@@ -59,7 +59,7 @@ import decimal
 import uuid
 from collections.abc import Callable
 from enum import Enum
-from typing import Any, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -98,6 +98,18 @@ from ..utils.inputs import SCALAR as SCALAR
 from ..utils.inputs import FieldConversionBase, InputFieldSpec
 from ..utils.strings import graphql_camel_name, pascal_case
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    from ..utils.typing import ConcreteField, ModelField
+
+    # DRF's stub generics are invariant in every parameter, so the all-``Any``
+    # parametrization is the stub's universal field / serializer form.
+    DRFField: TypeAlias = serializers.Field[Any, Any, Any, Any]
+    DRFBaseSerializer: TypeAlias = serializers.BaseSerializer[Any]
+    DRFSerializer: TypeAlias = serializers.Serializer[Any]
+    DRFModelSerializer: TypeAlias = serializers.ModelSerializer[Any]
+
 NESTED_SINGLE: str = "nested_single"
 NESTED_MULTI: str = "nested_multi"
 
@@ -122,10 +134,10 @@ class SerializerFieldConversion(FieldConversionBase):
     __slots__ = ()
 
 
-SerializerFieldConverter = Callable[[serializers.Field], SerializerFieldConversion]
+SerializerFieldConverter = Callable[["DRFField"], SerializerFieldConversion]
 
 
-def _scalar_converter(annotation: Any) -> SerializerFieldConverter:
+def _scalar_converter(annotation: object) -> SerializerFieldConverter:
     """Return a converter emitting a ``SCALAR``-kind conversion for a fixed annotation.
 
     Thin flavor wrapper around ``make_scalar_converter``: requiredness is
@@ -138,7 +150,7 @@ def _scalar_converter(annotation: Any) -> SerializerFieldConverter:
     return make_scalar_converter(SerializerFieldConversion, annotation)
 
 
-def _model_field_converter(field: serializers.Field) -> SerializerFieldConversion:
+def _model_field_converter(field: DRFField) -> SerializerFieldConversion:
     """Map ``serializers.ModelField`` through its wrapped Django ``model_field``.
 
     A ``ModelField`` proxies a concrete Django model field for (de)serialization; its
@@ -171,7 +183,7 @@ def _model_field_converter(field: serializers.Field) -> SerializerFieldConversio
 # ``FilePathField`` are ``CharField`` / ``ChoiceField`` subclasses whose explicit entries
 # keep them ``str`` (``FilePathField``'s explicit ``str`` also keeps its dynamic
 # filesystem-path choices OUT of the serializer-only choice-enum path).
-_BUILTIN_SCALAR_CONVERTERS: dict[type[serializers.Field], SerializerFieldConverter] = {
+_BUILTIN_SCALAR_CONVERTERS: dict[type[DRFField], SerializerFieldConverter] = {
     serializers.CharField: _scalar_converter(str),
     serializers.ChoiceField: _scalar_converter(str),
     serializers.IntegerField: _scalar_converter(int),
@@ -268,7 +280,7 @@ def clear_serializer_choice_enums() -> None:
 register_subsystem_clear(clear_serializer_choice_enums, owner="rest_framework.choice_enums")
 
 
-def is_nested_serializer_field(field: serializers.Field) -> TypeGuard[serializers.BaseSerializer]:
+def is_nested_serializer_field(field: DRFField) -> TypeGuard[DRFBaseSerializer]:
     """Return whether ``field`` is a nested ``Serializer`` / ``ListSerializer``.
 
     A nested ``Serializer`` / ``ModelSerializer`` field (single) or a
@@ -282,8 +294,8 @@ def is_nested_serializer_field(field: serializers.Field) -> TypeGuard[serializer
 
 
 def nested_serializer_child(
-    field: serializers.BaseSerializer,
-) -> tuple[serializers.Serializer, bool]:
+    field: DRFField,
+) -> tuple[DRFSerializer, bool]:
     """Return ``(child_serializer_instance, many)`` for a nested serializer field.
 
     A ``ListSerializer`` (``many=True``) carries the item serializer on ``.child`` and is
@@ -295,11 +307,20 @@ def nested_serializer_child(
     # The supported nested shapes are a ``Serializer`` item (``many=True`` builds a
     # ``ListSerializer`` around one); any other child fails loud at its guarded ``.fields`` read.
     if isinstance(field, serializers.ListSerializer):
-        return cast("serializers.Serializer", field.child), True
-    return cast("serializers.Serializer", field), False
+        return cast("DRFSerializer", field.child), True
+    return cast("DRFSerializer", field), False
 
 
-def _reject_nested_serializer(field: serializers.Field) -> None:
+def _bound_field_name(field: DRFField) -> str:
+    """Return a bound serializer field's name.
+
+    DRF types ``Field.field_name`` optional because it is set by ``bind``; a field
+    read off a serializer's ``.fields`` is always bound, so it always carries one.
+    """
+    return cast("str", field.field_name)
+
+
+def _reject_nested_serializer(field: DRFField) -> None:
     """Raise if ``field`` is a nested ``Serializer`` / ``ListSerializer`` NOT explicitly opted in.
 
     Nested serializer writes are OPT-IN ONLY: a ``Serializer`` /
@@ -320,7 +341,7 @@ def _reject_nested_serializer(field: serializers.Field) -> None:
         )
 
 
-def _reject_unsupported_relation_field(field: serializers.Field) -> None:
+def _reject_unsupported_relation_field(field: DRFField) -> None:
     """Raise unless ``field`` is a PK relation (spec-039 Decision 7).
 
     The package types every relation input as a ``GlobalID`` / raw-pk that decodes
@@ -396,8 +417,8 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
 
 
 def _finish_serializer_conversion(
-    result: Any,
-    field: serializers.Field,
+    result: SerializerFieldConversion | SerializerFieldConverter,
+    field: DRFField,
 ) -> SerializerFieldConversion:
     """Finish one registry result and enforce the scalar-extension boundary.
 
@@ -436,7 +457,7 @@ def _finish_serializer_conversion(
 
 
 def convert_serializer_field(
-    field: serializers.Field,
+    field: DRFField,
     *,
     is_input: bool = True,
 ) -> SerializerFieldConversion:
@@ -481,13 +502,13 @@ def convert_serializer_field(
     """
     del is_input  # graphene-parity, accepted-and-ignored.
 
-    def _relation_multi(field_: serializers.Field) -> SerializerFieldConversion:
+    def _relation_multi(field_: DRFField) -> SerializerFieldConversion:
         # Only PrimaryKeyRelatedField(many=True) (a ManyRelatedField of a PK
         # child) is a supported relation input; a non-PK child raises here.
         _reject_unsupported_relation_field(field_)
         return _CONVERT_RELATION_MULTI(field_)
 
-    def _relation_single(field_: serializers.Field) -> SerializerFieldConversion:
+    def _relation_single(field_: DRFField) -> SerializerFieldConversion:
         # Only PrimaryKeyRelatedField is a supported single relation input; a
         # SlugRelatedField / HyperlinkedRelatedField / custom RelatedField raises.
         _reject_unsupported_relation_field(field_)
@@ -496,7 +517,7 @@ def convert_serializer_field(
     def _list(field_: serializers.ListField) -> SerializerFieldConversion:
         return _list_child_conversion(field_)
 
-    def _nested(field_: serializers.Field) -> SerializerFieldConversion:
+    def _nested(field_: DRFField) -> SerializerFieldConversion:
         # A nested ``Serializer`` / ``ListSerializer`` always raises; the handler
         # never returns, so the skeleton never falls through on it.
         _reject_nested_serializer(field_)
@@ -522,7 +543,7 @@ def convert_serializer_field(
     return _finish_serializer_conversion(result, field)
 
 
-def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationError:
+def _unsupported_serializer_field(field: DRFField) -> ConfigurationError:
     """Build the fail-loud ``ConfigurationError`` for an unmapped ``serializers.Field``.
 
     The fallthrough factory ``convert_with_mro`` raises when a field is matched by
@@ -544,19 +565,19 @@ def _unsupported_serializer_field(field: serializers.Field) -> ConfigurationErro
     )
 
 
-def _relation_cardinality(field: serializers.Field) -> bool:
+def _relation_cardinality(field: DRFField) -> bool:
     """Return whether a DRF relation field validates a collection of related objects."""
     return isinstance(field, serializers.ManyRelatedField)
 
 
-def _model_relation_cardinality(field: models.Field) -> bool:
+def _model_relation_cardinality(field: ModelField) -> bool:
     """Return whether a Django relation field exposes a collection-valued side."""
     return bool(
         getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False),
     )
 
 
-def _reject_relation_cardinality_mismatch(field: serializers.Field, column: models.Field) -> None:
+def _reject_relation_cardinality_mismatch(field: DRFField, column: ModelField) -> None:
     """Reject a serializer relation whose collection shape disagrees with its model relation.
 
     ``resolve_serializer_field`` otherwise selected cardinality from the Django column while
@@ -609,7 +630,7 @@ def serializer_field_graphql_name(field_name: str, kind: str) -> tuple[str, str]
     return field_name, graphql_camel_name(field_name)
 
 
-def serializer_field_description(field: serializers.Field) -> str | None:
+def serializer_field_description(field: DRFField) -> str | None:
     """Return a GraphQL input-field description from a DRF field's metadata, or ``None``.
 
     Threads DRF validation metadata into the SDL as DOCUMENTATION (never a second
@@ -654,12 +675,7 @@ def serializer_field_description(field: serializers.Field) -> str | None:
         ) from exc
 
 
-def require_one_segment_source(
-    field: serializers.Field,
-    *,
-    field_label: str,
-    must_map_to: str,
-) -> None:
+def require_one_segment_source(field: DRFField, *, field_label: str, must_map_to: str) -> None:
     """Raise if a bound field's ``source`` is dotted or ``source='*'``.
 
     Bound DRF fields populate ``source_attrs`` as ``[]`` for ``source="*"`` and a
@@ -680,7 +696,7 @@ def require_one_segment_source(
         )
 
 
-def backing_model_field(model: type[models.Model] | None, field: serializers.Field) -> Any:
+def backing_model_field(model: type[models.Model] | None, field: DRFField) -> ModelField | None:
     """Return the backing ``models.Field`` for a serializer field via its ``source``, or ``None``.
 
     For a ``ModelSerializer`` field over a concrete column, the backing
@@ -707,8 +723,7 @@ def backing_model_field(model: type[models.Model] | None, field: serializers.Fie
         field_label=f"Serializer field {field.field_name!r}",
         must_map_to="a model-column-backed field must map to a single concrete column",
     )
-    # A bound field (read off a serializer's ``.fields``) always carries its name.
-    source = field.source if field.source else cast("str", field.field_name)
+    source = field.source if field.source else _bound_field_name(field)
     try:
         return model._meta.get_field(source)
     except FieldDoesNotExist:
@@ -740,9 +755,9 @@ def _require_relation_primary(field_name: str, related_model: type[models.Model]
 
 
 def serializer_only_relation_annotation(
-    field: serializers.Field,
+    field: DRFField,
     kind: str,
-) -> tuple[str, Any, type[models.Model]]:
+) -> tuple[str, object, type[models.Model]]:
     """Map a column-LESS serializer relation field to ``(python_attr, annotation, related_model)``.
 
     The serializer-flavor analog of
@@ -768,7 +783,7 @@ def serializer_only_relation_annotation(
         else field
     )
     many = kind == RELATION_MULTI
-    field_name = cast("str", field.field_name)
+    field_name = _bound_field_name(field)
     input_attr, _ = serializer_field_graphql_name(field_name, kind)
     return annotate_queryset_relation(
         getattr(related_field, "queryset", None),
@@ -785,7 +800,7 @@ def serializer_only_relation_annotation(
     )
 
 
-def _is_consumer_declared(field: serializers.Field) -> bool:
+def _is_consumer_declared(field: DRFField) -> bool:
     """Return whether ``field`` was EXPLICITLY declared on its serializer (not auto-generated).
 
     DRF's ``SerializerMetaclass`` records explicitly-declared fields in the serializer
@@ -803,16 +818,16 @@ def _is_consumer_declared(field: serializers.Field) -> bool:
     return field.field_name in getattr(type(parent), "_declared_fields", {})
 
 
-def _scalar_name(scalar: Any) -> str:
+def _scalar_name(scalar: object) -> str:
     """Return a readable name for a scalar annotation (for the conflict diagnostic)."""
     return getattr(scalar, "__name__", None) or repr(scalar)
 
 
 def _model_backed_scalar_annotation(
-    field: serializers.Field,
-    column: models.Field,
+    field: DRFField,
+    column: ConcreteField,
     type_name: str,
-) -> Any:
+) -> object:
     """Resolve a model-backed serializer SCALAR under the type-override conflict policy.
 
     An AUTO-generated ``ModelSerializer`` field routes through the read-side
@@ -861,7 +876,7 @@ def _model_backed_scalar_annotation(
 
 
 def _is_enumerable_serializer_choice(
-    field: serializers.Field,
+    field: DRFField,
 ) -> TypeGuard[serializers.ChoiceField]:
     """Return whether a serializer-only ``ChoiceField`` should generate a GraphQL enum.
 
@@ -878,7 +893,7 @@ def _is_enumerable_serializer_choice(
     )
 
 
-def _enum_member_map(enum_cls: type[Enum]) -> dict[str, Any]:
+def _enum_member_map(enum_cls: type[Enum]) -> dict[str, object]:
     """Return an enum's ``{member_name: value}`` map (for the choice-enum collision check)."""
     return {member.name: member.value for member in enum_cls}
 
@@ -896,8 +911,7 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     name); a name reused with a DIFFERENT member set fails loud rather than silently reusing
     the first.
     """
-    # A bound field (read off a serializer's ``.fields``) always carries its name.
-    enum_name = f"{type_name}{pascal_case(cast('str', field.field_name))}Enum"
+    enum_name = f"{type_name}{pascal_case(_bound_field_name(field))}Enum"
     enum_cls = build_enum_from_choices(
         list(field.choices.items()),
         enum_name,
@@ -916,7 +930,7 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     return enum_cls
 
 
-def _serializer_choice_annotation(field: serializers.ChoiceField, type_name: str) -> Any:
+def _serializer_choice_annotation(field: serializers.ChoiceField, type_name: str) -> object:
     """Return the generated enum annotation for an enumerable ``ChoiceField``.
 
     A ``ChoiceField`` -> a single generated enum; a ``MultipleChoiceField`` (a ``ChoiceField``
@@ -932,10 +946,10 @@ def _serializer_choice_annotation(field: serializers.ChoiceField, type_name: str
 
 
 def _serializer_only_scalar_annotation(
-    field: serializers.Field,
+    field: DRFField,
     conversion: SerializerFieldConversion,
     type_name: str,
-) -> Any:
+) -> object:
     """Resolve a column-less serializer SCALAR annotation, upgrading choices to enums.
 
     A serializer-only ``ChoiceField`` becomes a generated enum; a ``MultipleChoiceField``
@@ -948,10 +962,10 @@ def _serializer_only_scalar_annotation(
 
 
 def resolve_serializer_field(
-    field: serializers.Field,
+    field: DRFField,
     model: type[models.Model] | None,
     type_name: str,
-) -> tuple[str, Any, InputFieldSpec]:
+) -> tuple[str, object, InputFieldSpec]:
     """Resolve one serializer field to its ``(python_attr, base_annotation, InputFieldSpec)``.
 
     The serializer-flavor analog of ``forms/inputs.py::_field_triple_and_spec``,
@@ -985,8 +999,7 @@ def resolve_serializer_field(
     # reaches here (``inputs.py``'s walk routes it to the recursive nested build first); this
     # raise is the fail-loud default for an un-opted-in nested field.
     _reject_nested_serializer(field)
-    # A bound field (read off a serializer's ``.fields``) always carries its name.
-    field_name = cast("str", field.field_name)
+    field_name = _bound_field_name(field)
     column = backing_model_field(model, field)
     # ``source`` axis: the resolved one-segment source (``None`` when it equals
     # the declared name - keeps the reverse map terse and form-symmetric).
@@ -1042,7 +1055,13 @@ def resolve_serializer_field(
                 kind=kind,
             )
         else:
-            annotation = _model_backed_scalar_annotation(field, column, type_name)
+            # ``model_column_write_kind`` classifies every reverse ``ForeignObjectRel``
+            # as a relation, so a SCALAR column is a concrete ``Field``.
+            annotation = _model_backed_scalar_annotation(
+                field,
+                cast("ConcreteField", column),
+                type_name,
+            )
         python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
     else:
         # Column-less serializer field: the model-less converter owns the kind;

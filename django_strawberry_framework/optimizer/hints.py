@@ -24,7 +24,7 @@ top-level ``__init__.py`` so the import path stays short.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.db.models import Prefetch
 
@@ -50,8 +50,19 @@ from .nested_fetch import StrategySelection, resolve_strategy
 # ``from __future__ import annotations``, but the runtime check is the
 # load-bearing surface here.
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
 
-def _require_prefetch(obj: object) -> Prefetch:
+    #: Any ``Prefetch``: django-stubs' parameters are covariant, so the
+    #: string-lookup form with its defaults is the universal one.
+    _PrefetchAny: TypeAlias = Prefetch[str]
+else:
+    # ``typing.get_type_hints(OptimizerHint)`` evaluates the field annotations, and
+    # ``Prefetch`` has no ``__class_getitem__`` at runtime: the hint stays the class.
+    _PrefetchAny = Prefetch
+
+
+def _require_prefetch(obj: object) -> Prefetch[str]:
     """Return ``obj`` when it is a ``Prefetch``; else raise ``ConfigurationError``.
 
     Single owner for the Prefetch-type invariant shared by
@@ -131,7 +142,7 @@ class OptimizerHint:
 
     force_select: bool = False
     force_prefetch: bool = False
-    prefetch_obj: Prefetch | None = None
+    prefetch_obj: _PrefetchAny | None = None
     skip: bool = False
     nested_strategy: StrategySelection | None = None
 
@@ -226,7 +237,7 @@ class OptimizerHint:
         return cls(force_prefetch=True)
 
     @classmethod
-    def prefetch(cls, obj: Prefetch) -> OptimizerHint:
+    def prefetch(cls, obj: _PrefetchAny) -> OptimizerHint:
         """Use a specific ``Prefetch`` object for this field.
 
         This is a leaf operation. The consumer-provided queryset is the

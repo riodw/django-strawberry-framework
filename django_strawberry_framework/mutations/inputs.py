@@ -36,8 +36,8 @@ symmetric by construction (spec-036 Decision 6).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from collections.abc import Callable, Collection, Iterable
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, FieldDoesNotExist
@@ -68,7 +68,14 @@ from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_m
 from ..utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
     from strawberry.types.base import WithStrawberryObjectDefinition
+
+    from ..utils.typing import ConcreteField, ModelField
+
+    # The bind-time ``input attr -> Django field`` index the model decode reads.
+    ModelFieldIndex: TypeAlias = dict[str, ModelField]
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
 # single constant so any forward-ref and ``materialize_mutation_input_class``
@@ -98,7 +105,7 @@ CREATE: str = "create"
 PARTIAL: str = "partial"
 
 
-def _frozenset_of_attr_names(value: Any, *, parameter: str) -> frozenset[str]:
+def _frozenset_of_attr_names(value: Iterable[str] | None, *, parameter: str) -> frozenset[str]:
     """Freeze ``value`` into a python-attr-name set, rejecting bare ``str`` / ``bytes``.
 
     The one normalizer behind ``build_mutation_input``'s ``overrides`` and
@@ -260,7 +267,7 @@ def editable_input_fields(
     *,
     fields: tuple[str, ...] | None = None,
     exclude: tuple[str, ...] | None = None,
-) -> list[models.Field]:
+) -> list[ConcreteField]:
     """Return the model's editable, settable input columns (spec-036 Decision 6).
 
     The write-side counterpart to ``orders/inputs.py::_get_concrete_field_names_for_order``
@@ -293,14 +300,13 @@ def editable_input_fields(
     ``mutations/sets.py::DjangoMutation._validate_meta`` - so a malformed
     declaration reaching it used to iterate as characters or collapse silently.
     """
-    selected: list[models.Field] = []
+    selected: list[ConcreteField] = []
     for field in model._meta.get_fields():
         if getattr(field, "many_to_many", False):
             # Forward M2M only: a forward ``ManyToManyField`` is concrete and
             # writable; an auto-created reverse M2M accessor is not.
             if is_forward_many_to_many(field) and getattr(field, "editable", False):
-                # A forward M2M is a ``ManyToManyField``, never a reverse ``*Rel``.
-                selected.append(cast("models.Field", field))
+                selected.append(field)
             continue
         # Concrete column-backed fields only (``hasattr(f, "column")`` is the
         # cookbook idiom); reverse FKs have no ``column``. Drop the pk
@@ -313,7 +319,7 @@ def editable_input_fields(
             and not getattr(field, "primary_key", False)
         ):
             # Only a concrete ``Field`` carries a ``column``; a reverse ``*Rel`` has none.
-            selected.append(cast("models.Field", field))
+            selected.append(cast("ConcreteField", field))
 
     by_name = {field.name: field for field in selected}
     # No ``empty_message``: the model flavor's empty-input rejection is
@@ -330,7 +336,7 @@ def editable_input_fields(
     return list(effective.values())
 
 
-def input_field_required(field: models.Field) -> bool:
+def input_field_required(field: ConcreteField) -> bool:
     """Return whether a create-input field is required (spec-036 rule).
 
     A field is required **only when it has no usable default**: no Django
@@ -352,7 +358,7 @@ def input_field_required(field: models.Field) -> bool:
 def relation_id_scalar(
     related_model: type[models.Model],
     related_primary_type: type | None,
-) -> Any:
+) -> object:
     """Return the GraphQL id scalar for a write-input relation to ``related_model``.
 
     ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
@@ -374,7 +380,7 @@ def relation_id_annotation(
     related_primary_type: type | None,
     *,
     many: bool,
-) -> Any:
+) -> object:
     """Return ``list[id]`` or ``id`` for a write-input relation.
 
     Cardinality wrap around ``relation_id_scalar``: a multi relation is a
@@ -385,7 +391,7 @@ def relation_id_annotation(
     return list[id_scalar] if many else id_scalar  # type: ignore[valid-type]  # runtime-built annotation
 
 
-def related_model_of_queryset(queryset: Any) -> type[models.Model] | None:
+def related_model_of_queryset(queryset: object) -> type[models.Model] | None:
     """Return ``queryset.model`` when a relation queryset is typed, else ``None``.
 
     Column-less write-input relations (form ``ModelChoiceField``, serializer
@@ -398,7 +404,7 @@ def related_model_of_queryset(queryset: Any) -> type[models.Model] | None:
 
 
 def require_queryset_related_model(
-    queryset: Any,
+    queryset: object,
     *,
     missing: Callable[[], ConfigurationError],
 ) -> type[models.Model]:
@@ -415,13 +421,13 @@ def require_queryset_related_model(
 
 
 def annotate_queryset_relation(
-    queryset: Any,
+    queryset: object,
     *,
     many: bool,
     python_attr: str,
     primary_of: Callable[[type], type | None],
     missing: Callable[[], ConfigurationError],
-) -> tuple[str, Any, type[models.Model]]:
+) -> tuple[str, object, type[models.Model]]:
     """Return ``(python_attr, id-annotation, related_model)`` for a column-less relation.
 
     Form ``_model_less_relation_annotation`` and serializer
@@ -445,10 +451,10 @@ def annotate_queryset_relation(
 
 
 def relation_input_annotation(
-    field: models.Field,
+    field: ConcreteField,
     *,
     related_primary_type: type | None,
-) -> tuple[str, str, Any]:
+) -> tuple[str, str, object]:
     """Map a relation field to its ``(python_attr, graphql_name, annotation)`` triple.
 
     Forward FK / OneToOne become a single ``<field>_id`` input; M2M becomes
@@ -478,8 +484,8 @@ def relation_input_annotation(
     return python_attr, graphql_name, annotation
 
 
-def model_column_write_kind(field: models.Field) -> str:
-    """Return the write-input decode kind for a backing ``models.Field``.
+def model_column_write_kind(field: ModelField) -> str:
+    """Return the write-input decode kind for a backing model field.
 
     ``model_column_input_annotation`` (036 naming + GraphQL annotation) and the
     form / serializer reverse maps all classify a column the same way: relation
@@ -496,7 +502,7 @@ def model_column_write_kind(field: models.Field) -> str:
 
 def _relation_field_index(
     model: type[models.Model],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[ModelFieldIndex, ModelFieldIndex]:
     """Index a model's forward FK/OneToOne (by ``<field>_id`` attr) and M2M (by name).
 
     Bind-time helper: the same input-attr-to-relation-field mapping the generator's
@@ -513,8 +519,8 @@ def _relation_field_index(
     excludes virtual relations from the input, so this only hardens the index
     against ever mis-mapping one.
     """
-    fk_by_attr: dict[str, Any] = {}
-    m2m_by_name: dict[str, Any] = {}
+    fk_by_attr: ModelFieldIndex = {}
+    m2m_by_name: ModelFieldIndex = {}
     for field in model._meta.get_fields():
         if getattr(field, "many_to_many", False):
             if is_forward_many_to_many(field):
@@ -529,7 +535,7 @@ def mutation_input_field_specs(
     input_cls: type[WithStrawberryObjectDefinition],
     *,
     excluded_attrs: Collection[str] = (),
-) -> tuple[list[InputFieldSpec], dict[str, Any]]:
+) -> tuple[list[InputFieldSpec], ModelFieldIndex]:
     """Build total-coverage reverse-map specs + the Django-field index for ``input_cls``.
 
     Walks every field of the (possibly merged) input dataclass so
@@ -553,7 +559,7 @@ def mutation_input_field_specs(
     excluded = _frozenset_of_attr_names(excluded_attrs, parameter="excluded_attrs")
     fk_by_attr, m2m_by_name = _relation_field_index(model)
     specs: list[InputFieldSpec] = []
-    model_fields: dict[str, Any] = {}
+    model_fields: ModelFieldIndex = {}
     for field in input_cls.__strawberry_definition__.fields:
         python_name = field.python_name
         graphql_name = field.graphql_name or graphql_camel_name(python_name)
@@ -570,11 +576,7 @@ def mutation_input_field_specs(
                 )
         # Past the guard above, a non-indexed attr resolved to a concrete non-relation
         # column, i.e. a ``Field`` (every reverse ``*Rel`` is a relation).
-        kind = (
-            EXCLUDED
-            if python_name in excluded
-            else model_column_write_kind(cast("models.Field", django_field))
-        )
+        kind = EXCLUDED if python_name in excluded else model_column_write_kind(django_field)
         related_model = (
             django_field.related_model if kind in (RELATION_SINGLE, RELATION_MULTI) else None
         )
@@ -592,12 +594,12 @@ def mutation_input_field_specs(
 
 
 def model_column_write_annotation(
-    field: models.Field,
+    field: ModelField,
     type_name: str,
     *,
     primary_of: Callable[[type], type | None],
     kind: str | None = None,
-) -> Any:
+) -> object:
     """Return the GraphQL annotation for a backing column, without naming.
 
     Relation rides ``relation_id_annotation`` (primary lookup via ``primary_of``);
@@ -619,15 +621,17 @@ def model_column_write_annotation(
         )
     if kind == FILE:
         return Upload
-    return convert_scalar(field, type_name, force_nullable=False)
+    # ``model_column_write_kind`` classifies every reverse ``ForeignObjectRel`` as a
+    # relation, so a SCALAR column is a concrete ``Field``.
+    return convert_scalar(cast("ConcreteField", field), type_name, force_nullable=False)
 
 
 def model_column_input_annotation(
-    field: models.Field,
+    field: ConcreteField,
     type_name: str,
     *,
     primary_of: Callable[[type], type | None],
-) -> tuple[str, str, Any]:
+) -> tuple[str, str, object]:
     """Return ``(python_attr, graphql_name, annotation)`` for a model column.
 
     ``build_mutation_input`` and form ``_field_triple_and_spec`` (column arm)
@@ -727,11 +731,11 @@ class MutationInputShape(NamedTuple):
 
     model: type[models.Model]
     operation_kind: str
-    selected: tuple[models.Field, ...]
+    selected: tuple[ConcreteField, ...]
     full_field_names: tuple[str, ...]
     effective_field_names: frozenset[str]
     type_name: str
-    cache_key: tuple[Any, ...]
+    cache_key: tuple[type[models.Model], str, frozenset[str]]
 
 
 def mutation_input_shape(
@@ -852,7 +856,7 @@ def build_mutation_input(
     # causing later overrides to be emitted and clobbered in the merged input.
     overrides = _frozenset_of_attr_names(overrides, parameter="overrides")
 
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
+    triples: list[tuple[str, object, dict[str, object]]] = []
     selected_names: list[_GeneratedInputFieldName] = []
     emitted_names: list[_GeneratedInputFieldName] = []
     for field in selected:
@@ -979,7 +983,7 @@ def build_payload_type(
       a non-``None`` ``object_type``), so the model payload is byte-unchanged.
     """
     if object_type is None:
-        namespace: dict[str, Any] = {
+        namespace: dict[str, object] = {
             "__annotations__": {"ok": bool, "errors": list[FieldError]},
             "ok": False,
             "errors": strawberry.field(default_factory=list),

@@ -106,8 +106,13 @@ from .utils.querysets import (
 from .utils.typing import is_async_callable
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from django.db.models.expressions import Expression
+    from django.db.models.options import Options
+    from django.db.models.sql.query import Query
+
     from .orders.sets import OrderSet
     from .types.definition import DjangoTypeDefinition
+    from .utils.typing import ModelField
 
 __all__ = ("DjangoListField", "ListArgumentError")
 
@@ -124,7 +129,7 @@ _KNOWN_LIST_ARGUMENT_REASONS: frozenset[str] = frozenset(
 
 def _validate_djangotype_target(
     target_type: type,
-    resolver: Callable | None,
+    resolver: object,
     *,
     field: str,
 ) -> DjangoTypeDefinition:
@@ -215,7 +220,7 @@ def _validate_djangotype_target(
 
 def _validate_relay_djangotype_target(
     target_type: type,
-    resolver: Callable | None,
+    resolver: object,
     *,
     field: str,
     relay_error_message: str,
@@ -265,7 +270,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
         field: str,
         argument: str,
         reason: str,
-        value: Any = None,
+        value: object = None,
         ceiling: int | None = None,
         order_argument: str | None = None,
     ) -> None:
@@ -278,7 +283,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
         self.order_argument = order_argument
 
         if reason == "non_integer":
-            self.value = value if isinstance(value, str) else describe_value(value)
+            self.value: object = value if isinstance(value, str) else describe_value(value)
             msg = (
                 f"Invalid argument {argument!r} on {field}: expected a non-negative "
                 f"integer, got {self.value}."
@@ -311,7 +316,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
                 f"Invalid argument {argument!r} on {field}: an ordering argument "
                 "requires a QuerySet source."
             )
-        extensions: dict[str, Any] = {
+        extensions: dict[str, object] = {
             "code": "LIST_ARGUMENT_INVALID",
             "argument": argument,
             "reason": reason,
@@ -342,7 +347,11 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
 _DEFAULT_WIRE_NAMES: dict[str, str] = {"offset": "offset", "limit": "limit", "order_by": "orderBy"}
 
 
-def _published_wire_name(info: Any, arg_def: Any, parameter_name: str) -> str | None:
+def _published_wire_name(
+    info: Info[object, object],
+    arg_def: object,
+    parameter_name: str,
+) -> str | None:
     """Read the wire name the executable schema PUBLISHED for ``arg_def``.
 
     Strawberry fixes every argument's GraphQL name once, while it builds the
@@ -371,7 +380,8 @@ def _published_wire_name(info: Any, arg_def: Any, parameter_name: str) -> str | 
         for wire_name, graphql_argument in published_args.items():
             extensions = graphql_argument.extensions or {}
             if extensions.get(GraphQLCoreConverter.DEFINITION_BACKREF) is arg_def:
-                return wire_name
+                # graphql-core types the ``fields`` map ``Any``; its argument keys are names.
+                return cast("str", wire_name)
     except Exception as exc:
         raise ConfigurationError(
             f"Failed to read the published arguments for {parameter_name!r} on "
@@ -383,7 +393,7 @@ def _published_wire_name(info: Any, arg_def: Any, parameter_name: str) -> str | 
     )
 
 
-def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
+def _resolve_argument_wire_name(info: Info[object, object], parameter_name: str) -> str:
     """Resolve the active GraphQL wire name for an internal parameter name.
 
     Only invoked on error paths (e.g. inside ``ListArgumentError`` instantiation or
@@ -429,20 +439,20 @@ def _resolve_argument_wire_name(info: Any, parameter_name: str) -> str:
 class _ListArguments:
     offset: int | None
     limit: int | None
-    order_by: Any
+    order_by: object
     order_by_supplied: bool
     any_argument_supplied: bool
 
 
 def _normalize_list_arguments(
     field_name: str,
-    info: Any,
+    info: Info[object, object],
     max_rows: int | None,
     trusted_max_rows: bool,
     *,
-    offset: Any = None,
-    limit: Any = None,
-    order_by: Any = strawberry.UNSET,
+    offset: object = None,
+    limit: object = None,
+    order_by: object = strawberry.UNSET,
 ) -> _ListArguments:
     """Normalize and validate pagination arguments against effective resource policy ceilings.
 
@@ -550,7 +560,7 @@ def _normalize_list_arguments(
 
 def _synthesized_list_signature(
     orderset_class: type[OrderSet] | None,
-) -> tuple[inspect.Signature, dict[str, Any]]:
+) -> tuple[inspect.Signature, dict[str, object]]:
     """Build the resolver ``__signature__`` and ``__annotations__`` for DjangoListField.
 
     Carries ``offset`` and ``limit`` arguments, plus conditional ``order_by`` when
@@ -580,13 +590,13 @@ def _synthesized_list_signature(
             annotation=int | None,
         ),
     ]
-    annotations: dict[str, Any] = {"info": Info, "offset": int | None, "limit": int | None}
+    annotations: dict[str, object] = {"info": Info, "offset": int | None, "limit": int | None}
 
     if orderset_class is not None:
         from .orders import order_input_type
 
         # mypy: runtime-built annotation
-        order_ann: Any = list[order_input_type(orderset_class)] | None  # type: ignore[misc]
+        order_ann: object = list[order_input_type(orderset_class)] | None  # type: ignore[misc]
         params.append(
             inspect.Parameter(
                 "order_by",
@@ -716,7 +726,10 @@ _ORDER_VALUE_CONTAINERS = (
 )
 
 
-def _resolve_order_field_path(opts: Any, path: str) -> tuple[Any, Any] | None:
+def _resolve_order_field_path(
+    opts: Options[models.Model] | None,
+    path: str,
+) -> tuple[ModelField, Options[models.Model] | None] | None:
     """Walk a field path against ``opts``, returning ``(field, related opts)`` or None.
 
     ``django/db/models/sql/compiler.py::SQLCompiler.find_ordering_name`` hands
@@ -738,14 +751,15 @@ def _resolve_order_field_path(opts: Any, path: str) -> tuple[Any, Any] | None:
             return None
         related = field.related_model if field.is_relation else None
         opts = related._meta if related is not None else None
-    return field, opts
+    # ``split`` yields at least one piece, and every piece that does not return sets it.
+    return cast("ModelField", field), opts
 
 
 def _is_deterministic_order_field_path(
-    query: Any,
+    query: Query,
     path: str,
-    opts: Any,
-    seen: frozenset[tuple[Any, str]],
+    opts: Options[models.Model],
+    seen: frozenset[tuple[type[models.Model], str]],
     prefix: str,
 ) -> bool:
     """Classify a resolved field path, expanding a relation the way the compiler does.
@@ -791,7 +805,7 @@ def _is_deterministic_order_field_path(
     )
 
 
-def _is_deterministic_order_reference(query: Any, name: str, prefix: str) -> bool:
+def _is_deterministic_order_reference(query: Query, name: str, prefix: str) -> bool:
     """Classify the name an expression reference holds, which is always a column order.
 
     An ``F`` is not a string ordering term and never reaches
@@ -824,10 +838,10 @@ def _is_deterministic_order_reference(query: Any, name: str, prefix: str) -> boo
 
 
 def _is_deterministic_order_name(
-    query: Any,
+    query: Query,
     name: str,
-    opts: Any = None,
-    seen: frozenset[tuple[Any, str]] = frozenset(),
+    opts: Options[models.Model] | None = None,
+    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
     prefix: str = "",
 ) -> bool:
     """Resolve a string ordering term the way the compiler resolves it, then classify it.
@@ -873,10 +887,10 @@ def _is_deterministic_order_name(
 
 
 def _is_deterministic_order_term(
-    query: Any,
+    query: Query,
     term: Any,
-    opts: Any = None,
-    seen: frozenset[tuple[Any, str]] = frozenset(),
+    opts: Options[models.Model] | None = None,
+    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
     prefix: str = "",
 ) -> bool:
     """Classify one selected ordering term by the form Django will compile it into.
@@ -960,10 +974,10 @@ def _is_deterministic_order_term(
 
 
 def _is_deterministic_order_value(
-    query: Any,
-    value: Any,
-    opts: Any = None,
-    seen: frozenset[tuple[Any, str]] = frozenset(),
+    query: Query,
+    value: object,
+    opts: Options[models.Model] | None = None,
+    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
     prefix: str = "",
 ) -> bool:
     """Classify one value a predicate's lookup compares its column against.
@@ -985,7 +999,7 @@ def _is_deterministic_order_value(
     return True
 
 
-def _approved_order_transform(lhs: Any, name: str) -> Any:
+def _approved_order_transform(lhs: Expression, name: str) -> Expression | None:
     """Apply one approved transform to ``lhs``, or return None when it is not one.
 
     Mirrors ``django/db/models/sql/query.py::Query.try_transform``: the name is
@@ -999,10 +1013,11 @@ def _approved_order_transform(lhs: Any, name: str) -> Any:
     transform = lhs.output_field.get_transform(name)
     if transform is None or transform not in _APPROVED_ORDER_TRANSFORMS:
         return None
-    return transform(lhs)
+    # The stubs type ``Expression.output_field`` ``Any``; this is a ``Transform`` of ``lhs``.
+    return cast("Expression", transform(lhs))
 
 
-def _is_deterministic_order_lookup_chain(field: Any, pieces: Sequence[str]) -> bool:
+def _is_deterministic_order_lookup_chain(field: ModelField, pieces: Sequence[str]) -> bool:
     """Classify the transforms and the final lookup a predicate applies to a reference.
 
     ``django/db/models/sql/query.py::Query.build_lookup`` reads every piece but
@@ -1020,7 +1035,10 @@ def _is_deterministic_order_lookup_chain(field: Any, pieces: Sequence[str]) -> b
     ``exact``, which is approved, so an ordinary equality predicate needs no
     spelling of its own.
     """
-    lhs = models.Value(None, output_field=field)
+    # ``Value`` stores its ``output_field`` verbatim, so a reverse relation's registered
+    # lookups are read through it too; the stubs narrow the parameter to ``Field``.
+    lhs: Expression | None
+    lhs = models.Value(None, output_field=field)  # type: ignore[arg-type]
     *transforms, final = tuple(pieces) or ("exact",)
     for name in transforms:
         lhs = _approved_order_transform(lhs, name)
@@ -1036,9 +1054,9 @@ def _is_deterministic_order_lookup_chain(field: Any, pieces: Sequence[str]) -> b
 
 
 def _is_deterministic_order_predicate_reference(
-    query: Any,
+    query: Query,
     lookup: str,
-    opts: Any,
+    opts: Options[models.Model] | None,
     prefix: str,
 ) -> bool:
     """Classify the left-hand side of one ``(lookup, value)`` predicate child.
@@ -1087,10 +1105,10 @@ def _is_deterministic_order_predicate_reference(
 
 
 def _is_deterministic_order_condition(
-    query: Any,
+    query: Query,
     condition: models.Q,
-    opts: Any = None,
-    seen: frozenset[tuple[Any, str]] = frozenset(),
+    opts: Options[models.Model] | None = None,
+    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
     prefix: str = "",
 ) -> bool:
     """Classify the predicate a conditional ordering term picks its value with.
@@ -1118,7 +1136,7 @@ def _is_deterministic_order_condition(
     return True
 
 
-def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]:
+def _selected_ordering(queryset: models.QuerySet[models.Model]) -> tuple[str, tuple[object, ...]]:
     """Return the ordering Django will compile for ``queryset``, as ``(source, terms)``.
 
     ``django/db/models/sql/compiler.py::SQLCompiler._order_by_pairs`` picks ONE
@@ -1146,7 +1164,7 @@ def _selected_ordering(queryset: models.QuerySet) -> tuple[str, tuple[Any, ...]]
     return _ORDER_FROM_NOTHING, ()
 
 
-def _has_deterministic_ordering(queryset: models.QuerySet) -> bool:
+def _has_deterministic_ordering(queryset: models.QuerySet[models.Model]) -> bool:
     """Return True when every term of the order Django will compile is deterministic.
 
     Classifies the SELECTED ordering, not every collection holding terms: a
@@ -1160,7 +1178,7 @@ def _has_deterministic_ordering(queryset: models.QuerySet) -> bool:
     return all(_is_deterministic_order_term(query, term) for term in terms)
 
 
-def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
+def _is_model_default_ordering_active(queryset: models.QuerySet[models.Model]) -> bool:
     """Return True when the model's own ``Meta.ordering`` is the order Django will compile.
 
     The guard's public-order eligibility rule: ordering the resolver alone put on
@@ -1180,7 +1198,7 @@ def _is_model_default_ordering_active(queryset: models.QuerySet) -> bool:
     return all(_is_deterministic_order_term(query, term) for term in terms)
 
 
-def _model_from_definition(definition: Any) -> type[models.Model]:
+def _model_from_definition(definition: DjangoTypeDefinition) -> type[models.Model]:
     """Read the target's Django model off its ONE definition read.
 
     Called exactly once per field, at construction. The value seeds the default
@@ -1209,7 +1227,7 @@ def _model_from_definition(definition: Any) -> type[models.Model]:
     return model
 
 
-def _orderset_class_from_definition(definition: Any) -> type[OrderSet] | None:
+def _orderset_class_from_definition(definition: DjangoTypeDefinition) -> type[OrderSet] | None:
     """Read the target's declared ``Meta.orderset_class`` off its ONE definition read.
 
     Called exactly once per field, at construction, from the definition
@@ -1227,7 +1245,7 @@ def _orderset_class_from_definition(definition: Any) -> type[OrderSet] | None:
         ) from exc
 
 
-def _field_label(info: Any) -> str:
+def _field_label(info: Info[object, object]) -> str:
     """Return the resolver field label without allowing consumer descriptors to escape."""
     try:
         field_name = info.field_name
@@ -1236,7 +1254,10 @@ def _field_label(info: Any) -> str:
     return field_name if isinstance(field_name, str) and field_name else "DjangoListField"
 
 
-def _resolver_root_and_info(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, Info]:
+def _resolver_root_and_info(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[object, Info[object, object]]:
     """Extract Strawberry's positional resolver context and reject unknown call inputs."""
     if len(args) > 2:
         raise TypeError("DjangoListField resolver accepts only root and info positional inputs.")
@@ -1265,10 +1286,10 @@ def _argument_record(
     *,
     max_rows: int | None,
     trusted_max_rows: bool,
-    offset: Any = None,
-    limit: Any = None,
-    order_by: Any = strawberry.UNSET,
-) -> tuple[Any, Info, _ListArguments]:
+    offset: object = None,
+    limit: object = None,
+    order_by: object = strawberry.UNSET,
+) -> tuple[object, Info[object, object], _ListArguments]:
     """Extract root, info, and normalize list arguments for any resolver invocation."""
     root, info = _resolver_root_and_info(args, kwargs)
     field_name = _field_label(info)
@@ -1286,7 +1307,7 @@ def _argument_record(
 
 def _build_non_queryset_rejection_error(
     args_record: _ListArguments,
-    info: Info,
+    info: Info[object, object],
     *,
     orderset_class: type[OrderSet] | None = None,
 ) -> ListArgumentError | None:
@@ -1312,7 +1333,7 @@ def _build_non_queryset_rejection_error(
 async def _handle_non_queryset_rejections_async(
     source: Any,
     args_record: _ListArguments,
-    info: Info,
+    info: Info[object, object],
     *,
     orderset_class: type[OrderSet] | None = None,
 ) -> None:
@@ -1342,10 +1363,10 @@ async def _handle_non_queryset_rejections_async(
 
 
 def _check_nonzero_offset_guard(
-    queryset: models.QuerySet,
+    queryset: models.QuerySet[models.Model],
     args_record: _ListArguments,
     orderset_class: type[OrderSet] | None,
-    info: Info,
+    info: Info[object, object],
 ) -> None:
     """Validate that non-zero offset pagination is backed by a deterministic ordering.
 
@@ -1424,8 +1445,8 @@ def _order_normalization_scope(
 
 def _execute_queryset_pipeline_sync(
     target_type: type,
-    source: models.QuerySet,
-    info: Info,
+    source: models.QuerySet[models.Model],
+    info: Info[object, object],
     args_record: _ListArguments,
     max_rows: int | None,
     trusted_max_rows: bool,
@@ -1433,7 +1454,7 @@ def _execute_queryset_pipeline_sync(
     model: type[models.Model],
     orderset_class: type[OrderSet] | None,
     is_async_context: bool,
-) -> Any:
+) -> object:
     post_vis_qs = apply_type_visibility_sync(target_type, source, info, model=model)
     if not args_record.any_argument_supplied:
         bounded = _windowed_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
@@ -1471,15 +1492,15 @@ def _execute_queryset_pipeline_sync(
 
 async def _execute_queryset_pipeline_async(
     target_type: type,
-    source: models.QuerySet,
-    info: Info,
+    source: models.QuerySet[models.Model],
+    info: Info[object, object],
     args_record: _ListArguments,
     max_rows: int | None,
     trusted_max_rows: bool,
     *,
     model: type[models.Model],
     orderset_class: type[OrderSet] | None,
-) -> Any:
+) -> object:
     post_vis_qs = await apply_type_visibility_async(target_type, source, info, model=model)
     if not args_record.any_argument_supplied:
         bounded = _windowed_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
@@ -1518,7 +1539,7 @@ async def _execute_queryset_pipeline_async(
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
     target_type: type,
     *,
-    resolver: Callable | None = None,
+    resolver: Callable[..., Any] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
@@ -1619,11 +1640,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
         def _default(
             *args: Any,
-            offset: Any = None,
-            limit: Any = None,
-            order_by: Any = strawberry.UNSET,
+            offset: object = None,
+            limit: object = None,
+            order_by: object = strawberry.UNSET,
             **kwargs: Any,
-        ) -> Any:
+        ) -> object:
             _, info, args_record = _argument_record(
                 args,
                 kwargs,
@@ -1662,10 +1683,10 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         user_resolver = resolver
 
         async def _resolve_async_iterable(
-            source: Any,
-            info: Info,
+            source: object,
+            info: Info[object, object],
             args_record: _ListArguments,
-        ) -> Any:
+        ) -> object:
             if args_record.any_argument_supplied:
                 await _handle_non_queryset_rejections_async(
                     source,
@@ -1684,16 +1705,16 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
         # The two arms bind the one name to a coroutine function and a plain one, so it
         # is declared up front.
-        _wrap: Callable[..., Any]
+        _wrap: Callable[..., object]
         if is_async_callable(user_resolver):
 
             async def _wrap(
                 *args: Any,
-                offset: Any = None,
-                limit: Any = None,
-                order_by: Any = strawberry.UNSET,
+                offset: object = None,
+                limit: object = None,
+                order_by: object = strawberry.UNSET,
                 **kwargs: Any,
-            ) -> Any:
+            ) -> object:
                 root, info, args_record = _argument_record(
                     args,
                     kwargs,
@@ -1725,11 +1746,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
             def _wrap(
                 *args: Any,
-                offset: Any = None,
-                limit: Any = None,
-                order_by: Any = strawberry.UNSET,
+                offset: object = None,
+                limit: object = None,
+                order_by: object = strawberry.UNSET,
                 **kwargs: Any,
-            ) -> Any:
+            ) -> object:
                 root, info, args_record = _argument_record(
                     args,
                     kwargs,

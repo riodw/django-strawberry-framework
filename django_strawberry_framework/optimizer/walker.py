@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from django.db import models
 from django.db.models import Prefetch
@@ -13,6 +13,7 @@ from strawberry.utils.str_converters import to_camel_case
 
 from ..exceptions import ConfigurationError
 from ..registry import register_subsystem_clear, registry
+from ..utils.connections import relay_max_results_from_info
 from ..utils.querysets import (
     _COMBINED_WHAT,
     _LIST_RELATION_CHILD_POLICY,
@@ -57,10 +58,17 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # The ``MutableSequence`` casts below restate that a plan under walker
     # construction still holds its mutable directive lists; ``OptimizationPlan``
     # types them as the ``Sequence`` a finalized plan's tuples also satisfy.
-    from collections.abc import MutableSequence
+    from collections.abc import Iterable, Mapping, MutableSequence, Sequence
     from typing import Protocol
 
+    from django.db.models import QuerySet
+    from graphql.type.definition import GraphQLResolveInfo
+    from strawberry.schema.name_converter import NameConverter
+    from strawberry.types.nodes import Arguments
+
     from ..types.definition import DjangoTypeDefinition
+    from .plans import PrefetchLookup
+    from .selections import ConvertedSelection, FieldSelection
 
     class _CustomGetQuerysetReporter(Protocol):
         """A registered class answering the ``get_queryset`` downgrade question itself."""
@@ -104,7 +112,7 @@ _order_entry_field_name = _nested_planner._order_entry_field_name
 _project_scalar_only_window = _nested_planner._project_scalar_only_window
 _relation_connection_to_attr = _nested_planner._relation_connection_to_attr
 _relation_connection_to_attr_for_key = _nested_planner._relation_connection_to_attr_for_key
-_relay_max_results_from_info = _nested_planner._relay_max_results_from_info
+_relay_max_results_from_info = relay_max_results_from_info
 
 
 def _record_path_resolver_keys(
@@ -137,7 +145,7 @@ def _record_select_path_keys(
     _record_path_resolver_keys(plan.select_path_resolver_keys, lookup_path, keys)
 
 
-def _enable_only_for_operation(info: Any | None) -> bool:
+def _enable_only_for_operation(info: GraphQLResolveInfo | None) -> bool:
     """Return whether ``.only(...)`` projection is enabled for ``info``'s operation.
 
     The G2 gate (spec-035 Decision 4): only a ``QUERY`` operation projects
@@ -159,9 +167,9 @@ def _enable_only_for_operation(info: Any | None) -> bool:
 
 
 def plan_optimizations(
-    selected_fields: list[Any],
+    selected_fields: Iterable[ConvertedSelection],
     model: type[models.Model],
-    info: Any | None = None,
+    info: GraphQLResolveInfo | None = None,
     *,
     runtime_prefixes: tuple[tuple[str, ...], ...] | None = None,
     source_type: type | None = None,
@@ -202,11 +210,11 @@ def plan_optimizations(
 
 
 def plan_relation(
-    field: Any,
+    field: FieldMeta,
     target_type: type | None,
-    info: Any | None,  # noqa: ARG001
+    info: object,  # noqa: ARG001
     *,
-    target_definition: Any | None = None,
+    target_definition: DjangoTypeDefinition | None = None,
 ) -> tuple[str, str]:
     """Return relation traversal kind without constructing querysets.
 
@@ -235,7 +243,7 @@ def plan_relation(
 
 def _target_has_custom_get_queryset(
     target_type: type | None,
-    target_definition: Any | None = None,
+    target_definition: DjangoTypeDefinition | None = None,
 ) -> bool:
     """Report whether a relation target overrides ``get_queryset``.
 
@@ -260,12 +268,12 @@ def _target_has_custom_get_queryset(
     )
 
 
-def _schema_name_converter(info: Any | None) -> Any | None:
+def _schema_name_converter(info: object) -> NameConverter | None:
     """Return the active Strawberry name converter from planner or resolver ``info``."""
     return getattr(schema_config_from_info(info), "name_converter", None)
 
 
-def _graphql_names_by_python_name(type_cls: type | None, info: Any | None) -> dict[str, str]:
+def _graphql_names_by_python_name(type_cls: type | None, info: object) -> dict[str, str]:
     """Return authoritative GraphQL names for the Strawberry fields on ``type_cls``."""
     definition = getattr(type_cls, "__strawberry_definition__", None)
     converter = _schema_name_converter(info)
@@ -293,9 +301,9 @@ class _ForwardNames(NamedTuple):
     name converter the names came from.
     """
 
-    converter: Any
+    converter: NameConverter | None
     connections: dict[str, str]
-    fields: dict[str, tuple[str, Any]]
+    fields: dict[str, tuple[str, FieldMeta]]
 
 
 # Memo of ``_ForwardNames`` per ``(type_cls, id(name converter))``. Every
@@ -321,11 +329,11 @@ register_subsystem_clear(clear_forward_names, owner="optimizer.forward_names")
 
 
 def _build_forward_names(
-    field_map: dict[str, Any],
-    relation_connections: dict[str, str],
-    graphql_names: dict[str, str],
+    field_map: Mapping[str, FieldMeta],
+    relation_connections: Mapping[str, str],
+    graphql_names: Mapping[str, str],
     *,
-    converter: Any,
+    converter: NameConverter | None,
 ) -> _ForwardNames:
     """Map each field's and connection's GraphQL name to its target, first declaration winning."""
     connections: dict[str, str] = {}
@@ -334,7 +342,7 @@ def _build_forward_names(
         if candidate is None:
             candidate = to_camel_case(generated)
         connections.setdefault(candidate, relation_name)
-    fields: dict[str, tuple[str, Any]] = {}
+    fields: dict[str, tuple[str, FieldMeta]] = {}
     for field in field_map.values():
         django_name = getattr(field, "name", None)
         if django_name is None:
@@ -347,12 +355,12 @@ def _build_forward_names(
 
 
 def _forward_names(
-    field_map: dict[str, Any],
-    relation_connections: dict[str, str],
+    field_map: Mapping[str, FieldMeta],
+    relation_connections: Mapping[str, str],
     *,
     type_cls: type | None,
-    info: Any | None,
-    definition: Any | None = None,
+    info: GraphQLResolveInfo | None,
+    definition: DjangoTypeDefinition | None = None,
 ) -> _ForwardNames:
     """Return the forward GraphQL-name maps for one type's fields and connections.
 
@@ -398,12 +406,12 @@ def _forward_names(
 
 def _field_by_graphql_name(
     graphql_name: str,
-    field_map: dict[str, Any],
+    field_map: Mapping[str, FieldMeta],
     *,
     type_cls: type | None = None,
-    info: Any | None = None,
-    definition: Any | None = None,
-) -> tuple[str, Any] | None:
+    info: GraphQLResolveInfo | None = None,
+    definition: DjangoTypeDefinition | None = None,
+) -> tuple[str, FieldMeta] | None:
     """Forward-resolve a GraphQL name to its real Django field after a reverse miss."""
     names = _forward_names(
         field_map,
@@ -417,13 +425,13 @@ def _field_by_graphql_name(
 
 def _resolve_selection_target(
     graphql_name: str,
-    field_map: dict[str, Any],
-    relation_connections: dict[str, str],
+    field_map: Mapping[str, FieldMeta],
+    relation_connections: Mapping[str, str],
     *,
     type_cls: type | None,
-    info: Any | None,
-    definition: Any | None = None,
-) -> tuple[str, str, Any | None] | None:
+    info: GraphQLResolveInfo | None,
+    definition: DjangoTypeDefinition | None = None,
+) -> tuple[str, str, FieldMeta | None] | None:
     """Resolve a selection across model-field and synthesized-connection namespaces.
 
     The exact ``snake_case`` reversal answers first; a miss reads the forward
@@ -458,7 +466,7 @@ def _resolve_field_map(
     model: type[models.Model],
     *,
     source_type: type | None = None,
-) -> tuple[type | None, Any | None, dict[str, FieldMeta]]:
+) -> tuple[type | None, DjangoTypeDefinition | None, dict[str, FieldMeta]]:
     """Return ``(registered DjangoType, definition, field_map)`` for ``model``.
 
     Prefers the canonical ``DjangoTypeDefinition.field_map`` registered
@@ -494,10 +502,10 @@ def _resolve_field_map(
 
 
 def _resolve_relation_target(
-    definition: Any | None,
+    definition: DjangoTypeDefinition | None,
     django_name: str,
-    django_field: Any,
-) -> tuple[type | None, Any | None]:
+    django_field: FieldMeta,
+) -> tuple[type | None, DjangoTypeDefinition | None]:
     """Return one relation target as ``(origin, definition)``.
 
     The owner definition's ``related_target_for`` already resolved the child
@@ -531,7 +539,7 @@ def _resolve_relation_target(
     return origin, registry.get_definition(origin)
 
 
-def _resolve_optimizer_hints(definition: Any | None) -> dict[str, OptimizerHint]:
+def _resolve_optimizer_hints(definition: DjangoTypeDefinition | None) -> dict[str, OptimizerHint]:
     """Return optimizer hints from the resolved ``DjangoTypeDefinition``."""
     if definition is None:
         return {}
@@ -539,14 +547,14 @@ def _resolve_optimizer_hints(definition: Any | None) -> dict[str, OptimizerHint]
 
 
 def _build_child_queryset(
-    field: Any,
+    field: FieldMeta,
     target_type: type | None,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     has_custom_qs: bool,
     *,
     target_model: type[models.Model] | None = None,
-    policy: _SealPolicy = _LIST_RELATION_CHILD_POLICY,
-) -> Any:
+    policy: _SealPolicy[models.Model] = _LIST_RELATION_CHILD_POLICY,
+) -> QuerySet[models.Model]:
     """Build the queryset used inside a generated ``Prefetch`` object.
 
     ``policy`` is the seal the child's ``get_queryset`` return is held to. It
@@ -582,7 +590,8 @@ def _build_child_queryset(
     effective alias entering the hook is ``None`` on this path, and the hook
     cannot pin one of its own.
     """
-    queryset = base_queryset(field.related_model)
+    # Every caller plans only a relation whose related model resolved.
+    queryset = base_queryset(cast("type[models.Model]", field.related_model))
     if has_custom_qs:
         # The slice axis is the one axis the two child policies differ on, and it
         # differs because the paths do.
@@ -629,13 +638,13 @@ def _build_child_queryset(
 
 
 def _build_connection_child_queryset(
-    field: Any,
+    field: FieldMeta,
     target_type: type | None,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     has_custom_qs: bool,
     *,
     target_model: type[models.Model] | None = None,
-) -> Any:
+) -> QuerySet[models.Model]:
     """Build a nested-connection child queryset under ``_PREFETCH_CHILD_POLICY``.
 
     The nested-connection planner reaches the shared child builder through this
@@ -656,7 +665,7 @@ def _build_connection_child_queryset(
 
 
 def _resolver_identities_for(
-    sel: Any,
+    sel: FieldSelection,
     field_name: str,
     type_cls: type | None,
     runtime_prefixes: tuple[tuple[str, ...], ...],
@@ -679,7 +688,8 @@ def _resolver_identities_for(
     is the cartesian product over those prefixes and ``_response_keys(sel)``.
     """
     selection_runtime_prefixes = (
-        tuple(sel._optimizer_runtime_prefixes)
+        # Only the walker's ``SimpleNamespace`` clones carry runtime prefixes.
+        tuple(cast("SimpleNamespace", sel)._optimizer_runtime_prefixes)
         if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
         else runtime_prefixes
     )
@@ -695,11 +705,11 @@ def _resolver_identities_for(
 
 
 def _walk_selections(
-    selections: list[Any],
+    selections: Iterable[ConvertedSelection],
     model: type[models.Model],
     plan: OptimizationPlan,
     prefix: str = "",
-    info: Any | None = None,
+    info: GraphQLResolveInfo | None = None,
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
     *,
     source_type: type | None = None,
@@ -936,14 +946,14 @@ def _walk_selections(
 def _dispatch_single_relation(
     *,
     prefer_prefetch: bool,
-    sel: Any,
-    django_field: Any,
+    sel: FieldSelection,
+    django_field: FieldMeta,
     target_type: type | None,
-    target_definition: Any | None,
+    target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
     full_path: str,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
     enable_only: bool = True,
@@ -988,14 +998,14 @@ def _dispatch_single_relation(
 
 
 def _plan_select_relation(
-    sel: Any,
-    django_field: Any,
+    sel: FieldSelection,
+    django_field: FieldMeta,
     target_type: type | None,
-    target_definition: Any | None,
+    target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
     full_path: str,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
     *,
@@ -1049,13 +1059,13 @@ def _plan_select_relation(
 
 
 def _plan_prefetch_relation(
-    sel: Any,
-    django_field: Any,
+    sel: FieldSelection,
+    django_field: FieldMeta,
     target_type: type | None,
-    target_definition: Any | None,
+    target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
     *,
@@ -1091,7 +1101,7 @@ def _plan_prefetch_relation(
         plan.cacheable = False
     if django_field.related_model is None:
         _record_prefetch_path_keys(plan, lookup_path, resolver_identities)
-        append_unique(cast("MutableSequence[str | Prefetch]", plan.prefetch_related), lookup_path)
+        append_unique(cast("MutableSequence[PrefetchLookup]", plan.prefetch_related), lookup_path)
         return
 
     # Snapshot before the child absorb so nested PLANNED keys that land on
@@ -1117,14 +1127,14 @@ def _plan_prefetch_relation(
     nested_keys = tuple(k for k in plan.planned_resolver_keys if k not in prior_planned)
     _record_prefetch_path_keys(plan, lookup_path, (*resolver_identities, *nested_keys))
     append_prefetch_unique(
-        cast("MutableSequence[str | Prefetch]", plan.prefetch_related),
+        cast("MutableSequence[PrefetchLookup]", plan.prefetch_related),
         Prefetch(lookup_path, queryset=child_queryset),
     )
 
 
 def _record_relation_access(
     plan: OptimizationPlan,
-    django_field: Any,
+    django_field: FieldMeta,
     prefix: str,
     resolver_identities: tuple[str, ...],
     *,
@@ -1157,17 +1167,17 @@ def _record_relation_access(
 
 
 def _build_prefetch_child_queryset(
-    sel: Any,
-    django_field: Any,
+    sel: FieldSelection,
+    django_field: FieldMeta,
     target_type: type | None,
-    target_definition: Any | None,
+    target_definition: DjangoTypeDefinition | None,
     parent_plan: OptimizationPlan,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     *,
     has_custom_get_queryset: bool,
     enable_only: bool = True,
-) -> Any:
+) -> QuerySet[models.Model]:
     """Build and optimize the child queryset for a generated ``Prefetch``.
 
     ``enable_only`` (G2 gate, spec-035 Decision 4) is forwarded so a child
@@ -1194,15 +1204,15 @@ def _build_prefetch_child_queryset(
 
 
 def _build_prefetch_child_queryset_from_base(
-    sel: Any,
-    django_field: Any,
+    sel: FieldSelection,
+    django_field: FieldMeta,
     parent_plan: OptimizationPlan,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     *,
-    base_queryset: Any,
+    base_queryset: QuerySet[models.Model],
     enable_only: bool = True,
-) -> Any:
+) -> QuerySet[models.Model]:
     """Apply the child optimization plan to an already-built base queryset.
 
     This is the queryset-boundary abstraction: the visibility/default-manager
@@ -1214,7 +1224,8 @@ def _build_prefetch_child_queryset_from_base(
     child_plan = OptimizationPlan()
     _walk_selections(
         sel.selections,
-        django_field.related_model,
+        # Every caller plans only a relation whose related model resolved.
+        cast("type[models.Model]", django_field.related_model),
         child_plan,
         prefix="",
         info=info,
@@ -1229,16 +1240,16 @@ def _build_prefetch_child_queryset_from_base(
 def _apply_hint(
     hint: OptimizerHint,
     *,
-    sel: Any,
-    django_field: Any,
+    sel: FieldSelection,
+    django_field: FieldMeta,
     django_name: str,
     type_cls: type,
     target_type: type | None,
-    target_definition: Any | None,
+    target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
     full_path: str,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
     enable_only: bool = True,
@@ -1338,7 +1349,7 @@ def _apply_hint(
         )
         _record_prefetch_path_keys(plan, hinted_lookup, resolver_identities)
         append_prefetch_unique(
-            cast("MutableSequence[str | Prefetch]", plan.prefetch_related),
+            cast("MutableSequence[PrefetchLookup]", plan.prefetch_related),
             rebased_prefetch,
         )
         return True
@@ -1385,11 +1396,11 @@ def _apply_hint(
 
 
 def _hint_prefetch_over_pk_set(
-    prefetch: Prefetch,
+    prefetch: Prefetch[str],
     *,
     django_name: str,
     type_name: str,
-) -> Prefetch:
+) -> Prefetch[str]:
     """Return ``prefetch`` with a combined queryset rewritten to its primary-key set.
 
     Django's reverse-FK prefetch adds the parent-batch predicate to the child
@@ -1423,12 +1434,12 @@ def _hint_prefetch_over_pk_set(
 
 
 def _prefetch_hint_for_path(
-    prefetch: Prefetch,
+    prefetch: Prefetch[str],
     *,
     django_name: str,
     full_path: str,
     type_name: str,
-) -> Prefetch:
+) -> Prefetch[str]:
     """Return ``prefetch`` adapted from a type-relative lookup to ``full_path``."""
     lookup = getattr(prefetch, "prefetch_through", None)
     if lookup is None:
@@ -1469,10 +1480,10 @@ def _absorb_child_plan(parent_plan: OptimizationPlan, child_plan: OptimizationPl
 
 
 def _selected_scalar_names(
-    selections: list[Any],
+    selections: Iterable[ConvertedSelection],
     model: type[models.Model] | None,
     *,
-    info: Any | None = None,
+    info: GraphQLResolveInfo | None = None,
 ) -> set[str] | None:
     """Return selected scalar Django field names, or ``None`` when elision is unsafe."""
     if model is None:
@@ -1555,7 +1566,7 @@ def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None
 
 def _ensure_connector_only_fields(
     plan: OptimizationPlan,
-    parent_field: Any,
+    parent_field: FieldMeta,
     *,
     enable_only: bool = True,
 ) -> None:
@@ -1591,7 +1602,7 @@ def _ensure_connector_only_fields(
         append_unique(cast("MutableSequence[str]", plan.only_fields), attname)
 
 
-def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
+def _merge_aliased_selections(selections: Sequence[FieldSelection]) -> Sequence[FieldSelection]:
     """Merge same-field selections while preserving all represented response keys.
 
     The main walker path passes fragment-inlined field selections here, so
@@ -1618,8 +1629,8 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
         seen_names.add(key)
     else:
         return selections
-    seen: dict[str, Any] = {}
-    result: list[Any] = []
+    seen: dict[str, SimpleNamespace] = {}
+    result: list[FieldSelection] = []
     for sel in selections:
         if _is_fragment(sel):
             result.append(sel)
@@ -1670,7 +1681,7 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
     return result
 
 
-def _record_response_key_arguments(merged: Any, selection: Any) -> None:
+def _record_response_key_arguments(merged: SimpleNamespace, selection: FieldSelection) -> None:
     """Record a duplicate selection's arguments under its response key.
 
     The merged selection carries ``_optimizer_response_key_arguments``: a map
@@ -1702,7 +1713,7 @@ def _record_response_key_arguments(merged: Any, selection: Any) -> None:
     per_key[response_key] = payload
 
 
-def _normalized_alias_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _normalized_alias_payload(payload: Arguments) -> Arguments:
     """Return ``payload`` with pagination bounds coerced for equality checks.
 
     Alias-payload comparison (the divergence selector and the same-key
@@ -1724,7 +1735,7 @@ def _normalized_alias_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _response_key_arguments_conflict(selection: Any) -> bool:
+def _response_key_arguments_conflict(selection: FieldSelection) -> bool:
     """Return whether one response key carries two DIFFERENT argument payloads.
 
     Set by ``_record_response_key_arguments`` when parent-alias subtrees were
@@ -1735,7 +1746,7 @@ def _response_key_arguments_conflict(selection: Any) -> bool:
     return getattr(selection, "_optimizer_response_key_argument_conflict", False)
 
 
-def _aliased_arguments_diverge(selection: Any) -> bool:
+def _aliased_arguments_diverge(selection: FieldSelection) -> bool:
     """Return whether a merged selection's aliases carry divergent arguments.
 
     ``True`` when two response keys of the same field were selected with
@@ -1757,7 +1768,7 @@ def _aliased_arguments_diverge(selection: Any) -> bool:
     return any(payload != first for payload in payloads[1:])
 
 
-def _selection_runtime_prefixes(selection: Any) -> list[tuple[str, ...]] | None:
+def _selection_runtime_prefixes(selection: FieldSelection) -> list[tuple[str, ...]] | None:
     """Return selection-specific runtime prefixes carried by connection extraction."""
     prefixes = getattr(selection, "_optimizer_runtime_prefixes", None)
     if prefixes is None:
@@ -1765,7 +1776,7 @@ def _selection_runtime_prefixes(selection: Any) -> list[tuple[str, ...]] | None:
     return list(prefixes)
 
 
-def _merge_runtime_prefixes(merged: Any, selection: Any) -> None:
+def _merge_runtime_prefixes(merged: SimpleNamespace, selection: FieldSelection) -> None:
     """Union connection-carried runtime prefixes while preserving order."""
     incoming = _selection_runtime_prefixes(selection)
     if incoming is None:
@@ -1779,14 +1790,14 @@ def _merge_runtime_prefixes(merged: Any, selection: Any) -> None:
 
 
 def _plan_connection_relation(
-    sel: Any,
-    definition: Any,
+    sel: FieldSelection,
+    definition: DjangoTypeDefinition | None,
     *,
     relation_field_name: str,
-    field_map: dict[str, Any],
+    field_map: Mapping[str, FieldMeta],
     plan: OptimizationPlan,
     prefix: str,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_prefixes: tuple[tuple[str, ...], ...],
     type_cls: type | None,
     model: type[models.Model],

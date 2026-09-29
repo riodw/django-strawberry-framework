@@ -22,12 +22,14 @@ caller pre-computes the field list with
 
 import inspect
 from collections.abc import Callable
-from typing import Any, Literal
+from collections.abc import Set as AbstractSet
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import strawberry
 from asgiref.sync import sync_to_async
-from django.db import router
+from django.db import models, router
 from strawberry.types import Info
+from strawberry.utils.await_maybe import AwaitableOrValue
 
 from ..exceptions import OptimizerError
 
@@ -67,6 +69,12 @@ from ..utils.querysets import (
 from ..utils.relations import RelationKind, instance_accessor, is_many_side_relation_kind
 from .converters import _field_output_type_for
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..utils.typing import ModelField
+
+# Every generated relation / file resolver: Strawberry binds ``(root, info)``.
+_FieldResolver = Callable[[object, Info[object, object]], object]
+
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
 _EMPTY_ELISIONS: frozenset[str] = frozenset()
@@ -74,7 +82,8 @@ _EMPTY_ELISIONS: frozenset[str] = frozenset()
 # Sentinel distinguishing "caller did not read the PLAN sentinel" from a real
 # ``planned is None``. ``forward_resolver`` reads the plan once and threads it
 # (plus the resolver key) into ``_check_n1`` so the runtime-path walk is not
-# repeated when both the FK-id-elision and N+1 checks need it.
+# repeated when both the FK-id-elision and N+1 checks need it. Typed ``Any`` so it
+# can default ``_check_n1``'s precisely typed ``planned`` parameter.
 _PLAN_UNREAD: Any = object()
 
 # Sentinel returned by ``_build_fk_id_stub`` when the FK ``attname`` is deferred
@@ -87,10 +96,10 @@ _PLAN_UNREAD: Any = object()
 # signals "elision unsafe" instead of reading the column; ``forward_resolver``
 # treats the sentinel as not-elided and falls through to the normal
 # related-object resolve so ``_check_n1`` (strictness) sees the access.
-_FK_ELISION_UNSAFE: Any = object()
+_FK_ELISION_UNSAFE: object = object()
 
 
-def _fk_attname_is_deferred(root: Any, attname: str) -> bool:
+def _fk_attname_is_deferred(root: object, attname: str) -> bool:
     """Return ``True`` when reading ``root.<attname>`` would trigger a deferred fetch.
 
     The FK column lives in ``root.__dict__`` on a fully-loaded instance and is
@@ -119,7 +128,7 @@ def _fk_attname_is_deferred(root: Any, attname: str) -> bool:
         return False
 
 
-def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
+def _build_fk_id_stub(root: object, field_meta: FieldMeta) -> object:
     """Build a target-model stub from ``root.<attname>`` for B2 id-only selections.
 
     Returns ``_FK_ELISION_UNSAFE`` when ``field_meta.attname`` is deferred on
@@ -153,7 +162,7 @@ def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
     return stub
 
 
-def _will_lazy_load_single(root: Any, field_name: str) -> bool:
+def _will_lazy_load_single(root: object, field_name: str) -> bool:
     """Return ``True`` if a single-valued relation access would trigger a query.
 
     Forward FK, forward OneToOne, and reverse OneToOne. Django's
@@ -171,7 +180,7 @@ def _will_lazy_load_single(root: Any, field_name: str) -> bool:
     return field_name not in fields_cache
 
 
-def _will_lazy_load_many(root: Any, field_name: str) -> bool:
+def _will_lazy_load_many(root: object, field_name: str) -> bool:
     """Return ``True`` if a many-side relation access would trigger a query.
 
     Reverse FK and M2M. The only Django-supported cache for the many
@@ -186,7 +195,7 @@ def _will_lazy_load_many(root: Any, field_name: str) -> bool:
     return field_name not in prefetch_cache
 
 
-def _strictness_for(context: Any) -> str:
+def _strictness_for(context: object) -> str:
     """Return the N+1 strictness in force for this execution (``"off"`` when none).
 
     Prefers the per-execution ``ContextVar`` the running extension armed, which is
@@ -201,10 +210,11 @@ def _strictness_for(context: Any) -> str:
     live = _active_strictness()
     if live is not None:
         return live
-    return _optimizer_value(context, DST_OPTIMIZER_STRICTNESS, "off")
+    # The extension stashes its ``strictness`` string under this key.
+    return cast("str", _optimizer_value(context, DST_OPTIMIZER_STRICTNESS, "off"))
 
 
-def _relation_is_planned(key: str, planned: Any) -> bool:
+def _relation_is_planned(key: str, planned: AbstractSet[str] | None) -> bool:
     """Return whether the optimizer planned the relation named by ``key``.
 
     Reads both publish channels: the ``DST_OPTIMIZER_PLANNED`` stash (``planned``,
@@ -218,8 +228,8 @@ def _relation_is_planned(key: str, planned: Any) -> bool:
 
 
 def _check_n1(
-    info: Any,
-    root: Any,
+    info: object,
+    root: object,
     field_name: str,
     parent_type: type | None = None,
     *,
@@ -227,7 +237,7 @@ def _check_n1(
     accessor_name: str | None = None,
     to_attr: str | None = None,
     reason: str | None = None,
-    planned: Any = _PLAN_UNREAD,
+    planned: AbstractSet[str] | None = _PLAN_UNREAD,
     precomputed_key: str | None = None,
     force_unplanned: bool = False,
     strictness: str | None = None,
@@ -328,7 +338,7 @@ def _check_n1(
         _resolver_logger.warning("Potential N+1 on %s%s", field_name, suffix)
 
 
-def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..., Any]:
+def _name_resolver(resolver: _FieldResolver, field_name: str) -> _FieldResolver:
     """Stamp ``resolver.__name__`` to ``resolve_<field_name>``.
 
     Keeps GraphiQL traces readable and centralises the three
@@ -341,7 +351,7 @@ def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..
     return resolver
 
 
-def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
+def _field_meta_for_resolver(field: "ModelField", parent_type: type | None) -> FieldMeta:
     """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it.
 
     Production callers MUST pass ``parent_type=cls`` so the branch-sensitive
@@ -392,7 +402,11 @@ def _custom_visibility_type(field_meta: FieldMeta) -> type | None:
     return target_type
 
 
-def _visible_related_object(related: Any, target_type: type, info: Info) -> Any:
+def _visible_related_object(
+    related: object,
+    target_type: type,
+    info: Info[object, object],
+) -> AwaitableOrValue[models.Model | None]:
     """Re-check one relation object through its target visibility hook."""
     if related is None:
         return None
@@ -404,7 +418,7 @@ def _visible_related_object(related: Any, target_type: type, info: Info) -> Any:
     source = source.filter(pk=pk)
     if async_execution():
 
-        async def _resolve() -> Any:
+        async def _resolve() -> models.Model | None:
             visible = await apply_type_visibility_async(target_type, source, info)
             return await visible.afirst()
 
@@ -412,7 +426,11 @@ def _visible_related_object(related: Any, target_type: type, info: Info) -> Any:
     return apply_type_visibility_sync(target_type, source, info).first()
 
 
-def _visible_many_rows(source: Any, target_type: type, info: Info) -> Any:
+def _visible_many_rows(
+    source: models.QuerySet[models.Model],
+    target_type: type,
+    info: Info[object, object],
+) -> AwaitableOrValue[list[models.Model]]:
     """Apply target visibility, then bound and materialize a many-side relation.
 
     The async branch iterates the bound with ``async for`` unconditionally: the
@@ -423,7 +441,7 @@ def _visible_many_rows(source: Any, target_type: type, info: Info) -> Any:
     """
     if async_execution():
 
-        async def _resolve() -> list[Any]:
+        async def _resolve() -> list[models.Model]:
             visible = await apply_type_visibility_async(target_type, source, info)
             bounded = await bounded_rows_async(visible, info)
             return [row async for row in bounded]
@@ -434,7 +452,7 @@ def _visible_many_rows(source: Any, target_type: type, info: Info) -> Any:
 
 
 def _optimizer_scoped_relation(
-    info: Info,
+    info: Info[object, object],
     parent_type: type | None,
     field_name: str,
     *,
@@ -474,7 +492,10 @@ def _optimizer_scoped_relation(
     return _relation_is_optimizer_scoped(key)
 
 
-def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
+def _make_relation_resolver(
+    field: "ModelField",
+    parent_type: type | None = None,
+) -> _FieldResolver:
     """Generate a resolver for a Django relation field.
 
     Production callers MUST pass ``parent_type=cls`` so the branch-sensitive
@@ -542,7 +563,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
     if field_meta.is_many_side:
 
-        def many_resolver(root: Any, info: Info) -> Any:
+        def many_resolver(root: object, info: Info[object, object]) -> object:
             _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
             # Prefetched path (the optimized norm): Django stores the rows under
             # ``_prefetched_objects_cache[accessor_name]`` - the same key the N+1
@@ -593,7 +614,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
                 # the query on the event-loop thread. Iterate the bound queryset
                 # asynchronously instead - the same rows in the same order.
 
-                async def _resolve() -> list[Any]:
+                async def _resolve() -> list[models.Model]:
                     bounded = await bounded_rows_async(source, info)
                     return [row async for row in bounded]
 
@@ -610,11 +631,11 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             else AttributeError
         )
 
-        def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
+        def reverse_one_to_one_resolver(root: object, info: Info[object, object]) -> object:
             _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
             if _will_lazy_load_single(root, accessor_name) and async_execution():
 
-                async def _resolve_async() -> Any:
+                async def _resolve_async() -> object:
                     try:
                         related = await sync_to_async(getattr, thread_sensitive=True)(
                             root,
@@ -664,7 +685,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         else ()
     )
 
-    def forward_resolver(root: Any, info: Info) -> Any:
+    def forward_resolver(root: object, info: Info[object, object]) -> object:
         context = getattr(info, "context", None)
         # FK-id elision (spec-011 Decision 7) and the N+1 probe both key off the
         # resolver key, which requires an ``info.path`` walk. Read both sentinels
@@ -687,7 +708,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         if not elisions and planned is None and live_strictness in (None, "off"):
             if _will_lazy_load_single(root, field_name) and async_execution():
 
-                async def _resolve_async() -> Any:
+                async def _resolve_async() -> object:
                     try:
                         related = await sync_to_async(getattr, thread_sensitive=True)(
                             root,
@@ -758,7 +779,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         )
         if _will_lazy_load_single(root, field_name) and async_execution():
 
-            async def _resolve_async() -> Any:
+            async def _resolve_async() -> object:
                 try:
                     related = await sync_to_async(getattr, thread_sensitive=True)(
                         root,
@@ -802,7 +823,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
 def _attach_relation_resolvers(
     cls: type,
-    fields: tuple[Any, ...],
+    fields: "tuple[ModelField, ...]",
     *,
     skip_field_names: frozenset[str] = frozenset(),
 ) -> None:
@@ -823,7 +844,7 @@ def _attach_relation_resolvers(
         setattr(cls, field.name, strawberry.field(resolver=resolver))
 
 
-def _make_file_resolver(field: Any) -> Any:
+def _make_file_resolver(field: "ModelField") -> _FieldResolver:
     """Generate the parent resolver for a ``FileField`` / ``ImageField`` column.
 
     Object nullability ONLY (spec-037 Decision 4): a Django file column's
@@ -843,7 +864,7 @@ def _make_file_resolver(field: Any) -> Any:
     """
     field_name = field.name
 
-    def file_resolver(root: Any, info: Info) -> Any:  # noqa: ARG001 - info injected by Strawberry, unused here.
+    def file_resolver(root: object, info: Info[object, object]) -> object:  # noqa: ARG001 - info injected by Strawberry, unused here.
         value = getattr(root, field_name)
         return value if value else None
 
@@ -852,7 +873,7 @@ def _make_file_resolver(field: Any) -> Any:
 
 def _attach_file_resolvers(
     cls: type,
-    fields: tuple[Any, ...],
+    fields: "tuple[ModelField, ...]",
     *,
     skip_field_names: frozenset[str] = frozenset(),
 ) -> None:

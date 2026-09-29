@@ -70,7 +70,7 @@ from __future__ import annotations
 import threading
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
 from django.db.models.fields.files import FieldFile
@@ -81,9 +81,46 @@ from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
 from .canonical import base_container_values, canonical_sort_key
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from django.db import models
+    from collections.abc import Callable, Iterable, Iterator
+    from typing import Protocol, TypeAlias
 
+    from django.db import models
+    from django.db.models import QuerySet
+
+    from ..mutations.inputs import FieldError
     from ..mutations.sets import WriteMutationClass
+
+    #: The ``execute`` callable a connection hands an ``execute_wrapper``: the
+    #: statement parameters, the context and the result are passed through untouched.
+    _Execute: TypeAlias = Callable[
+        [
+            str,
+            object,
+            bool,
+            dict[str, object],
+        ],
+        object,
+    ]
+    #: A connection ``execute_wrapper`` wrapper, as ``execute_wrapper`` accepts it.
+    _ExecuteWrapper: TypeAlias = Callable[
+        [
+            _Execute,
+            str,
+            object,
+            bool,
+            dict[str, object],
+        ],
+        object,
+    ]
+
+    class _PreSaveReceiver(Protocol):
+        """The ``pre_save`` receiver ``make_cross_alias_save_guard`` builds."""
+
+        def __call__(self, sender: type[models.Model], using: str, **kwargs: object) -> None: ...
+
+
+_ModelT = TypeVar("_ModelT", bound="models.Model")
+_QuerySetT = TypeVar("_QuerySetT", bound="QuerySet[models.Model, object]")
 
 # The alias of the completion-spanning transaction ``DjangoSchema``'s execution
 # context opened for the mutation field currently executing. ``None`` means no
@@ -168,8 +205,8 @@ class WriteAliasContext:
     def __init__(self, alias: str, *, lock: bool) -> None:
         self.alias = alias
         self.lock = lock
-        self.authorized_pk: Any = None
-        self.target_state: dict[str, Any] | None = None
+        self.authorized_pk: object = None
+        self.target_state: dict[str, object] | None = None
         self.write_phase: bool = False
         self.auth_phase: bool = False
         self.auth_aliases: frozenset[str] = frozenset()
@@ -190,7 +227,7 @@ def resolve_write_alias(model: type | None) -> str:
 
 
 @contextmanager
-def managed_write_transaction(alias: str) -> Any:
+def managed_write_transaction(alias: str) -> Iterator[None]:
     """Mark a completion-spanning transaction open on ``alias`` (the execution-context seam).
 
     Entered by ``DjangoMutationExecutionContext`` around each generated
@@ -222,7 +259,7 @@ def require_managed_write(mutation_cls: type) -> str:
 
 
 @contextmanager
-def write_pipeline(alias: str, *, lock: bool) -> Any:
+def write_pipeline(alias: str, *, lock: bool) -> Iterator[None]:
     """Pin the shared relation-check helpers to ``alias`` (+ ``lock``) for one operation."""
     token = _WRITE_PIPELINE.set(WriteAliasContext(alias, lock=lock))
     try:
@@ -232,7 +269,7 @@ def write_pipeline(alias: str, *, lock: bool) -> Any:
 
 
 @contextmanager
-def open_write_pipeline(mutation_cls: WriteMutationClass) -> Any:
+def open_write_pipeline(mutation_cls: WriteMutationClass) -> Iterator[str]:
     """Open the nested atomic + pinned write-pipeline context for one mutation.
 
     Shared substrate for every write flavor: resolve the managed alias, then
@@ -248,7 +285,7 @@ def open_write_pipeline(mutation_cls: WriteMutationClass) -> Any:
 
 
 @contextmanager
-def pipeline_write_phase() -> Any:
+def pipeline_write_phase() -> Iterator[None]:
     """Mark the pinned-alias WRITE phase open for the duration of one save / delete call.
 
     Entered by the flavor write steps around exactly the statement-issuing write
@@ -288,7 +325,7 @@ def pipeline_write_phase() -> Any:
 _READ_ONLY_BARRIER_VENDORS = frozenset({"postgresql", "sqlite"})
 
 
-def _enforce_read_only_barrier(barrier_alias: str) -> Any:
+def _enforce_read_only_barrier(barrier_alias: str) -> Callable[[], None]:
     """Put ``barrier_alias`` in a DB-enforced read-only transaction; fail closed if impossible.
 
     Forced rollback alone is not a portable barrier against ordinary writes: on
@@ -346,7 +383,7 @@ def _enforce_read_only_barrier(barrier_alias: str) -> Any:
 
 
 @contextmanager
-def authorization_phase(auth_aliases: Any) -> Any:
+def authorization_phase(auth_aliases: Iterable[str]) -> Iterator[None]:
     """Open the dedicated AUTHORIZATION phase: auth-alias access inside a rolled-back transaction.
 
     Wraps EXACTLY the single permission-evaluation call inside the alias guard.
@@ -391,7 +428,7 @@ def authorization_phase(auth_aliases: Any) -> Any:
     prev_aliases = context.auth_aliases
     context.auth_phase = True
     context.auth_aliases = aliases
-    disarms: list[Any] = []
+    disarms: list[Callable[[], None]] = []
     try:
         try:
             with ExitStack() as stack:
@@ -436,7 +473,7 @@ _READ_ONLY_SQL_PREFIXES = (
 )
 
 
-def _sql_statement_token(sql: Any) -> str:
+def _sql_statement_token(sql: object) -> str:
     """Return the first meaningful (comment-stripped, uppercased) token of ``sql``.
 
     A NON-string statement returns ``""`` - unclassifiable, therefore never
@@ -475,7 +512,7 @@ def _sql_statement_token(sql: Any) -> str:
     return text[start:index].upper()
 
 
-def is_read_only_sql(sql: Any) -> bool:
+def is_read_only_sql(sql: object) -> bool:
     """Best-effort classify ``sql`` as read-only for the PINNED-alias phase guard.
 
     Comment-stripping + an ALLOW-list (never a write-keyword deny-list): a
@@ -496,7 +533,7 @@ def make_cross_alias_save_guard(
     actor: str,
     recourse: str,
     guard_thread: int | None = None,
-) -> Any:
+) -> _PreSaveReceiver:
     """Build the thread-scoped ``pre_save`` receiver rejecting a cross-alias save.
 
     The one body behind the two ``pre_save`` cross-alias blockers: the
@@ -512,7 +549,7 @@ def make_cross_alias_save_guard(
     """
     owner_thread = threading.get_ident() if guard_thread is None else guard_thread
 
-    def _block_cross_alias_save(sender: Any, using: Any, **kwargs: Any) -> None:
+    def _block_cross_alias_save(sender: type[models.Model], using: str, **kwargs: object) -> None:
         del kwargs
         if threading.get_ident() != owner_thread:
             return
@@ -529,7 +566,7 @@ def make_cross_alias_save_guard(
 
 
 @contextmanager
-def pipeline_alias_guard(owner: str, alias: str) -> Any:
+def pipeline_alias_guard(owner: str, alias: str) -> Iterator[None]:
     """Police the pipeline's SQL by alias AND phase (fail closed).
 
     Installed by the pipeline skeletons around the consumer-reachable phases
@@ -575,12 +612,12 @@ def pipeline_alias_guard(owner: str, alias: str) -> Any:
     pipeline = _WRITE_PIPELINE.get()
 
     def _reject_writes_outside_write_phase(
-        execute: Any,
-        sql: Any,
-        params: Any,
-        many: Any,
-        context: Any,
-    ) -> Any:
+        execute: _Execute,
+        sql: str,
+        params: object,
+        many: bool,
+        context: dict[str, object],
+    ) -> object:
         if (pipeline is None or not pipeline.write_phase) and not is_read_only_sql(sql):
             raise ConfigurationError(
                 f"{owner}: write SQL was issued on the pinned database alias {alias!r} "
@@ -591,14 +628,14 @@ def pipeline_alias_guard(owner: str, alias: str) -> Any:
             )
         return execute(sql, params, many, context)
 
-    def _reject_statements(other: str) -> Any:
+    def _reject_statements(other: str) -> _ExecuteWrapper:
         def _reject(
-            execute: Any,
-            sql: Any,
-            params: Any,
-            many: Any,
-            context: Any,
-        ) -> Any:
+            execute: _Execute,
+            sql: str,
+            params: object,
+            many: bool,
+            context: dict[str, object],
+        ) -> object:
             # The ONE narrow exception: during the authorization phase, statements
             # on an identified auth alias are permitted. The CONTAINMENT is NOT this
             # allow decision - it is the database-enforced read-only, rolled-back
@@ -673,7 +710,12 @@ def require_write_pipeline() -> WriteAliasContext:
     return context
 
 
-def pin_write_queryset(queryset: Any, alias: str, *, owner: str | None = None) -> Any:
+def pin_write_queryset(
+    queryset: _QuerySetT,
+    alias: str,
+    *,
+    owner: str | None = None,
+) -> _QuerySetT:
     """Pin ``queryset`` to the write alias; a hook that switched aliases fails closed.
 
     A visibility ``get_queryset`` hook may legitimately return the queryset
@@ -686,7 +728,8 @@ def pin_write_queryset(queryset: Any, alias: str, *, owner: str | None = None) -
     uncommitted-invisible state) while pretending one atomic boundary covers
     both. Fail closed instead of writing.
     """
-    hook_alias = queryset._db  # ``None`` unless the hook called ``.using(...)``.
+    # ``None`` unless the hook called ``.using(...)``.
+    hook_alias = queryset._db  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db
     if hook_alias is not None and hook_alias != alias:
         if owner is None:
             owner = f"{queryset.model.__name__} get_queryset"
@@ -696,10 +739,11 @@ def pin_write_queryset(queryset: Any, alias: str, *, owner: str | None = None) -
             "inside ONE transaction on the write alias; cross-alias writes are not supported. "
             "Remove the .using(...) call or fix the database router.",
         )
-    return queryset.using(alias)
+    # ``QuerySet.using`` returns ``Self``; the stubs' model plugin types the call ``Any``.
+    return cast("_QuerySetT", queryset.using(alias))
 
 
-def check_instance_write_alias(model: type, alias: str, instance: Any) -> None:
+def check_instance_write_alias(model: type, alias: str, instance: models.Model) -> None:
     """Re-check the router WITH the located instance before writing (fail closed on divergence).
 
     ``resolve_write_alias`` necessarily routed without an instance (the row was
@@ -719,7 +763,7 @@ def check_instance_write_alias(model: type, alias: str, instance: Any) -> None:
         )
 
 
-def canonical_pk(model: type[models.Model], value: Any) -> Any:
+def canonical_pk(model: type[models.Model], value: object) -> object:
     """Coerce ``value`` through ``model``'s pk field to its canonical Python form.
 
     The pk-equality primitive the pipeline compares authorization snapshots with:
@@ -733,7 +777,7 @@ def canonical_pk(model: type[models.Model], value: Any) -> Any:
     return model._meta.pk.to_python(value)
 
 
-def pks_match(model: type[models.Model], first: Any, second: Any) -> bool:
+def pks_match(model: type[models.Model], first: object, second: object) -> bool:
     """Compare two pk values canonically through ``model``'s pk field (fail closed).
 
     ``True`` only when BOTH values coerce through the pk field's ``to_python``
@@ -748,8 +792,8 @@ def pks_match(model: type[models.Model], first: Any, second: Any) -> bool:
 
 def reject_substituted_row(
     model: type[models.Model],
-    actual_pk: Any,
-    authorized_pk: Any,
+    actual_pk: object,
+    authorized_pk: object,
     *,
     message: str,
 ) -> None:
@@ -804,7 +848,7 @@ class _ValueSnapshot:
 
     __slots__ = ()
 
-    def matches(self, current: Any) -> bool:
+    def matches(self, current: object) -> bool:
         """Return whether ``current`` still holds the value this snapshot captured."""
         raise NotImplementedError  # pragma: no cover - abstract base
 
@@ -821,10 +865,10 @@ class _FileNameSnapshot(_ValueSnapshot):
 
     __slots__ = ("name",)
 
-    def __init__(self, name: Any) -> None:
+    def __init__(self, name: str | None) -> None:
         self.name = name
 
-    def matches(self, current: Any) -> bool:
+    def matches(self, current: object) -> bool:
         """Compare the database-relevant ``name``, not the descriptor object.
 
         A hook that mutates ``instance.<file>.name`` in place keeps the SAME
@@ -872,12 +916,12 @@ class _FieldFingerprint(_ValueSnapshot):
     def __init__(self, digest: str) -> None:
         self.digest = digest
 
-    def matches(self, current: Any) -> bool:
+    def matches(self, current: object) -> bool:
         """Compare the RECOMPUTED fingerprint: a flat digest, never a deep walk."""
         return _field_fingerprint(current) == self.digest
 
 
-def _leaf_token(item: Any) -> str:
+def _leaf_token(item: object) -> str:
     """Render one non-container leaf of the fingerprint without trusting consumer code.
 
     Two tiers. The immutable BUILT-IN atoms (whose base repr is a complete
@@ -909,7 +953,7 @@ def _leaf_token(item: Any) -> str:
     return f"{_safe_type_name(item)}:{_safe_arg_repr(item)}:{id(type(item))}:{id(item)}"
 
 
-def _field_fingerprint(value: Any) -> str:
+def _field_fingerprint(value: object) -> str:
     """Canonically serialize a mutable container value to a token string, ITERATIVELY.
 
     An explicit stack (never recursion) walks nested dict / list / tuple / set /
@@ -1009,7 +1053,7 @@ def _field_fingerprint(value: Any) -> str:
     return "".join(parts)
 
 
-def _snapshot_field_value(value: Any) -> Any:
+def _snapshot_field_value(value: object) -> object:
     """Snapshot a field value by value: fingerprint containers, name-capture files, alias scalars."""
     if isinstance(value, FieldFile):
         return _FileNameSnapshot(value.name)
@@ -1018,7 +1062,7 @@ def _snapshot_field_value(value: Any) -> Any:
     return value
 
 
-def snapshot_target_state(instance: Any) -> dict[str, Any]:
+def snapshot_target_state(instance: models.Model) -> dict[str, object]:
     """Snapshot the located instance's LOADED concrete field values (pre-consumer-code).
 
     Captured by the pipeline skeleton at the same immediately-after-locate moment
@@ -1044,7 +1088,7 @@ def snapshot_target_state(instance: Any) -> dict[str, Any]:
     }
 
 
-def assert_no_target_drift(owner: str, instance: Any) -> None:
+def assert_no_target_drift(owner: str, instance: models.Model) -> None:
     """Reject in-memory drift of the located target before the write (fail closed).
 
     Compares the instance's CURRENT loaded concrete field values against the
@@ -1093,7 +1137,11 @@ def assert_no_target_drift(owner: str, instance: Any) -> None:
             )
 
 
-def base_locked_queryset(model: type[models.Model], alias: str, visible_queryset: Any) -> Any:
+def base_locked_queryset(
+    model: type[_ModelT],
+    alias: str,
+    visible_queryset: QuerySet[models.Model],
+) -> QuerySet[_ModelT]:
     """Build the ``SELECT ... FOR UPDATE`` base query constrained by the visibility pk subquery.
 
     The lock rides the model's BASE MANAGER - a plain single-table query that can
@@ -1104,14 +1152,19 @@ def base_locked_queryset(model: type[models.Model], alias: str, visible_queryset
     rejects ``FOR UPDATE`` on several of them). Visibility is still enforced (a
     hidden row is not in the subquery, so it is not locked and not found).
     """
-    return (
+    # A ``model`` base-manager chain; the stubs' model plugin types it ``Any``.
+    return cast(
+        "QuerySet[_ModelT]",
         model._base_manager.using(alias)
         .select_for_update()
-        .filter(pk__in=visible_queryset.values("pk"))
+        .filter(pk__in=visible_queryset.values("pk")),
     )
 
 
-def pipeline_scoped_queryset(queryset: Any, model: type[models.Model]) -> Any:
+def pipeline_scoped_queryset(
+    queryset: QuerySet[_ModelT],
+    model: type[_ModelT],
+) -> QuerySet[_ModelT]:
     """Apply the active write pipeline's alias pin (+ conditional row lock) to ``queryset``.
 
     The invariant the shared relation-visibility helpers
@@ -1138,7 +1191,7 @@ def pipeline_scoped_queryset(queryset: Any, model: type[models.Model]) -> Any:
     return queryset
 
 
-def conflict_error() -> Any:
+def conflict_error() -> FieldError:
     """Build the in-band concurrent-write ``conflict`` ``FieldError`` on ``id``.
 
     The disappearing-row envelope: the target existed at locate but a concurrent
@@ -1170,7 +1223,11 @@ def not_updated_exceptions(model: type) -> tuple[type[BaseException], ...]:
     return (DatabaseError,)
 
 
-def forced_update_conflict_errors(instance: Any, alias: str, exc: BaseException) -> list[Any]:
+def forced_update_conflict_errors(
+    instance: models.Model,
+    alias: str,
+    exc: BaseException,
+) -> list[FieldError]:
     """Map a zero-row forced update to the ``conflict`` envelope, or re-raise ``exc``.
 
     The compat disambiguation (Django 5.2's zero-row signal is an untyped

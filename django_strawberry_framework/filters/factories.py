@@ -33,7 +33,7 @@ is ``utils/inputs.py::resolve_set_meta_fields``; class-Meta write-back is
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from ..utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
@@ -42,6 +42,9 @@ from ..utils.inputs import (
 )
 from .inputs import _build_input_fields, _build_logic_fields
 from .sets import FilterSet
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..types.definition import DjangoTypeDefinition
 
 # Module-level dynamic-FilterSet cache per Layer 6 of Decision 3. Keys
 # are produced by ``utils/inputs.py::make_set_meta_cache_key`` so dict /
@@ -63,7 +66,7 @@ from .sets import FilterSet
 # a rebuilt model gets a fresh key rather than a wrong hit -- and carries
 # no real-world cost in a normal (non-reloading) process. Add a clear hook
 # here only if a consumer reload path ever demands it.
-_dynamic_filterset_cache: dict[tuple, type[FilterSet]] = {}
+_dynamic_filterset_cache: dict[tuple[object, ...], type[FilterSet]] = {}
 
 
 # Reserved kwargs stripped from ``get_filterset_class``'s meta input to
@@ -71,7 +74,7 @@ _dynamic_filterset_cache: dict[tuple, type[FilterSet]] = {}
 _RESERVED_FACTORY_KEYS: frozenset[str] = frozenset({"filterset_base_class"})
 
 
-class FilterArgumentsFactory(GeneratedInputArgumentsFactory):
+class FilterArgumentsFactory(GeneratedInputArgumentsFactory[FilterSet]):
     """BFS-build every reachable Strawberry input class for a ``FilterSet``.
 
     The BFS walk, per-class collision check, idempotent cache, and
@@ -111,10 +114,10 @@ class FilterArgumentsFactory(GeneratedInputArgumentsFactory):
 
     def _build_input_triples(
         self,
-        set_cls: type,
+        set_cls: type[FilterSet],
         type_name: str,
-        owner_definition: Any,
-    ) -> list[tuple[str, Any, dict[str, Any]]]:
+        owner_definition: DjangoTypeDefinition | None,
+    ) -> list[tuple[str, object, dict[str, object]]]:
         """Filter input triples plus the ``and_`` / ``or_`` / ``not_`` operator bag."""
         return [*_build_input_fields(set_cls, owner_definition), *_build_logic_fields(type_name)]
 
@@ -141,7 +144,10 @@ _get_filterset_class = make_dynamic_set_getter(
 )
 
 
-def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) -> type[FilterSet]:
+def get_filterset_class(
+    filterset_class: type[FilterSet] | None,
+    **meta: object,
+) -> type[FilterSet]:
     """Return a ``FilterSet`` class for use against a connection / list field.
 
     Mirrors the cookbook's same-named helper at

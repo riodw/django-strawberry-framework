@@ -68,7 +68,7 @@ products ``Mutation`` + ``config/schema.py`` wiring + the live
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import strawberry
 from django.conf import settings
@@ -133,11 +133,16 @@ from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from typing import TypeAlias
+    from collections.abc import Callable, Coroutine
+    from typing import Protocol, TypeAlias, TypeVar
 
     from django.db import models
+    from strawberry.types import Info
 
     from ..auth.mutations import _SealedAuthHolderMeta
+    from ..utils.inputs import InputFieldSpec
+    from ..utils.typing import ConcreteField, ModelField
+    from .inputs import ModelFieldIndex
     from .sets import DjangoMutation, WriteMutationClass
 
     # A class ``authorize_or_raise`` / ``payload_cls_for`` receives: every
@@ -145,6 +150,51 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # holders (zero-arg-constructible classes carrying ``check_permission`` and the
     # bind outputs, built by ``_SealedAuthHolderMeta``).
     _AuthorizedClass: TypeAlias = WriteMutationClass | _SealedAuthHolderMeta
+
+    # The provided M2M replace-sets the model decode hands its write step, in
+    # assignment order: ``(m2m field name, decoded pk list)``.
+    _M2MAssignments: TypeAlias = list[tuple[str, object]]
+    # The model ``decode_step`` product: ``(target, m2m_assignments, exclude)``, plus the
+    # captured ``excluded_values`` when the bind stashed an ``EXCLUDED`` spec.
+    _ModelDecoded: TypeAlias = tuple[models.Model, _M2MAssignments, list[str]]
+    _ModelDecodedWithExcluded: TypeAlias = tuple[
+        models.Model,
+        _M2MAssignments,
+        list[str],
+        dict[str, object],
+    ]
+
+    # A flavor's ``decode_step`` product and ``write_step`` product, threaded through
+    # the shared skeleton unchanged.
+    _DecodedT = TypeVar("_DecodedT")
+    _SavedT = TypeVar("_SavedT")
+    # The mutation class a flavor's sync pipeline body is written against.
+    _MutationClassT = TypeVar("_MutationClassT")
+    _MutationClassT_contra = TypeVar("_MutationClassT_contra", contravariant=True)
+
+    class _SyncResolverEntry(Protocol[_MutationClassT_contra]):
+        """A flavor's module-level sync resolver entry (``make_resolver_entries``)."""
+
+        def __call__(
+            self,
+            mutation_cls: _MutationClassT_contra,
+            info: Info[object, object],
+            *,
+            data: object = ...,
+            id: object = ...,  # noqa: A002
+        ) -> object: ...
+
+    class _AsyncResolverEntry(Protocol[_MutationClassT_contra]):
+        """A flavor's module-level async resolver entry (``make_resolver_entries``)."""
+
+        def __call__(
+            self,
+            mutation_cls: _MutationClassT_contra,
+            info: Info[object, object],
+            *,
+            data: object = ...,
+            id: object = ...,  # noqa: A002
+        ) -> Coroutine[object, object, object]: ...
 
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -159,14 +209,14 @@ _MUTATION_ASYNC_RECOURSE = sync_pipeline_recourse("DjangoMutation")
 
 def run_write_pipeline_sync(
     mutation_cls: WriteMutationClass,
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
+    info: Info[object, object],
+    data: object,
+    id: object,  # noqa: A002
     *,
-    decode_step: Any,
-    write_step: Any,
-    tail_step: Any = None,
-) -> Any:
+    decode_step: Callable[[models.Model | None], _DecodedT | list[FieldError]],
+    write_step: Callable[[models.Model | None, _DecodedT], _SavedT | list[FieldError]],
+    tail_step: Callable[[_SavedT], object] | None = None,
+) -> object:
     """The shared write orchestration every mutation flavor rides.
 
     The single-sited skeleton the model (create / update / delete), the
@@ -328,6 +378,9 @@ def run_write_pipeline_sync(
 
             if slot is None:
                 return payload_cls(ok=True, errors=[])
+            # ``slot`` is non-``None`` only on the model-backed flavors, whose
+            # ``write_step`` answers the saved model instance.
+            saved_row = cast("models.Model", saved)
 
             # The flavor-independent backstop over the snapshot: whatever the
             # flavor's own validation concluded, an update result whose pk
@@ -338,12 +391,12 @@ def run_write_pipeline_sync(
             if meta.operation == "update":
                 reject_substituted_row(
                     cast("type[models.Model]", model),
-                    saved.pk,
+                    saved_row.pk,
                     authorized_pk,
                     message=(
                         f"{mutation_cls.__name__}: the write step returned "
                         f"{cast('type[models.Model]', model).__name__} "
-                        f"pk={_safe_arg_repr(saved.pk)}, but the located, "
+                        f"pk={_safe_arg_repr(saved_row.pk)}, but the located, "
                         f"authorized row is pk={_safe_arg_repr(authorized_pk)}; an update must write "
                         "the row that was "
                         "authorized, never a substituted one."
@@ -352,7 +405,7 @@ def run_write_pipeline_sync(
 
             obj = refetch_optimized(
                 cast("type", primary_type),
-                saved.pk,
+                saved_row.pk,
                 info,
                 alias=using,
                 force_load=False,
@@ -366,7 +419,11 @@ def run_write_pipeline_sync(
             return build_payload(payload_cls, slot, obj, [])
 
 
-def error_payload_builder(payload_cls: type, slot: str | None, using: str) -> Any:
+def error_payload_builder(
+    payload_cls: type,
+    slot: str | None,
+    using: str,
+) -> Callable[[list[FieldError]], object]:
     """Build the roll-back-then-envelope closure every write error path returns through.
 
     The single error-envelope constructor (centralized for mutation atomicity, shipped 0.0.14):
@@ -387,7 +444,7 @@ def error_payload_builder(payload_cls: type, slot: str | None, using: str) -> An
     ``None`` selects the model-less ``{ ok: false, errors }`` envelope.
     """
 
-    def _error_payload(errors: list[FieldError]) -> Any:
+    def _error_payload(errors: list[FieldError]) -> object:
         transaction.set_rollback(True, using=using)
         if slot is None:
             return payload_cls(ok=False, errors=errors)
@@ -397,12 +454,12 @@ def error_payload_builder(payload_cls: type, slot: str | None, using: str) -> An
 
 
 def _decode_relations(
-    data: Any,
-    info: Any,
+    data: object,
+    info: Info[object, object],
     *,
-    specs: list,
-    model_fields: dict[str, Any],
-) -> tuple[dict[str, Any], list[Any], dict[str, Any], FieldError | None]:
+    specs: list[InputFieldSpec],
+    model_fields: ModelFieldIndex,
+) -> tuple[dict[str, object], _M2MAssignments, dict[str, object], FieldError | None]:
     """Decode provided input fields into model attrs + M2M pk lists.
 
     The model rider of ``utils/write_values.py::decode_provided_fields`` (spec-036
@@ -427,10 +484,13 @@ def _decode_relations(
     Returns ``(scalar_and_fk_attrs, m2m_assignments, excluded_values, error)``.
     """
 
-    def extra(spec: Any) -> dict[str, Any]:
+    def extra(spec: InputFieldSpec) -> dict[str, object]:
         return {"relation_field": model_fields[spec.input_attr]}
 
-    def _model_scalar_decode(spec: Any, value: Any) -> tuple[Any, FieldError | None]:
+    def _model_scalar_decode(
+        spec: InputFieldSpec,
+        value: object,
+    ) -> tuple[object, FieldError | None]:
         graphql_name = spec.graphql_name
         null_error = _explicit_null_error(model_fields[spec.input_attr], graphql_name, value)
         if null_error is not None:
@@ -440,7 +500,9 @@ def _decode_relations(
             return None, text_error
         return _make_aware_if_naive(decoded), None
 
-    def relation_handler(dest: dict[str, Any]) -> Any:
+    def relation_handler(
+        dest: dict[str, object],
+    ) -> Callable[[InputFieldSpec, object], FieldError | None]:
         return relation_into(
             dest,
             single=_decode_single_relation_id,
@@ -449,12 +511,15 @@ def _decode_relations(
             extra=extra,
         )
 
-    scalar_and_fk_attrs: dict[str, Any] = {}
-    m2m_pks: dict[str, Any] = {}
-    excluded_values: dict[str, Any] = {}
+    scalar_and_fk_attrs: dict[str, object] = {}
+    m2m_pks: dict[str, object] = {}
+    excluded_values: dict[str, object] = {}
     scalar_handler = decoded_into(scalar_and_fk_attrs, _model_scalar_decode)
 
-    def _model_excluded_decode(spec: Any, value: Any) -> tuple[Any, FieldError | None]:
+    def _model_excluded_decode(
+        spec: InputFieldSpec,
+        value: object,
+    ) -> tuple[object, FieldError | None]:
         graphql_name = spec.graphql_name
         null_error = _explicit_null_error(model_fields[spec.input_attr], graphql_name, value)
         if null_error is not None:
@@ -478,7 +543,11 @@ def _decode_relations(
     return scalar_and_fk_attrs, list(m2m_pks.items()), excluded_values, None
 
 
-def _explicit_null_error(django_field: Any, field_name: str, value: Any) -> FieldError | None:
+def _explicit_null_error(
+    django_field: ModelField,
+    field_name: str,
+    value: object,
+) -> FieldError | None:
     """Reject an explicit ``null`` on a non-nullable scalar column.
 
     A provided ``None`` (``UNSET`` is already stripped) on a ``null=False`` column is
@@ -499,7 +568,7 @@ def _explicit_null_error(django_field: Any, field_name: str, value: Any) -> Fiel
     return null_field_error(field_name)
 
 
-def _make_aware_if_naive(value: Any) -> Any:
+def _make_aware_if_naive(value: object) -> object:
     """Make a naive ``datetime`` input timezone-aware under ``USE_TZ``.
 
     Strawberry's ``DateTime`` scalar parses a naive ISO string into a naive
@@ -518,13 +587,13 @@ def _make_aware_if_naive(value: Any) -> Any:
 
 
 def _decode_single_relation_id(
-    value: Any,
+    value: object,
     *,
     graphql_name: str,
-    related_model: Any,
-    info: Any,
-    relation_field: Any,
-) -> tuple[Any, FieldError | None]:
+    related_model: type[models.Model],
+    info: Info[object, object],
+    relation_field: ModelField,
+) -> tuple[object, FieldError | None]:
     """Decode one FK / OneToOne id via the shared set decoder (spec-036 Decision 8 / 10).
 
     Wraps the single value in a one-element list, delegates to
@@ -556,17 +625,17 @@ def _decode_single_relation_id(
     if error is not None:
         return None, error
     # The shared decoder answers ``pks`` exactly when it reports no error.
-    return cast("list[Any]", pks)[0], None
+    return cast("list[object]", pks)[0], None
 
 
 def _decode_relation_id_list(
-    value: Any,
+    value: object,
     *,
     graphql_name: str,
-    related_model: Any,
-    info: Any,
-    relation_field: Any,
-) -> tuple[list[Any], FieldError | None]:
+    related_model: type[models.Model],
+    info: Info[object, object],
+    relation_field: ModelField,
+) -> tuple[list[object], FieldError | None]:
     """Decode an M2M ``list[<id>]`` to pks: null-reject, then the shared set decoder.
 
     The list is the replace-set the post-save step assigns. An explicit
@@ -592,7 +661,7 @@ def _decode_relation_id_list(
     if error is not None:
         return [], error
     # The shared decoder answers ``pks`` exactly when it reports no error.
-    return cast("list[Any]", pks), None
+    return cast("list[object]", pks), None
 
 
 def _relation_null_error(field_name: str) -> FieldError:
@@ -613,12 +682,12 @@ def _relation_null_error(field_name: str) -> FieldError:
 
 def locate_instance(
     target_type: type,
-    node_id: Any,
-    info: Any,
+    node_id: object,
+    info: Info[object, object],
     *,
     alias: str,
     select_for_update: bool = True,
-) -> Any | None:
+) -> models.Model | None:
     """Locate an update / delete row through the visibility ``get_queryset`` (spec-036 Decision 10).
 
     The same visibility hook every read surface uses (and the
@@ -658,9 +727,9 @@ def locate_instance(
 
 
 def _provided_attr_names(
-    model_fields: dict[str, Any],
-    scalar_and_fk_attrs: dict[str, Any],
-    m2m_assignments: list[Any],
+    model_fields: ModelFieldIndex,
+    scalar_and_fk_attrs: dict[str, object],
+    m2m_assignments: _M2MAssignments,
 ) -> set[str]:
     """Return the model field names a partial input provided (for the exclude carve-out).
 
@@ -738,12 +807,12 @@ def _unique_constraint_groups(model: type[models.Model]) -> list[set[str]]:
         # Only a concrete ``Field`` carries a ``column``; a reverse ``*Rel`` has none.
         if hasattr(field, "column")
         and getattr(field, "unique", False)
-        and not cast("models.Field", field).primary_key
+        and not cast("ConcreteField", field).primary_key
     )
     return groups
 
 
-def _assign_m2m(instance: Any, m2m_assignments: list[Any]) -> None:
+def _assign_m2m(instance: models.Model, m2m_assignments: _M2MAssignments) -> None:
     """Assign provided M2M relations on a saved instance.
 
     For each provided ``(m2m_field_name, [pk, ...])``: ``instance.<m2m>.set([
@@ -758,12 +827,12 @@ def _assign_m2m(instance: Any, m2m_assignments: list[Any]) -> None:
 
 def refetch_optimized(
     target_type: type,
-    pk: Any,
-    info: Any,
+    pk: object,
+    info: Info[object, object],
     *,
     alias: str,
     force_load: bool,
-) -> Any | None:
+) -> models.Model | None:
     """Re-fetch the written row by pk + optimizer plan (spec-036 Decision 9).
 
     ``qs = initial_queryset(target_type).filter(pk=pk)`` - **by pk, WITHOUT the
@@ -809,9 +878,9 @@ def refetch_optimized(
 def build_payload(
     payload_cls: type,
     slot: str,
-    obj: Any,
+    obj: object,
     errors: list[FieldError],
-) -> Any:
+) -> object:
     """Instantiate a ``<Name>Payload`` with ``obj`` in the uniform slot + ``errors`` (spec-036 Decision 7).
 
     The single source for the success (``obj`` set, ``errors`` empty) and error
@@ -825,10 +894,10 @@ def build_payload(
 
 def _run_pipeline_sync(
     mutation_cls: type[DjangoMutation],
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
-) -> Any:
+    info: Info[object, object],
+    data: object,
+    id: object,  # noqa: A002
+) -> object:
     """Run the synchronous decode -> ... -> payload pipeline inside one ``transaction.atomic()``.
 
     The single sync body the async path wraps in ``sync_to_async(...,
@@ -856,22 +925,27 @@ def _run_pipeline_sync(
             info,
             instance=instance,
             # A create / update has an input, so the bind stashed the decode's reverse maps.
-            specs=cast("list", mutation_cls._input_field_specs),
-            model_fields=cast("dict[str, Any]", mutation_cls._model_fields_by_attr),
+            specs=cast("list[InputFieldSpec]", mutation_cls._input_field_specs),
+            model_fields=cast("ModelFieldIndex", mutation_cls._model_fields_by_attr),
         ),
-        write_step=lambda instance, decoded: _model_write_step(instance, decoded),
+        # The model flavor's bind stashes no ``EXCLUDED`` spec, so its decode
+        # answers the three-tuple.
+        write_step=lambda instance, decoded: _model_write_step(
+            instance,
+            cast("_ModelDecoded", decoded),
+        ),
     )
 
 
 def _model_decode_step(
     model: type[models.Model],
-    data: Any,
-    info: Any,
+    data: object,
+    info: Info[object, object],
     *,
-    instance: Any,
-    specs: list,
-    model_fields: dict[str, Any],
-) -> tuple[Any, ...] | list[FieldError]:
+    instance: models.Model | None,
+    specs: list[InputFieldSpec],
+    model_fields: ModelFieldIndex,
+) -> _ModelDecoded | _ModelDecodedWithExcluded | list[FieldError]:
     """The model ``decode_step``: relation-decode + construct / ``setattr``.
 
     Decodes the input via ``_decode_relations`` (the ``036`` contract: type-check
@@ -928,9 +1002,9 @@ def _model_decode_step(
 
 
 def _model_write_step(
-    instance: Any,
-    decoded: tuple[Any, list[Any], list[str] | None],
-) -> Any | list[FieldError]:
+    instance: models.Model | None,
+    decoded: _ModelDecoded,
+) -> models.Model | list[FieldError]:
     """The model ``write_step``: ``full_clean`` -> ``save`` -> M2M.
 
     From validation onward create and update run an IDENTICAL tail (the prior
@@ -981,7 +1055,7 @@ def _model_write_step(
     return target
 
 
-def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
+def forced_save_or_field_errors(target: models.Model) -> list[FieldError] | None:
     """Run ``target.save(force_update=True)``; map races to the envelope else ``None``.
 
     The update-side counterpart of ``save_or_field_errors`` (0.0.14 concurrency hardening), with the
@@ -1013,9 +1087,9 @@ def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
 
 def _run_delete(
     mutation_cls: type[DjangoMutation],
-    info: Any,
-    id: Any,  # noqa: A002
-) -> Any:
+    info: Info[object, object],
+    id: object,  # noqa: A002
+) -> object:
     """Delete rider of ``run_write_pipeline_sync``: snapshot-before-delete via ``tail_step``.
 
     Locate / authorize / alias-guard / rollback envelope are the shared skeleton.
@@ -1033,16 +1107,22 @@ def _run_delete(
         None,
         id,
         decode_step=lambda _instance: None,
+        # A delete always locates: a missing row returned the not-found envelope
+        # before the write step, so the step receives the located row.
         write_step=lambda instance, _decoded: _delete_write_step(
             mutation_cls,
             info,
-            instance,
+            cast("models.Model", instance),
         ),
         tail_step=lambda snapshot: build_payload(payload_cls, slot, snapshot, []),
     )
 
 
-def _delete_write_step(mutation_cls: type[DjangoMutation], info: Any, instance: Any) -> Any:
+def _delete_write_step(
+    mutation_cls: type[DjangoMutation],
+    info: Info[object, object],
+    instance: models.Model,
+) -> models.Model | list[FieldError] | None:
     """Snapshot the authorized row, then delete it (spec-036 snapshot-before-delete).
 
     The snapshot is the optimizer-planned re-fetch fully materialized (relations
@@ -1091,7 +1171,7 @@ def _delete_write_step(mutation_cls: type[DjangoMutation], info: Any, instance: 
     return snapshot
 
 
-def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
+def _delete_or_field_errors(instance: models.Model) -> list[FieldError] | None:
     """Run ``instance.delete()``; map a protected-reference refusal to the envelope else ``None``.
 
     The delete-side counterpart of ``save_or_field_errors``: a row referenced
@@ -1134,11 +1214,11 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
 
 def authorize_or_raise(
     mutation_cls: _AuthorizedClass,
-    info: Any,
+    info: Info[object, object],
     operation: str,
-    data: Any,
+    data: object,
     *,
-    instance: Any,
+    instance: models.Model | None,
 ) -> None:
     """Run ``check_permission``; a ``False`` return raises a top-level ``GraphQLError``.
 
@@ -1174,7 +1254,7 @@ def authorize_or_raise(
 
 
 def _full_clean_or_field_errors(
-    instance: Any,
+    instance: models.Model,
     *,
     exclude: list[str] | None,
 ) -> list[FieldError] | None:
@@ -1198,7 +1278,7 @@ def _full_clean_or_field_errors(
     return None
 
 
-def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
+def save_or_field_errors(save_callable: Callable[[], object]) -> list[FieldError] | None:
     """Run ``save_callable()``; map a race ``IntegrityError`` to the envelope else ``None``.
 
     Wraps a zero-arg callable rather than a fixed ``instance.save()`` so ONE
@@ -1218,11 +1298,11 @@ def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
 
 
 def coerce_lookup_id(
-    id: Any,  # noqa: A002
+    id: object,  # noqa: A002
     target_type: type,
     *,
     using: str | None = None,
-) -> tuple[Any, FieldError | None]:
+) -> tuple[object, FieldError | None]:
     """Coerce the update/delete ``id:`` to a pk: GlobalID for a Relay primary, raw pk otherwise.
 
     ``DjangoMutationField`` declares ``id`` as ``strawberry.ID`` - the
@@ -1317,17 +1397,26 @@ def payload_cls_for(mutation_cls: _AuthorizedClass) -> type:
     from . import inputs
 
     # An auth permission holder reaching a pipeline is a bound ``login`` / ``logout``
-    # holder, whose payload name the auth bind stashed.
-    return getattr(inputs, cast("str", mutation_cls._payload_type_name))
+    # holder, whose payload name the auth bind stashed; the bind materialized that
+    # payload class as a module global of ``mutations.inputs``.
+    return cast("type", getattr(inputs, cast("str", mutation_cls._payload_type_name)))
 
 
 async def run_pipeline_async(
-    sync_body: Any,
-    mutation_cls: type,
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
-) -> Any:
+    sync_body: Callable[
+        [
+            _MutationClassT,
+            Info[object, object],
+            object,
+            object,
+        ],
+        object,
+    ],
+    mutation_cls: _MutationClassT,
+    info: Info[object, object],
+    data: object,
+    id: object,  # noqa: A002
+) -> object:
     """Run a sync mutation/form pipeline body in one ``sync_to_async(thread_sensitive=True)`` call.
 
     The shared async boundary both the model (``resolve_mutation_async``) and form
@@ -1349,7 +1438,17 @@ async def run_pipeline_async(
 # avoiding a mutations-subpackage dependency.
 
 
-def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:
+def make_resolver_entries(
+    sync_body: Callable[
+        [
+            _MutationClassT,
+            Info[object, object],
+            object,
+            object,
+        ],
+        object,
+    ],
+) -> tuple[_SyncResolverEntry[_MutationClassT], _AsyncResolverEntry[_MutationClassT]]:
     """Return the ``(resolve_sync, resolve_async)`` module-entry pair for a write flavor (spec-039).
 
     The two byte-parallel module-level entries every dispatcher-backed write flavor
@@ -1365,22 +1464,22 @@ def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:
     """
 
     def resolve_sync(
-        mutation_cls: type,
-        info: Any,
+        mutation_cls: _MutationClassT,
+        info: Info[object, object],
         *,
-        data: Any = strawberry.UNSET,
-        id: Any = strawberry.UNSET,  # noqa: A002
-    ) -> Any:
+        data: object = strawberry.UNSET,
+        id: object = strawberry.UNSET,  # noqa: A002
+    ) -> object:
         """Normalize the ``UNSET``-default kwargs to ``sync_body``'s positional args."""
         return sync_body(mutation_cls, info, data, id)
 
     async def resolve_async(
-        mutation_cls: type,
-        info: Any,
+        mutation_cls: _MutationClassT,
+        info: Info[object, object],
         *,
-        data: Any = strawberry.UNSET,
-        id: Any = strawberry.UNSET,  # noqa: A002
-    ) -> Any:
+        data: object = strawberry.UNSET,
+        id: object = strawberry.UNSET,  # noqa: A002
+    ) -> object:
         """Run ``sync_body`` in one ``sync_to_async(thread_sensitive=True)`` call."""
         return await run_pipeline_async(sync_body, mutation_cls, info, data, id)
 

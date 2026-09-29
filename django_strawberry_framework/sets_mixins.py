@@ -46,9 +46,9 @@ sets.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar, cast
 
 from django.utils.module_loading import import_string
 
@@ -64,6 +64,9 @@ from .utils.permissions import (
     verbatim_path,
 )
 from .utils.strings import pascal_case_or_raise
+
+_T = TypeVar("_T")
+_D = TypeVar("_D", bound="RelatedSetTargetMixin")
 
 
 class ClassBasedTypeNameMixin:
@@ -133,7 +136,7 @@ class LazyRelatedClassMixin:
     consumer.
     """
 
-    def resolve_lazy_class(self, class_ref: Any, bound_class: type | None) -> Any:
+    def resolve_lazy_class(self, class_ref: object, bound_class: type | None) -> object:
         """Resolve `class_ref` to a class.
 
         Strings resolve via two attempts:
@@ -208,7 +211,7 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
         if not hasattr(self, self._owner_attr):
             setattr(self, self._owner_attr, owner)
 
-    def _resolved_target(self) -> Any:
+    def _resolved_target(self) -> object:
         """Resolve the (possibly-lazy) target class on first access and re-store it.
 
         The family gate (``_validate_target``) fires here, AFTER the re-store,
@@ -228,7 +231,7 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
             self._validate_target(resolved)
         return resolved
 
-    def _validate_target(self, resolved: Any) -> None:
+    def _validate_target(self, resolved: object) -> None:
         """Family hook: reject a resolved target outside the family.
 
         Called with every non-``None`` RESOLVED target -- strings / callables
@@ -245,7 +248,7 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
             "declaration would otherwise accept any target.",
         )
 
-    def _set_target(self, value: Any) -> None:
+    def _set_target(self, value: object) -> None:
         """Substitute the target class (the ``.<target>`` setter seam).
 
         A pure store, deliberately unvalidated: the setter accepts the same
@@ -261,15 +264,15 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
 
 def collect_related_declarations(
     new_class: type,
-    bases: tuple,
+    bases: tuple[type, ...],
     *,
-    own_items: Any,
-    declaration_type: type,
+    own_items: Iterable[tuple[str, object]],
+    declaration_type: type[_D],
     collection_attr: str,
     inherit_from_bases: bool,
-    class_items: Any | None = None,
+    class_items: Iterable[tuple[str, object]] | None = None,
     base_declarations_attr: str | None = None,
-) -> OrderedDict:
+) -> OrderedDict[str, _D]:
     """Collect a metaclass's related-set declarations onto ``new_class`` and bind each.
 
     The shared ``FilterSetMetaclass`` / ``OrderSetMetaclass`` collect-and-bind
@@ -300,7 +303,7 @@ def collect_related_declarations(
     class_values = dict(own_items if class_items is None else class_items)
     base_declarations_attr = base_declarations_attr or collection_attr
 
-    collected: OrderedDict = OrderedDict()
+    collected: OrderedDict[str, _D] = OrderedDict()
     if inherit_from_bases:
         for base in reversed(bases):
             for name, declaration in getattr(base, collection_attr, {}).items():
@@ -350,9 +353,9 @@ def expanded_once(
     *,
     cache_attr: str,
     guard_attr: str,
-    build: Callable[[], Any],
-    on_reentry: Callable[[], Any] | None = None,
-) -> Any:
+    build: Callable[[], _T],
+    on_reentry: Callable[[], _T] | None = None,
+) -> _T:
     """Run ``build()`` once under a class-level expansion cache + reentry guard.
 
     The control-flow skeleton ``FilterSet.get_filters`` / ``OrderSet.get_fields``
@@ -382,7 +385,7 @@ def expanded_once(
     """
     cached = cls.__dict__.get(cache_attr)
     if cached is not None:
-        return cached
+        return cast("_T", cached)  # the slot holds what ``build()`` stored for this class
     if on_reentry is not None and cls.__dict__.get(guard_attr, False):
         return on_reentry()
     setattr(cls, guard_attr, True)
@@ -435,7 +438,7 @@ RE_READABLE_FIELDS_HELP = (
 )
 
 
-def is_re_readable_field_declaration(value: Any) -> bool:
+def is_re_readable_field_declaration(value: object) -> bool:
     """Return whether ``value`` is a container a set expansion may walk repeatedly.
 
     ``collections.abc.Collection`` IS the contract: ``__len__`` + ``__iter__`` +
@@ -455,7 +458,7 @@ def is_re_readable_field_declaration(value: Any) -> bool:
 
 def require_re_readable_field_declaration(
     set_cls: type,
-    value: Any,
+    value: object,
     *,
     subject: str,
     accepted: str,
@@ -592,7 +595,7 @@ class ActiveInputPermissionMixin:
         return cls._permission.traversal
 
     @classmethod
-    def _request_from_info(cls, info: Any) -> Any:
+    def _request_from_info(cls, info: object) -> object:
         """Resolve the Django request from ``info.context``.
 
         Thin delegate to ``utils/permissions.py::request_from_info``.
@@ -600,7 +603,7 @@ class ActiveInputPermissionMixin:
         return request_from_info(info, family_label=cls._permission.family_label)
 
     @classmethod
-    def _extract_branch_value(cls, input_value: Any, field_name: str) -> Any:
+    def _extract_branch_value(cls, input_value: object, field_name: str) -> Any:
         """Return the value at ``field_name`` on a dataclass-or-dict input.
 
         Thin delegate to ``utils/permissions.py::extract_branch_value`` with
@@ -613,7 +616,7 @@ class ActiveInputPermissionMixin:
         )
 
     @classmethod
-    def _iter_active_related_branches(cls, input_value: Any) -> list[tuple[str, Any, Any]]:
+    def _iter_active_related_branches(cls, input_value: object) -> list[tuple[str, Any, object]]:
         """List ``(field_name, related_obj, child_input)`` for present branches.
 
         Thin delegate to ``utils/permissions.py::active_related_branches``.
@@ -629,9 +632,9 @@ class ActiveInputPermissionMixin:
 
     @staticmethod
     def _invoke_permission_method(
-        bare_instance: Any,
+        bare_instance: ActiveInputPermissionMixin,
         field_path: str,
-        request: Any,
+        request: object,
         *,
         fired: set[str] | None = None,
     ) -> None:
@@ -651,7 +654,7 @@ class ActiveInputPermissionMixin:
         return verbatim_path(python_attr)
 
     @classmethod
-    def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
+    def _active_permission_field_paths(cls, input_value: object) -> list[str]:
         """Return the base Django source path for each active top-level leaf.
 
         Thin delegate to ``_active_permission_targets``'s ``LEAF`` half.
@@ -661,8 +664,8 @@ class ActiveInputPermissionMixin:
     @classmethod
     def _active_permission_targets(
         cls,
-        input_value: Any,
-    ) -> tuple[list[str], list[tuple[str, Any, Any]]]:
+        input_value: object,
+    ) -> tuple[list[str], list[tuple[str, Any, object]]]:
         """Single-pass ``(leaf source paths, active related branches)`` for one level.
 
         Thin delegate to ``utils/permissions.py::active_permission_targets``.
@@ -687,18 +690,18 @@ class ActiveInputPermissionMixin:
     @classmethod
     def _run_logic_permission_checks(
         cls,
-        _input_value: Any,
-        _request: Any,
+        _input_value: object,
+        _request: object,
         *,
         _fired: dict[type, set[str]],
-        _bare: Any,
+        _bare: ActiveInputPermissionMixin,
         _depth: int,
     ) -> None:
         """Recurse into family-specific logical containers. Default no-op."""
         return
 
     @classmethod
-    def _prepare_permission_input(cls, _input_value: Any) -> None:
+    def _prepare_permission_input(cls, _input_value: object) -> None:
         """Populate family-specific provenance before traversal. Default no-op.
 
         A direct ``apply`` / permission call can reach the facade before the
@@ -711,11 +714,11 @@ class ActiveInputPermissionMixin:
     @classmethod
     def _run_permission_checks(
         cls,
-        input_value: Any,
-        request: Any,
+        input_value: object,
+        request: object,
         *,
         _fired: dict[type, set[str]] | None = None,
-        _bare: Any = None,
+        _bare: ActiveInputPermissionMixin | None = None,
         _depth: int = 0,
     ) -> None:
         """Fire ``check_<field>_permission(request)`` for fields in the input.

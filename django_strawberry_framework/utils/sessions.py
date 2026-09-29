@@ -98,8 +98,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncIterator, MutableMapping
-from typing import Any
+from collections.abc import AsyncIterator, Callable, MutableMapping
+from typing import TYPE_CHECKING, TypeVar, cast
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.contrib.sessions.backends.base import SessionBase
+
+_ScopedT = TypeVar("_ScopedT")
 
 __all__ = (
     "ConnectionActorState",
@@ -150,13 +155,13 @@ class ScopeSingletonMessages:
 
 
 def scope_singleton(
-    scope: MutableMapping[str, Any],
+    scope: MutableMapping[str, object],
     key: str,
     *,
-    factory: Any,
-    expect: type,
+    factory: Callable[[], _ScopedT],
+    expect: type[_ScopedT],
     messages: ScopeSingletonMessages,
-) -> Any:
+) -> _ScopedT:
     """Return the scope's singleton under ``key``, creating it on first use.
 
     The per-scope lazy singleton, once. Nothing the package owns runs early
@@ -184,22 +189,23 @@ def scope_singleton(
     except BaseException as exc:
         raise ConfigurationError(messages.unreadable) from exc
     if value is None:
-        value = factory()
+        created = factory()
         try:
-            scope[key] = value
+            scope[key] = created
         except BaseException as exc:
             raise ConfigurationError(messages.unstorable) from exc
-        return value
+        return created
     try:
         matches = isinstance(value, expect)
     except BaseException as exc:
         raise ConfigurationError(messages.uninspectable) from exc
     if not matches:
         raise ConfigurationError(messages.corrupted.format(actual=_safe_type_name(value)))
-    return value
+    # ``matches`` is the ``isinstance(value, expect)`` verdict, so the slot holds an ``expect``.
+    return cast("_ScopedT", value)
 
 
-def session_store_class() -> type:
+def session_store_class() -> type[SessionBase]:
     """Resolve the configured ``SESSION_ENGINE``'s ``SessionStore`` class.
 
     The ONE expression that reads the deployment's session engine
@@ -248,7 +254,9 @@ def session_store_class() -> type:
     # same guarantee ``describe_value`` gives the non-string rejection above.
     engine = str.__str__(engine)
     try:
-        return import_string(f"{engine}.SessionStore")
+        # Django's session-engine contract: the module exports a ``SessionBase`` subclass.
+        return cast("type[SessionBase]", import_string(f"{engine}.SessionStore"))
+
     except (
         ImportError,
         TypeError,
@@ -312,7 +320,7 @@ class ConnectionActorState:
         self.lock = asyncio.Lock()
 
 
-def connection_actor_state(scope: MutableMapping[str, Any]) -> ConnectionActorState:
+def connection_actor_state(scope: MutableMapping[str, object]) -> ConnectionActorState:
     """Return the scope's ``ConnectionActorState``, creating it on first use.
 
     Lazily created for the same reason the per-scope lock is: a scope arrives
@@ -330,7 +338,7 @@ def connection_actor_state(scope: MutableMapping[str, Any]) -> ConnectionActorSt
     )
 
 
-def note_authenticated_actor(scope: MutableMapping[str, Any]) -> None:
+def note_authenticated_actor(scope: MutableMapping[str, object]) -> None:
     """Latch that this connection has carried an authenticated actor.
 
     Write-once in meaning: the flag is only ever set, never cleared, which is
@@ -339,12 +347,12 @@ def note_authenticated_actor(scope: MutableMapping[str, Any]) -> None:
     connection_actor_state(scope).authenticated_provenance = True
 
 
-def connection_was_authenticated(scope: MutableMapping[str, Any]) -> bool:
+def connection_was_authenticated(scope: MutableMapping[str, object]) -> bool:
     """Whether an authenticated actor has ever been observed on this connection."""
     return connection_actor_state(scope).authenticated_provenance
 
 
-def actor_lease(scope: MutableMapping[str, Any]) -> asyncio.Lock:
+def actor_lease(scope: MutableMapping[str, object]) -> asyncio.Lock:
     """Return the connection's actor lease, to be held with ``async with``.
 
     The transport side of the shared primitive: ``consumers.py``'s two
@@ -380,7 +388,7 @@ def actor_lease(scope: MutableMapping[str, Any]) -> asyncio.Lock:
 
 @contextlib.asynccontextmanager
 async def actor_transition(
-    scope: MutableMapping[str, Any],
+    scope: MutableMapping[str, object],
     *,
     was_authenticated: bool,
 ) -> AsyncIterator[None]:

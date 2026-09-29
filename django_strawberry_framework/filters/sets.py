@@ -20,7 +20,7 @@ from collections import OrderedDict
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn, TypeVar, cast
 
 import django_filters
 from django.db import models
@@ -119,6 +119,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from types import MethodType
 
     from ..types.definition import DjangoTypeDefinition
+    from ..utils.typing import ForeignKeyField, ModelField
+
+_M = TypeVar("_M", bound=models.Model)
 
 
 # Process-lifetime memo for ``_lookups_for_field``, keyed by field CLASS.
@@ -141,7 +144,7 @@ _FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
 }
 
 
-def _lookups_for_field(model_field: models.Field | None) -> list[str]:
+def _lookups_for_field(model_field: ModelField | None) -> list[str]:
     """Return every concrete (non-transform) lookup valid for ``model_field``.
 
     Backs the per-field ``Meta.fields = {"<field>": "__all__"}`` shorthand
@@ -203,7 +206,7 @@ _MODEL_CHOICE_ONLY_EXTRAS = frozenset(
 )
 
 
-def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
+def _strip_model_choice_extras(extra: Mapping[str, object]) -> dict[str, object]:
     """Return ``extra`` without the model-choice-only constructor kwargs.
 
     Used by both flat GlobalID replacement sites (``FilterSet.filter_for_field``'s
@@ -269,7 +272,7 @@ def _strip_model_choice_extras(extra: dict[str, Any]) -> dict[str, Any]:
 #      package's own).
 
 
-def _forward_relation_extra(field: Any) -> dict[str, Any]:
+def _forward_relation_extra(field: ForeignKeyField) -> dict[str, object]:
     """Package-owned mirror of upstream's ``OneToOneField`` / ``ForeignKey`` extra.
 
     A forward single-valued relation resolves its choice queryset and joins on the
@@ -285,12 +288,12 @@ def _forward_relation_extra(field: Any) -> dict[str, Any]:
     }
 
 
-def _forward_m2m_extra(field: Any) -> dict[str, Any]:
+def _forward_m2m_extra(field: models.ManyToManyField[Any, Any]) -> dict[str, object]:
     """Package-owned mirror of upstream's ``ManyToManyField`` extra (queryset only)."""
     return {"queryset": filterset.remote_queryset(field)}
 
 
-def _reverse_o2o_extra(field: Any) -> dict[str, Any]:
+def _reverse_o2o_extra(field: OneToOneRel) -> dict[str, object]:
     """Package-owned mirror of upstream's ``OneToOneRel`` extra.
 
     A reverse one-to-one omits ``to_field_name`` (the reverse descriptor has no
@@ -302,7 +305,7 @@ def _reverse_o2o_extra(field: Any) -> dict[str, Any]:
     }
 
 
-def _reverse_rel_extra(field: Any) -> dict[str, Any]:
+def _reverse_rel_extra(field: ManyToOneRel | ManyToManyRel) -> dict[str, object]:
     """Package-owned mirror of upstream's ``ManyToOneRel`` / ``ManyToManyRel`` extra."""
     return {"queryset": filterset.remote_queryset(field)}
 
@@ -313,7 +316,7 @@ def _reverse_rel_extra(field: Any) -> dict[str, Any]:
 # the package-owned ``extra`` providers above -- NOT a snapshot of the mutable global.
 # Installed as ``FilterSet.FILTER_DEFAULTS`` (deepcopyable + customizable, restoring
 # django-filter's inherited extension seam).
-_PUBLIC_PACKAGE_FILTER_DEFAULTS: dict[type, dict[str, Any]] = {
+_PUBLIC_PACKAGE_FILTER_DEFAULTS: dict[type, dict[str, object]] = {
     models.AutoField: {"filter_class": NumberFilter},
     models.CharField: {"filter_class": CharFilter},
     models.TextField: {"filter_class": CharFilter},
@@ -362,11 +365,11 @@ class _NormalizedPolicyEntry:
     diverges. Frozen, so it is safe as an immutable baseline value.
     """
 
-    filter_class: Any = None
-    extra: Any = None
+    filter_class: object = None
+    extra: object = None
 
 
-def _normalize_policy_entry(entry: Any) -> _NormalizedPolicyEntry | None:
+def _normalize_policy_entry(entry: Mapping[str, object] | None) -> _NormalizedPolicyEntry | None:
     """Return the ``_NormalizedPolicyEntry`` for a raw ``FILTER_DEFAULTS`` entry.
 
     ``None`` for a missing entry (no policy for the class), so a missing selection on
@@ -558,7 +561,7 @@ class FilterGenerationProvenance:
     generation_capable: bool = False
 
 
-def filter_generation_provenance(filter_instance: Any) -> FilterGenerationProvenance | None:
+def filter_generation_provenance(filter_instance: object) -> FilterGenerationProvenance | None:
     """Return the frozen generation-provenance record stamped on ``filter_instance``.
 
     ``None`` for any instance that was never stamped (a consumer-returned
@@ -568,7 +571,10 @@ def filter_generation_provenance(filter_instance: Any) -> FilterGenerationProven
     return getattr(filter_instance, _GENERATION_PROVENANCE_ATTR, None)
 
 
-def _stamp_generation_provenance(filter_instance: Any, record: FilterGenerationProvenance) -> None:
+def _stamp_generation_provenance(
+    filter_instance: object,
+    record: FilterGenerationProvenance,
+) -> None:
     """Persist ``record`` on ``filter_instance`` under the private slot."""
     setattr(filter_instance, _GENERATION_PROVENANCE_ATTR, record)
 
@@ -779,7 +785,7 @@ def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
     return _SEQUENCE_LOOKUP_PROFILE
 
 
-def _family_profile_for(filter_instance: Any) -> _FilterFamilyProfile | None:
+def _family_profile_for(filter_instance: object) -> _FilterFamilyProfile | None:
     """Return the behavior profile of ``filter_instance``'s supported filter family.
 
     Resolution is fail-closed and never rediscovered from arbitrary ancestry:
@@ -916,11 +922,14 @@ class ExpansionSnapshot:
     subclass never inherits its parent's classification.
     """
 
-    filters: Mapping[str, Any]
+    filters: Mapping[str, Filter]
     candidates: Mapping[str, CandidateFilterMetadata]
 
 
-def _candidate_metadata_for(model: type, filter_instance: Any) -> CandidateFilterMetadata | None:
+def _candidate_metadata_for(
+    model: type[models.Model],
+    filter_instance: Filter,
+) -> CandidateFilterMetadata | None:
     """Return the frozen candidate row for a framework-generated leaf, else ``None``.
 
     ``None`` (no row -- fail closed) for any leaf whose provenance origin is not
@@ -997,8 +1006,8 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
     def __new__(
         cls: type[FilterSetMetaclass],
         name: str,
-        bases: tuple,
-        attrs: dict[str, Any],
+        bases: tuple[type, ...],
+        attrs: dict[str, object],
     ) -> FilterSetMetaclass:
         """Build the class, collect `RelatedFilter`s, and bind them to the owner."""
         class_items = tuple(attrs.items())
@@ -1013,7 +1022,8 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         # count).
         promote_set_meta_fields(attrs.get("Meta"), fields_alias=FILTERSET_FIELDS_ALIAS)
 
-        new_class = super().__new__(cls, name, bases, attrs)
+        # django-filter is unstubbed: its metaclass ``__new__`` returns the built class.
+        new_class = cast("FilterSetMetaclass", super().__new__(cls, name, bases, attrs))
 
         # Collect the ``RelatedFilter`` declarations and bind each to the new
         # class via the shared set-family collector.
@@ -1091,7 +1101,7 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         return new_class
 
 
-def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Any]:
+def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Filter]:
     """Expand `f` against its target filterset's resolved filters.
 
     Verbatim port of the cookbook's `expand_related_filter`. The
@@ -1102,7 +1112,7 @@ def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[st
     (``get_filters``) free of ``cls.__class__.expand_related_filter
     (cls, ...)`` indirection that obscured the function's purpose.
     """
-    expanded: OrderedDict = OrderedDict()
+    expanded: OrderedDict[str, Filter] = OrderedDict()
     target_filterset = f.filterset
     if not target_filterset:
         return expanded
@@ -1162,7 +1172,7 @@ class FilterSet(
     # inherits this by identity (``_is_generation_capable`` checks it); ownership is
     # decided against the PRIVATE normalized ``_PACKAGE_POLICY_BASELINE`` by value, not
     # against this public object's identity.
-    FILTER_DEFAULTS: ClassVar[dict[type, dict[str, Any]]] = _PUBLIC_PACKAGE_FILTER_DEFAULTS
+    FILTER_DEFAULTS: ClassVar[dict[type, dict[str, object]]] = _PUBLIC_PACKAGE_FILTER_DEFAULTS
 
     # Binding seam - populated by `finalize_django_types` phase 2.5.
     _owner_definition: DjangoTypeDefinition | None = None
@@ -1235,7 +1245,7 @@ class FilterSet(
     # branches can re-derive their `RelatedFilter` visibility across the
     # `.qs` boundary. `None` for instances built outside the apply pipeline
     # (they carry no related branches to re-derive).
-    _apply_info: Any = None
+    _apply_info: object = None
 
     # Pre-derived nested-branch visibility map. Populated by ``apply_async``
     # via ``_collect_nested_visibility_querysets_async``, which walks every
@@ -1245,7 +1255,7 @@ class FilterSet(
     # which would raise ``SyncMisuseError`` mid-``.qs`` if the target type's
     # ``get_queryset`` is async-only. ``None`` for instances built by
     # ``apply_sync`` or outside the apply pipeline (sync path stays sync).
-    _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None
+    _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None
 
     # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
     # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
@@ -1259,7 +1269,7 @@ class FilterSet(
     # ------------------------------------------------------------------
 
     @classmethod
-    def get_filters(cls) -> OrderedDict:
+    def get_filters(cls) -> OrderedDict[str, Filter]:
         """Return declared + Meta-derived + related-expanded filters.
 
         Direct port of `AdvancedFilterSet.get_filters`. Two reasons the
@@ -1297,8 +1307,9 @@ class FilterSet(
         # no-arg nested function / lambda has no positional to bind).
         get_base = super().get_filters
 
-        def _build() -> OrderedDict:
-            all_filters = get_base()
+        def _build() -> OrderedDict[str, Filter]:
+            # django-filter is unstubbed: ``get_filters`` builds an ``OrderedDict`` of filters.
+            all_filters = cast("OrderedDict[str, Filter]", get_base())
             model = cls._meta.model
             candidates: dict[str, CandidateFilterMetadata] = {}
             if model is not None:
@@ -1421,7 +1432,7 @@ class FilterSet(
         return cls.__dict__.get("_expanded_snapshot")
 
     @classmethod
-    def get_fields(cls) -> OrderedDict:
+    def get_fields(cls) -> OrderedDict[str, object]:
         """Expand per-field ``"__all__"`` and narrow the top-level ``"__all__"`` sweep.
 
         These are two DISTINCT features that happen to share the ``"__all__"``
@@ -1473,7 +1484,8 @@ class FilterSet(
                     "'__all__', a lookup-bag dict, or a re-readable collection of field names"
                 ),
             )
-        fields = super().get_fields()
+        # django-filter is unstubbed: ``get_fields`` maps each field name to its lookups.
+        fields = cast("OrderedDict[str, object]", super().get_fields())
         model = cls._meta.model
 
         # Per-field ``"__all__"`` expansion (dict form). Runs before the
@@ -1527,10 +1539,10 @@ class FilterSet(
     @classmethod
     def filter_for_field(
         cls,
-        field: Any,
+        field: ModelField,
         field_name: str,
         lookup_expr: str | None = None,
-    ) -> Any:
+    ) -> Filter | None:
         """Pick the Relay-aware filter for Relay-Node-shaped relation targets.
 
         Decision-4 conditional. Resolves the relation target via
@@ -1620,7 +1632,7 @@ class FilterSet(
         # then stays fail-closed even when a capable parent expands it.
         generation_capable = cls._is_generation_capable()
 
-        def _stamp(instance: Any, origin: FilterOrigin) -> None:
+        def _stamp(instance: object, origin: FilterOrigin) -> None:
             # Every generation site on this method stamps the SAME
             # ``framework_added_distinct`` / ``generation_capable`` bits (both fixed for
             # this (field, lookup) pair); only ``origin`` and the target instance vary.
@@ -1716,7 +1728,11 @@ class FilterSet(
         return relay_replacement
 
     @classmethod
-    def _generation_origin_for_field(cls, field: Any, lookup_expr: str | None) -> FilterOrigin:
+    def _generation_origin_for_field(
+        cls,
+        field: ModelField,
+        lookup_expr: str | None,
+    ) -> FilterOrigin:
         """Return ``override_generated`` vs ``framework_default`` for a generated leaf.
 
         Keyed on the RESOLVED output field -- the SAME field django-filter's
@@ -1885,7 +1901,11 @@ class FilterSet(
         )
 
     @classmethod
-    def filter_for_lookup(cls, field: Any, lookup_type: str) -> tuple[Any, dict[str, Any]]:
+    def filter_for_lookup(
+        cls,
+        field: ModelField,
+        lookup_type: str,
+    ) -> tuple[type[Filter] | None, dict[str, object]]:
         """Mirror `filter_for_field`'s Relay-vs-scalar conditional per-lookup.
 
         Non-relation fields defer to the upstream pair-return shape unless
@@ -2021,7 +2041,7 @@ class FilterSet(
         )
 
     @classmethod
-    def _is_own_pk_under_relay_owner(cls, field: Any) -> bool:
+    def _is_own_pk_under_relay_owner(cls, field: object) -> bool:
         """Return True iff ``field`` is the owning model's PK and owner is Relay.
 
         Own-PK branch per spec-027 Decision 4: when a ``FilterSet``
@@ -2047,7 +2067,9 @@ class FilterSet(
         return owner_type is not None and implements_relay_node(owner_type)
 
     @staticmethod
-    def _relay_filter_class_for_field(field: Any) -> type:
+    def _relay_filter_class_for_field(
+        field: ModelField,
+    ) -> type[GlobalIDFilter] | type[GlobalIDMultipleChoiceFilter]:
         """Pick the Relay-aware filter class matching the relation cardinality.
 
         Multi-valued relations (`ManyToManyField`, reverse FK
@@ -2071,7 +2093,7 @@ class FilterSet(
         return GlobalIDFilter
 
     @classmethod
-    def _resolve_relation_target_type(cls, field: Any, field_name: str | None) -> type | None:
+    def _resolve_relation_target_type(cls, field: object, field_name: str | None) -> type | None:
         """Look up the registered target `DjangoType` for a relation field.
 
         Consults `_owner_definition.related_target_for(...)` when the
@@ -2112,7 +2134,7 @@ class FilterSet(
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
+    def _iter_input_items(input_value: object) -> list[tuple[str, object]] | None:
         """Walk a dict or Strawberry-input dataclass into ``(name, value)`` pairs.
 
         Thin delegate to ``utils/input_values.py::iter_input_items`` (the
@@ -2126,8 +2148,8 @@ class FilterSet(
     @classmethod
     def _iter_logic_branches(
         cls,
-        input_value: Any,
-    ) -> Iterator[tuple[LogicOperatorDescriptor, list[Any]]]:
+        input_value: object,
+    ) -> Iterator[tuple[LogicOperatorDescriptor, list[object]]]:
         """Iterate active logical branches and their child filter-input elements.
 
         Single authoritative iterator for all runtime logical-tree traversals
@@ -2218,7 +2240,7 @@ class FilterSet(
             cls._validate_logic_element_shape(wire_key, element)
 
     @classmethod
-    def _validate_logic_element_shape(cls, wire_key: str, element: Any) -> None:
+    def _validate_logic_element_shape(cls, wire_key: str, element: object) -> None:
         """Reject a non-filter-input element of a logical branch (report Defect 4).
 
         A filter input is a mapping or a Strawberry-input dataclass --
@@ -2239,7 +2261,7 @@ class FilterSet(
             )
 
     @classmethod
-    def _normalize_input(cls, input_value: Any) -> dict[str, Any]:
+    def _normalize_input(cls, input_value: object) -> dict[str, object]:
         """Translate a Strawberry input dataclass into `django-filter` form data.
 
         Per-primitive value normalization: each scalar attr passes
@@ -2316,7 +2338,7 @@ class FilterSet(
         # stripped (owned by ``_apply_related_constraints``, since the parent form
         # cannot validate a nested-dict shape), and ``LEAF`` runs the per-field
         # operator-bag / range normalization that stays local to the filter family.
-        data: dict[str, Any] = {}
+        data: dict[str, object] = {}
         for field in iter_active_fields(cls, input_value, cls._input_traversal()):
             if field.kind == LOGIC:
                 wire_key = LOGIC_OPERATORS_BY_PYTHON_ATTR[field.python_attr].wire_name
@@ -2417,7 +2439,7 @@ class FilterSet(
         cls,
         filter_instance: Filter,
         form_key: str,
-        lookup_value: Any,
+        lookup_value: object,
     ) -> None:
         """Fail loud when a NON-range filter's normalized value is a dict patch.
 
@@ -2456,7 +2478,7 @@ class FilterSet(
         )
 
     @staticmethod
-    def _operator_bag_items(raw_value: Any) -> list[tuple[str, Any]] | None:
+    def _operator_bag_items(raw_value: object) -> list[tuple[str, object]] | None:
         """Return the ``(lookup_attr, value)`` pairs of a per-field operator bag.
 
         ``_build_input_fields`` wraps each scalar field's lookups in a
@@ -2540,9 +2562,9 @@ class FilterSet(
     @classmethod
     def _iter_visibility_steps(
         cls,
-        input_value: Any,
+        input_value: object,
         parent_db: str | None = None,
-    ) -> Iterator[tuple[str, Any, type[FilterSet], Any, models.QuerySet]]:
+    ) -> Iterator[tuple[str, type, type[FilterSet], object, models.QuerySet[models.Model]]]:
         """Yield the pre-await state each visibility derive method needs.
 
         Returns ``(field_name, target_type, child_filterset, child_input,
@@ -2599,12 +2621,12 @@ class FilterSet(
     @classmethod
     def _derive_related_visibility_querysets_sync(
         cls,
-        input_value: Any,
-        info: Any,
+        input_value: object,
+        info: object,
         *,
         parent_db: str | None = None,
         _depth: int = 0,
-    ) -> dict[str, models.QuerySet]:
+    ) -> dict[str, models.QuerySet[models.Model]]:
         """Run each active branch's target ``get_queryset(...)`` then recurse.
 
         Reuses ``django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync``
@@ -2638,7 +2660,7 @@ class FilterSet(
         self-referential ``RelatedFilter`` is capped with a typed error rather
         than recursing into a ``RecursionError`` (report Defect 5).
         """
-        result: dict[str, models.QuerySet] = {}
+        result: dict[str, models.QuerySet[models.Model]] = {}
         for (
             field_name,
             target_type,
@@ -2659,12 +2681,12 @@ class FilterSet(
     @classmethod
     async def _derive_related_visibility_querysets_async(
         cls,
-        input_value: Any,
-        info: Any,
+        input_value: object,
+        info: object,
         *,
         parent_db: str | None = None,
         _depth: int = 0,
-    ) -> dict[str, models.QuerySet]:
+    ) -> dict[str, models.QuerySet[models.Model]]:
         """Async sibling of `_derive_related_visibility_querysets_sync`.
 
         Runs the child ``apply_async`` with ``run_permissions=False`` for the
@@ -2673,7 +2695,7 @@ class FilterSet(
         so the derivation must not re-fire them. ``parent_db`` (report Defect 3)
         and ``_depth`` (report Defect 5) thread exactly as in the sync twin.
         """
-        result: dict[str, models.QuerySet] = {}
+        result: dict[str, models.QuerySet[models.Model]] = {}
         for (
             field_name,
             target_type,
@@ -2714,12 +2736,12 @@ class FilterSet(
     @classmethod
     async def _collect_nested_visibility_querysets_async(
         cls,
-        input_value: Any,
-        info: Any,
+        input_value: object,
+        info: object,
         *,
         parent_db: str | None = None,
         _depth: int = 0,
-    ) -> dict[int, dict[str, models.QuerySet]]:
+    ) -> dict[int, dict[str, models.QuerySet[models.Model]]]:
         """Pre-walk logical branches and derive each branch's visibility map.
 
         Returns a map keyed by ``id(child_input)`` -- the same Python object
@@ -2745,7 +2767,7 @@ class FilterSet(
         misuse and surfaces the same typed ``ConfigurationError`` here
         rather than waiting for the sync recursion to discover it.
         """
-        result: dict[int, dict[str, models.QuerySet]] = {}
+        result: dict[int, dict[str, models.QuerySet[models.Model]]] = {}
         if is_inactive_value(input_value, unset_sentinel=UNSET):
             return result
         if _depth > cls._MAX_LOGIC_DEPTH:
@@ -2797,7 +2819,8 @@ class FilterSet(
         child_owner = getattr(child_filterset, "_owner_definition", None)
         owner_type = getattr(child_owner, "origin", None) if child_owner is not None else None
         if owner_type is not None:
-            return owner_type
+            # A bound owner is a ``DjangoTypeDefinition``, whose ``origin`` is the ``DjangoType``.
+            return cast("type", owner_type)
         child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
         if child_model is None:
             return None
@@ -2814,11 +2837,11 @@ class FilterSet(
     @classmethod
     def _run_logic_permission_checks(
         cls,
-        input_value: Any,
-        request: Any,
+        input_value: object,
+        request: object,
         *,
         _fired: dict[type, set[str]],
-        _bare: Any,
+        _bare: ActiveInputPermissionMixin,
         _depth: int,
     ) -> None:
         """Recurse into logical operator branches so nested clauses stay gated.
@@ -2836,7 +2859,7 @@ class FilterSet(
                     _depth=_depth + 1,
                 )
 
-    def check_permissions(self, request: Any, requested_fields: set[str] | None = None) -> None:
+    def check_permissions(self, request: object, requested_fields: set[str] | None = None) -> None:
         """Backward-compatible thin delegate to `_run_permission_checks`.
 
         Cookbook callers reach for the bound-method form; the active-input
@@ -2890,10 +2913,10 @@ class FilterSet(
 
     @staticmethod
     def _invoke_suppressing_framework_distinct(
-        filter_instance: Any,
-        inner_root: models.QuerySet,
-        value: Any,
-    ) -> models.QuerySet:
+        filter_instance: Filter,
+        inner_root: models.QuerySet[_M],
+        value: object,
+    ) -> object:
         """Invoke ``filter_instance.filter`` on the correlated inner root, distinct-free.
 
         Only eligible framework-generated candidates reach here, and eligibility
@@ -2921,7 +2944,7 @@ class FilterSet(
         finally:
             filter_instance.distinct = original_distinct
 
-    def _apply_flat_leaves(self, queryset: models.QuerySet) -> models.QuerySet:
+    def _apply_flat_leaves(self, queryset: models.QuerySet[_M]) -> models.QuerySet[_M]:
         """Apply flat leaves, mirroring ``BaseFilterSet.filter_queryset`` exactly.
 
         Iterates ``self.form.cleaned_data`` in insertion order (upstream's
@@ -3025,7 +3048,7 @@ class FilterSet(
             queryset = queryset.filter(positive)
         return queryset
 
-    def filter_queryset(self, queryset: models.QuerySet) -> models.QuerySet:
+    def filter_queryset(self, queryset: models.QuerySet[_M]) -> models.QuerySet[_M]:
         """Compose the tree-form ``and`` / ``or`` / ``not`` keys on top of the leaves.
 
         spec-027 Decision 8 step 8 + Definition-of-done item 4(d). The flat leaf
@@ -3093,18 +3116,19 @@ class FilterSet(
             _depth=depth,
             _nested_qs_by_branch_id=nested_map,
         )
-        return qs.filter(q)
+        # django-stubs types a queryset method on an unresolved model as ``Any``.
+        return cast("models.QuerySet[_M]", qs.filter(q))
 
     @classmethod
     def _evaluate_logic_tree(
         cls,
-        queryset: models.QuerySet,
-        tree_data: Any,
-        request: Any = None,
-        info: Any = None,
+        queryset: models.QuerySet[models.Model],
+        tree_data: object,
+        request: object = None,
+        info: object = None,
         *,
         _depth: int = 0,
-        _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None,
+        _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
     ) -> models.Q:
         """Build the ``Q`` expression for logical operator branches.
 
@@ -3148,13 +3172,13 @@ class FilterSet(
     @classmethod
     def _q_for_branch(
         cls,
-        queryset: models.QuerySet,
-        child_input: Any,
-        request: Any = None,
-        info: Any = None,
+        queryset: models.QuerySet[models.Model],
+        child_input: object,
+        request: object = None,
+        info: object = None,
         *,
         _depth: int = 0,
-        _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None,
+        _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
     ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
 
@@ -3240,10 +3264,10 @@ class FilterSet(
     @classmethod
     def _apply_related_constraints(
         cls,
-        input_value: Any,
-        parent_qs: models.QuerySet,
-        child_qs_by_branch: dict[str, models.QuerySet],
-    ) -> models.QuerySet:
+        input_value: object,
+        parent_qs: models.QuerySet[_M],
+        child_qs_by_branch: Mapping[str, models.QuerySet[models.Model]],
+    ) -> models.QuerySet[_M]:
         """Constrain `parent_qs` by each active branch's intersected child qs.
 
         The explicit `RelatedFilter(queryset=...)`
@@ -3332,11 +3356,11 @@ class FilterSet(
     @classmethod
     def _apply_common_prelude(
         cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
-        child_qs_by_branch: dict[str, models.QuerySet],
-    ) -> tuple[FilterSet, Any]:
+        input_value: object,
+        queryset: models.QuerySet[models.Model],
+        info: object,
+        child_qs_by_branch: Mapping[str, models.QuerySet[models.Model]],
+    ) -> tuple[FilterSet, object]:
         """Build the filterset_instance + request shared by apply_sync / apply_async.
 
         Captures the verbatim normalize / request / constraints / ctor /
@@ -3356,11 +3380,11 @@ class FilterSet(
     def _apply_common_finalize(
         cls,
         filterset_instance: FilterSet,
-        input_value: Any,
-        request: Any,
+        input_value: object,
+        request: object,
         *,
         run_permissions: bool = True,
-    ) -> models.QuerySet:
+    ) -> models.QuerySet[models.Model]:
         """Run the perm check + form validate + lazy ``.qs`` read trailer.
 
         Sync ``apply_sync`` calls this directly; async ``apply_async``
@@ -3382,18 +3406,19 @@ class FilterSet(
         if run_permissions:
             cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
-        return filterset_instance.qs
+        # django-filter is unstubbed: ``qs`` is the filtered queryset.
+        return cast("models.QuerySet[models.Model]", filterset_instance.qs)
 
     @classmethod
     def apply_sync(
         cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
+        input_value: object,
+        queryset: models.QuerySet[models.Model],
+        info: object,
         *,
         run_permissions: bool = True,
         _depth: int = 0,
-    ) -> models.QuerySet:
+    ) -> models.QuerySet[models.Model]:
         """Sync resolver entry point (Decision 8).
 
         Steps run in the pinned order: derive visibility
@@ -3440,13 +3465,13 @@ class FilterSet(
     @classmethod
     async def apply_async(
         cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
+        input_value: object,
+        queryset: models.QuerySet[models.Model],
+        info: object,
         *,
         run_permissions: bool = True,
         _depth: int = 0,
-    ) -> models.QuerySet:
+    ) -> models.QuerySet[models.Model]:
         """Async sibling of `apply_sync` awaiting every blocking step.
 
         Steps:
@@ -3509,10 +3534,10 @@ class FilterSet(
     @classmethod
     def apply(
         cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
-    ) -> models.QuerySet:
+        input_value: object,
+        queryset: models.QuerySet[models.Model],
+        info: object,
+    ) -> models.QuerySet[models.Model]:
         """Thin dispatcher - picks `apply_sync` and translates sync-misuse.
 
         Decision 8 - catches the typed ``SyncMisuseError``

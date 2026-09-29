@@ -43,19 +43,22 @@ attachment.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from django.db.models import Exists, OuterRef, Q
 
 from ..exceptions import OptimizerError
 
 if TYPE_CHECKING:  # pragma: no cover
+    from django.db import models
     from django.db.models import QuerySet
+
+_M = TypeVar("_M", bound="models.Model")
 
 _RESERVED_ALIAS_PREFIX = "_dst_predicate_"
 
 
-def correlated_inner_root(queryset: QuerySet) -> QuerySet:
+def correlated_inner_root(queryset: QuerySet[_M]) -> QuerySet[_M]:
     """Return an unevaluated inner root correlated to the outer row's pk.
 
     Built as ``model._base_manager.using(queryset.db).filter(pk=OuterRef("pk"))``.
@@ -72,10 +75,11 @@ def correlated_inner_root(queryset: QuerySet) -> QuerySet:
       composite primary keys compile to a tuple comparison on supported Django.
     """
     model = queryset.model
-    return model._base_manager.using(queryset.db).filter(pk=OuterRef("pk"))
+    # The django-stubs plugin types ``filter()`` as ``Any``; it returns ``model``'s queryset.
+    return cast("QuerySet[_M]", model._base_manager.using(queryset.db).filter(pk=OuterRef("pk")))
 
 
-def _effective_alias_names(queryset: QuerySet) -> set[str]:
+def _effective_alias_names(queryset: QuerySet[models.Model]) -> set[str]:
     """Return the effective alias namespace the reserved alias must avoid.
 
     Django is lax in the dangerous direction - a duplicate ``.alias()`` silently
@@ -102,7 +106,10 @@ def _effective_alias_names(queryset: QuerySet) -> set[str]:
     return names
 
 
-def _next_reserved_alias(queryset: QuerySet, prefix: str = _RESERVED_ALIAS_PREFIX) -> str:
+def _next_reserved_alias(
+    queryset: QuerySet[models.Model],
+    prefix: str = _RESERVED_ALIAS_PREFIX,
+) -> str:
     """Advance a deterministic counter past every occupied effective alias name.
 
     Yields ``_dst_predicate_0``, ``_dst_predicate_1``, ... skipping any name
@@ -117,7 +124,10 @@ def _next_reserved_alias(queryset: QuerySet, prefix: str = _RESERVED_ALIAS_PREFI
     return f"{prefix}{index}"
 
 
-def attach_exists(queryset: QuerySet, inner_queryset: QuerySet) -> tuple[QuerySet, Q]:
+def attach_exists(
+    queryset: QuerySet[_M],
+    inner_queryset: QuerySet[models.Model],
+) -> tuple[QuerySet[_M], Q]:
     """Attach ``Exists(inner_queryset)`` under a reserved alias, row-preservingly.
 
     Returns ``(new_queryset, Q(<alias>=True))``: the caller owns boolean

@@ -115,7 +115,7 @@ AppConfig.
 
 import inspect
 import textwrap
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.db import connections
 from django.test.testcases import SimpleTestCase
@@ -307,8 +307,12 @@ def _disallowed_connection_methods(
         _validated_remove_databases_failures_source
         == _CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE
     ):
-        # mypy: django-stubs omits SimpleTestCase._disallowed_connection_methods (Django < 6.1)
-        return cls._disallowed_connection_methods  # type: ignore[attr-defined]
+        # The class attribute is a list of the same ``(name, operation)`` pairs.
+        return cast(
+            "list[tuple[str, str]]",
+            # mypy: django-stubs omits SimpleTestCase._disallowed_connection_methods (Django < 6.1)
+            cls._disallowed_connection_methods,  # type: ignore[attr-defined]
+        )
     if (
         _validated_remove_databases_failures_source
         == _CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE

@@ -78,7 +78,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from types import MethodType
-from typing import Any, Generic, NamedTuple, TypeVar, cast
+from typing import Generic, NamedTuple, TypeVar, cast
 from weakref import ReferenceType, ref
 
 __all__ = ("PrivateAuthority", "PrivateMembership")
@@ -103,9 +103,9 @@ class PrivateAuthority(Generic[StateT]):
     """
 
     def __init__(self) -> None:
-        self._settled: dict[int, tuple[ReferenceType[Any], StateT]] = {}
+        self._settled: dict[int, tuple[ReferenceType[object], StateT]] = {}
 
-    def settled(self, owner: Any) -> bool:
+    def settled(self, owner: object) -> bool:
         """Whether ``owner`` already has an authority filed here.
 
         Asked by a constructor before it settles one, because settling twice is
@@ -124,18 +124,18 @@ class PrivateAuthority(Generic[StateT]):
         entry = self._settled.get(id(owner))
         return entry is not None and entry[0]() is owner
 
-    def settle(self, owner: Any, state: StateT) -> None:
+    def settle(self, owner: object, state: StateT) -> None:
         """File ``state`` as ``owner``'s authority."""
         key = id(owner)
 
-        def forget(dead: ReferenceType[Any]) -> None:
+        def forget(dead: ReferenceType[object]) -> None:
             entry = self._settled.get(key)
             if entry is not None and entry[0] is dead:
                 del self._settled[key]
 
         self._settled[key] = (ref(owner, forget), state)
 
-    def recall(self, owner: Any) -> StateT | None:
+    def recall(self, owner: object) -> StateT | None:
         """The authority ``owner`` was settled with, or ``None`` if it has none.
 
         ``None`` means never settled. It cannot mean lost: the entry is held
@@ -184,10 +184,10 @@ _Evidence = ReferenceType[MemberT] | _BoxedMember
 
 #: One owner's filed evidence: which object the entry belongs to, and one piece
 #: of evidence per member of the sequence it was accepted with.
-_Accepted = tuple[ReferenceType[Any], tuple[_Evidence[MemberT], ...]]
+_Accepted = tuple[ReferenceType[object], tuple[_Evidence[MemberT], ...]]
 
 
-def _accepted_member(member: MemberT) -> tuple[_Evidence[MemberT], Any]:
+def _accepted_member(member: MemberT) -> tuple[_Evidence[MemberT], MemberT | MethodType]:
     """What one accepted member is answered from, and what the owner holds for it.
 
     A weak reference is preferred wherever the member's layout admits one,
@@ -235,7 +235,7 @@ class PrivateMembership(Generic[MemberT]):
         self._attribute = attribute
         self._accepted: dict[int, _Accepted[MemberT]] = {}
 
-    def accept(self, owner: Any, members: Iterable[MemberT]) -> None:
+    def accept(self, owner: object, members: Iterable[MemberT]) -> None:
         """Accept ``members`` as ``owner``'s sequence, replacing whatever it carried.
 
         The evidence is taken first, so nothing is half-accepted for a later
@@ -247,14 +247,14 @@ class PrivateMembership(Generic[MemberT]):
         owner.__dict__[self._attribute] = tuple(hold for _, hold in taken)
         key = id(owner)
 
-        def forget(dead: ReferenceType[Any]) -> None:
+        def forget(dead: ReferenceType[object]) -> None:
             entry = self._accepted.get(key)
             if entry is not None and entry[0] is dead:
                 del self._accepted[key]
 
         self._accepted[key] = (ref(owner, forget), tuple(evidence for evidence, _ in taken))
 
-    def recall(self, owner: Any) -> tuple[MemberT, ...] | None:
+    def recall(self, owner: object) -> tuple[MemberT, ...] | None:
         """The sequence ``owner`` was accepted with, or ``None`` for one that is gone.
 
         ``None`` is the answer when no sequence was ever accepted, when the

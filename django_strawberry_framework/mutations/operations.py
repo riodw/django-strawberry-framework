@@ -12,7 +12,6 @@ Single authoritative home for the write-side operation vocabulary (``create``,
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from .inputs import CREATE, PARTIAL
@@ -137,7 +136,7 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
 }
 
 
-def non_delete_operation_error(base_label: str, name: str, got: Any) -> ConfigurationError:
+def non_delete_operation_error(base_label: str, name: str, got: object) -> ConfigurationError:
     """Build the shared "operation must be create/update" reject.
 
     Single-sites the create/update-only operation reject message both the form and

@@ -51,13 +51,12 @@ from __future__ import annotations
 import contextlib
 import copy
 import inspect
-from collections.abc import Sequence
+from collections.abc import Awaitable, Iterable, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
-from django.db import models
 from graphql import GraphQLError
 from strawberry.types import Info
 
@@ -78,6 +77,9 @@ from .utils.querysets import (
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .types.base import DjangoType
     from .types.relay import _RelayDjangoType
+    from .utils.typing import ModelField
+
+_NodeT = TypeVar("_NodeT")
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -128,7 +130,7 @@ def _decode_or_graphql_error(gid: str) -> tuple[type[_RelayDjangoType], str]:
 
 def _node_id_slot(
     resolved_type: type[_RelayDjangoType],
-) -> tuple[str, models.Field | models.ForeignObjectRel | None]:
+) -> tuple[str, ModelField | None]:
     """Resolve a Relay type's id slot to ``(id_attr, concrete field or None)``.
 
     The single statement of "which concrete model column backs the GlobalID id
@@ -235,16 +237,16 @@ class DecodeResult(NamedTuple):
     """
 
     status: GlobalIDDecode
-    pk: Any | None
+    pk: object
     resolved_type: type | None
 
 
 def _resolve_real_pk(
     resolved_type: type[_RelayDjangoType],
-    coerced_id: Any,
+    coerced_id: object,
     *,
     using: str | None = None,
-) -> Any | None:
+) -> object:
     """Map a coerced NodeID-attr value to the model's real primary key.
 
     ``_coerce_pk_or_none`` coerces ``node_id`` against ``resolve_id_attr()`` - which
@@ -295,7 +297,7 @@ def _resolve_real_pk(
 
 
 def decode_model_global_id(
-    value: Any,
+    value: object,
     expected_model: type,
     *,
     using: str | None = None,
@@ -356,8 +358,8 @@ def _validate_node_target(target_type: type, *, field: str) -> None:
 
 def _interleave(
     positions: list[tuple[type, int] | None],
-    per_type_results: dict[type, list[Any]],
-) -> list[Any]:
+    per_type_results: dict[type, list[object]],
+) -> list[object]:
     """Reassemble per-type result lists into input order with ``null`` holes.
 
     ``positions`` carries one entry per input id: ``None`` for an
@@ -376,7 +378,7 @@ def _interleave(
     ]
 
 
-def _check_nodes_result(resolved_type: type, result: Any, pks: list[Any]) -> Any:
+def _check_nodes_result(resolved_type: type, result: Any, pks: list[object]) -> Iterable[object]:
     """Validate a ``resolve_nodes`` return is positionally 1:1 with ``pks``.
 
     ``_interleave`` indexes each result by its within-group position, so a
@@ -402,10 +404,11 @@ def _check_nodes_result(resolved_type: type, result: Any, pks: list[Any]) -> Any
             "input-ordered and 1:1 with node_ids (None for missing) - the "
             "_resolve_nodes_default / _order_nodes shape.",
         )
-    return result
+    # ``len()`` above measured it; the override contract makes it the row iterable.
+    return cast("Iterable[object]", result)
 
 
-def _stamp_node_type(resolved_type: type, node: Any) -> Any:
+def _stamp_node_type(resolved_type: type, node: _NodeT) -> _NodeT:
     """Stamp the decode-resolved ``DjangoType`` on a fetched node instance.
 
     The bare ``node``/``nodes`` fields hand graphql-core a raw model
@@ -441,7 +444,7 @@ def _stamp_node_type(resolved_type: type, node: Any) -> Any:
     return node
 
 
-async def _await_and_stamp(resolved_type: type, awaitable: Any) -> Any:
+async def _await_and_stamp(resolved_type: type, awaitable: Awaitable[_NodeT]) -> _NodeT:
     """Await an async ``resolve_node`` result, then stamp it (async sibling)."""
     return _stamp_node_type(resolved_type, await awaitable)
 
@@ -472,8 +475,8 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     _node_fields_declared.append("DjangoNodeField")
 
     def _resolve(
-        root: Any,  # noqa: ARG001
-        info: Info,
+        root: object,  # noqa: ARG001
+        info: Info[object, object],
         # ``id`` is the Relay-spec signature (``node(id: ID!)``) - the builtin
         # shadow is deliberate. ``strawberry.ID`` (the raw string), never
         # ``relay.GlobalID``: a GlobalID-annotated argument is parsed by
@@ -556,8 +559,8 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     _node_fields_declared.append("DjangoNodesField")
 
     def _resolve(
-        root: Any,  # noqa: ARG001
-        info: Info,
+        root: object,  # noqa: ARG001
+        info: Info[object, object],
         # Raw strings for the same reason as ``DjangoNodeField``'s ``id``
         # argument.
         ids: list[strawberry.ID],
@@ -577,6 +580,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         # Group coercible (type, pk) by decoded type - insertion-ordered, pks
         # in input order with duplicates preserved; uncoercible positions are
         # reserved null holes that never poison the batch ``pk__in``.
+        # The coerced pks keep ``_coerce_pk_or_none``'s column-typed values.
         groups: dict[type[_RelayDjangoType], list[Any]] = {}
         positions: list[tuple[type, int] | None] = []
         for resolved, node_id in decoded:
@@ -595,8 +599,8 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
             # connection safety, and the spec requires only "a single
             # gathering coroutine".
 
-            async def _gather() -> list[Any]:
-                per_type: dict[type, list[Any]] = {}
+            async def _gather() -> list[object]:
+                per_type: dict[type, list[object]] = {}
                 for resolved_type, pks in groups.items():
                     # ``resolve_nodes`` is AwaitableOrValue: the framework
                     # default returns a coroutine in async context, but a valid

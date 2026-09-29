@@ -84,7 +84,7 @@ from __future__ import annotations
 
 import codecs
 from functools import wraps
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from cross_web import DjangoHTTPRequestAdapter, HTTPException
 from django.conf import settings
@@ -104,10 +104,10 @@ from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
     from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
-    from django.http import HttpRequest
+    from django.http import HttpRequest, HttpResponseBase
     from django.views import View
 
     # Both package views compose the boundary mixin ahead of a Django ``View``
@@ -118,6 +118,9 @@ else:
     _BoundaryMixinBase = object
 
 __all__ = ("AsyncDjangoGraphQLView", "DjangoGraphQLView")
+
+#: The response a CSRF-checked ``run`` delegate produces, handed back unchanged.
+_ResponseT = TypeVar("_ResponseT")
 
 
 #: The wire reason for an over-limit body, verbatim from spec-046's Error
@@ -771,7 +774,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
             if isinstance(value, str) and _REPLACEMENT_CHARACTER in value:
                 raise HTTPException(400, _JSON_PARSE_REASON)
 
-    def parse_json(self, data: str | bytes) -> Any:
+    def parse_json(self, data: str | bytes) -> object:
         """Decode a ``bytes`` request body as strict UTF-8, then delegate upstream.
 
         The strict UTF-8 wire contract (spec-046 Decision 9): the success set for
@@ -838,10 +841,10 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
 
 def _run_after_csrf_check(
     request: HttpRequest,
-    delegate: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> Any:
+    delegate: Callable[..., _ResponseT],
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> _ResponseT:
     """Call ``delegate`` - and be the function ``csrf_protect`` wraps.
 
     The whole ordering fix for the multipart declared cap (spec-046 Decision 7)
@@ -931,10 +934,10 @@ def _run_after_csrf_check(
 
 async def _async_run_after_csrf_check(
     request: HttpRequest,
-    delegate: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-) -> Any:
+    delegate: Callable[..., Awaitable[_ResponseT]],
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> _ResponseT:
     """The async twin of :func:`_run_after_csrf_check` - see it for the whole contract.
 
     Needed as a separate function because ``csrf_protect`` branches on
@@ -1008,7 +1011,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
     #: async adapter already hands over raw bytes.
     request_adapter_class = _RawBodyRequestAdapter
 
-    def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+    def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
         """Enforce the request boundary, then run CSRF, then upstream's ``run``.
 
         The order is the contract (spec-046 Decision 7): nothing here may touch

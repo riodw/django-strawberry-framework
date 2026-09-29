@@ -21,7 +21,7 @@ the distinct-class collision guard.
 from __future__ import annotations
 
 import functools
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..mutations.fields import _lazy_ref
 from ..registry import register_subsystem_clear
@@ -34,6 +34,14 @@ from .mutations import (
     _make_auth_field,
     _sync_bridged_async_body,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Iterable, Sequence
+
+    from django.contrib.auth.models import _User
+    from strawberry.types import Info
+
+    from .mutations import _SealedAuthHolderMeta
 
 AUTH_QUERIES_MODULE_PATH = "django_strawberry_framework.auth.queries"
 
@@ -64,7 +72,10 @@ register_subsystem_clear(
 )
 
 
-def _current_user_resolve_body(holder_cls: type, info: Any) -> Any:
+def _current_user_resolve_body(
+    holder_cls: _SealedAuthHolderMeta,
+    info: Info[object, object],
+) -> _User | None:
     """Return the session actor (or ``None``) after the permission gate (Decision 7).
 
     The gate runs FIRST - its ``instance`` argument is the authenticated request
@@ -91,10 +102,10 @@ def _current_user_resolve_body(holder_cls: type, info: Any) -> Any:
 
 def current_user(
     *,
-    permission_classes: Any = None,
+    permission_classes: Iterable[type] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
-    directives: Any = (),
+    directives: Sequence[object] = (),
 ) -> Any:
     """Return the nullable session-actor query field (spec-040 Decision 7).
 
@@ -114,7 +125,9 @@ def current_user(
         sync_body=sync_body,
         async_body=_sync_bridged_async_body(sync_body),
         arguments=[],
-        return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,
+        # mypy: typeshed types a subscripted typing form as ``object``, not the alias
+        # whose ``__or__`` builds the ``Optional`` at runtime
+        return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,  # type: ignore[operator]
         description=description,
         deprecation_reason=deprecation_reason,
         directives=directives,

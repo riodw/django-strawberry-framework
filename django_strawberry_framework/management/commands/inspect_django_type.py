@@ -45,7 +45,6 @@ from functools import partial
 
 import strawberry
 from django.core.management.base import BaseCommand, CommandError, CommandParser
-from django.db import models
 from strawberry.schema.name_converter import NameConverter
 from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
@@ -68,6 +67,7 @@ if typing.TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from django_strawberry_framework.optimizer.field_meta import FieldMeta
     from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.utils.typing import ConcreteField, ModelField
 
 _GLOBAL_ID_GRAPHQL_TYPE = "GlobalID!"
 _RELAY_PK_CONVERTER = "relay.Node id"
@@ -241,7 +241,7 @@ class Command(BaseCommand):
     def _resolve_row(
         self,
         definition: "DjangoTypeDefinition",
-        field: models.Field,
+        field: "ModelField",
         scalar_namer: _ScalarNamer,
     ) -> tuple[str, str, str]:
         """Return ``(graphql_type, nullable, converter)`` for one selected field.
@@ -272,10 +272,11 @@ class Command(BaseCommand):
             return self._consumer_authored_row(definition, field, scalar_namer)
         if field_meta.is_relation:
             return self._relation_row(definition, field, field_meta, scalar_namer)
-        return self._scalar_row(definition, field, scalar_namer)
+        # Not a relation, so a concrete column: reverse ``ForeignObjectRel``s are relations.
+        return self._scalar_row(definition, typing.cast("ConcreteField", field), scalar_namer)
 
     @staticmethod
-    def _is_suppressed_relay_pk(definition: "DjangoTypeDefinition", field: models.Field) -> bool:
+    def _is_suppressed_relay_pk(definition: "DjangoTypeDefinition", field: "ModelField") -> bool:
         """Return whether ``field`` is the Relay-Node-suppressed primary key.
 
         On a Relay-Node-shaped type a NON-relation pk ``continue``s past
@@ -300,13 +301,14 @@ class Command(BaseCommand):
             return False
         if not _is_relay_shaped(definition.origin, definition.interfaces):
             return False
-        return field.name == definition.model._meta.pk.name
+        # The Django plugin types ``_meta`` on the abstract ``type[Model]`` as ``Any``.
+        return typing.cast("bool", field.name == definition.model._meta.pk.name)
 
     @classmethod
     def _relation_row(
         cls,
         definition: "DjangoTypeDefinition",
-        field: models.Field,
+        field: "ModelField",
         field_meta: "FieldMeta",
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
@@ -344,7 +346,7 @@ class Command(BaseCommand):
     @staticmethod
     def _suppressed_connection_name(
         definition: "DjangoTypeDefinition",
-        field: models.Field,
+        field: "ModelField",
     ) -> str | None:
         """Return the synthesized ``<rel>_connection`` name when ``field``'s list form was dropped.
 
@@ -395,7 +397,7 @@ class Command(BaseCommand):
     @staticmethod
     def _scalar_row(
         definition: "DjangoTypeDefinition",
-        field: models.Field,
+        field: "ConcreteField",
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
         """Build the row for a scalar field, reading nullability from the annotation."""
@@ -423,7 +425,7 @@ class Command(BaseCommand):
     @staticmethod
     def _consumer_authored_row(
         definition: "DjangoTypeDefinition",
-        field: models.Field,
+        field: "ModelField",
         scalar_namer: _ScalarNamer | None = None,
     ) -> tuple[str, str, str]:
         """Build the row for a consumer-authored field (annotation / ``strawberry.field`` override).
@@ -478,7 +480,7 @@ def _annotation_is_optional(annotation: object) -> bool:
     return False
 
 
-def _matched_scalar_key(field: models.Field) -> str:
+def _matched_scalar_key(field: "ModelField") -> str:
     """Name the ``SCALAR_MAP`` entry (the MRO ancestor) that fired for ``field``.
 
     ``convert_scalar`` resolves a scalar field by walking ``type(field).__mro__``

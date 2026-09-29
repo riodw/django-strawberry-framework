@@ -12,8 +12,12 @@ sentinel with ``resolved_relation_annotation`` and hands the resolved records ba
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from django.db import models
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..utils.typing import ModelField
 
 
 @dataclass(frozen=True, eq=False)
@@ -37,7 +41,7 @@ class PendingRelation:
     source_type: type
     source_model: type[models.Model]
     field_name: str
-    django_field: models.Field | models.ForeignObjectRel
+    django_field: ModelField
     related_model: type[models.Model]
 
 

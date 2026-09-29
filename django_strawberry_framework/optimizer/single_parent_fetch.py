@@ -41,7 +41,7 @@ Two verified corrections to the original idea:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, cast
 
 from django.db.models import QuerySet
 
@@ -61,6 +61,12 @@ from .nested_fetch import (
     unwindowable_child_queryset_reason,
 )
 from .plans import WINDOW_ROW_NUMBER
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+    from django.db.models.sql.where import WhereNode
+
+    from .plans import OrderEntry
 
 
 @dataclass(frozen=True)
@@ -91,13 +97,13 @@ class SingleParentWindowSpec:
     keyset fields ride here.
     """
 
-    pristine_child_queryset: Any
-    order_by: tuple[Any, ...]
+    pristine_child_queryset: QuerySet[models.Model]
+    order_by: tuple[OrderEntry, ...]
     parent_link_attname: str
     parent_link_column: str
     parent_link_table: str
     fetch_limit: int
-    select_related: Any
+    select_related: bool | dict[str, object]
     select_columns: tuple[tuple[str, str], ...] | None
 
 
@@ -176,11 +182,14 @@ class SingleParentWindowQuerySet(RecognizedFetchQuerySet):
     _dst_spec_attr = "_dst_single_parent_spec"
     _dst_single_parent_spec: SingleParentWindowSpec | None = None
 
-    def _fetch_recognized_rows(self) -> list | None:
+    def _fetch_recognized_rows(self) -> list[models.Model] | None:
         return _fetch_single_parent_rows(self)
 
 
-def _single_parent_where_ids(where: Any, spec: SingleParentWindowSpec) -> list | None:
+def _single_parent_where_ids(
+    where: WhereNode,
+    spec: SingleParentWindowSpec,
+) -> list[object] | None:
     """The parent-id list if ``where`` is "window range + ONE parent IN", else ``None``.
 
     The structural twin of ``lateral_fetch._recognize_lateral_fetch``'s WHERE
@@ -193,7 +202,7 @@ def _single_parent_where_ids(where: Any, spec: SingleParentWindowSpec) -> list |
     """
     if where.negated or where.connector != "AND":
         return None
-    parent_ids: list | None = None
+    parent_ids: list[object] | None = None
     for child in where.children:
         if _is_window_qual(child):
             continue
@@ -210,7 +219,7 @@ def _single_parent_where_ids(where: Any, spec: SingleParentWindowSpec) -> list |
     return parent_ids
 
 
-def _fetch_single_parent_rows(queryset: SingleParentWindowQuerySet) -> list | None:
+def _fetch_single_parent_rows(queryset: SingleParentWindowQuerySet) -> list[models.Model] | None:
     """Execute the plain page query for ``queryset`` if its state is recognized.
 
     Returns ``None`` for every unrecognized shape (the superclass then runs the

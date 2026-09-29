@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..utils.relations import (
     RelationKind,
@@ -63,6 +63,9 @@ from ..utils.relations import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
+
+    from ..utils.typing import ForeignKeyField, ModelField
+    from .field_meta import FieldMeta
 
 
 class LateralJoinShape(enum.Enum):
@@ -94,7 +97,7 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 # one truth test, two failure policies. The local names stay so the 22 call
 # sites below read as taxonomy code, and so the lenient policy is declared once
 # here instead of at each of them.
-def _safe_getattr(value: object, name: str, default: Any = None) -> Any:
+def _safe_getattr(value: object, name: str, default: object = None) -> Any:
     """Read a descriptor attribute without letting malformed doubles escape."""
     return relation_attr(value, name, default, lenient=True)
 
@@ -107,7 +110,7 @@ def _safe_flag(value: object, name: str) -> bool:
     return relation_bool(value, name, False, lenient=True)
 
 
-def _first_truthy(*values: Any) -> Any:
+def _first_truthy(*values: object) -> object:
     """The first value that tests true, a raising truth test counting as false."""
     for value in values:
         if _safe_truthy(value):
@@ -153,10 +156,10 @@ class RelationJoinDescriptor:
     windowable: bool
     partition_expr: str | None
     parent_join_column: str | None
-    through_model: type | None
+    through_model: type[models.Model] | None
     lateral_shape: LateralJoinShape
-    parent_link_field: Any = None
-    through_child_field: Any = None
+    parent_link_field: ForeignKeyField | None = None
+    through_child_field: ForeignKeyField | None = None
     content_type_column: str | None = None
 
     @property
@@ -178,7 +181,7 @@ class RelationJoinDescriptor:
         return tuple(columns)
 
 
-def _partition_expr(field: Any) -> str | None:
+def _partition_expr(field: object) -> str | None:
     """The parent-side partition expression Django's prefetch attach uses.
 
     ``remote_field.attname or remote_field.name`` - exactly what upstream's
@@ -189,13 +192,17 @@ def _partition_expr(field: Any) -> str | None:
     accessor when ``related_name`` is absent).
     """
     remote_field = _safe_getattr(field, "remote_field")
-    return _first_truthy(
-        _safe_getattr(remote_field, "attname"),
-        _safe_getattr(remote_field, "name"),
+    # A relation's ``attname`` / ``name`` slots hold strings.
+    return cast(
+        "str | None",
+        _first_truthy(
+            _safe_getattr(remote_field, "attname"),
+            _safe_getattr(remote_field, "name"),
+        ),
     )
 
 
-def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
+def _parent_join_column(field: object, kind: RelationKind) -> str | None:
     """The child-side column Django needs loaded to attach rows to parents.
 
     The relation-kind-specific connector
@@ -205,34 +212,48 @@ def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
     for an M2M (the join table owns the attach, so the child only needs its
     pk). ``getattr`` fallbacks keep the synthetic test-double contract.
     """
+    # Every slot read below is a column ``attname``, which Django holds as a string.
     if _safe_flag(field, "one_to_many") or kind == "reverse_one_to_one":
-        return _first_truthy(
-            _safe_getattr(_safe_getattr(field, "field"), "attname"),
-            _safe_getattr(field, "reverse_connector_attname"),
+        return cast(
+            "str | None",
+            _first_truthy(
+                _safe_getattr(_safe_getattr(field, "field"), "attname"),
+                _safe_getattr(field, "reverse_connector_attname"),
+            ),
         )
     if not _safe_flag(field, "many_to_many"):
-        return _first_truthy(
-            _safe_getattr(_safe_getattr(field, "target_field"), "attname"),
-            _safe_getattr(field, "target_field_attname"),
+        return cast(
+            "str | None",
+            _first_truthy(
+                _safe_getattr(_safe_getattr(field, "target_field"), "attname"),
+                _safe_getattr(field, "target_field_attname"),
+            ),
         )
     related_model = _safe_getattr(field, "related_model")
     if related_model is None:
         return None
     try:
-        return related_model._meta.pk.attname
+        return cast("str", related_model._meta.pk.attname)
     except BaseException:
         return None
 
 
-def _through_model(field: Any) -> type[models.Model] | None:
+def _through_model(field: object) -> type[models.Model] | None:
     """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
+    # A relation's ``through`` slot holds the join-table model class.
     through = _safe_getattr(field, "through")
     if through is not None:
-        return through
-    return _safe_getattr(_safe_getattr(field, "remote_field"), "through")
+        return cast("type[models.Model]", through)
+    return cast(
+        "type[models.Model] | None",
+        _safe_getattr(_safe_getattr(field, "remote_field"), "through"),
+    )
 
 
-def _through_link_fields(field: Any, through: type[models.Model] | None) -> tuple[Any, Any]:
+def _through_link_fields(
+    field: object,
+    through: type[models.Model] | None,
+) -> tuple[ForeignKeyField | None, ForeignKeyField | None]:
     """The M2M through table's (parent-side FK, child-side FK) for ``field``.
 
     Resolved from the forward ``ManyToManyField``'s own naming
@@ -250,8 +271,13 @@ def _through_link_fields(field: Any, through: type[models.Model] | None) -> tupl
         return None, None
     try:
         through_meta = through._meta
-        source_fk = through_meta.get_field(forward_field.m2m_field_name())
-        target_fk = through_meta.get_field(forward_field.m2m_reverse_field_name())
+        # ``m2m_field_name`` / ``m2m_reverse_field_name`` name the through table's
+        # two ``ForeignKey`` columns.
+        source_fk = cast("ForeignKeyField", through_meta.get_field(forward_field.m2m_field_name()))
+        target_fk = cast(
+            "ForeignKeyField",
+            through_meta.get_field(forward_field.m2m_reverse_field_name()),
+        )
         if forward_field is field:
             return source_fk, target_fk  # forward: parent side is the source FK.
         return target_fk, source_fk  # reverse: parent side is the target FK.
@@ -259,7 +285,7 @@ def _through_link_fields(field: Any, through: type[models.Model] | None) -> tupl
         return None, None
 
 
-def _generic_child_attname(field: Any, name_attr: str) -> str | None:
+def _generic_child_attname(field: object, name_attr: str) -> str | None:
     """The child column attname a ``GenericRelation`` names via ``name_attr``.
 
     A ``GenericForeignKey`` stores the parent id in an ordinary column
@@ -281,12 +307,13 @@ def _generic_child_attname(field: Any, name_attr: str) -> str | None:
     if related_model is None or child_field_name is None:
         return None
     try:
-        return related_model._meta.get_field(child_field_name).attname
+        # A resolved child field's ``attname`` is its column name, a string.
+        return cast("str", related_model._meta.get_field(child_field_name).attname)
     except BaseException:
         return None
 
 
-def classify_relation_join(field: Any) -> RelationJoinDescriptor:
+def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescriptor:
     """Classify one raw Django relation field into its join descriptor.
 
     Pure and side-effect-free; safe to call at plan time on every nested

@@ -5,13 +5,27 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from django.db import models
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    from ..filters.sets import FilterSet
+    from ..orders.sets import OrderSet
+    from ..utils.typing import ModelField
+
+    #: A consumer ``globalid_strategy`` encoder, validated to bind
+    #: ``(type_cls, model, root)``. Its return is checked per call
+    #: (``types/relay.py::encode_typename``), so it is typed ``object``.
+    GlobalIDEncoder: TypeAlias = Callable[[type, type[models.Model], object], object]
+    #: A validated ``globalid_strategy``: a ``STRING_GLOBALID_STRATEGIES`` name or an encoder.
+    GlobalIDStrategy: TypeAlias = str | GlobalIDEncoder
 
 _GRAPHQL_NAME_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
 
@@ -156,7 +170,7 @@ class DjangoTypeDefinition:
     description: str | None
     fields_spec: tuple[str, ...] | Literal["__all__"] | None
     exclude_spec: tuple[str, ...] | None
-    selected_fields: tuple[models.Field, ...]
+    selected_fields: tuple[ModelField, ...]
     field_map: dict[str, FieldMeta]
     optimizer_hints: dict[str, OptimizerHint]
     has_custom_get_queryset: bool
@@ -170,10 +184,10 @@ class DjangoTypeDefinition:
     # ``interfaces`` is populated by ``_validate_meta``; consumed by
     # ``finalize_django_types()`` as the finalizer's source of truth for
     # base injection.
-    filterset_class: type | None = None
-    orderset_class: type | None = None
+    filterset_class: type[FilterSet] | None = None
+    orderset_class: type[OrderSet] | None = None
     fields_class: type | None = None
-    connection: dict | None = None
+    connection: dict[str, bool] | None = None
     # Keyset-cursor opt-in (the BACKLOG ``stable_cursor_field`` contract):
     # the validated ``Meta.cursor_field`` order strings, or ``None`` for the
     # shipped offset-cursor behavior. When set, every connection over this
@@ -192,7 +206,7 @@ class DjangoTypeDefinition:
     # UNDERLYING relation field name (``{"books_connection": "books"}``).
     # See the invariants docstring above for the full read/write contract.
     relation_connections: dict[str, str] | None = None
-    globalid_strategy: str | Callable[..., str] | None = None
+    globalid_strategy: GlobalIDStrategy | None = None
     # Finalization-set encode/decode classification (spec-031 Decision 10).
     # Unlike the raw ``globalid_strategy`` slot above (populated at class
     # creation), it is set exactly once by the Phase-2.5 typename resolver
@@ -211,7 +225,7 @@ class DjangoTypeDefinition:
     # consumer code holding references to discarded definitions -
     # which would surface the same staleness on any direct attribute
     # read.
-    _related_target_cache: dict[str, Any] = field(
+    _related_target_cache: dict[str, tuple[DjangoTypeDefinition, ModelField] | None] = field(
         default_factory=dict,
         repr=False,
         compare=False,
@@ -264,7 +278,7 @@ class DjangoTypeDefinition:
     def related_target_for(
         self,
         field_name: str,
-    ) -> tuple[DjangoTypeDefinition, models.Field | models.ForeignObjectRel] | None:
+    ) -> tuple[DjangoTypeDefinition, ModelField] | None:
         """Return ``(target_definition, model_field)`` for a relation field.
 
         Walks ``self.model._meta.get_field(field_name)``; returns
@@ -394,7 +408,7 @@ def origin_has_custom_id_resolver(origin: type, pk_name: str) -> bool:
     return _resolves_id_off_pk(origin, normalized_pk_name)
 
 
-def _normalize_pk_name(pk_name: Any) -> str | None:
+def _normalize_pk_name(pk_name: object) -> str | None:
     """Return a plain primary-key name, or ``None`` for malformed input."""
     if not isinstance(pk_name, str):
         return None
@@ -452,7 +466,7 @@ def _class_has_custom_id_resolver(type_cls: type, name: str) -> bool:
     return not _is_framework_relay_id_resolver(descriptor)
 
 
-def _is_framework_relay_id_resolver(value: Any) -> bool:
+def _is_framework_relay_id_resolver(value: object) -> bool:
     """Return whether ``value`` is the framework-installed Relay id resolver."""
     from strawberry import relay
 

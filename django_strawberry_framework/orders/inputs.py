@@ -23,7 +23,7 @@ cycle-safe local import inside ``TypeRegistry.clear``.
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 import strawberry
 from django.db.models import F
@@ -44,6 +44,7 @@ from ..utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.definition import DjangoTypeDefinition
+    from .base import RelatedOrder
     from .sets import OrderSet
 
 # Domain-local aliases for the shared generated-input substrate (the mechanics
@@ -155,7 +156,7 @@ _field_specs: dict[tuple[type[OrderSet], str], FieldSpec]
 )
 
 
-def _get_concrete_field_names_for_order(model: Any) -> list[str]:
+def _get_concrete_field_names_for_order(model: object) -> list[str]:
     """Return every column-backed field name for ``model``.
 
     Backs ``OrderSet._expand_meta_fields`` when ``Meta.fields = "__all__"``
@@ -185,9 +186,9 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
 
 
 def convert_order_field_to_input_annotation(
-    model_field: Any,
+    model_field: object,
     owner_definition: DjangoTypeDefinition | None = None,
-) -> Any:
+) -> object:
     """Return the Strawberry annotation for an order leaf field.
 
     Per spec-028 Decision 5: the ordering converter always returns
@@ -209,7 +210,7 @@ def convert_order_field_to_input_annotation(
 def _build_input_fields(
     orderset_cls: type[OrderSet],
     owner_definition: DjangoTypeDefinition | None = None,
-) -> list[tuple[str, Any, dict[str, Any]]]:
+) -> list[tuple[str, object, dict[str, object]]]:
     """Return per-field input triples for an orderset's GraphQL input.
 
     Walks ``orderset_cls.get_fields()`` (Layer-4 expansion). Each entry
@@ -236,7 +237,11 @@ def _build_input_fields(
     """
     del owner_definition  # reserved -- see ``convert_order_field_to_input_annotation``.
 
-    def _leaf_of(top_name: str, _python_attr: str, _entry: Any) -> tuple[Any, str]:
+    def _leaf_of(
+        top_name: str,
+        _python_attr: str,
+        _entry: RelatedOrder | None,
+    ) -> tuple[object, str]:
         # Leaf field: ``Ordering | None`` regardless of model-field type per
         # spec-028 Decision 5. ``model_field`` discovery is a future-extension
         # affordance the converter ignores today.
@@ -254,7 +259,11 @@ def _build_input_fields(
         related_target_of=lambda _top_name, entry: (
             (True, entry.orderset) if entry is not None else (False, None)
         ),
-        related_source_path_of=lambda top_name, entry: entry.field_name or top_name,
+        # ``related_target_of`` reports a member related exactly when its entry is a
+        # ``RelatedOrder`` (a leaf's entry is ``None``), so this path reads one.
+        related_source_path_of=lambda top_name, entry: (
+            cast("RelatedOrder", entry).field_name or top_name
+        ),
         leaf_of=_leaf_of,
         input_type_name_for=_input_type_name_for,
         module_path=INPUTS_MODULE_PATH,
@@ -264,7 +273,7 @@ def _build_input_fields(
 
 def normalize_input_value(
     orderset_cls: type[OrderSet],
-    input_value: Any,
+    input_value: object,
 ) -> list[tuple[str, Ordering | None]]:
     """Flatten a Strawberry order input value into ``(field_path, direction)`` tuples.
 
@@ -339,7 +348,7 @@ def normalize_input_value(
     return result
 
 
-def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: Any) -> None:
+def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: object) -> None:
     """Populate provenance before direct normalization or permission checks.
 
     The "is anything supplied?" warm-up gate is answered THROUGH the family

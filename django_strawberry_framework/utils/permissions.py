@@ -51,7 +51,10 @@ from .querysets import reject_async_in_sync_context
 from .strings import flatten_lookup_path
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+
     from ..sets_mixins import ActiveInputPermissionMixin
+    from .inputs import GeneratedInputFieldSpec
 
 # Recourse text shared by every ``check_<field>_permission`` async-guard raise. A
 # filter / order permission gate is fired synchronously (on the async surface it
@@ -111,7 +114,7 @@ class ChannelsRequestAdapter:
     require the optional ``channels`` dependency (spec-041 Decision 11).
     """
 
-    def __init__(self, request: Any, scope: Mapping[str, Any]) -> None:
+    def __init__(self, request: object, scope: Mapping[str, Any]) -> None:
         self._request = request
         self._scope = scope
 
@@ -144,7 +147,7 @@ class ChannelsRequestAdapter:
         return getattr(self._request, name)
 
 
-def _channels_scope(request: Any) -> Mapping[str, Any] | None:
+def _channels_scope(request: object) -> Mapping[str, Any] | None:
     """Resolve Strawberry's HTTP or WebSocket Channels scope shape."""
     try:
         consumer = getattr(request, "consumer", None)
@@ -162,7 +165,7 @@ def _channels_scope(request: Any) -> Mapping[str, Any] | None:
     return None
 
 
-def _context_request(context: Any) -> tuple[Any, bool]:
+def _context_request(context: object) -> tuple[object, bool]:
     """Read the ``request`` slot off a Strawberry context, with the read CONTAINED.
 
     The Mapping-vs-attribute fork, once. A Strawberry context is either a
@@ -191,7 +194,7 @@ def _context_request(context: Any) -> tuple[Any, bool]:
         return None, False
 
 
-def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
+def _channels_request_adapter(context: object) -> ChannelsRequestAdapter | None:
     """Wrap ``context`` or its ``request`` in a ``ChannelsRequestAdapter`` when an ASGI scope is present."""
     if isinstance(context, ChannelsRequestAdapter):
         return context
@@ -208,7 +211,7 @@ def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
     return None
 
 
-def _request_from_context(context: Any) -> Any | None:
+def _request_from_context(context: object) -> object:
     """Resolve every supported Django or Channels request context shape."""
     if isinstance(context, ChannelsRequestAdapter):
         return context
@@ -236,7 +239,7 @@ def _request_from_context(context: Any) -> Any | None:
     return None
 
 
-def request_from_info(info: Any, *, family_label: str) -> Any:
+def request_from_info(info: object, *, family_label: str) -> object:
     """Resolve the Django request from ``info.context``.
 
     Canonical Strawberry-Django shape: ``info.context.request``. The
@@ -276,7 +279,7 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     )
 
 
-def _safe_get_model(app_label: str, model_name: str) -> type | None:
+def _safe_get_model(app_label: str, model_name: str) -> type[models.Model] | None:
     """Return the named model, or ``None`` when the app / model is not installed."""
     from django.apps import apps
 
@@ -325,7 +328,7 @@ def resolve_auth_aliases() -> frozenset[str]:
     return frozenset(aliases)
 
 
-def auth_aliases_for_permission_classes(permission_classes: Any) -> frozenset[str]:
+def auth_aliases_for_permission_classes(permission_classes: object) -> frozenset[str]:
     """Resolve auth aliases only when a write surface has permission classes.
 
     An empty ``permission_classes`` declaration is an explicit authorization
@@ -344,7 +347,12 @@ def auth_aliases_for_permission_classes(permission_classes: Any) -> frozenset[st
     return resolve_auth_aliases() if enabled else frozenset()
 
 
-def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: Any = None) -> Any:
+def extract_branch_value(
+    input_value: object,
+    field_name: str,
+    *,
+    unset_sentinel: object = None,
+) -> object:
     """Return the value at ``field_name`` on a dataclass-or-dict input.
 
     Collapses ``None`` (and ``unset_sentinel``, when the family supplies one) to
@@ -369,9 +377,9 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
 
 
 def invoke_permission_method(
-    bare_instance: Any,
+    bare_instance: object,
     field_path: str,
-    request: Any,
+    request: object,
     *,
     fired: set[str] | None = None,
 ) -> None:
@@ -447,15 +455,15 @@ def verbatim_path(python_attr: str) -> str:
 
 def active_permission_targets(
     cls: type,
-    input_value: Any,
+    input_value: object,
     *,
-    field_specs: Mapping[Any, Any],
+    field_specs: Mapping[Any, GeneratedInputFieldSpec],
     related_attr: str,
     logic_keys: frozenset[str],
     fallback_path: Callable[[str], str],
-    unset_sentinel: Any = None,
+    unset_sentinel: object = None,
     handle_top_level_list: bool = False,
-) -> tuple[list[str], list[tuple[str, Any, Any]]]:
+) -> tuple[list[str], list[tuple[str, Any, object]]]:
     """Partition active top-level fields into ``(leaf_paths, related_branches)`` in ONE walk.
 
     ``run_active_input_permission_checks`` needs both the per-field gate paths
@@ -483,7 +491,7 @@ def active_permission_targets(
         handle_top_level_list=handle_top_level_list,
     )
     leaf_paths: list[str] = []
-    branches: list[tuple[str, Any, Any]] = []
+    branches: list[tuple[str, Any, object]] = []
     for field in iter_active_fields(cls, input_value, config):
         if field.kind == LEAF:
             leaf_paths.append(
@@ -498,12 +506,12 @@ def active_permission_targets(
 
 def active_related_branches(
     cls: type,
-    input_value: Any,
+    input_value: object,
     *,
     related_attr: str,
-    unset_sentinel: Any = None,
+    unset_sentinel: object = None,
     handle_top_level_list: bool = False,
-) -> list[tuple[str, Any, Any]]:
+) -> list[tuple[str, Any, object]]:
     """List ``(field_name, related_obj, child_input)`` for present related branches.
 
     Active-branch scoping: a related branch is "active" when its key is present
@@ -544,7 +552,7 @@ def active_related_branches(
 def _fire_gate_on_class(
     gate_cls: type,
     field_path: str,
-    request: Any,
+    request: object,
     *,
     fired: dict[type, set[str]],
 ) -> None:
@@ -562,7 +570,7 @@ def _fire_gate_on_class(
 def _fire_flat_relation_path_gates(
     owning_cls: type,
     source_path: str,
-    request: Any,
+    request: object,
     *,
     fired: dict[type, set[str]],
     related_attr: str,
@@ -683,11 +691,11 @@ def _related_declarations(cls: type, related_attr: str) -> tuple[tuple[Any, Any]
 
 def run_active_input_permission_checks(
     cls: type[ActiveInputPermissionMixin],
-    input_value: Any,
-    request: Any,
+    input_value: object,
+    request: object,
     *,
     fired: dict[type, set[str]],
-    bare: Any,
+    bare: ActiveInputPermissionMixin,
     target_attr: str,
     related_attr: str,
     depth: int = 0,

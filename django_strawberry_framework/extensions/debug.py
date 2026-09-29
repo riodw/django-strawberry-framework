@@ -92,10 +92,10 @@ Capture mechanism and its documented boundaries:
 import math
 import threading
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict, cast
+from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
 
 from django.conf import settings
 from django.db import connections
@@ -109,6 +109,7 @@ from .operation_state import OperationState, _OperationBoundExtension
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.backends.base.base import BaseDatabaseWrapper
+    from strawberry.types import ExecutionContext
 
 __all__ = ["DjangoDebugExtension"]
 
@@ -269,7 +270,7 @@ _coordinator = _CursorCaptureCoordinator()
 
 def _serialize_sql_row(
     database_connection: "BaseDatabaseWrapper",
-    entry: dict[str, Any],
+    entry: dict[str, str],
 ) -> _DebugSQLRow:
     """Serialize one Django query-log ``entry`` to the six-key wire row.
 
@@ -343,7 +344,7 @@ def _terminal_original_error(error: GraphQLError) -> BaseException:
     return candidate
 
 
-def _collect_exceptions(execution_result: Any) -> "list[_DebugExceptionRow]":
+def _collect_exceptions(execution_result: object) -> "list[_DebugExceptionRow]":
     """Serialize the execution exceptions represented by ``execution_result``'s errors.
 
     The single owner of the ``result is None`` / ``errors is None`` guards
@@ -366,7 +367,7 @@ def _collect_exceptions(execution_result: Any) -> "list[_DebugExceptionRow]":
     return rows
 
 
-def _query_log_entries_since(snapshot: _ConnectionSnapshot) -> list[dict[str, Any]]:
+def _query_log_entries_since(snapshot: _ConnectionSnapshot) -> list[dict[str, str]]:
     """Return the query-log entries appended since ``snapshot`` was taken.
 
     Materializes the bounded deque (a deque is not sliceable) and clamps the
@@ -393,7 +394,7 @@ def _truncate(text: str, limit: int) -> str:
     return text[:limit] + _TRUNCATION_MARKER
 
 
-def _row_cost(row: "Mapping[str, Any]") -> int:
+def _row_cost(row: "Mapping[str, object]") -> int:
     """The serialized character cost of one row, counting its string values only.
 
     The numeric and boolean values are bounded by their own types, so the
@@ -468,7 +469,7 @@ def _apply_payload_caps(
 
 def _serialized_sql_row_or_dropped(
     database_connection: "BaseDatabaseWrapper",
-    entry: dict[str, Any],
+    entry: dict[str, str],
 ) -> "_DebugSQLRow | None":
     """Serialize one query-log ``entry``, or return ``None`` after logging the drop.
 
@@ -493,7 +494,10 @@ def _serialized_sql_row_or_dropped(
         return None
 
 
-def _build_payload(snapshots: "list[_ConnectionSnapshot]", execution_result: Any) -> _DebugPayload:
+def _build_payload(
+    snapshots: "list[_ConnectionSnapshot]",
+    execution_result: object,
+) -> _DebugPayload:
     """Assemble the completed ``debug`` payload - the one place spelling its shape.
 
     Every call returns fresh list containers. The two collection phases each
@@ -562,7 +566,7 @@ class _DebugOperationState(OperationState):
 
     __slots__ = ("payload", "snapshots")
 
-    def __init__(self, execution_context: Any) -> None:
+    def __init__(self, execution_context: "ExecutionContext") -> None:
         super().__init__(execution_context)
         self.payload: _DebugPayload | None = None
         self.snapshots: list[_ConnectionSnapshot] | None = None
@@ -700,7 +704,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
             )
         _ACKNOWLEDGEMENT.settle(self, _AcceptedDisclosure(allow_unsafe_production))
 
-    def _new_operation_state(self, execution_context: Any) -> _DebugOperationState:
+    def _new_operation_state(self, execution_context: "ExecutionContext") -> _DebugOperationState:
         """Build this operation's capture state."""
         return _DebugOperationState(execution_context)
 
@@ -740,7 +744,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         # closed without touching the operation.
         return self._acknowledged() or getattr(settings, "DEBUG", None) is True
 
-    def on_operation(self) -> Any:
+    def on_operation(self) -> Iterator[None]:
         """Bracket the operation with the debug cursor; assemble the payload at teardown.
 
         One synchronous generator serves both execution colors (the engine
@@ -806,7 +810,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
                 # contract).
                 self._stash_payload_if_executed(state)
 
-    def on_execute(self) -> Any:
+    def on_execute(self) -> Iterator[None]:
         """Stash the payload the moment graphql-core returns, before any operation teardown.
 
         The engine's streaming path reads the extension results inside the
@@ -848,7 +852,7 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         if isinstance(result, GraphQLExecutionResult):
             state.payload = _build_payload(state.snapshots or [], result)
 
-    def get_results(self) -> dict[str, Any]:
+    def get_results(self) -> dict[str, _DebugPayload]:
         """Return ``{"debug": <payload>}`` once the stash exists, else ``{}``.
 
         A pure, idempotent read: never a mutate-or-pop, never a write to

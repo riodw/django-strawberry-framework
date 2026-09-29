@@ -48,11 +48,11 @@ from django import forms
 
 from ..exceptions import ConfigurationError, _safe_text
 from ..mutations.inputs import PARTIAL
+from ..mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
 from ..mutations.permissions import DenyAll, DjangoModelPermission, run_permission_classes
 from ..mutations.sets import (
     COMMON_WRITE_META_KEYS,
     MODEL_BACKED_WRITE_META_KEYS,
-    NON_DELETE_OPERATION_INPUT_KIND,
     DjangoMutation,
     _hook_overridden,
     _validate_permission_classes,
@@ -94,6 +94,12 @@ from .inputs import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Mapping
+
+    from django.db import models
+    from strawberry.types import Info
+
+    from ..utils.inputs import InputFieldSpec
     from .inputs import FormClass
 
 # The form ``Meta``'s allowed-key sets (spec-038 Decision 6), composed from
@@ -159,11 +165,17 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # disjoint (separate dicts, registered + cleared separately). ``clear_form_shape_build_cache``
 # is co-cleared from ``registry.clear()`` (a ``registry.clear()``-only reset, NOT a
 # pre-bind input clear - it is a per-pass build cache).
+_form_shape_build_cache: dict[
+    tuple[FormClass, str, frozenset[str], tuple[tuple[str, type[forms.Field], bool, object], ...]],
+    tuple[type, list[InputFieldSpec]],
+]
 _form_shape_build_cache, clear_form_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(clear_form_shape_build_cache, owner="forms.shape_cache")
 
 
-def _default_mutation_get_form_fields(cls: type) -> dict[str, forms.Field]:
+def _default_mutation_get_form_fields(
+    cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+) -> dict[str, forms.Field]:
     """Return the mutation's stable field basis from its declared ``form_class``.
 
     Class validation runs before the metaclass stamps ``_mutation_meta``, so that
@@ -185,7 +197,10 @@ def _default_mutation_get_form_fields(cls: type) -> dict[str, forms.Field]:
     return get_form_fields(form_class)
 
 
-def _mutation_form_fields(mutation_cls: type, form_class: FormClass) -> dict[str, forms.Field]:
+def _mutation_form_fields(
+    mutation_cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    form_class: FormClass,
+) -> dict[str, forms.Field]:
     """Resolve a mutation's overridable form-field hook for one build pass.
 
     The hook INVOCATION is the typed boundary both flavors' ``_validate_meta``
@@ -221,14 +236,14 @@ def _mutation_form_fields(mutation_cls: type, form_class: FormClass) -> dict[str
 
 
 def _cached_build_form_input(
-    form_class: type,
+    form_class: FormClass,
     *,
     operation_kind: str,
-    fields: Any,
-    exclude: Any,
+    fields: tuple[str, ...] | None,
+    exclude: tuple[str, ...] | None,
     guard_required: bool,
-    form_fields: Any = None,
-) -> tuple[type, list]:
+    form_fields: Mapping[str, forms.Field] | None = None,
+) -> tuple[type, list[InputFieldSpec]]:
     """Build the operation's form input once per shape; return ``(input_cls, field_specs)``.
 
     Mirrors ``mutations/sets.py::_materialize_input_for``'s cache-by-shape-identity:
@@ -284,7 +299,7 @@ def _cached_build_form_input(
         else:
             guard_create_required_fields(form_class, effective, form_fields)
 
-    def _build() -> tuple[type, list]:
+    def _build() -> tuple[type, list[InputFieldSpec]]:
         if operation_kind == PARTIAL:
             return build_form_input_class(
                 form_class,
@@ -320,11 +335,11 @@ def _cached_build_form_input(
 
 
 def _resolve_effective_form_field_names(
-    form_class: type,
+    form_class: FormClass,
     *,
-    fields: Any,
-    exclude: Any,
-    form_fields: Any = None,
+    fields: tuple[str, ...] | None,
+    exclude: tuple[str, ...] | None,
+    form_fields: Mapping[str, forms.Field] | None = None,
 ) -> tuple[str, ...]:
     """Return the effective form-field names after ``Meta.fields`` / ``Meta.exclude``.
 
@@ -345,10 +360,10 @@ def _resolve_effective_form_field_names(
 
 def _normalized_form_field_selection(
     meta: type,
-    form_class: type,
+    form_class: FormClass,
     *,
-    form_fields: Any = None,
-) -> tuple[Any, Any]:
+    form_fields: Mapping[str, forms.Field] | None = None,
+) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
     """Normalize + fail-loud-validate ``Meta.fields`` / ``Meta.exclude`` for both form bases.
 
     Shape-normalize via the shared ``normalize_meta_field_selection``, then the
@@ -368,7 +383,10 @@ def _normalized_form_field_selection(
     return fields, exclude
 
 
-def _form_kwargs_overridden(cls: type, base: type) -> bool:
+def _form_kwargs_overridden(
+    cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+    base: type[DjangoModelFormMutation] | type[DjangoFormMutation],
+) -> bool:
     """Return whether ``cls`` overrides ``get_form_kwargs`` / ``get_form`` (the waiver detection).
 
     The ``get_form_kwargs`` / ``get_form`` waiver (spec-038 Decision 7):
@@ -402,12 +420,12 @@ def _form_kwargs_overridden(cls: type, base: type) -> bool:
 
 
 def _default_get_form_kwargs(
-    self: Any,  # noqa: ARG001  # receiver of the instance method; the default ignores it
-    info: Any,
+    self: DjangoModelFormMutation | DjangoFormMutation,  # noqa: ARG001  # the default ignores it
+    info: Info[object, object],
     *,
-    data: Any,
-    files: Any,
-    instance: Any = None,
+    data: dict[str, object],
+    files: dict[str, object],
+    instance: models.Model | None = None,
 ) -> dict[str, Any]:
     """The default ``get_form_kwargs`` body shared by both form bases (spec-038 Decision 8 step 4).
 
@@ -426,12 +444,12 @@ def _default_get_form_kwargs(
 
 
 def _default_get_form(
-    self: Any,
-    info: Any,
+    self: DjangoModelFormMutation | DjangoFormMutation,
+    info: Info[object, object],
     *,
-    data: Any,
-    files: Any,
-    instance: Any = None,
+    data: dict[str, object],
+    files: dict[str, object],
+    instance: models.Model | None = None,
 ) -> Any:
     """The default ``get_form`` body shared by both form bases (spec-038 Decision 8 step 4).
 
@@ -448,11 +466,11 @@ def _default_get_form(
 
 
 def _build_and_stash_form_input(
-    cls: type,
+    cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
     meta: _ValidatedMutationMeta,
     *,
     operation_kind: str,
-    base: type,
+    base: type[DjangoModelFormMutation] | type[DjangoFormMutation],
 ) -> type:
     """Build + materialize a form input and stash its reverse map (both flavors' ``build_input`` tail).
 
@@ -487,7 +505,7 @@ def _build_and_stash_form_input(
 
 
 def _form_input_type_name_for(
-    mutation_cls: type,
+    mutation_cls: type[DjangoModelFormMutation] | type[DjangoFormMutation],
     meta: _ValidatedMutationMeta,
     operation_kind: str,
 ) -> str:
@@ -529,12 +547,14 @@ class DjangoModelFormMutation(DjangoMutation):
     ``Meta.fields`` / ``Meta.exclude`` / ``Meta.permission_classes``).
     """
 
-    get_form_fields: ClassVar[classmethod[Any, [], dict[str, forms.Field]]] = classmethod(
-        _default_mutation_get_form_fields,
+    get_form_fields: ClassVar[classmethod[DjangoModelFormMutation, [], dict[str, forms.Field]]] = (
+        classmethod(
+            _default_mutation_get_form_fields,
+        )
     )
 
     @classmethod
-    def _resolve_model(cls, meta: type) -> Any:
+    def _resolve_model(cls, meta: type) -> type[models.Model] | None:
         """Resolve the model from ``Meta.form_class._meta.model`` (the ``036`` seam override).
 
         Returns ``None`` for a missing ``form_class`` / a form with no ``_meta`` /
@@ -651,7 +671,7 @@ class DjangoModelFormMutation(DjangoMutation):
     # reverse map. ``None`` until bind (mirrors ``_input_class``); a type checker
     # sees the bound list, since every form operation has an input.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        _input_field_specs: ClassVar[list]
+        _input_field_specs: ClassVar[list[InputFieldSpec]]
     else:
         _input_field_specs = None
 
@@ -757,8 +777,10 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     payload (no object slot). The resolver pipeline lives in ``resolvers.py``.
     """
 
-    get_form_fields: ClassVar[classmethod[Any, [], dict[str, forms.Field]]] = classmethod(
-        _default_mutation_get_form_fields,
+    get_form_fields: ClassVar[classmethod[DjangoFormMutation, [], dict[str, forms.Field]]] = (
+        classmethod(
+            _default_mutation_get_form_fields,
+        )
     )
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.
@@ -784,7 +806,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # The reverse-map records, stashed at bind for the decode
     # (mirrors ``DjangoModelFormMutation._input_field_specs``).
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        _input_field_specs: ClassVar[list]
+        _input_field_specs: ClassVar[list[InputFieldSpec]]
     else:
         _input_field_specs = None
 
@@ -881,7 +903,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
                 "saved object + applies the DjangoModelPermission default + the optimizer "
                 "re-fetch). DjangoFormMutation is for a plain forms.Form only.",
             )
-        require_subclass(
+        form_class = require_subclass(
             name,
             form_class,
             base_label="DjangoFormMutation",
@@ -974,7 +996,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     get_form_kwargs = _default_get_form_kwargs
     get_form = _default_get_form
 
-    def perform_mutate(self, form: Any, info: Any) -> None:
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         """The plain-form write hook (spec-038 Decision 6 / Decision 8 step 5).
 
         The default calls ``form.save()`` when the form defines one (a
@@ -992,10 +1014,10 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
 
     def check_permission(
         self,
-        info: Any,
+        info: Info[object, object],
         operation: str,
-        data: Any,
-        instance: Any = None,
+        data: object,
+        instance: models.Model | None = None,
     ) -> bool:
         """Return whether the request is authorized (the plain-flavor write-auth seam).
 

@@ -36,7 +36,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Generic, TypeVar, cast
 
 import strawberry
 from django.db import models as django_models
@@ -52,10 +52,40 @@ from .imports import import_attr_if_importable
 from .strings import flatten_lookup_path
 from .strings import graphql_camel_name as graphql_camel_name
 
+_EntryT = TypeVar("_EntryT")
+_FieldT = TypeVar("_FieldT")
+_KeyT = TypeVar("_KeyT")
+_ValueT = TypeVar("_ValueT")
+_SetT = TypeVar("_SetT")
+_FactorySetT = TypeVar("_FactorySetT", bound="ClassBasedTypeNameMixin")
+_SpecT = TypeVar("_SpecT", bound="_NamedInputSpec")
+
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
+    from typing import Protocol
+
+    from strawberry.types.field import StrawberryField
 
     from ..sets_mixins import ClassBasedTypeNameMixin
+    from ..types.definition import DjangoTypeDefinition
+
+    class _NamedInputSpec(Protocol):
+        """A generated-input naming record: its dataclass attr and its GraphQL name."""
+
+        @property
+        def input_attr(self) -> str: ...
+        @property
+        def graphql_name(self) -> str: ...
+
+    class _Clearable(Protocol):
+        """A ledger the namespace reset empties and otherwise never reads."""
+
+        def clear(self) -> None: ...
+
+    class _DynamicSetGetter(Protocol[_SetT]):
+        """The Layer-6 ``get_<family>set_class`` getter ``make_dynamic_set_getter`` builds."""
+
+        def __call__(self, explicit: type[_SetT] | None, **meta: object) -> type[_SetT]: ...
 
 
 @dataclass(frozen=True)
@@ -85,7 +115,7 @@ def set_input_type_name(set_class: type[ClassBasedTypeNameMixin]) -> str:
     return set_class.type_name_for()
 
 
-def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, Any]:
+def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, object]:
     """Return the optional default plus any non-identity GraphQL alias.
 
     Every generated filter / order input field is optional-with-``None``: an
@@ -95,7 +125,7 @@ def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, Any]
     name when this helper does not need to carry an alias, so Strawberry never
     re-derives the wire name through a different converter.
     """
-    kwargs: dict[str, Any] = {"default": None}
+    kwargs: dict[str, object] = {"default": None}
     if python_attr != graphql_name:
         kwargs["name"] = graphql_name
     return kwargs
@@ -107,7 +137,7 @@ def optional_input_field(
     python_attr: str,
     graphql_name: str,
     widen: bool,
-) -> tuple[Any, dict[str, Any]]:
+) -> tuple[Any, dict[str, object]]:
     """Apply the write-input optional-widening tail to one field.
 
     The per-field tail the form and serializer input builders share, seated
@@ -124,7 +154,7 @@ def optional_input_field(
     ``build_strawberry_input_class`` pins the package-derived name when no alias
     is needed, keeping Strawberry's converter out of generated-input naming.
     """
-    field_kwargs: dict[str, Any] = {}
+    field_kwargs: dict[str, object] = {}
     if python_attr != graphql_name:
         field_kwargs["name"] = graphql_name
     if widen:
@@ -135,15 +165,15 @@ def optional_input_field(
 
 def emit_set_input_field_triples(
     set_cls: type,
-    entries: Iterator[tuple[str, Any]] | list[tuple[str, Any]],
+    entries: Iterable[tuple[str, _EntryT]],
     *,
-    related_target_of: Callable[[str, Any], tuple[bool, Any]],
-    related_source_path_of: Callable[[str, Any], str],
-    leaf_of: Callable[[str, str, Any], tuple[Any, str]],
+    related_target_of: Callable[[str, _EntryT], tuple[bool, type | None]],
+    related_source_path_of: Callable[[str, _EntryT], str],
+    leaf_of: Callable[[str, str, _EntryT], tuple[object, str]],
     input_type_name_for: Callable[[type], str],
     module_path: str,
     field_specs: dict[tuple[type, str], GeneratedInputFieldSpec],
-) -> list[tuple[str, Any, dict[str, Any]]]:
+) -> list[tuple[str, object, dict[str, object]]]:
     """Emit the per-field input triples + ``FieldSpec`` rows for one set class.
 
     The triple-emission scaffold the filter and order ``_build_input_fields``
@@ -193,7 +223,7 @@ def emit_set_input_field_triples(
     construction site, whose value is precisely that it does not share a body
     with the domain guards - one walk would mean one bug disabling all of them.
     """
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
+    triples: list[tuple[str, object, dict[str, object]]] = []
     seen_attr: dict[str, str] = {}
     seen_graphql: dict[str, str] = {}
     # Provenance rows are staged and committed only after the whole set walks
@@ -213,7 +243,7 @@ def emit_set_input_field_triples(
             target_name = input_type_name_for(target)
             # mypy: runtime-built annotation
             inner = Annotated[target_name, strawberry.lazy(module_path)]  # type: ignore[valid-type]
-            annotation: Any = inner | None
+            annotation: object = inner | None
             django_source_path = related_source_path_of(top_name, entry)
         else:
             annotation, django_source_path = leaf_of(top_name, python_attr, entry)
@@ -351,7 +381,7 @@ class InputFieldSpec:
     target_name: str
     kind: str
     source: str | None = None
-    related_model: type | None = None
+    related_model: type[django_models.Model] | None = None
     nested_specs: tuple[InputFieldSpec, ...] | None = None
     annotation_repr: str | None = None
     required: bool | None = None
@@ -471,12 +501,12 @@ def make_set_input_namespace(
     return ledger, field_specs, materialize_fn, clear_fn
 
 
-def _opaque_meta_value(value: Any) -> tuple[str, int, int]:
+def _opaque_meta_value(value: object) -> tuple[str, int, int]:
     """Return an identity token for a value whose structure cannot be inspected."""
     return ("__unhashable_meta_value__", id(type(value)), id(value))
 
 
-def _sorted_meta_values(value: Any) -> list[Any]:
+def _sorted_meta_values(value: object) -> list[object]:
     """Sort a metadata container without trusting iteration or representation hooks.
 
     The read and the ordering are ``utils/canonical.py``'s
@@ -495,7 +525,7 @@ def _sorted_meta_values(value: Any) -> list[Any]:
 _MAX_META_VALUE_DEPTH = 64
 
 
-def _hashable_meta_value(v: Any, active: set[int], depth: int) -> Any:
+def _hashable_meta_value(v: object, active: set[int], depth: int) -> object:
     """Recursive implementation with an active-path cycle guard and depth bound."""
     is_container = isinstance(
         v,
@@ -548,7 +578,7 @@ def _hashable_meta_value(v: Any, active: set[int], depth: int) -> Any:
     return v
 
 
-def make_hashable_meta_value(v: Any) -> Any:
+def make_hashable_meta_value(v: object) -> object:
     """Recursively convert unhashable objects into hashable cache-key parts.
 
     ``dict`` and ``set`` / ``frozenset`` are *unordered* containers, so their
@@ -577,7 +607,7 @@ def make_hashable_meta_value(v: Any) -> Any:
 FILTERSET_FIELDS_ALIAS = "filter_fields"
 
 
-def _set_meta_has(source: Any, key: str) -> bool:
+def _set_meta_has(source: object, key: str) -> bool:
     """Return whether a Meta class or kwargs mapping carries ``key``.
 
     Mappings use own-key membership (Layer-6 factory kwargs). Anything else
@@ -591,14 +621,18 @@ def _set_meta_has(source: Any, key: str) -> bool:
     return hasattr(source, key)
 
 
-def _set_meta_get(source: Any, key: str) -> Any:
+def _set_meta_get(source: object, key: str) -> object:
     """Read ``key`` from a Meta class or kwargs mapping."""
     if isinstance(source, dict):
         return source[key]
     return getattr(source, key)
 
 
-def resolve_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> tuple[Any, bool]:
+def resolve_set_meta_fields(
+    source: object,
+    *,
+    fields_alias: str | None = None,
+) -> tuple[object, bool]:
     """Return ``(fields_value, from_alias)`` under the set-family synonym rule.
 
     ``fields`` wins when present. Otherwise ``fields_alias``
@@ -623,7 +657,7 @@ def resolve_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> 
     return None, False
 
 
-def canonicalize_set_meta_fields(fields: Any) -> Any:
+def canonicalize_set_meta_fields(fields: object) -> object:
     """Return unordered ``Meta.fields`` shapes in the Layer-6 cache-stable form.
 
     ``set`` / ``frozenset`` become ``repr``-sorted lists so class-Meta expansion
@@ -660,7 +694,7 @@ def promote_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> 
     return fields
 
 
-def read_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> Any:
+def read_set_meta_fields(source: object, *, fields_alias: str | None = None) -> Any:
     """Return resolved, cache-stable ``Meta.fields`` without mutating ``source``.
 
     The expansion / apply reader: ``resolve_set_meta_fields`` then
@@ -672,7 +706,9 @@ def read_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> Any
     return canonicalize_set_meta_fields(fields)
 
 
-def make_set_meta_cache_key(safe_meta: dict[str, Any]) -> tuple:
+def make_set_meta_cache_key(
+    safe_meta: dict[str, object],
+) -> tuple[object, tuple[str, object], object]:
     """Build a hashable ``(model, fields_key, extra)`` cache key from Meta kwargs.
 
     ``model`` is the primary discriminator. ``fields`` may be ``"__all__"``, a
@@ -695,7 +731,7 @@ def make_set_meta_cache_key(safe_meta: dict[str, Any]) -> tuple:
     model = dict.get(safe_meta, "model")
     fields = dict.get(safe_meta, "fields")
     if isinstance(fields, dict):
-        fields_key: tuple = ("dict", make_hashable_meta_value(fields))
+        fields_key: tuple[str, object] = ("dict", make_hashable_meta_value(fields))
     elif isinstance(fields, (list, tuple)):
         fields_key = (
             "seq",
@@ -720,11 +756,11 @@ def make_set_meta_cache_key(safe_meta: dict[str, Any]) -> tuple:
 
 
 def normalize_set_meta_for_factory(
-    meta: dict[str, Any],
+    meta: dict[str, object],
     *,
     reserved_keys: frozenset[str],
     fields_alias: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Normalize Meta kwargs before cache keying and dynamic class creation.
 
     Two equivalences must collapse onto one cache slot (and one generated set
@@ -794,14 +830,14 @@ def normalize_set_meta_for_factory(
 
 
 def create_dynamic_set_class(
-    safe_meta: dict[str, Any],
+    safe_meta: dict[str, object],
     *,
-    set_base_class: type,
+    set_base_class: type[_SetT],
     auto_name_suffix: str,
     getter_name: str,
     explicit_param: str,
     require_fields_or_exclude: bool = False,
-) -> type:
+) -> type[_SetT]:
     """Build a synthetic set-family subclass from a ``Meta`` dict.
 
     Replaces graphene-django's ``custom_filterset_factory`` (which the cookbook
@@ -842,20 +878,21 @@ def create_dynamic_set_class(
     meta_attrs = dict(safe_meta)
     name = f"{model.__name__}{auto_name_suffix}"
     meta_class = type("Meta", (object,), meta_attrs)
-    return type(name, (set_base_class,), {"Meta": meta_class})
+    # A class built on ``set_base_class`` alone is a ``set_base_class`` subclass.
+    return cast("type[_SetT]", type(name, (set_base_class,), {"Meta": meta_class}))
 
 
 def make_dynamic_set_getter(
     *,
-    cache: dict[tuple, type],
-    set_base_class: type,
+    cache: dict[tuple[object, ...], type[_SetT]],
+    set_base_class: type[_SetT],
     auto_name_suffix: str,
     getter_name: str,
     reserved_keys: frozenset[str],
     explicit_param: str,
     fields_alias: str | None = None,
     require_fields_or_exclude: bool = False,
-) -> Callable[..., type]:
+) -> _DynamicSetGetter[_SetT]:
     """Return a Layer-6 ``get_<family>set_class`` getter over a family cache.
 
     Filter and order factories keep disjoint caches and base classes; this
@@ -869,7 +906,7 @@ def make_dynamic_set_getter(
     fields-less Meta lifecycle intact.
     """
 
-    def get_set_class(explicit: type | None, **meta: Any) -> type:
+    def get_set_class(explicit: type[_SetT] | None, **meta: object) -> type[_SetT]:
         if explicit is not None:
             return explicit
         safe_meta = normalize_set_meta_for_factory(
@@ -897,7 +934,7 @@ def make_dynamic_set_getter(
     return get_set_class
 
 
-def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
+def make_shape_build_cache() -> tuple[dict[_KeyT, _ValueT], Callable[[], None]]:
     """Return the ``(cache, clear_fn)`` pair for a per-shape build cache.
 
     The promoted plumbing the mutation + form + serializer bind caches share:
@@ -914,9 +951,10 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
 
     Pure plumbing; no registration. This module owns the helper (and unit-tests
     it). Each flavor still owns its cache dict and its key type. The get-or-store
-    walk those caches share is ``get_or_store_shape_build``.
+    walk those caches share is ``get_or_store_shape_build``. The key and value
+    types are the consuming module's own declaration of its cache variable.
     """
-    cache: dict[Any, Any] = {}
+    cache: dict[_KeyT, _ValueT] = {}
 
     def clear_fn() -> None:
         cache.clear()
@@ -924,7 +962,11 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
     return cache, clear_fn
 
 
-def get_or_store_shape_build(cache: dict[Any, Any], key: Any, factory: Callable[[], Any]) -> Any:
+def get_or_store_shape_build(
+    cache: dict[_KeyT, _ValueT],
+    key: _KeyT,
+    factory: Callable[[], _ValueT],
+) -> _ValueT:
     """Return the cached value for ``key``, storing ``factory()`` on a miss.
 
     The get-or-store spine the three write-flavor shape caches share:
@@ -1131,15 +1173,15 @@ def normalize_field_name_sequence(
 
 
 def resolve_effective_fields(
-    basis: dict[str, Any],
+    basis: dict[str, _FieldT],
     *,
-    fields: Any,
-    exclude: Any,
+    fields: object,
+    exclude: object,
     subject: str,
     seq_flavor: str,
     unknown_noun: str,
     empty_message: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, _FieldT]:
     """Return the effective ``{name: field}`` dict after ``fields`` / ``exclude`` narrowing.
 
     The narrowing spine both ``forms/inputs.py::resolve_effective_form_fields`` and
@@ -1173,7 +1215,7 @@ def resolve_effective_fields(
             f"{subject} declares both `fields` and `exclude`; supply at most one.",
         )
 
-    def _reject_unknown(seq: Any, key: str) -> None:
+    def _reject_unknown(seq: tuple[str, ...], key: str) -> None:
         # The identical unknown-name check both branches spelled separately; the
         # pinned message stays byte-identical via the threaded ``fields`` /
         # ``exclude`` key.
@@ -1199,10 +1241,10 @@ def resolve_effective_fields(
 
 
 def guard_dropped_required(
-    required_field_names: Any,
-    effective_field_names: Any,
+    required_field_names: Iterable[str],
+    effective_field_names: Iterable[str],
     *,
-    waived: Any = (),
+    waived: Iterable[object] = (),
     make_error: Callable[[list[str]], Exception],
 ) -> None:
     """Raise if a create narrowing drops a still-required field not covered by ``waived`` (spec-039).
@@ -1220,7 +1262,7 @@ def guard_dropped_required(
         raise make_error(dropped)
 
 
-def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
+def iter_provided_input_fields(data: object) -> Iterator[tuple[str, object, StrawberryField]]:
     """Yield ``(python_name, value, field)`` for each PROVIDED field of a bound input.
 
     The ``UNSET``-strip walk ``decode_provided_fields`` opens with - the model,
@@ -1246,7 +1288,7 @@ def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
 
 def build_strawberry_input_class(
     name: str,
-    field_specs: Sequence[tuple[str, Any, dict[str, Any] | None]],
+    field_specs: Sequence[tuple[str, object, dict[str, Any] | None]],
     *,
     empty_message: str | None = None,
 ) -> type:
@@ -1447,14 +1489,14 @@ def duplicate_name_message(
 
 
 def iter_input_field_collisions(
-    field_specs: list,
+    field_specs: Iterable[_SpecT],
     *,
     subject: str,
     field_noun: str,
     rename_clause: str,
-    name_of: Callable[[Any], str],
+    name_of: Callable[[_SpecT], str],
     camel_case_note: str = "",
-    source_of: Callable[[Any], str] | None = None,
+    source_of: Callable[[_SpecT], str] | None = None,
     check_input_attrs: bool = True,
     check_graphql_names: bool = True,
 ) -> Iterator[str]:
@@ -1598,7 +1640,7 @@ def _safe_import(module_path: str, attr: str) -> Any:
 def clear_generated_input_namespace(
     *,
     materialized_names: dict[str, type],
-    field_specs: dict[Any, Any],
+    field_specs: _Clearable,
     factory_module: str,
     factory_class_name: str,
     collision_registry_attr: str,
@@ -1656,7 +1698,7 @@ def clear_generated_input_namespace(
                     delattr(subclass, attr)
 
 
-class GeneratedInputArgumentsFactory:
+class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
     """BFS-build every reachable Strawberry input class for a set-family root.
 
     Shared substrate for ``filters/factories.py::FilterArgumentsFactory`` and
@@ -1703,7 +1745,7 @@ class GeneratedInputArgumentsFactory:
     _related_attr: ClassVar[str]
     _related_target_attr: ClassVar[str]
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """Allow the direct family factories; reject any deeper subclassing."""
         super().__init_subclass__(**kwargs)
         # The two family factories subclass this base directly. A class whose
@@ -1719,7 +1761,7 @@ class GeneratedInputArgumentsFactory:
                 "instance), not inheritance.",
             )
 
-    def __init__(self, set_class: type) -> None:
+    def __init__(self, set_class: type[_FactorySetT]) -> None:
         """Store the root set class and its class-derived input type name."""
         self.set_class = set_class
         self.input_type_name = set_input_type_name(set_class)
@@ -1727,7 +1769,8 @@ class GeneratedInputArgumentsFactory:
     @property
     def _collision_registry(self) -> dict[str, type]:
         """The family collision registry, addressed through its spec-named attr."""
-        return getattr(type(self), self._collision_registry_attr)
+        # Each family factory declares the registry this attr names as a fresh dict.
+        return cast("dict[str, type]", getattr(type(self), self._collision_registry_attr))
 
     @property
     def arguments(self) -> type:
@@ -1747,8 +1790,8 @@ class GeneratedInputArgumentsFactory:
         deterministic breadth-first build order across both subsystems.
         Collision detection raises when two distinct sets claim the same name.
         """
-        pending: list[type] = [self.set_class]
-        seen: set[type] = set()
+        pending: list[type[_FactorySetT]] = [self.set_class]
+        seen: set[type[_FactorySetT]] = set()
         while pending:
             set_cls = pending.pop(0)
             if set_cls in seen:
@@ -1783,7 +1826,7 @@ class GeneratedInputArgumentsFactory:
                     if target is not None and target not in seen:
                         pending.append(target)
 
-    def _build_class_type(self, set_cls: type) -> None:
+    def _build_class_type(self, set_cls: type[_FactorySetT]) -> None:
         """Build the root input class for ``set_cls`` and stash it in the cache."""
         type_name = set_input_type_name(set_cls)
         owner_definition = getattr(set_cls, "_owner_definition", None)
@@ -1816,10 +1859,10 @@ class GeneratedInputArgumentsFactory:
 
     def _build_input_triples(
         self,
-        set_cls: type,
+        set_cls: type[_FactorySetT],
         type_name: str,
-        owner_definition: Any,
-    ) -> list[tuple[str, Any, dict[str, Any]]]:
+        owner_definition: DjangoTypeDefinition | None,
+    ) -> list[tuple[str, object, dict[str, object]]]:
         """Return the input-field triples for ``set_cls`` (family hook).
 
         The filter family appends ``_build_logic_fields`` (the ``and_`` /

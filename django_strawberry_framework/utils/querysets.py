@@ -86,7 +86,7 @@ import uuid
 import zoneinfo
 from collections.abc import AsyncIterable, Iterable
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Generic, ParamSpec, TypeGuard, TypeVar, cast, overload
 
 from asgiref.sync import sync_to_async
 from django.db import models, router
@@ -122,9 +122,23 @@ from .write_transaction import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import AsyncIterator, Callable, Mapping
+    from typing import TypeAlias
+
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
     from ..types.base import DjangoType
+    from .typing import ModelField
+
+    #: A ``Prefetch`` as the seal rebuilds it: a string lookup over a model-row child.
+    _SealedPrefetch: TypeAlias = Prefetch[str, models.QuerySet[models.Model], str]
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+_P = ParamSpec("_P")
+_ModelT = TypeVar("_ModelT", bound=models.Model)
+_RowT = TypeVar("_RowT")
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 
 class SyncMisuseError(ConfigurationError, RuntimeError):
@@ -169,13 +183,13 @@ def _safe_class_name(value: Any) -> str:
 
 
 def reject_async_in_sync_context(
-    value: Any,
+    value: _T,
     *,
     owner: str,
     method: str,
     context: str,
     recourse: str,
-) -> Any:
+) -> _T:
     """Guard a synchronous hook result against any awaitable return.
 
     Three sync pipeline seams invoke a consumer-overridable hook that
@@ -203,7 +217,7 @@ def reject_async_in_sync_context(
     return value
 
 
-def _disposed_awaitable(value: Any) -> bool:
+def _disposed_awaitable(value: object) -> bool:
     """Return whether ``value`` was an awaitable, DISPOSING it when it was.
 
     The shared half of every awaitable refusal in the package: detect, then
@@ -225,7 +239,7 @@ def _disposed_awaitable(value: Any) -> bool:
     return True
 
 
-def _dispose_sync_awaitable(value: Any) -> None:
+def _dispose_sync_awaitable(value: object) -> None:
     """Release a rejected awaitable without awaiting it, when possible.
 
     Native coroutines are closed and futures cancelled; other awaitables have
@@ -254,7 +268,7 @@ def model_for(type_cls: type[DjangoType]) -> type[models.Model]:
     return type_cls.__django_strawberry_definition__.model
 
 
-def base_queryset(model: type[models.Model], *, using: str | None = None) -> models.QuerySet:
+def base_queryset(model: type[_ModelT], *, using: str | None = None) -> models.QuerySet[_ModelT]:
     """Return a fresh unevaluated base queryset for ``model``, optionally alias-pinned.
 
     The MODEL-keyed seed. ``initial_queryset`` is its TYPE-keyed wrapper, and
@@ -271,10 +285,14 @@ def base_queryset(model: type[models.Model], *, using: str | None = None) -> mod
     not use this - it takes the raw manager and composes from there.
     """
     manager = model._default_manager
-    return manager.using(using).all() if using is not None else manager.all()
+    # A ``model`` default-manager chain; the stubs' model plugin types it ``Any``.
+    return cast(
+        "models.QuerySet[_ModelT]",
+        manager.using(using).all() if using is not None else manager.all(),
+    )
 
 
-def initial_queryset(type_cls: type) -> models.QuerySet:
+def initial_queryset(type_cls: type) -> models.QuerySet[models.Model]:
     """Return ``model._default_manager.all()`` for a ``DjangoType``'s model.
 
     Step 1 of the Relay node defaults' four-step shape and the default
@@ -289,7 +307,7 @@ def initial_queryset(type_cls: type) -> models.QuerySet:
     return base_queryset(model_for(type_cls))
 
 
-def normalize_query_source(source: Any) -> tuple[Any, bool]:
+def normalize_query_source(source: object) -> tuple[Any, bool]:
     """Coerce a ``Manager`` to its ``QuerySet`` and report whether the result is one.
 
     The single Manager-to-QuerySet coercion shared by every resolver surface
@@ -318,7 +336,7 @@ def normalize_query_source(source: Any) -> tuple[Any, bool]:
     return source, isinstance(source, models.QuerySet)
 
 
-def coerce_field_value_or_none(field: models.Field | ForeignObjectRel | None, value: Any) -> Any:
+def coerce_field_value_or_none(field: ModelField | None, value: object) -> object:
     """Coerce ``value`` through ``field``'s ``to_python`` + ``run_validators``; ``None`` if invalid.
 
     The single "raw literal -> Django field value, or nothing" safety wrapper
@@ -384,7 +402,7 @@ def sync_pipeline_recourse(flavor_noun: str) -> str:
     )
 
 
-def is_async_only_iterable(value: Any) -> bool:
+def is_async_only_iterable(value: object) -> TypeGuard[AsyncIterable[object]]:
     """Whether ``value`` iterates only asynchronously.
 
     The one spelling of the async-only-iterable predicate: an
@@ -410,30 +428,30 @@ class _AsyncQuerySetRows:
 
     __slots__ = ("_queryset",)
 
-    def __init__(self, queryset: models.QuerySet) -> None:
+    def __init__(self, queryset: models.QuerySet[models.Model]) -> None:
         if not isinstance(queryset, models.QuerySet):
             raise TypeError(
                 f"_AsyncQuerySetRows requires a QuerySet; got {_safe_type_name(queryset)}",
             )
         self._queryset = queryset
 
-    def __aiter__(self) -> Any:
+    def __aiter__(self) -> AsyncIterator[models.Model]:
         return self._queryset.__aiter__()
 
 
-def is_async_queryset_adapter(val: Any) -> bool:
+def is_async_queryset_adapter(val: object) -> bool:
     """Return whether ``val`` is an ``_AsyncQuerySetRows`` adapter instance."""
     return isinstance(val, _AsyncQuerySetRows)
 
 
-def wrap_async_queryset_adapter(qs: Any) -> Any:
+def wrap_async_queryset_adapter(qs: _T) -> _T | _AsyncQuerySetRows:
     """Wrap a QuerySet in an async-only completion adapter; pass non-querysets through unchanged."""
     if isinstance(qs, models.QuerySet):
         return _AsyncQuerySetRows(qs)
     return qs
 
 
-def unwrap_async_queryset_adapter(val: Any) -> tuple[Any, bool]:
+def unwrap_async_queryset_adapter(val: _T) -> tuple[_T | models.QuerySet[models.Model], bool]:
     """Unwrap an ``_AsyncQuerySetRows`` adapter to ``(inner_queryset, True)`` or ``(val, False)``."""
     if isinstance(val, _AsyncQuerySetRows):
         return val._queryset, True
@@ -441,7 +459,7 @@ def unwrap_async_queryset_adapter(val: Any) -> tuple[Any, bool]:
 
 
 def reject_async_iterable_in_sync_context(
-    value: Any,
+    value: object,
     *,
     flavor_noun: str,
     async_executor: bool,
@@ -474,7 +492,11 @@ def reject_async_iterable_in_sync_context(
         )
 
 
-async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
+async def run_in_one_sync_boundary(
+    fn: Callable[_P, _R],
+    *args: _P.args,
+    **kwargs: _P.kwargs,
+) -> _R:
     """Run ``fn(*args, **kwargs)`` in ONE ``sync_to_async(thread_sensitive=True)`` worker.
 
     The generic one-boundary primitive (spec-040 D17): every async surface
@@ -493,7 +515,7 @@ async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
     return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
 
 
-def _concrete_or_none(candidate: Any) -> type[models.Model] | None:
+def _concrete_or_none(candidate: object) -> type[models.Model] | None:
     """Return ``candidate._meta.concrete_model`` if ``candidate`` is a model, else ``None``.
 
     A hostile or malformed ``QuerySet.model`` / ``Query.model`` may be a
@@ -523,7 +545,7 @@ def _concrete_or_none(candidate: Any) -> type[models.Model] | None:
         return None
 
 
-def _base_table_defect(query: Any, concrete: type[models.Model]) -> str | None:
+def _base_table_defect(query: object, concrete: type[models.Model]) -> str | None:
     """Return the query's baked base table if it is not ``concrete``'s table.
 
     ``concrete`` is the registered type's ``_meta.concrete_model``, resolved once
@@ -638,7 +660,7 @@ _INERT_VALUE_TYPES: frozenset[type] = frozenset(
 )
 
 
-def _is_inert_value(value: Any) -> bool:
+def _is_inert_value(value: object) -> bool:
     """Return whether ``value`` is an inert (non-dispatchable) query-parameter leaf.
 
     ``None`` is inert. Membership is by EXACT type, so a ``str`` / ``int`` /
@@ -651,7 +673,7 @@ def _is_inert_value(value: Any) -> bool:
     return value is None or type(value) in _INERT_VALUE_TYPES
 
 
-def _shadow_defect(node: Any, label: str) -> tuple[str, str] | None:
+def _shadow_defect(node: object, label: str) -> tuple[str, str] | None:
     """Return a defect if ``node``'s instance ``__dict__`` shadows a callable method.
 
     Python methods are non-data descriptors, so an instance-``__dict__`` entry named
@@ -747,7 +769,10 @@ _TEMPLATE_PARAM_VALUE_TYPES: frozenset[type] = frozenset(
 )
 
 
-def _template_params_defect(node_dict: dict[Any, Any], label: str) -> tuple[str, str] | None:
+def _template_params_defect(
+    node_dict: Mapping[object, object],
+    label: str,
+) -> tuple[str, str] | None:
     """Return a defect unless an expression's ``extra`` template mapping is inert scalars.
 
     Read straight from the already-validated instance ``__dict__`` so the check itself
@@ -770,7 +795,7 @@ def _template_params_defect(node_dict: dict[Any, Any], label: str) -> tuple[str,
     return None
 
 
-def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
+def _node_metadata_defect(node: object, label: str) -> tuple[str, str] | None:
     """Return a defect for compiler-reachable node metadata NOT covered by source expressions.
 
     ``get_source_expressions`` enumerates the operand sub-expressions the compiler
@@ -820,7 +845,7 @@ def _raw_sql_params_defect(params: Any, label: str) -> tuple[str, str] | None:
     return None
 
 
-def _raw_sql_node_defect(node: Any, label: str) -> tuple[str, str] | None:
+def _raw_sql_node_defect(node: object, label: str) -> tuple[str, str] | None:
     """Validate compiler-dispatched raw-SQL payloads outside expression children."""
     if type(node) is RawSQL:
         return _raw_sql_params_defect(node.params, label)
@@ -930,7 +955,7 @@ _EXPRESSION_SEQUENCE_STATE_ATTRS: tuple[str, ...] = (
 )
 
 
-def _expression_state_defect(node: Any, label: str) -> tuple[str, str] | None:
+def _expression_state_defect(node: object, label: str) -> tuple[str, str] | None:
     """Validate expression-owned state that a genuine accessor reads, before calling it.
 
     ``node`` is already proven an EXACT genuine Django expression type with no
@@ -954,7 +979,7 @@ def _expression_state_defect(node: Any, label: str) -> tuple[str, str] | None:
 
 
 def _genuine_node_defect(
-    node: Any,
+    node: object,
     label: str,
     phrase: str = "is a",
     suffix: str = "",
@@ -1015,7 +1040,7 @@ def _is_plain_container(value_type: type) -> bool:
     return value_type in _PLAIN_CONTAINER_TYPES
 
 
-def _expr_mapping_key_detail(label: str, key: Any) -> str:  # noqa: ARG001 - shared detail signature
+def _expr_mapping_key_detail(label: str, key: object) -> str:  # noqa: ARG001 - shared detail signature
     """Non-string mapping-key detail for the expression-graph walk.
 
     This walker names the slot, not the offending key type; ``key`` is accepted so both
@@ -1024,7 +1049,7 @@ def _expr_mapping_key_detail(label: str, key: Any) -> str:  # noqa: ARG001 - sha
     return f"{label} has a non-string mapping key"
 
 
-def _deferred_mapping_key_detail(label: str, key: Any) -> str:
+def _deferred_mapping_key_detail(label: str, key: object) -> str:
     """Non-string mapping-key detail for the deferred-filter value walk."""
     return f"{label} mapping key is a {_safe_type_name(key)}"
 
@@ -1033,8 +1058,8 @@ def _container_defect(
     value: Any,
     walk: _GraphWalk,
     label: str,
-    recurse: Any,
-    key_detail: Any,
+    recurse: Callable[[object, _GraphWalk, str], tuple[str, str] | None],
+    key_detail: Callable[[str, object], str],
 ) -> tuple[str, str] | None:
     """Walk a plain sequence / dict member-wise under the shared three-state guard.
 
@@ -1095,7 +1120,7 @@ _DIRECT_RHS_TRUSTED_MRO: frozenset[type] = frozenset(_DIRECT_RHS_DATA_BASES) | {
 _ATTR_MISSING = object()
 
 
-def _static_attr_present(value: Any, name: str) -> bool:
+def _static_attr_present(value: object, name: str) -> bool:
     """Return whether ``name`` resolves on ``value`` WITHOUT running an attribute hook.
 
     Reproduces the ``hasattr(value, name)`` semantics Django itself uses to classify a
@@ -1127,7 +1152,7 @@ def _rhs_hook_defect(value_type: type, label: str) -> tuple[str, str] | None:
     return None
 
 
-def _direct_rhs_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+def _direct_rhs_defect(value: object, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return a defect unless a direct (non-dispatched) lookup RHS is plain query data.
 
     A direct RHS is never compiled through ``as_sql``; Django binds it as a ``%s``
@@ -1165,7 +1190,7 @@ def _direct_rhs_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, s
     return None
 
 
-def _lookup_operands_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+def _lookup_operands_defect(node: object, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Walk an exact genuine Django ``Lookup``'s operands without calling a bound accessor.
 
     ``Lookup.get_source_expressions`` cannot be used to discover a lookup's children: it
@@ -1311,7 +1336,7 @@ def _raw_sql_sequence_defect(holder: Any, label: str) -> tuple[str, str] | None:
     return None
 
 
-def _join_defect(join: Any, alias: str, walk: _GraphWalk) -> tuple[str, str] | None:
+def _join_defect(join: object, alias: str, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return a defect if an ``alias_map`` join is not a genuine, unshadowed Django join.
 
     ``sql.Query.clone`` shallow-copies ``alias_map`` (sharing the join objects) and
@@ -1347,7 +1372,7 @@ def _join_defect(join: Any, alias: str, walk: _GraphWalk) -> tuple[str, str] | N
     return _where_tree_defect(resolved, walk)
 
 
-def _where_tree_defect(node: Any, walk: _GraphWalk) -> tuple[str, str] | None:
+def _where_tree_defect(node: object, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return the first non-genuine / shadowed node in a ``where`` tree, or ``None``.
 
     ``sql.Query.clone`` calls ``self.where.clone()``, which dispatches
@@ -1388,7 +1413,7 @@ def _where_tree_defect(node: Any, walk: _GraphWalk) -> tuple[str, str] | None:
     return None
 
 
-def _select_related_defect(select_related: Any) -> tuple[str, str] | None:
+def _select_related_defect(select_related: object) -> tuple[str, str] | None:
     """Return a defect if ``select_related`` is not a plain bool / str-keyed dict tree.
 
     ``sql.Query.clone`` ``deepcopy``s ``select_related`` when it is not ``False``.
@@ -1434,7 +1459,7 @@ _EXACT_SET_QUERY_ATTRS: tuple[str, ...] = (
 )
 
 
-def _query_payload_defect(query: Any) -> tuple[str, str] | None:
+def _query_payload_defect(query: object) -> tuple[str, str] | None:
     """Return a defect if a retained container's PAYLOAD is not its exact Django shape.
 
     The keys of ``alias_refcount`` / ``external_aliases`` / ``table_map`` /
@@ -1573,43 +1598,43 @@ def _is_reconstructable_node(node_type: type) -> bool:
     return True
 
 
-def _normalized_str(value: Any) -> str:
+def _normalized_str(value: str) -> str:
     """Return the exact ``str`` content of a ``str`` subclass instance."""
     return str.__str__(value)
 
 
-def _normalized_bytes(value: Any) -> bytes:
+def _normalized_bytes(value: bytes) -> bytes:
     """Return the exact ``bytes`` content of a ``bytes`` subclass instance."""
     return bytes.__getitem__(value, slice(None))
 
 
-def _normalized_bytearray(value: Any) -> bytearray:
+def _normalized_bytearray(value: bytearray) -> bytearray:
     """Return a fresh exact ``bytearray`` holding a ``bytearray`` subclass's bytes."""
     return bytearray.__getitem__(value, slice(None))
 
 
-def _normalized_int(value: Any) -> int:
+def _normalized_int(value: int) -> int:
     """Return the exact ``int`` value of an ``int`` subclass instance."""
     return int.__int__(value)
 
 
-def _normalized_float(value: Any) -> float:
+def _normalized_float(value: float) -> float:
     """Return the exact ``float`` value of a ``float`` subclass instance."""
     return float.__float__(value)
 
 
-def _normalized_complex(value: Any) -> complex:
+def _normalized_complex(value: complex) -> complex:
     """Return an exact ``complex`` built from a ``complex`` subclass's component slots."""
     return complex(complex.real.__get__(value), complex.imag.__get__(value))
 
 
-def _normalized_decimal(value: Any) -> Decimal:
+def _normalized_decimal(value: Decimal) -> Decimal:
     """Return an exact ``Decimal`` rebuilt from a ``Decimal`` subclass's coefficient tuple."""
     # mypy: typeshed's Decimal() omits the DecimalTuple special-value exponents it accepts
     return Decimal(Decimal.as_tuple(value))  # type: ignore[arg-type]
 
 
-def _normalized_date(value: Any) -> datetime.date:
+def _normalized_date(value: datetime.date) -> datetime.date:
     """Return an exact ``datetime.date`` rebuilt from a date subclass's field slots."""
     return datetime.date(
         datetime.date.year.__get__(value),
@@ -1618,7 +1643,7 @@ def _normalized_date(value: Any) -> datetime.date:
     )
 
 
-def _normalized_datetime(value: Any) -> datetime.datetime:
+def _normalized_datetime(value: datetime.datetime) -> datetime.datetime:
     """Return an exact ``datetime.datetime`` rebuilt from a datetime subclass's field slots.
 
     ``tzinfo`` is carried over BY REFERENCE: it is the same object an exact
@@ -1639,7 +1664,7 @@ def _normalized_datetime(value: Any) -> datetime.datetime:
     )
 
 
-def _normalized_time(value: Any) -> datetime.time:
+def _normalized_time(value: datetime.time) -> datetime.time:
     """Return an exact ``datetime.time`` rebuilt from a time subclass's field slots."""
     base = datetime.time
     return base(
@@ -1652,7 +1677,7 @@ def _normalized_time(value: Any) -> datetime.time:
     )
 
 
-def _normalized_timedelta(value: Any) -> datetime.timedelta:
+def _normalized_timedelta(value: datetime.timedelta) -> datetime.timedelta:
     """Return an exact ``datetime.timedelta`` rebuilt from a timedelta subclass's slots."""
     base = datetime.timedelta
     return base(
@@ -1662,7 +1687,7 @@ def _normalized_timedelta(value: Any) -> datetime.timedelta:
     )
 
 
-def _normalized_uuid(value: Any) -> uuid.UUID:
+def _normalized_uuid(value: uuid.UUID) -> uuid.UUID:
     """Return an exact ``uuid.UUID`` rebuilt from a UUID subclass's integer slot."""
     # mypy: typeshed declares UUID.int an instance attribute, not its __slots__ descriptor
     return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))  # type: ignore[misc,attr-defined]
@@ -1679,7 +1704,7 @@ def _normalized_uuid(value: Any) -> uuid.UUID:
 # ``IntegerChoices`` member (a ``str`` / ``int`` SUBCLASS) normalizes straight to its
 # underlying exact scalar. ``bool`` is absent because it cannot be subclassed, and
 # ``models.Model`` is absent because a model instance IS the bound foreign-key value.
-_BOUND_VALUE_NORMALIZERS: tuple[tuple[type, Any], ...] = (
+_BOUND_VALUE_NORMALIZERS: tuple[tuple[type, Callable[[Any], object]], ...] = (
     (str, _normalized_str),
     (bytes, _normalized_bytes),
     (bytearray, _normalized_bytearray),
@@ -1715,7 +1740,7 @@ class _UntrustedBoundValueError(TypeError):
     """
 
 
-def _normalized_bound_value(value: Any) -> Any:
+def _normalized_bound_value(value: object) -> object:
     """Return an EXACT inert replacement for a plain-data SUBCLASS bound value.
 
     An admitted bound value is bound on plain-data ancestry rather than exact type,
@@ -1770,7 +1795,7 @@ def _normalized_bound_value(value: Any) -> Any:
     return normalized
 
 
-def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
+def _reconstructed_value(value: Any, memo: dict[int, Any]) -> object:
     """Return a framework-owned reconstruction of one validated query-state value.
 
     The recursive half of canonical reconstruction. Mutable builtin containers are
@@ -1931,7 +1956,7 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> Any:
     return rebuilt
 
 
-def _rebuild_query_payloads(query: Any) -> None:
+def _rebuild_query_payloads(query: object) -> None:
     """Rebuild a cloned query's whole payload + AST graph as fresh framework-owned objects.
 
     ``sql.Query.clone`` is a SHALLOW copy: it rebuilds the ``where`` tree's ``WhereNode``
@@ -1983,7 +2008,7 @@ def _rebuild_query_payloads(query: Any) -> None:
         state[key] = _reconstructed_value(state[key], memo)
 
 
-def _reconstruction_defect(query: Any, cls_name: str) -> tuple[str, str] | None:
+def _reconstruction_defect(query: object, cls_name: str) -> tuple[str, str] | None:
     """Canonically reconstruct ``query`` in place, surfacing any failure as a typed defect.
 
     Reconstruction reads validated state and builds fresh builtins, so no consumer
@@ -2007,7 +2032,7 @@ def _reconstruction_defect(query: Any, cls_name: str) -> tuple[str, str] | None:
     return None
 
 
-def _query_container_defect(query: Any) -> tuple[str, str] | None:
+def _query_container_defect(query: object) -> tuple[str, str] | None:
     """Return a defect if any container ``sql.Query.clone`` copies is not an exact builtin.
 
     ``Query.clone`` calls ``.copy()`` on ``alias_refcount`` / ``alias_map`` /
@@ -2091,7 +2116,7 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
     return None
 
 
-def _query_ast_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] | None:
+def _query_ast_defect(query: object, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return the first untrusted embedded AST node in ``query``, or ``None``.
 
     The complete genuineness walk over EVERY compiler-reachable expression slot the
@@ -2142,7 +2167,7 @@ def _query_ast_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] | None:
     return _select_related_defect(getattr(query, "select_related", False))
 
 
-def _query_genuineness_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] | None:
+def _query_genuineness_defect(query: object, walk: _GraphWalk) -> tuple[str, str] | None:
     """Return the first genuineness defect in ``query`` (NO concrete-table check), or ``None``.
 
     A ``Subquery`` / ``Exists`` legitimately targets ANOTHER table, so only the
@@ -2177,7 +2202,7 @@ def _query_genuineness_defect(query: Any, walk: _GraphWalk) -> tuple[str, str] |
 
 
 def _combined_query_table_defect(
-    query: Any,
+    query: object,
     concrete: type[models.Model],
     branches: _GraphWalk | None = None,
 ) -> tuple[str, str] | None:
@@ -2284,10 +2309,10 @@ _DJANGO_ITERABLE_CLASSES: frozenset[type] = frozenset(
 
 
 def _rebuilt_prefetch_or_defect(
-    entry: Prefetch,
+    entry: _SealedPrefetch,
     cls_name: str,
-    sealed_inner: models.QuerySet | None,
-) -> tuple[Prefetch | None, tuple[str, str] | None]:
+    sealed_inner: models.QuerySet[models.Model, object] | None,
+) -> tuple[_SealedPrefetch | None, tuple[str, str] | None]:
     """Rebuild a validated ``Prefetch`` as an EXACT ``django.db.models.Prefetch``.
 
     Every ``Prefetch`` -- including the ``queryset=None`` case -- is rebuilt from
@@ -2317,7 +2342,7 @@ def _rebuilt_prefetch_or_defect(
 
 def _prefetch_relation_target_or_none(
     parent_model: type[models.Model],
-    path: Any,
+    path: object,
 ) -> type[models.Model] | None:
     """Return the model the prefetch lookup ``path`` terminates on, or ``None``.
 
@@ -2346,7 +2371,7 @@ def _prefetch_relation_target_or_none(
     """
     if type(path) is not str:
         return None
-    current: Any = parent_model
+    current: type[models.Model] = parent_model
     for part in path.split(LOOKUP_SEP):
         try:
             field = current._meta.get_field(part)
@@ -2365,7 +2390,7 @@ def _prefetch_relation_target_or_none(
     return current
 
 
-def _reverse_relation_by_accessor_or_none(model: Any, part: Any) -> Any:
+def _reverse_relation_by_accessor_or_none(model: Any, part: str) -> Any:
     """Return the reverse relation whose accessor name is spelled ``part``.
 
     ``_meta.get_field`` registers a reverse relation under its declared name
@@ -2399,7 +2424,7 @@ def _sealed_prefetch_related_lookups(
     cls_name: str,
     required_alias: str | None,
     parent_model: type[models.Model],
-) -> tuple[tuple[Any, ...] | None, tuple[str, str] | None]:
+) -> tuple[tuple[str | _SealedPrefetch, ...] | None, tuple[str, str] | None]:
     """Seal every ``Prefetch`` entry's inner queryset; pass string lookups through.
 
     ``_prefetch_related_lookups`` entries are either plain string lookups (safe --
@@ -2474,7 +2499,7 @@ def _sealed_prefetch_related_lookups(
         return (), None
     if type(lookups) not in (tuple, list):
         return None, ("untrusted", f"{cls_name} prefetch lookups is a {_safe_type_name(lookups)}")
-    sealed_entries: list[Any] = []
+    sealed_entries: list[str | _SealedPrefetch] = []
     for entry in lookups:
         if not isinstance(entry, Prefetch):
             # A non-``Prefetch`` lookup must be EXACTLY ``str`` (Django builds the
@@ -2489,7 +2514,7 @@ def _sealed_prefetch_related_lookups(
             continue
         entry_state = object.__getattribute__(entry, "__dict__")
         inner = entry_state.get("queryset")
-        sealed_inner: models.QuerySet | None = None
+        sealed_inner: models.QuerySet[models.Model, object] | None = None
         if inner is not None:
             inner_state = (
                 object.__getattribute__(inner, "__dict__")
@@ -2575,7 +2600,8 @@ def _sealed_prefetch_related_lookups(
         rebuilt, rebuild_defect = _rebuilt_prefetch_or_defect(entry, cls_name, sealed_inner)
         if rebuild_defect is not None:
             return None, rebuild_defect
-        sealed_entries.append(rebuilt)
+        # A ``None`` rebuild defect means the rebuild produced the ``Prefetch``.
+        sealed_entries.append(cast("_SealedPrefetch", rebuilt))
     return tuple(sealed_entries), None
 
 
@@ -2648,8 +2674,8 @@ def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[st
 
 
 def _bake_deferred_filter_or_defect(
-    rebuilt_query: Any,
-    deferred: Any,
+    rebuilt_query: sql.Query,
+    deferred: object,
     cls_name: str,
 ) -> tuple[str, str] | None:
     """Bake a validated ``_deferred_filter`` onto the DETACHED clone, or return a defect.
@@ -2708,7 +2734,7 @@ def _bake_deferred_filter_or_defect(
     return None
 
 
-def _queryset_state_defect(state: dict, cls_name: str) -> tuple[str, str] | None:
+def _queryset_state_defect(state: dict[str, Any], cls_name: str) -> tuple[str, str] | None:
     """Return a defect if a RETAINED ``QuerySet`` state field is not its exact shape.
 
     Beyond the query graph, the seal carries a handful of ``QuerySet.__dict__`` fields
@@ -2750,8 +2776,12 @@ def _queryset_state_defect(state: dict, cls_name: str) -> tuple[str, str] | None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class _SealPolicy:
+class _SealPolicy(Generic[_RowT_co]):
     """The per-surface option set ``_seal_or_defect`` runs under, declared once.
+
+    The type parameter is the row type a sealed queryset yields under the
+    policy: ``models.Model`` when ``require_model_rows`` holds, ``object``
+    otherwise. Each constant below declares it beside the flag it follows.
 
     Every surface that seals a queryset differs from the default on one or two
     axes, and each axis used to be its own keyword re-declared down the whole
@@ -2826,14 +2856,14 @@ class _SealPolicy:
 # Every read surface (Relay node defaults, connection root, list field with or
 # without list arguments, the related-object hooks): model rows, nothing sliced
 # to recompose onto, a combinator served as its primary-key set, one alias.
-_DEFAULT_SEAL_POLICY = _SealPolicy()
+_DEFAULT_SEAL_POLICY: _SealPolicy[models.Model] = _SealPolicy()
 # ``apply_cascade_permissions`` at BOTH of its ends -- the root it is handed and
 # every target hook's return. A ``.values()`` projection is supported input
 # (the cascade re-projects it), while a sliced shape is rejected because the
 # walk narrows by ``.filter(...)`` and re-projects to the edge's target column,
 # which Django refuses after a slice. A combinator reaches the walk as its
 # primary-key set, which takes both.
-_CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False)
+_CASCADE_SEAL_POLICY: _SealPolicy[object] = _SealPolicy(require_model_rows=False)
 # The optimizer walker's NESTED-CONNECTION ``Prefetch`` child, and every
 # consumer-supplied ``Prefetch`` child sealed by
 # ``_sealed_prefetch_related_lookups``. Its nested-connection gate
@@ -2842,7 +2872,10 @@ _CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False)
 # fallback WITHOUT recomposing, so the slice rejection's premise does not hold
 # there; the shared-alias requirement keeps one GraphQL resolution on one
 # database connection.
-_PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=True)
+_PREFETCH_CHILD_POLICY: _SealPolicy[models.Model] = _SealPolicy(
+    reject_sliced=False,
+    require_shared_alias=True,
+)
 # The optimizer walker's PLAIN-LIST-relation ``Prefetch`` child. It differs from
 # ``_PREFETCH_CHILD_POLICY`` on ``reject_sliced`` and on no other axis, because
 # exactly one thing differs: no gate downstream of this child classifies a slice.
@@ -2852,13 +2885,13 @@ _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=T
 # raw ``TypeError`` on a sliced query. A hook that returns a sliced queryset for
 # such a child therefore gets the seal's typed ``sliced`` defect here, the same
 # contract every other bad-hook shape answers to.
-_LIST_RELATION_CHILD_POLICY = _SealPolicy(require_shared_alias=True)
+_LIST_RELATION_CHILD_POLICY: _SealPolicy[models.Model] = _SealPolicy(require_shared_alias=True)
 # Post-sidecar result policy, one for both public ``FilterSet.apply_*`` and
 # ``OrderSet.apply_*`` returns: model rows, unevaluated, unsliced, a combinator
 # served as its primary-key set. The two sidecars hand back the same kind of object
 # to the same downstream steps, so they answer to one policy (Decision 8: a second
 # constant would differ on nothing).
-_SIDECAR_RESULT_POLICY = _SealPolicy(require_unevaluated=True)
+_SIDECAR_RESULT_POLICY: _SealPolicy[models.Model] = _SealPolicy(require_unevaluated=True)
 # A raw-list row source about to be windowed by ``resource_policy.py``. Every axis
 # that exists to protect a RECOMPOSITION is off, because nothing recomposes here:
 # one ``[start:stop]`` is taken and Django takes it on a sliced query and on a
@@ -2869,7 +2902,7 @@ _SIDECAR_RESULT_POLICY = _SealPolicy(require_unevaluated=True)
 # windowed from what it already holds and costs what Django's own manager costs.
 # What is NOT optional is the rebuild itself: the point of sealing here is that
 # the slice runs on a queryset this package built.
-_RAW_LIST_SOURCE_POLICY = _SealPolicy(
+_RAW_LIST_SOURCE_POLICY: _SealPolicy[object] = _SealPolicy(
     require_model_rows=False,
     reject_sliced=False,
     rewrite_combined=False,
@@ -2877,7 +2910,7 @@ _RAW_LIST_SOURCE_POLICY = _SealPolicy(
 )
 
 
-def _routing_hints_equal(cand_hints: Any, orig_hints: Any) -> bool:
+def _routing_hints_equal(cand_hints: object, orig_hints: object) -> bool:
     """Return True if candidate and original routing hints match without consumer dispatch.
 
     Preserves the exact distinction between absent (``None``) and empty (``{}``)
@@ -2923,12 +2956,12 @@ class _RoutingIntent:
     database" a mechanical guarantee rather than a promise about hint contents.
     """
 
-    db: Any
-    hints: Any
+    db: str | None
+    hints: dict[str, object] | None
     effective_alias: str
 
 
-def _snapshot_routing_intent(queryset: Any, method_name: str) -> _RoutingIntent:
+def _snapshot_routing_intent(queryset: object, method_name: str) -> _RoutingIntent:
     """Freeze a sealed source's routing BEFORE consumer code receives it.
 
     The post-``OrderSet`` seal compares the returned candidate against this
@@ -2990,7 +3023,7 @@ def _snapshot_routing_intent(queryset: Any, method_name: str) -> _RoutingIntent:
     return _RoutingIntent(db=None, hints=hints, effective_alias=alias)
 
 
-def _safe_routing_repr(value: Any) -> str:
+def _safe_routing_repr(value: object) -> str:
     """Safely format database routing intent without invoking arbitrary consumer code.
 
     Renders primitives directly, dictionary key-value pairs safely, and non-primitives
@@ -3024,11 +3057,11 @@ def _safe_routing_repr(value: Any) -> str:
 def _validate_post_orderset_result(
     target_type: type,
     expected_routing: _RoutingIntent,
-    post_order_candidate: Any,
+    post_order_candidate: object,
     method_name: str,
     *,
     model: type[models.Model] | None = None,
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Validate and seal a public sidecar ``apply_sync`` / ``apply_async`` return.
 
     ``method_name`` names the ``FilterSet`` or ``OrderSet`` method that produced
@@ -3096,8 +3129,9 @@ def _validate_post_orderset_result(
         )
         messages["routing"] = f"{method_name} changed database routing intent; {defect[1]}."
         raise ConfigurationError(_defect_message(messages, defect, method_name))
-    # ``_seal_or_defect`` returns a queryset exactly when it returns no defect.
-    return cast("models.QuerySet", sealed)
+    # ``_seal_or_defect`` returns a queryset exactly when it returns no defect, and
+    # ``_SIDECAR_RESULT_POLICY`` requires model rows.
+    return cast("models.QuerySet[models.Model]", sealed)
 
 
 def require_orderset_class(
@@ -3120,12 +3154,12 @@ def require_orderset_class(
 def _apply_sidecar_sync(
     target_type: type,
     set_class: type[FilterSet] | type[OrderSet],
-    queryset: models.QuerySet,
-    input_value: Any,
-    info: Any,
+    queryset: models.QuerySet[models.Model],
+    input_value: object,
+    info: object,
     *,
     model: type[models.Model],
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Call a sidecar set's ``apply_sync`` and re-seal what it returned.
 
     The ONE post-sidecar seal the list field and the Relay connection field run
@@ -3163,12 +3197,12 @@ def _apply_sidecar_sync(
 async def _apply_sidecar_async(
     target_type: type,
     set_class: type[FilterSet] | type[OrderSet],
-    queryset: models.QuerySet,
-    input_value: Any,
-    info: Any,
+    queryset: models.QuerySet[models.Model],
+    input_value: object,
+    info: object,
     *,
     model: type[models.Model],
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Async sibling of :func:`_apply_sidecar_sync`, running the same one seal.
 
     The awaited result carries the same ``_SIDECAR_RESULT_POLICY`` contract;
@@ -3202,12 +3236,12 @@ async def _apply_sidecar_async(
 def apply_orderset_sync(
     target_type: type,
     orderset_class: type[OrderSet] | None,
-    queryset: models.QuerySet,
-    order_by: Any,
-    info: Any,
+    queryset: models.QuerySet[models.Model],
+    order_by: object,
+    info: object,
     *,
     model: type[models.Model],
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Run ``OrderSet.apply_sync`` through the shared post-sidecar seal.
 
     Both the list field and the Relay connection field enter here; see
@@ -3220,12 +3254,12 @@ def apply_orderset_sync(
 async def apply_orderset_async(
     target_type: type,
     orderset_class: type[OrderSet] | None,
-    queryset: models.QuerySet,
-    order_by: Any,
-    info: Any,
+    queryset: models.QuerySet[models.Model],
+    order_by: object,
+    info: object,
     *,
     model: type[models.Model],
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Async sibling of :func:`apply_orderset_sync`."""
     orderset_class = require_orderset_class(target_type, orderset_class)
     return await _apply_sidecar_async(
@@ -3241,12 +3275,12 @@ async def apply_orderset_async(
 def apply_filterset_sync(
     target_type: type,
     filterset_class: type[FilterSet],
-    queryset: models.QuerySet,
-    filter_input: Any,
-    info: Any,
+    queryset: models.QuerySet[models.Model],
+    filter_input: object,
+    info: object,
     *,
     model: type[models.Model],
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Run ``FilterSet.apply_sync`` through the shared post-sidecar seal.
 
     The Relay connection field is the one field publishing ``filter:``; its
@@ -3266,12 +3300,12 @@ def apply_filterset_sync(
 async def apply_filterset_async(
     target_type: type,
     filterset_class: type[FilterSet],
-    queryset: models.QuerySet,
-    filter_input: Any,
-    info: Any,
+    queryset: models.QuerySet[models.Model],
+    filter_input: object,
+    info: object,
     *,
     model: type[models.Model],
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Async sibling of :func:`apply_filterset_sync`."""
     return await _apply_sidecar_async(
         target_type,
@@ -3309,7 +3343,12 @@ def _is_model_column(name: str, model: type[models.Model]) -> bool:
 # emits ``FOR UPDATE`` (``SQLCompiler.as_sql``), so it is no lost property.
 
 
-def _combined_lost_property(query: Any, model: type[models.Model], *, outer: bool) -> str | None:
+def _combined_lost_property(
+    query: sql.Query,
+    model: type[models.Model],
+    *,
+    outer: bool,
+) -> str | None:
     """Name the property a primary-key-set rewrite of ``query`` would lose, or ``None``.
 
     ``query`` is a combined ``sql.Query``. The rewrite keeps exactly the SET of
@@ -3370,7 +3409,7 @@ def _combined_lost_property(query: Any, model: type[models.Model], *, outer: boo
 
 
 def _pk_membership_query_or_defect(
-    query: Any,
+    query: sql.Query,
     model: type[models.Model],
 ) -> tuple[sql.Query | None, tuple[str, str] | None]:
     """Rewrite a combined ``query`` as ``<model>.filter(pk__in=<combined>.values("pk"))``.
@@ -3398,13 +3437,13 @@ def _pk_membership_query_or_defect(
 
 
 def _seal_or_defect(
-    candidate: Any,
+    candidate: object,
     model: type[models.Model],
     required_alias: str | None,
-    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
+    policy: _SealPolicy[object] = _DEFAULT_SEAL_POLICY,
     *,
     expected_routing: _RoutingIntent | None = None,
-) -> tuple[models.QuerySet | None, tuple[str, str] | None]:
+) -> tuple[models.QuerySet[models.Model, object] | None, tuple[str, str] | None]:
     """Rebuild a framework-owned plain ``QuerySet`` from ``candidate``'s validated state.
 
     The single sealing primitive both boundary sites run. Returns
@@ -3779,10 +3818,15 @@ def _row_source_model(state: dict[str, Any], origin: str) -> type[models.Model]:
             f"{_safe_type_name(model)}; the row bound rebuilds a framework-owned "
             "queryset from that state and cannot do so without a model class.",
         )
-    return model
+    # ``issubclass(model, models.Model)`` held above.
+    return cast("type[models.Model]", model)
 
 
-def normalized_row_source(value: Any, *, origin: str = "a collection resolver returned") -> Any:
+def normalized_row_source(
+    value: _T,
+    *,
+    origin: str = "a collection resolver returned",
+) -> _T | models.QuerySet[models.Model, object]:
     """Return a row source whose slice is an operation this package owns.
 
     The raw-list ceiling is applied by slicing, because slicing a queryset is
@@ -3832,10 +3876,11 @@ def normalized_row_source(value: Any, *, origin: str = "a collection resolver re
         raise ConfigurationError(
             _raw_list_source_message(defect, _safe_type_name(value), origin),
         )
-    return sealed
+    # ``_seal_or_defect`` returns a queryset exactly when it returns no defect.
+    return cast("models.QuerySet[models.Model, object]", sealed)
 
 
-def materialized_rows(value: Any) -> Any:
+def materialized_rows(value: object) -> list[object] | None:
     """The rows a row source has already fetched, or ``None`` when it has none.
 
     Django's prefetch cache holds a queryset whose ``_result_cache`` is the list
@@ -3854,11 +3899,12 @@ def materialized_rows(value: Any) -> Any:
     """
     if type(value) is not models.QuerySet:
         return None
-    return _readable_queryset_state(value).get("_result_cache")
+    # An exact ``QuerySet``'s ``_result_cache`` slot: its fetched rows, or ``None``.
+    return cast("list[object] | None", _readable_queryset_state(value).get("_result_cache"))
 
 
 def _readable_queryset_state(
-    value: Any,
+    value: object,
     origin: str = "a collection resolver returned",
 ) -> dict[str, Any]:
     """The instance dictionary of ``value``, read without dispatching consumer code.
@@ -3870,7 +3916,8 @@ def _readable_queryset_state(
     being waved through with an empty one.
     """
     try:
-        return object.__getattribute__(value, "__dict__")
+        # An instance dictionary, read through the base slot.
+        return cast("dict[str, Any]", object.__getattribute__(value, "__dict__"))
     except BaseException:
         raise ConfigurationError(
             f"{_sentence_start(origin)} a {_safe_type_name(value)} whose "
@@ -3944,7 +3991,9 @@ def _raw_list_source_message(defect: tuple[str, str], name: str, origin: str) ->
     )
 
 
-def _coerced_manager_queryset(manager: models.Manager) -> models.QuerySet:
+def _coerced_manager_queryset(
+    manager: models.Manager[models.Model],
+) -> models.QuerySet[models.Model]:
     """Coerce a ``Manager`` to its ``QuerySet``, preserving its explicit alias or failing closed.
 
     ``Manager.all()`` is consumer-overridable. A custom Manager can degrade it
@@ -4027,7 +4076,7 @@ def _visibility_result_error(
     model: type[models.Model],
     required_alias: str | None,
     defect: tuple[str, str],
-    render_error: Any,
+    render_error: Callable[[str, str], str] | None,
 ) -> ConfigurationError:
     """Build the fail-closed error for a defective ``get_queryset`` result.
 
@@ -4109,12 +4158,12 @@ def _captured_model(type_cls: type, model: type[models.Model] | None) -> type[mo
 
 def _prepared_visibility_source(
     type_cls: type,
-    queryset: Any,
+    queryset: object,
     *,
     model: type[models.Model] | None = None,
-    render_error: Any = None,
-    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
-) -> tuple[models.QuerySet, str | None]:
+    render_error: Callable[[str, str], str] | None = None,
+    policy: _SealPolicy[object] = _DEFAULT_SEAL_POLICY,
+) -> tuple[models.QuerySet[models.Model, object], str | None]:
     """Validate and SEAL the source queryset before the visibility hook runs.
 
     Returns ``(sealed_queryset, required_alias)``. The source is sealed through
@@ -4159,7 +4208,7 @@ def _prepared_visibility_source(
 
     """
     model = _captured_model(type_cls, model)
-    queryset, defect = _seal_or_defect(queryset, model, None, policy)
+    candidate, defect = _seal_or_defect(queryset, model, None, policy)
     if defect is not None:
         code, detail = defect
         if render_error is not None:
@@ -4206,28 +4255,30 @@ def _prepared_visibility_source(
                 f"The apply_type_visibility source for {name}",
             ),
         )
+    # ``_seal_or_defect`` returns a queryset exactly when it returns no defect.
+    sealed = cast("models.QuerySet[models.Model, object]", candidate)
     pipeline = current_write_pipeline()
     if pipeline is not None:
-        queryset = pin_write_queryset(
-            queryset,
+        sealed = pin_write_queryset(
+            sealed,
             pipeline.alias,
             owner=f"The {_safe_class_name(type_cls)} visibility source",
         )
         required_alias = pipeline.alias
     else:
-        required_alias = queryset._db
-    return queryset, required_alias
+        required_alias = sealed._db  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db
+    return sealed, required_alias
 
 
 def _normalized_visibility_result(
     type_cls: type,
-    result: Any,
+    result: object,
     required_alias: str | None,
-    render_error: Any = None,
+    render_error: Callable[[str, str], str] | None = None,
     *,
     model: type[models.Model] | None = None,
-    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
-) -> models.QuerySet:
+    policy: _SealPolicy[object] = _DEFAULT_SEAL_POLICY,
+) -> models.QuerySet[models.Model, object]:
     """Normalize a ``get_queryset`` hook result into a composable, correctly-routed queryset.
 
     The shared result contract both colored visibility runners apply (the sealed
@@ -4267,19 +4318,40 @@ def _normalized_visibility_result(
     if defect is not None:
         raise _visibility_result_error(type_cls, model, required_alias, defect, render_error)
     # ``_seal_or_defect`` returns a queryset exactly when it returns no defect.
-    return cast("models.QuerySet", sealed)
+    return cast("models.QuerySet[models.Model, object]", sealed)
 
 
+@overload
 def apply_type_visibility_sync(
     type_cls: type[DjangoType],
-    queryset: models.QuerySet,
-    info: Any,
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
+    async_recourse: str = ...,
+    *,
+    model: type[models.Model] | None = ...,
+    render_error: Callable[[str, str], str] | None = ...,
+) -> models.QuerySet[models.Model]: ...
+@overload
+def apply_type_visibility_sync(
+    type_cls: type[DjangoType],
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
+    async_recourse: str = ...,
+    *,
+    model: type[models.Model] | None = ...,
+    render_error: Callable[[str, str], str] | None = ...,
+    policy: _SealPolicy[_RowT],
+) -> models.QuerySet[models.Model, _RowT]: ...
+def apply_type_visibility_sync(
+    type_cls: type[DjangoType],
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
     *,
     model: type[models.Model] | None = None,
-    render_error: Any = None,
-    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
-) -> models.QuerySet:
+    render_error: Callable[[str, str], str] | None = None,
+    policy: _SealPolicy[object] = _DEFAULT_SEAL_POLICY,
+) -> models.QuerySet[models.Model, object]:
     """Run ``type_cls.get_queryset`` in a sync context; reject async hooks loudly.
 
     Decision 9 makes a consumer's ``DjangoType.get_queryset`` allowed to
@@ -4355,9 +4427,9 @@ def apply_type_visibility_sync(
 
 def visibility_scoped_related_queryset(
     related_type: type,
-    info: Any,
+    info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Return a related type's base queryset scoped by its ``get_queryset`` visibility hook.
 
     The one-line composition of the two primitives every relation-visibility check
@@ -4378,10 +4450,10 @@ def visibility_scoped_related_queryset(
 
 
 def related_visibility_queryset(
-    related_model: type,
-    info: Any,
+    related_model: type[models.Model],
+    info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
-) -> models.QuerySet | None:
+) -> models.QuerySet[models.Model] | None:
     """Return the related model's visibility-scoped queryset, or ``None`` when it has no primary.
 
     The ``registry.get(related_model)`` resolve + the "scope through the primary
@@ -4407,10 +4479,10 @@ def related_visibility_queryset(
 
 
 def related_visibility_queryset_or_default(
-    related_model: type,
-    info: Any,
+    related_model: type[models.Model],
+    info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """The visibility-scoped queryset, falling back to the default manager.
 
     The "no primary ``DjangoType`` => default-manager, no visibility contract"
@@ -4427,7 +4499,7 @@ def related_visibility_queryset_or_default(
     return queryset
 
 
-def _stringified(pks: Any) -> set[str]:
+def _stringified(pks: Iterable[object]) -> set[str]:
     """Stringify a pk collection into the type-agnostic comparison basis.
 
     The ``{str(pk) for pk in ...}`` coercion both membership helpers share, so
@@ -4437,7 +4509,10 @@ def _stringified(pks: Any) -> set[str]:
     return {str(pk) for pk in pks}
 
 
-def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[str]:
+def stringified_pks_present(
+    queryset: models.QuerySet[models.Model],
+    query_pks: Iterable[object],
+) -> set[str]:
     """Return the stringified pks among ``query_pks`` actually present in ``queryset`` (one query).
 
     The ``{str(pk) for pk in queryset.filter(pk__in=...).values_list("pk", flat=True)}``
@@ -4461,7 +4536,7 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
     return _stringified(queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True))
 
 
-def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
+def pks_all_present(declared_pks: Iterable[object], present: set[str]) -> bool:
     """Return whether every ``declared_pks`` member (stringified) is in ``present`` (spec-039).
 
     The subset-membership test the model relation guard
@@ -4476,11 +4551,11 @@ def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
 
 
 def visible_related_object(
-    related_model: type,
-    pk: Any,
-    info: Any,
+    related_model: type[models.Model],
+    pk: object,
+    info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
-) -> Any | None:
+) -> models.Model | None:
     """Resolve the VISIBLE related object by pk through the related primary's ``get_queryset``.
 
     The object-returning visibility-on-every-branch query, single-sited so the
@@ -4516,13 +4591,14 @@ def visible_related_object(
     # same relation-target lock the batched membership check applies.
     queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
     queryset = pipeline_scoped_queryset(queryset, related_model)
-    return queryset.filter(pk=pk).first()
+    # A related-model row or ``None``; the stubs' model plugin types the chain ``Any``.
+    return cast("models.Model | None", queryset.filter(pk=pk).first())
 
 
 def visible_related_objects(
-    related_model: type,
-    pks: Any,
-    info: Any,
+    related_model: type[models.Model],
+    pks: Iterable[object],
+    info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
 ) -> set[str]:
     """Return the VISIBLE pks among ``pks`` in ONE visibility-scoped ``pk__in`` query.
@@ -4544,15 +4620,34 @@ def visible_related_objects(
     return stringified_pks_present(queryset, pks)
 
 
+@overload
 async def apply_type_visibility_async(
     type_cls: type[DjangoType],
-    queryset: models.QuerySet,
-    info: Any,
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
+    *,
+    model: type[models.Model] | None = ...,
+    render_error: Callable[[str, str], str] | None = ...,
+) -> models.QuerySet[models.Model]: ...
+@overload
+async def apply_type_visibility_async(
+    type_cls: type[DjangoType],
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
+    *,
+    model: type[models.Model] | None = ...,
+    render_error: Callable[[str, str], str] | None = ...,
+    policy: _SealPolicy[_RowT],
+) -> models.QuerySet[models.Model, _RowT]: ...
+async def apply_type_visibility_async(
+    type_cls: type[DjangoType],
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
     *,
     model: type[models.Model] | None = None,
-    render_error: Any = None,
-    policy: _SealPolicy = _DEFAULT_SEAL_POLICY,
-) -> models.QuerySet:
+    render_error: Callable[[str, str], str] | None = None,
+    policy: _SealPolicy[object] = _DEFAULT_SEAL_POLICY,
+) -> models.QuerySet[models.Model, object]:
     """Run ``type_cls.get_queryset`` in an async context, awaiting awaitables.
 
     Sync ``get_queryset`` returns the queryset directly and is passed
@@ -4609,7 +4704,7 @@ async def apply_type_visibility_async(
     )
 
 
-def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
+def reject_awaitable_sync_source(source: object, type_cls: type) -> None:
     """Reject an awaitable source from a sync list or connection resolver.
 
     A plain ``def`` that returns an awaitable is committed to the sync field
@@ -4628,7 +4723,7 @@ def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
     )
 
 
-def reject_residual_async_source(source: Any, type_cls: type) -> None:
+def reject_residual_async_source(source: object, type_cls: type) -> None:
     """Reject a residual awaitable from an already-awaited async consumer resolver.
 
     Both async consumer pipelines await the consumer ``resolver=`` return
@@ -4658,12 +4753,12 @@ def reject_residual_async_source(source: Any, type_cls: type) -> None:
 
 
 def prepared_resolver_source(
-    result: Any,
+    result: object,
     type_cls: type,
     *,
-    async_guard: Any,
-    non_queryset_guard: Any = None,
-    queryset_guard: Any = None,
+    async_guard: Callable[[object, type], None],
+    non_queryset_guard: Callable[[object], None] | None = None,
+    queryset_guard: Callable[[models.QuerySet[models.Model]], None] | None = None,
 ) -> tuple[Any, bool]:
     """Refuse the wrong async shape, coerce a Manager, and report what the source IS.
 
@@ -4699,7 +4794,7 @@ def prepared_resolver_source(
     return source, True
 
 
-def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) -> Any:
+def post_process_queryset_result_sync(type_cls: type, result: object, info: object) -> object:
     """Normalize a consumer-resolver return then apply visibility (sync).
 
     The list-field consumer-resolver shape: a ``Manager`` is coerced to a
@@ -4722,7 +4817,11 @@ def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) ->
     return source
 
 
-async def post_process_queryset_result_async(type_cls: type, result: Any, info: Any) -> Any:
+async def post_process_queryset_result_async(
+    type_cls: type,
+    result: object,
+    info: object,
+) -> object:
     """Async sibling of ``post_process_queryset_result_sync``.
 
     The caller awaits the consumer coroutine BEFORE handing the result here so

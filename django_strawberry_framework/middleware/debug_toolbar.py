@@ -55,13 +55,15 @@ from __future__ import annotations
 
 import collections
 import json
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 
 from django_strawberry_framework.utils.imports import require_optional_module
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from types import ModuleType
 
 # The single django-debug-toolbar install-hint string (spec-042 Decision 5).
 # Every toolbar-absent raise routes through ``require_debug_toolbar()`` so the
@@ -97,7 +99,7 @@ _DEBUG_TOOLBAR_APP_HINT: str = (
 )
 
 
-def require_debug_toolbar() -> Any:
+def require_debug_toolbar() -> ModuleType:
     """Import + return the top-level ``debug_toolbar`` package, or raise the install hint.
 
     A thin wrapper over ``utils/imports.py::require_optional_module`` (spec-042 --
@@ -154,7 +156,7 @@ def _get_payload(
     request: HttpRequest,  # noqa: ARG001 - upstream-verbatim signature (spec-042 Decision 6)
     response: HttpResponse,
     toolbar: DebugToolbar,
-) -> dict | None:
+) -> dict[str, object] | None:
     """Build the ``debugToolbar`` payload for a JSON operation response, or ``None``.
 
     ``None`` when the toolbar assigned no ``request_id`` (nothing to reference),
@@ -218,9 +220,9 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
     def process_view(
         self,
         request: HttpRequest,
-        view_func: Callable[..., HttpResponse],
-        *args,
-        **kwargs,
+        view_func: object,
+        *args: object,
+        **kwargs: object,
     ) -> None:
         """Tag the request when its resolved view is a Strawberry Django view.
 

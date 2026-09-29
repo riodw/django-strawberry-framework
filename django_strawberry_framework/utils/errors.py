@@ -113,7 +113,7 @@ GLOBALID_UNVALIDATABLE_ERROR_CODE = "GLOBALID_UNVALIDATABLE"
 FILTER_INVALID_ERROR_CODE = "FILTER_INVALID"
 
 
-def coded_error_extensions(code: str, **detail: Any) -> dict[str, Any]:
+def coded_error_extensions(code: str, **detail: object) -> dict[str, object]:
     """Build the ``extensions`` mapping for a coded framework ``GraphQLError``.
 
     One shape for every coded error the framework raises: a ``"code"`` key
@@ -131,7 +131,7 @@ def coded_error_extensions(code: str, **detail: Any) -> dict[str, Any]:
     return {"code": code, **detail}
 
 
-def field_error(path: str, messages: Any, *, codes: Any = None) -> FieldError:
+def field_error(path: str, messages: object, *, codes: object = None) -> FieldError:
     """Build ONE ``FieldError`` leaf for the shared envelope.
 
     The single leaf constructor BOTH the flat Django mapper
@@ -217,7 +217,7 @@ def _str_list(value: Any) -> list[str]:
     return [_safe_text(item) for item in items]
 
 
-def _validation_messages(error: Any) -> list[Any]:
+def _validation_messages(error: Any) -> list[object]:
     """Read one Django validation leaf's messages without trusting its metadata."""
     try:
         msgs = error.messages
@@ -242,7 +242,7 @@ def _validation_messages(error: Any) -> list[Any]:
             return [error]
 
 
-def _validation_code(leaf: Any) -> Any:
+def _validation_code(leaf: Any) -> object:
     """Read one Django validation leaf's code, dropping hostile or empty values."""
     try:
         code = leaf.code
@@ -251,7 +251,7 @@ def _validation_code(leaf: Any) -> Any:
         return None
 
 
-def _validation_leaves(error: Any) -> tuple[Any, ...]:
+def _validation_leaves(error: object) -> tuple[object, ...]:
     """Flatten one Django validation error into its leaf errors.
 
     ``ValidationError.error_list`` is the flattened leaf list ``.messages``
@@ -270,7 +270,7 @@ def _validation_leaves(error: Any) -> tuple[Any, ...]:
         return (error,)
 
 
-def _validation_codes(error: Any) -> list[Any]:
+def _validation_codes(error: object) -> list[object]:
     """Read all codes from one Django validation error leaf."""
     leaves = _validation_leaves(error)
     return [code for leaf in leaves if (code := _validation_code(leaf)) is not None]
@@ -309,7 +309,7 @@ def null_field_error(path: str) -> FieldError:
     return field_error(path, "This field cannot be null.", codes=FIELD_ERROR_CODE_NULL)
 
 
-def _error_dict_entry(item: Any) -> tuple[Any, Any] | None:
+def _error_dict_entry(item: Any) -> tuple[object, Any] | None:
     """Unpack one ``ValidationError.error_dict`` item without trusting its shape."""
     try:
         field_name, field_errors = item
@@ -381,13 +381,14 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
                 normalized_name = _safe_text(field_name)
                 path = "" if normalized_name == NON_FIELD_ERRORS else normalized_name
                 if isinstance(field_errors, _TEXT_ATOM_TYPES):
-                    field_error_items: tuple[Any, ...] = (field_errors,)
+                    field_error_items: tuple[object, ...] = (field_errors,)
                 else:
                     try:
                         field_error_items = tuple(field_errors)
                     except BaseException:
                         field_error_items = (field_errors,)
-                messages: list[Any] = []
+                messages: list[object] = []
+
                 for error in field_error_items:
                     messages.extend(_validation_messages(error))
                 # Preserve each leaf Django ``ValidationError.code`` alongside the

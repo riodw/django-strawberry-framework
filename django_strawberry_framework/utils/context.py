@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Final
 
 __all__ = (
     "MISSING",
@@ -40,7 +40,7 @@ __all__ = (
     "stash_on_context",
 )
 
-MISSING: Any = object()
+MISSING: Final = object()
 """Sentinel distinguishing a missing context key from one explicitly stashed as ``None``.
 
 Public because the distinction is not private to the read: any caller that
@@ -51,7 +51,7 @@ itself is :func:`restored_context_keys`.
 """
 
 
-def get_context_value(context: Any, key: str, default: Any = None) -> Any:
+def get_context_value(context: Any, key: str, default: object = None) -> Any:
     """Return ``key`` from an object-or-dict context, or ``default``.
 
     Dispatch mirrors ``stash_on_context`` so the read and write paths stay
@@ -114,7 +114,7 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
         return default
 
 
-def stash_on_context(context: Any, key: str, value: Any) -> None:
+def stash_on_context(context: Any, key: str, value: object) -> None:
     """Stash ``value`` on ``context`` under ``key``; silently skip if impossible.
 
     Dispatch order mirrors ``get_context_value``: ``dict`` instances are

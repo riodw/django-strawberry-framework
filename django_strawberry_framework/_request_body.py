@@ -421,7 +421,7 @@ def _measured_remaining(stream: Any) -> int | _Probe:
     return remaining
 
 
-def _declares_seekable(stream: Any) -> bool:
+def _declares_seekable(stream: object) -> bool:
     """Whether ``stream`` may be size-probed at all, without moving it.
 
     ``True`` covers both shapes the probe supports: a stream whose ``seekable()``
@@ -449,7 +449,7 @@ def _declares_seekable(stream: Any) -> bool:
         return False
 
 
-def _lacks_seek(stream: Any) -> bool:
+def _lacks_seek(stream: object) -> bool:
     """Whether ``stream`` has no ``seek`` method at all, before anything moves.
 
     The other half of believing a missing ``seekable`` declaration
@@ -474,7 +474,7 @@ def _lacks_seek(stream: Any) -> bool:
         return False
 
 
-def _position_restored(stream: Any, position: Any) -> bool:
+def _position_restored(stream: Any, position: object) -> bool:
     """Whether ``stream`` is provably back at ``position``.
 
     Verified with ``tell()`` rather than inferred from a ``seek`` that did not
@@ -492,7 +492,7 @@ def _position_restored(stream: Any, position: Any) -> bool:
         return False
 
 
-def _bounded_read_exceeds_limit(request: HttpRequest, stream: Any, limit: int) -> bool:
+def _bounded_read_exceeds_limit(request: HttpRequest, stream: object, limit: int) -> bool:
     """Measure by reading, and answer fail-closed if the stream will not be read.
 
     The bounded read's error boundary, kept separate from the read itself so that

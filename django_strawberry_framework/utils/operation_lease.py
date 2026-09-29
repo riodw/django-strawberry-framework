@@ -39,7 +39,8 @@ from typing import Generic, TypeVar
 
 __all__ = ("OperationLease",)
 
-PayloadT = TypeVar("PayloadT")
+# Covariant: a lease only hands its payload out (``held``) or drops it (``close``).
+PayloadT = TypeVar("PayloadT", covariant=True)
 
 
 class OperationLease(Generic[PayloadT]):

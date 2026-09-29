@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import fields
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from ..exceptions import ConfigurationError, describe_value
 
@@ -60,7 +60,7 @@ def copy_policy(policy: PolicyT) -> PolicyT:
     return duplicate
 
 
-def canonical_policy(policy: Any, *, policy_cls: type[PolicyT], display_name: str) -> PolicyT:
+def canonical_policy(policy: object, *, policy_cls: type[PolicyT], display_name: str) -> PolicyT:
     """Return a private, validated ``policy_cls`` built from ``policy``'s fields.
 
     ALWAYS a new object, never the one handed in, and the exact type is not a
@@ -88,7 +88,7 @@ def canonical_policy(policy: Any, *, policy_cls: type[PolicyT], display_name: st
     than a raw error, because this runs at schema construction and a policy
     that cannot be read is a deployment fault.
     """
-    values: dict[str, Any] = {}
+    values: dict[str, object] = {}
     reading = ""
     try:
         for field in fields(policy_cls):
@@ -108,11 +108,11 @@ def _article(name: str) -> str:
 
 
 def resolve_policy(
-    explicit: PolicyT | Mapping[str, Any] | None,
+    explicit: PolicyT | Mapping[str, object] | None,
     *,
     policy_cls: type[PolicyT],
     default: PolicyT,
-    read_setting: Callable[[], Any],
+    read_setting: Callable[[], object],
     display_name: str,
     unit: str,
 ) -> PolicyT:

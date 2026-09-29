@@ -84,12 +84,18 @@ from .converter import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Iterable, Mapping
     from typing import TypeAlias
+
+    from django.db import models
+
+    from ..utils.typing import ConcreteField
 
     # A declarative form class - the only kind a form mutation's ``Meta.form_class``
     # validates to (``forms.Form`` / ``forms.ModelForm`` are siblings under
     # ``forms.BaseForm``, and only they carry the metaclass-built ``base_fields``).
-    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm]
+    # ``ModelForm``'s model parameter is invariant, so ``Any`` is its universal form.
+    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[Any]]
 
 # Module path the ``strawberry.lazy(...)`` marker references for the FORM input
 # namespace; pinned as a single constant so any forward-ref and
@@ -276,7 +282,7 @@ def normalize_form_field_basis(form_class: FormClass, form_fields: Any) -> dict[
     return _form_field_basis(form_class, form_fields)
 
 
-def _related_model_of(field: forms.Field) -> Any:
+def _related_model_of(field: forms.Field) -> object:
     """Return a column-less relation field's ``queryset.model``, or ``None``.
 
     The annotation input the build reads through
@@ -299,7 +305,10 @@ def _related_model_of(field: forms.Field) -> Any:
         return None
 
 
-def _form_basis_content_identity(form_class: FormClass, form_fields: Any = None) -> tuple:
+def _form_basis_content_identity(
+    form_class: FormClass,
+    form_fields: Mapping[str, forms.Field] | None = None,
+) -> tuple[tuple[str, type[forms.Field], bool, object], ...]:
     """Return a hashable projection of the hook basis that determines input content.
 
     The per-shape build cache (``forms/sets.py::_cached_build_form_input``) keys
@@ -353,9 +362,9 @@ def _form_basis_content_identity(form_class: FormClass, form_fields: Any = None)
 def resolve_effective_form_fields(
     form_class: FormClass,
     *,
-    fields: Any = None,
-    exclude: Any = None,
-    form_fields: Any = None,
+    fields: object = None,
+    exclude: object = None,
+    form_fields: Mapping[str, forms.Field] | None = None,
 ) -> dict[str, forms.Field]:
     """Return the effective ``{name: forms.Field}`` dict after ``fields`` / ``exclude``.
 
@@ -426,7 +435,7 @@ def form_input_type_name(
     )
 
 
-def _model_column_for(form_class: FormClass, name: str) -> Any:
+def _model_column_for(form_class: FormClass, name: str) -> ConcreteField | None:
     """Return the backing model column for a ``ModelForm`` field ``name``, or ``None``.
 
     A ``ModelForm`` exposes its model via ``_meta.model``; a field with a backing
@@ -483,14 +492,16 @@ def _model_column_for(form_class: FormClass, name: str) -> Any:
             return None
     elif getattr(column, "column", None) is None:
         return None
-    return column
+    # The arms above let through only a forward concrete / forward M2M column,
+    # read off the dynamically-resolved ``_meta.model``.
+    return cast("ConcreteField", column)
 
 
 def _model_less_relation_annotation(
     name: str,
-    field: forms.ModelChoiceField,
+    field: forms.ModelChoiceField[Any],
     form_class: FormClass,
-) -> tuple[str, Any, type]:
+) -> tuple[str, object, type[models.Model]]:
     """Map a column-LESS relation form field to its ``(python_attr, annotation, related_model)``.
 
     A plain ``Form`` ``ModelChoiceField`` / ``ModelMultipleChoiceField`` has no
@@ -527,7 +538,7 @@ def _model_less_relation_annotation(
     )
 
 
-def _simple_triple(name: str, annotation: Any, kind: str) -> tuple[str, str, Any, str]:
+def _simple_triple(name: str, annotation: object, kind: str) -> tuple[str, str, object, str]:
     """Return ``(input_attr, graphql_name, annotation, kind)`` for a NON-relation form field.
 
     The scalar / file arms of ``_field_triple_and_spec`` all share one shape: the
@@ -542,10 +553,10 @@ def _simple_triple(name: str, annotation: Any, kind: str) -> tuple[str, str, Any
 def _field_triple_and_spec(
     name: str,
     field: forms.Field,
-    column: Any,
+    column: ConcreteField | None,
     type_name: str,
     form_class: FormClass,
-) -> tuple[str, Any, InputFieldSpec, bool]:
+) -> tuple[str, object, InputFieldSpec, bool]:
     """Resolve one form field to its ``(python_attr, base_annotation, InputFieldSpec, required)``.
 
     A ``ModelForm`` field with a backing column routes through
@@ -572,7 +583,7 @@ def _field_triple_and_spec(
     decode never re-derives it from the class-level ``base_fields`` field
     (whose ``queryset`` is ``None`` under the request-scoped-choices idiom).
     """
-    related_model: Any = None
+    related_model: type[models.Model] | None = None
     # ONE requiredness decision for both the column-backed and column-less paths
     # (so a NullBooleanField backed by a nullable model column is forced optional
     # too, not just the model-less one) - see ``converter.form_field_required``.
@@ -604,7 +615,7 @@ def _field_triple_and_spec(
             # ``ModelChoiceField`` (the multi variant subclasses it).
             python_attr, annotation, related_model = _model_less_relation_annotation(
                 name,
-                cast("forms.ModelChoiceField", field),
+                cast("forms.ModelChoiceField[Any]", field),
                 form_class,
             )
             graphql_name = graphql_camel_name(python_attr)
@@ -663,9 +674,9 @@ def build_form_input_class(
     form_class: FormClass,
     *,
     operation_kind: str,
-    fields: Any = None,
-    exclude: Any = None,
-    form_fields: Any = None,
+    fields: object = None,
+    exclude: object = None,
+    form_fields: Mapping[str, forms.Field] | None = None,
 ) -> tuple[type, list[InputFieldSpec]]:
     """Build ONE ``@strawberry.input`` class from a form's declared fields.
 
@@ -705,7 +716,7 @@ def build_form_input_class(
     )
     is_partial = operation_kind == PARTIAL
 
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
+    triples: list[tuple[str, object, dict[str, object]]] = []
     field_specs: list[InputFieldSpec] = []
     for name, field in effective.items():
         column = _model_column_for(form_class, name)
@@ -737,7 +748,10 @@ def build_form_input_class(
     return input_cls, field_specs
 
 
-def _required_form_field_names(form_class: FormClass, form_fields: Any = None) -> set[str]:
+def _required_form_field_names(
+    form_class: FormClass,
+    form_fields: Mapping[str, forms.Field] | None = None,
+) -> set[str]:
     """Return the names of every declared form field that must appear in a create input.
 
     Uses the shared ``converter.form_field_required`` with each field's backing
@@ -755,8 +769,8 @@ def _required_form_field_names(form_class: FormClass, form_fields: Any = None) -
 
 def guard_create_required_fields(
     form_class: FormClass,
-    effective_field_names: Any,
-    form_fields: Any = None,
+    effective_field_names: Iterable[str],
+    form_fields: Mapping[str, forms.Field] | None = None,
 ) -> None:
     """Raise if a create-shaped narrowing drops a still-declared required form field.
 
@@ -795,8 +809,8 @@ def guard_create_required_fields(
 
 def guard_partial_required_column_less_fields(
     form_class: FormClass,
-    effective_field_names: Any,
-    form_fields: Any = None,
+    effective_field_names: Iterable[str],
+    form_fields: Mapping[str, forms.Field] | None = None,
 ) -> None:
     """Raise if a partial (update) narrowing drops a required COLUMN-LESS form field.
 
@@ -842,10 +856,10 @@ def build_form_inputs(
     form_class: FormClass,
     *,
     operation_kind: str = FORM,
-    fields: Any = None,
-    exclude: Any = None,
+    fields: object = None,
+    exclude: object = None,
     guard_required: bool = True,
-    form_fields: Any = None,
+    form_fields: Mapping[str, forms.Field] | None = None,
 ) -> tuple[type, list[InputFieldSpec], type, list[InputFieldSpec]]:
     """Build BOTH the create + partial inputs for a form, with the create-required guard.
 

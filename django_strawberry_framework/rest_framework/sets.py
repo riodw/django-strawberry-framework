@@ -65,9 +65,9 @@ from rest_framework import serializers
 
 from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..mutations.inputs import CREATE
+from ..mutations.operations import NON_DELETE_OPERATION_INPUT_KIND
 from ..mutations.sets import (
     MODEL_BACKED_WRITE_META_KEYS,
-    NON_DELETE_OPERATION_INPUT_KIND,
     DjangoMutation,
     _ValidatedMutationMeta,
     build_and_stash_input,
@@ -90,6 +90,7 @@ from ..utils.inputs import normalize_field_name_sequence
 from .inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     NestedSerializerConfig,
+    SerializerInputShape,
     build_serializer_input_class,
     dedupe_serializer_input_shape,
     guard_create_required_serializer_fields,
@@ -113,6 +114,14 @@ from .inputs import (
 )
 from .serializer_converter import is_nested_serializer_field, nested_serializer_child
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+    from strawberry.types import Info
+
+    from ..utils.inputs import InputFieldSpec
+    from .hook_context import SerializerHookContext
+    from .serializer_converter import DRFBaseSerializer, DRFField, DRFSerializer
+
 # The serializer ``Meta``'s allowed-key set (spec-039 Decision 6), composed from
 # the shared ``MODEL_BACKED_WRITE_META_KEYS`` plus serializer-specific keys.
 _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | frozenset(
@@ -132,7 +141,7 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | f
 # ``<Serializer>PartialInput`` (``PARTIAL``).
 
 
-def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serializers.Field]:
+def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFField]:
     """Validate and snapshot the map returned by ``get_serializer_for_schema``.
 
     The hook is a public classmethod seam, so its result is an untrusted boundary even though
@@ -156,7 +165,7 @@ def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serialize
             "serializers.Field.",
         ) from exc
 
-    normalized: dict[str, serializers.Field] = {}
+    normalized: dict[str, DRFField] = {}
     errors: list[str] = []
     for entry in entries:
         try:
@@ -218,7 +227,7 @@ def _validate_schema_field_map(name: str, field_map: Any) -> dict[str, serialize
 def _checked_schema_field_map(
     cls: type[SerializerMutation],
     meta: _ValidatedMutationMeta,
-) -> dict[str, serializers.Field]:
+) -> dict[str, DRFField]:
     """Read ``get_serializer_for_schema()`` through the ONE guarded path.
 
     The single authoritative read of the schema hook for the bind window: calls the overridable
@@ -261,8 +270,8 @@ def _serializer_input_shape_for(
     meta: _ValidatedMutationMeta,
     *,
     operation_kind: str,
-    field_map: dict[str, serializers.Field],
-) -> tuple[type, Any]:
+    field_map: dict[str, DRFField],
+) -> tuple[type, SerializerInputShape]:
     """Return the serializer input class + descriptor through the shared shape cache."""
     input_cls, shape = build_serializer_input_class(
         meta.serializer_class,
@@ -294,9 +303,9 @@ _SERIALIZER_OPERATION_NESTED_WRITE_METHOD: dict[str, str] = {
 
 def _validate_serializer_nested_fields(
     name: str,
-    serializer_class: type[serializers.Serializer],
+    serializer_class: type[DRFSerializer],
     operation: str,
-    field_map: dict[str, serializers.Field],
+    field_map: dict[str, DRFField],
     nested_fields: Any,
 ) -> Mapping[str, NestedSerializerConfig] | None:
     """Validate + normalize ``Meta.nested_fields`` at class creation.
@@ -395,9 +404,9 @@ def _validate_serializer_nested_fields(
 
 def _assert_schema_source_ownership(
     name: str,
-    field_map: Mapping[str, serializers.Field],
+    field_map: Mapping[str, DRFField],
     *,
-    serializer_class: type[serializers.Serializer],
+    serializer_class: type[DRFSerializer],
     supplied_fields: set[str],
     apply_defaults: bool,
     nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
@@ -429,7 +438,7 @@ def _assert_schema_source_ownership(
     )
     for field_name, config in nested_fields.items():
         # ``validate_nested_config_keys`` just required every key to name a nested serializer.
-        nested_field = cast("serializers.BaseSerializer", field_map[field_name])
+        nested_field = cast("DRFBaseSerializer", field_map[field_name])
         child_serializer, _many = nested_serializer_child(nested_field)
         child_class = type(child_serializer)
         guard_nested_recursion(child_class, nested_path, field_name)
@@ -481,7 +490,7 @@ class SerializerMutation(DjangoMutation):
     # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot); a type
     # checker sees the bound list, since every serializer operation has an input.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        _input_field_specs: ClassVar[list]
+        _input_field_specs: ClassVar[list[InputFieldSpec]]
     else:
         _input_field_specs = None
 
@@ -490,7 +499,7 @@ class SerializerMutation(DjangoMutation):
     # contract (present / writable / source / kind / relation-model) an input field gets - not
     # merely that its key is present in ``data``. ``[]`` when no fields are injected.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        _injected_field_specs: ClassVar[list]
+        _injected_field_specs: ClassVar[list[InputFieldSpec]]
     else:
         _injected_field_specs = None
 
@@ -507,7 +516,7 @@ class SerializerMutation(DjangoMutation):
     Meta: ClassVar[type[Any]]
 
     @classmethod
-    def _resolve_model(cls, meta: type) -> Any:
+    def _resolve_model(cls, meta: type) -> type[models.Model] | None:
         """Resolve the model from ``Meta.serializer_class.Meta.model`` (the ``036`` seam override).
 
         Returns ``None`` for a missing ``serializer_class`` / a serializer with no
@@ -753,7 +762,7 @@ class SerializerMutation(DjangoMutation):
         )
 
     @classmethod
-    def get_serializer_for_schema(cls) -> dict[str, serializers.Field]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         """Return the serializer's SCHEMA-TIME field map (the overridable Decision-7 hook).
 
         The input is generated at finalization - BEFORE any request exists - so the
@@ -866,7 +875,7 @@ class SerializerMutation(DjangoMutation):
         # ``get_serializer_injected_data`` (exact-match keys). The partial (update) shape is
         # never create-required guarded (all optional).
 
-        def _build() -> tuple[type, Any]:
+        def _build() -> tuple[type, SerializerInputShape]:
             # The create-required guard runs PER DECLARATION, BEFORE the per-shape
             # descriptor dedupe (the descriptor cache key excludes the injection state), so a
             # mutation that materializes a narrowed shape FIRST cannot suppress the guard for
@@ -913,7 +922,8 @@ class SerializerMutation(DjangoMutation):
         field_map = _checked_schema_field_map(cls, meta)
         bound_name = cls.__dict__.get("_input_type_name")
         if bound_name is not None:
-            return bound_name
+            # ``build_input`` stashes the materialized class name here (own dict only).
+            return cast("str", bound_name)
         _input_cls, shape = _serializer_input_shape_for(
             meta,
             operation_kind=operation_kind,
@@ -923,10 +933,10 @@ class SerializerMutation(DjangoMutation):
 
     def get_serializer_kwargs(
         self,
-        info: Any,
+        info: Info[object, object],
         *,
-        data: Any,
-        hook_context: Any,
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
     ) -> dict[str, Any]:
         """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the resolver consumes this).
 
@@ -966,11 +976,11 @@ class SerializerMutation(DjangoMutation):
 
     def get_serializer_injected_data(
         self,
-        info: Any,
+        info: Info[object, object],
         *,
-        data: Any,
-        hook_context: Any,
-    ) -> dict[str, Any]:
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         """Supply the ``Meta.injected_fields`` values merged into the serializer data (hardening).
 
         The SANCTIONED injection seam: the resolver builds the final serializer data as
@@ -990,11 +1000,11 @@ class SerializerMutation(DjangoMutation):
 
     def get_serializer_save_kwargs(
         self,
-        info: Any,
+        info: Info[object, object],
         *,
-        data: Any,
-        hook_context: Any,
-    ) -> dict[str, Any]:
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         """Return extra kwargs for ``serializer.save(**kwargs)``.
 
         The DRF-native customization point for request-derived data DRF expects at SAVE time

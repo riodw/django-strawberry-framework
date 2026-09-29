@@ -29,7 +29,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from django.db import models
 from strawberry import UNSET
@@ -65,9 +65,12 @@ from .inputs import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from django.db.models.expressions import OrderBy
+
     from ..types.definition import DjangoTypeDefinition
 
 _NormalizedTerms = tuple[tuple[str, "Ordering | None"], ...]
+_M = TypeVar("_M", bound=models.Model)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -80,8 +83,8 @@ class _AppliedNormalization:
     already-validated tuple of primitives that application ordered by.
     """
 
-    orderset_class: type
-    input_value: Any
+    orderset_class: type[OrderSet]
+    input_value: object
     terms: _NormalizedTerms
 
 
@@ -133,7 +136,7 @@ class _NormalizationLedger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._records: list[_AppliedNormalization] = []
-        self._claimed: list[tuple[type, Any]] = []
+        self._claimed: list[tuple[type[OrderSet], object]] = []
         self._closed = False
 
     def publish(self, record: _AppliedNormalization) -> None:
@@ -147,7 +150,11 @@ class _NormalizationLedger:
                 return
             self._records.append(record)
 
-    def claim(self, orderset_class: type, input_value: Any) -> _NormalizedTerms | None:
+    def claim(
+        self,
+        orderset_class: type[OrderSet],
+        input_value: object,
+    ) -> _NormalizedTerms | None:
         """Claim the terms attested for this exact class and input object.
 
         Returns ``None`` when nothing applicable was published, when this pair
@@ -235,8 +242,8 @@ def capture_applied_order_normalization() -> Iterator[None]:
 
 
 def _record_applied_normalization(
-    cls: type,
-    input_value: Any,
+    cls: type[OrderSet],
+    input_value: object,
     data: list[tuple[str, Ordering | None]],
 ) -> None:
     """Attest one successful normalization into the active ledger, if any.
@@ -253,7 +260,7 @@ def _record_applied_normalization(
         ledger.publish(_AppliedNormalization(cls, input_value, tuple(data)))
 
 
-def _validate_normalized_terms(cls: type, data: Any) -> list[tuple[str, Ordering | None]]:
+def _validate_normalized_terms(cls: type, data: object) -> list[tuple[str, Ordering | None]]:
     """Enforce the OrderSet._normalize_input return contract at the pipeline boundary.
 
     Guarantees that normalized order data is a list of 2-tuples of (field_path: str,
@@ -302,8 +309,8 @@ class OrderSetMetaclass(type):
     def __new__(
         cls: type[OrderSetMetaclass],
         name: str,
-        bases: tuple,
-        attrs: dict,
+        bases: tuple[type, ...],
+        attrs: dict[str, object],
     ) -> OrderSetMetaclass:
         """Build the class, collect ``RelatedOrder`` declarations, bind owner."""
         # No cookbook ``order_fields`` synonym (``fields_alias=None``); the
@@ -401,7 +408,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     )
 
     @classmethod
-    def get_fields(cls) -> OrderedDict:
+    def get_fields(cls) -> OrderedDict[str, RelatedOrder | None]:
         """Return ``Meta.fields`` expansion merged with ``related_orders``.
 
         Direct port of
@@ -421,7 +428,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         (spec-028 Decision 3).
         """
 
-        def _build() -> OrderedDict:
+        def _build() -> OrderedDict[str, RelatedOrder | None]:
             fields = cls._expand_meta_fields()
             for k, v in getattr(cls, "related_orders", {}).items():
                 fields[k] = v
@@ -450,7 +457,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         )
 
     @classmethod
-    def _expand_meta_fields(cls) -> OrderedDict:
+    def _expand_meta_fields(cls) -> OrderedDict[str, RelatedOrder | None]:
         """Expand ``Meta.fields`` into an ``OrderedDict`` keyed by field name.
 
         Supports list / tuple form (``["title", "subtitle"]``) and the
@@ -478,7 +485,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
           typed declaration error instead of silently landing in the
           expansion (or raising raw ``TypeError`` from the dict write).
         """
-        fields: OrderedDict = OrderedDict()
+        fields: OrderedDict[str, RelatedOrder | None] = OrderedDict()
         meta = getattr(cls, "Meta", None)
         # Shared reader with Layer-6 factory kwargs: synonym resolve + unordered
         # ``set`` / ``frozenset`` canonicalization. No write-back here -- the
@@ -547,7 +554,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # ------------------------------------------------------------------
 
     @classmethod
-    def _input_has_active_terms(cls, input_value: Any) -> bool:
+    def _input_has_active_terms(cls, input_value: object) -> bool:
         """Return True if input_value contains at least one non-null ordering direction.
 
         Checks purity against the normalization the ``OrderSet`` actually ordered
@@ -598,7 +605,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return any(direction is not None for _, direction in flat_orders)
 
     @classmethod
-    def _normalize_input(cls, input_value: Any) -> list[tuple[str, Ordering | None]]:
+    def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
         """Normalize client order input into an internal term representation.
 
         Purity obligation:
@@ -615,7 +622,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return normalize_input_value(cls, input_value)
 
     @classmethod
-    def _prepare_permission_input(cls, _input_value: Any) -> None:
+    def _prepare_permission_input(cls, _input_value: object) -> None:
         """Initialize direct-call provenance before active permission traversal.
 
         The order family builds its field specs lazily, so a direct call can
@@ -665,7 +672,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         flat_orders: list[tuple[str, Ordering | None]],
         *,
         model: type[models.Model],
-    ) -> tuple[dict[str, Any], list]:
+    ) -> tuple[dict[str, models.Aggregate], list[OrderBy]]:
         """Build ``(annotations, order_expressions)`` from flat ``(path, direction)`` pairs.
 
         A term whose ``field_path`` traverses a **to-many** relation (reverse FK
@@ -705,8 +712,8 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         correctness depend on declaration history and can miss a concrete
         to-many path, leaving the raw fan-out join this method exists to prevent.
         """
-        annotations: dict[str, Any] = {}
-        expressions: list = []
+        annotations: dict[str, models.Aggregate] = {}
+        expressions: list[OrderBy] = []
         for index, (field_path, direction) in enumerate(flat_orders):
             if direction is None:
                 continue
@@ -737,7 +744,11 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return annotations, expressions
 
     @classmethod
-    def _apply_orderings(cls, input_value: Any, queryset: models.QuerySet) -> models.QuerySet:
+    def _apply_orderings(
+        cls,
+        input_value: object,
+        queryset: models.QuerySet[_M],
+    ) -> models.QuerySet[_M]:
         """Apply the normalized orderings to ``queryset`` - the un-colored tail.
 
         The shared body behind ``apply_sync`` / ``apply_async`` (the order-side
@@ -774,10 +785,10 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     @classmethod
     def apply_sync(
         cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
-    ) -> models.QuerySet:
+        input_value: object,
+        queryset: models.QuerySet[_M],
+        info: object,
+    ) -> models.QuerySet[_M]:
         """Sync resolver entry point per spec-028 Decision 8.
 
         Steps:
@@ -807,10 +818,10 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     @classmethod
     async def apply_async(
         cls,
-        input_value: Any,
-        queryset: models.QuerySet,
-        info: Any,
-    ) -> models.QuerySet:
+        input_value: object,
+        queryset: models.QuerySet[_M],
+        info: object,
+    ) -> models.QuerySet[_M]:
         """Async sibling of ``apply_sync`` per spec-028 Decision 8 sync/async-split.
 
         Wraps ``_run_permission_checks`` in ``run_in_one_sync_boundary``

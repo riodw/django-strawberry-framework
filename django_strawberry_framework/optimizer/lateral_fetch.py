@@ -73,7 +73,7 @@ adaptation semantics and was the source of incorrect parent-key fidelity.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from django.core.exceptions import EmptyResultSet, FullResultSet
 from django.db import connections
@@ -101,9 +101,28 @@ from .plans import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable, Sequence
+    from typing import TypeAlias
+
     from django.db import models
+    from django.db.backends.base.base import BaseDatabaseWrapper
+    from django.db.models.lookups import Lookup
+    from django.db.models.options import Options
+    from django.db.models.sql.query import Query
+    from django.utils.tree import Node, _NodeChildren
 
     from ..keyset import KeysetSeek
+    from ..utils.typing import ConcreteField, ForeignKeyField
+    from .plans import OrderEntry
+
+    #: A canonical window-qual signature (``window_predicate_signature``): an
+    #: order-independent tuple of the normalized ``("leaf", ...)`` /
+    #: ``("node", ...)`` tuples ``_normalize_window_node`` builds.
+    WindowSignature: TypeAlias = tuple[object, ...]
+    #: A compiled SQL fragment: ``(sql, params)``.
+    CompiledSQL: TypeAlias = tuple[str, list[object]]
+    #: A field's database-value adapter (``Field.get_db_prep_value`` bound to a connection).
+    PrepareValue: TypeAlias = Callable[[ConcreteField, object], object]
 
 #: The stem prefix for synthesized lateral SQL table aliases and columns.
 #: Single root source of truth for the package-owned lateral SQL namespace.
@@ -178,10 +197,10 @@ class LateralWindowSpec:
     model: type[models.Model]
     db_table: str
     select_columns: tuple[tuple[str, str], ...]
-    select_fields: tuple[Any, ...]
+    select_fields: tuple[ConcreteField, ...]
     order_columns: tuple[tuple[str, bool], ...]
-    query_order_by: tuple[Any, ...]
-    parent_link_field: Any
+    query_order_by: tuple[OrderEntry, ...]
+    parent_link_field: ForeignKeyField
     parent_link_table: str
     parent_link_column: str
     through_table: str | None
@@ -213,7 +232,7 @@ class LateralWindowSpec:
     # SQL is trusted (``_visibility_quals_match``). Per-user filter values
     # never enter the plan cache: a custom ``get_queryset`` marks the plan
     # non-cacheable (``nested_planner.py``).
-    visibility_where: Any | None = None
+    visibility_where: WhereNode | None = None
 
     def __post_init__(self) -> None:
         """Enforce the probe/count mutual-exclusion on the lateral window spec.
@@ -227,13 +246,13 @@ class LateralWindowSpec:
 
 def build_lateral_sql(
     spec: LateralWindowSpec,
-    parent_ids: list,
+    parent_ids: Sequence[object],
     *,
-    quote_name: Any,
+    quote_name: Callable[[str], str],
     parent_cast: str | None = None,
-    prepare_value: Any | None = None,
-    visibility_where_sql: tuple[str, list] | None = None,
-) -> tuple[str, list]:
+    prepare_value: PrepareValue | None = None,
+    visibility_where_sql: CompiledSQL | None = None,
+) -> CompiledSQL:
     """Render the lateral page query for ``spec`` over ``parent_ids``.
 
     Pure: identifiers are quoted through the passed ``quote_name``
@@ -311,7 +330,9 @@ def build_lateral_sql(
         through = qn(LATERAL_THROUGH_ALIAS)
         from_sql = (
             f"{through_table} AS {through} INNER JOIN {child_table} AS {child}"
-            f" ON {child}.{qn(spec.child_join_column)} = {through}.{qn(spec.through_child_column)}"
+            # ``through_child_column`` is set exactly when ``through_table`` is.
+            f" ON {child}.{qn(spec.child_join_column)} = "
+            f"{through}.{qn(cast('str', spec.through_child_column))}"
         )
         link_table = through
     else:
@@ -338,7 +359,7 @@ def build_lateral_sql(
         parent_cast is not None
         and target_field.get_internal_type() in _ARRAY_BINDABLE_PARENT_FIELD_TYPES
     )
-    params: list = [prepared_parent_ids] if use_parent_array else list(prepared_parent_ids)
+    params: list[object] = [prepared_parent_ids] if use_parent_array else list(prepared_parent_ids)
     if spec.keyset_seek is not None:
         # The keyset value seek, INSIDE the lateral branch: paired with the
         # in-branch ``ORDER BY ... LIMIT`` below this is the O(page) shape -
@@ -431,11 +452,11 @@ def build_lateral_sql(
 
 def _keyset_seek_sql(
     spec: LateralWindowSpec,
-    qn: Any,
+    qn: Callable[[str], str],
     child: str,
     *,
-    prepare_value: Any | None,
-) -> tuple[str, list]:
+    prepare_value: PrepareValue | None,
+) -> CompiledSQL:
     """Bind ``spec``'s keyset seek into quoted child-column refs for ``keyset_seek_sql``.
 
     Lateral-specific adapter only: prepares values through each cursor
@@ -452,7 +473,8 @@ def _keyset_seek_sql(
         for column, value in zip(seek.columns, seek.cursor.values, strict=True)
     ]
     plan = seek.plan(values)
-    refs = [f"{child}.{qn(column.field.column)}" for column in seek.columns]
+    # A cursor column is a concrete field, whose ``column`` is its db column name.
+    refs = [f"{child}.{qn(cast('str', column.field.column))}" for column in seek.columns]
     return keyset_seek_sql(refs, plan)
 
 
@@ -469,7 +491,7 @@ class LateralQuerySet(RecognizedFetchQuerySet):
     _dst_spec_attr = "_dst_lateral_spec"
     _dst_lateral_spec: LateralWindowSpec | None = None
 
-    def _fetch_recognized_rows(self) -> list | None:
+    def _fetch_recognized_rows(self) -> list[models.Model] | None:
         return _fetch_lateral_rows(self)
 
 
@@ -489,11 +511,11 @@ class _RecognizedLateralFetch:
     ``None`` for every non-visibility shape (plain windows and keyset seeks).
     """
 
-    parent_ids: list
-    visibility_where_sql: tuple[str, list] | None = None
+    parent_ids: list[object]
+    visibility_where_sql: CompiledSQL | None = None
 
 
-def _fetch_lateral_rows(queryset: LateralQuerySet) -> list | None:
+def _fetch_lateral_rows(queryset: LateralQuerySet) -> list[models.Model] | None:
     """Execute the lateral SQL for ``queryset`` if its state is recognized.
 
     Returns ``None`` for every unrecognized shape (the superclass then runs
@@ -539,7 +561,7 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list | None:
     return [_instantiate_row(spec, row, queryset.db) for row in fetched]
 
 
-def _deduplicate_parent_ids(parent_ids: list) -> list:
+def _deduplicate_parent_ids(parent_ids: list[object]) -> list[object]:
     """De-duplicate hashable parent ids; discard NULL ids that cannot match a branch."""
     try:
         unique = dict.fromkeys(parent_ids)
@@ -551,7 +573,11 @@ def _deduplicate_parent_ids(parent_ids: list) -> list:
         return [value for value in parent_ids if value is not None]
 
 
-def _apply_lateral_converters(spec: LateralWindowSpec, rows: list, connection: Any) -> list:
+def _apply_lateral_converters(
+    spec: LateralWindowSpec,
+    rows: Sequence[Sequence[object]],
+    connection: BaseDatabaseWrapper,
+) -> list[tuple[object, ...]]:
     """Apply Django's backend + field converter chain to raw cursor rows."""
     expressions = [
         spec.parent_link_field.target_field.get_col(spec.parent_link_table),
@@ -626,8 +652,8 @@ def _recognize_lateral_fetch(
     where = query.where
     if where.negated or where.connector != "AND":
         return None
-    parent_ids: list | None = None
-    unrecognized: list[Any] = []
+    parent_ids: list[object] | None = None
+    unrecognized: _NodeChildren = []
     for child in where.children:
         if _is_window_qual(child):
             continue
@@ -643,7 +669,7 @@ def _recognize_lateral_fetch(
         unrecognized.append(child)
     if parent_ids is None:
         return None
-    visibility_where_sql: tuple[str, list] | None = None
+    visibility_where_sql: CompiledSQL | None = None
     if spec.keyset_seek is not None:
         # The planned count-free keyset body carries the seek in its base
         # WHERE (the windowed-fallback correctness floor); the fetch-time
@@ -670,7 +696,7 @@ def _recognize_lateral_fetch(
     )
 
 
-def _is_window_qual(node: Any) -> bool:
+def _is_window_qual(node: object) -> bool:
     """True if ``node`` constrains ONLY the planned ``_dst_*`` window annotations.
 
     A window-range lookup carries the cloned ``Window`` expression as its
@@ -684,11 +710,12 @@ def _is_window_qual(node: Any) -> bool:
     """
     children = getattr(node, "children", None)
     if children is not None:
-        return not node.negated and all(_is_window_qual(sub) for sub in children)
+        # A qual carrying ``children`` is a ``WhereNode``.
+        return not cast("Node", node).negated and all(_is_window_qual(sub) for sub in children)
     return isinstance(getattr(node, "lhs", None), Window)
 
 
-def _normalize_window_node(node: Any, names_by_id: dict[int, str]) -> tuple | None:
+def _normalize_window_node(node: object, names_by_id: dict[int, str]) -> WindowSignature | None:
     """Normalize one window-qual node to a canonical comparable signature, or ``None``.
 
     A leaf becomes ``("leaf", annotation-name, lookup, rhs)`` - the annotation
@@ -705,16 +732,18 @@ def _normalize_window_node(node: Any, names_by_id: dict[int, str]) -> tuple | No
     """
     children = getattr(node, "children", None)
     if children is not None:
-        subs: list = []
+        subs: list[WindowSignature] = []
         for child in children:
             normalized = _normalize_window_node(child, names_by_id)
             if normalized is None:
                 return None
             subs.append(normalized)
+        # A qual carrying ``children`` is a ``WhereNode``.
+        tree_node = cast("Node", node)
         return (
             "node",
-            node.connector,
-            bool(node.negated),
+            tree_node.connector,
+            bool(tree_node.negated),
             tuple(sorted(subs, key=repr)),
         )
     name = names_by_id.get(id(getattr(node, "lhs", None)))
@@ -731,7 +760,7 @@ def _normalize_window_node(node: Any, names_by_id: dict[int, str]) -> tuple | No
     )
 
 
-def window_predicate_signature(query: Any) -> tuple | None:
+def window_predicate_signature(query: Query) -> WindowSignature | None:
     """Return a canonical signature of the window-range quals in ``query.where``.
 
     The safety boundary SHARED by both nested-connection fetch recognizers
@@ -759,7 +788,7 @@ def window_predicate_signature(query: Any) -> tuple | None:
         for name, expression in query.annotations.items()
         if isinstance(expression, Window)
     }
-    signatures: list = []
+    signatures: list[WindowSignature] = []
     for child in query.where.children:
         if not _is_window_qual(child):
             continue
@@ -770,7 +799,7 @@ def window_predicate_signature(query: Any) -> tuple | None:
     return tuple(sorted(signatures, key=repr))
 
 
-def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
+def _keyset_seek_quals_match(nodes: _NodeChildren, spec: LateralWindowSpec) -> bool:
     """Whether ``nodes`` are exactly the planned keyset seek's WHERE residue.
 
     ``keyset.keyset_seek_q`` builds a deterministic tree - the redundant
@@ -789,7 +818,7 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
     if len(nodes) != 2 or len(column_names) != len(plan.values):
         return False
 
-    def is_lookup(node: Any, lookup_name: str, index: int) -> bool:
+    def is_lookup(node: object, lookup_name: str, index: int) -> bool:
         if getattr(node, "lookup_name", None) != lookup_name:
             return False
         target = getattr(getattr(node, "lhs", None), "target", None)
@@ -797,10 +826,11 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
             return False
         if target.model._meta.db_table != spec.db_table:
             return False
-        rhs = node.rhs
+        # A qual carrying ``lookup_name`` is a ``Lookup``.
+        rhs = cast("Lookup[object]", node).rhs
         return not hasattr(rhs, "resolve_expression") and rhs == plan.values[index]
 
-    def is_cmp(node: Any, index: int) -> bool:
+    def is_cmp(node: object, index: int) -> bool:
         return is_lookup(node, "gt" if plan.greater[index] else "lt", index)
 
     lead, expansion = nodes
@@ -809,10 +839,12 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
     if len(column_names) == 1:
         return is_cmp(expansion, 0)
     arms = getattr(expansion, "children", None)
+    # A qual carrying ``children`` is a ``WhereNode``.
+    expansion_node = cast("Node", expansion)
     if (
         arms is None
-        or expansion.negated
-        or expansion.connector != "OR"
+        or expansion_node.negated
+        or expansion_node.connector != "OR"
         or len(arms) != len(column_names)
     ):
         return False
@@ -838,9 +870,9 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
 
 def _visibility_quals_match(
     queryset: LateralQuerySet,
-    nodes: list[Any],
+    nodes: _NodeChildren,
     spec: LateralWindowSpec,
-) -> tuple[str, list] | None:
+) -> CompiledSQL | None:
     """Return the APPROVED compiled visibility predicate, or ``None`` on mismatch.
 
     The fail-closed recognizer for a DIRECT_FK spec's single-table
@@ -872,10 +904,11 @@ def _visibility_quals_match(
         return None
     if residual_compiled != stored_compiled:
         return None
-    return residual_compiled
+    # ``SQLCompiler.compile`` returns the ``(sql, params)`` pair.
+    return cast("CompiledSQL", residual_compiled)
 
 
-def _parent_in_values(node: Any, *, column: str, table: str) -> list | None:
+def _parent_in_values(node: object, *, column: str, table: str) -> list[object] | None:
     """The parent-id list if ``node`` is the prefetch ``__in`` filter, else ``None``.
 
     Matches by the lookup's target ``column`` AND ``table`` (the child table for
@@ -890,7 +923,8 @@ def _parent_in_values(node: Any, *, column: str, table: str) -> list | None:
         return None
     if target.model._meta.db_table != table:
         return None
-    rhs = node.rhs
+    # A qual carrying ``lookup_name`` is a ``Lookup``.
+    rhs = cast("Lookup[object]", node).rhs
     if not isinstance(rhs, (list, tuple)):
         return None
     if any(hasattr(value, "resolve_expression") for value in rhs):
@@ -898,7 +932,7 @@ def _parent_in_values(node: Any, *, column: str, table: str) -> list | None:
     return list(rhs)
 
 
-def _instantiate_row(spec: LateralWindowSpec, row: tuple, db: str) -> Any:
+def _instantiate_row(spec: LateralWindowSpec, row: tuple[object, ...], db: str) -> models.Model:
     """Build one model instance from a lateral result row.
 
     Column order is fixed by ``build_lateral_sql``: parent id, the
@@ -920,7 +954,8 @@ def _instantiate_row(spec: LateralWindowSpec, row: tuple, db: str) -> Any:
         setattr(instance, WINDOW_TOTAL_COUNT, row[2 + width])
     for alias in spec.prefetch_value_aliases:
         setattr(instance, alias, parent_id)
-    return instance
+    # ``Model.from_db`` builds an instance of ``spec.model``.
+    return cast("models.Model", instance)
 
 
 class LateralPrefetchStrategy:
@@ -953,7 +988,7 @@ class LateralPrefetchStrategy:
 LATERAL_STRATEGY = LateralPrefetchStrategy()
 
 
-def _plain_single_table_where(node: Any, base_table: str) -> bool:
+def _plain_single_table_where(node: Node, base_table: str) -> bool:
     """True iff every leaf qual under ``node`` is a plain ``base_table`` column qual.
 
     The v1 visibility-WHERE admission test: each leaf lookup's ``lhs`` must be a
@@ -968,7 +1003,8 @@ def _plain_single_table_where(node: Any, base_table: str) -> bool:
     for child in node.children:
         grandchildren = getattr(child, "children", None)
         if grandchildren is not None:
-            if not _plain_single_table_where(child, base_table):
+            # A qual carrying ``children`` is a ``WhereNode``.
+            if not _plain_single_table_where(cast("Node", child), base_table):
                 return False
             continue
         lhs = getattr(child, "lhs", None)
@@ -1123,7 +1159,10 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
     )
 
 
-def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], ...] | None:
+def _order_columns(
+    order_by: tuple[OrderEntry, ...],
+    child_meta: Options[models.Model],
+) -> tuple[tuple[str, bool], ...] | None:
     """Map the deterministic order onto local concrete columns, or ``None``.
 
     The lateral builder renders plain ``"column ASC/DESC"`` entries (matching
@@ -1154,11 +1193,15 @@ def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], 
         )
         if field is None or field.model._meta.db_table != child_meta.db_table:
             return None
-        columns.append((field.column, descending))
+        # A local concrete field's ``column`` is its db column name.
+        columns.append((cast("str", field.column), descending))
     return tuple(columns)
 
 
-def _select_columns(queryset: Any, child_meta: Any) -> tuple[tuple[str, str], ...] | None:
+def _select_columns(
+    queryset: QuerySet[models.Model],
+    child_meta: Options[models.Model],
+) -> tuple[tuple[str, str], ...] | None:
     """The loaded ``(attname, column)`` projection in concrete-field order.
 
     Mirrors the ``.only()`` deferred-loading shape the walker plans (names
@@ -1185,4 +1228,5 @@ def _select_columns(queryset: Any, child_meta: Any) -> tuple[tuple[str, str], ..
         )
     if any(field.model._meta.db_table != child_meta.db_table for field in fields):
         return None
-    return tuple((field.attname, field.column) for field in fields)
+    # A concrete field's ``column`` is its db column name.
+    return tuple((field.attname, cast("str", field.column)) for field in fields)

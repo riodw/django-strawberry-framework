@@ -44,9 +44,10 @@ its converted-selection memo lives on - both below it in the dependency order.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from graphql.language.ast import (
     DirectiveNode,
@@ -57,6 +58,32 @@ from graphql.language.ast import (
 
 from ..utils.typing import schema_config_from_info
 from ._context import converted_selections_memo
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    from graphql.language.ast import FieldNode, FragmentDefinitionNode, Node
+    from graphql.type.definition import GraphQLResolveInfo
+    from strawberry.types.info import Info
+    from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField, Selection
+
+    from ._context import ConvertedMemoKey
+
+    #: One graphql-core selection-set member: a selection set holds exactly these
+    #: three node kinds.
+    AstSelection: TypeAlias = FieldNode | InlineFragmentNode | FragmentSpreadNode
+    #: One converted selection as this adapter reads it: a Strawberry
+    #: ``SelectedField`` / ``FragmentSpread`` / ``InlineFragment`` or a
+    #: ``SimpleNamespace`` clone the walker synthesizes in their shape.
+    ConvertedSelection: TypeAlias = Selection | SimpleNamespace
+    #: A converted FIELD selection (never a fragment): Strawberry's
+    #: ``SelectedField`` or the walker's field-shaped ``SimpleNamespace`` clone.
+    FieldSelection: TypeAlias = SelectedField | SimpleNamespace
+    #: A converted fragment selection, the ones ``is_fragment`` accepts.
+    FragmentSelection: TypeAlias = FragmentSpread | InlineFragment | SimpleNamespace
+    #: A ``resolve_unvisited_fragment`` visit key: the fragment name, or
+    #: ``(name, depth)`` for the depth-sensitive walk.
+    FragmentVisitKey: TypeAlias = str | tuple[str, int]
 
 # ---------------------------------------------------------------------------
 # AST -> converted-selection adapter - the package-owned ``convert_selections``
@@ -85,7 +112,10 @@ from ._context import converted_selections_memo
 # one list across rows is safe.
 
 
-def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
+def ast_to_converted_selections(
+    info: GraphQLResolveInfo,
+    field_nodes: Sequence[AstSelection],
+) -> list[Selection]:
     """Convert graphql-core ``field_nodes`` to converted selections, anonymous-safe.
 
     Mirrors Strawberry's ``strawberry.types.nodes.convert_selections`` but builds
@@ -135,7 +165,7 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
     conversion for every parent.
     """
     memo = converted_selections_memo()
-    memo_key: Any = None
+    memo_key: ConvertedMemoKey | None = None
     if memo is not None:
         # One-node groups are the overwhelmingly common shape; key on the single
         # node's id directly to skip the tuple build (graphql-core's own
@@ -153,8 +183,8 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
         convert_directives,
     )
 
-    def _convert(nodes: Any) -> list[Any]:
-        out: list[Any] = []
+    def _convert(nodes: Iterable[AstSelection]) -> list[Selection]:
+        out: list[Selection] = []
         for node in nodes:
             if isinstance(node, InlineFragmentNode):
                 condition = node.type_condition
@@ -189,11 +219,12 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
 
     converted = _convert(field_nodes)
     if memo is not None:
-        memo[memo_key] = converted
+        # ``memo_key`` was computed in the ``memo is not None`` branch above.
+        memo[cast("ConvertedMemoKey", memo_key)] = converted
     return converted
 
 
-def prime_selected_fields(info: Any) -> None:
+def prime_selected_fields(info: Info[object, object]) -> None:
     """Pre-seed Strawberry ``Info.selected_fields`` with the anonymous-safe conversion.
 
     ``Info.selected_fields`` is a ``functools.cached_property`` that lazily calls
@@ -232,7 +263,11 @@ def prime_selected_fields(info: Any) -> None:
     field_nodes = getattr(raw_info, "field_nodes", None)
     if not field_nodes or "selected_fields" in info.__dict__:
         return
-    info.__dict__["selected_fields"] = ast_to_converted_selections(raw_info, field_nodes)
+    info.__dict__["selected_fields"] = ast_to_converted_selections(
+        # ``field_nodes`` was read off it, so the raw info is present.
+        cast("GraphQLResolveInfo", raw_info),
+        field_nodes,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +275,7 @@ def prime_selected_fields(info: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def ast_child_selections(node: Any) -> tuple[Any, ...]:
+def ast_child_selections(node: Node) -> tuple[AstSelection, ...]:
     """Return the AST node's selection-set children as a tuple, or ``()``.
 
     Centralizes the ``getattr(node, "selection_set", None)`` plus
@@ -258,12 +293,12 @@ def ast_child_selections(node: Any) -> tuple[Any, ...]:
 
 
 def resolve_unvisited_fragment(
-    node: Any,
-    fragments: dict[str, Any],
-    visited_fragments: set[Any],
+    node: Node,
+    fragments: Mapping[str, FragmentDefinitionNode],
+    visited_fragments: set[FragmentVisitKey],
     *,
     depth: int | None = None,
-) -> Any | None:
+) -> FragmentDefinitionNode | None:
     """Resolve a ``FragmentSpreadNode`` to its definition, once per visit key.
 
     Returns the matching ``FragmentDefinitionNode`` and marks the visit key
@@ -285,7 +320,7 @@ def resolve_unvisited_fragment(
     frag_name = node.name.value if node.name else None
     if frag_name is None:
         return None
-    visit_key: Any = frag_name if depth is None else (frag_name, depth)
+    visit_key: FragmentVisitKey = frag_name if depth is None else (frag_name, depth)
     if visit_key in visited_fragments:
         return None
     frag_def = fragments.get(frag_name)
@@ -295,7 +330,7 @@ def resolve_unvisited_fragment(
     return frag_def
 
 
-def directive_variable_names(node: Any) -> set[str]:
+def directive_variable_names(node: Node) -> set[str]:
     """Return the variable names referenced in ``@skip`` / ``@include`` on ``node``.
 
     Only variables inside the ``if`` argument of ``@skip`` / ``@include`` affect
@@ -326,7 +361,7 @@ def directive_variable_names(node: Any) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def is_fragment(selection: Any) -> bool:
+def is_fragment(selection: object) -> bool:
     """Return ``True`` if the selection is a fragment spread or inline fragment.
 
     Duck-typed on ``type_condition`` so it matches both Strawberry's
@@ -340,7 +375,7 @@ def is_fragment(selection: Any) -> bool:
     return hasattr(selection, "type_condition")
 
 
-def should_include(selection: Any) -> bool:
+def should_include(selection: object) -> bool:
     """Evaluate ``@skip`` / ``@include`` directives on a converted selection."""
     directives = getattr(selection, "directives", None)
     # Directive-free selections are the overwhelmingly common shape, and this
@@ -361,12 +396,12 @@ def should_include(selection: Any) -> bool:
     return True
 
 
-def response_key(selection: Any) -> str:
+def response_key(selection: FieldSelection) -> str:
     """Return the GraphQL response key for a field selection."""
     return getattr(selection, "alias", None) or selection.name
 
 
-def response_keys(selection: Any) -> tuple[str, ...]:
+def response_keys(selection: FieldSelection) -> tuple[str, ...]:
     """Return all response keys represented by a possibly merged selection."""
     return tuple(
         getattr(selection, "_optimizer_response_keys", None) or (response_key(selection),),
@@ -387,7 +422,9 @@ def response_keys(selection: Any) -> tuple[str, ...]:
 # classifier returns INLINE, SKIP, or RECURSE_FRAGMENTS_ONLY. The recursion mode
 # drops direct fields for an unknown composite/union condition while still
 # re-checking nested fragments.
-def included_field_selections(selections: list[Any]) -> list[Any]:
+def included_field_selections(
+    selections: Iterable[ConvertedSelection],
+) -> Sequence[FieldSelection]:
     """Return included fields with fragment bodies inlined before field merging.
 
     Directive filtering happens on both fragment nodes and their nested field
@@ -417,8 +454,9 @@ def included_field_selections(selections: list[Any]) -> list[Any]:
         if is_fragment(selection) or not should_include(selection):
             break
     else:
-        return selections
-    result: list[Any] = []
+        # The probe loop found no fragment, so every member is a field selection.
+        return cast("Sequence[FieldSelection]", selections)
+    result: list[FieldSelection] = []
     for selection in selections:
         if not should_include(selection):
             continue
@@ -429,13 +467,14 @@ def included_field_selections(selections: list[Any]) -> list[Any]:
                 included_field_selections(getattr(selection, "selections", None) or []),
             )
             continue
-        result.append(selection)
+        # ``is_fragment`` rejected it, so it is a field selection.
+        result.append(cast("FieldSelection", selection))
     return result
 
 
-def named_children(selection: Any, name: str) -> list[Any]:
+def named_children(selection: ConvertedSelection, name: str) -> list[FieldSelection]:
     """Return included direct children named ``name``, recursing through fragments."""
-    children: list[Any] = []
+    children: list[FieldSelection] = []
     for child in getattr(selection, "selections", None) or []:
         if not should_include(child):
             continue
@@ -450,11 +489,15 @@ def named_children(selection: Any, name: str) -> list[Any]:
             children.extend(named_children(child, name))
             continue
         if getattr(child, "name", None) == name:
-            children.append(child)
+            # ``is_fragment`` rejected it, so it is a field selection.
+            children.append(cast("FieldSelection", child))
     return children
 
 
-def with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...], ...]) -> Any:
+def with_runtime_prefix(
+    selection: ConvertedSelection,
+    runtime_prefixes: tuple[tuple[str, ...], ...],
+) -> SimpleNamespace:
     """Clone a node-level selection carrying runtime prefixes for the walker.
 
     Fragments are descended, never marked; the ``_optimizer_runtime_prefixes``
@@ -465,7 +508,8 @@ def with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...],
     if is_fragment(selection):
         return SimpleNamespace(
             name=getattr(selection, "name", None),
-            type_condition=selection.type_condition,
+            # ``is_fragment`` accepted it, so it carries a ``type_condition``.
+            type_condition=cast("FragmentSelection", selection).type_condition,
             directives=getattr(selection, "directives", None) or {},
             selections=[
                 with_runtime_prefix(child, runtime_prefixes)
@@ -473,7 +517,8 @@ def with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...],
             ],
         )
     return SimpleNamespace(
-        name=selection.name,
+        # ``is_fragment`` rejected it, so it is a field selection.
+        name=cast("FieldSelection", selection).name,
         alias=getattr(selection, "alias", None),
         directives=getattr(selection, "directives", None) or {},
         arguments=getattr(selection, "arguments", None) or {},
@@ -483,12 +528,12 @@ def with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...],
 
 
 def node_children_with_runtime_prefix(
-    node_selection: Any,
+    node_selection: ConvertedSelection,
     *,
     runtime_prefixes: tuple[tuple[str, ...], ...],
-) -> list[Any]:
+) -> list[SimpleNamespace]:
     """Clone node children with a connection-aware runtime prefix."""
-    children: list[Any] = []
+    children: list[SimpleNamespace] = []
     for child in getattr(node_selection, "selections", None) or []:
         if not should_include(child):
             continue
@@ -532,7 +577,7 @@ DEFAULT_CONNECTION_FIELD_NAMES = ConnectionFieldNames()
 _CONNECTION_FIELD_PYTHON_NAMES = tuple(f.name for f in fields(ConnectionFieldNames))
 
 
-def connection_field_names(info: Any) -> ConnectionFieldNames:
+def connection_field_names(info: object) -> ConnectionFieldNames:
     """Resolve a connection's structural field names through ``info``'s schema.
 
     Forward resolution, the direction ``ATTENTION.md`` establishes for this
@@ -569,11 +614,11 @@ def connection_field_names(info: Any) -> ConnectionFieldNames:
 
 
 def connection_node_children(
-    selection: Any,
+    selection: ConvertedSelection,
     *,
     runtime_prefixes: tuple[tuple[str, ...], ...],
     names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
-) -> list[Any]:
+) -> list[SimpleNamespace]:
     """Unwrap a Relay connection's ``edges { node { ... } }`` child selections.
 
     Single owner of the edges->node composition that accumulates response-key
@@ -587,7 +632,7 @@ def connection_node_children(
     (``connection_field_names``); it defaults to Strawberry's camelCase names so
     direct / test callers need not thread a schema.
     """
-    node_children: list[Any] = []
+    node_children: list[SimpleNamespace] = []
     for edge_selection in named_children(selection, names.edges):
         edge_path_prefixes = tuple((*rp, response_key(edge_selection)) for rp in runtime_prefixes)
         for node_selection in named_children(edge_selection, names.node):
@@ -603,7 +648,7 @@ def connection_node_children(
     return node_children
 
 
-def direct_child_selected(selection_roots: Any, name: str) -> bool:
+def direct_child_selected(selection_roots: Iterable[ConvertedSelection], name: str) -> bool:
     """Return whether ``name`` is a direct child of ``selection_roots``, through fragments only.
 
     Recurses ONLY through fragment wrappers (``is_fragment``), NOT into a regular
@@ -625,7 +670,7 @@ def direct_child_selected(selection_roots: Any, name: str) -> bool:
     excluded fragment shell prunes its whole subtree.
     """
 
-    def _check(selection: Any) -> bool:
+    def _check(selection: ConvertedSelection) -> bool:
         if not should_include(selection):
             return False
         if is_fragment(selection):
@@ -636,7 +681,7 @@ def direct_child_selected(selection_roots: Any, name: str) -> bool:
 
 
 def connection_total_count_selected(
-    selection: Any,
+    selection: ConvertedSelection,
     *,
     names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
 ) -> bool:
@@ -656,7 +701,7 @@ def connection_total_count_selected(
 
 
 def connection_has_next_page_selected(
-    selection: Any,
+    selection: ConvertedSelection,
     *,
     names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
 ) -> bool:
@@ -678,7 +723,7 @@ def connection_has_next_page_selected(
 
 
 def connection_count_required(
-    selection: Any,
+    selection: ConvertedSelection,
     *,
     names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
 ) -> bool:

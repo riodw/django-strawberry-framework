@@ -33,9 +33,9 @@ import decimal
 import inspect
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from contextlib import suppress
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast
 
 from django.db import models
 from graphql.language.ast import (
@@ -111,7 +111,7 @@ from ._context import (
     stash_on_context as _stash_on_context,
 )
 from .hints import hint_is_skip
-from .nested_fetch import StrategySelection, resolve_strategy
+from .nested_fetch import NestedConnectionStrategy, StrategySelection, resolve_strategy
 from .plans import (
     diff_plan_for_queryset,
     lookup_paths,
@@ -130,6 +130,22 @@ from .selections import (
     response_key,
 )
 from .walker import plan_optimizations, plan_relation
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from types import SimpleNamespace
+
+    from graphql.language.ast import FragmentDefinitionNode, Node, OperationDefinitionNode
+    from graphql.type.definition import GraphQLResolveInfo
+    from strawberry.types.execution import ExecutionContext
+    from strawberry.types.nodes import Selection
+
+    from ..utils.typing import EitherInfo
+    from ._context import FrozenVariableValue, PlanCacheKey
+    from .field_meta import FieldMeta
+    from .plans import OptimizationPlan
+    from .selections import ConvertedSelection, FragmentVisitKey
+
+_M = TypeVar("_M", bound=models.Model)
 
 # The selection-traversal primitives live in ``optimizer/selections.py``.
 # The underscore aliases keep this module's bodies - and the tests
@@ -150,7 +166,7 @@ _MAX_PLAN_CACHE_SIZE = 256
 _STRICTNESS_MODES = ("off", "warn", "raise")
 
 
-def _is_valid_strictness(strictness: Any) -> bool:
+def _is_valid_strictness(strictness: object) -> bool:
     """Content-match ``strictness`` against the strictness vocabulary.
 
     The membership read never dispatches into the candidate value's dunders: a
@@ -229,9 +245,9 @@ __all__ = (
 
 
 def _walk_cache_relevant_vars(
-    node: Any,
-    fragments: dict[str, Any],
-    visited_fragments: set[tuple[str, int]],
+    node: "Node",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+    visited_fragments: "set[FragmentVisitKey]",
     depth: int,
     directive_names: set[str],
     pagination_names: set[str],
@@ -318,7 +334,10 @@ def _walk_cache_relevant_vars(
             )
 
 
-def _collect_cache_var_families(node: Any, fragments: dict[str, Any]) -> tuple[set[str], set[str]]:
+def _collect_cache_var_families(
+    node: "Node",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+) -> tuple[set[str], set[str]]:
     """Run the unified traversal and return ``(directive_names, pagination_names)``.
 
     The single entry the thin family wrappers and the union collector share, so
@@ -331,8 +350,8 @@ def _collect_cache_var_families(node: Any, fragments: dict[str, Any]) -> tuple[s
 
 
 def _collect_directive_var_names(
-    node: Any,
-    fragments: dict[str, Any] | None = None,
+    node: "Node",
+    fragments: "Mapping[str, FragmentDefinitionNode] | None" = None,
 ) -> frozenset[str]:
     """Return variable names used in ``@skip`` / ``@include`` directives.
 
@@ -349,8 +368,8 @@ def _collect_directive_var_names(
 
 
 def _collect_nested_pagination_var_names(
-    node: Any,
-    fragments: dict[str, Any] | None = None,
+    node: "Node",
+    fragments: "Mapping[str, FragmentDefinitionNode] | None" = None,
 ) -> frozenset[str]:
     """Return variable names used in pagination args on **non-root** field nodes.
 
@@ -368,7 +387,10 @@ def _collect_nested_pagination_var_names(
     return frozenset(pagination_names)
 
 
-def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any]) -> frozenset[str]:
+def _collect_cache_relevant_var_names(
+    operation: "OperationDefinitionNode",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+) -> frozenset[str]:
     """Union of the cache-relevant variable names for one operation.
 
     Combines the ``@skip`` / ``@include`` directive variable names with the
@@ -382,7 +404,7 @@ def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any])
     return frozenset(directive_names | pagination_names)
 
 
-def _hashable_variable_value(value: Any) -> Any:
+def _hashable_variable_value(value: object) -> "FrozenVariableValue":
     """Return a hashable, collision-resistant cache identity for a variable value.
 
     ``_build_cache_key`` stores cache-relevant ``(name, value)`` pairs in a
@@ -410,7 +432,7 @@ def _hashable_variable_value(value: Any) -> Any:
     return _freeze_variable_value(value, set())
 
 
-def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
+def _freeze_variable_value(value: Any, active_containers: set[int]) -> "FrozenVariableValue":
     """Recursive implementation for ``_hashable_variable_value``."""
     value_type_id = id(type(value))
     try:
@@ -474,9 +496,9 @@ def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
 
 
 def _collect_reachable_fragment_definitions(
-    node: Any,
-    fragments: dict[str, Any],
-) -> tuple[Any, ...]:
+    node: "Node",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+) -> "tuple[FragmentDefinitionNode, ...]":
     """Return every named fragment definition reachable from ``node``.
 
     Walks the AST in selection-set order, deterministically, so the
@@ -490,16 +512,16 @@ def _collect_reachable_fragment_definitions(
     without them, two operations differing only in a fragment body share
     one cache key.
     """
-    reachable: list[Any] = []
+    reachable: list[FragmentDefinitionNode] = []
     _walk_reachable_fragment_definitions(node, fragments, set(), reachable)
     return tuple(reachable)
 
 
 def _walk_reachable_fragment_definitions(
-    node: Any,
-    fragments: dict[str, Any],
-    visited_fragments: set[str],
-    reachable: list[Any],
+    node: "Node",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+    visited_fragments: "set[FragmentVisitKey]",
+    reachable: "list[FragmentDefinitionNode]",
 ) -> None:
     """Recursive workhorse for ``_collect_reachable_fragment_definitions``.
 
@@ -526,7 +548,10 @@ def _walk_reachable_fragment_definitions(
         _walk_reachable_fragment_definitions(child, fragments, visited_fragments, reachable)
 
 
-def _print_operation_with_reachable_fragments(operation: Any, fragments: dict[str, Any]) -> str:
+def _print_operation_with_reachable_fragments(
+    operation: "OperationDefinitionNode",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+) -> str:
     """Render the plan-cache document key.
 
     Concatenates ``print_ast(operation)`` with the printed AST of
@@ -581,7 +606,10 @@ def clear_document_key_cache() -> None:
 register_subsystem_clear(clear_document_key_cache, owner="optimizer.document_key_cache")
 
 
-def _doc_cache_entry(operation: Any, fragments: dict[str, Any]) -> tuple[str, frozenset[str]]:
+def _doc_cache_entry(
+    operation: "OperationDefinitionNode",
+    fragments: "Mapping[str, FragmentDefinitionNode]",
+) -> tuple[str, frozenset[str]]:
     """Return ``(doc_key, cache_relevant_var_names)``, memoized cross-request by source text.
 
     Keys on ``(operation.loc.source.body, operation_name)``: the source body is
@@ -626,10 +654,16 @@ def _doc_cache_entry(operation: Any, fragments: dict[str, Any]) -> tuple[str, fr
     return entry
 
 
-SelectionExtractor = Callable[[list[Any], Any], list[Any]]
+SelectionExtractor = Callable[
+    [list["Selection"], "GraphQLResolveInfo"],
+    Sequence["ConvertedSelection"],
+]
 
 
-def _root_child_selections(selections: list[Any], info: Any) -> list[Any]:  # noqa: ARG001
+def _root_child_selections(
+    selections: "list[Selection]",
+    info: "GraphQLResolveInfo",  # noqa: ARG001
+) -> "list[Selection]":
     """Flatten children from every converted root field node.
 
     GraphQL merges repeated root fields with the same response key
@@ -644,13 +678,16 @@ def _root_child_selections(selections: list[Any], info: Any) -> list[Any]:  # no
     list, so the order in which we flatten does not matter for plan
     correctness.
     """
-    children: list[Any] = []
+    children: list[Selection] = []
     for selection in selections:
         children.extend(selection.selections)
     return children
 
 
-def _connection_node_child_selections(selections: list[Any], info: Any) -> list[Any]:
+def _connection_node_child_selections(
+    selections: "list[Selection]",
+    info: "GraphQLResolveInfo",
+) -> "list[SimpleNamespace]":
     """Return node-level selections from a Relay connection wrapper.
 
     Connection resolvers optimize the pre-slice node queryset, so the ORM walker
@@ -661,7 +698,7 @@ def _connection_node_child_selections(selections: list[Any], info: Any) -> list[
     lives in ``selections.connection_node_children`` (shared with nested planning);
     this extractor only supplies the root response path from ``info``.
     """
-    node_children: list[Any] = []
+    node_children: list[SimpleNamespace] = []
     root_path = runtime_path_from_info(info)
     # The active schema's ``edges`` / ``node`` names (camel-invariant in practice,
     # but resolved through the same one owner as the count observers so the
@@ -691,8 +728,11 @@ def mutation_payload_child_selections(slot: str) -> SelectionExtractor:
     ``apply_connection_optimization``.
     """
 
-    def _extract(selections: list[Any], info: Any) -> list[Any]:
-        node_children: list[Any] = []
+    def _extract(
+        selections: "list[Selection]",
+        info: "GraphQLResolveInfo",
+    ) -> "list[SimpleNamespace]":
+        node_children: list[SimpleNamespace] = []
         root_path = runtime_path_from_info(info)
         for field_selection in selections:
             for slot_selection in _named_children(field_selection, slot):
@@ -716,7 +756,7 @@ class CacheInfo(NamedTuple):
     size: int
 
 
-def _collect_schema_reachable_types(schema: Any) -> set[type]:
+def _collect_schema_reachable_types(schema: object) -> set[type]:
     """Return the set of ``DjangoType`` classes reachable from the schema's root types.
 
     Traverses from ``query_type``, ``mutation_type``, and
@@ -737,7 +777,7 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
     strawberry_schema = _strawberry_schema_from_schema(schema)
     visited_type_names: set[str] = set()
 
-    def _walk_gql_type(gql_type: Any) -> None:
+    def _walk_gql_type(gql_type: object) -> None:
         """Recursively collect DjangoType origins from a graphql-core type."""
         gql_type = unwrap_graphql_type(gql_type)
         type_name = getattr(gql_type, "name", None)
@@ -811,7 +851,7 @@ class _OriginAndModel(NamedTuple):
     model: type[models.Model]
 
 
-def _resolve_model_from_return_type(info: Any) -> _OriginAndModel | None:
+def _resolve_model_from_return_type(info: "GraphQLResolveInfo") -> _OriginAndModel | None:
     """Trace ``info.return_type`` through graphql-core wrappers to ``(origin, model)``.
 
     graphql-core wraps resolver return types in layers of
@@ -857,9 +897,9 @@ class _OptimizerOperationState(OperationState):
 
     __slots__ = ("stashes",)
 
-    def __init__(self, execution_context: Any) -> None:
+    def __init__(self, execution_context: "ExecutionContext") -> None:
         super().__init__(execution_context)
-        self.stashes: dict[str, Any] = {}
+        self.stashes: dict[str, object] = {}
 
 
 class _AcceptedOptimizerConfiguration(NamedTuple):
@@ -871,7 +911,7 @@ class _AcceptedOptimizerConfiguration(NamedTuple):
     """
 
     strictness: str
-    nested_connection_strategy: Any
+    nested_connection_strategy: NestedConnectionStrategy
 
 
 #: Every constructed optimizer's settled configuration, held here and by nothing
@@ -935,7 +975,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         self,
         strictness: str = "off",
         *,
-        execution_context: Any = None,
+        execution_context: "ExecutionContext | None" = None,
         nested_connection_strategy: StrategySelection | None = None,
     ) -> None:
         # Strawberry assigns ``extension.execution_context`` once per
@@ -974,14 +1014,14 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
                 nested_connection_strategy=resolve_strategy(nested_connection_strategy),
             ),
         )
-        self._plan_cache: OrderedDict[
-            tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None],
-            Any,
-        ] = OrderedDict()
+        self._plan_cache: OrderedDict[PlanCacheKey, OptimizationPlan] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
 
-    def _new_operation_state(self, execution_context: Any) -> _OptimizerOperationState:
+    def _new_operation_state(
+        self,
+        execution_context: "ExecutionContext",
+    ) -> _OptimizerOperationState:
         """Build this operation's optimizer state."""
         return _OptimizerOperationState(execution_context)
 
@@ -1012,7 +1052,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         return self._configuration().strictness
 
     @property
-    def nested_connection_strategy(self) -> Any:
+    def nested_connection_strategy(self) -> NestedConnectionStrategy:
         """The nested-connection fetch strategy this extension was built with.
 
         Read-only for the reason the plan cache is instance-bound: one cache
@@ -1052,7 +1092,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         self._cache_hits = 0
         self._cache_misses = 0
 
-    def on_execute(self) -> Any:
+    def on_execute(self) -> Iterator[None]:
         """Open this execution's frame, and close it however the operation ends.
 
         One frame carries everything the execution publishes to itself - this
@@ -1099,12 +1139,12 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
     def resolve(
         self,
-        _next: Any,
-        root: Any,
-        info: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        _next: Callable[..., object],
+        root: object,
+        info: "GraphQLResolveInfo",
+        *args: object,
+        **kwargs: object,
+    ) -> object:
         """Root-gated resolver hook.
 
         Only root-level resolvers (``info.path.prev is None``) trigger
@@ -1123,13 +1163,13 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
             return result
         if inspect.isawaitable(result):
 
-            async def _async_optimize() -> Any:
+            async def _async_optimize() -> object:
                 return self._optimize(await result, info)
 
             return _async_optimize()
         return self._optimize(result, info)
 
-    def _optimize(self, result: Any, info: Any) -> Any:
+    def _optimize(self, result: object, info: "GraphQLResolveInfo") -> object:
         """Apply the O2 walker's plan to a root-level ``QuerySet`` (middleware path).
 
         Steps:
@@ -1168,7 +1208,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         """
         inner_result, was_adapted = unwrap_async_queryset_adapter(result)
 
-        def finish(val: Any) -> Any:
+        def finish(val: object) -> object:
             return wrap_async_queryset_adapter(val) if was_adapted else val
 
         inner_result, is_queryset = normalize_query_source(inner_result)
@@ -1200,12 +1240,12 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
     def apply_to(
         self,
         target_type: type | None,
-        target_model: type,
-        queryset: models.QuerySet,
-        info: Any,
+        target_model: type[models.Model],
+        queryset: "models.QuerySet[_M]",
+        info: "GraphQLResolveInfo",
         *,
         selection_extractor: SelectionExtractor = _root_child_selections,
-    ) -> models.QuerySet:
+    ) -> "models.QuerySet[_M]":
         """Build and apply the O2 plan to ``queryset`` given ``target_type`` / ``target_model``.
 
         The plan-build-and-apply tail extracted from ``_optimize``
@@ -1258,7 +1298,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # production path - that list is used for nothing. ``_get_or_build_plan``
         # invokes the thunk ONLY when it actually has to build a plan, so a cache
         # hit never pays the conversion.
-        def _node_selections() -> list[Any]:
+        def _node_selections() -> "Sequence[ConvertedSelection]":
             selections = ast_to_converted_selections(info, info.field_nodes)
             return selection_extractor(selections, info)
 
@@ -1292,11 +1332,11 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
     def _get_or_build_plan(
         self,
-        selections: "list[Any] | Callable[[], list[Any]]",
-        target_model: type,
-        info: Any,
+        selections: "Sequence[ConvertedSelection] | Callable[[], Sequence[ConvertedSelection]]",
+        target_model: type[models.Model],
+        info: "GraphQLResolveInfo",
         origin: type | None,
-    ) -> Any:
+    ) -> "OptimizationPlan":
         """Return the cached plan for ``(info, target_model, origin)`` or build a new one.
 
         B1: plan cache.  Cache hits increment ``_cache_hits`` and refresh
@@ -1381,7 +1421,11 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         self._cache_misses += 1
         return plan
 
-    def _publish_plan_to_context(self, plan: Any, info: Any) -> None:
+    def _publish_plan_to_context(
+        self,
+        plan: "OptimizationPlan",
+        info: "GraphQLResolveInfo",
+    ) -> None:
         """Stash the plan and (when strictness is active) the strictness sentinels on ``info.context``.
 
         B5: introspection stash so consumers and tests can inspect the
@@ -1422,7 +1466,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
             _stash_for_optimizer(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
 
     @staticmethod
-    def _stash_union(context: Any, key: str, new: frozenset) -> None:
+    def _stash_union(context: object, key: str, new: frozenset[str]) -> None:
         """Stash ``new`` unioned with any existing frozenset under ``key``.
 
         Reads the current stash via the read-side ``get_context_value`` helper
@@ -1448,7 +1492,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         _stash_for_optimizer(context, key, merged)
 
     @staticmethod
-    def check_schema(schema: Any) -> list[str]:
+    def check_schema(schema: object) -> list[str]:
         """Audit schema-reachable types for unoptimized relations.
 
         Walks only the ``DjangoType``s reachable from the schema's root
@@ -1499,10 +1543,10 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
     @staticmethod
     def _build_cache_key(
-        info: Any,
+        info: "GraphQLResolveInfo",
         target_model: type[models.Model],
         origin: type | None = None,
-    ) -> tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None]:
+    ) -> "PlanCacheKey":
         """Build the plan-cache key from resolver info, target model, and origin type.
 
         Key components:
@@ -1576,9 +1620,9 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
     def plan_relation(
         self,
-        field: Any,
+        field: "FieldMeta",
         target_type: type,
-        info: Any,
+        info: object,
     ) -> tuple[str, str]:
         """Plan a single relation traversal (O6 entry point).
 
@@ -1596,11 +1640,11 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
 def apply_connection_optimization(
     target_type: type,
-    queryset: models.QuerySet,
-    info: Any,
+    queryset: "models.QuerySet[_M]",
+    info: "EitherInfo",
     *,
     selection_extractor: SelectionExtractor = _connection_node_child_selections,
-) -> models.QuerySet:
+) -> "models.QuerySet[_M]":
     """Apply the optimizer plan to a connection field's pre-slice queryset.
 
     The connection field's own optimizer cooperation point (spec-030 Decision 11), also
@@ -1648,7 +1692,8 @@ def apply_connection_optimization(
     # the middleware path uses. ``Info._raw_info`` is that object; the
     # ``getattr`` fallback keeps the helper usable when a caller already passes
     # a raw info (e.g. a direct test).
-    raw_info = getattr(info, "_raw_info", info)
+    # A Strawberry ``Info`` carries its raw info at ``_raw_info``; a raw info is itself.
+    raw_info = cast("GraphQLResolveInfo", getattr(info, "_raw_info", info))
     return optimizer.apply_to(
         target_type,
         target_model,

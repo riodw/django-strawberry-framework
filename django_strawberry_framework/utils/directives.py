@@ -50,7 +50,7 @@ _CHAR_WISE_TYPES = (
 )
 
 
-def validated_field_directives(label: str, directives: Any) -> tuple[Any, ...]:
+def validated_field_directives(label: str, directives: Any) -> tuple[object, ...]:
     """Return ``directives`` as a tuple, or raise the typed construction-time reject.
 
     ``label`` names the consuming factory (``"DjangoListField"``,

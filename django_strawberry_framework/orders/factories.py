@@ -24,11 +24,14 @@ Non-goal (spec-028 Decision 12).
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from ..utils.inputs import GeneratedInputArgumentsFactory, make_dynamic_set_getter
 from .inputs import _build_input_fields
 from .sets import OrderSet
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..types.definition import DjangoTypeDefinition
 
 # Module-level dynamic-OrderSet cache per Layer 6. Keys are produced by
 # ``utils/inputs.py::make_set_meta_cache_key`` so dict / list / scalar
@@ -45,7 +48,7 @@ from .sets import OrderSet
 # Lifecycle: this cache has NO clear hook, matching the filter-side
 # Layer-6 dict. Keys embed the model identity, so a rebuilt model gets a
 # fresh key rather than a wrong hit.
-_dynamic_orderset_cache: dict[tuple, type[OrderSet]] = {}
+_dynamic_orderset_cache: dict[tuple[object, ...], type[OrderSet]] = {}
 
 
 # Reserved kwargs stripped from ``get_orderset_class``'s meta input to
@@ -53,7 +56,7 @@ _dynamic_orderset_cache: dict[tuple, type[OrderSet]] = {}
 _RESERVED_FACTORY_KEYS: frozenset[str] = frozenset({"orderset_base_class"})
 
 
-class OrderArgumentsFactory(GeneratedInputArgumentsFactory):
+class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):
     """BFS-build every reachable Strawberry input class for an ``OrderSet``.
 
     The BFS walk, per-class collision check, idempotent cache, and
@@ -96,10 +99,10 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory):
 
     def _build_input_triples(
         self,
-        set_cls: type,
+        set_cls: type[OrderSet],
         type_name: str,
-        owner_definition: Any,
-    ) -> list[tuple[str, Any, dict[str, Any]]]:
+        owner_definition: DjangoTypeDefinition | None,
+    ) -> list[tuple[str, object, dict[str, object]]]:
         """Order input triples -- no operator bag (spec-028 Decision 8)."""
         del type_name  # the order side has no ``and_`` / ``or_`` / ``not_`` bag.
         return _build_input_fields(set_cls, owner_definition)
@@ -121,7 +124,7 @@ _get_orderset_class = make_dynamic_set_getter(
 )
 
 
-def get_orderset_class(orderset_class: type[OrderSet] | None, **meta: Any) -> type[OrderSet]:
+def get_orderset_class(orderset_class: type[OrderSet] | None, **meta: object) -> type[OrderSet]:
     """Return an ``OrderSet`` class for use against a connection / list field.
 
     Filter-side twin of ``filters/factories.py::get_filterset_class``. The

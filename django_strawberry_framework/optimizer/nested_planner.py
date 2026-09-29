@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist
@@ -38,10 +38,10 @@ from ..utils.connections import (
     window_range_plan,
 )
 
-# Re-exported under its historical private name: the walker aliases
-# ``optimizer.walker._relay_max_results_from_info`` off this module, and
-# ``tests/optimizer/test_walker.py`` imports it from there. The dig itself now
-# has one owner in ``utils/connections.py``, shared with the resolve-time cap.
+# Imported under its historical private name, which the walker binds to the
+# same function (``optimizer.walker._relay_max_results_from_info``, imported by
+# ``tests/optimizer/test_walker.py``). The dig itself has one owner in
+# ``utils/connections.py``, shared with the resolve-time cap.
 from ..utils.connections import relay_max_results_from_info as _relay_max_results_from_info
 from ..utils.imports import import_attr_if_importable
 from ..utils.relations import instance_accessor
@@ -76,6 +76,22 @@ from .selections import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import MutableSequence
+
+    from django.db.models import QuerySet
+    from django.db.models.options import Options
+    from graphql.type.definition import GraphQLResolveInfo
+    from strawberry.types.nodes import Arguments
+
+    from ..keyset import CursorColumn
+    from ..types.definition import DjangoTypeDefinition
+    from ..utils.typing import ConcreteField, ModelField
+    from .field_meta import FieldMeta
+    from .hints import OptimizerHint
+    from .nested_fetch import NestedConnectionStrategy
+    from .plans import OrderEntry
+    from .selections import FieldSelection
+
+_M = TypeVar("_M", bound=models.Model)
 
 # The exact ``Index`` types proven to build an ordinary ORDER-serving B-tree:
 # the plain ``models.Index`` and PostgreSQL's ``BTreeIndex``. ``GinIndex`` /
@@ -144,7 +160,7 @@ class NestedConnectionPlanResult:
         return bool(self.accepted_response_keys)
 
 
-def _connector_only_field(parent_field: Any) -> str | None:
+def _connector_only_field(parent_field: ModelField | FieldMeta) -> str | None:
     """Return the single connector column Django needs for non-generic attach.
 
     The relation-kind-specific connector: the child FK attname for a reverse FK /
@@ -163,7 +179,7 @@ def _connector_only_field(parent_field: Any) -> str | None:
     return classify_relation_join(parent_field).parent_join_column
 
 
-def _order_entry_field_name(entry: Any) -> str | None:
+def _order_entry_field_name(entry: object) -> str | None:
     """Return the field name an ``order_by`` entry references, or ``None``.
 
     A thin shim over the shared entry parser
@@ -176,7 +192,7 @@ def _order_entry_field_name(entry: Any) -> str | None:
     return parsed[0] if parsed is not None else None
 
 
-def _concrete_order_columns(order_by: Sequence[Any], model: type[models.Model]) -> list[str]:
+def _concrete_order_columns(order_by: Sequence[object], model: type[models.Model]) -> list[str]:
     """Return the LOCAL concrete column attnames referenced by ``order_by``.
 
     Related-span lookups (``author__name``) and unresolvable expressions are
@@ -201,7 +217,7 @@ def _concrete_order_columns(order_by: Sequence[Any], model: type[models.Model]) 
     return columns
 
 
-def _select_nested_strategy(hint: Any) -> Any:
+def _select_nested_strategy(hint: OptimizerHint | None) -> NestedConnectionStrategy:
     """Return the fetch strategy for a connection field, honoring a per-field hint.
 
     ``OptimizerHint.strategy(name)`` (``nested_strategy=...``) overrides the
@@ -220,7 +236,7 @@ def _select_nested_strategy(hint: Any) -> Any:
 
 
 def _concrete_order_terms(
-    order_by: Sequence[Any],
+    order_by: Sequence[object],
     model: type[models.Model],
 ) -> list[tuple[str, bool]] | None:
     """Return the LOCAL concrete ``(attname, descending)`` order terms, or ``None`` if any is not.
@@ -279,7 +295,10 @@ def _concrete_order_terms(
     return terms
 
 
-def _index_leading_terms(meta: Any, index: Any) -> list[tuple[str, bool]] | None:
+def _index_leading_terms(
+    meta: Options[models.Model],
+    index: models.Index,
+) -> list[tuple[str, bool]] | None:
     """Return an index's leading ``(attname, descending)`` terms, or ``None`` when uninspectable.
 
     ``Meta.indexes`` entries carry field NAMES (optionally ``-``-prefixed for a
@@ -324,7 +343,8 @@ def _index_leading_terms(meta: Any, index: Any) -> list[tuple[str, bool]] | None
         saw_descending = saw_descending or descending
         bare = name[1:] if descending else name
         try:
-            field = meta.get_field(bare)
+            # Django's model checks admit only concrete local fields in ``Meta.indexes``.
+            field = cast("ConcreteField", meta.get_field(bare))
         except FieldDoesNotExist:
             return None
         terms.append((field.attname, descending))
@@ -389,7 +409,10 @@ def _index_serves_window(
     return _terms_serve_order(index_terms[prefix_len:], order_terms)
 
 
-def _plain_field_terms(meta: Any, names: Sequence[str]) -> list[tuple[str, bool]] | None:
+def _plain_field_terms(
+    meta: Options[models.Model],
+    names: Sequence[str],
+) -> list[tuple[str, bool]] | None:
     """Map DIRECTIONLESS field names to ascending ``(attname, False)`` terms, or ``None``.
 
     For ``UniqueConstraint`` / ``unique_together`` entries, which carry no
@@ -402,14 +425,15 @@ def _plain_field_terms(meta: Any, names: Sequence[str]) -> list[tuple[str, bool]
     terms: list[tuple[str, bool]] = []
     for name in names:
         try:
-            field = meta.get_field(name)
+            # Django's model checks admit only concrete local fields in unique sets.
+            field = cast("ConcreteField", meta.get_field(name))
         except FieldDoesNotExist:
             return None
         terms.append((field.attname, False))
     return terms
 
 
-def _model_index_shapes(meta: Any) -> tuple[list[list[tuple[str, bool]]], bool]:
+def _model_index_shapes(meta: Options[models.Model]) -> tuple[list[list[tuple[str, bool]]], bool]:
     """Return ``(inspectable leading-term shapes, saw_uninspectable)`` for a model.
 
     The coverage inventory built from every PHYSICAL index shape model metadata
@@ -569,7 +593,7 @@ def _index_advisory_already_emitted(key: _IndexAdvisoryKey) -> bool:
 def _advise_composite_index(
     related_model: type[models.Model],
     join: RelationJoinDescriptor,
-    order_by: Sequence[Any],
+    order_by: Sequence[object],
 ) -> None:
     """Emit a dev-mode advisory when no index covers a nested window's leading columns.
 
@@ -659,12 +683,12 @@ def _advise_composite_index(
 
 
 def _project_scalar_only_window(
-    child_queryset: Any,
-    django_field: Any,
-    order_by: Sequence[Any],
+    child_queryset: QuerySet[_M],
+    django_field: FieldMeta,
+    order_by: Sequence[object],
     *,
     enable_only: bool = True,
-) -> Any:
+) -> QuerySet[_M]:
     """Restrict a scalar-only connection window to pk / connector / order columns.
 
     A ``pageInfo``-only or ``totalCount``-only selection unwraps to ``[]`` node
@@ -683,7 +707,8 @@ def _project_scalar_only_window(
     """
     if not enable_only:
         return child_queryset
-    related_model = django_field.related_model
+    # ``plan_connection_relation`` refused a relation without a related model.
+    related_model = cast("type[models.Model]", django_field.related_model)
     fields: list[str] = []
     append_unique(fields, related_model._meta.pk.attname)
     # Attach-complete set from one classify (connector + GenericRelation morph).
@@ -695,10 +720,14 @@ def _project_scalar_only_window(
         append_unique(fields, column)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
-    return child_queryset.only(*fields)
+    # The django-stubs plugin types ``only()`` as ``Any``; it returns the same queryset type.
+    return cast("QuerySet[_M]", child_queryset.only(*fields))
 
 
-def _extend_only_projection(child_queryset: Any, attnames: tuple[str, ...]) -> Any:
+def _extend_only_projection(
+    child_queryset: QuerySet[_M],
+    attnames: tuple[str, ...],
+) -> QuerySet[_M]:
     """Ensure ``attnames`` load under an existing ``.only()`` / ``.defer()`` projection.
 
     The keyset cursor-column loader: a keyset page mints edge cursors from
@@ -720,13 +749,15 @@ def _extend_only_projection(child_queryset: Any, attnames: tuple[str, ...]) -> A
         if len(remaining) == len(names):
             return child_queryset
         cleared = child_queryset.defer(None)
-        return cleared.defer(*remaining) if remaining else cleared
+        # The django-stubs plugin types ``defer()`` / ``only()`` as ``Any``; each
+        # returns the same queryset type.
+        return cast("QuerySet[_M]", cleared.defer(*remaining) if remaining else cleared)
     if not names:
         return child_queryset
     missing = [attname for attname in attnames if attname not in names]
     if not missing:
         return child_queryset
-    return child_queryset.only(*names, *missing)
+    return cast("QuerySet[_M]", child_queryset.only(*names, *missing))
 
 
 def relation_connection_to_attr(relation_field_name: str, response_key: str | None = None) -> str:
@@ -755,10 +786,10 @@ def _relation_connection_to_attr_for_key(relation_field_name: str, response_key:
 
 
 def _connection_node_selections(
-    sel: Any,
+    sel: FieldSelection,
     runtime_paths: tuple[tuple[str, ...], ...],
     names: ConnectionFieldNames,
-) -> list[Any]:
+) -> list[SimpleNamespace]:
     """Unwrap a nested connection's ``edges { node { ... } }`` child selections.
 
     Thin adapter over ``selections.connection_node_children`` (Decision 9) so the
@@ -794,8 +825,8 @@ def _coerce_pagination_int(value: Any) -> Any:
 
 
 def _connection_window_slice_from_arguments(
-    arguments: dict[str, Any],
-    info: Any,
+    arguments: Arguments,
+    info: GraphQLResolveInfo | None,
 ) -> ConnectionWindowBounds | None:
     """Resolve the window bounds from one argument payload.
 
@@ -859,10 +890,10 @@ def _connection_window_slice_from_arguments(
 
 
 def _keyset_window_slice_from_arguments(
-    arguments: dict[str, Any],
-    info: Any,
+    arguments: Arguments,
+    info: GraphQLResolveInfo | None,
     *,
-    columns: tuple[Any, ...],
+    columns: tuple[CursorColumn, ...],
     fingerprint: str,
 ) -> tuple[ConnectionWindowBounds, KeysetSeek | None] | None:
     """Resolve one keyset window ``(bounds, seek)`` per payload.
@@ -921,8 +952,8 @@ def _keyset_window_slice_from_arguments(
 
 
 def _divergent_key_windows(
-    response_key_arguments: Mapping[str | None, dict[str, Any]],
-    info: Any,
+    response_key_arguments: Mapping[str | None, Arguments],
+    info: GraphQLResolveInfo | None,
     keyset_context: DeclaredCursorState | None = None,
 ) -> tuple[
     list[tuple[str | None, ConnectionWindowBounds, KeysetSeek | None]],
@@ -1032,7 +1063,7 @@ def _identities_for_response_keys(
     )
 
 
-def _raw_relation_field(model: type[models.Model], relation_field_name: str) -> Any:
+def _raw_relation_field(model: type[models.Model], relation_field_name: str) -> ModelField:
     """Return the raw Django relation field for ``relation_field_name`` on ``model``.
 
     The window partition derivation needs the raw descriptor's
@@ -1044,25 +1075,36 @@ def _raw_relation_field(model: type[models.Model], relation_field_name: str) -> 
 
 
 def plan_connection_relation(
-    sel: Any,
-    definition: Any,
+    sel: FieldSelection,
+    definition: DjangoTypeDefinition | None,
     *,
     relation_field_name: str,
-    field_map: dict[str, Any],
+    field_map: Mapping[str, FieldMeta],
     prefix: str,
-    info: Any | None,
+    info: GraphQLResolveInfo | None,
     runtime_prefixes: tuple[tuple[str, ...], ...],
     type_cls: type | None,
     model: type[models.Model],
     enable_only: bool = True,
-    resolve_optimizer_hints: Callable[[Any], dict[str, Any]],
-    resolve_relation_target: Callable[[Any, str, Any], tuple[type | None, Any | None]],
-    response_key_arguments_conflict: Callable[[Any], bool],
-    aliased_arguments_diverge: Callable[[Any], bool],
-    target_has_custom_get_queryset: Callable[[type | None, Any | None], bool],
-    resolver_identities_for: Callable[..., tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]],
-    build_child_queryset: Callable[..., Any],
-    build_prefetch_child_queryset_from_base: Callable[..., Any],
+    resolve_optimizer_hints: Callable[[DjangoTypeDefinition | None], dict[str, OptimizerHint]],
+    resolve_relation_target: Callable[
+        [DjangoTypeDefinition | None, str, FieldMeta],
+        tuple[type | None, DjangoTypeDefinition | None],
+    ],
+    response_key_arguments_conflict: Callable[[FieldSelection], bool],
+    aliased_arguments_diverge: Callable[[FieldSelection], bool],
+    target_has_custom_get_queryset: Callable[[type | None, DjangoTypeDefinition | None], bool],
+    resolver_identities_for: Callable[
+        [
+            FieldSelection,
+            str,
+            type | None,
+            tuple[tuple[str, ...], ...],
+        ],
+        tuple[tuple[tuple[str, ...], ...], tuple[str, ...]],
+    ],
+    build_child_queryset: Callable[..., QuerySet[models.Model]],
+    build_prefetch_child_queryset_from_base: Callable[..., QuerySet[models.Model]],
 ) -> NestedConnectionPlanResult:
     """Plan one recognized nested connection as a windowed ``Prefetch``.
 
@@ -1155,7 +1197,8 @@ def plan_connection_relation(
     # keyset first pages alike.
     keyed_windows, malformed_keys, fallback_keys = _divergent_key_windows(
         (
-            sel._optimizer_response_key_arguments
+            # Diverging aliases exist only on the walker's merged ``SimpleNamespace``.
+            cast("SimpleNamespace", sel)._optimizer_response_key_arguments
             if divergent
             else {None: getattr(sel, "arguments", None) or {}}
         ),
@@ -1293,12 +1336,17 @@ def plan_connection_relation(
     # through ``deterministic_order`` - lives ONCE in
     # ``plans.py::effective_connection_order`` so this plan-time window order
     # and ``connection.py::_finalize_queryset`` cannot drift (the cursor-parity
-    # invariant).
-    order_by = list(
-        effective_connection_order(
-            keyset_context.cursor_field if keyset_context is not None else None,
-            tuple(child_queryset.query.order_by),
-            django_field.related_model,
+    # invariant). ``QuerySet.order_by`` admits only a field-name string or an
+    # expression (Django requires ``resolve_expression`` of anything else), which
+    # django-stubs spells ``str | Combinable``; the window takes it as ``OrderEntry``.
+    order_by = cast(
+        "list[OrderEntry]",
+        list(
+            effective_connection_order(
+                keyset_context.cursor_field if keyset_context is not None else None,
+                tuple(child_queryset.query.order_by),
+                django_field.related_model,
+            ),
         ),
     )
 

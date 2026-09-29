@@ -383,8 +383,8 @@ import asyncio
 import contextlib
 import math
 import time
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.core.exceptions import DisallowedHost
 from django.http import HttpRequest
@@ -399,7 +399,17 @@ from .utils.sessions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from asgiref.typing import (
+        ASGI3Application,
+        ASGIReceiveCallable,
+        ASGISendCallable,
+        WebSocketScope,
+    )
     from strawberry.channels import GraphQLWSConsumer
+    from strawberry.schema import BaseSchema
+
+#: The outgoing frame a revalidated send hands to the transport unchanged.
+_MessageT = TypeVar("_MessageT")
 
 #: The default revalidation window, in seconds: ``0.0`` revalidates at every
 #: security checkpoint. Spelled ONCE here and imported by ``routers.py`` for its
@@ -665,7 +675,7 @@ class _ConnectionRevocation:
         if self.state == _REVOCATION_PERMITTED:
             self.state = _REVOCATION_DECIDED
 
-    async def close(self, websocket: Any) -> None:
+    async def close(self, websocket: object) -> None:
         """Start the one permitted close attempt, or await the one already in flight.
 
         Callers hold the connection's actor lease, so the state read and the task
@@ -929,8 +939,8 @@ async def revalidate_operation_actor(handler: Any) -> bool:
 
 async def send_revalidated_operation_frame(
     websocket: Any,
-    message: Any,
-    send: Callable[[Any], Awaitable[None]],
+    message: _MessageT,
+    send: Callable[[_MessageT], Awaitable[None]],
 ) -> None:
     """Outbound checkpoint: send one information-bearing frame, or revoke.
 
@@ -1311,7 +1321,11 @@ async def _revoke_connection(websocket: Any) -> None:
         return
 
 
-async def _stop_aware_results(source: Any, consumer: Any, schema: Any) -> Any:
+async def _stop_aware_results(
+    source: AsyncIterator[object],
+    consumer: Any,
+    schema: object,
+) -> AsyncGenerator[object, None]:
     """Yield ``source``'s masked results until the connection is revoked, then end.
 
     **This is also where the error policy reaches a subscription** (spec-048
@@ -1421,7 +1435,7 @@ class _StopAwareSchema:
 
     __slots__ = ("_consumer", "_schema")
 
-    def __init__(self, schema: Any, consumer: Any) -> None:
+    def __init__(self, schema: BaseSchema, consumer: Any) -> None:
         self._schema = schema
         self._consumer = consumer
 
@@ -1429,7 +1443,7 @@ class _StopAwareSchema:
         """Forward every name but the two result-source calls to the real schema."""
         return getattr(self._schema, name)
 
-    async def subscribe(self, *args: Any, **kwargs: Any) -> Any:
+    async def subscribe(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
         """Return the real schema's subscription results, wrapped so they can stop.
 
         The seam both protocols read up to 0.318.1, and the one the legacy
@@ -1437,7 +1451,7 @@ class _StopAwareSchema:
         """
         return self._stoppable(await self._schema.subscribe(*args, **kwargs))
 
-    async def stream(self, *args: Any, **kwargs: Any) -> Any:
+    async def stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
         """Return the real schema's streamed results, wrapped so they can stop.
 
         The seam ``graphql-transport-ws`` reads from 0.319.0 on, for EVERY operation
@@ -1448,7 +1462,7 @@ class _StopAwareSchema:
         """
         return self._stoppable(await self._schema.stream(*args, **kwargs))
 
-    def _stoppable(self, source: Any) -> Any:
+    def _stoppable(self, source: AsyncIterator[object]) -> AsyncGenerator[object, None]:
         """Wrap one upstream result source in the connection's stop-and-mask seam.
 
         Shared by both entry points so the two cannot diverge on what a result
@@ -1583,7 +1597,7 @@ async def _contain_message_loop_failure(handler: Any, exc: Exception, protocol: 
         )
 
 
-async def _refreshed_actor(scope: Any) -> Any:
+async def _refreshed_actor(scope: Mapping[str, Any]) -> object:
     """Reload the connection's session and resolve its actor, or ``AnonymousUser``.
 
     ``channels.auth.get_user`` is reused verbatim rather than reimplemented: it
@@ -1615,7 +1629,9 @@ async def _refreshed_actor(scope: Any) -> Any:
     return await get_user({"session": store})
 
 
-def build_revalidating_consumer_class(base_consumer_cls: type[GraphQLWSConsumer]) -> type:
+def build_revalidating_consumer_class(
+    base_consumer_cls: type[GraphQLWSConsumer],
+) -> type[GraphQLWSConsumer]:
     """Return a ``base_consumer_cls`` subclass that revalidates at both checkpoints.
 
     A pure factory: no cache, no soft-dependency guard, and no import of
@@ -1645,10 +1661,10 @@ def build_revalidating_consumer_class(base_consumer_cls: type[GraphQLWSConsumer]
             super().__init__(*args, **kwargs)
             _install_stop_aware_schema(self)
 
-        # ``message`` is upstream's ``SubscribeMessage`` TypedDict; annotated
-        # ``Any`` deliberately, so the factory keeps importing nothing from
-        # upstream's deep protocol-types modules.
-        async def handle_subscribe(self, message: Any) -> None:
+        # ``message`` is upstream's ``SubscribeMessage`` TypedDict; annotated as
+        # the client-supplied mapping it is at run time, so the factory keeps
+        # importing nothing from upstream's deep protocol-types modules.
+        async def handle_subscribe(self, message: Mapping[str, object]) -> None:
             if not await revalidate_operation_actor(self):
                 return
             # Floor strawberry (0.316.x) parses ``payload["query"]`` in this
@@ -1711,7 +1727,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type[GraphQLWSConsumer]
             _install_stop_aware_schema(self)
 
         # ``message`` is upstream's ``StartMessage`` TypedDict; see above.
-        async def handle_start(self, message: Any) -> None:
+        async def handle_start(self, message: Mapping[str, object]) -> None:
             if not await revalidate_operation_actor(self):
                 return
             await super().handle_start(message)
@@ -1745,7 +1761,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type[GraphQLWSConsumer]
 
         # ``message`` is a protocol frame mapping on either protocol; ``Any``
         # for the same reason the handler hooks above use it.
-        async def send_json(self, message: Any) -> None:
+        async def send_json(self, message: Mapping[str, object]) -> None:
             """Revalidate an information-bearing frame; write nothing once revoked.
 
             Two arms, and only the first is an authorization decision. An
@@ -1969,7 +1985,7 @@ def build_revalidating_consumer_class(base_consumer_cls: type[GraphQLWSConsumer]
 _HOST_META_KEYS_BY_HEADER = {"host": "HTTP_HOST", "x-forwarded-host": "HTTP_X_FORWARDED_HOST"}
 
 
-def _host_validation_request(scope: Any) -> HttpRequest:
+def _host_validation_request(scope: WebSocketScope) -> HttpRequest:
     """Project one handshake scope's Host metadata into a minimal Django request.
 
     The whole package-owned half of the Host boundary: everything after this is
@@ -2067,14 +2083,14 @@ class DjangoWebSocketHostValidator:
     aspirational.
     """
 
-    def __init__(self, application: Any) -> None:
+    def __init__(self, application: ASGI3Application) -> None:
         self.application = application
 
     async def __call__(
         self,
-        scope: Any,
-        receive: Any,
-        send: Any,
+        scope: WebSocketScope,
+        receive: ASGIReceiveCallable,
+        send: ASGISendCallable,
     ) -> None:
         """Validate the handshake's ``Host`` through Django, then delegate or deny."""
         try:

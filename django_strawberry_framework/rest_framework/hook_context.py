@@ -22,7 +22,6 @@ serializer's own validation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +37,7 @@ class SerializerHookContext:
 
     operation: str
     write_alias: str
-    instance_pk: Any
+    instance_pk: object
 
 
 @dataclass(frozen=True, slots=True)

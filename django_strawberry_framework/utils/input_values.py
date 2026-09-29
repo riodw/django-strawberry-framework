@@ -35,9 +35,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from ..exceptions import ConfigurationError, _safe_type_name
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .inputs import GeneratedInputFieldSpec
 
 # Default maximum traversal depth across set input graphs (logical operators and related branches).
 # Sets with custom depth requirements (e.g. FilterSet._MAX_LOGIC_DEPTH) can override the class-level
@@ -57,7 +60,7 @@ RELATED = "related"
 LEAF = "leaf"
 
 
-def _field_name(value: Any, *, input_value: Any) -> str:
+def _field_name(value: object, *, input_value: object) -> str:
     """Normalize one input key or reject it before lookup/permission dispatch."""
     if not isinstance(value, str):
         raise ConfigurationError(
@@ -67,14 +70,14 @@ def _field_name(value: Any, *, input_value: Any) -> str:
     return str.__str__(value)
 
 
-def _walk_error(input_value: Any, detail: str) -> ConfigurationError:
+def _walk_error(input_value: object, detail: str) -> ConfigurationError:
     """Build a typed, safe traversal error for malformed consumer input."""
     return ConfigurationError(
         f"Could not traverse set input of type {_safe_type_name(input_value)}: {detail}.",
     )
 
 
-def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
+def iter_input_items(input_value: object) -> list[tuple[str, object]] | None:
     """Walk a dict or Strawberry-input dataclass into ``(name, value)`` pairs.
 
     Returns ``None`` when ``input_value`` is neither a dict nor an object
@@ -105,7 +108,7 @@ def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
         names = tuple(dataclass_fields)
     except BaseException as exc:
         raise _walk_error(input_value, "its dataclass fields could not be enumerated") from exc
-    items: list[tuple[str, Any]] = []
+    items: list[tuple[str, object]] = []
     for name in names:
         field_name = _field_name(name, input_value=input_value)
         try:
@@ -116,7 +119,7 @@ def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
     return items
 
 
-def input_field_value(input_value: Any, name: str) -> Any:
+def input_field_value(input_value: object, name: str) -> object:
     """Read ONE field off a dict-or-dataclass input; ``None`` when absent.
 
     The single-field sibling of ``iter_input_items``: the dict-vs-dataclass
@@ -134,7 +137,7 @@ def input_field_value(input_value: Any, name: str) -> Any:
         raise _walk_error(input_value, "a field value could not be read") from exc
 
 
-def is_inactive_value(value: Any, *, unset_sentinel: Any = None) -> bool:
+def is_inactive_value(value: object, *, unset_sentinel: object = None) -> bool:
     """Return ``True`` when ``value`` should be treated as "not supplied".
 
     The single active-input rule shared by every traversal surface: a value is
@@ -173,10 +176,10 @@ class SetInputTraversal:
       shape; when set, a list ``input_value`` is flattened element-by-element.
     """
 
-    field_specs: Mapping[Any, Any]
+    field_specs: Mapping[Any, GeneratedInputFieldSpec]
     related_attr: str
     logic_keys: frozenset[str] = frozenset()
-    unset_sentinel: Any = None
+    unset_sentinel: object = None
     handle_top_level_list: bool = False
 
 
@@ -192,13 +195,13 @@ class ActiveField:
     """
 
     python_attr: str
-    raw_value: Any
-    spec: Any | None
+    raw_value: object
+    spec: GeneratedInputFieldSpec | None
     kind: str
     related_obj: Any = None
 
 
-def set_traversal_depth_cap(set_cls: Any) -> int:
+def set_traversal_depth_cap(set_cls: object) -> int:
     """Return the traversal-depth budget that governs ``set_cls``.
 
     ONE budget for both traversals over the same input tree: a ``FilterSet``
@@ -213,7 +216,7 @@ def set_traversal_depth_cap(set_cls: Any) -> int:
 
 
 def raise_set_traversal_depth_exceeded(
-    set_cls: Any,
+    set_cls: object,
     *,
     branch: str,
     input_noun: str,
@@ -253,7 +256,7 @@ def raise_set_traversal_depth_exceeded(
 
 
 def assert_set_traversal_depth(
-    set_cls: Any,
+    set_cls: object,
     depth: int,
     *,
     branch: str,
@@ -281,13 +284,13 @@ class RelatedDeclarationError(Exception):
     original failure so a translated error can chain it.
     """
 
-    def __init__(self, kind: str, value: Any = None) -> None:
+    def __init__(self, kind: str, value: object = None) -> None:
         super().__init__(kind)
         self.kind = kind
         self.value = value
 
 
-def related_declaration_mapping(owner: Any, related_attr: str) -> Any:
+def related_declaration_mapping(owner: object, related_attr: str) -> Mapping[object, object]:
     """Read a set's related-declaration attribute and prove it is a mapping.
 
     The shared front half of every related-branch traversal: read the attribute
@@ -320,7 +323,7 @@ def related_declaration_mapping(owner: Any, related_attr: str) -> Any:
 
 def iter_active_fields(
     set_cls: type,
-    input_value: Any,
+    input_value: object,
     config: SetInputTraversal,
 ) -> Iterator[ActiveField]:
     """Yield one ``ActiveField`` per supplied, active top-level field of ``input_value``.

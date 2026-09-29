@@ -22,8 +22,8 @@ package is not imported at runtime.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeGuard, cast
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, TypeGuard, TypeVar, cast
 
 from django.apps import apps
 from django.db import models
@@ -47,8 +47,11 @@ from ..utils.querysets import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.types import Info
+    from strawberry.utils.await_maybe import AwaitableOrValue
+
     from .base import DjangoType
-    from .definition import DjangoTypeDefinition
+    from .definition import DjangoTypeDefinition, GlobalIDStrategy
 
     class _RelayDjangoType(DjangoType, relay.Node):
         """A Relay-Node-shaped ``DjangoType``: both surfaces on one class.
@@ -56,6 +59,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         Names the classes ``decode_global_id`` resolves to. Type-checking only:
         a runtime subclass of ``DjangoType`` would run its collection hook.
         """
+
+
+_ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 def implements_relay_node(type_cls: type) -> TypeGuard[type[relay.Node]]:
@@ -277,17 +283,23 @@ def _resolve_id_attr_default(cls: type) -> str:
     the child is then harmless: all four defaults are stateless
     classmethods that act on the runtime ``cls``.)
     """
-    stamped = cls.__dict__.get(_RELAY_ID_ATTR_SLOT)
+    # Only ``_stamp_relay_id_attr`` writes the slot, with the scanned ``str``.
+    stamped = cast("str | None", cls.__dict__.get(_RELAY_ID_ATTR_SLOT))
     if stamped is not None:
         return stamped
     try:
         # mypy: a classmethod read off its class is typed without __func__
-        return relay.Node.resolve_id_attr.__func__(cls)  # type: ignore[attr-defined]
+        return cast("str", relay.Node.resolve_id_attr.__func__(cls))  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         return "pk"
 
 
-def _resolve_id_default(cls: type[relay.Node], root: models.Model, *, info: Any) -> str:  # noqa: ARG001
+def _resolve_id_default(
+    cls: type[relay.Node],
+    root: models.Model,
+    *,
+    info: Info[object, object],  # noqa: ARG001
+) -> str:
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
 
     Signature mirrors ``strawberry.relay.Node.resolve_id`` after
@@ -319,34 +331,36 @@ def _resolve_id_default(cls: type[relay.Node], root: models.Model, *, info: Any)
         return str(getattr(root, id_attr))
 
 
-def _coerce_node_id(node_id: Any) -> Any:
+def _coerce_node_id(node_id: object) -> object:
     return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
 
 
-def _coerce_node_ids(node_ids: Any) -> list[Any] | None:
+def _coerce_node_ids(node_ids: Iterable[object] | None) -> list[object] | None:
     if node_ids is None:
         return None
     return [_coerce_node_id(node_id) for node_id in node_ids]
 
 
 def _apply_node_filter(
-    qs: models.QuerySet,
+    qs: models.QuerySet[_ModelT],
     id_attr: str,
     *,
-    node_id: Any = None,
-    node_ids: list[Any] | None = None,
-) -> models.QuerySet:
+    node_id: object = None,
+    node_ids: list[object] | None = None,
+) -> models.QuerySet[_ModelT]:
     """Apply the Relay-id filter to ``qs`` (color-agnostic).
 
     The lazy ``.filter`` call is identical on sync and async paths; the
     terminal materialization is what differs (``.get``/``.first`` on the
     sync path, ``.aget``/``.afirst`` on the async path).
     """
+    # The stubs' plugin cannot resolve a lookup spelled as a runtime string, so a
+    # ``filter(**{...})`` over one is typed ``Any``; it returns ``qs``'s own class.
     if node_id is not None:
         coerced = _coerce_node_id(node_id)
-        return qs.filter(**{id_attr: coerced})
+        return cast("models.QuerySet[_ModelT]", qs.filter(**{id_attr: coerced}))
     if node_ids is not None:
-        return qs.filter(**{f"{id_attr}__in": node_ids})
+        return cast("models.QuerySet[_ModelT]", qs.filter(**{f"{id_attr}__in": node_ids}))
     return qs
 
 
@@ -355,7 +369,7 @@ def _apply_node_filter(
 # testing helpers belong to the sibling Full Relay card.
 
 
-def _validated_globalid_setting() -> str | Callable[..., str] | None:
+def _validated_globalid_setting() -> GlobalIDStrategy | None:
     """Read and validate the schema-wide ``RELAY_GLOBALID_STRATEGY`` setting once.
 
     Reads ``conf.relay_globalid_strategy_setting()`` (a thin reader that does not
@@ -399,8 +413,8 @@ def _validated_globalid_setting() -> str | Callable[..., str] | None:
 
 def _resolve_globalid_strategy(
     definition: DjangoTypeDefinition,
-    globalid_setting: str | Callable[..., str] | None,
-) -> str | Callable[..., str]:
+    globalid_setting: GlobalIDStrategy | None,
+) -> GlobalIDStrategy:
     """Resolve a type's effective raw GlobalID strategy by pure three-tier precedence.
 
     Precedence (spec-031 Decision 5): the per-type ``Meta.globalid_strategy``
@@ -491,9 +505,9 @@ def _accepts_type_name_decode(effective_strategy: str | None) -> bool:
 
 def encode_typename(
     definition: DjangoTypeDefinition,
-    strategy: str | Callable[..., str],
+    strategy: GlobalIDStrategy,
     type_cls: type,
-    root: Any,
+    root: object,
 ) -> str:
     """Compute the ``GlobalID`` type-name slot for one resolved strategy.
 
@@ -604,7 +618,7 @@ def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
 def install_globalid_typename_resolver(
     type_cls: type[relay.Node],
     definition: DjangoTypeDefinition,
-    globalid_setting: str | Callable[..., str] | None,
+    globalid_setting: GlobalIDStrategy | None,
 ) -> None:
     """Inject the strategy-parameterized ``resolve_typename`` default (Phase 2.5).
 
@@ -668,7 +682,7 @@ def install_globalid_typename_resolver(
 def _install_typename_closure(
     type_cls: type[relay.Node],
     definition: DjangoTypeDefinition,
-    strategy: str | Callable[..., str],
+    strategy: GlobalIDStrategy,
 ) -> None:
     """Install the framework ``resolve_typename`` classmethod capturing ``strategy``.
 
@@ -684,7 +698,7 @@ def _install_typename_closure(
     override.
     """
 
-    def resolve_typename(cls: type, root: Any, info: Any) -> str:  # noqa: ARG001
+    def resolve_typename(cls: type, root: object, info: Info[object, object]) -> str:  # noqa: ARG001
         # Strawberry's resolve_typename seam passes ``(cls, root, info)``; the
         # encoder contract dropped ``info`` (pre-1.0), so only ``root`` is
         # forwarded to ``encode_typename``.
@@ -695,7 +709,7 @@ def _install_typename_closure(
     type_cls.resolve_typename = classmethod(resolve_typename)  # type: ignore[method-assign,assignment]
 
 
-def decode_global_id(gid: relay.GlobalID | str) -> tuple[type[_RelayDjangoType], str]:
+def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
     """Decode a ``GlobalID`` to its ``(DjangoType, node_id)`` via resolve-then-enforce.
 
     The decode half of the GlobalID-encoding feature (spec-031 Decision 8), and the
@@ -840,12 +854,12 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type[_RelayDjangoType],
 
 def _order_nodes(
     cls: type,
-    results: list,
+    results: list[_ModelT],
     coerced_keys: list[str],
     id_attr: str,
     *,
     required: bool,
-) -> list:
+) -> list[_ModelT | None]:
     """Re-order ``results`` to match ``coerced_keys`` (port of strawberry-django's map_results).
 
     Mirrors ``strawberry_django/relay/utils.py::resolve_model_nodes #"def map_results"``: build an index
@@ -860,7 +874,7 @@ def _order_nodes(
     ``required=False`` emits ``None`` for missing keys.
     """
     index = {str(getattr(obj, id_attr)): obj for obj in results}
-    output: list = []
+    output: list[_ModelT | None] = []
     model = model_for(cls)
     for key in coerced_keys:
         if required:
@@ -878,11 +892,11 @@ def _order_nodes(
 
 def _resolve_node_default(
     cls: type[_RelayDjangoType],
-    node_id: Any,
+    node_id: object,
     *,
-    info: Any,
+    info: Info[object, object],
     required: bool = False,
-) -> Any:
+) -> AwaitableOrValue[models.Model | None]:
     """Default ``Node.resolve_node`` - ``get_queryset`` aware.
 
     Signature mirrors ``strawberry.relay.Node.resolve_node`` after
@@ -915,11 +929,11 @@ def _resolve_node_default(
 async def _resolve_node_async(
     cls: type,
     id_attr: str,
-    node_id: Any,
+    node_id: object,
     *,
-    info: Any,
+    info: Info[object, object],
     required: bool,
-) -> Any:
+) -> models.Model | None:
     """Async sibling of ``_resolve_node_default``.
 
     Awaits the ``get_queryset`` hook (regardless of whether the consumer
@@ -936,10 +950,10 @@ async def _resolve_node_async(
 def _resolve_nodes_default(
     cls: type[_RelayDjangoType],
     *,
-    info: Any,
-    node_ids: Any = None,
+    info: Info[object, object],
+    node_ids: Iterable[object] | None = None,
     required: bool = False,
-) -> Any:
+) -> AwaitableOrValue[models.QuerySet[models.Model] | list[models.Model | None]]:
     """Default ``Node.resolve_nodes`` - order-preserving, missing-aware.
 
     Signature mirrors ``strawberry.relay.Node.resolve_nodes`` after
@@ -981,11 +995,11 @@ def _resolve_nodes_default(
 async def _resolve_nodes_async(
     cls: type,
     id_attr: str,
-    node_ids: Any,
+    node_ids: Iterable[object] | None,
     *,
-    info: Any,
+    info: Info[object, object],
     required: bool,
-) -> Any:
+) -> models.QuerySet[models.Model] | list[models.Model | None]:
     """Async sibling of ``_resolve_nodes_default``.
 
     Awaits the ``get_queryset`` hook before applying the id filter so
@@ -1007,7 +1021,7 @@ async def _resolve_nodes_async(
 # Single source of truth for the four Relay resolver method names plus the
 # framework default implementation each one maps to. Iterated by
 # ``install_relay_node_resolvers``; appears nowhere else.
-_RELAY_RESOLVER_DEFAULTS: tuple[tuple[str, Callable[..., Any]], ...] = (
+_RELAY_RESOLVER_DEFAULTS: tuple[tuple[str, Callable[..., object]], ...] = (
     ("resolve_id", _resolve_id_default),
     ("resolve_id_attr", _resolve_id_attr_default),
     ("resolve_node", _resolve_node_default),

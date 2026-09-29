@@ -39,8 +39,8 @@ legitimate shapes, and coercion is unconditionally correct. Do not
 unify the two.
 """
 
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from django.conf import settings as django_settings
 from django.test.signals import setting_changed
@@ -161,10 +161,10 @@ ERROR_POLICY_KEY = "ERROR_POLICY"
 
 # Sentinel for "no live ``django.conf.settings`` object has been bound yet"
 # (distinct from ``None``, which is a valid live value meaning "no settings").
-_LIVE_UNSET: Any = object()
+_LIVE_UNSET: object = object()
 
 
-def _normalize_user_settings(value: Any) -> dict[str, Any]:
+def _normalize_user_settings(value: Any) -> dict[str, object]:
     """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
 
     Branches:
@@ -181,7 +181,7 @@ def _normalize_user_settings(value: Any) -> dict[str, Any]:
       tests that capture the same dict by reference observe their
       mutations).
     - Other ``Mapping`` instances -> copied into a plain ``dict`` so
-      the cache always exposes a uniform ``dict[str, Any]`` shape to
+      the cache always exposes a uniform ``dict[str, object]`` shape to
       ``Settings.user_settings`` consumers.
 
     Shared by ``Settings.__init__`` (eager construction),
@@ -216,7 +216,7 @@ def _normalize_user_settings(value: Any) -> dict[str, Any]:
 class Settings:
     """Attribute-style accessor for user-provided library settings."""
 
-    def __init__(self, user_settings: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, user_settings: Mapping[str, object] | None = None) -> None:
         """Build a ``Settings`` instance.
 
         ``None`` (the default) defers loading until first attribute access, at
@@ -236,8 +236,8 @@ class Settings:
         which deletes the key without emitting the signal).
         """
         if user_settings is None:
-            self._user_settings: dict[str, Any] | None = None
-            self._live_source: Any = _LIVE_UNSET
+            self._user_settings: dict[str, object] | None = None
+            self._live_source: object = _LIVE_UNSET
             self._django_backed = True
         else:
             self._user_settings = _normalize_user_settings(user_settings)
@@ -245,7 +245,7 @@ class Settings:
             self._django_backed = False
 
     @property
-    def user_settings(self) -> dict[str, Any]:
+    def user_settings(self) -> dict[str, object]:
         """Lazily load user-defined settings from ``django.conf.settings``.
 
         Missing or ``None`` top-level configuration is treated the same as an
@@ -290,7 +290,7 @@ class Settings:
         self._user_settings = normalized
         return self._user_settings
 
-    def reload(self, value: Mapping[str, Any] | None) -> None:
+    def reload(self, value: Mapping[str, object] | None) -> None:
         """Replace the cached user-settings mapping in place.
 
         ``None`` restores django-backed lazy reload on next attribute access.
@@ -311,7 +311,7 @@ class Settings:
         self._live_source = _LIVE_UNSET
         self._django_backed = False
 
-    def _reload_from_django(self, value: Mapping[str, Any] | None) -> None:
+    def _reload_from_django(self, value: object) -> None:
         """Apply a ``setting_changed`` value while retaining live Django backing."""
         if value is None:
             self.reload(None)
@@ -464,7 +464,8 @@ def upstream_patches_enabled(dependency: str) -> bool:
                         f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
                         f"got {_safe_type_name(value)}.",
                     )
-            return plain.get(dependency, True)
+            # Every value was just proven an exact ``bool`` by the loop above.
+            return cast("bool", plain.get(dependency, True))
         except ConfigurationError:
             raise
         except Exception as exc:
@@ -540,7 +541,7 @@ def hide_flat_filters_setting() -> bool:
     return getattr(settings, HIDE_FLAT_FILTERS_KEY, False)
 
 
-def relay_globalid_strategy_setting() -> str | Callable[..., str] | None:
+def relay_globalid_strategy_setting() -> object:
     """The configured schema-wide GlobalID type-name-slot strategy (or ``None``).
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]``,
@@ -569,7 +570,7 @@ def max_request_body_bytes_setting() -> int | None:
     return getattr(settings, MAX_REQUEST_BODY_BYTES_KEY, 1_048_576)
 
 
-def resource_policy_setting() -> Any:
+def resource_policy_setting() -> object:
     """The configured resource-policy overrides, or ``None`` when unset.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RESOURCE_POLICY"]``. ``conf.py`` stays a
@@ -581,7 +582,7 @@ def resource_policy_setting() -> Any:
     return getattr(settings, RESOURCE_POLICY_KEY, None)
 
 
-def error_policy_setting() -> Any:
+def error_policy_setting() -> object:
     """The configured production error-policy overrides, or ``None`` when unset.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]``. ``conf.py`` stays a
@@ -593,7 +594,7 @@ def error_policy_setting() -> Any:
     return getattr(settings, ERROR_POLICY_KEY, None)
 
 
-def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:
+def reload_settings(setting: str, value: object, **kwargs: object) -> None:
     """Refresh the singleton ``settings`` instance when our key changes.
 
     Mutates the existing ``Settings`` object instead of rebinding the module

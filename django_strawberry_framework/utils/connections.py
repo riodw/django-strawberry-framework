@@ -34,10 +34,10 @@ re-exports the same helper for argument-comparison); this helper assumes its
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 import strawberry
 from strawberry.relay.utils import SliceMetadata
@@ -46,6 +46,15 @@ from ..exceptions import OptimizerError
 from ..resource_policy import effective_bound, policy_from_info
 from .input_values import is_inactive_value
 from .typing import schema_config_from_info
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry import Info
+
+    from .typing import EitherInfo
+
+_FirstT = TypeVar("_FirstT")
+_LastT = TypeVar("_LastT")
+_RowT = TypeVar("_RowT")
 
 # The connection sidecar argument names, in BOTH vocabularies the shared
 # readers below see. ``CONNECTION_ORDER_KWARG`` is the PYTHON kwarg name (the
@@ -93,7 +102,9 @@ class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, no
     """
 
 
-def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any] | None) -> tuple[Any, Any]:
+def connection_sidecar_inputs_from_kwargs(
+    kwargs: Mapping[str, object] | None,
+) -> tuple[object, object]:
     """Extract ``(filter_input, order_by_input)`` from a kwargs/arguments dict.
 
     The single reader of the sidecar kwarg keys so no caller re-spells
@@ -113,7 +124,7 @@ def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any] | None) -> tupl
     return kwargs.get(CONNECTION_FILTER_KWARG), order_by_input
 
 
-def is_supplied(value: Any) -> bool:
+def is_supplied(value: object) -> bool:
     """Return whether a connection argument was actually supplied by the client.
 
     The connection surfaces' spelling of the package's ONE active-input rule,
@@ -129,7 +140,7 @@ def is_supplied(value: Any) -> bool:
     return not is_inactive_value(value, unset_sentinel=strawberry.UNSET)
 
 
-def is_backward_shape(first: Any, last: Any) -> bool:
+def is_backward_shape(first: object, last: object) -> bool:
     """Return whether the pagination arguments describe a BACKWARD (``last``-only) page.
 
     The core Relay shape test: ``last`` was given as an ``int`` and ``first``
@@ -142,7 +153,12 @@ def is_backward_shape(first: Any, last: Any) -> bool:
     return isinstance(last, int) and not isinstance(first, int)
 
 
-def page_arguments(first: Any, last: Any, *, cap: int) -> tuple[Any, Any]:
+def page_arguments(
+    first: _FirstT,
+    last: _LastT,
+    *,
+    cap: int,
+) -> tuple[_FirstT | int, _LastT | None]:
     """Return the ``(first, last)`` every connection page is sliced with, offset and keyset alike.
 
     ``last: 0`` with no ``int`` ``first`` is the ``first: 0`` page (Strawberry would slice
@@ -157,12 +173,12 @@ def page_arguments(first: Any, last: Any, *, cap: int) -> tuple[Any, Any]:
     return cap, last
 
 
-def has_connection_sidecar_input(*, filter_input: Any, order_by_input: Any) -> bool:
+def has_connection_sidecar_input(*, filter_input: object, order_by_input: object) -> bool:
     """Return whether either already-extracted sidecar input is present."""
     return is_supplied(filter_input) or is_supplied(order_by_input)
 
 
-def has_connection_sidecar_kwargs(kwargs: dict[str, Any] | None) -> bool:
+def has_connection_sidecar_kwargs(kwargs: Mapping[str, object] | None) -> bool:
     """Return whether a kwargs/arguments dict carries any sidecar input.
 
     The walker's fallback predicate (a sidecar-bearing nested connection is not
@@ -520,7 +536,22 @@ def assert_window_fetch_mode(range_plan: WindowRangePlan, *, with_total_count: b
         )
 
 
-def assert_window_fetch_mode_for(window: Any) -> None:
+class _RawWindowArguments(Protocol):
+    """The raw window arguments a window-carrying dataclass exposes."""
+
+    @property
+    def offset(self) -> int: ...
+    @property
+    def limit(self) -> int | None: ...
+    @property
+    def reverse(self) -> bool: ...
+    @property
+    def next_page_probe(self) -> bool: ...
+    @property
+    def with_total_count(self) -> bool: ...
+
+
+def assert_window_fetch_mode_for(window: _RawWindowArguments) -> None:
     """``assert_window_fetch_mode`` for callers holding RAW window arguments.
 
     ``NestedConnectionRequest`` and ``LateralWindowSpec`` carry
@@ -542,11 +573,11 @@ def assert_window_fetch_mode_for(window: Any) -> None:
 
 
 def split_window_rows(
-    rows: list[Any] | Sequence[Any] | Iterable[Any],
+    rows: Iterable[_RowT],
     range_plan: WindowRangePlan,
     *,
     row_number: str,
-) -> tuple[list[Any], bool]:
+) -> tuple[list[_RowT], bool]:
     """Split annotated window ``rows`` into page rows and dropped sentinel rows.
 
     Returns ``(page_rows, probe_row_seen)``. The one home for sentinel-row
@@ -619,12 +650,12 @@ class ConnectionWindowBounds:
 
 
 def derive_connection_window_bounds(
-    info: Any,
+    info: EitherInfo | None,
     *,
-    before: Any,
-    after: Any,
-    first: Any,
-    last: Any,
+    before: str | None,
+    after: str | None,
+    first: int | None,
+    last: int | None,
     max_results: int | None,
 ) -> ConnectionWindowBounds:
     """Derive the window ``(offset, limit, reverse)`` from pagination arguments.
@@ -678,7 +709,9 @@ def derive_connection_window_bounds(
     effective_max_results = resolve_relay_max_results(info, max_results)
     first, last = page_arguments(first, last, cap=effective_max_results)
     slice_meta = SliceMetadata.from_arguments(
-        info,
+        # The engine reads ``info`` only to find a cap when ``max_results`` is
+        # ``None``, and ``effective_max_results`` is always an ``int``.
+        cast("Info[object, object]", info),
         before=before,
         after=after,
         first=first,
@@ -717,7 +750,7 @@ def derive_connection_window_bounds(
 _RELAY_MAX_RESULTS_DEFAULT = 100
 
 
-def assert_relay_pagination_bound(argument: str, value: Any, *, cap: int) -> None:
+def assert_relay_pagination_bound(argument: str, value: object, *, cap: int) -> None:
     """Raise ``SliceMetadata``-parity ``ValueError``s for a negative or over-cap page size.
 
     The ONE spelling of the Relay ``first`` / ``last`` bound check the keyset
@@ -737,7 +770,7 @@ def assert_relay_pagination_bound(argument: str, value: Any, *, cap: int) -> Non
         raise ValueError(f"Argument '{argument}' cannot be higher than {cap}.")
 
 
-def relay_max_results_from_info(info: Any) -> int | None:
+def relay_max_results_from_info(info: EitherInfo | None) -> int | None:
     """Read the configured ``relay_max_results``, or ``None`` when none is reachable.
 
     THE config dig, for both sides of the cursor-parity invariant's keyset leg.
@@ -755,7 +788,7 @@ def relay_max_results_from_info(info: Any) -> int | None:
     return getattr(schema_config_from_info(info), "relay_max_results", None)
 
 
-def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
+def resolve_relay_max_results(info: EitherInfo | None, max_results: int | None) -> int:
     """Resolve the effective ``relay_max_results`` cap for a keyset window.
 
     Precedence mirrors ``SliceMetadata.from_arguments``: an explicit
@@ -778,12 +811,12 @@ def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
 
 
 def derive_keyset_window_bounds(
-    info: Any,
+    info: EitherInfo | None,
     *,
-    before: Any,
-    after: Any,  # noqa: ARG001 - signature parity with the offset twin; the seek, not the bounds, consumes it.
-    first: Any,
-    last: Any,
+    before: str | None,
+    after: str | None,  # noqa: ARG001 - signature parity with the offset twin; the seek, not the bounds, consumes it.
+    first: int | None,
+    last: int | None,
     max_results: int | None,
 ) -> ConnectionWindowBounds:
     """Derive the window bounds for a KEYSET (``cursor_field``) connection.

@@ -21,7 +21,7 @@ Django descriptors into the walk.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ..exceptions import OptimizerError, _safe_type_name
 from ..utils.relations import (
@@ -213,7 +213,7 @@ class FieldMeta:
     @classmethod
     def _from_field_shape(
         cls,
-        field: Any,
+        field: object,
         *,
         is_relation: bool,
         field_name: str | None = None,

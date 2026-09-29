@@ -47,7 +47,7 @@ import asyncio
 import contextlib
 import enum
 from collections.abc import AsyncIterator, MutableMapping
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from django.http import HttpRequest
 
@@ -64,6 +64,11 @@ from ..utils.sessions import (
     scope_singleton,
     session_store_class,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from types import ModuleType
+
+    from django.contrib.sessions.backends.base import SessionBase
 
 # The single channels-ABSENT install hint for the auth transport (mirrors
 # ``routers.py::_CHANNELS_INSTALL_HINT`` but keyed to this feature so hint strings
@@ -114,7 +119,7 @@ class Transport(enum.Enum):
     CHANNELS_WEBSOCKET = "channels_websocket"
 
 
-def require_channels() -> Any:
+def require_channels() -> ModuleType:
     """Import + return ``channels``, or raise the auth install-hint ``ImportError``.
 
     A thin wrapper over the shared optional-import owner
@@ -209,7 +214,7 @@ def classify_transport(request: Any) -> Transport:
     )
 
 
-def _safe_transport_label(transport: Any) -> str:
+def _safe_transport_label(transport: Transport) -> str:
     """Render ``transport`` for an error message without trusting its dunders.
 
     ``transport`` is expected to be a ``Transport`` enum, but the error path
@@ -229,7 +234,7 @@ def _safe_transport_label(transport: Any) -> str:
         return _safe_type_name(transport)
 
 
-def require_session(request: Any, transport: Transport) -> Any:
+def require_session(request: object, transport: Transport) -> SessionBase:
     """Return the request's session, or raise the actionable missing-middleware error.
 
     A Django request whose ``SessionMiddleware`` never ran has no ``session``
@@ -258,10 +263,12 @@ def require_session(request: Any, transport: Transport) -> Any:
             "install Django's SessionMiddleware (and, for Channels, wrap the scope in "
             "AuthMiddlewareStack) so login/logout can mutate a real session.",
         )
-    return session
+    # ``SessionMiddleware`` (Django's, or Channels') installs the engine's
+    # ``SessionStore``, a ``SessionBase``.
+    return cast("SessionBase", session)
 
 
-def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[str, Any]:
+def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[str, object]:
     """Return the adapter's scope as a ``MutableMapping``, or raise loudly.
 
     ``ChannelsRequestAdapter.scope`` is typed as a read-only ``Mapping``, but
@@ -290,7 +297,7 @@ def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[st
             "scopes are dictionaries. Do not route auth through an immutable scope.",
         )
     # ``is_mutable`` is the ``isinstance(scope, MutableMapping)`` verdict checked above.
-    return cast("MutableMapping[str, Any]", scope)
+    return cast("MutableMapping[str, object]", scope)
 
 
 @contextlib.asynccontextmanager

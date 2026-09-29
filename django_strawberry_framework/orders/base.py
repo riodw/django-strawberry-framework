@@ -22,7 +22,7 @@ spec-028 Decision 8.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from ..exceptions import (
     ConfigurationError,
@@ -32,8 +32,17 @@ from ..exceptions import (
 )
 from ..sets_mixins import RelatedSetTargetMixin
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable
+    from typing import TypeAlias
 
-def _order_set_class() -> type:
+    from .sets import OrderSet
+
+    # Every target shape the constructor and setter store; resolution happens on read.
+    _OrderSetTarget: TypeAlias = str | type[OrderSet] | Callable[[], type[OrderSet] | None] | None
+
+
+def _order_set_class() -> type[OrderSet]:
     """Return the ``OrderSet`` family base for the target-type gate.
 
     Deferred so the ``orders.sets -> orders.base`` module-load edge stays
@@ -84,13 +93,13 @@ class RelatedOrder(RelatedSetTargetMixin):
     _target_attr = "_orderset"
     _owner_attr = "bound_orderset"
 
-    def __init__(self, orderset: str | type, field_name: str | None = None) -> None:
+    def __init__(self, orderset: _OrderSetTarget, field_name: str | None = None) -> None:
         """Store the (possibly-lazy) target orderset and the ORM field name."""
         super().__init__()
         self._orderset = orderset
         self.field_name = field_name
 
-    def bind_orderset(self, orderset: type) -> None:
+    def bind_orderset(self, orderset: type[OrderSet]) -> None:
         """Bind the owning ``OrderSet`` once; subsequent calls are no-ops.
 
         Idempotent so ``OrderSetMetaclass.__new__`` can rebind every
@@ -101,7 +110,7 @@ class RelatedOrder(RelatedSetTargetMixin):
         """
         self._bind_owner(orderset)
 
-    def _validate_target(self, resolved: Any) -> None:
+    def _validate_target(self, resolved: object) -> None:
         """The ``RelatedSetTargetMixin`` family gate: target must be an ``OrderSet``.
 
         Fired by ``sets_mixins.py::RelatedSetTargetMixin._resolved_target`` on
@@ -132,7 +141,7 @@ class RelatedOrder(RelatedSetTargetMixin):
             )
 
     @property
-    def orderset(self) -> type | None:
+    def orderset(self) -> type[OrderSet] | None:
         """Resolve ``self._orderset`` lazily on first access.
 
         Re-stores the resolved class so the next access is a plain
@@ -144,8 +153,9 @@ class RelatedOrder(RelatedSetTargetMixin):
         must be ``None`` (the skip-silently placeholder) or an ``OrderSet``
         subclass.
         """
-        return self._resolved_target()
+        # ``_validate_target`` rejected every non-``None`` resolution outside the family.
+        return cast("type[OrderSet] | None", self._resolved_target())
 
     @orderset.setter
-    def orderset(self, value: Any) -> None:
+    def orderset(self, value: _OrderSetTarget) -> None:
         self._set_target(value)

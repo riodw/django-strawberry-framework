@@ -29,8 +29,8 @@ callable that still needs ``field``).
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Protocol, TypeVar
 
 from .inputs import SCALAR, FieldConversionBase
 
@@ -61,12 +61,24 @@ class _MroContinue:
 MRO_CONTINUE = _MroContinue()
 
 
+class _RequiredFlagField(Protocol):
+    """A flavor field whose requiredness a converter reads (``forms`` / DRF ``Field``)."""
+
+    @property
+    def required(self) -> bool: ...
+
+
+_FieldT = TypeVar("_FieldT")
+_FlagFieldT = TypeVar("_FlagFieldT", bound=_RequiredFlagField)
+_ConversionT = TypeVar("_ConversionT", bound=FieldConversionBase)
+
+
 def convert_with_mro(
-    field: Any,
+    field: _FieldT,
     *,
-    isinstance_prechecks: list[tuple[type | tuple[type, ...], Callable[[Any], Any]]],
-    scalar_registry: dict[type, Any],
-    fallthrough_error_factory: Callable[[Any], Exception],
+    isinstance_prechecks: Sequence[tuple[type | tuple[type, ...], Callable[[Any], object]]],
+    scalar_registry: Mapping[type, object],
+    fallthrough_error_factory: Callable[[_FieldT], Exception],
 ) -> Any:
     """Dispatch ``field`` to a conversion via ordered prechecks, an MRO walk, then a raise.
 
@@ -137,12 +149,12 @@ def convert_with_mro(
 
 
 def make_kind_converter(
-    conversion_cls: type,
+    conversion_cls: type[_ConversionT],
     kind: str,
     *,
-    annotation: Any = None,
-    required_of: Callable[[Any], bool] | None = None,
-) -> Callable[[Any], Any]:
+    annotation: object = None,
+    required_of: Callable[[_FlagFieldT], bool] | None = None,
+) -> Callable[[_FlagFieldT], _ConversionT]:
     """Return a converter emitting a ``conversion_cls`` instance for a fixed kind.
 
     The scalar-table / kind-precheck VALUE shape both write converters share
@@ -151,7 +163,7 @@ def make_kind_converter(
     the form table passes ``form_field_required`` (NullBoolean).
     """
 
-    def _convert(field: Any) -> Any:
+    def _convert(field: _FlagFieldT) -> _ConversionT:
         required = field.required if required_of is None else required_of(field)
         return conversion_cls(annotation=annotation, kind=kind, required=required)
 
@@ -159,11 +171,11 @@ def make_kind_converter(
 
 
 def make_scalar_converter(
-    conversion_cls: type,
-    annotation: Any,
+    conversion_cls: type[_ConversionT],
+    annotation: object,
     *,
-    required_of: Callable[[Any], bool] | None = None,
-) -> Callable[[Any], Any]:
+    required_of: Callable[[_FlagFieldT], bool] | None = None,
+) -> Callable[[_FlagFieldT], _ConversionT]:
     """Return a converter emitting a ``SCALAR``-kind conversion for a fixed annotation.
 
     Convenience over ``make_kind_converter`` for the scalar-table rows: kind is
@@ -178,7 +190,10 @@ def make_scalar_converter(
     )
 
 
-def finish_field_conversion(result: Any, field: Any) -> Any:
+def finish_field_conversion(
+    result: FieldConversionBase | Callable[[_FieldT], FieldConversionBase],
+    field: _FieldT,
+) -> FieldConversionBase:
     """Turn a ``convert_with_mro`` result into a ``FieldConversionBase`` instance.
 
     Precheck handlers return a finished conversion; scalar-table entries are

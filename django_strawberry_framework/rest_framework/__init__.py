@@ -20,9 +20,12 @@ guarded ``ImportError`` when DRF is absent. Generalizes the
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from ..utils.imports import require_optional_module
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from types import ModuleType
 
 # The single DRF install-hint string (spec-039 carry-forward, Decision 12).
 # Every DRF-absent raise routes through ``require_drf()`` so the hint lives in
@@ -33,7 +36,7 @@ _DRF_INSTALL_HINT: str = (
 )
 
 
-def require_drf() -> Any:
+def require_drf() -> ModuleType:
     """Import + return the DRF ``rest_framework`` package, or raise the install hint.
 
     The shared soft-dependency guard (spec-039 Decision 12): every serializer-mutation

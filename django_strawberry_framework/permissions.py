@@ -91,9 +91,10 @@ context.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from functools import lru_cache
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypeGuard
 
 from django.db import models
 from django.db.models import Q
@@ -134,6 +135,10 @@ from .utils.querysets import (
 # already in the package-root ``__all__`` via ``types``, so this re-export adds no
 # new public name.
 from .utils.querysets import SyncMisuseError as SyncMisuseError
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .utils.typing import ForeignKeyField, ModelField
+
 
 _ASYNC_RECOURSE = (
     "apply_cascade_permissions walks target hooks synchronously and "
@@ -185,11 +190,11 @@ class _EdgePlan(NamedTuple):
     hook runs, and ``fields=`` naming one fails at validation.
     """
 
-    cascadable: tuple[Any, ...]
+    cascadable: tuple[ForeignKeyField, ...]
     unsupported: tuple[str, ...]
 
 
-def _is_cascadable_edge(field: Any) -> bool:
+def _is_cascadable_edge(field: ModelField) -> TypeGuard[ForeignKeyField]:
     """Return whether ``field`` is a single-column concrete forward FK / OneToOne edge.
 
     The single definition of "cascadable edge" -- the full walk, the
@@ -209,7 +214,7 @@ def _is_cascadable_edge(field: Any) -> bool:
     return isinstance(field, models.ForeignKey) and getattr(field, "column", None) is not None
 
 
-def _is_unsupported_forward_edge(field: Any) -> bool:
+def _is_unsupported_forward_edge(field: ModelField) -> bool:
     """Return whether ``field`` is a forward relation the cascade must fail closed on.
 
     A forward relation that is not a single-column concrete FK / OneToOne --
@@ -241,8 +246,8 @@ def _edge_plan(model: type[models.Model]) -> _EdgePlan:
     this process-wide helper without limit; eviction is correctness-neutral
     because the plan can always be recomputed.
     """
-    cascadable = []
-    unsupported = []
+    cascadable: list[ForeignKeyField] = []
+    unsupported: list[str] = []
     for field in model._meta.get_fields():
         if _is_cascadable_edge(field):
             cascadable.append(field)
@@ -251,7 +256,7 @@ def _edge_plan(model: type[models.Model]) -> _EdgePlan:
     return _EdgePlan(cascadable=tuple(cascadable), unsupported=tuple(unsupported))
 
 
-def _cascadable_edges(model: type[models.Model]) -> tuple[Any, ...]:
+def _cascadable_edges(model: type[models.Model]) -> tuple[ForeignKeyField, ...]:
     """Return ``model``'s cascadable edge fields (the cached plan's tuple)."""
     return _edge_plan(model).cascadable
 
@@ -261,7 +266,7 @@ def _cascadable_edge_names(model: type[models.Model]) -> frozenset[str]:
     return frozenset(field.name for field in _cascadable_edges(model))
 
 
-def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
+def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) -> set[str] | None:
     """Resolve ``fields`` to the set of edge names to walk, validating loudly.
 
     ``None`` returns ``None`` (a sentinel meaning "walk every cascadable edge",
@@ -328,7 +333,7 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
     return requested
 
 
-def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
+def _root_error_renderer(cls: type, model: type[models.Model]) -> Callable[[str, str], str]:
     """Build the cascade's error renderer for the shared visibility SOURCE boundary.
 
     The twin of :func:`_edge_error_renderer`, for the other end of the helper:
@@ -388,7 +393,11 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
     return _render
 
 
-def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
+def _edge_error_renderer(
+    target_type: type,
+    field: ForeignKeyField,
+    alias: str,
+) -> Callable[[str, str], str]:
     """Build the cascade's error renderer for the shared visibility boundary.
 
     The boundary owns the hook-result shape / concrete-table / alias /
@@ -460,9 +469,9 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
 
 def _validated_target_subquery(
     target_type: type,
-    target_qs: models.QuerySet,
-    field: Any,
-) -> models.QuerySet:
+    target_qs: models.QuerySet[models.Model, object],
+    field: ForeignKeyField,
+) -> models.QuerySet[models.Model, dict[str, object]]:
     """Validate a hook return's SQL composability and normalize it to the edge's target column.
 
     The hook return becomes the RHS of ``Q(<edge>__in=...)`` -- a row-visibility
@@ -554,10 +563,10 @@ def _cycle_error(state: _TraversalState, cls: type) -> ConfigurationError:
 
 def apply_cascade_permissions(
     cls: type,
-    queryset: models.QuerySet,
-    info: Any,
-    fields: Any = None,
-) -> models.QuerySet:
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
+    fields: Iterable[str] | None = None,
+) -> models.QuerySet[models.Model, object]:
     """Narrow ``queryset`` so each forward relation respects its target visibility.
 
     Call from inside a ``DjangoType.get_queryset`` (Decision 5). Walks ``cls``'s
@@ -670,11 +679,11 @@ def apply_cascade_permissions(
 def _walk(
     cls: type,
     model: type[models.Model],
-    queryset: models.QuerySet,
-    info: Any,
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
     names_to_walk: set[str] | None,
     state: _TraversalState,
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model, object]:
     """Intersect one visibility constraint per qualifying edge of ``model``.
 
     The caller owns the walk-frame lifecycle (state install / cycle raise /
@@ -718,10 +727,10 @@ def _walk(
 
 async def aapply_cascade_permissions(
     cls: type,
-    queryset: models.QuerySet,
-    info: Any,
-    fields: Any = None,
-) -> models.QuerySet:
+    queryset: models.QuerySet[models.Model, object],
+    info: object,
+    fields: Iterable[str] | None = None,
+) -> models.QuerySet[models.Model, object]:
     """Async twin of ``apply_cascade_permissions`` -- the same walk, off the event loop.
 
     Wraps the single sync walk in ``run_in_one_sync_boundary`` so blocking

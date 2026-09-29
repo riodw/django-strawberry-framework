@@ -62,7 +62,7 @@ _subsystem_clears: dict[str, tuple[Callable[[], None], bool]] = {}
 # the validated setting once per finalization and stores it here; the cache
 # boundary is the registry lifecycle, reset by ``clear()`` (spec-031 GlobalID
 # setting snapshot).
-GLOBALID_SETTING_UNSET: Any = object()
+GLOBALID_SETTING_UNSET: object = object()
 
 
 def register_subsystem_clear(
@@ -127,7 +127,7 @@ class TypeRegistry:
         # build, computed once by ``finalize_django_types`` and read by the Relay
         # loop. ``GLOBALID_SETTING_UNSET`` distinguishes "not yet computed" from a
         # ``None`` (no-override) snapshot; reset in ``clear()``.
-        self._globalid_setting_snapshot: Any = GLOBALID_SETTING_UNSET
+        self._globalid_setting_snapshot: object = GLOBALID_SETTING_UNSET
 
     def _check_mutable(self) -> None:
         """Defense-in-depth guard: refuse mutation after ``mark_finalized``.

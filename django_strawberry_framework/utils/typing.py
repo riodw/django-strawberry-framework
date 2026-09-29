@@ -25,7 +25,33 @@ the same dig from plan-time graphql-core ``info`` and resolve-time Strawberry
 import functools
 import inspect
 from collections.abc import Callable, Coroutine
-from typing import Any, TypeGuard, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast, get_args, get_origin
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    from django.db import models
+    from graphql import GraphQLNullableType, GraphQLResolveInfo
+    from strawberry import Info
+    from strawberry.schema import Schema
+    from strawberry.schema.config import StrawberryConfig
+    from strawberry.types.base import StrawberryType
+
+    # The package's shared type aliases (type-checking only; nothing imports them
+    # at runtime).
+    #: A concrete or forward-relation model ``Field``, in the stub's universal
+    #: parametrization (its value types vary per column class).
+    ConcreteField: TypeAlias = models.Field[Any, Any]
+    #: Every field ``Model._meta.get_field`` / ``get_fields`` returns: a
+    #: ``ConcreteField`` or a reverse ``ForeignObjectRel`` (django-stubs' own
+    #: ``_AnyField``).
+    ModelField: TypeAlias = ConcreteField | models.ForeignObjectRel
+    #: A forward ``ForeignKey`` / ``OneToOneField`` (the stub's universal
+    #: parametrization): a cascadable edge, or a join's link column.
+    ForeignKeyField: TypeAlias = models.ForeignKey[Any, Any]
+    #: Both resolver ``info`` flavors: the resolve-time Strawberry ``Info`` and the
+    #: plan-time graphql-core ``GraphQLResolveInfo``.
+    EitherInfo: TypeAlias = Info[object, object] | GraphQLResolveInfo
 
 __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
@@ -39,8 +65,10 @@ __all__ = (
     "unwrap_return_type",
 )
 
+_T = TypeVar("_T")
 
-def strawberry_schema_from_schema(schema: Any) -> Any:
+
+def strawberry_schema_from_schema(schema: object) -> object:
     """Unwrap a Strawberry Schema to its inner schema; return ``schema`` if already unwrapped.
 
     Centralizes the brittle Strawberry-private ``_strawberry_schema`` contract.
@@ -51,17 +79,22 @@ def strawberry_schema_from_schema(schema: Any) -> Any:
     return schema if unwrapped is None else unwrapped
 
 
-def strawberry_schema_from_info(info: Any) -> Any | None:
+def strawberry_schema_from_info(info: object) -> "Schema | None":
     """Walk ``info.schema._strawberry_schema``; return ``None`` if any step is missing.
 
     Centralizes the brittle Strawberry-private ``_strawberry_schema`` contract for
     the resolver-info path. Caller treats ``None`` as "no schema available,
     nothing to look up."
     """
-    return getattr(getattr(info, "schema", None), "_strawberry_schema", None)
+    # Strawberry's ``Schema.__init__`` files itself on the graphql-core schema it
+    # builds, which is the object ``info.schema`` names on both info flavors.
+    return cast(
+        "Schema | None",
+        getattr(getattr(info, "schema", None), "_strawberry_schema", None),
+    )
 
 
-def schema_config_from_info(info: Any) -> Any | None:
+def schema_config_from_info(info: object) -> "StrawberryConfig | None":
     """Return StrawberryConfig from plan-time graphql-core or resolve-time Info.
 
     Prefers ``info.schema._strawberry_schema.config`` (optimizer middleware /
@@ -77,7 +110,8 @@ def schema_config_from_info(info: Any) -> Any | None:
     config = getattr(strawberry_schema_from_info(info), "config", None)
     if config is None:
         config = getattr(schema, "config", None)
-    return config
+    # Both reads land on a Strawberry schema's ``config`` attribute.
+    return cast("StrawberryConfig | None", config)
 
 
 # A type- or callable-wrapper stack (``GraphQLNonNull`` / ``GraphQLList`` / a
@@ -89,7 +123,7 @@ def schema_config_from_info(info: Any) -> Any | None:
 MAX_TYPE_WRAPPER_DEPTH = 64
 
 
-def _callable_inspection_target(value: Any) -> Any:
+def _callable_inspection_target(value: object) -> object:
     """Unwrap ``partial`` / ``staticmethod`` layers for the async predicates.
 
     Lets ``is_async_callable`` see every supported wrapper shape without
@@ -114,7 +148,7 @@ def _callable_inspection_target(value: Any) -> Any:
     )
 
 
-def is_async_callable(value: Any) -> TypeGuard[Callable[..., Coroutine[Any, Any, Any]]]:
+def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[Any, Any, Any]]]:
     """Return whether calling ``value`` yields a coroutine.
 
     ``inspect.iscoroutinefunction`` only reports on the value handed to it
@@ -163,7 +197,7 @@ def is_async_callable(value: Any) -> TypeGuard[Callable[..., Coroutine[Any, Any,
     )
 
 
-def unwrap_graphql_type(gql_type: Any) -> Any:
+def unwrap_graphql_type(gql_type: object) -> object:
     """Peel all graphql-core / Strawberry ``of_type`` wrapper layers.
 
     Returns the innermost type when ``gql_type`` is a
@@ -191,7 +225,7 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
     )
 
 
-def unwrap_non_null(gql_type: Any) -> Any:
+def unwrap_non_null(gql_type: _T) -> "_T | GraphQLNullableType":
     """Peel ONLY ``GraphQLNonNull`` layers, bounded; leave list wrappers in place.
 
     The narrow sibling of :func:`unwrap_graphql_type`, for the callers that must
@@ -217,7 +251,7 @@ def unwrap_non_null(gql_type: Any) -> Any:
     )
 
 
-def unwrap_container_type(strawberry_type: Any) -> Any:
+def unwrap_container_type(strawberry_type: _T) -> "_T | StrawberryType | type":
     """Peel Strawberry ``StrawberryContainer`` layers only, bounded.
 
     The container-scoped sibling of ``unwrap_graphql_type`` for resolved
@@ -235,17 +269,19 @@ def unwrap_container_type(strawberry_type: Any) -> Any:
     """
     from strawberry.types.base import StrawberryContainer
 
+    peeled: _T | StrawberryType | type = strawberry_type
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
-        if not isinstance(strawberry_type, StrawberryContainer):
-            return strawberry_type
-        strawberry_type = strawberry_type.of_type
+        if not isinstance(peeled, StrawberryContainer):
+            return peeled
+        peeled = peeled.of_type
+
     raise RuntimeError(
         f"unwrap_container_type: `of_type` container stack exceeded "
         f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
     )
 
 
-def unwrap_return_type(rt: Any) -> Any:
+def unwrap_return_type(rt: object) -> object:
     """Unwrap **one layer** of list / Strawberry-list-wrapper around the inner type.
 
     Returns the inner type when ``rt`` is ``list[T]``, a Strawberry-style

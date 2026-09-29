@@ -61,6 +61,7 @@ from ..mutations.inputs import (
 from ..mutations.sets import (
     DjangoMutation,
     _validate_permission_classes,
+    backing_model_of,
     make_declaration_registry,
 )
 from ..mutations.sets import (
@@ -75,10 +76,42 @@ from ..utils.sessions import actor_transition
 from . import sessions
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable
+    from collections.abc import Callable, Coroutine, Iterable, Sequence
+    from typing import Protocol
 
     from django.contrib.auth.base_user import AbstractBaseUser
+    from django.contrib.auth.models import _User
+    from django.contrib.sessions.backends.base import SessionBase
     from django.db import models
+    from django.http import HttpRequest
+    from strawberry.types import Info
+
+    from ..mutations.inputs import FieldError, ModelFieldIndex
+    from ..mutations.resolvers import _M2MAssignments
+    from ..mutations.sets import _ValidatedMutationMeta
+    from ..utils.inputs import InputFieldSpec
+
+    # The register decode product: the constructed (unsaved) user, the M2M
+    # replace-sets, the ``full_clean`` exclude list, and the captured raw password.
+    _RegisterDecoded: TypeAlias = tuple[_User, _M2MAssignments, list[str], object]
+
+    class _OkPayload(Protocol):
+        """The model-less ``{ ok, errors }`` payload instance logout returns."""
+
+        ok: bool
+
+    class _OkPayloadClass(Protocol):
+        """The materialized ``LogoutPayload`` class, as the logout teardowns build it."""
+
+        def __call__(self, *, ok: bool, errors: list[FieldError]) -> _OkPayload: ...
+
+    class _AuthLedgerEntry(Protocol):
+        """One auth-ledger declaration (a fixed-surface holder or the register rider)."""
+
+        _auth_surface: str
+        _primary_type: type | None
+        _payload_type_name: str | None
+
 
 # The one family label every auth surface resolves its request under (the
 # spec-040 D1 reuse directive): a single module-level constant, never a per-field
@@ -197,13 +230,13 @@ class _AuthMutationMetaSnapshot:
 
     __slots__ = ("_sealed", "operation", "permission_classes")
 
-    def __init__(self, operation: str, permission_classes: tuple[Any, ...]) -> None:
+    def __init__(self, operation: str, permission_classes: tuple[type, ...]) -> None:
         self._sealed = False
         self.operation = operation
         self.permission_classes = permission_classes
         self._sealed = True
 
-    def __setattr__(self, name: str, value: Any) -> None:
+    def __setattr__(self, name: str, value: object) -> None:
         if getattr(self, "_sealed", False):
             raise ConfigurationError(
                 f"The auth permission holder's validated snapshot is sealed and {name!r} "
@@ -249,7 +282,7 @@ class _SealedAuthHolderMeta(_AuthHolderAttributes):
     one honored write; rebinding or deletion raises ``ConfigurationError``.
     """
 
-    def __setattr__(cls, name: str, value: Any) -> None:  # noqa: N805 - a metaclass method's first argument is the class
+    def __setattr__(cls, name: str, value: object) -> None:  # noqa: N805 - a metaclass method's first argument is the class
         if name == "_mutation_meta" and "_mutation_meta" in cls.__dict__:
             raise ConfigurationError(
                 f"{cls.__name__}._mutation_meta is sealed and cannot be rebound; the auth "
@@ -275,7 +308,7 @@ _AuthDeclarationT = TypeVar("_AuthDeclarationT", _SealedAuthHolderMeta, type[Dja
 def _make_permission_holder(
     operation: str,
     holder_name: str,
-    permission_classes: tuple[Any, ...],
+    permission_classes: tuple[type, ...],
 ) -> _SealedAuthHolderMeta:
     """Synthesize the module-internal permission holder for one fixed auth surface.
 
@@ -329,7 +362,7 @@ def _declared_auth_surface(surface: str) -> _AuthDeclaration | None:
 def _reject_conflicting_permission_classes(
     surface: str,
     declared_cls: _AuthDeclaration,
-    permission_classes: tuple[Any, ...],
+    permission_classes: tuple[type, ...],
 ) -> None:
     """Raise unless a repeat declaration's ``permission_classes`` match the cached one.
 
@@ -357,8 +390,8 @@ def _reject_conflicting_permission_classes(
 def _declare_auth_surface(
     surface: str,
     label: str,
-    permission_classes: Any,
-    synthesize: Callable[[tuple[Any, ...]], _AuthDeclarationT],
+    permission_classes: Iterable[type] | None,
+    synthesize: Callable[[tuple[type, ...]], _AuthDeclarationT],
 ) -> _AuthDeclarationT:
     """Resolve one auth surface's declaration class (cached, conflict-checked, or fresh).
 
@@ -388,7 +421,7 @@ def _declare_auth_surface(
 def _declare_fixed_auth_surface(
     surface: str,
     holder_name: str,
-    permission_classes: Any,
+    permission_classes: Iterable[type] | None,
 ) -> _SealedAuthHolderMeta:
     """Record (or re-record) one fixed auth surface; return its permission holder.
 
@@ -410,7 +443,9 @@ def _declare_fixed_auth_surface(
     return holder_cls
 
 
-def _sync_bridged_async_body(sync_body: Any) -> Any:
+def _sync_bridged_async_body(
+    sync_body: Callable[..., object],
+) -> Callable[..., Coroutine[object, object, object]]:
     """Build the interim async resolver body that bridges to ``sync_body`` (spec-040 D17).
 
     ``_make_auth_field`` carries a real sync resolver body and a real *async*
@@ -427,7 +462,7 @@ def _sync_bridged_async_body(sync_body: Any) -> Any:
     the dispatch seam below.
     """
 
-    async def _async_body(info: Any, **kwargs: Any) -> Any:
+    async def _async_body(info: Info[object, object], **kwargs: object) -> object:
         return await run_in_one_sync_boundary(sync_body, info, **kwargs)
 
     return _async_body
@@ -435,14 +470,14 @@ def _sync_bridged_async_body(sync_body: Any) -> Any:
 
 def _make_auth_field(
     *,
-    sync_body: Any,
-    async_body: Any,
-    arguments: list[tuple[str, Any]],
-    return_annotation: Any,
+    sync_body: Callable[..., object],
+    async_body: Callable[..., object],
+    arguments: list[tuple[str, object]],
+    return_annotation: object,
     description: str | None,
     deprecation_reason: str | None,
-    directives: Any,
-) -> Any:
+    directives: Sequence[object],
+) -> object:
     """Build one fixed auth field around split sync / async gate-then-session-work bodies.
 
     The ONE auth field-construction helper the three fixed factories share
@@ -468,7 +503,7 @@ def _make_auth_field(
     # the factory fails loud as ConfigurationError.
     directives = validated_field_directives("auth field", directives)
 
-    def _resolve(root: Any, info: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+    def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:  # noqa: ARG001
         if async_execution():
             return async_body(info, **kwargs)
         return sync_body(info, **kwargs)
@@ -485,7 +520,7 @@ def _make_auth_field(
     )
 
 
-def _authenticated_actor_or_none(request: Any) -> Any:
+def _authenticated_actor_or_none(request: object) -> _User | None:
     """Return the request's authenticated actor, or ``None`` when anonymous.
 
     The ONE anonymity definition the session-auth surfaces share (spec-040
@@ -559,7 +594,9 @@ def _authenticated_actor_or_none(request: Any) -> Any:
     # authenticated).
     try:
         if is_authenticated:
-            return user
+            # The auth middleware's ``user`` is the ``AUTH_USER_MODEL`` instance or
+            # ``AnonymousUser``; only the former reports itself authenticated.
+            return cast("_User", user)
     except (
         TypeError,
         ValueError,
@@ -571,7 +608,7 @@ def _authenticated_actor_or_none(request: Any) -> Any:
     return None
 
 
-def _failed_login_payload(payload_cls: type, slot: str) -> Any:
+def _failed_login_payload(payload_cls: type, slot: str) -> object:
     """Build the ONE undifferentiated failed-login envelope (spec-040 Decision 5).
 
     ``node``/``result`` is ``None`` and ``errors`` carries a single non-field-keyed
@@ -582,17 +619,18 @@ def _failed_login_payload(payload_cls: type, slot: str) -> Any:
     credential collapse to a byte-identical payload (the enumeration guard).
     """
     from ..mutations import resolvers
+    from ..utils.errors import field_error
 
-    error = resolvers.field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
+    error = field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
     return resolvers.build_payload(payload_cls, slot, None, [error])
 
 
 def _transport_prologue(
-    info: Any,
+    info: Info[object, object],
     *,
-    supported: Any,
+    supported: Callable[[sessions.Transport], bool],
     unsupported_message: str,
-) -> tuple[Any, sessions.Transport, Any]:
+) -> tuple[Any, sessions.Transport, SessionBase]:
     """Resolve + classify the request, enforce transport capability, require a session.
 
     The ONE shared transport prologue login and logout both open with (auth
@@ -614,7 +652,7 @@ def _transport_prologue(
     return request, transport, session
 
 
-def _login_result_payload(payload_cls: type, slot: str, user: Any) -> Any:
+def _login_result_payload(payload_cls: type, slot: str, user: _User | None) -> object:
     """Build the failed-login envelope when ``user`` is ``None``, else the success payload.
 
     The shared two-line payload construction both login bodies (sync + async) open
@@ -632,10 +670,10 @@ def _login_result_payload(payload_cls: type, slot: str, user: Any) -> Any:
 
 def _login_authenticate(
     holder_cls: _SealedAuthHolderMeta,
-    info: Any,
+    info: Info[object, object],
     username: str,
     password: str,
-) -> tuple[Any, sessions.Transport, Any, type, str, Any]:
+) -> tuple[Any, sessions.Transport, SessionBase, type, str, _User | None]:
     """The all-sync login prologue: classify, capability, gate, preflight, authenticate.
 
     Runs steps 1-5 of the login state machine with NO session mutation:
@@ -683,7 +721,7 @@ def _login_authenticate(
     return request, transport, session, payload_cls, slot, user
 
 
-def _django_http_login_establish(request: Any, user: Any) -> None:
+def _django_http_login_establish(request: HttpRequest, user: _User) -> None:
     """Establish + durably persist the Django HTTP session; compensate fail-closed.
 
     Django's native ``login`` performs session rotation (``cycle_key`` for
@@ -717,7 +755,7 @@ def _django_http_login_establish(request: Any, user: Any) -> None:
         raise
 
 
-async def _channels_http_login_establish(request: Any, session: Any, user: Any) -> None:
+async def _channels_http_login_establish(request: Any, session: SessionBase, user: _User) -> None:
     """Establish + durably persist the Channels HTTP session; compensate fail-closed.
 
     The Channels twin of ``_django_http_login_establish``, awaited natively (never a
@@ -754,11 +792,11 @@ async def _channels_http_login_establish(request: Any, session: Any, user: Any) 
 
 def _login_resolve_body(
     holder_cls: _SealedAuthHolderMeta,
-    info: Any,
+    info: Info[object, object],
     *,
     username: str,
     password: str,
-) -> Any:
+) -> object:
     """The native SYNC login body: prologue, then the transport critical section.
 
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
@@ -793,11 +831,11 @@ def _login_resolve_body(
 
 async def _login_resolve_body_async(
     holder_cls: _SealedAuthHolderMeta,
-    info: Any,
+    info: Info[object, object],
     *,
     username: str,
     password: str,
-) -> Any:
+) -> object:
     """The native ASYNC login body: bridge Django HTTP, await Channels HTTP natively.
 
     A Django ``HttpRequest`` under async execution stays inside the existing
@@ -834,8 +872,8 @@ async def _login_resolve_body_async(
 
 def _logout_prologue(
     holder_cls: _SealedAuthHolderMeta,
-    info: Any,
-) -> tuple[Any, sessions.Transport, type]:
+    info: Info[object, object],
+) -> tuple[Any, sessions.Transport, _OkPayloadClass]:
     """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
 
     Runs steps 1-3 of the logout state machine with NO session mutation:
@@ -863,11 +901,12 @@ def _logout_prologue(
         unsupported_message=_WEBSOCKET_LOGOUT_UNSUPPORTED,
     )
     resolvers.authorize_or_raise(holder_cls, info, "logout", None, instance=None)
-    payload_cls = resolvers.payload_cls_for(holder_cls)
+    # The logout holder's payload is the bind-materialized model-less ``LogoutPayload``.
+    payload_cls = cast("_OkPayloadClass", resolvers.payload_cls_for(holder_cls))
     return request, transport, payload_cls
 
 
-def _logout_observation(request: Any, payload_cls: type) -> Any:
+def _logout_observation(request: object, payload_cls: _OkPayloadClass) -> _OkPayload:
     """Capture the pre-teardown ``ok`` observation and build the logout payload.
 
     The shared pair both logout teardowns open their critical section with (auth
@@ -882,7 +921,7 @@ def _logout_observation(request: Any, payload_cls: type) -> Any:
     return payload_cls(ok=ok, errors=[])
 
 
-def _django_http_logout(request: Any, payload_cls: type) -> Any:
+def _django_http_logout(request: HttpRequest, payload_cls: _OkPayloadClass) -> _OkPayload:
     """Capture the actor, build the payload, then run Django's native logout; fail closed.
 
     The Django HTTP teardown. The
@@ -909,7 +948,7 @@ def _django_http_logout(request: Any, payload_cls: type) -> Any:
     return payload
 
 
-async def _channels_logout(request: Any, payload_cls: type) -> Any:
+async def _channels_logout(request: Any, payload_cls: _OkPayloadClass) -> _OkPayload:
     """The Channels twin of ``_django_http_logout``, awaited natively under the scope lock.
 
     ``channels.auth.logout`` (a ``database_sync_to_async`` callable) fires
@@ -971,7 +1010,7 @@ async def _channels_logout(request: Any, payload_cls: type) -> Any:
             return payload
 
 
-def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Any) -> Any:
+def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Info[object, object]) -> object:
     """The native SYNC logout body: prologue, then the transport critical section.
 
     Handles Django HTTP under synchronous execution directly, and a directly-invoked
@@ -995,7 +1034,10 @@ def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Any) -> Any:
     return async_to_sync(_channels_logout)(request, payload_cls)
 
 
-async def _logout_resolve_body_async(holder_cls: _SealedAuthHolderMeta, info: Any) -> Any:
+async def _logout_resolve_body_async(
+    holder_cls: _SealedAuthHolderMeta,
+    info: Info[object, object],
+) -> object:
     """The native ASYNC logout body: bridge Django HTTP, await Channels natively.
 
     A Django ``HttpRequest`` under async execution stays inside the existing
@@ -1020,10 +1062,10 @@ async def _logout_resolve_body_async(holder_cls: _SealedAuthHolderMeta, info: An
 
 def login_mutation(
     *,
-    permission_classes: Any = None,
+    permission_classes: Iterable[type] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
-    directives: Any = (),
+    directives: Sequence[object] = (),
 ) -> Any:
     """Return the ``login(username:, password:)`` session mutation field (Decision 5).
 
@@ -1049,10 +1091,10 @@ def login_mutation(
 
 def logout_mutation(
     *,
-    permission_classes: Any = None,
+    permission_classes: Iterable[type] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
-    directives: Any = (),
+    directives: Sequence[object] = (),
 ) -> Any:
     """Return the argument-less ``logout`` session mutation field (Decision 5).
 
@@ -1113,10 +1155,10 @@ def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...
 
 def _register_decode_step(
     mutation_cls: type[DjangoMutation],
-    data: Any,
-    info: Any,
-    instance: Any,
-) -> Any:
+    data: object,
+    info: Info[object, object],
+    instance: models.Model | None,
+) -> _RegisterDecoded | list[FieldError]:
     """The register ``decode_step``: the shared model decode + the password capture.
 
     Rides ``_model_decode_step``; bind stashes ``password`` as kind ``EXCLUDED``
@@ -1133,22 +1175,30 @@ def _register_decode_step(
 
     # The rider is a model-backed create: its snapshot carries the user model and the
     # bind stashed the decode's reverse maps.
-    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
+    model = backing_model_of(mutation_cls._mutation_meta)
     decoded = _model_decode_step(
         model,
         data,
         info,
         instance=instance,
-        specs=cast("list", mutation_cls._input_field_specs),
-        model_fields=cast("dict[str, Any]", mutation_cls._model_fields_by_attr),
+        specs=cast("list[InputFieldSpec]", mutation_cls._input_field_specs),
+        model_fields=cast("ModelFieldIndex", mutation_cls._model_fields_by_attr),
     )
     if isinstance(decoded, list):
         return decoded
-    user, m2m_assignments, exclude, excluded_values = decoded
+    # The rider's model is ``get_user_model()`` and its bind stashed the ``EXCLUDED``
+    # password spec, so the decode answers the user plus the captured values.
+    user, m2m_assignments, exclude, excluded_values = cast(
+        "tuple[_User, _M2MAssignments, list[str], dict[str, object]]",
+        decoded,
+    )
     return user, m2m_assignments, exclude, excluded_values.get("password")
 
 
-def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
+def _register_write_step(
+    instance: models.Model | None,
+    decoded: _RegisterDecoded,
+) -> models.Model | list[FieldError]:
     """The register ``write_step``: validate + hash the password, then the shared tail.
 
     ``validate_password(raw_password, user)`` runs with the constructed (unsaved)
@@ -1189,12 +1239,16 @@ def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
         validate_password(raw_password, user)
     except ValidationError as exc:
         codes = [leaf.code for leaf in exc.error_list if leaf.code]
-        return [resolvers.field_error("password", exc.messages, codes=codes)]
+        return [field_error("password", exc.messages, codes=codes)]
     user.set_password(raw_password)
     return resolvers._model_write_step(instance, (user, m2m_assignments, exclude))
 
 
-def _run_register_pipeline_sync(mutation_cls: type[DjangoMutation], info: Any, data: Any) -> Any:
+def _run_register_pipeline_sync(
+    mutation_cls: type[DjangoMutation],
+    info: Info[object, object],
+    data: object,
+) -> object:
     """Run the register create through the shared write skeleton (spec-040 Decision 6).
 
     Rides ``run_write_pipeline_sync`` unchanged - the ``transaction.atomic()``
@@ -1217,7 +1271,7 @@ def _run_register_pipeline_sync(mutation_cls: type[DjangoMutation], info: Any, d
     )
 
 
-def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[DjangoMutation]:
+def _synthesize_register_rider(permission_classes: tuple[type, ...]) -> type[DjangoMutation]:
     """Synthesize the concrete ``Register`` rider class (spec-040 Decision 6).
 
     A package-declared ``DjangoMutation`` subclass whose ``__name__`` is pinned to
@@ -1254,13 +1308,13 @@ def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[Djan
             permission_classes = rider_permission_classes
 
         @classmethod
-        def input_type_name(cls, meta: Any) -> str:
+        def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
             """Pin the generated input's public name to ``RegisterInput`` (the name seam)."""
             del meta  # the register input name is fixed, not shape-derived.
             return _REGISTER_INPUT_NAME
 
         @classmethod
-        def build_input(cls, meta: Any, primary_type: type) -> type:
+        def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type:
             """Build the narrowed model-column input under the pinned ``RegisterInput`` name.
 
             The standard generator unchanged (``mutation_input_shape`` +
@@ -1273,10 +1327,11 @@ def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[Djan
             ``RegisterInput``. Stashes specs with ``password`` as kind ``EXCLUDED``
             (spec-040 D6) so the shared model decode captures it out of construction.
             """
-            shape = mutation_input_shape(meta.model, CREATE, fields=meta.fields)
+            model = backing_model_of(meta)
+            shape = mutation_input_shape(model, CREATE, fields=meta.fields)
             pinned = shape._replace(type_name=_REGISTER_INPUT_NAME)
             input_cls = build_mutation_input(
-                meta.model,
+                model,
                 operation_kind=CREATE,
                 primary_type=primary_type,
                 fields=meta.fields,
@@ -1284,7 +1339,7 @@ def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[Djan
             )
             materialize_mutation_input_class(input_cls.__name__, input_cls)
             cls._input_field_specs, cls._model_fields_by_attr = mutation_input_field_specs(
-                meta.model,
+                model,
                 input_cls,
                 excluded_attrs=_REGISTER_EXCLUDED_INPUT_FIELDS,
             )
@@ -1293,11 +1348,11 @@ def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[Djan
         @classmethod
         def resolve_sync(
             cls,
-            info: Any,
+            info: Info[object, object],
             *,
-            data: Any,
-            id: Any,  # noqa: A002
-        ) -> Any:
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
             """The sync register entry: the shared skeleton with the password step pair."""
             del id  # create-only: the field dispatcher always passes UNSET.
             return _run_register_pipeline_sync(cls, info, data)
@@ -1305,11 +1360,11 @@ def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[Djan
         @classmethod
         async def resolve_async(
             cls,
-            info: Any,
+            info: Info[object, object],
             *,
-            data: Any,
-            id: Any,  # noqa: A002
-        ) -> Any:
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
             """The async twin: the SAME sync body in one ``sync_to_async`` boundary."""
             del id  # create-only: the field dispatcher always passes UNSET.
             return await run_in_one_sync_boundary(_run_register_pipeline_sync, cls, info, data)
@@ -1319,10 +1374,10 @@ def _synthesize_register_rider(permission_classes: tuple[Any, ...]) -> type[Djan
 
 def register_mutation(
     *,
-    permission_classes: Any = None,
+    permission_classes: Iterable[type] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
-    directives: Any = (),
+    directives: Sequence[object] = (),
 ) -> Any:
     """Return the ``register(data: RegisterInput!)`` mutation field (Decision 6).
 
@@ -1356,7 +1411,10 @@ def register_mutation(
     )
 
 
-def _resolve_user_primary_or_raise(user_model: type, surfaces: list[str]) -> type:
+def _resolve_user_primary_or_raise(
+    user_model: type[models.Model],
+    surfaces: Sequence[str],
+) -> type:
     """Resolve the user model's primary ``DjangoType``, or raise the auth-specific fix.
 
     Rides ``registry.get(user_model)`` - the SAME getter ``_resolve_primary_type``
@@ -1402,7 +1460,9 @@ def bind_auth_mutations() -> None:
     alias rides the ``auth.queries`` namespace trio (D13). Everything lands
     before ``strawberry.Schema(...)`` resolves the fields' lazy forward-refs.
     """
-    declared = iter_auth_mutations()
+    # The auth ledger records only fixed-surface holders and the register rider,
+    # each carrying its surface key and the bind's two output slots.
+    declared = cast("tuple[_AuthLedgerEntry, ...]", iter_auth_mutations())
     if not declared:
         return
     by_surface = {declaration._auth_surface: declaration for declaration in declared}

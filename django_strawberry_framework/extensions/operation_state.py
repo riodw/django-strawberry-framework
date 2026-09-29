@@ -125,7 +125,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterable, Iterator
 from contextvars import ContextVar, Token
-from typing import Any, Generic, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast
 from weakref import ref
 
 from strawberry.extensions.base_extension import SchemaExtension
@@ -135,6 +135,17 @@ from ..exceptions import ConfigurationError
 from ..utils.execution_mode import OperationMode, bind_operation_mode
 from ..utils.operation_lease import OperationLease
 from ..utils.private_state import PrivateAuthority
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from strawberry.extensions.context import ExtensionContextManagerBase
+    from strawberry.schema._graphql_core import GraphQLIncrementalResult
+    from strawberry.schema.schema import StreamResult
+    from strawberry.types import ExecutionContext
+    from strawberry.types.execution import ExecutionResult, PreExecutionError
+    from typing_extensions import TypeIs
+
+#: The value type of whichever context variable a binding sets and resets.
+_ValueT = TypeVar("_ValueT")
 
 __all__ = ("DjangoExtensionsRunner", "OperationState")
 
@@ -157,15 +168,15 @@ class OperationState:
 
     __slots__ = ("__weakref__", "_resumed_bindings", "execution_context")
 
-    def __init__(self, execution_context: Any) -> None:
+    def __init__(self, execution_context: ExecutionContext) -> None:
         self.execution_context = execution_context
-        self._resumed_bindings: list[tuple[ContextVar[Any], Any]] = []
+        self._resumed_bindings: list[tuple[ContextVar[Any], object]] = []
 
     def rebind_on_resume(
         self,
-        variable: ContextVar[Any],
-        value: Any,
-        token: Token[Any],
+        variable: ContextVar[_ValueT],
+        value: _ValueT,
+        token: Token[_ValueT],
     ) -> bool:
         """Have the runner bind ``variable`` to ``value`` again on every resume.
 
@@ -197,14 +208,23 @@ class OperationState:
         self._resumed_bindings.append((variable, value))
         return _register_resumed_binding(variable, token)
 
-    def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], Any], ...]:
+    def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], object], ...]:
         """The variables an extension asked the runner to bind again on resume."""
         return tuple(self._resumed_bindings)
 
 
 # The state type one operation-bound extension builds and reads back: the
 # ``OperationState`` subclass its ``_new_operation_state`` returns.
-_StateT = TypeVar("_StateT", bound=OperationState)
+_StateT = TypeVar("_StateT", bound=OperationState, covariant=True)
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only aliases.
+    #: Each operation-bound extension paired with the state built for this operation.
+    _OperationStates = tuple[
+        tuple["_OperationBoundExtension[OperationState]", OperationState],
+        ...,
+    ]
+    #: One frame a streamed operation yields.
+    _StreamFrame = PreExecutionError | ExecutionResult | GraphQLIncrementalResult
 
 
 class _RunnerScope(NamedTuple):
@@ -250,7 +270,9 @@ class _RunnerScope(NamedTuple):
 #: A ``ContextVar`` points back at nothing, so holding one strongly retains
 #: nothing but the variable; the extension it belongs to is held weakly, and its
 #: entry is dropped when the extension dies.
-_OPERATION_CARRIERS: PrivateAuthority[ContextVar[Any]] = PrivateAuthority()
+_OPERATION_CARRIERS: PrivateAuthority[ContextVar[OperationLease[ref[OperationState]] | None]] = (
+    PrivateAuthority()
+)
 
 #: Every extension a ``DjangoSchema`` has managed, and nothing else.
 #:
@@ -294,7 +316,7 @@ _RESUME_REGISTRARS: ContextVar[list[_Binding] | None] = ContextVar(
 )
 
 
-def _register_resumed_binding(variable: ContextVar[Any], token: Token[Any]) -> bool:
+def _register_resumed_binding(variable: ContextVar[_ValueT], token: Token[_ValueT]) -> bool:
     """Hand ``token`` to the resume driving this task, if one is; say whether it took it.
 
     Nothing to hand it to on the ordinary operation path, where the scope that
@@ -332,7 +354,7 @@ class _OperationModeMarker(SchemaExtension):
         self.mode = mode
 
 
-def _declared_operation_mode(extensions: Iterable[Any]) -> OperationMode | None:
+def _declared_operation_mode(extensions: Iterable[SchemaExtension]) -> OperationMode | None:
     """The mode the chain declares, or ``None`` when no chain member declares one.
 
     Exact type, and the first one found: a consumer extension that grew a
@@ -368,7 +390,7 @@ def operation_is_nested() -> bool:
     return scope is not None and scope.nested
 
 
-def _carrier(extension: Any) -> ContextVar[Any]:
+def _carrier(extension: object) -> ContextVar[OperationLease[ref[OperationState]] | None]:
     """The binding carrier settled for ``extension`` at construction.
 
     Absent for one case only: a subclass whose ``__init__`` never reached
@@ -399,15 +421,17 @@ def _bound_state(extension: _OperationBoundExtension[_StateT]) -> _StateT | None
     if lease is None:
         return None
     binding = lease.held()
-    return None if binding is None else binding()
+    # An extension's carrier is only ever set to a reference to the state its own
+    # ``_new_operation_state`` built (``_bind`` over ``_operation_states``).
+    return None if binding is None else cast("_StateT | None", binding())
 
 
-def _is_package_managed(extension: Any) -> bool:
+def _is_package_managed(extension: object) -> bool:
     """Whether a ``DjangoSchema`` has already managed ``extension``."""
     return _PACKAGE_MANAGED.settled(extension)
 
 
-def _mark_package_managed(extension: Any) -> None:
+def _mark_package_managed(extension: object) -> None:
     """Record ``extension`` as one the package runner owns the state of.
 
     Also drops whatever the compatibility branch had left on the instance: an
@@ -420,7 +444,7 @@ def _mark_package_managed(extension: Any) -> None:
     extension.__dict__.pop("_compatibility_state", None)
 
 
-def _is_operation_bound(extension: Any) -> bool:
+def _is_operation_bound(extension: object) -> TypeIs[_OperationBoundExtension[OperationState]]:
     """Whether ``extension`` is one of this package's operation-bound extensions.
 
     ``type()`` rather than ``isinstance``, for the reason
@@ -431,7 +455,7 @@ def _is_operation_bound(extension: Any) -> bool:
     return issubclass(type(extension), _OperationBoundExtension)
 
 
-def _binds_operation_state(execution_context: Any) -> bool:
+def _binds_operation_state(execution_context: object) -> bool:
     """Whether a package runner will build this context's operation state.
 
     Only a ``DjangoSchema`` overrides the runner factory, so only a context
@@ -500,7 +524,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
         return None if state is None else state.execution_context
 
     @execution_context.setter
-    def execution_context(self, value: Any) -> None:
+    def execution_context(self, value: ExecutionContext | None) -> None:
         """Take the engine's assignment for the schemas it is the only signal for.
 
         Under a ``DjangoSchema`` the runner is handed this same context and
@@ -531,7 +555,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
             None if value is None else self._new_operation_state(value)
         )
 
-    def _new_operation_state(self, execution_context: Any) -> _StateT:
+    def _new_operation_state(self, execution_context: ExecutionContext) -> _StateT:
         """Build the state one operation on this extension is answered from."""
         # A subclass that keeps this default declares ``OperationState`` as its state type.
         return cast("_StateT", OperationState(execution_context))
@@ -557,9 +581,9 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
 
 
 def _operation_states(
-    extensions: Iterable[Any],
-    execution_context: Any,
-) -> tuple[tuple[Any, OperationState], ...]:
+    extensions: Iterable[SchemaExtension],
+    execution_context: ExecutionContext,
+) -> _OperationStates:
     """Build the state each operation-bound extension answers this operation from.
 
     Only the package's own operation-bound extensions are selected: a consumer
@@ -596,13 +620,13 @@ class _Binding(NamedTuple):
 
     variable: ContextVar[Any]
     token: Token[Any]
-    lease: OperationLease[Any] | None
+    lease: OperationLease[object] | None
     adopted: bool = False
 
 
 def _bind(
     scope: _RunnerScope,
-    states: tuple[tuple[Any, OperationState], ...],
+    states: _OperationStates,
     *,
     registrar: bool = False,
 ) -> list[_Binding]:
@@ -625,13 +649,13 @@ def _bind(
         return []
     bindings: list[_Binding] = []
     try:
-        lease: OperationLease[Any] = OperationLease(scope)
+        lease = OperationLease(scope)
         bindings.append(_Binding(_RUNNER_SCOPES, _RUNNER_SCOPES.set(lease), lease))
         if scope.mode is not None:
             bindings.append(_Binding(*bind_operation_mode(scope.mode)))
         for extension, state in states:
             carrier = _carrier(extension)
-            binding: OperationLease[Any] = OperationLease(ref(state))
+            binding = OperationLease(ref(state))
             bindings.append(_Binding(carrier, carrier.set(binding), binding))
             for variable, value in state.resumed_bindings():
                 bindings.append(_Binding(variable, variable.set(value), None))
@@ -655,7 +679,7 @@ def _already_bound(scope: _RunnerScope) -> bool:
     return lease is not None and lease.held() is scope
 
 
-def _reset_binding(variable: ContextVar[Any], token: Token[Any]) -> None:
+def _reset_binding(variable: ContextVar[_ValueT], token: Token[_ValueT]) -> None:
     """Reset one binding, in the context that made it.
 
     Every binding here is reset where it was created: a scope that spans a
@@ -687,7 +711,7 @@ def _unbind(bindings: list[_Binding]) -> None:
             _reset_binding(binding.variable, binding.token)
 
 
-def _reset_adopted_binding(variable: ContextVar[Any], token: Token[Any]) -> None:
+def _reset_adopted_binding(variable: ContextVar[_ValueT], token: Token[_ValueT]) -> None:
     """Take back a binding this scope adopted, restoring its exact predecessor.
 
     The token was made in this task, so the reset belongs here and restores
@@ -708,7 +732,7 @@ def _reset_adopted_binding(variable: ContextVar[Any], token: Token[Any]) -> None
 @contextlib.contextmanager
 def _bound(
     scope: _RunnerScope,
-    states: tuple[tuple[Any, OperationState], ...],
+    states: _OperationStates,
     *,
     registrar: bool = False,
 ) -> Iterator[None]:
@@ -744,8 +768,8 @@ class _BoundScope:
     def __init__(
         self,
         runner_scope: _RunnerScope,
-        states: tuple[tuple[Any, OperationState], ...],
-        scope: Any,
+        states: _OperationStates,
+        scope: ExtensionContextManagerBase,
     ) -> None:
         self._runner_scope = runner_scope
         self._states = states
@@ -760,7 +784,7 @@ class _BoundScope:
             _unbind(self._bindings)
             raise
 
-    def __exit__(self, *exc_info: Any) -> Any:
+    def __exit__(self, *exc_info: Any) -> None:
         try:
             return self._scope.__exit__(*exc_info)
         finally:
@@ -774,7 +798,7 @@ class _BoundScope:
             _unbind(self._bindings)
             raise
 
-    async def __aexit__(self, *exc_info: Any) -> Any:
+    async def __aexit__(self, *exc_info: Any) -> None:
         try:
             return await self._scope.__aexit__(*exc_info)
         finally:
@@ -804,7 +828,7 @@ class _ResumedStream:
 
     __slots__ = ("_runner", "_source")
 
-    def __init__(self, runner: DjangoExtensionsRunner, source: Any) -> None:
+    def __init__(self, runner: DjangoExtensionsRunner, source: StreamResult) -> None:
         self._runner = runner
         self._source = source
 
@@ -812,22 +836,22 @@ class _ResumedStream:
         """Answer for itself, so the bindings cover every frame the caller pulls."""
         return self
 
-    async def __anext__(self) -> Any:
+    async def __anext__(self) -> _StreamFrame:
         """Produce the next frame with this operation bound in the calling task."""
         with self._runner.resumed():
             return await self._source.__anext__()
 
-    async def asend(self, value: Any) -> Any:
+    async def asend(self, value: None) -> _StreamFrame:
         """Resume the stream with ``value``, bound in the calling task."""
         with self._runner.resumed():
             return await self._source.asend(value)
 
-    async def athrow(self, *args: Any, **kwargs: Any) -> Any:
+    async def athrow(self, *args: Any, **kwargs: Any) -> _StreamFrame:
         """Throw into the stream, bound so its teardown reads its own operation."""
         with self._runner.resumed():
             return await self._source.athrow(*args, **kwargs)
 
-    async def aclose(self) -> Any:
+    async def aclose(self) -> None:
         """Close the stream, bound so every scope it unwinds tears its own state down.
 
         The one method whose caller is routinely not the task that produced a
@@ -862,7 +886,11 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
     only one of them that can happen in a task the operation never started in.
     """
 
-    def __init__(self, execution_context: Any, extensions: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        execution_context: ExecutionContext,
+        extensions: list[SchemaExtension] | None = None,
+    ) -> None:
         super().__init__(execution_context=execution_context, extensions=extensions)
         self._operation_states = _operation_states(self.extensions, execution_context)
         self._operation_mode = _declared_operation_mode(self.extensions)
@@ -889,7 +917,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         """The operation scope, with this operation's bindings around it."""
         return _BoundScope(self._scope(), self._operation_states, super().operation())
 
-    def on_stream_result(self, result: Any) -> Any:
+    def on_stream_result(self, result: object) -> Any:
         """The streaming-result scope, bound so the runner's contract is complete."""
         return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))
 
@@ -906,11 +934,11 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         with _bound(self._scope(), self._operation_states, registrar=True):
             yield
 
-    def resumed_stream(self, source: Any) -> _ResumedStream:
+    def resumed_stream(self, source: StreamResult) -> _ResumedStream:
         """Wrap ``source`` so every frame it yields is produced with this operation bound."""
         return _ResumedStream(self, source)
 
-    def get_extensions_results_sync(self) -> dict[str, Any]:
+    def get_extensions_results_sync(self) -> dict[str, object]:
         """Collect results with the operation's bindings in force.
 
         Upstream calls this after the synchronous operation teardown has
@@ -922,7 +950,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         with _bound(self._scope(), self._operation_states):
             return super().get_extensions_results_sync()
 
-    async def get_extensions_results(self, ctx: Any) -> dict[str, Any]:
+    async def get_extensions_results(self, ctx: ExecutionContext) -> dict[str, object]:
         """Collect results with the operation's bindings in force, on the async path."""
         with _bound(self._scope(), self._operation_states):
             return await super().get_extensions_results(ctx)

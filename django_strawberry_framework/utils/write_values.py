@@ -21,7 +21,7 @@ mutation resolver is not the utility module for the other write flavors):
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
@@ -38,11 +38,21 @@ from .querysets import (
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
+    from typing import TypeAlias
+
+    from django.db import models
+    from strawberry import Info
 
     from ..mutations.inputs import FieldError
+    from .inputs import InputFieldSpec
+
+    #: One kind handler: decode ``(spec, value)``, store it, and report a ``FieldError``.
+    _FieldHandler: TypeAlias = Callable[[InputFieldSpec, object], FieldError | None]
+    #: One flavor relation decoder, called with the shared keyword arguments.
+    _RelationDecoder: TypeAlias = Callable[..., tuple[object, FieldError | None]]
 
 
-def unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
+def unencodable_text_error(field_name: str, value: object) -> FieldError | None:
     r"""Reject a string input that cannot be encoded for storage (unpaired surrogate).
 
     A GraphQL ``String`` can carry lone UTF-16 surrogate code points (e.g. U+D800
@@ -76,7 +86,7 @@ def unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
     return None
 
 
-def raw_choice_value(value: Any) -> Any:
+def raw_choice_value(value: object) -> object:
     """Unwrap a choice-enum member to its raw Django choice value (spec-036 Decision 6).
 
     A ``choices`` column resolves to the SAME generated Strawberry ``Enum`` on the
@@ -94,7 +104,7 @@ def raw_choice_value(value: Any) -> Any:
     return str.__str__(raw_value) if isinstance(raw_value, str) else raw_value
 
 
-def coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
+def coerce_relation_pk_or_none(related_model: type, pk: object) -> object:
     """Coerce a raw M2M pk through the target's pk field; ``None`` if uncoercible / out of range.
 
     The raw-pk M2M counterpart to ``relay.py::_coerce_pk_or_none`` (which coerces a
@@ -117,11 +127,11 @@ def coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
 
 
 def type_check_relation_id(
-    value: Any,
+    value: object,
     *,
     graphql_name: str,
     related_model: type,
-) -> tuple[Any, FieldError | None]:
+) -> tuple[object, FieldError | None]:
     """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch.
 
     The "GlobalID -> ``decode_model_global_id`` (non-``OK`` -> uniform relation
@@ -158,7 +168,7 @@ def type_check_relation_id(
     return pk, None
 
 
-def decode_scalar_leaf(graphql_name: str, value: Any) -> tuple[Any, FieldError | None]:
+def decode_scalar_leaf(graphql_name: str, value: object) -> tuple[object, FieldError | None]:
     """Run the shared scalar leaf decode: choice unwrap, then text preflight.
 
     The two-step compose every write flavor runs on a provided scalar value -
@@ -182,15 +192,15 @@ def decode_scalar_leaf(graphql_name: str, value: Any) -> tuple[Any, FieldError |
 
 
 def decode_visible_relation(
-    value: Any,
+    value: object,
     *,
     graphql_name: str,
     related_model: type,
-    info: Any,
+    info: Info[object, object],
     async_recourse: str,
-    skip: Callable[[Any], bool],
-    project: Callable[[Any], Any],
-) -> tuple[Any, FieldError | None]:
+    skip: Callable[[object], bool],
+    project: Callable[[models.Model], object],
+) -> tuple[object, FieldError | None]:
     """Decode ONE relation id to its visible, flavor-projected value.
 
     The single-relation decode spine the form and serializer flavors share - and
@@ -245,7 +255,7 @@ RELATION_ID_ATOM_TYPES = (
 def materialize_relation_id_container(
     values: Any,
     graphql_name: str,
-) -> tuple[list[Any], None] | tuple[None, FieldError]:
+) -> tuple[list[object], None] | tuple[None, FieldError]:
     """Materialize a relation-id container, or return the uniform field-keyed error.
 
     GraphQL normally supplies a list, but every write flavor's M2M seam can be
@@ -271,13 +281,13 @@ def materialize_relation_id_container(
 
 
 def decode_visible_relation_ids(
-    values: Any,
+    values: object,
     *,
     graphql_name: str,
     related_model: type,
-    info: Any,
+    info: Info[object, object],
     async_recourse: str,
-) -> tuple[list[Any] | None, FieldError | None]:
+) -> tuple[list[object] | None, FieldError | None]:
     """Type-check each relation id, then confirm the whole set in one visibility query.
 
     The batched compose the model FK / M2M set decoder and the serializer
@@ -300,9 +310,9 @@ def decode_visible_relation_ids(
     if container_error is not None:
         return None, container_error
 
-    pks: list[Any] = []
+    pks: list[object] = []
     # A ``None`` error means the container materialized into a list.
-    for value in cast("list[Any]", provided_values):
+    for value in cast("list[object]", provided_values):
         pk, error = type_check_relation_id(
             value,
             graphql_name=graphql_name,
@@ -319,20 +329,20 @@ def decode_visible_relation_ids(
     return pks, None
 
 
-def _spec_field_name(spec: Any) -> str:
+def _spec_field_name(spec: InputFieldSpec) -> str:
     """Default GraphQL error-path: the spec's own wire name."""
     return spec.graphql_name
 
 
-def _no_relation_extra(_spec: Any) -> dict[str, Any]:
+def _no_relation_extra(_spec: InputFieldSpec) -> Mapping[str, object]:
     """Default relation-decoder extras: none."""
     return {}
 
 
 def store_decoded(
     dest: dict[str, Any],
-    spec: Any,
-    pair: tuple[Any, FieldError | None],
+    spec: InputFieldSpec,
+    pair: tuple[object, FieldError | None],
 ) -> FieldError | None:
     """Store a successful ``(decoded, error)`` pair under ``spec.target_name``.
 
@@ -351,15 +361,15 @@ def store_decoded(
 
 def decoded_into(
     dest: dict[str, Any],
-    decode: Callable[[Any, Any], tuple[Any, FieldError | None]],
-) -> Callable[[Any, Any], FieldError | None]:
+    decode: Callable[[InputFieldSpec, object], tuple[object, FieldError | None]],
+) -> _FieldHandler:
     """Build a kind handler: ``decode(spec, value)`` then ``store_decoded``.
 
     The primitive SCALAR / FILE / RELATION / nested handlers all specialize.
     ``decode`` returns ``(decoded, None)`` or ``(None, FieldError)``.
     """
 
-    def handler(spec: Any, value: Any) -> FieldError | None:
+    def handler(spec: InputFieldSpec, value: object) -> FieldError | None:
         return store_decoded(dest, spec, decode(spec, value))
 
     return handler
@@ -368,8 +378,8 @@ def decoded_into(
 def scalar_into(
     dest: dict[str, Any],
     *,
-    field_name: Callable[[Any], str] = _spec_field_name,
-) -> Callable[[Any, Any], FieldError | None]:
+    field_name: Callable[[InputFieldSpec], str] = _spec_field_name,
+) -> _FieldHandler:
     """SCALAR handler: ``decode_scalar_leaf`` then store under ``target_name``.
 
     ``field_name(spec)`` is the GraphQL path the error keys to (default
@@ -383,7 +393,7 @@ def scalar_into(
 
 def file_into(
     dest: dict[str, Any],
-) -> Callable[[Any, Any], FieldError | None]:
+) -> _FieldHandler:
     """FILE handler: store the Upload under ``spec.target_name``.
 
     Destination is flavor policy: form ``provided_files`` (Django ``files=``),
@@ -395,12 +405,12 @@ def file_into(
 def relation_into(
     dest: dict[str, Any],
     *,
-    single: Callable[..., tuple[Any, FieldError | None]],
-    multi: Callable[..., tuple[Any, FieldError | None]],
-    info: Any,
-    field_name: Callable[[Any], str] = _spec_field_name,
-    extra: Callable[[Any], dict[str, Any]] = _no_relation_extra,
-) -> Callable[[Any, Any], FieldError | None]:
+    single: _RelationDecoder,
+    multi: _RelationDecoder,
+    info: Info[object, object],
+    field_name: Callable[[InputFieldSpec], str] = _spec_field_name,
+    extra: Callable[[InputFieldSpec], Mapping[str, object]] = _no_relation_extra,
+) -> _FieldHandler:
     """RELATION_SINGLE / RELATION_MULTI handler over flavor decoders.
 
     Picks ``multi`` vs ``single`` from ``spec.kind``, calls with the shared
@@ -410,7 +420,7 @@ def relation_into(
     ``to_field_name``; serializer ``None`` + ``obj.pk`` / batched ids).
     """
 
-    def decode(spec: Any, value: Any) -> tuple[Any, FieldError | None]:
+    def decode(spec: InputFieldSpec, value: object) -> tuple[object, FieldError | None]:
         decoder = multi if spec.kind == RELATION_MULTI else single
         return decoder(
             value,
@@ -426,17 +436,14 @@ def relation_into(
 def decode_field_handlers(
     dest: dict[str, Any],
     *,
-    info: Any,
-    single: Callable[..., tuple[Any, FieldError | None]],
-    multi: Callable[..., tuple[Any, FieldError | None]],
+    info: Info[object, object],
+    single: _RelationDecoder,
+    multi: _RelationDecoder,
     file_dest: dict[str, Any] | None = None,
-    field_name: Callable[[Any], str] = _spec_field_name,
-    extra: Callable[[Any], dict[str, Any]] = _no_relation_extra,
-    extra_handlers: dict[str, Callable[[Any, Any], FieldError | None]] | None = None,
-) -> tuple[
-    dict[str, Callable[[Any, Any], FieldError | None]],
-    Callable[[Any, Any], FieldError | None],
-]:
+    field_name: Callable[[InputFieldSpec], str] = _spec_field_name,
+    extra: Callable[[InputFieldSpec], Mapping[str, object]] = _no_relation_extra,
+    extra_handlers: dict[str, _FieldHandler] | None = None,
+) -> tuple[dict[str, _FieldHandler], _FieldHandler]:
     """Build the SCALAR / RELATION_* / FILE handler map the form + serializer flavors share.
 
     Returns ``(handlers, scalar_handler)`` for ``decode_provided_fields``.
@@ -467,11 +474,11 @@ def decode_field_handlers(
 
 
 def decode_provided_fields(
-    specs: list,
-    data: Any,
+    specs: Iterable[InputFieldSpec],
+    data: object,
     *,
-    handlers: dict[str, Callable[[Any, Any], FieldError | None]],
-    scalar_handler: Callable[[Any, Any], FieldError | None],
+    handlers: Mapping[str, _FieldHandler],
+    scalar_handler: _FieldHandler,
 ) -> FieldError | None:
     """Route each provided input field by ``spec.kind`` through a handler map.
 

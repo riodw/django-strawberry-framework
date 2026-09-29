@@ -374,7 +374,7 @@ the AppConfig.
 
 import inspect
 import textwrap
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .conf import upstream_patches_enabled
 
@@ -393,13 +393,25 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     SyncBaseHTTPView = None  # type: ignore[assignment,misc]  # import-failure sentinel
     replace_placeholders_with_files = None  # type: ignore[assignment]  # import-failure sentinel
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Awaitable, Callable, Mapping
+
+    from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
+    from strawberry.http.types import QueryParams
+
+    # The patched methods serve every parametrization of each generic view, so their
+    # ``self`` is the view's universal form.
+    _AnyBaseView = BaseView[Any]
+    _AnySyncView = SyncBaseHTTPView[Any, Any, Any, Any, Any]
+    _AnyAsyncView = AsyncBaseHTTPView[Any, Any, Any, Any, Any, Any, Any]
+
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
 _PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
 _PATCH_OWNER = "django_strawberry_framework._strawberry_patches"
 
 
-def _captured_upstream_method(owner: Any | None, name: str) -> Any:
+def _captured_upstream_method(owner: type | None, name: str) -> object:
     """Return the upstream method, retaining it across an in-process reload.
 
     The AppConfig may be called again after ``importlib.reload()`` in tests or
@@ -418,16 +430,24 @@ def _captured_upstream_method(owner: Any | None, name: str) -> Any:
 
 # Capture the genuine upstream methods once, at import time, before ``apply()``
 # can install our replacements. The captured values also survive an in-process
-# reload, so a reloaded applier never wraps a previous package wrapper.
-_original_parse_json = _captured_upstream_method(BaseView, "parse_json")
-_original_parse_query_params = _captured_upstream_method(BaseView, "parse_query_params")
-_original_sync_parse_multipart = _captured_upstream_method(
-    SyncBaseHTTPView,
-    "parse_multipart",
+# reload, so a reloaded applier never wraps a previous package wrapper. Each
+# capture is ``None`` or a reshaped value only until ``_validate_upstream_shape``
+# refuses it, and the replacements that call them install only after it passes.
+_original_parse_json = cast(
+    "Callable[[_AnyBaseView, str | bytes], object]",
+    _captured_upstream_method(BaseView, "parse_json"),
 )
-_original_async_parse_multipart = _captured_upstream_method(
-    AsyncBaseHTTPView,
-    "parse_multipart",
+_original_parse_query_params = cast(
+    "Callable[[_AnyBaseView, QueryParams], dict[str, object]]",
+    _captured_upstream_method(BaseView, "parse_query_params"),
+)
+_original_sync_parse_multipart = cast(
+    "Callable[[_AnySyncView, SyncHTTPRequestAdapter], dict[str, str]]",
+    _captured_upstream_method(SyncBaseHTTPView, "parse_multipart"),
+)
+_original_async_parse_multipart = cast(
+    "Callable[[_AnyAsyncView, AsyncHTTPRequestAdapter], Awaitable[dict[str, str]]]",
+    _captured_upstream_method(AsyncBaseHTTPView, "parse_multipart"),
 )
 
 
@@ -544,7 +564,7 @@ def _validate_upstream_shape() -> None:
         )
 
 
-def _translated_parse_json(self: Any, data: "str | bytes") -> Any:
+def _translated_parse_json(self: "_AnyBaseView", data: "str | bytes") -> object:
     """The captured original plus the raises its ``except`` lets escape as 500s.
 
     Upstream's ``parse_json`` translates ``json.JSONDecodeError`` into
@@ -578,7 +598,10 @@ def _translated_parse_json(self: Any, data: "str | bytes") -> Any:
         raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc
 
 
-def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
+def _patched_parse_json(
+    self: "_AnyBaseView",
+    data: "str | bytes",
+) -> "dict[object, object] | list[dict[object, object]]":
     """Wrapper around ``BaseView.parse_json`` closing two upstream gaps.
 
     1. **The ``UnicodeDecodeError`` / ``RecursionError`` translation.**
@@ -648,7 +671,10 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     )
 
 
-def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":
+def _patched_parse_query_params(
+    self: "_AnyBaseView",
+    params: "Mapping[str, Any]",
+) -> "dict[str, object]":
     """Source-pinned reimplementation of ``BaseView.parse_query_params``.
 
     Byte-for-byte upstream semantics (the superseded body is pinned as
@@ -737,7 +763,10 @@ def _raised_inside_the_upload_utility(exc: BaseException) -> bool:
     return False
 
 
-def _patched_sync_parse_multipart(self: Any, request: Any) -> Any:
+def _patched_sync_parse_multipart(
+    self: "_AnySyncView",
+    request: "SyncHTTPRequestAdapter",
+) -> "dict[str, str]":
     """Translate malformed multipart structures to Strawberry's controlled ``400``.
 
     The generic JSON guard deliberately allows a list of objects because that is
@@ -763,7 +792,10 @@ def _patched_sync_parse_multipart(self: Any, request: Any) -> Any:
         raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
 
 
-async def _patched_async_parse_multipart(self: Any, request: Any) -> Any:
+async def _patched_async_parse_multipart(
+    self: "_AnyAsyncView",
+    request: "AsyncHTTPRequestAdapter",
+) -> "dict[str, str]":
     """Async twin of :func:`_patched_sync_parse_multipart`."""
     try:
         return await _original_async_parse_multipart(self, request)
@@ -773,7 +805,7 @@ async def _patched_async_parse_multipart(self: Any, request: Any) -> Any:
         raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
 
 
-def _mark_patch_replacement(patched: Any, original: Any) -> None:
+def _mark_patch_replacement(patched: object, original: object) -> None:
     """Stamp a replacement with its owner and the upstream callable it wraps.
 
     Called at import, before ``apply()`` can install anything, so a reloaded

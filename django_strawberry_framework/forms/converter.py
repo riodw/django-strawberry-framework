@@ -45,7 +45,8 @@ from __future__ import annotations
 import datetime
 import decimal
 import uuid
-from typing import Any
+from collections.abc import Callable
+from typing import cast
 
 import strawberry
 from django import forms
@@ -93,7 +94,12 @@ class FormFieldConversion(FieldConversionBase):
     __slots__ = ()
 
 
-def form_field_required(field: forms.Field, *, column: Any = None) -> bool:
+# The value shape of every form converter table entry: a ``forms.Field`` in, its
+# ``FormFieldConversion`` out.
+FormFieldConverter = Callable[[forms.Field], FormFieldConversion]
+
+
+def form_field_required(field: forms.Field, *, column: object = None) -> bool:
     """The effective GraphQL-input requiredness of any form field (the one rule).
 
     An exact ``NullBooleanField`` has a no-op ``validate``, so its
@@ -122,7 +128,7 @@ def form_field_required(field: forms.Field, *, column: Any = None) -> bool:
     return False
 
 
-def _null_boolean_converter(field: forms.NullBooleanField) -> FormFieldConversion:
+def _null_boolean_converter(field: forms.Field) -> FormFieldConversion:
     """Convert ``NullBooleanField`` with an annotation matching requiredness.
 
     The exact built-in field keeps ``bool | None`` + an optional input default
@@ -136,7 +142,7 @@ def _null_boolean_converter(field: forms.NullBooleanField) -> FormFieldConversio
     return FormFieldConversion(annotation=annotation, kind=SCALAR, required=required)
 
 
-def _scalar_converter(annotation: Any) -> Any:
+def _scalar_converter(annotation: object) -> FormFieldConverter:
     """Return a form scalar-table converter (``form_field_required`` for requiredness)."""
     return make_scalar_converter(
         FormFieldConversion,
@@ -145,7 +151,7 @@ def _scalar_converter(annotation: Any) -> Any:
     )
 
 
-def _kind_converter(kind: str, annotation: Any = None) -> Any:
+def _kind_converter(kind: str, annotation: object = None) -> FormFieldConverter:
     """Return a form kind-precheck converter (``form_field_required`` for requiredness)."""
     return make_kind_converter(
         FormFieldConversion,
@@ -177,7 +183,7 @@ def _kind_converter(kind: str, annotation: Any = None) -> Any:
 # it the CharField parent would silently type JSON payloads as ``String``,
 # rejecting object / array literals that Django's form field (and the serializer
 # / model scalar tables) accept as structured JSON.
-_SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
+_SCALAR_FORM_FIELDS: dict[type[forms.Field], FormFieldConverter] = {
     forms.CharField: _scalar_converter(str),
     forms.ChoiceField: _scalar_converter(str),
     forms.IntegerField: _scalar_converter(int),
@@ -269,7 +275,8 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
         scalar_registry=_SCALAR_FORM_FIELDS,
         fallthrough_error_factory=_unsupported_form_field,
     )
-    return finish_field_conversion(result, field)
+    # Every precheck handler and registry converter above builds a FormFieldConversion.
+    return cast("FormFieldConversion", finish_field_conversion(result, field))
 
 
 def _unsupported_form_field(field: forms.Field) -> ConfigurationError:

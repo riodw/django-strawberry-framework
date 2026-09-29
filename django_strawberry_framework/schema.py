@@ -64,10 +64,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast
 
 import strawberry
 from asgiref.sync import AsyncToSync, async_to_sync, sync_to_async
@@ -96,6 +96,18 @@ from .utils.execution_mode import OperationMode, async_execution
 from .utils.policies import copy_policy
 from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db.transaction import Atomic
+    from graphql import FieldNode, GraphQLObjectType
+    from graphql.pyutils import AwaitableOrValue, Path
+    from strawberry.extensions.runner import SchemaExtensionsRunner
+    from strawberry.schema.schema import StreamResult
+    from strawberry.types import ExecutionContext as StrawberryExecutionContext
+    from strawberry.types import ExecutionResult as StrawberryExecutionResult
+
+#: What one window's ``run`` produces, handed back unchanged.
+_WindowT = TypeVar("_WindowT")
 
 #: The message of the field error a window reports when its connection was closed
 #: inside the transaction: Django's ``Atomic.__exit__`` skips the commit of such a
@@ -134,11 +146,11 @@ class DjangoMutationExecutionContext(ExecutionContext):
 
     def execute_field(
         self,
-        parent_type: Any,
-        source: Any,
-        field_nodes: Any,
-        path: Any,
-    ) -> Any:
+        parent_type: GraphQLObjectType,
+        source: object,
+        field_nodes: list[FieldNode],
+        path: Path,
+    ) -> AwaitableOrValue[object]:
         """Wrap a marked top-level mutation field in its completion-spanning transaction."""
         mutation_cls = self._marked_mutation_class(parent_type, field_nodes)
         if mutation_cls is None:
@@ -156,7 +168,11 @@ class DjangoMutationExecutionContext(ExecutionContext):
             )
         return self._execute_mutation_field_sync(alias, parent_type, source, field_nodes, path)
 
-    def _marked_mutation_class(self, parent_type: Any, field_nodes: Any) -> type | None:
+    def _marked_mutation_class(
+        self,
+        parent_type: GraphQLObjectType,
+        field_nodes: list[FieldNode],
+    ) -> type | None:
         """Return the field's bound mutation class, or ``None`` for any unmarked field.
 
         Only TOP-LEVEL mutation fields qualify (``parent_type`` is the schema's
@@ -193,7 +209,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         wrapped = getattr(base_resolver, "wrapped_func", None)
         return getattr(wrapped, MUTATION_CLASS_MARKER, None)
 
-    def _execution_errors(self) -> list:
+    def _execution_errors(self) -> list[GraphQLError]:
         """Return the execution's live error list across graphql-core versions.
 
         graphql-core < 3.2.9 stores located errors directly as
@@ -236,8 +252,8 @@ class DjangoMutationExecutionContext(ExecutionContext):
     def _refuse_uncommitted_window(
         self,
         alias: str,
-        field_nodes: Any,
-        path: Any,
+        field_nodes: list[FieldNode],
+        path: Path,
     ) -> None:
         """Fail the field when the window's connection was closed inside its transaction.
 
@@ -261,11 +277,11 @@ class DjangoMutationExecutionContext(ExecutionContext):
 
     def _exit_window(
         self,
-        atomic: Any,
+        atomic: Atomic,
         errors_before: int,
         alias: str,
-        field_nodes: Any,
-        path: Any,
+        field_nodes: list[FieldNode],
+        path: Path,
     ) -> None:
         """Exit a window that raised nothing, under the failure rules of both modes.
 
@@ -282,10 +298,10 @@ class DjangoMutationExecutionContext(ExecutionContext):
     def _run_window(
         self,
         alias: str,
-        field_nodes: Any,
-        path: Any,
-        run: Callable[[], Any],
-    ) -> Any:
+        field_nodes: list[FieldNode],
+        path: Path,
+        run: Callable[[], _WindowT],
+    ) -> _WindowT:
         """Hold one window's transaction around ``run`` on the calling thread.
 
         The window body of both execution modes: ``run`` resolves and completes
@@ -308,11 +324,11 @@ class DjangoMutationExecutionContext(ExecutionContext):
     def _execute_mutation_field_sync(
         self,
         alias: str,
-        parent_type: Any,
-        source: Any,
-        field_nodes: Any,
-        path: Any,
-    ) -> Any:
+        parent_type: GraphQLObjectType,
+        source: object,
+        field_nodes: list[FieldNode],
+        path: Path,
+    ) -> AwaitableOrValue[object]:
         """Sync execution: one window on the calling thread around ``execute_field``.
 
         graphql-core completes the field's value inside that call, so it covers
@@ -324,11 +340,11 @@ class DjangoMutationExecutionContext(ExecutionContext):
     async def _execute_mutation_field_async(
         self,
         alias: str,
-        parent_type: Any,
-        source: Any,
-        field_nodes: Any,
-        path: Any,
-    ) -> Any:
+        parent_type: GraphQLObjectType,
+        source: object,
+        field_nodes: list[FieldNode],
+        path: Path,
+    ) -> object:
         """Async execution: run the window on a thread that drives the completion.
 
         ``window`` is one sync call: it enters the atomic, then blocks in
@@ -361,7 +377,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         execute_field = super().execute_field
         cancelled = False
 
-        async def complete() -> Any:
+        async def complete() -> object:
             if cancelled:
                 raise asyncio.CancelledError
             result = execute_field(parent_type, source, field_nodes, path)
@@ -371,7 +387,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
 
         caller = getattr(AsyncToSync.executors, "current", None)
 
-        def window() -> Any:
+        def window() -> object:
             try:
                 return self._run_window(alias, field_nodes, path, async_to_sync(complete))
             finally:
@@ -478,7 +494,7 @@ _SCHEMA_ENFORCEMENT: PrivateAuthority[_SchemaEnforcement] = PrivateAuthority()
 #: operation there rather than resolving a list it cannot vouch for, because
 #: falling back to this schema's own policy would answer a lost entry with a
 #: wider budget.
-_SCHEMA_EXTENSIONS: PrivateMembership[Any] = PrivateMembership("_django_extensions")
+_SCHEMA_EXTENSIONS: PrivateMembership[object] = PrivateMembership("_django_extensions")
 
 #: The record answered for a schema that never completed ``DjangoSchema.__init__``
 #: - a subclass that skipped ``super().__init__``, or an object whose
@@ -492,7 +508,7 @@ _FALLBACK_ENFORCEMENT = _SchemaEnforcement(
 )
 
 
-def _enforcement(schema: Any) -> _SchemaEnforcement:
+def _enforcement(schema: object) -> _SchemaEnforcement:
     """The record ``schema`` was settled with, or the record of one that settled none."""
     record = _SCHEMA_ENFORCEMENT.recall(schema)
     return _FALLBACK_ENFORCEMENT if record is None else record
@@ -527,7 +543,7 @@ _REFUSAL_DOCUMENTS = {
 }
 
 
-def _refuse_operation_document(execution_context: Any) -> None:
+def _refuse_operation_document(execution_context: StrawberryExecutionContext) -> None:
     """Give the parse stage the package's own document, selected by nothing.
 
     A refused schema runs nothing, and that has to include the parser: a
@@ -645,7 +661,7 @@ class _RefusedConfiguration(SchemaExtension):
         )
 
 
-def _refused_chain(message: str, reason: str, *, sync: bool) -> list[Any]:
+def _refused_chain(message: str, reason: str, *, sync: bool) -> list[SchemaExtension]:
     """The only chain a refused configuration runs: mask, refuse, and still bound.
 
     Both package authorities are kept. The masking extension is kept because the
@@ -764,8 +780,8 @@ class DjangoSchema(strawberry.Schema):
     def __init__(
         self,
         *args: Any,
-        resource_policy: ResourcePolicy | Mapping[str, Any] | None = None,
-        error_policy: ErrorPolicy | Mapping[str, Any] | None = None,
+        resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
+        error_policy: ErrorPolicy | Mapping[str, object] | None = None,
         **kwargs: Any,
     ) -> None:
         entries, declared_resource = _consumer_extension_entries(kwargs.get("extensions"))
@@ -837,7 +853,7 @@ class DjangoSchema(strawberry.Schema):
         return () if accepted is None else accepted
 
     @extensions.setter
-    def extensions(self, value: Any) -> None:
+    def extensions(self, value: Iterable[object]) -> None:
         """Settle the accepted configuration, once, from the base constructor.
 
         ``strawberry.Schema.__init__`` materializes its ``extensions=`` argument
@@ -916,7 +932,7 @@ class DjangoSchema(strawberry.Schema):
         """
         return copy_policy(_enforcement(self).error_policy)
 
-    def get_extensions(self, sync: bool = False) -> list[Any]:
+    def get_extensions(self, sync: bool = False) -> list[SchemaExtension]:
         """Resolve the accepted entries into this operation's chain, or refuse it.
 
         The chain is this schema's two enforcement authorities with the
@@ -1021,8 +1037,8 @@ class DjangoSchema(strawberry.Schema):
 
     def create_extensions_runner(
         self,
-        execution_context: Any,
-        extensions: list[Any],
+        execution_context: StrawberryExecutionContext,
+        extensions: list[SchemaExtension],
     ) -> DjangoExtensionsRunner:
         """Build the runner that owns every framework extension's operation state.
 
@@ -1044,7 +1060,7 @@ class DjangoSchema(strawberry.Schema):
             extensions=extensions,
         )
 
-    def execute_sync(self, *args: Any, **kwargs: Any) -> Any:
+    def execute_sync(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:
         """Run the operation synchronously and mask what is RETURNED.
 
         The masking extension's teardown answers for a result upstream assigned
@@ -1058,7 +1074,7 @@ class DjangoSchema(strawberry.Schema):
         """
         return self._masked_return(super().execute_sync(*args, **kwargs))
 
-    async def execute(self, *args: Any, **kwargs: Any) -> Any:
+    async def execute(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:
         """Run the operation asynchronously and mask what is RETURNED.
 
         The async twin of :meth:`execute_sync`, for the same reason and with the
@@ -1071,7 +1087,7 @@ class DjangoSchema(strawberry.Schema):
         """
         return self._masked_return(await super().execute(*args, **kwargs))
 
-    def _masked_return(self, result: Any) -> Any:
+    def _masked_return(self, result: StrawberryExecutionResult) -> StrawberryExecutionResult:
         """Apply this schema's error policy to one returned execution result.
 
         The gates and the masking itself are the extension module's own
@@ -1114,11 +1130,11 @@ class DjangoSchema(strawberry.Schema):
 
     def _stream(
         self,
-        execution_context: Any,
-        extensions_runner: Any,
+        execution_context: StrawberryExecutionContext,
+        extensions_runner: SchemaExtensionsRunner,
         *args: Any,
         **kwargs: Any,
-    ) -> Any:
+    ) -> StreamResult:
         """Stream the operation's frames with this operation bound in every task.
 
         The narrowest seam that already receives the exact runner and the raw
@@ -1137,11 +1153,12 @@ class DjangoSchema(strawberry.Schema):
         """
         source = super()._stream(execution_context, extensions_runner, *args, **kwargs)
         if issubclass(type(extensions_runner), DjangoExtensionsRunner):
-            return extensions_runner.resumed_stream(source)
+            # The exact-type check above is the narrowing mypy cannot read.
+            return cast("DjangoExtensionsRunner", extensions_runner).resumed_stream(source)
         return source
 
 
-def _is_resolvable_extension_entry(entry: Any) -> bool:
+def _is_resolvable_extension_entry(entry: object) -> bool:
     """Whether Strawberry can turn ``entry`` into an extension for an operation.
 
     Its resolution is ``entry if isinstance(entry, SchemaExtension) else
@@ -1154,7 +1171,7 @@ def _is_resolvable_extension_entry(entry: Any) -> bool:
     return issubclass(type(entry), SchemaExtension) or callable(entry)
 
 
-def _is_extension(extension: Any, extension_type: type) -> bool:
+def _is_extension(extension: object, extension_type: type) -> bool:
     """Whether a RESOLVED entry is of ``extension_type``, by its type alone.
 
     ``isinstance`` consults ``__class__``, which a consumer object answers with
@@ -1168,7 +1185,7 @@ def _is_extension(extension: Any, extension_type: type) -> bool:
     return issubclass(type(extension), extension_type)
 
 
-def _claimed_authority(member: Any) -> str | None:
+def _claimed_authority(member: object) -> str | None:
     """Name the enforcement role a RESOLVED member claims, or ``None`` for an ordinary one.
 
     Both roles are checked and the first match is named, so one class inheriting
@@ -1185,7 +1202,7 @@ def _claimed_authority(member: Any) -> str | None:
     return None
 
 
-def _admitted_chain(resolved: list[Any], *, sync: bool) -> list[Any]:
+def _admitted_chain(resolved: list[SchemaExtension], *, sync: bool) -> list[SchemaExtension]:
     """This schema's authorities around ``resolved``, and the guard behind them.
 
     The error policy is FIRST and the resource policy LAST, and both positions
@@ -1223,7 +1240,9 @@ def _admitted_chain(resolved: list[Any], *, sync: bool) -> list[Any]:
     ]
 
 
-def _consumer_extension_entries(extensions: Any) -> tuple[list[Any], ResourcePolicy | None]:
+def _consumer_extension_entries(
+    extensions: Iterable[object] | None,
+) -> tuple[list[object], ResourcePolicy | None]:
     """Split ``extensions`` into the consumer's entries and the policy one of them declared.
 
     An enforcement extension supplied directly is a CONFIGURATION statement
@@ -1252,7 +1271,7 @@ def _consumer_extension_entries(extensions: Any) -> tuple[list[Any], ResourcePol
     # installation must not invoke that arbitrary hook before Strawberry sees
     # the actual entries.  ``None`` is the only omitted-value spelling.
     supplied = [] if extensions is None else list(extensions)
-    entries: list[Any] = []
+    entries: list[object] = []
     declared: ResourcePolicy | None = None
     for entry in supplied:
         role = _declared_authority(entry)
@@ -1275,7 +1294,7 @@ def _consumer_extension_entries(extensions: Any) -> tuple[list[Any], ResourcePol
     return entries, declared
 
 
-def _declared_authority(entry: Any) -> type | None:
+def _declared_authority(entry: object) -> type | None:
     """The enforcement kind ``entry`` declares directly, or ``None`` for any other entry.
 
     A class or an instance names its type without anything being run, which is
@@ -1328,6 +1347,6 @@ def _entry_type(entry: Any) -> type:
     return entry if issubclass(type(entry), type) else type(entry)
 
 
-def _extension_entry_matches(extension: Any, extension_type: type) -> bool:
+def _extension_entry_matches(extension: object, extension_type: type) -> bool:
     """Match a class or instance entry by its real type, without invoking factories."""
     return issubclass(_entry_type(extension), extension_type)

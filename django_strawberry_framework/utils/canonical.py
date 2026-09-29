@@ -30,14 +30,25 @@ rather than being spelled per walk.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TypeVar, overload
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 
 __all__ = ["base_container_values", "canonical_sort_key"]
 
+_KeyT = TypeVar("_KeyT")
+_ValueT = TypeVar("_ValueT")
 
-def base_container_values(value: Any) -> tuple[Any, ...]:
+
+@overload
+def base_container_values(value: dict[_KeyT, _ValueT]) -> tuple[tuple[_KeyT, _ValueT], ...]: ...
+@overload
+def base_container_values(
+    value: set[_ValueT] | frozenset[_ValueT] | list[_ValueT] | tuple[_ValueT, ...],
+) -> tuple[_ValueT, ...]: ...
+@overload
+def base_container_values(value: object) -> tuple[object, ...]: ...
+def base_container_values(value: object) -> tuple[object, ...]:
     """Read a built-in container through its BASE iterator, never an override.
 
     A ``dict`` yields its ``(key, value)`` pairs; every other built-in container
@@ -75,7 +86,7 @@ def base_container_values(value: Any) -> tuple[Any, ...]:
     )
 
 
-def canonical_sort_key(value: Any) -> tuple[str, int, int]:
+def canonical_sort_key(value: object) -> tuple[str, int, int]:
     """Return a TOTAL, hostile-repr-safe ordering key for a consumer value.
 
     Three parts, in order of decreasing usefulness and increasing reliability:

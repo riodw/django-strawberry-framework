@@ -43,7 +43,7 @@ from django_strawberry_framework.conf import testing_endpoint_setting
 from django_strawberry_framework.exceptions import _safe_arg_repr
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Iterator, Mapping
     from typing import Protocol, TypedDict
 
     from django.contrib.auth.models import _User
@@ -63,12 +63,12 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
         def assertEqual(  # noqa: N802 - unittest assertion vocabulary
             self,
-            first: Any,
-            second: Any,
-            msg: Any = None,
+            first: object,
+            second: object,
+            msg: object = None,
         ) -> None: ...
-        def assertIsNone(self, obj: object, msg: Any = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
-        def assertTrue(self, expr: Any, msg: Any = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
+        def assertIsNone(self, obj: object, msg: object = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
+        def assertTrue(self, expr: object, msg: object = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
 
 
 __all__ = [
@@ -140,7 +140,8 @@ class TestClient(BaseGraphQLTestClient):
     @property
     def client(self) -> Client:
         """The wrapped ``django.test.Client`` (the base stores it as ``self._client``)."""
-        return self._client
+        # The base stores its client untyped; ``__init__`` handed it a ``Client``.
+        return cast("Client", self._client)
 
     def query(
         self,
@@ -271,7 +272,7 @@ class TestClient(BaseGraphQLTestClient):
     def _build_body(
         self,
         query: str,
-        variables: dict[str, Any] | None = None,
+        variables: Mapping[str, object] | None = None,
         files: dict[str, object] | None = None,
         operation_name: str | None = None,
     ) -> dict[str, object]:
@@ -336,13 +337,16 @@ class TestClient(BaseGraphQLTestClient):
 
         # ``cast``: the ``variables`` member checked above exists only for a
         # non-empty ``variables`` dict.
-        self._assert_file_placeholders(cast("dict[str, Any]", variables), files)
+        self._assert_file_placeholders(cast("dict[str, object]", variables), files)
 
         file_map = {key: [f"variables.{key}"] for key in files}
         return {"operations": json.dumps(body), "map": json.dumps(file_map), **files}
 
     @staticmethod
-    def _assert_file_placeholders(variables: dict[str, Any], files: dict[str, object]) -> None:
+    def _assert_file_placeholders(
+        variables: Mapping[str, object],
+        files: dict[str, object],
+    ) -> None:
         """Verify each ``files=`` path resolves to a ``None`` placeholder in ``variables``.
 
         The path-keyed ``files=`` contract (spec-043 Decision 9) makes the
@@ -362,7 +366,7 @@ class TestClient(BaseGraphQLTestClient):
         empty-``variables`` guard above.
         """
         for key in files:
-            current: Any = variables
+            current: object = variables
             for segment in key.split("."):
                 # An empty segment can never name a GraphQL variable (variable
                 # names are non-empty), so a map entry built from one - the ``""``
@@ -460,7 +464,8 @@ class AsyncTestClient(TestClient):
     # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
     def client(self) -> AsyncClient:  # type: ignore[override]
         """The wrapped ``django.test.AsyncClient``."""
-        return self._client
+        # The base stores its client untyped; ``__init__`` handed it an ``AsyncClient``.
+        return cast("AsyncClient", self._client)
 
     # mypy: the async twin re-colors the sync client it subclasses for isinstance parity
     async def query(  # type: ignore[override]

@@ -79,7 +79,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from django.conf import settings
 from django.core import signing
@@ -93,7 +93,10 @@ from .exceptions import ConfigurationError
 from .utils.imports import require_optional_module
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from django.db.models import ForeignObjectRel
+    from cryptography.hazmat.primitives.ciphers.aead import AESSIV
+
+    from .types.definition import DjangoTypeDefinition
+    from .utils.typing import ConcreteField, ModelField
 
 #: The keyset cursor namespace, package-owned (upstream strawberry uses
 #: ``arrayconnection``; strawberry-graphql-django uses ``orderedcursor`` -
@@ -124,7 +127,7 @@ class CursorColumn:
     order_ref: str
     name: str
     descending: bool
-    field: models.Field
+    field: ConcreteField
     value_source: str
 
 
@@ -132,7 +135,7 @@ class CursorColumn:
 class KeysetCursor:
     """A decoded keyset cursor: the ordering-column values at one row position."""
 
-    values: tuple[Any, ...]
+    values: tuple[object, ...]
 
 
 @dataclass(frozen=True)
@@ -156,7 +159,7 @@ class KeysetSeek:
         """The ORM seek predicate (``keyset_seek_q`` over this carrier)."""
         return keyset_seek_q(self.columns, self.cursor, flip=self.flip)
 
-    def plan(self, values: Sequence[Any] | None = None) -> KeysetSeekPlan:
+    def plan(self, values: Sequence[object] | None = None) -> KeysetSeekPlan:
         """The dialect-agnostic seek plan (optionally over already-adapted ``values``).
 
         Default values are the decoded cursor payload. SQL renderers that bind
@@ -234,17 +237,15 @@ def validate_cursor_field_references(
     return tuple(parsed)
 
 
-def _resolve_cursor_field_column(
-    model: type[models.Model],
-    name: str,
-) -> models.Field | ForeignObjectRel:
+def _resolve_cursor_field_column(model: type[models.Model], name: str) -> ModelField:
     """Resolve one cursor column name to its model field (``pk`` alias honored).
 
     A reverse-relation name resolves to its ``ForeignObjectRel``;
     ``validate_cursor_field_columns`` is what rejects it.
     """
     if name == "pk":
-        return model._meta.pk
+        # The stubs' plugin types ``_meta`` of an unparametrized model class as ``Any``.
+        return cast("ConcreteField", model._meta.pk)
     return model._meta.get_field(name)
 
 
@@ -262,7 +263,7 @@ def cursor_columns_for(
     for order_ref in order_refs:
         name, descending = split_order_ref(order_ref)
         # A validated entry is a local concrete column, never a reverse relation.
-        field = cast("models.Field", _resolve_cursor_field_column(model, name))
+        field = cast("ConcreteField", _resolve_cursor_field_column(model, name))
         columns.append(
             CursorColumn(
                 order_ref=order_ref,
@@ -285,13 +286,15 @@ class DeclaredCursorState:
     every cursor over the type mints and decodes under.
     """
 
-    definition: Any
+    definition: DjangoTypeDefinition
     cursor_field: tuple[str, ...]
     columns: tuple[CursorColumn, ...]
     fingerprint: str
 
 
-def declared_cursor_state_for_definition(definition: Any) -> DeclaredCursorState | None:
+def declared_cursor_state_for_definition(
+    definition: DjangoTypeDefinition | None,
+) -> DeclaredCursorState | None:
     """Derive the declared keyset vocabulary from a ``DjangoTypeDefinition``.
 
     The one derivation, and it is DEFINITION-keyed because every caller holds a
@@ -307,6 +310,8 @@ def declared_cursor_state_for_definition(definition: Any) -> DeclaredCursorState
     cursor_field = getattr(definition, "cursor_field", None)
     if cursor_field is None:
         return None
+    # A declared ``cursor_field`` was just read off it, so it is a definition.
+    definition = cast("DjangoTypeDefinition", definition)
     return DeclaredCursorState(
         definition=definition,
         cursor_field=cursor_field,
@@ -351,7 +356,7 @@ def validate_cursor_field_columns(
                 "column (or a defaulted denormalization of the nullable one).",
             )
         # The relation / non-concrete check above leaves only a local concrete column.
-        if not _is_supported_cursor_field(cast("models.Field", field)):
+        if not _is_supported_cursor_field(cast("ConcreteField", field)):
             raise ConfigurationError(
                 f"{lead} entry {order_ref!r} uses JSONField. Keyset cursor columns "
                 "must have portable ordering semantics across database backends; "
@@ -360,7 +365,7 @@ def validate_cursor_field_columns(
             )
     terminal_name, _ = parsed[-1]
     # Every entry passed the local-concrete-column check above.
-    terminal = cast("models.Field", _resolve_cursor_field_column(model, terminal_name))
+    terminal = cast("ConcreteField", _resolve_cursor_field_column(model, terminal_name))
     if not (terminal.primary_key or getattr(terminal, "unique", False)):
         raise ConfigurationError(
             f"{lead} must end in a unique column so the cursor order is a total "
@@ -369,7 +374,7 @@ def validate_cursor_field_columns(
         )
 
 
-def serialize_cursor_value(field: models.Field, value: Any) -> Any:
+def serialize_cursor_value(field: ConcreteField, value: object) -> str:
     """Serialize one ordering-column value through the model field's own codec.
 
     ``Field.value_to_string`` (fed a shim carrying the value under the
@@ -392,7 +397,7 @@ def serialize_cursor_value(field: models.Field, value: Any) -> Any:
     return field.value_to_string(SimpleNamespace(**{field.attname: value}))  # type: ignore[arg-type]
 
 
-def _deserialize_cursor_value(field: models.Field, raw: Any, argument: str) -> Any:
+def _deserialize_cursor_value(field: ConcreteField, raw: object, argument: str) -> object:
     """Invert ``serialize_cursor_value``; malformed/non-canonical values raise."""
     try:
         value = field.to_python(raw)
@@ -429,13 +434,13 @@ def _invalid_cursor_error(argument: str) -> GraphQLError:
     )
 
 
-def _is_supported_cursor_field(field: models.Field) -> bool:
+def _is_supported_cursor_field(field: ConcreteField) -> bool:
     """Whether ``field`` has portable keyset ordering semantics in the v1 contract."""
     return not isinstance(field, models.JSONField)
 
 
 @lru_cache(maxsize=1)
-def _cursor_crypto_types() -> tuple[Any, type[Exception]]:
+def _cursor_crypto_types() -> tuple[type[AESSIV], type[Exception]]:
     """Load the soft crypto dependency only when keyset cursors are exercised."""
     exceptions = require_optional_module(
         "cryptography.exceptions",
@@ -449,7 +454,7 @@ def _cursor_crypto_types() -> tuple[Any, type[Exception]]:
 
 
 @cache
-def _cursor_aessiv(secret_key: str | bytes) -> Any:
+def _cursor_aessiv(secret_key: str | bytes) -> AESSIV:
     """Build and cache the authenticated-encryption primitive for one configured secret.
 
     The private caller supplies only ``SECRET_KEY`` and ``SECRET_KEY_FALLBACKS``.
@@ -466,7 +471,7 @@ def _cursor_aessiv(secret_key: str | bytes) -> Any:
     return aessiv(digest)
 
 
-def _encrypt_cursor_payload(payload: Any) -> str:
+def _encrypt_cursor_payload(payload: dict[str, str | list[str]]) -> str:
     """Serialize and authenticated-encrypt one cursor payload."""
     serialized = signing.JSONSerializer().dumps(payload)
     encrypted = _cursor_aessiv(settings.SECRET_KEY).encrypt(
@@ -476,7 +481,7 @@ def _encrypt_cursor_payload(payload: Any) -> str:
     return base64.urlsafe_b64encode(encrypted).decode("ascii")
 
 
-def _decrypt_cursor_payload(value: str, argument: str) -> Any:
+def _decrypt_cursor_payload(value: str, argument: str) -> object:
     """Decrypt one payload with the active key or any configured fallback."""
     try:
         encrypted = base64.b64decode(
@@ -503,7 +508,12 @@ def _decrypt_cursor_payload(value: str, argument: str) -> Any:
     raise _invalid_cursor_error(argument)
 
 
-def encode_keyset_cursor(columns: tuple[CursorColumn, ...], row: Any, *, fingerprint: str) -> str:
+def encode_keyset_cursor(
+    columns: tuple[CursorColumn, ...],
+    row: object,
+    *,
+    fingerprint: str,
+) -> str:
     """Mint the opaque encrypted cursor for ``row`` under the given effective order.
 
     Payload shape: ``{"o": <order fingerprint>, "v": [<field-serialized
@@ -599,7 +609,7 @@ class KeysetSeekPlan:
     """
 
     greater: tuple[bool, ...]
-    values: tuple[Any, ...]
+    values: tuple[object, ...]
 
     def __post_init__(self) -> None:
         """Reject empty or arity-mismatched seek plans at construction."""
@@ -624,7 +634,7 @@ class KeysetSeekPlan:
 
 def build_keyset_seek_plan(
     descending: Sequence[bool],
-    values: Sequence[Any],
+    values: Sequence[object],
     *,
     flip: bool = False,
 ) -> KeysetSeekPlan:
@@ -685,7 +695,7 @@ def keyset_seek_q(
     return models.Q(**{f"{columns[0].name}__{bound_op}": plan.values[0]}) & seek
 
 
-def keyset_seek_sql(column_refs: Sequence[str], plan: KeysetSeekPlan) -> tuple[str, list]:
+def keyset_seek_sql(column_refs: Sequence[str], plan: KeysetSeekPlan) -> tuple[str, list[object]]:
     """Render ``plan`` as a parameterized SQL seek predicate over ``column_refs``.
 
     The raw-SQL twin of ``keyset_seek_q``. Uniform directions emit the native
@@ -708,7 +718,7 @@ def keyset_seek_sql(column_refs: Sequence[str], plan: KeysetSeekPlan) -> tuple[s
             return f"{column_refs[0]} {op} %s", values
         placeholders = ", ".join(["%s"] * len(column_refs))
         return f"({', '.join(column_refs)}) {op} ({placeholders})", values
-    params: list = [values[0]]
+    params: list[object] = [values[0]]
     lead = f"{column_refs[0]} {'>=' if plan.lead_greater else '<='} %s"
     or_parts: list[str] = []
     for index in range(len(column_refs)):

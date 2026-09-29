@@ -20,7 +20,6 @@ public ``django_strawberry_framework.testing`` import crash.
 """
 
 from collections.abc import Callable
-from typing import Any
 
 from django.db.backends.base.base import BaseDatabaseWrapper
 
@@ -30,7 +29,7 @@ from django_strawberry_framework._django_patches import _is_database_failure
 def safe_wrap_connection_method(
     connection: BaseDatabaseWrapper,
     method_name: str,
-    wrapper: Callable[..., Any],
+    wrapper: Callable[..., object],
 ) -> bool:
     """Wrap a connection method, declining if Django wrapped it first.
 

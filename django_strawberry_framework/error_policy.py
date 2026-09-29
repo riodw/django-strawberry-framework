@@ -47,7 +47,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from .conf import error_policy_setting
 from .exceptions import ConfigurationError, describe_value
@@ -149,7 +148,7 @@ _PACKAGE_ERROR_POLICY = canonical_policy(
 )
 
 
-def resolve_error_policy(explicit: ErrorPolicy | Mapping[str, Any] | None) -> ErrorPolicy:
+def resolve_error_policy(explicit: ErrorPolicy | Mapping[str, object] | None) -> ErrorPolicy:
     """Normalize the deployment's error policy once, at schema construction.
 
     Precedence, highest first: the ``DjangoSchema(error_policy=...)`` argument,

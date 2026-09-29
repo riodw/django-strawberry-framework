@@ -19,11 +19,41 @@ once.
 from __future__ import annotations
 
 import contextlib
-from contextvars import ContextVar
-from typing import Any, NamedTuple
+from contextvars import ContextVar, Token
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..utils.context import clear_context_key, get_context_value, stash_on_context
 from ..utils.operation_lease import OperationLease
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Iterable
+    from typing import TypeAlias
+
+    from django.db import models
+    from strawberry.types.nodes import Selection
+
+    from .extension import DjangoOptimizerExtension
+    from .nested_fetch import NestedConnectionStrategy
+    from .plans import OptimizationPlan
+
+    #: One variable value frozen for the plan-cache key
+    #: (``extension.py::_hashable_variable_value``): a ``(tag, type id, payload)``
+    #: triple whose payload is a library-owned scalar, a nested frozen structure,
+    #: or an opaque ``object()`` token.
+    FrozenVariableValue: TypeAlias = tuple[str, int, object]
+    #: The operation-constant plan-cache-key parts: the rendered document key and
+    #: the frozen ``(variable name, value)`` pairs that can change a plan.
+    CacheKeyParts: TypeAlias = tuple[str, frozenset[tuple[str, FrozenVariableValue]]]
+    #: The full plan-cache key (``extension.py::DjangoOptimizerExtension._build_cache_key``).
+    PlanCacheKey: TypeAlias = tuple[
+        str,
+        frozenset[tuple[str, FrozenVariableValue]],
+        type[models.Model],
+        tuple[str, ...],
+        type | None,
+    ]
+    #: A converted-selection memo key: one field node's id, or a group's ids.
+    ConvertedMemoKey: TypeAlias = int | tuple[int, ...]
 
 __all__ = (
     "DST_OPTIMIZER_FK_ID_ELISIONS",
@@ -158,11 +188,11 @@ class _ExecutionFrame:
 
     def __init__(
         self,
-        stashes: dict[str, Any],
+        stashes: dict[str, object],
         *,
         publishes_to_context: bool,
-        optimizer: Any,
-        strategy: Any,
+        optimizer: DjangoOptimizerExtension | None,
+        strategy: NestedConnectionStrategy | None,
         strictness: str | None,
     ) -> None:
         self.stashes = stashes
@@ -171,9 +201,9 @@ class _ExecutionFrame:
         self.strategy = strategy
         self.strictness = strictness
         self.scoped_relations: set[str] = set()
-        self.plans: dict[Any, Any] = {}
-        self.key_parts: dict[int, tuple[str, frozenset[tuple[str, Any]]]] = {}
-        self.converted: dict[Any, list[Any]] = {}
+        self.plans: dict[PlanCacheKey, OptimizationPlan] = {}
+        self.key_parts: dict[int, CacheKeyParts] = {}
+        self.converted: dict[ConvertedMemoKey, list[Selection]] = {}
 
     def clear(self) -> None:
         """Empty every store this frame owns, at the end of the execution.
@@ -198,7 +228,7 @@ class _FrameScope(NamedTuple):
     """One execution frame's lease and the token that restores the enclosing one."""
 
     lease: OperationLease[_ExecutionFrame]
-    token: Any
+    token: Token[OperationLease[_ExecutionFrame] | None]
 
 
 _execution_frames: ContextVar[OperationLease[_ExecutionFrame] | None] = ContextVar(
@@ -221,11 +251,11 @@ def _active_frame() -> _ExecutionFrame | None:
 
 
 def begin_execution_frame(
-    stashes: dict[str, Any],
+    stashes: dict[str, object],
     *,
     nested: bool,
-    optimizer: Any = None,
-    strategy: Any = None,
+    optimizer: DjangoOptimizerExtension | None = None,
+    strategy: NestedConnectionStrategy | None = None,
     strictness: str | None = None,
 ) -> _FrameScope:
     """Open this execution's frame; returns the scope :func:`end_execution_frame` closes.
@@ -262,13 +292,13 @@ def end_execution_frame(scope: _FrameScope) -> None:
         _execution_frames.reset(scope.token)
 
 
-def active_optimizer() -> Any:
+def active_optimizer() -> DjangoOptimizerExtension | None:
     """The extension instance running this execution, or ``None`` outside one."""
     frame = _active_frame()
     return None if frame is None else frame.optimizer
 
 
-def active_nested_strategy() -> Any:
+def active_nested_strategy() -> NestedConnectionStrategy | None:
     """The nested-connection strategy this execution planned with, or ``None``."""
     frame = _active_frame()
     return None if frame is None else frame.strategy
@@ -280,25 +310,25 @@ def active_strictness() -> str | None:
     return None if frame is None else frame.strictness
 
 
-def execution_plan_memo() -> dict[Any, Any] | None:
+def execution_plan_memo() -> dict[PlanCacheKey, OptimizationPlan] | None:
     """This execution's built-plan memo, or ``None`` outside a managed execution."""
     frame = _active_frame()
     return None if frame is None else frame.plans
 
 
-def cache_key_parts_memo() -> dict[int, tuple[str, frozenset[tuple[str, Any]]]] | None:
+def cache_key_parts_memo() -> dict[int, CacheKeyParts] | None:
     """This execution's cache-key-parts memo, or ``None`` outside a managed execution."""
     frame = _active_frame()
     return None if frame is None else frame.key_parts
 
 
-def converted_selections_memo() -> dict[Any, list[Any]] | None:
+def converted_selections_memo() -> dict[ConvertedMemoKey, list[Selection]] | None:
     """This execution's converted-selection memo, or ``None`` outside a managed execution."""
     frame = _active_frame()
     return None if frame is None else frame.converted
 
 
-def publish_scoped_relations(keys: Any) -> None:
+def publish_scoped_relations(keys: Iterable[str]) -> None:
     """Record ``keys`` as optimizer-planned for this execution (idempotent union)."""
     if not keys:
         return
@@ -331,7 +361,7 @@ def operation_publishes_to_context() -> bool:
     return frame is not None and frame.publishes_to_context
 
 
-def optimizer_value(context: Any, key: str, default: Any = None) -> Any:
+def optimizer_value(context: object, key: str, default: object = None) -> Any:
     """Read one optimizer stash for the operation running here.
 
     The running operation's own mapping answers, without falling through to the
@@ -346,7 +376,7 @@ def optimizer_value(context: Any, key: str, default: Any = None) -> Any:
     return frame.stashes.get(key, default)
 
 
-def stash_for_optimizer(context: Any, key: str, value: Any) -> None:
+def stash_for_optimizer(context: object, key: str, value: object) -> None:
     """Publish one optimizer stash for this operation, and on the request context.
 
     Two destinations with two different jobs: the operation's mapping is what
@@ -379,7 +409,7 @@ DST_OPTIMIZER_KEYS: tuple[str, ...] = (
 )
 
 
-def clear_optimizer_context(context: Any) -> None:
+def clear_optimizer_context(context: object) -> None:
     """Remove every optimizer stash key from ``context`` (start-of-execution reset).
 
     ``DjangoOptimizerExtension.on_execute`` calls this before the operation

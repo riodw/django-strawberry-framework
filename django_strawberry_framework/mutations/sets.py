@@ -56,6 +56,7 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name
 from ..registry import register_subsystem_clear, registry
 from ..utils.imports import import_attr
 from ..utils.inputs import (
+    InputFieldSpec,
     get_or_store_shape_build,
     make_shape_build_cache,
     normalize_field_name_sequence,
@@ -82,11 +83,23 @@ from .operations import (
 from .permissions import DjangoModelPermission, run_permission_classes
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Mapping
     from typing import Protocol, TypeAlias, TypeVar
 
+    from strawberry.types import Info
     from strawberry.types.base import WithStrawberryObjectDefinition
+    from strawberry.types.field import StrawberryField
 
     from ..forms.sets import DjangoFormMutation
+    from ..rest_framework.inputs import NestedSerializerConfig
+    from .inputs import ModelFieldIndex, MutationInputShape
+
+    # A shape-build cache key, and the per-flavor stash value a build answers
+    # beside its input class (the form's ``field_specs`` list, the serializer shape).
+    _KeyT = TypeVar("_KeyT")
+    _PayloadT = TypeVar("_PayloadT")
+    # The class ``require_subclass`` gates against.
+    _ExpectedT = TypeVar("_ExpectedT")
 
 #: Common Meta keys accepted by every write-flavor Mutation.Meta (fields, exclude, permission_classes).
 COMMON_WRITE_META_KEYS: frozenset[str] = frozenset(
@@ -108,7 +121,7 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = MODEL_BACKED_WRITE_META_KEYS | fro
 )
 
 
-def _safe_frozenset_membership(value: Any, choices: frozenset[str]) -> bool:
+def _safe_frozenset_membership(value: object, choices: frozenset[str]) -> bool:
     """Return ``value in choices``, answering ``False`` when hashing ``value`` raises.
 
     ``Meta.operation`` is consumer-supplied: a ``str`` subclass may define a
@@ -213,12 +226,12 @@ def _hook_overridden(cls: type, base: type, name: str) -> bool:
 
 
 def cached_build_input(
-    cache: dict[Any, tuple[type, Any]],
-    shape_key: Any,
+    cache: dict[_KeyT, tuple[type, _PayloadT]],
+    shape_key: _KeyT,
     *,
     guard: Callable[[], None],
-    build_fn: Callable[[], tuple[type, Any]],
-) -> tuple[type, Any]:
+    build_fn: Callable[[], tuple[type, _PayloadT]],
+) -> tuple[type, _PayloadT]:
     """Run the per-declaration guard, THEN the per-shape cache lookup.
 
     The promoted guard-before-cache-lookup core for flavors whose cache key is
@@ -252,9 +265,9 @@ def cached_build_input(
 def build_and_stash_input(
     cls: WriteMutationClass,
     *,
-    build: Callable[[], tuple[type, Any]],
+    build: Callable[[], tuple[type, _PayloadT]],
     materialize: Callable[[str, type], None],
-    specs_of: Callable[[Any], Any],
+    specs_of: Callable[[_PayloadT], list[InputFieldSpec]],
 ) -> type:
     """Materialize a built input + stash its reverse map on the mutation.
 
@@ -273,7 +286,7 @@ def build_and_stash_input(
     return input_cls
 
 
-def construction_kwargs(*, instance: Any = None, **base: Any) -> dict[str, Any]:
+def construction_kwargs(*, instance: models.Model | None = None, **base: Any) -> dict[str, Any]:
     """Build a construction-hook kwargs dict, adding ``instance`` only when non-``None`` (spec-039).
 
     The default construction-kwargs hooks share the ``{...base...}`` +
@@ -297,7 +310,7 @@ def require_backing_class(
     key: str,
     base_label: str,
     expected_label: str,
-) -> Any:
+) -> object:
     """Return ``Meta.<key>`` or raise the shared "declares no backing class" error.
 
     The presence check both the form + serializer ``_validate_meta`` prologues share:
@@ -324,14 +337,14 @@ def require_backing_class(
 
 def require_subclass(
     name: str,
-    value: Any,
+    value: object,
     *,
     base_label: str,
     key: str,
-    expected: type,
+    expected: type[_ExpectedT],
     expected_label: str,
     note: str = "",
-) -> Any:
+) -> type[_ExpectedT]:
     """Return ``value`` if it is an ``expected`` subclass, else raise the shared type-gate.
 
     The ``must be a <expected_label> subclass; got <value>`` clause both form
@@ -354,7 +367,7 @@ def require_subclass(
     raise ConfigurationError(message)
 
 
-def require_model_class(name: str, model: Any, *, base_label: str) -> Any:
+def require_model_class(name: str, model: object, *, base_label: str) -> type[models.Model]:
     """Return ``model`` if it is a Django model class, else raise.
 
     The class-creation type-gate ``DjangoMutation._validate_meta`` runs after
@@ -373,7 +386,19 @@ def require_model_class(name: str, model: Any, *, base_label: str) -> Any:
     )
 
 
-def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> Any:
+def backing_model_of(meta: _ValidatedMutationMeta) -> type[models.Model]:
+    """Return a model-backed mutation snapshot's validated model.
+
+    The snapshot's ``model`` slot is optional because the model-less form flavor
+    (``DjangoFormMutation``) has none. Every model-backed flavor
+    (``DjangoMutation``, ``DjangoModelFormMutation``, ``SerializerMutation``) gates
+    it through ``require_model_class`` at class creation, so on their snapshots it
+    is always a model class.
+    """
+    return cast("type[models.Model]", meta.model)
+
+
+def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> type[models.Model] | None:
     """Resolve a backing class's ``Meta.model`` via the shared three-getattr chain.
 
     The ``getattr(meta, key) -> getattr(backing, meta_attr) -> getattr(backing_meta,
@@ -396,7 +421,7 @@ def resolve_backed_model_or_raise(
     base_label: str,
     key: str,
     noun: str,
-) -> Any:
+) -> type[models.Model]:
     """Return ``cls._resolve_model(meta)`` or raise the shared "resolves no model" error.
 
     The no-model raise both flavors' ``_validate_meta`` share, run AFTER the backing
@@ -420,7 +445,7 @@ def resolver_seams(
     async_name: str,
     *,
     with_id: bool = True,
-) -> tuple[classmethod[Any, ..., Any], classmethod[Any, ..., Any]]:
+) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
     """Build the ``(resolve_sync, resolve_async)`` classmethod pair a mutation base exposes.
 
     Every write-flavor base (``DjangoMutation`` / ``DjangoModelFormMutation`` /
@@ -442,37 +467,37 @@ def resolver_seams(
     """
     # The two arms bind the same names to differently-shaped functions (the
     # model-less arm has no ``id``), so the names are declared once up front.
-    resolve_sync: Callable[..., Any]
-    resolve_async: Callable[..., Any]
+    resolve_sync: Callable[..., object]
+    resolve_async: Callable[..., object]
     if with_id:
 
         def resolve_sync(
             cls: type,
-            info: Any,
+            info: Info[object, object],
             *,
-            data: Any,
-            id: Any,  # noqa: A002
-        ) -> Any:
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
             """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
             return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
 
         def resolve_async(
             cls: type,
-            info: Any,
+            info: Info[object, object],
             *,
-            data: Any,
-            id: Any,  # noqa: A002
-        ) -> Any:
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
             """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
             return import_attr(module_path, async_name)(cls, info, data=data, id=id)
 
     else:
 
-        def resolve_sync(cls: type, info: Any, *, data: Any) -> Any:
+        def resolve_sync(cls: type, info: Info[object, object], *, data: object) -> object:
             """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
             return import_attr(module_path, sync_name)(cls, info, data=data)
 
-        def resolve_async(cls: type, info: Any, *, data: Any) -> Any:
+        def resolve_async(cls: type, info: Info[object, object], *, data: object) -> object:
             """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
             return import_attr(module_path, async_name)(cls, info, data=data)
 
@@ -500,6 +525,7 @@ def resolver_seams(
 # start of ``bind_mutations()`` AND co-cleared from ``registry.clear()`` so a
 # stale class from a prior (failed or re-run) finalize never leaks across a
 # clear that does not itself re-bind.
+_shape_build_cache: dict[tuple[type[models.Model], str, frozenset[str]], type]
 _shape_build_cache, clear_mutation_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(clear_mutation_shape_build_cache, owner="mutations.shape_cache")
 
@@ -515,9 +541,9 @@ class DeclarationRegistry(NamedTuple):
     is the disjoint ``list[type]`` they close over.
     """
 
-    register: Any
-    clear: Any
-    iter_: Any
+    register: Callable[[type], None]
+    clear: Callable[[], None]
+    iter_: Callable[[], tuple[type, ...]]
     store: list[type]
 
 
@@ -622,8 +648,8 @@ def make_meta_validating_metaclass(
         def __new__(
             cls: type[MetaValidatingMetaclass],
             name: str,
-            bases: tuple,
-            attrs: dict,
+            bases: tuple[type, ...],
+            attrs: dict[str, Any],
         ) -> type:
             """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
             new_class = super().__new__(cls, name, bases, attrs)
@@ -638,7 +664,7 @@ def make_meta_validating_metaclass(
             register(new_class)
             return new_class
 
-        def __setattr__(cls, name: str, value: Any) -> None:
+        def __setattr__(cls, name: str, value: object) -> None:
             """Keep the validated ``Meta`` snapshot write-once (0.0.15 auth hardening).
 
             The metaclass stashes ``_mutation_meta`` exactly once at class
@@ -690,7 +716,7 @@ register_subsystem_clear(clear_mutation_registry, owner="mutations.declarations"
 
 def _validate_input_class(
     mutation_name: str,
-    input_class: Any,
+    input_class: object,
     *,
     attr_name: str,
     model: type[models.Model],
@@ -806,18 +832,18 @@ class _ValidatedMutationMeta:
         *,
         model: type[models.Model] | None,
         operation: str,
-        input_class: Any,
-        partial_input_class: Any,
+        input_class: type[WithStrawberryObjectDefinition] | None,
+        partial_input_class: type[WithStrawberryObjectDefinition] | None,
         fields: tuple[str, ...] | None,
         exclude: tuple[str, ...] | None,
-        permission_classes: tuple[Any, ...],
+        permission_classes: tuple[type, ...],
         form_class: Any = None,
         serializer_class: Any = None,
         optional_fields: tuple[str, ...] | None = None,
-        schema_fingerprint: Any = None,
+        schema_fingerprint: tuple[tuple[object, ...], ...] | None = None,
         injected_fields: tuple[str, ...] | None = None,
         select_for_update: bool = False,
-        nested_fields: Any = None,
+        nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
     ) -> None:
         self._sealed = False
         self.model = model
@@ -876,7 +902,7 @@ class _ValidatedMutationMeta:
         # Seal LAST: every validated slot is set; from here on the record is
         self._sealed = True
 
-    def __setattr__(self, name: str, value: Any) -> None:
+    def __setattr__(self, name: str, value: object) -> None:
         """Reject any attribute write on a sealed validated snapshot."""
         if getattr(self, "_sealed", False):
             raise ConfigurationError(
@@ -896,9 +922,9 @@ def _validate_permission_classes(
     mutation_name: str,
     value: Any,
     *,
-    unset_default: tuple[Any, ...] = (DjangoModelPermission,),
+    unset_default: tuple[type, ...] = (DjangoModelPermission,),
     base_label: str = "DjangoMutation",
-) -> tuple[Any, ...]:
+) -> tuple[type, ...]:
     """Validate + normalize ``Meta.permission_classes`` at class creation.
 
     An invalid ``permission_classes`` entry is rejected at
@@ -963,7 +989,7 @@ def _validate_permission_classes(
     return tuple(classes)
 
 
-def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bool:
+def validate_select_for_update(flavor: str, mutation_name: str, meta: type) -> bool:
     """Validate ``Meta.select_for_update`` for a model-backed flavor (0.0.14 concurrency hardening).
 
     Every model-backed write flavor (model / ``ModelForm`` / serializer) shares
@@ -992,7 +1018,7 @@ def model_backed_permission_and_lock(
     meta: type,
     *,
     flavor: str,
-) -> tuple[tuple[Any, ...], bool]:
+) -> tuple[tuple[type, ...], bool]:
     """Return ``(permission_classes, select_for_update)`` for a model-backed write flavor.
 
     Every model-backed ``_validate_meta`` (model / ModelForm) pairs the
@@ -1075,8 +1101,8 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # (``utils/write_values.py::decode_provided_fields``). ``None`` until bind
     # (and stays ``None`` for ``delete``, which has no input). Form / serializer
     # subclasses overwrite ``_input_field_specs`` with their own flavor map.
-    _input_field_specs: ClassVar[list | None] = None
-    _model_fields_by_attr: ClassVar[dict | None] = None
+    _input_field_specs: ClassVar[list[InputFieldSpec] | None] = None
+    _model_fields_by_attr: ClassVar[ModelFieldIndex | None] = None
 
     @classmethod
     def _resolve_model(cls, meta: type) -> type[models.Model] | None:
@@ -1277,9 +1303,8 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             # dataclass, consumer overrides included) + the Django-field index
             # (``relation_field.null`` and the ``_provided_attr_names``
             # FK-to-field-name reversal, spec-036 M3-1).
-            # A model-backed snapshot always carries its validated model.
             cls._input_field_specs, cls._model_fields_by_attr = mutation_input_field_specs(
-                cast("type[models.Model]", meta.model),
+                backing_model_of(meta),
                 input_cls,
             )
         return input_cls
@@ -1315,9 +1340,8 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 "id-only and materializes no input; input_type_name applies only to "
                 "create / update mutations.",
             )
-        # A model-backed snapshot always carries its validated model.
         return mutation_input_shape(
-            cast("type[models.Model]", meta.model),
+            backing_model_of(meta),
             operation_kind,
             fields=meta.fields,
             exclude=meta.exclude,
@@ -1338,7 +1362,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
 
     def check_permission(
         self,
-        info: Any,
+        info: Info,
         operation: str,
         data: Any,
         instance: Any = None,
@@ -1502,10 +1526,9 @@ def _materialize_input_for(
     # Edge cases #"Two mutations over one model") AND the generated name, so the
     # bind cache key and the generated type name cannot drift. The same
     # descriptor is handed to
-    # ``build_mutation_input`` so it does not re-walk the editable fields. A
-    # model-backed snapshot always carries its validated model.
+    # ``build_mutation_input`` so it does not re-walk the editable fields.
     shape = mutation_input_shape(
-        cast("type[models.Model]", meta.model),
+        backing_model_of(meta),
         operation_kind,
         fields=meta.fields,
         exclude=meta.exclude,
@@ -1514,7 +1537,7 @@ def _materialize_input_for(
         _shape_build_cache,
         shape.cache_key,
         lambda: build_mutation_input(
-            cast("type[models.Model]", meta.model),
+            backing_model_of(meta),
             operation_kind=operation_kind,
             primary_type=primary_type,
             fields=meta.fields,
@@ -1563,9 +1586,8 @@ def _materialize_merged_input(
     consumer_attrs = frozenset(
         field.python_name for field in consumer_input.__strawberry_definition__.fields
     )
-    # A model-backed snapshot always carries its validated model.
     shape = mutation_input_shape(
-        cast("type[models.Model]", meta.model),
+        backing_model_of(meta),
         operation_kind,
         fields=meta.fields,
         exclude=meta.exclude,
@@ -1577,7 +1599,7 @@ def _materialize_merged_input(
         attr_name="input_class" if operation_kind == CREATE else "partial_input_class",
     )
     remainder = build_mutation_input(
-        cast("type[models.Model]", meta.model),
+        backing_model_of(meta),
         operation_kind=operation_kind,
         primary_type=primary_type,
         fields=meta.fields,
@@ -1593,7 +1615,7 @@ def _materialize_merged_input(
 def _validate_relation_override_types(
     mutation_name: str,
     consumer_input: type[WithStrawberryObjectDefinition],
-    shape: Any,
+    shape: MutationInputShape,
     *,
     attr_name: str,
 ) -> None:
@@ -1652,7 +1674,8 @@ def _validate_relation_override_types(
             continue
         python_attr, _graphql_name, annotation = relation_input_annotation(
             field,
-            related_primary_type=registry.get(field.related_model),
+            # A relation field's ``related_model`` is its resolved target model class.
+            related_primary_type=registry.get(cast("type[models.Model]", field.related_model)),
         )
         if not _annotation_core_is_global_id(annotation):
             continue  # raw-pk relation (non-Relay target): no visibility contract to bypass.
@@ -1675,7 +1698,7 @@ def _validate_relation_override_types(
             )
 
 
-def _annotation_core_is_global_id(annotation: Any) -> bool:
+def _annotation_core_is_global_id(annotation: object) -> bool:
     """Return whether a generated relation annotation's core id type is ``relay.GlobalID``.
 
     ``relation_input_annotation`` emits ``relay.GlobalID`` (forward FK / OneToOne) or
@@ -1689,7 +1712,7 @@ def _annotation_core_is_global_id(annotation: Any) -> bool:
     return unwrap_return_type(annotation) is relay.GlobalID
 
 
-def _strawberry_field_shape(field: Any) -> tuple[int, Any]:
+def _strawberry_field_shape(field: StrawberryField) -> tuple[int, object]:
     """Return a consumer field's ``(list_depth, core_type)``, peeling Strawberry wrappers.
 
     A consumer relation override resolves to nested ``StrawberryOptional`` /
@@ -1750,8 +1773,8 @@ def bind_mutation_outputs(
 
 def bind_write_declarations(
     *,
-    cache: dict,
-    iterate: Callable[[], tuple[_BoundDeclaration[_ObjectTypeT], ...]],
+    cache: dict[_KeyT, _PayloadT],
+    iterate: Callable[[], tuple[type, ...]],
     resolve_object_type: Callable[
         [_BoundDeclaration[_ObjectTypeT], _ValidatedMutationMeta],
         _ObjectTypeT,
@@ -1787,7 +1810,9 @@ def bind_write_declarations(
     clear would wipe the sibling pass's already-materialized entries.
     """
     cache.clear()
-    for mutation_cls in iterate():
+    # Every ledger records a class only after its metaclass stashed the validated
+    # snapshot, so each drained declaration carries the bound-declaration shape.
+    for mutation_cls in cast("tuple[_BoundDeclaration[_ObjectTypeT], ...]", iterate()):
         meta = mutation_cls._mutation_meta
         object_type = resolve_object_type(mutation_cls, meta)
         bind_mutation_outputs(
@@ -1810,9 +1835,8 @@ def bind_mutations() -> None:
     bind_write_declarations(
         cache=_shape_build_cache,
         iterate=iter_mutations,
-        # A model-backed snapshot always carries its validated model.
         resolve_object_type=lambda mutation_cls, meta: _resolve_primary_type(
             mutation_cls,
-            cast("type[models.Model]", meta.model),
+            backing_model_of(meta),
         ),
     )

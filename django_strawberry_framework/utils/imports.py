@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import importlib
 import sys
-from typing import Any
+from types import ModuleType
+from typing import Any, TypeVar
 
 __all__ = [
     "CHANNELS_FLOOR",
@@ -50,8 +51,10 @@ CHANNELS_FLOOR = "4.3.2"
 # place the floor is written and must be bumped with this one.
 STRAWBERRY_FLOOR = "0.316.0"
 
+_T = TypeVar("_T")
 
-def _plain_text(value: Any) -> Any:
+
+def _plain_text(value: _T) -> _T | str:
     """Normalize a string subclass before handing it to import machinery."""
     if not isinstance(value, str) or type(value) is str:
         return value
@@ -115,7 +118,7 @@ def import_attr(module_path: str, attr_name: str) -> Any:
     return getattr(importlib.import_module(module_path), attr_name)
 
 
-def require_optional_module(module_name: str, *, install_hint: str) -> Any:
+def require_optional_module(module_name: str, *, install_hint: str) -> ModuleType:
     """Import + return an optional module, or raise ``ImportError`` carrying ``install_hint``.
 
     The RAISING optional-dependency primitive (spec-041 Decision 5): soft-dependency

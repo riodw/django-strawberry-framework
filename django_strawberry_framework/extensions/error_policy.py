@@ -71,7 +71,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, TypeVar
 
 from django.conf import settings
 from graphql import GraphQLError
@@ -82,6 +82,15 @@ from .. import logger
 from ..error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, new_correlation_id
 from .operation_state import OperationState, _OperationBoundExtension
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing_extensions import TypeIs
+
+#: Either result shape ``is_maskable_result`` admits; masking hands back the same shape.
+_MaskableResultT = TypeVar(
+    "_MaskableResultT",
+    bound="GraphQLExecutionResult | StrawberryExecutionResult",
+)
+
 __all__ = [
     "DjangoErrorPolicyExtension",
     "degraded_result",
@@ -91,7 +100,7 @@ __all__ = [
 ]
 
 
-def _is_unexpected(error: Any) -> bool:
+def _is_unexpected(error: object) -> bool:
     """Whether ``error`` reached the wire by accident (spec-048 Decision 8).
 
     Three cases, in the order graphql-core produces them:
@@ -147,7 +156,7 @@ def _is_unexpected(error: Any) -> bool:
     return not isinstance(original, GraphQLError)
 
 
-def _masked(error: Any, policy: ErrorPolicy) -> GraphQLError:
+def _masked(error: object, policy: ErrorPolicy) -> GraphQLError:
     """Return the client-safe replacement for one unexpected ``error``.
 
     The location information - ``nodes``, ``source``, ``positions``, and ``path``
@@ -202,7 +211,7 @@ def _degraded(policy: ErrorPolicy) -> GraphQLError:
     itself at construction.
     """
     try:
-        message: Any = policy.message
+        message: object = policy.message
     except Exception:
         message = None
     if not isinstance(message, str) or not message:
@@ -253,7 +262,9 @@ def masking_is_active(policy: ErrorPolicy) -> bool:
     return enabled and debug is not True
 
 
-def is_maskable_result(value: Any) -> bool:
+def is_maskable_result(
+    value: object,
+) -> TypeIs[GraphQLExecutionResult | StrawberryExecutionResult]:
     """Whether ``value`` is the execution-result shape this policy can rewrite.
 
     Both seams ask this one question, so neither can drift on the shape gate. The
@@ -275,7 +286,7 @@ def is_maskable_result(value: Any) -> bool:
     return isinstance(value, (GraphQLExecutionResult, StrawberryExecutionResult))
 
 
-def schema_error_policy(schema: Any) -> ErrorPolicy:
+def schema_error_policy(schema: object) -> ErrorPolicy:
     """The resolved policy carried by ``schema``, or the package default.
 
     A plain ``strawberry.Schema`` a consumer wired the extension into by hand has
@@ -296,7 +307,10 @@ def schema_error_policy(schema: Any) -> ErrorPolicy:
     return policy if isinstance(policy, ErrorPolicy) else _PACKAGE_ERROR_POLICY
 
 
-def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
+def mask_execution_result(
+    result: _MaskableResultT,
+    policy: ErrorPolicy,
+) -> _MaskableResultT | StrawberryExecutionResult:
     """Return the client-safe value for one completed or per-event ``result``.
 
     ``result`` itself is returned whenever nothing needed masking, so the common
@@ -345,7 +359,7 @@ def mask_execution_result(result: Any, policy: ErrorPolicy) -> Any:
         return degraded_result(policy)
 
 
-def _replacement_for(error: Any, policy: ErrorPolicy) -> Any:
+def _replacement_for(error: GraphQLError, policy: ErrorPolicy) -> GraphQLError:
     """Classify and mask one error, degrading to the policy message if that raises."""
     try:
         if not _is_unexpected(error):
@@ -393,7 +407,11 @@ class DjangoErrorPolicyExtension(_OperationBoundExtension[OperationState]):
         schema = getattr(getattr(self, "execution_context", None), "schema", None)
         return schema_error_policy(schema)
 
-    def _process_result(self, result: Any, policy: ErrorPolicy) -> None:
+    def _process_result(
+        self,
+        result: GraphQLExecutionResult | StrawberryExecutionResult,
+        policy: ErrorPolicy,
+    ) -> None:
         """Adopt the masked result onto the value the transport will render.
 
         The masking itself belongs to ``mask_execution_result``, which the

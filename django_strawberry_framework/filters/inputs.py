@@ -25,7 +25,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import strawberry
 from django.db import models
@@ -70,8 +70,16 @@ _iter_filterset_subclasses = iter_set_subclasses
 _input_type_name_for = set_input_type_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import Protocol
+
     from ..types.definition import DjangoTypeDefinition
+    from ..utils.typing import ConcreteField, ModelField
     from .sets import FilterSet
+
+    class _TypeForm(Protocol):
+        """A runtime annotation value (a class, ``NewType``, or scalar) that ``| None`` widens."""
+
+        def __or__(self, other: None, /) -> object: ...
 
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
@@ -267,7 +275,7 @@ def _pascal_case(name: str) -> str:
     )
 
 
-def _scalar_from_form_field(form_field: Any) -> type:
+def _scalar_from_form_field(form_field: object) -> type:
     """Pick a Strawberry-compatible scalar for a Django form field.
 
     Used by ``convert_filter_to_input_annotation`` for the
@@ -313,7 +321,7 @@ def _scalar_from_form_field(form_field: Any) -> type:
     return str
 
 
-def _scalar_from_model_field(model_field: Any) -> Any:
+def _scalar_from_model_field(model_field: ModelField | None) -> _TypeForm:
     """Map a Django model field to its scalar via the shared ``SCALAR_MAP`` lookup.
 
     Delegates to ``types.converters.scalar_for_field`` -- a LOCAL import, to
@@ -329,14 +337,15 @@ def _scalar_from_model_field(model_field: Any) -> Any:
         return str
     from ..types.converters import scalar_for_field
 
-    return scalar_for_field(model_field)
+    # A ``SCALAR_MAP`` value is a registered runtime annotation (a class or ``NewType``).
+    return cast("_TypeForm", scalar_for_field(model_field))
 
 
 def _choice_enum_from_filter(
     filter_instance: ChoiceFilter,
     type_name: str,
-    model_field: Any,
-) -> Any:
+    model_field: ModelField | None,
+) -> type[enum.Enum]:
     """Derive a Strawberry enum from a ``ChoiceFilter``'s underlying choice source.
 
     Per spec-027 Decision 4, a ``ChoiceFilter`` whose source is not a
@@ -361,14 +370,16 @@ def _choice_enum_from_filter(
             "`django.db.models.TextChoices` / `IntegerChoices` or register a "
             "custom scalar via `SCALAR_MAP`.",
         )
-    return convert_choices_to_enum(model_field, type_name)
+    # Past the guard the field declares truthy ``choices``, which only a concrete
+    # ``Field`` carries (a reverse ``ForeignObjectRel`` has no ``choices``).
+    return convert_choices_to_enum(cast("ConcreteField", model_field), type_name)
 
 
 def _element_annotation(
     filter_instance: Filter,
-    model_field: Any,
+    model_field: ModelField | None,
     owner_definition: DjangoTypeDefinition | None,
-) -> Any:
+) -> _TypeForm:
     """Single-element Strawberry type with the MODEL FIELD as source of truth.
 
     A backing model field's choices become the shared GraphQL enum and its
@@ -426,8 +437,8 @@ _FILTER_INPUT_KIND_TYPES: tuple[type | tuple[type, ...], ...] = (
 
 
 def _filter_input_prechecks(
-    *handlers: Callable[[Any], Any],
-) -> list[tuple[type | tuple[type, ...], Callable[[Any], Any]]]:
+    *handlers: Callable[[Filter], object],
+) -> list[tuple[type | tuple[type, ...], Callable[[Filter], object]]]:
     """Zip the shared kind order with per-pass handlers.
 
     ``zip(..., strict=True)`` fails loud if convert or normalize forgets a
@@ -436,7 +447,7 @@ def _filter_input_prechecks(
     return list(zip(_FILTER_INPUT_KIND_TYPES, handlers, strict=True))
 
 
-def _unexpected_filter_dispatch(obj: Any) -> ConfigurationError:
+def _unexpected_filter_dispatch(obj: object) -> ConfigurationError:
     """Fallthrough factory for the filter-input ``convert_with_mro`` riders.
 
     Last precheck is ``object`` (the original ``else``), so a real dispatch
@@ -450,10 +461,10 @@ def _unexpected_filter_dispatch(obj: Any) -> ConfigurationError:
 
 def convert_filter_to_input_annotation(
     filter_instance: Filter,
-    model_field: Any,
+    model_field: ModelField | None,
     owner_definition: DjangoTypeDefinition | None = None,
     filterset_cls: type[FilterSet] | None = None,
-) -> Any:
+) -> object:
     """Return the Strawberry annotation for a resolved ``django-filter`` filter.
 
     Implements the spec-027 Decision 4 conversion table. Kind order is
@@ -475,13 +486,13 @@ def convert_filter_to_input_annotation(
     """
     required = bool(filter_instance.extra.get("required", False))
 
-    def _gid_multi(_filter: Filter) -> Any:
+    def _gid_multi(_filter: Filter) -> object:
         return list[str]
 
-    def _gid(_filter: Filter) -> Any:
+    def _gid(_filter: Filter) -> object:
         return str
 
-    def _csv(matched: Filter) -> Any:
+    def _csv(matched: Filter) -> object:
         # django-filter expands ``Meta.fields`` ``in`` / ``range`` lookups
         # into ``BaseInFilter`` / ``BaseRangeFilter`` (both ``BaseCSVFilter``
         # subclasses) whose form field consumes a LIST of values, not a
@@ -490,22 +501,22 @@ def convert_filter_to_input_annotation(
         # mypy: runtime-built annotation
         return list[_element_annotation(matched, model_field, owner_definition)]  # type: ignore[misc]
 
-    def _range(matched: Filter) -> Any:
+    def _range(matched: Filter) -> object:
         inner = _scalar_from_model_field(model_field)
         return _build_range_input_class(matched, inner, filterset_cls)
 
-    def _list(matched: Filter) -> Any:
+    def _list(matched: Filter) -> object:
         # mypy: runtime-built annotation
         return list[_element_annotation(matched, model_field, owner_definition)]  # type: ignore[misc]
 
-    def _typed(matched: Filter) -> Any:
+    def _typed(matched: Filter) -> object:
         return _element_annotation(matched, model_field, owner_definition)
 
-    def _choice(matched: Filter) -> Any:
+    def _choice(matched: Filter) -> object:
         type_name = _owner_type_name(owner_definition) or "Filter"
         return _choice_enum_from_filter(matched, type_name, model_field)
 
-    def _catchall(matched: Filter) -> Any:
+    def _catchall(matched: Filter) -> object:
         # Catch-all scalar branch. ``Filter(method=...)`` filters land
         # here when their ``field_class`` is a recognized form field; an
         # unknown form-field shape raises per spec-027 Decision 4.
@@ -547,7 +558,7 @@ def normalize_input_value(
     filter_instance: Filter,
     raw_value: Any,
     field_name: str | None = None,
-) -> Any:
+) -> object:
     """Translate a Strawberry-shaped input value into ``django-filter`` form-data.
 
     Returns one of three shapes:
@@ -583,33 +594,33 @@ def normalize_input_value(
     if is_inactive_value(raw_value, unset_sentinel=UNSET):
         return None
 
-    def _gid_multi(_filter: Filter) -> Any:
+    def _gid_multi(_filter: Filter) -> object:
         _require_list_container(_filter, raw_value, "GlobalID list")
         return [_encode_global_id_input(item) for item in raw_value]
 
-    def _gid(_filter: Filter) -> Any:
+    def _gid(_filter: Filter) -> object:
         return _encode_global_id_input(raw_value)
 
-    def _csv(_filter: Filter) -> Any:
+    def _csv(_filter: Filter) -> object:
         # ``in`` / ``range`` generated CSV filters consume a list; unwrap
         # any enum members per element (parity with ``ListFilter`` below).
         _require_list_container(_filter, raw_value, "CSV membership list")
         return [_unwrap_enum_member(item) for item in raw_value]
 
-    def _range(matched: Filter) -> Any:
+    def _range(matched: Filter) -> object:
         return _normalize_range_value(matched, raw_value, field_name=field_name)
 
-    def _list(_filter: Filter) -> Any:
+    def _list(_filter: Filter) -> object:
         _require_list_container(_filter, raw_value, "list input")
         return [_unwrap_enum_member(item) for item in raw_value]
 
     def _typed(_filter: Filter) -> object:
         return MRO_CONTINUE
 
-    def _choice(_filter: Filter) -> Any:
+    def _choice(_filter: Filter) -> object:
         return _unwrap_enum_member(raw_value)
 
-    def _catchall(_filter: Filter) -> Any:
+    def _catchall(_filter: Filter) -> object:
         return _unwrap_enum_member(raw_value)
 
     return convert_with_mro(
@@ -629,7 +640,7 @@ def normalize_input_value(
     )
 
 
-def _require_list_container(filter_instance: Filter, raw_value: Any, shape: str) -> None:
+def _require_list_container(filter_instance: Filter, raw_value: object, shape: str) -> None:
     """Fail loud when a list-consuming normalize arm receives another container.
 
     ``GlobalIDMultipleChoiceFilter`` / ``BaseCSVFilter`` (``in`` / ``range``)
@@ -658,7 +669,7 @@ def _require_list_container(filter_instance: Filter, raw_value: Any, shape: str)
 # ---------------------------------------------------------------------------
 
 
-def _encode_global_id_input(value: Any) -> Any:
+def _encode_global_id_input(value: object) -> object:
     """Return the wire-form GlobalID string for a ``relay.GlobalID``-or-string.
 
     ``normalize_input_value`` feeds GlobalID-aware filters their form-data
@@ -681,7 +692,7 @@ def _encode_global_id_input(value: Any) -> Any:
     return value
 
 
-def _unwrap_enum_member(value: Any) -> Any:
+def _unwrap_enum_member(value: object) -> object:
     """Return ``value.value`` for an ``enum.Enum`` member; passthrough otherwise.
 
     Structural ``isinstance(value, enum.Enum)`` rather than duck-typing on
@@ -705,7 +716,7 @@ def _unwrap_enum_member(value: Any) -> Any:
 
 def _build_range_input_class(
     filter_instance: RangeFilter,
-    inner: type,
+    inner: _TypeForm,
     filterset_cls: type[FilterSet] | None = None,
 ) -> type:
     """Return a Strawberry input dataclass with ``start: T | None`` and ``end: T | None``.
@@ -744,7 +755,7 @@ def _build_range_input_class(
         filter_instance._range_input_classes = cache
     cached = cache.get(cache_key)
     if cached is not None:
-        return cached
+        return cast("type", cached)  # the slot only holds classes built below
     prefix = filterset_cls.__name__ if filterset_cls is not None else ""
     cls_name = f"{prefix}{_pascal_case(field_name)}RangeInputType"
     cls = build_input_class(
@@ -757,9 +768,9 @@ def _build_range_input_class(
 
 def _normalize_range_value(
     filter_instance: RangeFilter,
-    raw_value: Any,
+    raw_value: object,
     field_name: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Return the positional form-data patch ``{<name>_0, <name>_1}`` for a RangeFilter.
 
     Per spec-027 Decision 4: Django's ``RangeWidget.value_from_datadict``
@@ -794,7 +805,7 @@ def _normalize_range_value(
     # leaks ``UNSET`` into form-field cleaning -- the explicit
     # ``is_inactive_value`` rigor mirrors ``normalize_input_value``'s ``raw_value
     # is None or raw_value is UNSET`` entry guard.
-    patch: dict[str, Any] = {}
+    patch: dict[str, object] = {}
     if not is_inactive_value(start, unset_sentinel=UNSET):
         patch[f"{base}_0"] = _unwrap_enum_member(start)
     if not is_inactive_value(end, unset_sentinel=UNSET):
@@ -818,7 +829,7 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
 # ---------------------------------------------------------------------------
 
 
-def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]:
+def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, object]]]:
     """Return ``(python_attr, annotation, field_kwargs)`` triples for logical operators.
 
     Operators come from ``LOGIC_OPERATORS`` so adding an operator automatically
@@ -846,7 +857,7 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]
 def _build_input_fields(
     filterset_cls: type[FilterSet],
     owner_definition: DjangoTypeDefinition | None = None,
-) -> list[tuple[str, Any, dict[str, Any]]]:
+) -> list[tuple[str, object, dict[str, object]]]:
     """Return per-field input triples for a filterset's top-level GraphQL input.
 
     Walks ``filterset_cls.get_filters()`` (Layer-4 expansion), groups
@@ -934,19 +945,26 @@ def _build_input_fields(
                 continue
             yield top_name, lookup_bag
 
-    def _related_target_of(top_name: str, _lookup_bag: Any) -> tuple[bool, Any]:
+    def _related_target_of(
+        top_name: str,
+        _lookup_bag: OrderedDict[str, Filter],
+    ) -> tuple[bool, type[FilterSet] | None]:
         rel_filter = related_filters.get(top_name)
         if rel_filter is None:
             return False, None
         return True, rel_filter.filterset
 
-    def _leaf_of(top_name: str, python_attr: str, lookup_bag: Any) -> tuple[Any, str]:
+    def _leaf_of(
+        top_name: str,
+        python_attr: str,
+        lookup_bag: OrderedDict[str, Filter],
+    ) -> tuple[object, str]:
         # Leaf path: build a per-field operator-bag input class. Every
         # operator-bag leaf is optional (``optional_field_kwargs``); an
         # omitted ``default`` would build a REQUIRED field.
         sample_filter = next(iter(lookup_bag.values()))
         bag_name = filterset_cls.type_name_for(python_attr)
-        bag_specs: list[tuple[str, Any, dict[str, Any]]] = []
+        bag_specs: list[tuple[str, object, dict[str, object]]] = []
         for lookup, leaf_filter in lookup_bag.items():
             lookup_python_attr, lookup_graphql_name = LOOKUP_NAME_MAP.get(lookup, (lookup, lookup))
             model_field = _model_field_for_filter(filterset_cls, leaf_filter)
@@ -990,7 +1008,10 @@ def _build_input_fields(
     )
 
 
-def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Filter) -> Any:
+def _model_field_for_filter(
+    filterset_cls: type[FilterSet],
+    filter_instance: Filter,
+) -> ModelField | None:
     """Resolve the Django model field a filter targets (or ``None``).
 
     Folder-owned path walk: delegates to ``django_filters.utils.get_model_field``
@@ -1018,10 +1039,11 @@ def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Fil
     field_name = getattr(filter_instance, "field_name", None)
     if not field_name:
         return None
-    return get_model_field(model, field_name)
+    # django-filter is unstubbed: ``get_model_field`` returns ``Model._meta.get_field``'s result.
+    return cast("ModelField | None", get_model_field(model, field_name))
 
 
-def construct_search(all_filters: dict[str, Any]) -> dict[str, str]:
+def construct_search(all_filters: Mapping[str, object]) -> dict[str, str]:
     """Translate ``LOOKUP_PREFIXES``-vocabulary keys into a ``{name: lookup}`` map.
 
     Landed now even though the ``Meta.search_fields`` card is deferred to

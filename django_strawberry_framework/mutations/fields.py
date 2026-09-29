@@ -54,6 +54,7 @@ rejects it, that is surfaced rather than silently swapped.
 from __future__ import annotations
 
 import inspect
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
@@ -76,7 +77,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 MUTATION_CLASS_MARKER = "_django_mutation_cls"
 
 
-def _validate_mutation_target(mutation_cls: Any) -> None:
+def _validate_mutation_target(mutation_cls: object) -> None:
     """Reject a bad ``DjangoMutationField`` target at the construction line (spec-036 / spec-038 Decision 5).
 
     The target must be a **concrete, validated** member of the mutation / form
@@ -156,7 +157,7 @@ def _is_registered_mutation_target(mutation_cls: type) -> bool:
     return mutation_cls in iter_mutations() or mutation_cls in iter_form_mutations()
 
 
-def _lazy_ref(type_name: str, module_path: str) -> Any:
+def _lazy_ref(type_name: str, module_path: str) -> object:
     """Return ``Annotated[<type_name>, strawberry.lazy(module_path)]``.
 
     The forward-ref shape ``orders/inputs.py`` uses for its generated classes: a
@@ -179,9 +180,9 @@ def _lazy_ref(type_name: str, module_path: str) -> Any:
 
 
 def build_lazy_field_signature(
-    arguments: list[tuple[str, Any]],
-    return_ref: Any,
-) -> tuple[inspect.Signature, dict[str, Any]]:
+    arguments: list[tuple[str, object]],
+    return_ref: object,
+) -> tuple[inspect.Signature, dict[str, object]]:
     """Build the ``(__signature__, __annotations__)`` a fixed root-field dispatcher needs.
 
     The signature-injection idiom promoted to shared machinery (spec-040 Helper-reuse
@@ -205,7 +206,7 @@ def build_lazy_field_signature(
         inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
         inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
     ]
-    annotations: dict[str, Any] = {"info": Info}
+    annotations: dict[str, object] = {"info": Info}
     for name, annotation in arguments:
         params.append(
             inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=annotation),
@@ -217,7 +218,7 @@ def build_lazy_field_signature(
 
 def _synthesized_mutation_signature(
     mutation_cls: WriteMutationClass,
-) -> tuple[inspect.Signature, dict[str, Any]]:
+) -> tuple[inspect.Signature, dict[str, object]]:
     """Build the per-operation resolver ``__signature__`` + ``__annotations__`` (spec-036 Decision 14 / 7).
 
     ``root`` / ``info`` are Strawberry-reserved (bound without becoming GraphQL
@@ -249,7 +250,7 @@ def _synthesized_mutation_signature(
     meta = mutation_cls._mutation_meta
     operation = meta.operation
 
-    arguments: list[tuple[str, Any]] = []
+    arguments: list[tuple[str, object]] = []
     if operation_takes_id(operation):
         arguments.append(("id", strawberry.ID))
     if operation_takes_data(operation):
@@ -265,7 +266,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     *,
     description: str | None = None,
     deprecation_reason: str | None = None,
-    directives: Any = (),
+    directives: Sequence[object] = (),
 ) -> Any:
     """Expose a ``DjangoMutation`` on the schema's ``Mutation`` type (spec-036 Decision 5).
 
@@ -291,9 +292,9 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     # ``_resolve`` id-kwarg gating).
     takes_id = mutation_cls._mutation_meta.operation != "form"
 
-    def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001
+    def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:  # noqa: ARG001
         data = kwargs.get("data", strawberry.UNSET)
-        call_kwargs: dict[str, Any] = {"data": data}
+        call_kwargs: dict[str, object] = {"data": data}
         if takes_id:
             call_kwargs["id"] = kwargs.get("id", strawberry.UNSET)
         if async_execution():

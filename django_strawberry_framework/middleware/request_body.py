@@ -77,7 +77,7 @@ CSRF check refused it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 from cross_web import HTTPException
@@ -97,7 +97,7 @@ from django_strawberry_framework._boundary_ordering import (
 from django_strawberry_framework.exceptions import ConfigurationError
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from django.http import HttpRequest, HttpResponseBase
 
@@ -136,14 +136,17 @@ class GraphQLRequestBodyBoundaryMiddleware:
     sync_capable = True
     async_capable = True
 
-    def __init__(self, get_response: Callable[[HttpRequest], Any]) -> None:
+    def __init__(
+        self,
+        get_response: Callable[[HttpRequest], HttpResponseBase | Awaitable[HttpResponseBase]],
+    ) -> None:
         """Bind the downstream chain and refuse a chain that cannot deliver the ordering."""
         self.get_response = get_response
         _require_boundary_before_csrf()
         if iscoroutinefunction(self.get_response):
             markcoroutinefunction(self)
 
-    def __call__(self, request: HttpRequest) -> Any:
+    def __call__(self, request: HttpRequest) -> HttpResponseBase | Awaitable[HttpResponseBase]:
         """Publish the request this middleware is handling, then call downstream.
 
         The request object rather than a bare "installed" flag, because the
@@ -159,14 +162,19 @@ class GraphQLRequestBodyBoundaryMiddleware:
         cannot leave it set for whatever the worker handles next.
         """
         if iscoroutinefunction(self):
-            return self.__acall__(request)
+            # mypy: typeshed's iscoroutinefunction TypeGuard narrows ``self`` to a bare Callable;
+            # the attribute is this middleware's own ``__acall__``.
+            return cast(
+                "Awaitable[HttpResponseBase]",
+                self.__acall__(request),  # type: ignore[attr-defined]
+            )
         token = _boundary_middleware_request.set(request)
         try:
             return self.get_response(request)
         finally:
             _boundary_middleware_request.reset(token)
 
-    async def __acall__(self, request: HttpRequest) -> Any:
+    async def __acall__(self, request: HttpRequest) -> HttpResponseBase:
         """The async twin of :meth:`__call__` - the ``await`` is the whole difference.
 
         Separate rather than shared because the reset has to happen after the
@@ -175,16 +183,18 @@ class GraphQLRequestBodyBoundaryMiddleware:
         """
         token = _boundary_middleware_request.set(request)
         try:
-            return await self.get_response(request)
+            # An async chain: ``__init__`` marked this instance a coroutine function
+            # only when ``get_response`` is one, and only such an instance reaches here.
+            return await cast("Awaitable[HttpResponseBase]", self.get_response(request))
         finally:
             _boundary_middleware_request.reset(token)
 
     def process_view(
         self,
         request: HttpRequest,
-        view_func: Callable[..., Any],
-        view_args: tuple[Any, ...],
-        view_kwargs: dict[str, Any],
+        view_func: object,
+        view_args: tuple[object, ...],
+        view_kwargs: dict[str, object],
     ) -> HttpResponseBase | None:
         """Run a package view's body boundary here, before any later ``process_view``.
 
@@ -244,7 +254,7 @@ class GraphQLRequestBodyBoundaryMiddleware:
         return None
 
 
-def _package_view_instance(view_func: Callable[..., Any]) -> Any:
+def _package_view_instance(view_func: object) -> object:
     """The package view instance whose boundary this callback's mount would run.
 
     ``None`` means "not a callback this middleware can run a boundary for", and

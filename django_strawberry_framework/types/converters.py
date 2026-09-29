@@ -67,7 +67,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
 import strawberry
 from django.db import models
@@ -82,8 +82,14 @@ from ..utils.strings import pascal_case
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.contrib.postgres.fields import ArrayField, HStoreField
 
+    from ..utils.typing import ConcreteField, ModelField
 
-def _safe_file_attr(file_file: Any, attr: str) -> Any:
+
+@overload
+def _safe_file_attr(file_file: object, attr: Literal["size", "width", "height"]) -> int | None: ...
+@overload
+def _safe_file_attr(file_file: object, attr: Literal["url", "path"]) -> str | None: ...
+def _safe_file_attr(file_file: object, attr: str) -> int | str | None:
     """Read ``getattr(file_file, attr)``, degrading storage failures to ``None``.
 
     The single per-subfield guard shared by every nullable subfield resolver
@@ -105,7 +111,9 @@ def _safe_file_attr(file_file: Any, attr: str) -> Any:
     ``Exception`` would also swallow genuine resolver bugs.
     """
     try:
-        return getattr(file_file, attr)
+        # ``file_file`` is the bound ``FieldFile``: ``size`` / ``width`` / ``height``
+        # are ``int`` and ``url`` / ``path`` are ``str``, per the overloads above.
+        return cast("int | str | None", getattr(file_file, attr))
     except (ValueError, OSError, NotImplementedError):
         return None
 
@@ -193,7 +201,8 @@ class _FileSystemPathFields:
     description a consumer's SDL will carry.
     """
 
-    @strawberry.field(
+    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``
+    @strawberry.field(  # type: ignore[untyped-decorator]
         description=(
             "SECURITY: the file's absolute path on the server filesystem. Opted in "
             "per column via Meta.filesystem_path_fields; it is deployment metadata, "
@@ -226,7 +235,7 @@ class DjangoImagePathType(DjangoImageType, _FileSystemPathFields):
     """
 
 
-SCALAR_MAP: dict[type[models.Field], Any] = {
+SCALAR_MAP: "dict[type[ConcreteField], Any]" = {
     models.AutoField: int,
     models.BigAutoField: int,
     models.SmallAutoField: int,
@@ -268,7 +277,7 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
 # ``DjangoImageType`` rather than falling through to ``DjangoFileType``,
 # exactly as ``PositiveBigIntegerField`` resolves to ``BigInt`` before
 # ``IntegerField`` in SCALAR_MAP.
-FIELD_OUTPUT_TYPE_MAP: dict[type[models.Field], type] = {
+FIELD_OUTPUT_TYPE_MAP: "dict[type[ConcreteField], type]" = {
     models.ImageField: DjangoImageType,
     models.FileField: DjangoFileType,
 }
@@ -297,7 +306,7 @@ _GRAPHQL_RESERVED_ENUM_VALUES = frozenset(
 # postgres driver), and a loud ``AttributeError`` if that module is importable but
 # somehow missing the expected class -- a broken environment that should fail rather
 # than silently degrade.
-_ARRAY_FIELD_CLS: "type[ArrayField] | None" = import_attr_if_importable(
+_ARRAY_FIELD_CLS: "type[ArrayField[Any, Any]] | None" = import_attr_if_importable(
     "django.contrib.postgres.fields",
     "ArrayField",
 )
@@ -307,7 +316,7 @@ _HSTORE_FIELD_CLS: "type[HStoreField] | None" = import_attr_if_importable(
 )
 
 
-def _field_label(field: Any) -> str:
+def _field_label(field: object) -> str:
     """Return ``Model.field`` for diagnostics, tolerating malformed field metadata."""
     try:
         model = getattr(field, "model", None)
@@ -324,7 +333,7 @@ def _field_label(field: Any) -> str:
     return f"{_safe_text(model_name, '<unbound>')}.{_safe_text(field_name, '<unknown>')}"
 
 
-def _field_has_choices(field: Any) -> bool:
+def _field_has_choices(field: "ConcreteField") -> bool:
     """Read a field's choices flag without leaking hostile metadata errors."""
     try:
         return bool(field.choices)
@@ -332,7 +341,7 @@ def _field_has_choices(field: Any) -> bool:
         raise ConfigurationError(f"Could not inspect choices for {_field_label(field)}.") from exc
 
 
-def scalar_for_field(field: models.Field) -> Any:
+def scalar_for_field(field: "ModelField") -> Any:
     """Resolve a Django field to its ``SCALAR_MAP`` Python / Strawberry scalar.
 
     Walks ``type(field).__mro__`` so consumer-defined subclasses of a supported
@@ -356,11 +365,11 @@ def scalar_for_field(field: models.Field) -> Any:
 
 
 def convert_scalar(
-    field: models.Field,
+    field: "ConcreteField",
     type_name: str,
     *,
     force_nullable: bool | None = None,
-) -> Any:
+) -> object:
     """Map a Django scalar field to a Python / Strawberry type.
 
     Algorithm:
@@ -472,8 +481,8 @@ def convert_scalar(
                 f"GraphQL boundary. Drop the choices declaration or model the constrained "
                 f"shape with a separate field.",
             )
-        py_type: Any = strawberry.scalars.JSON
-        return py_type | None if effective_null else py_type
+        json_type = strawberry.scalars.JSON
+        return json_type | None if effective_null else json_type
     # Shared field-class -> scalar lookup (also used by the filter-input
     # converter) so a column resolves to the same scalar on both sides. Walks
     # the MRO, so consumer subclasses of a supported field resolve to the
@@ -486,7 +495,7 @@ def convert_scalar(
     return py_type
 
 
-def _field_output_type_for(field: models.Field) -> type | None:
+def _field_output_type_for(field: "ModelField") -> type | None:
     """Return the ``FIELD_OUTPUT_TYPE_MAP`` output object for ``field``, or ``None``.
 
     Walks ``type(field).__mro__`` against ``FIELD_OUTPUT_TYPE_MAP`` exactly as
@@ -503,12 +512,12 @@ def _field_output_type_for(field: models.Field) -> type | None:
 
 
 def convert_field_output(
-    field: models.Field,
+    field: "ConcreteField",
     type_name: str,
     *,
     force_nullable: bool | None = None,
     expose_filesystem_path: bool = False,
-) -> Any:
+) -> object:
     """Map a non-relation Django column to its read-output annotation.
 
     The read-output entry point ``types/base.py:_build_annotations`` calls for
@@ -588,7 +597,7 @@ def _is_enum_reserved_member(name: str, *, enum_name: str | None = None) -> bool
     )
 
 
-def _sanitize_member_name(value: Any, *, enum_name: str | None = None) -> str:
+def _sanitize_member_name(value: object, *, enum_name: str | None = None) -> str:
     """Produce a Strawberry / GraphQL-safe enum member from a Django choice value.
 
     The choice value (DB-side, not the human label) is the input. We coerce
@@ -631,7 +640,7 @@ def _sanitize_member_name(value: Any, *, enum_name: str | None = None) -> str:
 
 
 def build_enum_from_choices(
-    choice_pairs: Iterable[tuple[Any, Any]],
+    choice_pairs: Iterable[tuple[object, object]],
     enum_name: str,
     *,
     source_label: str,
@@ -678,7 +687,7 @@ def build_enum_from_choices(
             "sequence is empty; choices must be a non-empty flat sequence "
             "of (value, label) pairs.",
         )
-    normalized_pairs: list[tuple[Any, Any]] = []
+    normalized_pairs: list[tuple[object, object]] = []
     for entry in pairs:
         if isinstance(entry, (str, bytes)):
             malformed = True
@@ -714,8 +723,8 @@ def build_enum_from_choices(
                 "separate fields.",
             )
 
-    members: dict[str, Any] = {}
-    collisions: dict[str, list[Any]] = {}
+    members: dict[str, object] = {}
+    collisions: dict[str, list[object]] = {}
     for value, _label in normalized_pairs:
         try:
             member = _sanitize_member_name(value, enum_name=enum_name)
@@ -742,7 +751,7 @@ def build_enum_from_choices(
     return strawberry.enum(enum_cls)
 
 
-def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
+def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum]:
     """Generate (or fetch from registry) a Strawberry ``Enum`` for ``field.choices``.
 
     1. Cache check on ``(field.model, field.name)``; return cached on hit.
@@ -798,11 +807,11 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
 
 
 def resolved_relation_annotation(
-    field: models.Field | models.ForeignObjectRel,
+    field: "ModelField",
     target_type: type,
     *,
     field_meta: FieldMeta | None = None,
-) -> Any:
+) -> object:
     """Return the concrete annotation for ``field`` pointing at ``target_type``."""
     meta = field_meta or FieldMeta.from_django_field(field)
     if meta.is_many_side:

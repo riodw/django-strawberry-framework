@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, TypeGuard, cast, overload
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models.constants import LOOKUP_SEP
@@ -17,10 +17,13 @@ from django_strawberry_framework.exceptions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from django.db import models
+    from django.db.models.lookups import Lookup, Transform
     from django.db.models.query_utils import PathInfo
+
+    from .typing import ConcreteField, ModelField
 
 __all__ = [
     "MANY_SIDE_RELATION_KINDS",
@@ -75,7 +78,7 @@ def safe_truthy(value: object) -> bool:
 def relation_attr(
     field: object,
     name: str,
-    default: Any = _MISSING,
+    default: object = _MISSING,
     *,
     lenient: bool = False,
 ) -> Any:
@@ -144,7 +147,7 @@ def relation_name(field: object, name: str) -> str | None:
 
 
 class _RelationFieldLike(Protocol):
-    """Shape contract for the five Django relation flags this classifier reads.
+    """Shape contract for the five Django relation flags the relation classifiers read.
 
     Every caller in the package hands in a real Django relation field or rel
     descriptor whose ``many_to_many`` / ``one_to_many`` / ``one_to_one`` /
@@ -175,7 +178,7 @@ class _TraversableRelationLike(_RelationFieldLike, Protocol):
     def path_infos(self) -> Sequence[PathInfo]: ...
 
 
-def relation_kind(field: _RelationFieldLike) -> RelationKind:
+def relation_kind(field: object) -> RelationKind:
     """Classify a Django relation field by GraphQL/runtime cardinality.
 
     Five shapes are distinguished:
@@ -297,12 +300,12 @@ class ClassifiedPath:
     model: type
     path: str
     hops: tuple[RelationPathHop, ...]
-    terminal: Any
+    terminal: ModelField
     first_many_index: int | None
     relation_chain: tuple[str, ...]
 
 
-def _resolve_segment_field(model: type[models.Model], segment: str) -> object:
+def _resolve_segment_field(model: type[models.Model], segment: str) -> ModelField:
     """Return the field a path segment names, resolving ``pk`` to the pk field.
 
     ``pk`` is Django's ORM alias for the model's primary key; a ``pk`` segment
@@ -313,7 +316,8 @@ def _resolve_segment_field(model: type[models.Model], segment: str) -> object:
     """
     try:
         if segment == "pk":
-            return model._meta.pk
+            # The stubs' model plugin types ``Options.pk`` as ``Any``; it is the pk field.
+            return cast("ConcreteField", model._meta.pk)
         return model._meta.get_field(segment)
     except FieldDoesNotExist:
         raise
@@ -364,7 +368,7 @@ def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
     segments = field_path.split(LOOKUP_SEP)
     current = model
     hops: list[RelationPathHop] = []
-    terminal: Any = None
+    terminal: object = None
     last_index = len(segments) - 1
     for index, segment in enumerate(segments):
         try:
@@ -418,13 +422,14 @@ def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
         model=model,
         path=field_path,
         hops=tuple(hops),
-        terminal=terminal,
+        # The final segment assigned its ``_resolve_segment_field`` result here or raised.
+        terminal=cast("ModelField", terminal),
         first_many_index=first_many_index,
         relation_chain=tuple(hop.segment for hop in hops),
     )
 
 
-def validate_lookup_expr(terminal: Any, lookup_expr: str) -> type:
+def validate_lookup_expr(terminal: ModelField, lookup_expr: str) -> type[Lookup[Any]]:
     """Validate a django-filter lookup expression against a classified terminal.
 
     A contract SEPARATE from path classification. ``terminal`` is a
@@ -467,7 +472,7 @@ def validate_lookup_expr(terminal: Any, lookup_expr: str) -> type:
     for part in parts:
         if not part:
             raise LookupValidationError(terminal, lookup_expr, part)
-    cursor: Any = terminal
+    cursor: ModelField | Transform = terminal
     # ``str.split`` always yields at least one part, so the final part always exists.
     *transform_parts, final_part = parts
     for part in transform_parts:
@@ -548,7 +553,11 @@ def _classify_path_cached(model: type[models.Model], field_path: str) -> Classif
     return classify_path(model, field_path)
 
 
-def _traverses_to_many(classify: Any, model: type[models.Model], field_path: str) -> bool:
+def _traverses_to_many(
+    classify: Callable[[type[models.Model], str], ClassifiedPath],
+    model: type[models.Model],
+    field_path: str,
+) -> bool:
     """Answer the to-many question over ``classify``, with the shared fallback ladder.
 
     ONE body for both arms of :func:`path_traverses_to_many`: the hashable arm
@@ -634,6 +643,10 @@ path_traverses_to_many.cache_info = (  # type: ignore[attr-defined]  # mypy#2087
 )
 
 
+@overload
+def is_forward_many_to_many(field: ModelField) -> TypeGuard[ConcreteField]: ...
+@overload
+def is_forward_many_to_many(field: object) -> bool: ...
 def is_forward_many_to_many(field: object) -> bool:
     """Return ``True`` for a forward, writable ``ManyToManyField``.
 
@@ -652,7 +665,8 @@ def is_forward_many_to_many(field: object) -> bool:
     and the DRF attestation filter
     (``rest_framework/resolvers.py::_attestable_m2m_fields``). ``getattr``
     defaults defend against field shapes that omit a flag, matching
-    ``relation_kind``'s read contract.
+    ``relation_kind``'s read contract. Over a model field, ``True`` narrows it to
+    the forward ``ManyToManyField`` (a concrete ``Field``, never a reverse rel).
     """
     many_to_many = relation_bool(field, "many_to_many")
     concrete = relation_bool(field, "concrete")
@@ -660,6 +674,10 @@ def is_forward_many_to_many(field: object) -> bool:
     return many_to_many and (concrete or not auto_created)
 
 
+@overload
+def is_forward_concrete_relation(field: ModelField) -> TypeGuard[ConcreteField]: ...
+@overload
+def is_forward_concrete_relation(field: _RelationFieldLike) -> bool: ...
 def is_forward_concrete_relation(field: _RelationFieldLike) -> bool:
     """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
 
@@ -698,7 +716,8 @@ def is_forward_concrete_relation(field: _RelationFieldLike) -> bool:
     backing-column resolution.
 
     Every read is contained, so a descriptor with hostile metadata fails closed
-    to ``False`` instead of dispatching its own exception into the caller.
+    to ``False`` instead of dispatching its own exception into the caller. Over a
+    model field, ``True`` narrows it to the forward FK / OneToOne ``Field``.
     """
     try:
         if not relation_bool(field, "is_relation"):

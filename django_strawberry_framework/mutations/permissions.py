@@ -37,6 +37,10 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing import ClassVar, Protocol
 
     from django.db import models
+    from strawberry.types import Info
+
+    from ..forms.sets import DjangoFormMutation
+    from .sets import DjangoMutation
 
     class _ModelResolvingMutation(Protocol):
         """An instance of a concrete model-backed mutation class ``DjangoModelPermission`` reads.
@@ -71,7 +75,7 @@ _PERMISSION_ASYNC_RECOURSE = (
 )
 
 
-def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bool:
+def _require_sync_bool_auth_result(value: object, *, owner: str, method: str) -> bool:
     """Return a sync authorization bool; reject invalid results (auth hardening, shipped 0.0.14).
 
     The ONE write-authorization result contract the three sync seams share:
@@ -97,11 +101,11 @@ def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bo
 
 
 def run_permission_classes(
-    mutation_self: Any,
-    info: Any,
+    mutation_self: DjangoMutation | DjangoFormMutation,
+    info: Info[object, object],
     operation: str,
-    data: Any,
-    instance: Any,
+    data: object,
+    instance: models.Model | None,
 ) -> bool:
     """Run every ``Meta.permission_classes`` entry; deny as soon as one denies.
 
@@ -166,7 +170,7 @@ class DjangoModelPermission:
 
     def has_permission(
         self,
-        info: Any,
+        info: Info,
         mutation: type[_ModelResolvingMutation],
         operation: str,
         data: Any,
@@ -227,11 +231,11 @@ class DenyAll:
 
     def has_permission(
         self,
-        info: Any,
+        info: object,
         mutation: type,
         operation: str,
-        data: Any,
-        instance: Any = None,
+        data: object,
+        instance: object = None,
     ) -> bool:
         """Always deny: a plain form with no explicit ``permission_classes`` is closed."""
         del info, mutation, operation, data, instance  # a closed default reads none of them.

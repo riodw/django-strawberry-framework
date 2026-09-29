@@ -56,9 +56,19 @@ from .exceptions import ConfigurationError, describe_value
 from .utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR, require_optional_module
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable
+    from types import ModuleType
+    from typing import Protocol
+
     from django.core.handlers.asgi import ASGIHandler
     from strawberry.channels import GraphQLWSConsumer
     from strawberry.schema import BaseSchema
+
+    class _ApplicationFactory(Protocol):
+        """A consumer factory: called with the schema, returns the WebSocket application."""
+
+        def __call__(self, *, schema: BaseSchema) -> object: ...
+
 
 # The one public symbol is resolved lazily via the PEP 562 module ``__getattr__``
 # below, so it is never a real module global; ruff's F822 (undefined name in
@@ -197,7 +207,7 @@ def _validated_websocket_url_pattern(value: object) -> str:
     return value
 
 
-def require_channels() -> Any:
+def require_channels() -> ModuleType:
     """Import + return the ``channels`` package, or raise the install-hint ``ImportError``.
 
     A thin wrapper over the shared optional-import owner
@@ -209,7 +219,11 @@ def require_channels() -> Any:
     return require_optional_module("channels", install_hint=_CHANNELS_INSTALL_HINT)
 
 
-def _require_factory_calling_convention(factory: Any, *, schema: BaseSchema) -> None:
+def _require_factory_calling_convention(
+    factory: _ApplicationFactory,
+    *,
+    schema: BaseSchema,
+) -> None:
     """Raise ``ConfigurationError`` unless ``factory(schema=schema)`` can bind.
 
     See ``_factory_application`` rejection 1 for why the binding is pre-checked
@@ -232,7 +246,11 @@ def _require_factory_calling_convention(factory: Any, *, schema: BaseSchema) -> 
         ) from exc
 
 
-def _factory_application(factory: Any, *, schema: BaseSchema) -> Any:
+def _factory_application(
+    factory: _ApplicationFactory,
+    *,
+    schema: BaseSchema,
+) -> Callable[..., object]:
     """Invoke the injection seam's factory and validate what it handed back.
 
     The factory shape's whole contract is enforced here, at CONSTRUCTION, because
@@ -292,10 +310,10 @@ def _factory_application(factory: Any, *, schema: BaseSchema) -> Any:
 
 
 def _websocket_application(
-    candidate: Any,
+    candidate: object,
     *,
     schema: BaseSchema,
-    package_consumer_class: type[Any],
+    package_consumer_class: type[GraphQLWSConsumer],
     base_consumer_class: type[GraphQLWSConsumer],
     revalidation_window: float,
 ) -> Any:
@@ -475,7 +493,7 @@ def _build_router_class_uncached() -> type[Any]:
             django_application: ASGIHandler,
             *,
             websocket_url_pattern: str = r"^graphql/?$",
-            websocket_consumer_class: Any = None,
+            websocket_consumer_class: object = None,
             websocket_revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
         ) -> None:
             # One guard for both failure shapes Error shapes gives one message:

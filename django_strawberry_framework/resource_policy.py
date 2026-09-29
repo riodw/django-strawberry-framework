@@ -62,11 +62,11 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Mapping
-from contextvars import ContextVar
+from collections.abc import AsyncIterable, Mapping
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
 from itertools import islice
-from typing import Any
+from typing import Any, TypeGuard
 
 from django.db.models import QuerySet
 from graphql import GraphQLError
@@ -171,7 +171,7 @@ class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # no
         )
 
 
-def _is_builtin_number(value: Any) -> bool:
+def _is_builtin_number(value: object) -> TypeGuard[int | float]:
     """Whether ``value`` is an exact built-in ``int`` or ``float``.
 
     The test is EXACT, not ``isinstance``, everywhere a number crosses into the
@@ -193,7 +193,7 @@ def _is_builtin_number(value: Any) -> bool:
     return type(value) is int or type(value) is float
 
 
-def _is_valid_deadline(value: Any) -> bool:
+def _is_valid_deadline(value: object) -> bool:
     """Whether ``value`` sits in the deadline domain (``None`` is decided by the caller).
 
     Exact built-in numbers only (:func:`_is_builtin_number`), finite and
@@ -228,7 +228,7 @@ def _is_valid_deadline(value: Any) -> bool:
 MAX_RESOURCE_BOUND = 2**63 - 1
 
 
-def _require_positive_int(value: Any, label: str) -> None:
+def _require_positive_int(value: object, label: str) -> None:
     """Reject a non-positive-integer bound under whatever name declared it.
 
     The package's bound-domain rule, stated once for the two spellings of the
@@ -461,7 +461,9 @@ _PACKAGE_RESOURCE_POLICY = canonical_policy(
 )
 
 
-def resolve_resource_policy(explicit: ResourcePolicy | Mapping[str, Any] | None) -> ResourcePolicy:
+def resolve_resource_policy(
+    explicit: ResourcePolicy | Mapping[str, object] | None,
+) -> ResourcePolicy:
     """Normalize the deployment's policy once, at schema construction.
 
     Precedence, highest first: the ``DjangoSchema(resource_policy=...)``
@@ -591,7 +593,11 @@ class _BudgetScope:
 
     __slots__ = ("adopted", "lease", "token")
 
-    def __init__(self, lease: OperationLease[_RequestBudget], token: Any) -> None:
+    def __init__(
+        self,
+        lease: OperationLease[_RequestBudget],
+        token: Token[OperationLease[_RequestBudget] | None],
+    ) -> None:
         self.lease = lease
         self.token = token
         self.adopted = False
@@ -620,7 +626,11 @@ def _absolute_deadline(policy: ResourcePolicy) -> float | None:
     return None if seconds is None else time.monotonic() + seconds
 
 
-def _publish_budget_mirror(context: Any, policy: ResourcePolicy, deadline: float | None) -> None:
+def _publish_budget_mirror(
+    context: object,
+    policy: ResourcePolicy,
+    deadline: float | None,
+) -> None:
     """Write the consumer-readable mirror of a budget onto the request context.
 
     The policy published here is a COPY. The mirror exists to be read by consumer
@@ -632,7 +642,7 @@ def _publish_budget_mirror(context: Any, policy: ResourcePolicy, deadline: float
     stash_on_context(context, DST_RESOURCE_DEADLINE, deadline)
 
 
-def stash_resource_policy(context: Any, policy: ResourcePolicy) -> None:
+def stash_resource_policy(context: object, policy: ResourcePolicy) -> None:
     """Publish ``policy`` (and its derived deadline) onto the request context.
 
     The consumer-readable mirror, and only that. :func:`begin_resource_budget`
@@ -662,7 +672,7 @@ def _operation_policy(policy: ResourcePolicy) -> ResourcePolicy:
     return canonical_policy(policy, policy_cls=ResourcePolicy, display_name="resource policy")
 
 
-def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
+def begin_resource_budget(context: object, policy: ResourcePolicy) -> _BudgetScope:
     """Arm ``policy`` as this operation's budget and publish it; returns its scope.
 
     What is armed is a private snapshot (:func:`_operation_policy`), never the
@@ -686,7 +696,13 @@ def begin_resource_budget(context: Any, policy: ResourcePolicy) -> Any:
     return _BudgetScope(lease, _active_budget.set(lease))
 
 
-def budget_resume_binding(scope: Any) -> tuple[ContextVar[Any], Any, Any]:
+def budget_resume_binding(
+    scope: _BudgetScope,
+) -> tuple[
+    ContextVar[OperationLease[_RequestBudget] | None],
+    OperationLease[_RequestBudget],
+    Token[OperationLease[_RequestBudget] | None],
+]:
     """What a streamed operation has to bind again on resume, and what armed it here.
 
     An operation's budget is armed once, in the task that started it, and a
@@ -708,7 +724,7 @@ def budget_resume_binding(scope: Any) -> tuple[ContextVar[Any], Any, Any]:
     return _active_budget, scope.lease, scope.token
 
 
-def adopt_budget_binding(scope: Any) -> None:
+def adopt_budget_binding(scope: _BudgetScope) -> None:
     """Record that a resume took this scope's binding over.
 
     Called only when a registrar actually accepted it, so an ordinary operation
@@ -767,7 +783,7 @@ def admission_rejection() -> ResourceLimitExceeded | None:
     return None if budget is None else budget.admission.rejection
 
 
-def end_resource_budget(scope: Any) -> None:
+def end_resource_budget(scope: _BudgetScope) -> None:
     """Disarm the budget armed by :func:`begin_resource_budget`.
 
     Closing comes first and is unconditional, because it is the half that works
@@ -799,7 +815,7 @@ def end_resource_budget(scope: Any) -> None:
             raise
 
 
-def _effective_deadline(armed: float | None, mirror: Any) -> Any:
+def _effective_deadline(armed: float | None, mirror: object) -> float | None:
     """The tighter of the operation's own deadline and a consumer-written one.
 
     The narrowing rule the rest of the module already states for bounds
@@ -826,7 +842,7 @@ def _effective_deadline(armed: float | None, mirror: Any) -> Any:
     return mirror if mirror < armed else armed
 
 
-def _deadline_expired(deadline: Any) -> bool | None:
+def _deadline_expired(deadline: object) -> bool | None:
     """Whether ``deadline`` has passed, or ``None`` when it is not a deadline at all.
 
     Only an exact built-in number is placed against the clock
@@ -853,13 +869,13 @@ def _deadline_expired(deadline: Any) -> bool | None:
     return True
 
 
-def clear_resource_context(context: Any) -> None:
+def clear_resource_context(context: object) -> None:
     """Remove both resource keys, so a reused ``context_value`` cannot leak a deadline."""
     clear_context_key(context, DST_RESOURCE_POLICY)
     clear_context_key(context, DST_RESOURCE_DEADLINE)
 
 
-def policy_from_info(info: Any) -> ResourcePolicy:
+def policy_from_info(info: object) -> ResourcePolicy:
     """Return the request's policy, or the package default when none was published.
 
     The armed budget outranks the published mirror, and is consulted without
@@ -902,7 +918,7 @@ def policy_from_info(info: Any) -> ResourcePolicy:
     return copy_policy(value if type(value) is ResourcePolicy else _PACKAGE_RESOURCE_POLICY)
 
 
-def check_deadline(info: Any) -> None:
+def check_deadline(info: object) -> None:
     """Raise if the operation's optional wall-clock deadline has already passed.
 
     Cooperative and called at the collection resolvers' pre-query seam, which is
@@ -966,7 +982,7 @@ _SLICE_BOUNDED_ROW_TYPES = (
 )
 
 
-def _bounds_by_its_own_slice(result: Any) -> bool:
+def _bounds_by_its_own_slice(result: object) -> bool:
     """Whether slicing ``result`` is an operation this package owns the meaning of.
 
     Exact types only, and ``type(result)`` rather than ``isinstance``: a subclass
@@ -979,7 +995,7 @@ def _bounds_by_its_own_slice(result: Any) -> bool:
     return type(result) in _SLICE_BOUNDED_ROW_TYPES
 
 
-def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -> int:
+def _raw_list_bound(info: object, declared: int | None, *, trusted: bool = False) -> int:
     """Deadline check plus the effective raw-list row bound, spelled once for both colors.
 
     ``bounded_rows`` and ``bounded_rows_async`` enforce the same seam - the last
@@ -993,7 +1009,7 @@ def _raw_list_bound(info: Any, declared: int | None, *, trusted: bool = False) -
 
 def _windowed_rows(
     result: Any,
-    info: Any,
+    info: object,
     declared: int | None = None,
     *,
     offset: int | None = None,
@@ -1063,7 +1079,7 @@ def _windowed_rows(
 
 def bounded_rows(
     result: Any,
-    info: Any,
+    info: object,
     declared: int | None = None,
     *,
     trusted: bool = False,
@@ -1150,7 +1166,7 @@ def _is_cleanup_diagnostic(error: BaseException) -> bool:
 
 
 async def _close_async_iterator(
-    iterator: Any,
+    iterator: object,
     *,
     primary_error: BaseException | None = None,
     caller: str = "bounded_rows_async",
@@ -1177,7 +1193,7 @@ async def _close_async_iterator(
 
 
 async def _cleanup_rejected_async_iterable(
-    iterable: Any,
+    iterable: AsyncIterable[object],
     primary_error: BaseException,
     *,
     caller: str,
@@ -1218,7 +1234,7 @@ async def _cleanup_rejected_async_iterable(
 
 async def _windowed_rows_async(
     result: Any,
-    info: Any,
+    info: object,
     declared: int | None = None,
     *,
     offset: int | None = None,
@@ -1269,7 +1285,7 @@ async def _windowed_rows_async(
         await _close_async_iterator(iterator)
         return []
 
-    rows: list[Any] = []
+    rows: list[object] = []
     exhausted = False
     primary_error: BaseException | None = None
     skipped = 0
@@ -1298,7 +1314,7 @@ async def _windowed_rows_async(
 
 async def bounded_rows_async(
     result: Any,
-    info: Any,
+    info: object,
     declared: int | None = None,
     *,
     trusted: bool = False,
@@ -1332,7 +1348,7 @@ async def bounded_rows_async(
     return await _windowed_rows_async(result, info, declared, trusted=trusted)
 
 
-def validate_collection_bound(declared: Any, *, field: str) -> None:
+def validate_collection_bound(declared: object, *, field: str) -> None:
     """Reject a field-declared collection bound that is not a positive integer.
 
     Called at the line that constructs the field, so a typo fails where it was
@@ -1342,7 +1358,7 @@ def validate_collection_bound(declared: Any, *, field: str) -> None:
     _require_positive_int(declared, field)
 
 
-def validate_trusted_flag(declared: Any, *, field: str) -> None:
+def validate_trusted_flag(declared: object, *, field: str) -> None:
     """Reject a trusted-declaration opt-in that is not exactly ``True`` or ``False``.
 
     The opt-in that lets a field-declared maximum outrank the request's own

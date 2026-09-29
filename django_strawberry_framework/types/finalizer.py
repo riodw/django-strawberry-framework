@@ -51,7 +51,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 import strawberry
 from django.db import models
@@ -84,6 +84,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
+    from ..utils.typing import ModelField
     from .definition import DjangoTypeDefinition
 
 # The sidecar family one phase-2.5 binding pass runs over: every hook in one
@@ -580,7 +581,7 @@ def _register_relation_connection_teardown(
     lifecycle, not a general unfinalizer for Strawberry-decorated classes.
     """
     # The synthesized connection field is always built around a resolver.
-    generated_resolver = cast("StrawberryResolver[Any]", field_obj.base_resolver).wrapped_func
+    generated_resolver = cast("StrawberryResolver[object]", field_obj.base_resolver).wrapped_func
 
     def teardown() -> None:
         current = type_cls.__dict__.get(generated, _MISSING_CLASS_MEMBER)
@@ -1177,7 +1178,17 @@ def _bind_set_owner_common(
         Callable[[_SetT, DjangoTypeDefinition, DjangoTypeDefinition], None] | None
     ),
     related_attr: str,
-    format_target_mismatch: Callable[..., str],
+    format_target_mismatch: Callable[
+        [
+            _SetT,
+            DjangoTypeDefinition,
+            DjangoTypeDefinition,
+            str,
+            tuple[DjangoTypeDefinition, ModelField] | None,
+            tuple[DjangoTypeDefinition, ModelField] | None,
+        ],
+        str,
+    ],
 ) -> None:
     """Bind ``set_cls._owner_definition`` with shared first-bind/idempotency/target checks.
 
@@ -1417,8 +1428,8 @@ def _format_owner_target_mismatch_error(
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     field_name: str,
-    prev_target: tuple[DjangoTypeDefinition, models.Field] | None,
-    new_target: tuple[DjangoTypeDefinition, models.Field] | None,
+    prev_target: tuple[DjangoTypeDefinition, ModelField] | None,
+    new_target: tuple[DjangoTypeDefinition, ModelField] | None,
     *,
     family: str,
     suffix: str = "",

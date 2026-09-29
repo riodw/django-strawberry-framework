@@ -14,7 +14,7 @@ implementation no longer exhibits the bug pinned by
 
 import inspect
 from collections.abc import AsyncIterable
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .conf import upstream_patches_enabled
 
@@ -26,12 +26,31 @@ except ImportError:  # pragma: no cover - exercised through patched imports in t
     is_iterable = None  # type: ignore[assignment]  # import-failure sentinel
 
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable, Iterable
+
+    from graphql import FieldNode, GraphQLList, GraphQLOutputType, GraphQLResolveInfo
+    from graphql.pyutils import AwaitableOrValue, Path
+
+    _CompleteListValue = Callable[
+        [
+            ExecutionContext,
+            GraphQLList[GraphQLOutputType],
+            list[FieldNode],
+            GraphQLResolveInfo,
+            Path,
+            AsyncIterable[object] | Iterable[object],
+        ],
+        AwaitableOrValue[list[object]],
+    ]
+
+
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
 _PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
 _PATCH_OWNER = "django_strawberry_framework._graphql_core_patches"
 
 
-def _captured_upstream_method(owner: Any | None, name: str) -> Any:
+def _captured_upstream_method(owner: type | None, name: str) -> object:
     if owner is None:
         return None
     method = owner.__dict__.get(name)
@@ -43,9 +62,11 @@ def _captured_upstream_method(owner: Any | None, name: str) -> Any:
     return method
 
 
-_original_complete_list_value = _captured_upstream_method(
-    ExecutionContext,
-    "complete_list_value",
+# ``None`` or a reshaped value only until ``_validate_upstream_shape`` refuses it; the
+# wrapper that calls it is installed only after that validation passes.
+_original_complete_list_value = cast(
+    "_CompleteListValue",
+    _captured_upstream_method(ExecutionContext, "complete_list_value"),
 )
 
 
@@ -75,13 +96,13 @@ def _validate_upstream_shape() -> None:
 
 
 def _patched_complete_list_value(
-    self: Any,
-    return_type: Any,
-    field_nodes: Any,
-    info: Any,
-    path: Any,
-    result: Any,
-) -> Any:
+    self: "ExecutionContext",
+    return_type: "GraphQLList[GraphQLOutputType]",
+    field_nodes: "list[FieldNode]",
+    info: "GraphQLResolveInfo",
+    path: "Path",
+    result: "AsyncIterable[object] | Iterable[object]",
+) -> "AwaitableOrValue[list[object]]":
     res = _original_complete_list_value(
         self,
         return_type,

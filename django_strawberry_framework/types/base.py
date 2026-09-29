@@ -43,7 +43,17 @@ import re
 import typing
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Protocol, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    Protocol,
+    TypeVar,
+    cast,
+)
 
 from django.db import models
 from strawberry import relay
@@ -61,6 +71,14 @@ from .converters import _field_output_type_for, convert_field_output
 from .definition import _GRAPHQL_NAME_RE, DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from ..filters.sets import FilterSet
+    from ..orders.sets import OrderSet
+    from ..utils.typing import ConcreteField, ModelField
+    from .definition import GlobalIDStrategy
+
+_SidecarT = TypeVar("_SidecarT")
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {"aggregate_class", "fields_class", "search_fields"},
@@ -147,12 +165,12 @@ class _ModelMeta(Protocol):
 
 def _validate_set_sidecar(
     meta: _ModelMeta,
-    sidecar_class: Any,
+    sidecar_class: object,
     *,
-    expected: type,
+    expected: type[_SidecarT],
     meta_key: str,
     article: str,
-) -> type:
+) -> type[_SidecarT]:
     """Return ``sidecar_class`` if it is an ``expected`` subclass, else raise.
 
     The type-gate skeleton ``Meta.filterset_class`` and ``Meta.orderset_class``
@@ -169,7 +187,10 @@ def _validate_set_sidecar(
     return sidecar_class
 
 
-def _validate_filterset_class(meta: _ModelMeta, filterset_class: Any) -> type | None:
+def _validate_filterset_class(
+    meta: _ModelMeta,
+    filterset_class: object,
+) -> "type[FilterSet] | None":
     """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
 
     Local import of ``FilterSet`` at function scope keeps ``types/base.py``
@@ -196,7 +217,7 @@ def _validate_filterset_class(meta: _ModelMeta, filterset_class: Any) -> type | 
     )
 
 
-def _validate_orderset_class(meta: _ModelMeta, orderset_class: Any) -> type | None:
+def _validate_orderset_class(meta: _ModelMeta, orderset_class: object) -> "type[OrderSet] | None":
     """Validate ``Meta.orderset_class`` is a package-``OrderSet`` subclass.
 
     Local import of ``OrderSet`` at function scope keeps ``types/base.py``
@@ -225,7 +246,11 @@ def _validate_orderset_class(meta: _ModelMeta, orderset_class: Any) -> type | No
     )
 
 
-def _validate_connection(meta: _ModelMeta, connection: Any, relay_shaped: bool) -> dict | None:
+def _validate_connection(
+    meta: _ModelMeta,
+    connection: object,
+    relay_shaped: bool,
+) -> dict[str, bool] | None:
     """Validate ``Meta.connection`` shape AND the Relay-Node requirement (spec-030 Decision 8).
 
     ``None``-short-circuits when unset; otherwise shape-checks the dict (for
@@ -275,7 +300,7 @@ def _validate_connection(meta: _ModelMeta, connection: Any, relay_shaped: bool) 
 
 def _validate_cursor_field(
     meta: _ModelMeta,
-    value: Any,
+    value: object,
     relay_shaped: bool,
 ) -> tuple[str, ...] | None:
     """Validate ``Meta.cursor_field`` SHAPE and the Relay-Node gate (keyset cursors).
@@ -327,7 +352,7 @@ def _validate_cursor_field(
 
 def _validate_relation_shapes(
     meta: _ModelMeta,
-    value: Any,
+    value: object,
     relay_shaped: bool,
 ) -> dict[str, str] | None:
     """Validate ``Meta.relation_shapes`` shape AND the Relay-Node requirement (spec-032 Decision 7).
@@ -393,11 +418,11 @@ _GLOBALID_CALLABLE_PARAMS = ("type_cls", "model", "root")
 
 def _validate_globalid_strategy(
     meta: _ModelMeta | None,
-    value: Any,
+    value: object,
     relay_shaped: bool,
     *,
     source: str = "meta",
-) -> str | Callable[..., str] | None:
+) -> "GlobalIDStrategy | None":
     """Validate one ``globalid_strategy``-shaped value and return the normalized form.
 
     The single validator shared by BOTH the ``Meta.globalid_strategy`` path
@@ -435,7 +460,7 @@ def _validate_globalid_strategy(
                 f"{subject} got unknown strategy {_safe_arg_repr(value)}; "
                 f"valid strategies are {sorted(STRING_GLOBALID_STRATEGIES)} or a callable.",
             )
-        normalized: str | Callable[..., str] = value
+        normalized: GlobalIDStrategy = value
     elif callable(value):
         _validate_globalid_callable(subject, value)
         normalized = value
@@ -454,7 +479,7 @@ def _validate_globalid_strategy(
     return normalized
 
 
-def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None:
+def _validate_globalid_callable(subject: str, value: Callable[..., object]) -> None:
     """Reject a wrong-arity or async GlobalID encoder at validation time.
 
     ``inspect.signature`` must bind the three positional ``_GLOBALID_CALLABLE_PARAMS``
@@ -579,7 +604,7 @@ def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
     )
 
 
-def _meta_attr(meta: object, key: str, default: Any = None) -> Any:
+def _meta_attr(meta: object, key: str, default: object = None) -> Any:
     """Read one ``Meta`` attribute, containing hostile attribute access.
 
     ``getattr(meta, key, default)`` only swallows ``AttributeError``; a Meta
@@ -598,7 +623,7 @@ def _meta_attr(meta: object, key: str, default: Any = None) -> Any:
         ) from exc
 
 
-def _is_auto_annotation(annotation: Any) -> bool:
+def _is_auto_annotation(annotation: object) -> bool:
     """Return True for the ``field: auto`` declare-but-infer marker, every spelling.
 
     Recognized: the ``StrawberryAuto`` instance, the string ``"auto"``, and the
@@ -636,7 +661,7 @@ class DjangoType:
     # Installed alongside it by ``types/relay.py::install_is_type_of``.
     is_type_of: ClassVar[Callable[[object, object], bool]]
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
         super().__init_subclass__(**kwargs)
         # The ``_is_default_get_queryset`` sentinel must be stamped BEFORE the
@@ -826,7 +851,8 @@ class DjangoType:
             exclude_spec=validated.exclude_spec,
             selected_fields=tuple(fields),
             field_map=field_map,
-            optimizer_hints=validated.optimizer_hints,
+            # ``_validate_optimizer_hints`` above rejected every non-``OptimizerHint`` value.
+            optimizer_hints=cast("dict[str, OptimizerHint]", validated.optimizer_hints),
             has_custom_get_queryset=has_custom_get_queryset,
             consumer_authored_fields=consumer_authored_fields,
             consumer_annotated_relation_fields=consumer_annotated_relation_fields,
@@ -852,10 +878,10 @@ class DjangoType:
     @classmethod
     def get_queryset(
         cls,
-        queryset: models.QuerySet,
+        queryset: models.QuerySet[Any, Any],
         info: Any,  # noqa: ARG003
         **kwargs: Any,
-    ) -> models.QuerySet:
+    ) -> models.QuerySet[Any, Any]:
         """Default identity hook.
 
         Subclasses override this to scope visibility (permissions,
@@ -880,7 +906,11 @@ class DjangoType:
         ``get_queryset`` whose parent declared one inherits the parent's
         ``False`` sentinel through the class hierarchy.
         """
-        definition = getattr(cls, "__django_strawberry_definition__", None)
+        # The ``ClassVar`` is stamped only on subclasses that declare ``Meta``.
+        definition = cast(
+            "DjangoTypeDefinition | None",
+            getattr(cls, "__django_strawberry_definition__", None),
+        )
         if definition is None:
             return not cls._is_default_get_queryset
         return definition.has_custom_get_queryset
@@ -898,7 +928,7 @@ def _detect_custom_get_queryset(cls: type) -> bool:
     return False
 
 
-def _normalize_fields_spec(value: Any) -> tuple[str, ...] | Literal["__all__"] | None:
+def _normalize_fields_spec(value: object) -> tuple[str, ...] | Literal["__all__"] | None:
     """Normalize ``Meta.fields`` for storage on ``DjangoTypeDefinition``."""
     if value is None:
         return value
@@ -926,7 +956,7 @@ def _normalize_fields_spec(value: Any) -> tuple[str, ...] | Literal["__all__"] |
     return entries
 
 
-def _normalize_sequence_spec(value: Any, key: str = "exclude") -> tuple[str, ...] | None:
+def _normalize_sequence_spec(value: object, key: str = "exclude") -> tuple[str, ...] | None:
     """Normalize one optional collection-valued ``Meta`` key for storage.
 
     ``key`` names the declaration being normalized so the rejection message
@@ -965,7 +995,7 @@ def _normalize_sequence_spec(value: Any, key: str = "exclude") -> tuple[str, ...
 
 def _consumer_assigned_fields(
     cls: type,
-    fields: tuple[Any, ...],
+    fields: "tuple[ModelField, ...]",
 ) -> tuple[frozenset[str], frozenset[str]]:
     """Return (relation, scalar) names assigned to explicit Strawberry field objects.
 
@@ -1027,7 +1057,7 @@ def _consumer_assigned_fields(
     return frozenset(relation_assigned), frozenset(scalar_assigned)
 
 
-def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, Any]:
+def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, object]:
     """Return ``meta.optimizer_hints`` as a dict, or ``{}`` when unset.
 
     Centralizes the shape guard used across ``__init_subclass__`` and the
@@ -1241,14 +1271,14 @@ class _ValidatedMeta(NamedTuple):
     interfaces: tuple[type, ...]
     name: str | None
     primary: bool
-    optimizer_hints: dict[str, Any]
+    optimizer_hints: dict[str, object]
     fields_spec: tuple[str, ...] | Literal["__all__"] | None
     exclude_spec: tuple[str, ...] | None
-    filterset_class: type | None
-    orderset_class: type | None
-    connection: dict | None
+    filterset_class: "type[FilterSet] | None"
+    orderset_class: "type[OrderSet] | None"
+    connection: dict[str, bool] | None
     cursor_field: tuple[str, ...] | None
-    globalid_strategy: str | Callable[..., str] | None
+    globalid_strategy: "GlobalIDStrategy | None"
     relation_shapes: dict[str, str] | None
     nullable_overrides: frozenset[str]
     required_overrides: frozenset[str]
@@ -1442,8 +1472,8 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
 
 
 def _validate_optimizer_hints(
-    hints: dict[str, Any],
-    fields: tuple[Any, ...],
+    hints: dict[str, object],
+    fields: "tuple[ModelField, ...]",
     model: type[models.Model],
 ) -> None:
     """Validate ``Meta.optimizer_hints`` keys and values in one pass.
@@ -1517,11 +1547,11 @@ def _validate_optimizer_hints(
 def _selected_meta_targets(
     *,
     model: type[models.Model],
-    selected_fields: tuple[Any, ...],
+    selected_fields: "tuple[ModelField, ...]",
     attr: str,
     targets: AbstractSet[str],
     excluded_error: Callable[[list[str]], str],
-) -> tuple[dict[str, Any], list[str]]:
+) -> "tuple[dict[str, ModelField], list[str]]":
     """Run the shared unknown/excluded Meta-target guards; return ``(selected_by_name, sorted)``.
 
     The unknown/excluded half shared by every ``Meta`` key that targets a set
@@ -1561,7 +1591,7 @@ def _selected_meta_targets(
 def _validate_nullability_override_targets(
     *,
     model: type[models.Model],
-    selected_fields: tuple[Any, ...],
+    selected_fields: "tuple[ModelField, ...]",
     consumer_authored_fields: frozenset[str],
     relay_shaped: bool,
     nullable_overrides: frozenset[str],
@@ -1655,7 +1685,7 @@ def _validate_nullability_override_targets(
 def _validate_filesystem_path_targets(
     *,
     model: type[models.Model],
-    selected_fields: tuple[Any, ...],
+    selected_fields: "tuple[ModelField, ...]",
     consumer_authored_fields: frozenset[str],
     filesystem_path_fields: frozenset[str],
 ) -> None:
@@ -1723,7 +1753,7 @@ def _validate_relation_shape_targets(
     *,
     model: type[models.Model],
     relation_shapes: dict[str, str] | None,
-    selected_fields: tuple[Any, ...],
+    selected_fields: "tuple[ModelField, ...]",
     field_map: dict[str, FieldMeta],
     consumer_authored_fields: frozenset[str],
 ) -> None:
@@ -1794,7 +1824,7 @@ def _select_fields(
     model: type[models.Model],
     fields_spec: tuple[str, ...] | str | None,
     exclude_spec: tuple[str, ...] | None,
-) -> tuple[Any, ...]:
+) -> "tuple[ModelField, ...]":
     """Filter ``model._meta.get_fields()`` per ``Meta.fields`` / ``Meta.exclude``.
 
     Called once from ``DjangoType.__init_subclass__`` and the resulting
@@ -1863,7 +1893,7 @@ def _select_fields(
 
 def _build_annotations(
     cls: type,
-    fields: tuple[Any, ...],
+    fields: "tuple[ModelField, ...]",
     *,
     source_model: type[models.Model],
     consumer_authored_fields: frozenset[str] = frozenset(),
@@ -1871,7 +1901,7 @@ def _build_annotations(
     nullable_overrides: frozenset[str] = frozenset(),
     required_overrides: frozenset[str] = frozenset(),
     filesystem_path_fields: frozenset[str] = frozenset(),
-) -> tuple[dict[str, Any], list[PendingRelation]]:
+) -> tuple[dict[str, object], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
     Field-by-field dispatch: non-relation entries in ``fields`` are
@@ -1944,7 +1974,7 @@ def _build_annotations(
             selected relation has no concrete related model to map to a
             GraphQL type.
     """
-    annotations: dict[str, Any] = {}
+    annotations: dict[str, object] = {}
     pending: list[PendingRelation] = []
     # Suppress the synthesized scalar ``id`` annotation whenever the type will
     # participate in the Relay ``Node`` interface - either through
@@ -1999,7 +2029,8 @@ def _build_annotations(
                     source_model=source_model,
                     field_name=field.name,
                     django_field=field,
-                    related_model=field.related_model,
+                    # The ``related_model is None`` gate above raised for this field.
+                    related_model=cast("type[models.Model]", field.related_model),
                 ),
             )
             annotations[field.name] = PendingRelationAnnotation
@@ -2044,7 +2075,8 @@ def _build_annotations(
             # ``consumer_authored_fields`` short-circuit above, so it receives
             # no generated object type (spec-037 Decision 3 / Decision 4).
             annotations[field.name] = convert_field_output(
-                field,
+                # Every ``ForeignObjectRel`` is a relation, so a non-relation entry is a column.
+                cast("ConcreteField", field),
                 cls.__name__,
                 force_nullable=force_nullable,
                 expose_filesystem_path=field.name in filesystem_path_fields,

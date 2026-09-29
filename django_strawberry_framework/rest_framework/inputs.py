@@ -54,7 +54,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from rest_framework import serializers
 from rest_framework.fields import empty
@@ -86,6 +86,13 @@ from .serializer_converter import (
     resolve_serializer_field,
     serializer_field_description,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Iterable
+
+    from django.db import models
+
+    from .serializer_converter import DRFBaseSerializer, DRFField, DRFSerializer
 
 # Module path the ``strawberry.lazy(...)`` marker references for the SERIALIZER
 # input namespace; pinned as a single constant so any forward-ref and
@@ -211,9 +218,9 @@ class NestedSerializerConfig:
       guards as backstops).
     """
 
-    fields: Any = None
-    exclude: Any = None
-    optional_fields: Any = None
+    fields: object = None
+    exclude: object = None
+    optional_fields: object = None
     nested_fields: Mapping[str, NestedSerializerConfig] | None = None
 
 
@@ -288,8 +295,8 @@ NESTED_STABLE_FIELDS_INSTRUCTION: str = (
 
 
 def read_nested_serializer_fields(
-    serializer: serializers.Serializer,
-) -> dict[str, serializers.Field]:
+    serializer: DRFSerializer,
+) -> dict[str, DRFField]:
     """Return an OPTED-IN nested serializer's bound field map, or fail loud.
 
     The one read-or-reject path for a nested serializer's LAZILY-built ``.fields``: the
@@ -312,7 +319,7 @@ def read_nested_serializer_fields(
         ) from exc
 
 
-def require_nested_fields_mapping(owner_name: str, nested_fields: Any) -> None:
+def require_nested_fields_mapping(owner_name: str, nested_fields: object) -> None:
     """Reject a ``nested_fields`` declaration that is not a mapping.
 
     The container rejection is worded once for the ``Meta`` validation
@@ -327,7 +334,7 @@ def require_nested_fields_mapping(owner_name: str, nested_fields: Any) -> None:
         )
 
 
-def require_nested_serializer_config(owner_name: str, field_name: Any, config: Any) -> None:
+def require_nested_serializer_config(owner_name: str, field_name: object, config: object) -> None:
     """Reject a ``nested_fields`` value that is not a ``NestedSerializerConfig``.
 
     The per-entry value rejection paired with ``require_nested_fields_mapping``; the same
@@ -341,8 +348,8 @@ def require_nested_serializer_config(owner_name: str, field_name: Any, config: A
 
 
 def get_serializer_for_schema(
-    serializer_class: type[serializers.Serializer],
-) -> dict[str, serializers.Field]:
+    serializer_class: type[DRFSerializer],
+) -> dict[str, DRFField]:
     """Return the serializer's schema-time field dict, materializing ``.fields`` loudly.
 
     Default discovery (spec-039 Decision 7): construct ``serializer_class()`` with
@@ -376,7 +383,7 @@ def get_serializer_for_schema(
     return dict(fields)
 
 
-def _fingerprint_relation_target(field: serializers.Field) -> str | None:
+def _fingerprint_relation_target(field: DRFField) -> str | None:
     """Return a relation field's target model qualname for the fingerprint, or ``None``.
 
     Peels a ``ManyRelatedField`` to its ``child_relation`` and reads the relation's
@@ -391,7 +398,7 @@ def _fingerprint_relation_target(field: serializers.Field) -> str | None:
     return None
 
 
-def _fingerprint_choices(field: serializers.Field) -> tuple[str, ...] | None:
+def _fingerprint_choices(field: DRFField) -> tuple[str, ...] | None:
     """Return a ``ChoiceField``'s choice VALUES for the fingerprint, else ``None``.
 
     The generated enum's members come from the choice VALUES, so a hook that changes
@@ -405,7 +412,7 @@ def _fingerprint_choices(field: serializers.Field) -> tuple[str, ...] | None:
     return None
 
 
-def _fingerprint_converter_extra(field: serializers.Field) -> str | None:
+def _fingerprint_converter_extra(field: DRFField) -> str | None:
     """Return converter-affecting discriminants (``ModelField`` wrapped / ``ListField`` child), else ``None``.
 
     A ``ModelField``'s wrapped ``model_field`` and a ``ListField``'s ``child`` determine the
@@ -420,11 +427,11 @@ def _fingerprint_converter_extra(field: serializers.Field) -> str | None:
 
 
 def _fingerprint_nested(
-    field: serializers.Field,
+    field: DRFField,
     field_name: str,
     seen: frozenset[type],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
-) -> tuple[Any, ...] | None:
+) -> tuple[object, ...] | None:
     """Return a fingerprint of a nested serializer field, else ``None``.
 
     A nested ``Serializer`` / ``ListSerializer`` field's generated input derives from the NESTED
@@ -484,10 +491,10 @@ def _fingerprint_nested(
 
 
 def _fingerprint_field_map(
-    field_map: dict[str, serializers.Field],
+    field_map: dict[str, DRFField],
     seen: frozenset[type],
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
-) -> tuple[tuple[Any, ...], ...]:
+) -> tuple[tuple[object, ...], ...]:
     """The recursive fingerprint core (the nested recursion).
 
     Captures every SDL-affecting axis per WRITABLE field (see ``serializer_schema_fingerprint``),
@@ -529,10 +536,10 @@ def _fingerprint_field_map(
 
 
 def serializer_schema_fingerprint(
-    field_map: dict[str, serializers.Field],
+    field_map: dict[str, DRFField],
     *,
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
-) -> tuple[tuple[Any, ...], ...]:
+) -> tuple[tuple[object, ...], ...]:
     """Return a stable, request-independent fingerprint of a schema-time field map.
 
     ``get_serializer_for_schema()`` must return a STABLE, request-independent field shape (the
@@ -566,7 +573,7 @@ def serializer_schema_fingerprint(
     return _fingerprint_field_map(field_map, frozenset(), nested_configs)
 
 
-def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], name: str) -> Any:
+def _serializer_meta_value(serializer_class: type[DRFBaseSerializer], name: str) -> object:
     """Return ``serializer_class.Meta.<name>`` if declared, else ``None``.
 
     DRF serializers carry their own ``Meta`` (``model`` / ``fields`` / ``exclude``);
@@ -579,19 +586,20 @@ def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], n
     return getattr(meta, name, None)
 
 
-def _serializer_model(serializer_class: type[serializers.BaseSerializer]) -> Any:
+def _serializer_model(serializer_class: type[DRFBaseSerializer]) -> type[models.Model] | None:
     """Return the ``ModelSerializer``'s ``Meta.model``, or ``None`` for a plain serializer.
 
     The backing model is what the converter resolves a field's ``source`` against
     for the read-side ``models.Field``-keyed converters. A plain ``Serializer``
     (no ``Meta.model``) routes every field through the model-less path.
     """
-    return _serializer_meta_value(serializer_class, "model")
+    # DRF's ``ModelSerializer`` contract: a declared ``Meta.model`` is the model class.
+    return cast("type[models.Model] | None", _serializer_meta_value(serializer_class, "model"))
 
 
 def writable_serializer_fields(
-    field_map: Mapping[str, serializers.Field],
-) -> dict[str, serializers.Field]:
+    field_map: Mapping[str, DRFField],
+) -> dict[str, DRFField]:
     """Return the schema-time fields that can accept mutation input.
 
     This is the one writable basis for generated inputs, ``Meta.injected_fields``
@@ -606,11 +614,11 @@ def writable_serializer_fields(
 
 
 def runtime_validated_data_fields(
-    field_map: Mapping[str, serializers.Field],
+    field_map: Mapping[str, DRFField],
     *,
     supplied_fields: set[str],
     apply_defaults: bool,
-) -> dict[str, serializers.Field]:
+) -> dict[str, DRFField]:
     """Return every runtime field capable of contributing to ``validated_data``.
 
     ``supplied_fields`` are the client-input and injected names the framework can
@@ -710,12 +718,12 @@ def raise_writable_source_ownership_errors(
 
 
 def resolve_effective_serializer_fields(
-    serializer_class: type[serializers.Serializer],
+    serializer_class: type[DRFSerializer],
     *,
-    fields: Any = None,
-    exclude: Any = None,
-    field_map: dict[str, serializers.Field] | None = None,
-) -> dict[str, serializers.Field]:
+    fields: object = None,
+    exclude: object = None,
+    field_map: dict[str, DRFField] | None = None,
+) -> dict[str, DRFField]:
     """Return the effective ``{name: serializers.Field}`` dict after dropping + narrowing.
 
     Builds the input field set (spec-039 Decision 7):
@@ -767,8 +775,8 @@ def resolve_effective_serializer_fields(
 
 
 def resolve_optional_fields(
-    serializer_class: type[serializers.BaseSerializer],
-    optional_fields: Any,
+    serializer_class: type[DRFBaseSerializer],
+    optional_fields: object,
     effective_field_names: tuple[str, ...],
 ) -> frozenset[str]:
     """Return the normalized ``optional_fields`` set (create-only requiredness override).
@@ -801,9 +809,9 @@ def resolve_optional_fields(
 
 
 def resolve_injected_field_specs(
-    serializer_class: type[serializers.BaseSerializer],
-    field_map: dict[str, serializers.Field],
-    injected_fields: Any,
+    serializer_class: type[DRFBaseSerializer],
+    field_map: dict[str, DRFField],
+    injected_fields: tuple[str, ...] | None,
     *,
     operation_kind: str,
 ) -> list[InputFieldSpec]:
@@ -896,7 +904,7 @@ class SerializerInputShape:
     the bind dedupes on.
     """
 
-    serializer_class: type[serializers.BaseSerializer]
+    serializer_class: type[DRFBaseSerializer]
     operation_kind: str
     field_specs: tuple[InputFieldSpec, ...]
     annotations: tuple[str, ...]
@@ -1063,7 +1071,7 @@ def _shape_token(
 
 
 def serializer_input_type_name(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[DRFBaseSerializer],
     operation_kind: str,
     *,
     is_full_shape: bool,
@@ -1111,9 +1119,9 @@ def serializer_input_type_name(
 
 
 def _required_writable_field_names(
-    serializer_class: type[serializers.Serializer],
+    serializer_class: type[DRFSerializer],
     *,
-    field_map: dict[str, serializers.Field] | None = None,
+    field_map: dict[str, DRFField] | None = None,
 ) -> set[str]:
     """Return the names of every WRITABLE serializer field that is required-with-no-default.
 
@@ -1130,11 +1138,11 @@ def _required_writable_field_names(
 
 
 def guard_create_required_serializer_fields(
-    serializer_class: type[serializers.Serializer],
-    effective_field_names: Any,
+    serializer_class: type[DRFSerializer],
+    effective_field_names: Iterable[str],
     *,
-    injected_fields: Any = None,
-    field_map: dict[str, serializers.Field] | None = None,
+    injected_fields: Iterable[str] | None = None,
+    field_map: dict[str, DRFField] | None = None,
 ) -> None:
     """Raise if a create narrowing drops a still-declared required writable serializer field.
 
@@ -1180,7 +1188,7 @@ def guard_create_required_serializer_fields(
 
 
 def _collect_input_attr_collision_messages(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[DRFBaseSerializer],
     field_specs: list[InputFieldSpec],
 ) -> list[str]:
     """Return every input-attr / GraphQL-name / writable-source collision message.
@@ -1237,7 +1245,7 @@ def _collect_input_attr_collision_messages(
 
 
 def _aggregate_field_problems(
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[DRFBaseSerializer],
     messages: list[str],
 ) -> ConfigurationError:
     """Build ONE ``ConfigurationError`` from all collected schema-time problems.
@@ -1257,11 +1265,11 @@ def _aggregate_field_problems(
 
 
 def _walk_serializer_fields(
-    effective: dict[str, serializers.Field],
-    model: Any,
+    effective: dict[str, DRFField],
+    model: type[models.Model] | None,
     provisional_name: str,
     *,
-    serializer_class: type[serializers.BaseSerializer],
+    serializer_class: type[DRFBaseSerializer],
     is_partial: bool,
     optional_fields: frozenset[str],
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
@@ -1271,7 +1279,7 @@ def _walk_serializer_fields(
     list[str],
     list[str | None],
     list[bool],
-    list[tuple[str, Any, dict[str, Any]]],
+    list[tuple[str, object, dict[str, object]]],
 ]:
     """Resolve an effective field dict to the per-field build state (spec-039).
 
@@ -1312,7 +1320,7 @@ def _walk_serializer_fields(
     annotation_reprs: list[str] = []
     descriptions: list[str | None] = []
     required_state: list[bool] = []
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
+    triples: list[tuple[str, object, dict[str, object]]] = []
     field_errors: list[str] = []
     for name, field in effective.items():
         try:
@@ -1470,13 +1478,13 @@ def _dedupe_and_materialize_nested(
 
 
 def _resolve_nested_field(
-    field: serializers.BaseSerializer,
+    field: DRFBaseSerializer,
     field_name: str,
     nested_config: NestedSerializerConfig,
     *,
     operation_kind: str,
     nested_path: tuple[type, ...],
-) -> tuple[str, Any, InputFieldSpec]:
+) -> tuple[str, object, InputFieldSpec]:
     """Resolve ONE opted-in nested serializer field to ``(python_attr, annotation, spec)``.
 
     Builds the nested input RECURSIVELY from the nested serializer's OWN bound field map (read
@@ -1523,7 +1531,7 @@ def _resolve_nested_field(
     nested_cls, nested_shape = _dedupe_and_materialize_nested(nested_cls, nested_shape)
     kind = NESTED_MULTI if many else NESTED_SINGLE
     # mypy: runtime-built annotation
-    annotation: Any = list[nested_cls] if many else nested_cls  # type: ignore[valid-type]
+    annotation: object = list[nested_cls] if many else nested_cls  # type: ignore[valid-type]
     spec = InputFieldSpec(
         input_attr=field_name,
         graphql_name=graphql_camel_name(field_name),
@@ -1537,8 +1545,8 @@ def _resolve_nested_field(
 
 
 def validate_nested_config_keys(
-    serializer_class: type[serializers.Serializer],
-    effective: dict[str, serializers.Field],
+    serializer_class: type[DRFSerializer],
+    effective: dict[str, DRFField],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
 ) -> None:
     """Fail loud if a ``nested_fields`` key does not name an effective NESTED serializer field.
@@ -1570,8 +1578,8 @@ def validate_nested_config_keys(
 
 
 def _default_full_shape_identity(
-    serializer_class: type[serializers.Serializer],
-    model: Any,
+    serializer_class: type[DRFSerializer],
+    model: type[models.Model] | None,
     provisional_name: str,
     *,
     is_partial: bool,
@@ -1626,13 +1634,13 @@ def _default_full_shape_identity(
 
 
 def build_serializer_input_class(
-    serializer_class: type[serializers.Serializer],
+    serializer_class: type[DRFSerializer],
     *,
     operation_kind: str,
-    fields: Any = None,
-    exclude: Any = None,
-    optional_fields: Any = None,
-    field_map: dict[str, serializers.Field] | None = None,
+    fields: object = None,
+    exclude: object = None,
+    optional_fields: object = None,
+    field_map: dict[str, DRFField] | None = None,
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
     _nested_path: tuple[type, ...] = (),
 ) -> tuple[type, SerializerInputShape]:
@@ -1777,13 +1785,13 @@ def build_serializer_input_class(
 
 
 def build_serializer_inputs(
-    serializer_class: type[serializers.Serializer],
+    serializer_class: type[DRFSerializer],
     *,
-    fields: Any = None,
-    exclude: Any = None,
-    optional_fields: Any = None,
+    fields: object = None,
+    exclude: object = None,
+    optional_fields: object = None,
     guard_required: bool = True,
-    field_map: dict[str, serializers.Field] | None = None,
+    field_map: dict[str, DRFField] | None = None,
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[type, SerializerInputShape, type, SerializerInputShape]:
     """Build BOTH the create + partial inputs for a serializer, with the create-required guard.
@@ -1863,6 +1871,7 @@ def build_serializer_inputs(
 # The serializer shape cache can be primed before finalization by
 # ``SerializerMutation.input_type_name()``. Clear it with the generated-input
 # ledgers before every bind so nested cache hits cannot suppress re-materialization.
+_serializer_shape_build_cache: dict[SerializerInputShape, tuple[type, SerializerInputShape]]
 _serializer_shape_build_cache, clear_serializer_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(
     clear_serializer_shape_build_cache,

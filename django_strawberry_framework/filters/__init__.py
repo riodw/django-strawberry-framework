@@ -16,12 +16,13 @@ need to distinguish the two.
 
 from __future__ import annotations
 
+from django_filters import Filter
+
 from ..registry import register_subsystem_clear
 from ..utils.inputs import build_lazy_input_annotation
 from .base import (
     ArrayFilter,
     ArrayFilterMethod,
-    Filter,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     LazyRelatedClassMixin,

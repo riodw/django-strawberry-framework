@@ -34,7 +34,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, fields, replace
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count, Prefetch, Q, Window
@@ -45,22 +45,41 @@ from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from .join_taxonomy import WINDOWABLE_RELATION_KINDS, classify_relation_join
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable, Mapping
+    from typing import TypeAlias
+
     from django.db import models
+    from django.db.models import QuerySet
+    from django.db.models.expressions import Combinable, Expression, F, OrderBy
 
     from ..keyset import KeysetSeek
+    from ..utils.connections import WindowRangePlan
+    from ..utils.typing import ModelField
+
+    #: One ``QuerySet.prefetch_related`` lookup: a plain lookup path or a ``Prefetch``.
+    PrefetchLookup: TypeAlias = str | Prefetch[str]
+    #: One connection order entry both ``QuerySet.order_by`` and a ``Window``'s
+    #: ``order_by`` accept: a string ref, an ``F``, or an expression (``OrderBy``,
+    #: ``Lower(...)``, ...).
+    OrderEntry: TypeAlias = str | F | Expression
+
+_T = TypeVar("_T")
+_M = TypeVar("_M", bound="models.Model")
+_O = TypeVar("_O")
 
 
-def _lookup_path(entry: Any) -> str:
+def _lookup_path(entry: PrefetchLookup) -> str:
     """Return the prefetch lookup path for an entry (string or ``Prefetch``).
 
     Centralizes the brittle Django-private contract for ``Prefetch.prefetch_to``
     so a future Django rename has one fix.  Plain-string entries are
     returned as-is (they double as their own path).
     """
-    return getattr(entry, "prefetch_to", entry)
+    # A ``Prefetch`` carries its ``str`` ``prefetch_to``; a string is its own path.
+    return cast("str", getattr(entry, "prefetch_to", entry))
 
 
-class _IndexedList(list[Any]):
+class _IndexedList(list[_T]):
     """List with a construction-time membership index for optimizer builders.
 
     Only ``append``, ``extend``, and ``append_unique`` maintain the ``_seen``
@@ -75,7 +94,12 @@ class _IndexedList(list[Any]):
 
     __slots__ = ("_key", "_seen")
 
-    def __init__(self, values: Iterable[Any] = (), *, key: Any = None) -> None:
+    def __init__(
+        self,
+        values: Iterable[_T] = (),
+        *,
+        key: Callable[[_T], object] | None = None,
+    ) -> None:
         # ``key=None`` means "index by the value itself". The identity case
         # previously routed through a ``_identity`` key callable; ``append_unique``
         # is the walker's single hottest call (one per scalar projection, connector
@@ -83,11 +107,11 @@ class _IndexedList(list[Any]):
         # Python-level call per append.
         super().__init__()
         self._key = key
-        self._seen: set[Any] = set()
+        self._seen: set[object] = set()
         for value in values:
             self.append_unique(value)
 
-    def append_unique(self, value: Any) -> None:
+    def append_unique(self, value: _T) -> None:
         """Append ``value`` once, using the sidecar index when the key is hashable.
 
         The hashable path runs inside one ``try`` (zero-cost when nothing raises)
@@ -110,25 +134,25 @@ class _IndexedList(list[Any]):
             if value not in self:
                 super().append(value)
 
-    def append(self, value: Any) -> None:
+    def append(self, value: _T) -> None:
         """Append directly and keep the sidecar index useful for later helper calls."""
         super().append(value)
         key = self._key
         with contextlib.suppress(TypeError):
             self._seen.add(value if key is None else key(value))
 
-    def extend(self, values: Iterable[Any]) -> None:
+    def extend(self, values: Iterable[_T]) -> None:
         """Extend directly and keep the sidecar index useful for later helper calls."""
         for value in values:
             self.append(value)
 
 
-def _indexed_list() -> _IndexedList:
+def _indexed_list() -> _IndexedList[str]:
     """Return an indexed list for string-like optimizer directive fields."""
     return _IndexedList()
 
 
-def _prefetch_indexed_list() -> _IndexedList:
+def _prefetch_indexed_list() -> _IndexedList[PrefetchLookup]:
     """Return an indexed list keyed by Django prefetch lookup path."""
     return _IndexedList(key=_lookup_path)
 
@@ -162,7 +186,7 @@ class OptimizationPlan:
     select_related: Sequence[str] = field(default_factory=_indexed_list)
     """Forward FK / OneToOne field names for ``QuerySet.select_related``."""
 
-    prefetch_related: Sequence[str | Prefetch] = field(default_factory=_prefetch_indexed_list)
+    prefetch_related: Sequence[PrefetchLookup] = field(default_factory=_prefetch_indexed_list)
     """Strings or ``Prefetch`` objects for ``QuerySet.prefetch_related``.
 
     Generated relation plans use ``Prefetch`` objects so child querysets can
@@ -290,7 +314,7 @@ class OptimizationPlan:
             ),
         )
 
-    def apply(self, queryset: Any) -> Any:
+    def apply(self, queryset: QuerySet[_M]) -> QuerySet[_M]:
         """Apply the plan to a ``QuerySet`` and return the optimized copy.
 
         Applies in order: ``only()`` -> ``select_related()`` ->
@@ -324,7 +348,7 @@ class OptimizationPlan:
         append_unique_many(cast("MutableSequence[str]", self.select_related), other.select_related)
         for prefetch in other.prefetch_related:
             append_prefetch_unique(
-                cast("MutableSequence[str | Prefetch]", self.prefetch_related),
+                cast("MutableSequence[PrefetchLookup]", self.prefetch_related),
                 prefetch,
             )
         append_unique_many(cast("MutableSequence[str]", self.only_fields), other.only_fields)
@@ -394,7 +418,7 @@ def resolver_key(parent_type: type | None, field_name: str, runtime_path: tuple[
     return f"{parent_type.__name__}.{field_name}@{path}"
 
 
-def runtime_path_from_info(info: Any | None) -> tuple[str, ...]:
+def runtime_path_from_info(info: object) -> tuple[str, ...]:
     """Return the runtime path tuple from a GraphQL ``info`` (or ``()`` when absent).
 
     Thin wrapper that pulls ``info.path`` and delegates to
@@ -421,7 +445,7 @@ def runtime_path_from_info(info: Any | None) -> tuple[str, ...]:
 _MAX_PATH_DEPTH = 1024
 
 
-def runtime_path_from_path(path: Any) -> tuple[str, ...]:
+def runtime_path_from_path(path: object) -> tuple[str, ...]:
     """Walk a GraphQL ``path`` linked-list and return its keys, list indexes stripped.
 
     Iterates ``path.prev`` from the deepest selection back to the root,
@@ -450,7 +474,7 @@ def runtime_path_from_path(path: Any) -> tuple[str, ...]:
     )
 
 
-def _flatten_select_related(sr: Any) -> set[str]:
+def _flatten_select_related(sr: object) -> set[str]:
     """Flatten Django's ``query.select_related`` into a set of dotted paths.
 
     Django stores ``select_related`` in three shapes:
@@ -472,7 +496,7 @@ def _flatten_select_related(sr: Any) -> set[str]:
         return set()
     paths: set[str] = set()
 
-    def _walk(d: dict[str, Any], prefix: str) -> None:
+    def _walk(d: Mapping[str, object], prefix: str) -> None:
         for key, child in d.items():
             path = f"{prefix}__{key}" if prefix else key
             paths.add(path)
@@ -483,7 +507,7 @@ def _flatten_select_related(sr: Any) -> set[str]:
     return paths
 
 
-def append_unique(values: MutableSequence[Any], value: Any) -> None:
+def append_unique(values: MutableSequence[_T], value: _T) -> None:
     """Append ``value`` to ``values`` if it is not already present.
 
     Plan-shape mutator: lives next to ``OptimizationPlan`` so the dedupe
@@ -497,13 +521,16 @@ def append_unique(values: MutableSequence[Any], value: Any) -> None:
         values.append(value)
 
 
-def append_unique_many(values: MutableSequence[Any], new_values: Iterable[Any]) -> None:
+def append_unique_many(values: MutableSequence[_T], new_values: Iterable[_T]) -> None:
     """Append each value in ``new_values`` if it is not already present."""
     for value in new_values:
         append_unique(values, value)
 
 
-def append_prefetch_unique(values: MutableSequence[Any], prefetch: str | Prefetch) -> None:
+def append_prefetch_unique(
+    values: MutableSequence[PrefetchLookup],
+    prefetch: PrefetchLookup,
+) -> None:
     """Append ``prefetch`` unless a lookup for the same path already exists.
 
     Compares lookup paths via ``_lookup_path`` so a hint-supplied
@@ -522,7 +549,7 @@ def append_prefetch_unique(values: MutableSequence[Any], prefetch: str | Prefetc
     values.append(prefetch)
 
 
-def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
+def _consumer_prefetch_lookups(queryset: object) -> list[PrefetchLookup]:
     """Return the ``_prefetch_related_lookups`` already attached to a queryset.
 
     Centralizes the brittle Django-private contract for
@@ -540,7 +567,7 @@ def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
     return list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
 
 
-def deferred_loading_of(queryset: Any) -> tuple[frozenset[str], bool] | None:
+def deferred_loading_of(queryset: object) -> tuple[frozenset[str], bool] | None:
     """Return a queryset's raw ``(names, defer_flag)`` deferred-loading state.
 
     THE single reader of the brittle Django-private contract for
@@ -566,7 +593,7 @@ def deferred_loading_of(queryset: Any) -> tuple[frozenset[str], bool] | None:
         return None
 
 
-def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
+def _consumer_only_fields(queryset: object) -> frozenset[str] | None:
     """Return the consumer-applied ``.only()`` field set, or ``None``.
 
     Returns the non-empty only-set when the consumer applied ``.only()``;
@@ -585,7 +612,10 @@ def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
     return field_set
 
 
-def prune_unsupportable_select_related(plan: OptimizationPlan, queryset: Any) -> OptimizationPlan:
+def prune_unsupportable_select_related(
+    plan: OptimizationPlan,
+    queryset: QuerySet[models.Model],
+) -> OptimizationPlan:
     """Drop ``select_related`` paths a consumer projection cannot traverse.
 
     Django refuses to traverse a deferred relation field: applying planned
@@ -645,7 +675,7 @@ def prune_unsupportable_select_related(plan: OptimizationPlan, queryset: Any) ->
     ).finalize()
 
 
-def _consumer_projection(queryset: Any) -> tuple[frozenset[str], bool] | None:
+def _consumer_projection(queryset: object) -> tuple[frozenset[str], bool] | None:
     """The consumer's deferred-loading projection as ``(names, defer_mode)``.
 
     ``None`` when the consumer restricted nothing (the default
@@ -667,7 +697,7 @@ def _select_path_traversable(
     path: str,
     names: frozenset[str],
     defer_mode: bool,
-    model: Any,
+    model: type[models.Model] | None,
 ) -> bool:
     """Whether ``select_related(path)`` is Django-valid under the projection.
 
@@ -718,9 +748,9 @@ def _select_path_traversable(
 
 
 def _optimizer_can_absorb(
-    opt_entry: Any,
+    opt_entry: PrefetchLookup,
     consumer_paths: Sequence[str],
-    consumer_by_path: dict[str, list[Any]],
+    consumer_by_path: Mapping[str, list[PrefetchLookup]],
 ) -> bool:
     """Return ``True`` when ``opt_entry`` can losslessly take over the consumer's subtree.
 
@@ -769,7 +799,7 @@ WINDOW_ROW_NUMBER_ABS = "_dst_row_number_abs"
 WINDOW_KEYSET_SEEK_COUNT = "_dst_keyset_seek_count"
 
 
-def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
+def order_entry_name_and_direction(entry: object) -> tuple[str, bool] | None:
     """Parse one order entry into ``(field name, descending)``, or ``None``.
 
     The single parser of the ``deterministic_order`` entry vocabulary (the de
@@ -802,7 +832,7 @@ def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
     return expression_name, bool(getattr(entry, "descending", False))
 
 
-def order_entry_has_explicit_nulls(entry: Any) -> bool:
+def order_entry_has_explicit_nulls(entry: object) -> bool:
     """Whether an order ``entry`` requests explicit ``NULLS FIRST`` / ``LAST``.
 
     A string order ref (``"title"`` / ``"-title"``) never carries one; only an
@@ -821,7 +851,7 @@ def order_entry_has_explicit_nulls(entry: Any) -> bool:
     )
 
 
-def ends_in_unique_column(effective: tuple, model: type) -> bool:
+def ends_in_unique_column(effective: tuple[object, ...], model: type) -> bool:
     """Return whether the effective ordering's terminal entry is a unique total order.
 
     Hoisted from ``connection.py`` (spec-033 Decision 11 sites the hoist) so the
@@ -874,10 +904,10 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
 
 
 def effective_connection_order(
-    cursor_field: tuple | None,
-    explicit: tuple,
+    cursor_field: tuple[str, ...] | None,
+    explicit: tuple[str | Combinable, ...],
     model: type[models.Model],
-) -> tuple:
+) -> tuple[str | Combinable, ...]:
     """Return the effective ORDER BY a connection paginates under by default.
 
     The precedence ladder shared by the plan-time window
@@ -902,7 +932,10 @@ def effective_connection_order(
     return deterministic_order(explicit or tuple(model._meta.ordering), model)
 
 
-def deterministic_order(effective: tuple, model: type[models.Model]) -> tuple:
+def deterministic_order(
+    effective: tuple[_O, ...],
+    model: type[models.Model],
+) -> tuple[_O | str, ...]:
     """Return the deterministic TOTAL ordering tuple for a connection queryset.
 
     The effective ordering with the model pk appended as a terminal tiebreaker
@@ -918,7 +951,7 @@ def deterministic_order(effective: tuple, model: type[models.Model]) -> tuple:
     return (*effective, model._meta.pk.attname)
 
 
-def window_partition_for_prefetch(field: Any) -> str:
+def window_partition_for_prefetch(field: ModelField) -> str:
     """Return the parent-side partition expression for a windowed prefetch.
 
     The expression Django's prefetch attach uses to map each child row back to
@@ -962,17 +995,17 @@ def window_partition_for_prefetch(field: Any) -> str:
 
 
 def apply_window_pagination(
-    queryset: Any,
+    queryset: QuerySet[_M],
     *,
     partition_by: str,
-    order_by: Sequence[Any],
+    order_by: Sequence[OrderEntry],
     offset: int = 0,
     limit: int | None = None,
     reverse: bool = False,
     with_total_count: bool = True,
     next_page_probe: bool = False,
     keyset_seek: KeysetSeek | None = None,
-) -> Any:
+) -> QuerySet[_M]:
     """Annotate row-number / total-count windows and filter to the requested slice.
 
     The mechanism port of
@@ -1169,13 +1202,13 @@ def apply_window_pagination(
 
 
 def _apply_keyset_counted_window(
-    queryset: Any,
+    queryset: QuerySet[_M],
     *,
     partition_by: str,
-    order_by: Sequence[Any],
+    order_by: Sequence[OrderEntry],
     seek_q: Q,
-    range_plan: Any,
-) -> Any:
+    range_plan: WindowRangePlan,
+) -> QuerySet[_M]:
     """Render the COUNTED keyset-seek window (see ``apply_window_pagination``).
 
     All three (four with markers) annotations partition identically; only the
@@ -1214,10 +1247,11 @@ def _apply_keyset_counted_window(
         # empty page (all children before the cursor) and a childless parent
         # stay distinguishable and the pre-seek count reaches the resolver.
         range_q = range_q | Q(**{WINDOW_ROW_NUMBER_ABS: 1})
-    return queryset.filter(range_q)
+    # The django-stubs plugin types ``filter()`` as ``Any``; it returns the same queryset type.
+    return cast("QuerySet[_M]", queryset.filter(range_q))
 
 
-def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:
+def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
     """Return ``order_by`` with each entry's direction (and NULLS) flipped.
 
     Backward (``last``-only) pagination counts row numbers from the partition
@@ -1251,7 +1285,7 @@ def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:
     handler cannot swallow it (the same posture as the keyset-plus-``reverse``
     guard in ``apply_window_pagination``).
     """
-    reversed_order: list[Any] = []
+    reversed_order: list[OrderEntry] = []
     for entry in order_by:
         if isinstance(entry, str):
             reversed_order.append(entry[1:] if entry.startswith("-") else f"-{entry}")
@@ -1267,17 +1301,23 @@ def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:
                 )
             reversed_order.append(desc())
             continue
-        clone = entry.copy() if hasattr(entry, "copy") else entry
+        # Only an ``OrderBy`` carries the ``descending`` flag read above.
+        clone = cast("OrderBy", entry.copy() if hasattr(entry, "copy") else entry)
         clone.descending = not descending
         nulls_first = getattr(clone, "nulls_first", None)
         nulls_last = getattr(clone, "nulls_last", None)
         if nulls_first is not None or nulls_last is not None:
-            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first
+            # mypy: django-stubs types ``OrderBy.nulls_first`` / ``nulls_last`` as ``bool``;
+            # ``OrderBy.__init__`` stores ``None`` for the backend's default placement.
+            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first  # type: ignore[assignment]
         reversed_order.append(clone)
     return reversed_order
 
 
-def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[OptimizationPlan, Any]:
+def diff_plan_for_queryset(
+    plan: OptimizationPlan,
+    queryset: QuerySet[_M],
+) -> tuple[OptimizationPlan, QuerySet[_M]]:
     """Reconcile ``plan`` against optimizations already on ``queryset``.
 
     Returns ``(delta_plan, queryset_to_apply_against)``. The plan is
@@ -1383,7 +1423,7 @@ def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[Optim
     )
 
 
-def _diff_select_related(plan_select_related: Sequence[str], queryset: Any) -> list[str]:
+def _diff_select_related(plan_select_related: Sequence[str], queryset: object) -> list[str]:
     """Drop optimizer ``select_related`` entries that the queryset already has.
 
     Compared as dotted lookup paths against the consumer's existing
@@ -1400,9 +1440,9 @@ def _diff_select_related(plan_select_related: Sequence[str], queryset: Any) -> l
 
 
 def _diff_prefetch_related(
-    plan_prefetch_related: Sequence[Any],
-    queryset: Any,
-) -> tuple[list[Any], Any, frozenset[str]]:
+    plan_prefetch_related: Sequence[PrefetchLookup],
+    queryset: QuerySet[_M],
+) -> tuple[list[PrefetchLookup], QuerySet[_M], frozenset[str]]:
     """Reconcile optimizer ``prefetch_related`` against the queryset's existing lookups.
 
     Returns ``(new_prefetch_list, queryset_to_apply_against, dropped_lookup_paths)``.
@@ -1416,11 +1456,11 @@ def _diff_prefetch_related(
     # queryset remains authoritative. A one-value dict silently kept only the
     # trailing string, making the optimizer believe the subtree was entirely
     # absorbable and strip the consumer's filtered Prefetch.
-    consumer_by_path: dict[str, list[Any]] = {}
+    consumer_by_path: dict[str, list[PrefetchLookup]] = {}
     for entry in consumer_pf:
         consumer_by_path.setdefault(_lookup_path(entry), []).append(entry)
 
-    new_prefetch: list[Any] = []
+    new_prefetch: list[PrefetchLookup] = []
     paths_to_strip: set[str] = set()
     dropped_optimizer_paths: set[str] = set()
 
@@ -1465,7 +1505,7 @@ def lookup_paths(plan: OptimizationPlan) -> set[str]:
 
 def _lookup_paths_from_parts(
     select_related: Iterable[str],
-    prefetch_related: Iterable[Any],
+    prefetch_related: Iterable[PrefetchLookup],
 ) -> set[str]:
     """Return relation lookup paths from finalized or construction-time fields."""
     paths = set(select_related)
@@ -1473,7 +1513,7 @@ def _lookup_paths_from_parts(
     return paths
 
 
-def _prefetch_lookup_paths(entries: Iterable[Any], prefix: str = "") -> set[str]:
+def _prefetch_lookup_paths(entries: Iterable[PrefetchLookup], prefix: str = "") -> set[str]:
     """Recursively flatten prefetch strings and nested ``Prefetch`` objects."""
     paths: set[str] = set()
     for entry in entries:

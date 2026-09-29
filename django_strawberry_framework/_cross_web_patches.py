@@ -197,7 +197,7 @@ the AppConfig.
 """
 
 import inspect
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from .conf import upstream_patches_enabled
 
@@ -208,13 +208,18 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # unsupported upstream shape and the explicit opt-out.
     DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]  # import-failure sentinel
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable
+
+    _BodyGetter = Callable[[DjangoHTTPRequestAdapter], str | bytes]
+
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
 _PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
 _PATCH_OWNER = "django_strawberry_framework._cross_web_patches"
 
 
-def _captured_upstream_body_getter() -> Any:
+def _captured_upstream_body_getter() -> "_BodyGetter | None":
     """Return cross_web's getter, retaining it across an in-process reload.
 
     ``importlib.reload()`` leaves the old property installed while this module
@@ -228,7 +233,11 @@ def _captured_upstream_body_getter() -> Any:
     if not isinstance(descriptor, property) or descriptor.fget is None:
         return None
     if getattr(descriptor.fget, _PATCH_OWNER_ATTRIBUTE, None) == _PATCH_OWNER:
-        return getattr(descriptor.fget, _PATCH_ORIGINAL_ATTRIBUTE, None)
+        # The previous module instance's ``_original_body_fget``, stamped by its setattr below.
+        return cast(
+            "_BodyGetter | None",
+            getattr(descriptor.fget, _PATCH_ORIGINAL_ATTRIBUTE, None),
+        )
     return descriptor.fget
 
 
@@ -276,7 +285,7 @@ def _validate_upstream_shape() -> None:
         )
 
 
-def _patched_body(self: Any) -> bytes:
+def _patched_body(self: "DjangoHTTPRequestAdapter") -> bytes:
     """Return raw ``self.request.body`` bytes - the async adapter's contract.
 
     The return contract is unchanged by spec-046: raw bytes, never a

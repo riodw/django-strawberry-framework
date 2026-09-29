@@ -44,10 +44,10 @@ from __future__ import annotations
 
 import inspect
 import types
-from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast
 
 import strawberry
 from django.db import models
@@ -133,6 +133,22 @@ from .utils.typing import is_async_callable, unwrap_container_type
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types.base import WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
+    from typing_extensions import Self
+
+    from .optimizer.selections import ConnectionFieldNames, ConvertedSelection
+    from .types.definition import DjangoTypeDefinition
+    from .utils.typing import ConcreteField, ModelField
+
+    class _SelectionPredicate(Protocol):
+        """A per-selection observer: ``connection_total_count_selected`` and its sibling."""
+
+        def __call__(
+            self,
+            selection: ConvertedSelection,
+            *,
+            names: ConnectionFieldNames = ...,
+        ) -> bool: ...
+
 
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
@@ -143,6 +159,10 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 _ends_in_unique_column = ends_in_unique_column
 
 NodeType = TypeVar("NodeType")
+# A generated ``<TypeName>Connection`` (or the base): every helper below builds and
+# returns instances of the class it is handed, in the base's universal parametrization.
+_ConnectionT = TypeVar("_ConnectionT", bound="DjangoConnection[Any]")
+_ModelT = TypeVar("_ModelT", bound=models.Model)
 
 # Field name carried on the connection instance for the captured ``totalCount``;
 # ``None`` (the default) means the count was not requested / not run, which the
@@ -151,7 +171,7 @@ NodeType = TypeVar("NodeType")
 _TOTAL_COUNT_ATTR = "_django_total_count"
 
 
-def _keyset_connection_context(cls: type[DjangoConnection]) -> DeclaredCursorState | None:
+def _keyset_connection_context(cls: type[_ConnectionT]) -> DeclaredCursorState | None:
     """Return a connection's keyset-mode state, fixed when the class was generated.
 
     A declared ``Meta.cursor_field`` on the node type's definition makes every
@@ -166,7 +186,12 @@ def _keyset_connection_context(cls: type[DjangoConnection]) -> DeclaredCursorSta
     return cls.__dict__.get("_dst_keyset_state") or None
 
 
-def _set_total_count(conn: Any, *, want_count: bool, value: Any) -> Any:
+def _set_total_count(
+    conn: _ConnectionT,
+    *,
+    want_count: bool,
+    value: int | Callable[[], int] | None,
+) -> _ConnectionT:
     """Attach the captured ``totalCount`` to ``conn`` when it was requested.
 
     The single writer of ``_TOTAL_COUNT_ATTR`` (the selection-gating contract:
@@ -182,14 +207,14 @@ def _set_total_count(conn: Any, *, want_count: bool, value: Any) -> Any:
 
 
 def _empty_page_connection(
-    cls: type[DjangoConnection],
+    cls: type[_ConnectionT],
     *,
     offset: int,
     has_next_page: bool,
     want_count: bool,
     total: int,
     has_previous_page: bool | None = None,
-) -> Any:
+) -> _ConnectionT:
     """Build the edge-less connection the window fast path serves.
 
     One home for the pipeline-parity-bearing empty-page shape (the zero-children
@@ -238,16 +263,16 @@ class _WindowedConnectionRows:
     ``isinstance``-detect it after the ``first`` + ``last`` guard.
     """
 
-    rows: list[Any]
-    fallback: Callable[[], Any] = dataclass_field(repr=False)
+    rows: list[models.Model]
+    fallback: Callable[[], object] = dataclass_field(repr=False)
 
 
 def _build_windowed_fallback(
     target_type: type,
-    source: Any,
-    info: Info,
-    definition: Any,
-) -> Callable[[], Any]:
+    source: object,
+    info: Info[object, object],
+    definition: DjangoTypeDefinition,
+) -> Callable[[], object]:
     """Return a zero-arg callable re-running the per-parent pipeline.
 
     Carried on ``_WindowedConnectionRows`` so ``resolve_connection`` can recover
@@ -270,7 +295,7 @@ def _build_windowed_fallback(
     )
 
 
-def _window_edge_class(cls: type[DjangoConnection]) -> Any:
+def _window_edge_class(cls: type[_ConnectionT]) -> type[relay.Edge[Any]]:
     """Resolve the connection's edge class exactly as ``ListConnection`` does.
 
     ``get_object_definition`` -> ``edges`` field -> ``resolve_type`` -> unwrap
@@ -283,22 +308,26 @@ def _window_edge_class(cls: type[DjangoConnection]) -> Any:
     type_def = get_object_definition(cls, strict=True)
     # Every Relay connection type declares ``edges``.
     field_def = cast("StrawberryField", type_def.get_field("edges"))
-    return unwrap_container_type(field_def.resolve_type(type_definition=type_def))
+    # ``edges`` is ``list[Edge[Node]]``, so the unwrapped container is the Edge subclass.
+    return cast(
+        "type[relay.Edge[Any]]",
+        unwrap_container_type(field_def.resolve_type(type_definition=type_def)),
+    )
 
 
 def _resolve_from_window(
-    cls: type[DjangoConnection],
+    cls: type[_ConnectionT],
     window: _WindowedConnectionRows,
     *,
-    info: Info,
+    info: Info[object, object],
     offset: int,
     limit: int | None,
     reverse: bool = False,
     want_count: bool,
     keyset_state: DeclaredCursorState | None = None,
     keyset_after: str | None = None,
-    **kwargs: Any,
-) -> Any:
+    **kwargs: object,
+) -> _ConnectionT | None:
     """Build the Relay connection straight from the windowed prefetch rows.
 
     The single edge / cursor / ``pageInfo`` / ``totalCount`` derivation shared
@@ -601,18 +630,18 @@ def _resolve_from_window(
 
 
 def _consume_window(
-    cls: type[DjangoConnection],
-    nodes: Any,
+    cls: type[_ConnectionT],
+    nodes: object,
     *,
-    info: Info,
+    info: Info[object, object],
     before: str | None,
     after: str | None,
     first: int | None,
     last: int | None,
     max_results: int | None,
     want_count: bool,
-    **kwargs: Any,
-) -> Any:
+    **kwargs: object,
+) -> AwaitableOrValue[_ConnectionT]:
     """Detect the windowed-row wrapper and either fast-path it or fall back.
 
     Shared entry from both ``resolve_connection`` paths. Computes the slice
@@ -707,13 +736,13 @@ def _consume_window(
 
 
 def _consume_fallback(
-    cls: type[DjangoConnection],
+    cls: type[_ConnectionT],
     nodes: Any,
     *,
-    info: Info,
+    info: Info[object, object],
     want_count: bool,
     **slice_kwargs: Any,
-) -> Any:
+) -> AwaitableOrValue[_ConnectionT]:
     """Run the non-window keyset-or-offset path over a queryset.
 
     The one dispatch tail a non-wrapper source and the unservable-window
@@ -763,7 +792,7 @@ def _consume_fallback(
     return _attach_count_sync(conn, nodes, want_count=want_count)
 
 
-def _keyset_order_ref(entry: Any) -> tuple[str, str, bool] | None:
+def _keyset_order_ref(entry: object) -> tuple[str, str, bool] | None:
     """Parse one effective-order entry into ``(canonical ref, name, descending)``.
 
     Accepts the string and plain-``OrderBy``/``F`` shapes
@@ -791,7 +820,7 @@ def _keyset_order_ref(entry: Any) -> tuple[str, str, bool] | None:
     return (f"-{name}" if descending else name), name, descending
 
 
-def _resolve_order_path_field(model: type, path: str) -> Any:
+def _resolve_order_path_field(model: type[models.Model], path: str) -> ConcreteField | None:
     """Resolve a (possibly ``__``-traversing) order path to its terminal field.
 
     Returns ``None`` when any segment fails to resolve, an intermediate
@@ -802,8 +831,8 @@ def _resolve_order_path_field(model: type, path: str) -> Any:
     # In-function import mirrors the file's defensive-Django-imports idiom.
     from django.core.exceptions import FieldDoesNotExist
 
-    current: Any = model
-    field: Any = None
+    current: type[models.Model] | None = model
+    field: ModelField | None = None
     segments = path.split("__")
     for index, segment in enumerate(segments):
         if current is None:
@@ -823,13 +852,14 @@ def _resolve_order_path_field(model: type, path: str) -> Any:
         return None
     if not getattr(field, "concrete", False):
         return None
-    return field
+    # Every ``ForeignObjectRel`` is a relation, which the ``is_relation`` gate refused.
+    return cast("ConcreteField", field)
 
 
 def _keyset_order_state(
     state: DeclaredCursorState,
-    queryset: models.QuerySet,
-) -> tuple[tuple[CursorColumn, ...], str, models.QuerySet]:
+    queryset: models.QuerySet[_ModelT],
+) -> tuple[tuple[CursorColumn, ...], str, models.QuerySet[_ModelT]]:
     """Resolve the ROOT slicing state for a keyset queryset's effective order.
 
     The default-ordered page (the effective order IS the declared
@@ -864,7 +894,7 @@ def _keyset_order_state(
     model = state.definition.model
     refs: list[str] = []
     columns: list[CursorColumn] = []
-    annotations: dict[str, Any] = {}
+    annotations: dict[str, models.F] = {}
     local_attnames: list[str] = []
     for index, entry in enumerate(effective):
         parsed = _keyset_order_ref(entry)
@@ -914,7 +944,7 @@ def _keyset_order_state(
 class _KeysetPage:
     """One fetched keyset page plus the spec-algorithm pageInfo inputs."""
 
-    rows: list[Any]
+    rows: list[models.Model]
     overfetched: bool
     backward: bool
     after_supplied: bool
@@ -938,10 +968,10 @@ class _KeysetPage:
 
 
 def _resolve_keyset_connection(
-    cls: type[DjangoConnection],
-    nodes: Any,
+    cls: type[_ConnectionT],
+    nodes: object,
     *,
-    info: Info,
+    info: Info[object, object],
     want_count: bool,
     state: DeclaredCursorState,
     before: str | None = None,
@@ -949,8 +979,8 @@ def _resolve_keyset_connection(
     first: int | None = None,
     last: int | None = None,
     max_results: int | None = None,
-    **kwargs: Any,
-) -> Any:
+    **kwargs: object,
+) -> AwaitableOrValue[_ConnectionT]:
     """The framework-owned slicer for KEYSET (``Meta.cursor_field``) connections.
 
     Serves every non-window keyset path - root connections AND the
@@ -1054,7 +1084,7 @@ def _resolve_keyset_connection(
         )
         if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
 
-            async def _resolve_count_only_async() -> Any:
+            async def _resolve_count_only_async() -> _ConnectionT:
                 return _set_total_count(
                     conn,
                     want_count=True,
@@ -1064,7 +1094,7 @@ def _resolve_keyset_connection(
             return _resolve_count_only_async()
         return _set_total_count(conn, want_count=want_count, value=count_source.count)
 
-    def _build(page: _KeysetPage, total: Any) -> Any:
+    def _build(page: _KeysetPage, total: int | None) -> _ConnectionT:
         rows = page.rows[:page_size] if page.overfetched else page.rows
         if page.backward:
             rows = list(reversed(rows))
@@ -1087,7 +1117,7 @@ def _resolve_keyset_connection(
         )
         return _set_total_count(conn, want_count=want_count, value=total)
 
-    def _page(rows: list[Any]) -> _KeysetPage:
+    def _page(rows: list[models.Model]) -> _KeysetPage:
         return _KeysetPage(
             rows=rows,
             overfetched=len(rows) == fetch_limit,
@@ -1098,7 +1128,7 @@ def _resolve_keyset_connection(
 
     if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
 
-        async def _resolve_async() -> Any:
+        async def _resolve_async() -> _ConnectionT:
             source = fetch_queryset[:fetch_limit]
             rows = [row async for row in source]
             total = await count_source.acount() if want_count else None
@@ -1130,7 +1160,7 @@ def _guard_first_and_last(first: int | None, last: int | None) -> None:
         )
 
 
-def _connection_field_requested(info: Info, selected: Callable[..., bool]) -> bool:
+def _connection_field_requested(info: Info[object, object], selected: _SelectionPredicate) -> bool:
     """Whether any direct connection selection matches ``selected``.
 
     One ``connection_field_names`` + ``any(...)`` walk so ``totalCount`` and
@@ -1141,7 +1171,7 @@ def _connection_field_requested(info: Info, selected: Callable[..., bool]) -> bo
     return any(selected(field, names=names) for field in info.selected_fields)
 
 
-def _total_count_requested(info: Info) -> bool:
+def _total_count_requested(info: Info[object, object]) -> bool:
     """Return whether the query selects the connection's ``totalCount`` field.
 
     Checks the connection field's DIRECT children (the count field is a sibling
@@ -1171,7 +1201,7 @@ def _total_count_requested(info: Info) -> bool:
     return _connection_field_requested(info, connection_total_count_selected)
 
 
-def _has_next_page_requested(info: Info) -> bool:
+def _has_next_page_requested(info: Info[object, object]) -> bool:
     """Return whether the query selects ``pageInfo { hasNextPage }``.
 
     The ``hasNextPage`` sibling of ``_total_count_requested``: the window fast
@@ -1217,14 +1247,14 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # ty
         cls,
         nodes: NodeIterableType[NodeType],
         *,
-        info: Info,
+        info: Info[object, object],
         before: str | None = None,
         after: str | None = None,
         first: int | None = None,
         last: int | None = None,
         max_results: int | None = None,
-        **kwargs: Any,
-    ) -> AwaitableOrValue[Any]:
+        **kwargs: object,
+    ) -> AwaitableOrValue[Self]:
         """Guard pagination, consume optimized windows, then dispatch by cursor mode.
 
         The fast path (spec-033 Decision 5): after the guard and before Strawberry's list
@@ -1310,7 +1340,7 @@ class _CachedConnectionType(NamedTuple):
     honestly answer.
     """
 
-    definition: Any
+    definition: DjangoTypeDefinition
     connection_type: type
 
 
@@ -1336,8 +1366,8 @@ register_subsystem_clear(clear_connection_type_cache, owner="connection.type_cac
 
 def _generate_connection_class(
     target_type: type,
-    definition: Any,
-    populate: Callable[[dict], None] | None = None,
+    definition: DjangoTypeDefinition,
+    populate: Callable[[dict[str, object]], None] | None = None,
     *,
     description: str | None = None,
 ) -> type:
@@ -1365,7 +1395,7 @@ def _generate_connection_class(
     second read with a different surface name.
     """
 
-    def _populate(namespace: dict) -> None:
+    def _populate(namespace: dict[str, object]) -> None:
         # The keyset vocabulary is FIXED HERE, from the captured definition,
         # not derived at first resolve from the target class: the cursors a
         # connection mints and the ones it decodes are the ones the class was
@@ -1382,7 +1412,7 @@ def _generate_connection_class(
     return strawberry.type(generated, description=description)
 
 
-def _build_total_count_connection(target_type: type, definition: Any) -> type:
+def _build_total_count_connection(target_type: type, definition: DjangoTypeDefinition) -> type:
     """Generate the concrete ``<TypeName>Connection`` carrying ``totalCount``.
 
     The generated class subclasses ``DjangoConnection[target_type]`` (so it
@@ -1396,17 +1426,18 @@ def _build_total_count_connection(target_type: type, definition: Any) -> type:
     or after delegating slicing to the base (spec-030 Decision 4).
     """
 
-    @strawberry.field(description="Total number of nodes in the connection.")
-    def total_count(self: Any) -> int:
+    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``
+    @strawberry.field(description="Total number of nodes in the connection.")  # type: ignore[untyped-decorator]
+    def total_count(self: object) -> int:
         # The field renders ``Int!`` (the ``__annotations__`` below win for the
         # SDL); ``-> int`` is the honest return type because the count path is
         # QuerySet-only (the connection field's spec-030 Decision 7 rule raises a ``GraphQLError``
         # before a non-queryset return can reach ``totalCount``). The attribute
         # is always set by ``resolve_connection`` when the field is selected
         # over a queryset source.
-        return getattr(self, _TOTAL_COUNT_ATTR)
+        return cast("int", getattr(self, _TOTAL_COUNT_ATTR))
 
-    def _populate(namespace: dict) -> None:
+    def _populate(namespace: dict[str, object]) -> None:
         namespace["__annotations__"] = {"total_count": int}
         namespace["total_count"] = total_count
         # Opt this variant into the count half of the INHERITED
@@ -1423,7 +1454,7 @@ def _build_total_count_connection(target_type: type, definition: Any) -> type:
     return generated
 
 
-def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
+def _guard_total_count_countable(nodes: object, *, want_count: bool) -> None:
     """Raise ``GraphQLError`` when ``totalCount`` is selected over a non-queryset.
 
     spec-030 Decision 7: ``totalCount`` renders ``Int!``, and a
@@ -1443,7 +1474,7 @@ def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
         )
 
 
-def _attach_count_sync(conn: Any, nodes: Any, *, want_count: bool) -> Any:
+def _attach_count_sync(conn: _ConnectionT, nodes: Any, *, want_count: bool) -> _ConnectionT:
     """Attach the post-filter pre-slice count to a resolved connection (sync)."""
     _guard_total_count_countable(nodes, want_count=want_count)
     if not want_count:
@@ -1460,7 +1491,12 @@ def _attach_count_sync(conn: Any, nodes: Any, *, want_count: bool) -> Any:
     return _set_total_count(conn, want_count=True, value=nodes.count)
 
 
-async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bool) -> Any:
+async def _attach_count_async(
+    conn_awaitable: Awaitable[_ConnectionT],
+    nodes: Any,
+    *,
+    want_count: bool,
+) -> _ConnectionT:
     """Attach the post-filter pre-slice count to a resolved connection (async)."""
     # Await-before-raise (mirrors the close-before-raise discipline in
     # ``utils/querysets.py::apply_type_visibility_sync``, spec-030 Decision 10): resolve the
@@ -1479,7 +1515,7 @@ async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bo
     return conn
 
 
-def _connection_type_for(target_type: type, definition: Any) -> type:
+def _connection_type_for(target_type: type, definition: DjangoTypeDefinition) -> type:
     """Return (and cache) the connection class for a node ``DjangoType``.
 
     Always returns a generated concrete ``<TypeName>Connection`` subclass of
@@ -1545,7 +1581,7 @@ def _connection_type_for(target_type: type, definition: Any) -> type:
 # =============================================================================
 
 
-def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input: bool) -> None:
+def _guard_sidecar_input_against_non_queryset(source: object, *, has_sidecar_input: bool) -> None:
     """Raise ``GraphQLError`` when ``filter:`` / ``orderBy:`` is supplied over a non-queryset.
 
     The consumer-``resolver=`` contract (spec-030 Decision 7): a non-queryset iterable
@@ -1565,7 +1601,7 @@ def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input:
         )
 
 
-def _guard_non_queryset_iterable(source: Any) -> None:
+def _guard_non_queryset_iterable(source: object) -> None:
     """Raise ``GraphQLError`` when the connection resolver returned a non-iterable.
 
     The consumer-``resolver=`` contract (spec-030 Decision 7) admits three
@@ -1593,7 +1629,7 @@ def _guard_non_queryset_iterable(source: Any) -> None:
     )
 
 
-def _guard_source_not_pre_sliced(source: models.QuerySet) -> None:
+def _guard_source_not_pre_sliced(source: models.QuerySet[models.Model, object]) -> None:
     """Raise ``GraphQLError`` when the connection resolver returns an already-sliced QuerySet.
 
     A ``DjangoConnectionField`` owns pagination: ``_finalize_queryset`` appends a
@@ -1638,11 +1674,11 @@ def _guard_source_not_pre_sliced(source: models.QuerySet) -> None:
 
 def _finalize_queryset(
     target_type: type,
-    qs: models.QuerySet,
-    info: Info,
+    qs: models.QuerySet[models.Model],
+    info: Info[object, object],
     *,
     definition: Any,
-) -> models.QuerySet:
+) -> models.QuerySet[models.Model]:
     """Apply the color-agnostic pipeline tail: deterministic total order, then optimizer plan.
 
     Steps 5-6 of the Decision 7 pipeline. Single-sited so the sync and async
@@ -1731,12 +1767,12 @@ def _finalize_queryset(
 
 
 def _prepare_pipeline_source(
-    source: Any,
+    source: object,
     target_type: type,
     *,
-    async_guard: Any,
-    filter_input: Any,
-    order_by_input: Any,
+    async_guard: Callable[[object, type], None],
+    filter_input: object,
+    order_by_input: object,
 ) -> tuple[Any, bool]:
     """Normalize the pipeline source and apply the connection's per-branch guards.
 
@@ -1762,7 +1798,7 @@ def _prepare_pipeline_source(
         order_by_input=order_by_input,
     )
 
-    def non_queryset_guard(value: Any) -> None:
+    def non_queryset_guard(value: object) -> None:
         # The shape gate runs BEFORE the usage guards: a scalar is wrong
         # regardless of any input supplied, while the sidecar rule reads
         # naturally only once the value IS a plain iterable.
@@ -1778,7 +1814,11 @@ def _prepare_pipeline_source(
     )
 
 
-def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> tuple[tuple, ...]:
+def _sidecar_steps(
+    definition: DjangoTypeDefinition,
+    filter_input: object,
+    order_by_input: object,
+) -> tuple[tuple[str, Any, object], ...]:
     """Return the ``(kind, set_class, input)`` sidecar steps this call actually applies.
 
     The gate is one rule - supplied AND declared - and the ORDER is contractual
@@ -1794,7 +1834,7 @@ def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> t
     ``::apply_orderset_sync`` and their async twins); both run the one
     post-sidecar seal.
     """
-    steps = []
+    steps: list[tuple[str, Any, object]] = []
     if is_supplied(filter_input) and definition.filterset_class is not None:
         steps.append(("filter", definition.filterset_class, filter_input))
     if is_supplied(order_by_input) and definition.orderset_class is not None:
@@ -1805,12 +1845,12 @@ def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> t
 def _pipeline_sync(
     target_type: type,
     source: Any,
-    info: Info,
+    info: Info[object, object],
     *,
-    definition: Any,
-    filter_input: Any,
-    order_by_input: Any,
-) -> Any:
+    definition: DjangoTypeDefinition,
+    filter_input: object,
+    order_by_input: object,
+) -> object:
     """Run the composition pipeline on the sync path (spec-030 Decision 7 / Decision 10).
 
     ``source`` is the base value (the consumer ``resolver=`` return or the
@@ -1868,12 +1908,12 @@ def _pipeline_sync(
 async def _pipeline_async(
     target_type: type,
     source: Any,
-    info: Info,
+    info: Info[object, object],
     *,
-    definition: Any,
-    filter_input: Any,
-    order_by_input: Any,
-) -> Any:
+    definition: DjangoTypeDefinition,
+    filter_input: object,
+    order_by_input: object,
+) -> object:
     """Async sibling of ``_pipeline_sync`` - awaits the colored visibility / filter / order steps.
 
     The consumer ``resolver=`` return was already awaited once by
@@ -1914,8 +1954,8 @@ async def _pipeline_async(
 
 def _synthesized_signature(
     target_type: type,
-    definition: Any,
-) -> tuple[inspect.Signature, dict[str, Any]]:
+    definition: DjangoTypeDefinition,
+) -> tuple[inspect.Signature, dict[str, object]]:
     """Build the resolver ``__signature__`` + ``__annotations__`` carrying the sidecar args.
 
     spec-030 Decision 6: the resolver's signature is the SDL contract. The return
@@ -1951,7 +1991,7 @@ def _synthesized_signature(
         inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
         inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
     ]
-    annotations: dict[str, Any] = {"info": Info}
+    annotations: dict[str, object] = {"info": Info}
     if definition.filterset_class is not None:
         # mypy: runtime-built annotation
         filter_ann = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]
@@ -1966,7 +2006,7 @@ def _synthesized_signature(
         annotations[CONNECTION_FILTER_KWARG] = filter_ann
     if definition.orderset_class is not None:
         # mypy: runtime-built annotation
-        order_ann: Any = list[order_input_type(definition.orderset_class)] | None  # type: ignore[misc]
+        order_ann: object = list[order_input_type(definition.orderset_class)] | None  # type: ignore[misc]
         params.append(
             inspect.Parameter(
                 CONNECTION_ORDER_KWARG,
@@ -1983,9 +2023,9 @@ def _synthesized_signature(
 
 def _build_connection_resolver(
     target_type: type,
-    resolver: Callable | None,
-    definition: Any,
-) -> Callable:
+    resolver: Callable[..., Any] | None,
+    definition: DjangoTypeDefinition,
+) -> Callable[..., object]:
     """Build the field resolver: the pipeline body plus the synthesized signature.
 
     The body pops ``filter`` / ``order_by`` (forwarded by ``ConnectionExtension``
@@ -2021,10 +2061,10 @@ def _build_connection_resolver(
       its return and the async ``get_queryset`` / ``apply_async`` hooks run on
       the async path.
     """
-    _resolve: Callable[..., Any]
+    _resolve: Callable[..., object]
     if is_async_callable(resolver):
 
-        async def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+        async def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
             source = await resolver(root, info)
             filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return await _pipeline_async(
@@ -2048,7 +2088,7 @@ def _build_connection_resolver(
         # turns execute_sync misuse into a typed package error. The guard is a
         # no-op for the default branch (a QuerySet is synchronously iterable).
 
-        def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+        def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
             if resolver is None:
                 source = base_queryset(definition.model)
             else:
@@ -2070,12 +2110,12 @@ def _build_connection_resolver(
 
     signature, annotations = _synthesized_signature(target_type, definition)
     # mypy: typeshed's FunctionType omits __signature__
-    _resolve.__signature__ = signature  # type: ignore[union-attr]
+    _resolve.__signature__ = signature  # type: ignore[attr-defined]
     _resolve.__annotations__ = annotations
     return _resolve
 
 
-def _window_rows_are_annotated(rows: list) -> bool:
+def _window_rows_are_annotated(rows: list[object]) -> bool:
     """Return whether every row carries the windowed-prefetch row number.
 
     Upstream's own integrity probe (``resolve_optimized_connection_by_prefetch``
@@ -2109,8 +2149,8 @@ def _build_relation_connection_resolver(
     accessor_name: str,
     relation_field_name: str,
     declaring_type: type,
-    definition: Any,
-) -> Callable:
+    definition: DjangoTypeDefinition,
+) -> Callable[..., object]:
     """Build the resolver for a Phase-2.5 synthesized relation connection (spec-032 Decision 6).
 
     Identical pipeline tail to ``_build_connection_resolver``'s default branch,
@@ -2182,7 +2222,7 @@ def _build_relation_connection_resolver(
     """
     to_attr = _relation_connection_to_attr(relation_field_name)
 
-    def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+    def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
         source = getattr(root, accessor_name).all()
         # Per-response-key window first (divergent aliases): the attr
         # is a pure function of ``info.path.key`` - the resolve-time twin of
@@ -2260,7 +2300,7 @@ def _build_relation_connection_resolver(
 def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`
     target_type: type,
     *,
-    resolver: Callable | None = None,
+    resolver: Callable[..., Any] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),

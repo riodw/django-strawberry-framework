@@ -46,7 +46,6 @@ from __future__ import annotations
 
 from contextvars import ContextVar, Token
 from enum import Enum
-from typing import Any
 
 from strawberry.utils.inspect import in_async_context
 
@@ -89,7 +88,11 @@ _OPERATION_MODES: ContextVar[OperationLease[OperationMode] | None] = ContextVar(
 
 def bind_operation_mode(
     mode: OperationMode,
-) -> tuple[ContextVar[Any], Token[Any], OperationLease[OperationMode]]:
+) -> tuple[
+    ContextVar[OperationLease[OperationMode] | None],
+    Token[OperationLease[OperationMode] | None],
+    OperationLease[OperationMode],
+]:
     """Bind ``mode`` here and hand the owner back everything that undoes it.
 
     The variable, the token and the lease, because the runner that owns the

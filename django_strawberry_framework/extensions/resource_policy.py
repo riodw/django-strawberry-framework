@@ -79,9 +79,9 @@ Where each pass reaches, stated as the boundary rather than as parity:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from graphql import (
     DirectiveNode,
@@ -137,6 +137,37 @@ from ..utils.policies import copy_policy
 from ..utils.private_state import PrivateAuthority
 from ..utils.typing import unwrap_non_null
 from .operation_state import OperationState, _OperationBoundExtension
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from graphql import (
+        ArgumentNode,
+        DocumentNode,
+        GraphQLArgument,
+        GraphQLField,
+        GraphQLNamedType,
+        GraphQLSchema,
+        GraphQLType,
+        SelectionNode,
+        TypeNode,
+        ValueNode,
+        VariableDefinitionNode,
+    )
+    from strawberry.types import ExecutionContext
+
+    from ..utils.inputs import InputFieldSpec
+
+    #: One pending input node: its declared type, its value, the containers it sits
+    #: in, and the mutation input spec (and nested spec map) it decodes through.
+    _ValueFrame = tuple[
+        GraphQLType | None,
+        object,
+        tuple[object, ...],
+        InputFieldSpec | None,
+        Mapping[str, InputFieldSpec] | None,
+    ]
+
+#: The member type a bounded container enumeration yields.
+_MemberT = TypeVar("_MemberT")
 
 __all__ = ("DjangoResourcePolicyExtension",)
 
@@ -276,7 +307,7 @@ def scan_document_text(policy: ResourcePolicy, query: str | None) -> None:
         return
 
 
-def _mutation_input_specs(field_def: Any) -> Mapping[str, Any] | None:
+def _mutation_input_specs(field_def: object) -> Mapping[str, InputFieldSpec] | None:
     """Return the bound mutation's per-input-field spec map, or ``None``.
 
     The bridge from the walker's graphql-core view to the bind-time reverse map
@@ -307,7 +338,7 @@ def _mutation_input_specs(field_def: Any) -> Mapping[str, Any] | None:
     return {spec.graphql_name: spec for spec in specs}
 
 
-def _nested_specs_map(spec: Any) -> Mapping[str, Any] | None:
+def _nested_specs_map(spec: object) -> Mapping[str, InputFieldSpec] | None:
     """Return the field-spec map of a NESTED input's own fields, or ``None``.
 
     A serializer nested-serializer field records its nested rows' own reverse
@@ -327,7 +358,7 @@ def _nested_specs_map(spec: Any) -> Mapping[str, Any] | None:
 _EXACT_SEQUENCE_TYPES = (list, tuple)
 
 
-def _closes_a_cycle(container: Any, path: tuple[Any, ...]) -> bool:
+def _closes_a_cycle(container: object, path: tuple[object, ...]) -> bool:
     """``True`` when ``container`` is one of the containers it hangs under.
 
     Identity by ``is``, never by ``==`` or by ``id()``: an input value's
@@ -399,7 +430,11 @@ class _ValueBudget:
         if charged > limit:
             raise ResourceLimitExceeded(bound, limit, charged, detail)
 
-    def _bounded_members(self, members: Callable[[], Any], bound: str) -> list[Any]:
+    def _bounded_members(
+        self,
+        members: Callable[[], Iterable[_MemberT]],
+        bound: str,
+    ) -> list[_MemberT]:
         """Read ``members()`` until ``bound`` is proven exceeded, and no further.
 
         The measurement is itself work the request asked for, so it is bounded
@@ -423,7 +458,7 @@ class _ValueBudget:
         being measured rather than whatever the container raised.
         """
         limit = getattr(self.policy, bound)
-        collected: list[Any] = []
+        collected: list[_MemberT] = []
         try:
             for member in members():
                 collected.append(member)
@@ -449,12 +484,12 @@ class _ValueBudget:
 
     def charge(
         self,
-        input_type: Any,
-        value: Any,
+        input_type: GraphQLType | None,
+        value: object,
         *,
         in_mutation: bool,
         argument: str,
-        specs: Mapping[str, Any] | None = None,
+        specs: Mapping[str, InputFieldSpec] | None = None,
     ) -> None:
         """Charge one argument's whole value tree against every value bound.
 
@@ -476,7 +511,7 @@ class _ValueBudget:
         was built for; ``None`` leaves every level classified by type shape
         alone.
         """
-        stack: list[tuple[Any, Any, tuple[Any, ...], Any, Any]] = [
+        stack: list[_ValueFrame] = [
             (
                 input_type,
                 value,
@@ -561,14 +596,14 @@ class _ValueBudget:
 
     def _charge_container(
         self,
-        value: Any,
-        stack: list[tuple[Any, Any, tuple[Any, ...], Any, Any]],
-        node_type: Any,
-        path: tuple[Any, ...],
+        value: object,
+        stack: list[_ValueFrame],
+        node_type: GraphQLType | None,
+        path: tuple[object, ...],
         in_mutation: bool,
         argument: str,
-        spec: Any,
-        spec_map: Mapping[str, Any] | None,
+        spec: InputFieldSpec | None,
+        spec_map: Mapping[str, InputFieldSpec] | None,
     ) -> bool:
         """Charge a list or mapping's width and queue its children; ``False`` if neither.
 
@@ -602,7 +637,7 @@ class _ValueBudget:
             if _closes_a_cycle(value, path):
                 return True
             if type(value) is dict:
-                entries: Any = value.items()
+                entries: Collection[tuple[str, object]] = value.items()
                 width = len(value)
             else:
                 entries = self._bounded_members(lambda: value.items(), "max_container_width")
@@ -636,7 +671,7 @@ class _ValueBudget:
         if _closes_a_cycle(value, path):
             return True
         if type(value) in _EXACT_SEQUENCE_TYPES:
-            members: Any = value
+            members: Collection[object] = value
             width = len(value)
         else:
             members = self._bounded_members(lambda: value, "max_container_width")
@@ -677,12 +712,12 @@ class _ValueBudget:
 
     def _charge_list_family(
         self,
-        item_type: Any,
+        item_type: GraphQLType | None,
         width: int,
         *,
         in_mutation: bool,
         argument: str,
-        spec: Any = None,
+        spec: InputFieldSpec | None = None,
     ) -> None:
         """Charge a list against the input family its field places it in.
 
@@ -756,7 +791,7 @@ class _ValueBudget:
             "the request carries more relation ids in aggregate than the policy allows",
         )
 
-    def _charge_leaf(self, node_type: Any, value: Any) -> None:
+    def _charge_leaf(self, node_type: GraphQLType | None, value: object) -> None:
         """Charge a scalar or enum leaf for its byte size, or a file for its bytes.
 
         ``max_scalar_bytes`` measures TEXT, because the superlinear parsers and
@@ -802,7 +837,7 @@ class _ValueBudget:
                 "a scalar value is larger than the policy allows",
             )
 
-    def _charge_upload(self, value: Any) -> None:
+    def _charge_upload(self, value: object) -> None:
         """Charge one uploaded file against the count, per-file, and aggregate bounds.
 
         The size is read from the file object and must BE a size: an upload whose
@@ -897,7 +932,10 @@ class _DocumentBudget:
             )
 
 
-def _root_type(graphql_schema: Any, operation: OperationType) -> Any:
+def _root_type(
+    graphql_schema: GraphQLSchema,
+    operation: OperationType,
+) -> GraphQLObjectType | None:
     """Return the schema root type for an operation kind, or ``None`` if absent."""
     if operation is OperationType.MUTATION:
         return graphql_schema.mutation_type
@@ -906,7 +944,11 @@ def _root_type(graphql_schema: Any, operation: OperationType) -> Any:
     return graphql_schema.query_type
 
 
-def _field_definition(graphql_schema: Any, parent_type: Any, name: str) -> Any:
+def _field_definition(
+    graphql_schema: GraphQLSchema,
+    parent_type: GraphQLNamedType | None,
+    name: str,
+) -> GraphQLField | None:
     """Return a field definition on an object / interface parent, or ``None``.
 
     The introspection meta-fields are resolved the way graphql-core's own
@@ -930,10 +972,15 @@ def _field_definition(graphql_schema: Any, parent_type: Any, name: str) -> Any:
             return TypeMetaFieldDef
     if not isinstance(parent_type, (GraphQLObjectType, GraphQLInterfaceType)):
         return None
-    return parent_type.fields.get(name)
+    # graphql-core's own ``cached_property`` erases the ``GraphQLFieldMap`` it returns.
+    return cast("GraphQLField | None", parent_type.fields.get(name))
 
 
-def _page_bound(policy: ResourcePolicy, node: FieldNode, variables: dict[str, Any] | None) -> int:
+def _page_bound(
+    policy: ResourcePolicy,
+    node: FieldNode,
+    variables: dict[str, object] | None,
+) -> int:
     """Return the row bound one connection selection would fetch.
 
     A ``first`` / ``last`` argument narrows the bound; anything else - absent,
@@ -958,10 +1005,10 @@ def _page_bound(policy: ResourcePolicy, node: FieldNode, variables: dict[str, An
 
 def _collection_rows(
     policy: ResourcePolicy,
-    parent_type: Any,
-    field_type: Any,
+    parent_type: GraphQLNamedType | None,
+    field_type: GraphQLType,
     node: FieldNode,
-    variables: dict[str, Any] | None,
+    variables: dict[str, object] | None,
 ) -> int | None:
     """Return the rows a field selection can fetch, or ``None`` when it is not a collection.
 
@@ -981,7 +1028,7 @@ def _collection_rows(
     return None
 
 
-def _is_connection_type(candidate: Any) -> bool:
+def _is_connection_type(candidate: object) -> bool:
     """``True`` for a Relay connection object type, detected by its whole edge shape.
 
     The full structural test, not merely "has a field called ``edges``": the
@@ -1006,7 +1053,7 @@ def _is_connection_type(candidate: Any) -> bool:
     return isinstance(edge, GraphQLObjectType) and set(edge.fields) >= _EDGE_MARKER_FIELDS
 
 
-def _variable_names(value_node: Any) -> Iterator[str]:
+def _variable_names(value_node: ValueNode) -> Iterator[str]:
     """Yield the name of every variable a value AST references, iteratively."""
     stack = [value_node]
     while stack:
@@ -1019,7 +1066,7 @@ def _variable_names(value_node: Any) -> Iterator[str]:
             stack.extend(field.value for field in node.fields)
 
 
-def _type_system_directives(definition: Any) -> Iterator[Any]:
+def _type_system_directives(definition: Node) -> Iterator[DirectiveNode]:
     """Yield every directive node inside a type-system definition, iteratively.
 
     Validation rejects a type-system definition in a request, but only after
@@ -1041,7 +1088,7 @@ def _type_system_directives(definition: Any) -> Iterator[Any]:
                 stack.extend(item for item in child if isinstance(item, Node))
 
 
-def _declared_input_type(graphql_schema: Any, type_node: Any) -> Any:
+def _declared_input_type(graphql_schema: GraphQLSchema, type_node: TypeNode) -> GraphQLType | None:
     """The input type a variable definition declares, or ``None`` when it names none."""
     declared = type_from_ast(graphql_schema, type_node)
     return declared if is_input_type(declared) else None
@@ -1062,8 +1109,8 @@ class _DocumentWalk:
     def __init__(
         self,
         policy: ResourcePolicy,
-        graphql_schema: Any,
-        fragments: Any,
+        graphql_schema: GraphQLSchema,
+        fragments: Mapping[str, FragmentDefinitionNode],
     ) -> None:
         self.policy = policy
         self.graphql_schema = graphql_schema
@@ -1071,15 +1118,15 @@ class _DocumentWalk:
         self.budget = _DocumentBudget(policy)
         self.values = _ValueBudget(policy)
         self.expanded: set[str] = set()
-        self.variables: dict[str, Any] | None = None
+        self.variables: dict[str, object] | None = None
         self.read: set[str] | None = None
         self.in_mutation = False
 
     def charge_arguments(
         self,
-        arguments: Any,
-        argument_defs: Any,
-        specs: Mapping[str, Any] | None = None,
+        arguments: Iterable[ArgumentNode] | None,
+        argument_defs: Mapping[str, GraphQLArgument] | None,
+        specs: Mapping[str, InputFieldSpec] | None = None,
     ) -> None:
         """Charge each argument's value, typed where ``argument_defs`` declares it, else untyped."""
         for argument in arguments or ():
@@ -1097,7 +1144,7 @@ class _DocumentWalk:
                 specs=specs,
             )
 
-    def charge_directives(self, directives: Any) -> None:
+    def charge_directives(self, directives: Iterable[DirectiveNode] | None) -> None:
         """Charge every directive's arguments, typed by the directive's definition where one exists."""
         for directive in directives or ():
             directive_def = self.graphql_schema.get_directive(directive.name.value)
@@ -1108,8 +1155,8 @@ class _DocumentWalk:
 
     def operation(
         self,
-        operation: Any,
-        supplied: Mapping[str, Any],
+        operation: OperationDefinitionNode,
+        supplied: Mapping[str, object],
         *,
         selected: bool,
     ) -> None:
@@ -1117,7 +1164,7 @@ class _DocumentWalk:
         graphql_schema = self.graphql_schema
         root = _root_type(graphql_schema, operation.operation)
         definitions = operation.variable_definitions or ()
-        defaulted: dict[str, Any] = {}
+        defaulted: dict[str, VariableDefinitionNode] = {}
         self.variables = None
         if selected:
             self.variables = dict(supplied)
@@ -1151,7 +1198,7 @@ class _DocumentWalk:
                 argument=name,
             )
 
-    def fragment(self, fragment: Any) -> None:
+    def fragment(self, fragment: FragmentDefinitionNode) -> None:
         """Walk a fragment definition no spread expanded, as a root of its own."""
         condition = self.graphql_schema.get_type(fragment.type_condition.name.value)
         self.variables = None
@@ -1168,9 +1215,9 @@ class _DocumentWalk:
 
     def walk(
         self,
-        selections: Any,
-        parent: Any,
-        root: Any,
+        selections: Sequence[SelectionNode],
+        parent: GraphQLNamedType | None,
+        root: GraphQLNamedType | None,
         *,
         shape: bool,
         path: frozenset[str] = frozenset(),
@@ -1178,7 +1225,7 @@ class _DocumentWalk:
         """Walk one root's selections, charging values everywhere and shape where ``shape``."""
         graphql_schema = self.graphql_schema
         # (node, parent type, cost multiplier, fragment spread path, shape)
-        stack: list[tuple[Any, Any, int, frozenset[str], bool]] = [
+        stack: list[tuple[Any, GraphQLNamedType | None, int, frozenset[str], bool]] = [
             (
                 selection,
                 parent,
@@ -1269,9 +1316,9 @@ class _DocumentWalk:
 
 def charge_document(
     policy: ResourcePolicy,
-    graphql_schema: Any,
-    document: Any,
-    variables: Mapping[str, Any] | None = None,
+    graphql_schema: GraphQLSchema,
+    document: DocumentNode,
+    variables: Mapping[str, object] | None = None,
     operation_name: str | None = None,
 ) -> None:
     """Charge one request's document shape and every value validation converts, iteratively.
@@ -1356,7 +1403,7 @@ class _AcceptedPolicy:
 _EXPLICIT_POLICY: PrivateAuthority[_AcceptedPolicy] = PrivateAuthority()
 
 
-def restate_admission_verdict(execution_context: Any) -> None:
+def restate_admission_verdict(execution_context: ExecutionContext) -> None:
     """Republish this operation's admission verdict over whatever replaced it.
 
     One statement of what a rejected operation's pre-execution error is, applied

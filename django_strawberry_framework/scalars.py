@@ -47,7 +47,7 @@ __all__ = [
 _BIGINT_STRING_PATTERN = re.compile(r"^(0|-?[1-9][0-9]*)$")
 
 
-def _parse_bigint(value: Any) -> int:
+def _parse_bigint(value: object) -> int:
     """Strict BigInt parser.
 
     Accepts:
@@ -92,7 +92,7 @@ def _parse_bigint(value: Any) -> int:
     raise ValueError(f"BigInt cannot parse {_safe_type_name(value)}")
 
 
-def _serialize_bigint(value: Any) -> str:
+def _serialize_bigint(value: object) -> str:
     """Strict BigInt serializer.
 
     Accepts:

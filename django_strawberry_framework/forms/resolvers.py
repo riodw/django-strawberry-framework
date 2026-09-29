@@ -97,7 +97,7 @@ reconstruction.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from django import forms
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
@@ -108,6 +108,7 @@ from ..mutations.resolvers import (
     run_write_pipeline_sync,
     save_or_field_errors,
 )
+from ..mutations.sets import backing_model_of
 from ..utils.querysets import sync_pipeline_recourse
 from ..utils.write_transaction import pipeline_write_phase
 from ..utils.write_values import (
@@ -122,11 +123,15 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing import TypeAlias
 
     from django.db import models
+    from strawberry.types import Info
 
+    from ..mutations.inputs import FieldError
     from .sets import DjangoFormMutation, DjangoModelFormMutation
 
     # A form-flavor mutation class: the ``ModelForm`` or the model-less plain base.
     _FormMutationClass: TypeAlias = type[DjangoModelFormMutation] | type[DjangoFormMutation]
+    # The form ``decode_step`` product: the form-keyed bound ``(data, files)`` pair.
+    _DecodedForm: TypeAlias = tuple[dict[str, object], dict[str, object]]
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) form pipeline. Mirrors the
@@ -136,7 +141,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 _FORM_ASYNC_RECOURSE = sync_pipeline_recourse("form mutation")
 
 
-def _to_form_key_value(obj: Any, form_field: Any) -> Any:
+def _to_form_key_value(obj: models.Model, form_field: forms.Field | None) -> object:
     """Convert a resolved relation object to its form-key value via ``to_field_name``.
 
     A ``ModelChoiceField`` / ``ModelMultipleChoiceField`` with ``to_field_name``
@@ -154,7 +159,7 @@ def _to_form_key_value(obj: Any, form_field: Any) -> Any:
     return getattr(obj, "pk", obj)
 
 
-def _is_empty_form_value(candidate: Any, form_field: Any) -> bool:
+def _is_empty_form_value(candidate: object, form_field: forms.Field | None) -> bool:
     """Return whether ``candidate`` matches the form field's empty values safely."""
     empty_values: Container[object] = getattr(
         form_field,
@@ -174,13 +179,13 @@ def _is_empty_form_value(candidate: Any, form_field: Any) -> bool:
 
 
 def _decode_form_relation_single(
-    value: Any,
+    value: object,
     *,
     graphql_name: str,
-    related_model: Any,
-    form_field: Any,
-    info: Any,
-) -> tuple[Any, Any | None]:
+    related_model: type[models.Model],
+    form_field: forms.Field | None,
+    info: Info[object, object],
+) -> tuple[object, FieldError | None]:
     """Decode ONE relation id to its form-key value, visibility-checked.
 
     The form coloring of the shared
@@ -220,13 +225,13 @@ def _decode_form_relation_single(
 
 
 def _decode_form_relation_multi(
-    values: Any,
+    values: object,
     *,
     graphql_name: str,
-    related_model: Any,
-    form_field: Any,
-    info: Any,
-) -> tuple[Any, Any | None]:
+    related_model: type[models.Model],
+    form_field: forms.Field | None,
+    info: Info[object, object],
+) -> tuple[list[object] | None, FieldError | None]:
     """Decode an M2M ``list[<id>]`` to a list of form-key values, visibility-checked (NET-NEW).
 
     Maps ``_decode_form_relation_single`` over each element (so every member is
@@ -254,9 +259,9 @@ def _decode_form_relation_multi(
     provided_values, container_error = materialize_relation_id_container(values, graphql_name)
     if container_error is not None:
         return None, container_error
-    keys: list[Any] = []
+    keys: list[object] = []
     # The shared materializer answers the values exactly when it reports no error.
-    for value in cast("list[Any]", provided_values):
+    for value in cast("list[object]", provided_values):
         key, error = _decode_form_relation_single(
             value,
             graphql_name=graphql_name,
@@ -272,9 +277,9 @@ def _decode_form_relation_multi(
 
 def _decode_form_data(
     mutation_cls: _FormMutationClass,
-    data: Any,
-    info: Any,
-) -> tuple[dict[str, Any], dict[str, Any], Any | None]:
+    data: object,
+    info: Info[object, object],
+) -> tuple[dict[str, object], dict[str, object], FieldError | None]:
     """Decode the bound input dataclass into ``(provided_data, provided_files, error)`` (NET-NEW).
 
     Walks the provided input fields (``UNSET`` stripped) and, using the
@@ -300,8 +305,8 @@ def _decode_form_data(
     """
     form_fields = dict(mutation_cls.get_form_fields())
 
-    provided_data: dict[str, Any] = {}
-    provided_files: dict[str, Any] = {}
+    provided_data: dict[str, object] = {}
+    provided_files: dict[str, object] = {}
     handlers, scalar_handler = decode_field_handlers(
         provided_data,
         info=info,
@@ -323,9 +328,9 @@ def _decode_form_data(
 
 def _reconstruct_partial_data(
     mutation_cls: _FormMutationClass,
-    instance: Any,
-    provided_data: dict[str, Any],
-) -> dict[str, Any]:
+    instance: models.Model,
+    provided_data: dict[str, object],
+) -> dict[str, object]:
     """Reconstruct the full bound ``data=`` for a partial ``ModelForm`` update (NET-NEW).
 
     For every non-file declared form field NOT overridden by ``provided_data``,
@@ -381,17 +386,16 @@ def _reconstruct_partial_data(
     ``isinstance`` catches both). Net-new vs. ``036``: the model update does
     ``setattr`` on the located instance, not a bound-data reconstruction.
     """
-    # Only a ``ModelForm`` update locates a row to reconstruct from, and its
-    # validated snapshot always carries the form's model.
-    model = cast("type[models.Model]", mutation_cls._mutation_meta.model)
+    # Only a ``ModelForm`` update locates a row to reconstruct from.
+    model = backing_model_of(mutation_cls._mutation_meta)
     form_fields = dict(mutation_cls.get_form_fields())
     m2m_field_names = {field.name for field in model._meta.many_to_many}
     fk_field_names = {
         field.name for field in model._meta.concrete_fields if getattr(field, "is_relation", False)
     }
 
-    m2m_data: dict[str, Any] = {}
-    relation_data: dict[str, Any] = {}
+    m2m_data: dict[str, object] = {}
+    relation_data: dict[str, object] = {}
     scalar_names: list[str] = []
     for name, form_field in form_fields.items():
         if name in provided_data or isinstance(form_field, forms.FileField):
@@ -428,7 +432,7 @@ def _reconstruct_partial_data(
     }
 
 
-def _form_errors_to_field_errors(form: Any) -> list[Any]:
+def _form_errors_to_field_errors(form: forms.BaseForm) -> list[FieldError]:
     """Map a failed form's ``form.errors`` onto the ``FieldError`` envelope.
 
     Reuses the ``036`` ``validation_error_to_field_errors`` over a
@@ -445,11 +449,11 @@ def _form_errors_to_field_errors(form: Any) -> list[Any]:
 
 def _modelform_decode_step(
     mutation_cls: _FormMutationClass,
-    data: Any,
-    info: Any,
+    data: object,
+    info: Info[object, object],
     *,
-    instance: Any,
-) -> tuple[dict[str, Any], dict[str, Any]] | list[Any]:
+    instance: models.Model | None,
+) -> _DecodedForm | list[FieldError]:
     """The form ``decode_step``: form-decode + (ModelForm update) partial reconstruction.
 
     Decodes the bound input into a FORM-field-keyed ``(provided_data,
@@ -471,12 +475,12 @@ def _modelform_decode_step(
 
 
 def _bound_form_or_field_errors(
-    holder: Any,
-    info: Any,
-    decoded: tuple[dict[str, Any], dict[str, Any]],
+    holder: DjangoModelFormMutation | DjangoFormMutation,
+    info: Info[object, object],
+    decoded: _DecodedForm,
     *,
-    instance: Any,
-) -> tuple[Any, list[Any] | None]:
+    instance: models.Model | None,
+) -> tuple[Any, list[FieldError] | None]:
     """Construct the bound form and run ``is_valid()`` once (both form flavors).
 
     Returns ``(form, None)`` on success or ``(None, errors)`` on a validation
@@ -493,10 +497,10 @@ def _bound_form_or_field_errors(
 
 def _modelform_write_step(
     mutation_cls: type[DjangoModelFormMutation],
-    info: Any,
-    instance: Any,
-    decoded: tuple[dict[str, Any], dict[str, Any]],
-) -> Any | list[Any]:
+    info: Info[object, object],
+    instance: models.Model | None,
+    decoded: _DecodedForm,
+) -> models.Model | list[FieldError]:
     """The ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save``.
 
     Constructs the form via the overridable ``get_form`` hook over the decoded bound
@@ -523,14 +527,16 @@ def _modelform_write_step(
         write_error = save_or_field_errors(form.save)
     if write_error is not None:
         return write_error
-    return form.instance
+    # The consumer-overridable ``get_form`` hook is untyped; a ``ModelForm``
+    # mutation's form is a ``ModelForm``, whose ``instance`` is the saved row.
+    return cast("models.Model", form.instance)
 
 
 def _plain_form_write_step(
     mutation_cls: type[DjangoFormMutation],
-    info: Any,
-    decoded: tuple[dict[str, Any], dict[str, Any]],
-) -> Any | list[Any]:
+    info: Info[object, object],
+    decoded: _DecodedForm,
+) -> Literal[True] | list[FieldError]:
     """The plain-form ``write_step``: ``get_form`` -> ``is_valid`` -> ``perform_mutate``.
 
     Same construct/validate helper as ModelForm; the persist hook is
@@ -561,10 +567,10 @@ def _plain_form_write_step(
 
 def _run_form_pipeline_sync(
     mutation_cls: _FormMutationClass,
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
-) -> Any:
+    info: Info[object, object],
+    data: object,
+    id: object,  # noqa: A002
+) -> object:
     """The form-flavor rider of ``run_write_pipeline_sync`` (both form bases).
 
     ONE skeleton call serves both bases - the ``transaction.atomic()`` boundary
@@ -586,14 +592,20 @@ def _run_form_pipeline_sync(
     """
     # The two arms bind the one name to differently-shaped steps, so it is declared
     # up front; ``_primary_type is None`` IS the plain-vs-``ModelForm`` flavor split.
-    write_step: Callable[[Any, Any], Any]
+    write_step: Callable[[models.Model | None, _DecodedForm], object]
     if mutation_cls._primary_type is None:
 
-        def write_step(_instance: Any, decoded: Any) -> Any:
+        def write_step(
+            _instance: models.Model | None,
+            decoded: _DecodedForm,
+        ) -> Literal[True] | list[FieldError]:
             return _plain_form_write_step(mutation_cls, info, decoded)
     else:
 
-        def write_step(instance: Any, decoded: Any) -> Any:
+        def write_step(
+            instance: models.Model | None,
+            decoded: _DecodedForm,
+        ) -> models.Model | list[FieldError]:
             return _modelform_write_step(mutation_cls, info, instance, decoded)
 
     return run_write_pipeline_sync(

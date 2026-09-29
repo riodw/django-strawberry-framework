@@ -68,8 +68,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
+from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 
+from django.db import models
 from django.db.models import Prefetch, QuerySet
 from django.db.models.query import ModelIterable
 
@@ -82,8 +83,13 @@ from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagina
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import MutableSequence
 
+    from ..keyset import KeysetSeek
+    from ..utils.typing import ModelField
+    from .lateral_fetch import WindowSignature
+    from .plans import OrderEntry, PrefetchLookup
 
-def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
+
+def unwindowable_child_queryset_reason(queryset: object) -> str | None:
     """Classify child-queryset states NO fetch strategy can window safely.
 
     The strategy-independent safety gate the nested planner runs before building a
@@ -137,7 +143,7 @@ def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
     return None
 
 
-class RecognizedFetchQuerySet(QuerySet):
+class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
     """Shared skeleton for a windowed-prefetch queryset with a recognized fast path.
 
     ``lateral_fetch.py::LateralQuerySet`` and
@@ -161,16 +167,17 @@ class RecognizedFetchQuerySet(QuerySet):
 
     # Named by each subclass; ``_clone`` copies it alongside the signature.
     _dst_spec_attr: ClassVar[str]
-    _dst_window_signature: tuple | None = None
+    _dst_window_signature: WindowSignature | None = None
 
     def _clone(self) -> RecognizedFetchQuerySet:
         clone = super()._clone()  # type: ignore[misc]  # django-stubs omits QuerySet._clone
         setattr(clone, self._dst_spec_attr, getattr(self, self._dst_spec_attr))
         clone._dst_window_signature = self._dst_window_signature
-        return clone
+        # ``_clone`` returns an instance of ``type(self)``.
+        return cast("RecognizedFetchQuerySet", clone)
 
     @classmethod
-    def rebind(cls, queryset: Any, spec: Any) -> RecognizedFetchQuerySet:
+    def rebind(cls, queryset: QuerySet[models.Model], spec: object) -> RecognizedFetchQuerySet:
         """Rebind ``queryset`` (a plain windowed ``QuerySet``) as this class.
 
         A chain-then-reclass: a subclass adds no construction-time state beyond
@@ -186,13 +193,14 @@ class RecognizedFetchQuerySet(QuerySet):
         # break the same way.
         from .lateral_fetch import window_predicate_signature
 
-        clone = queryset._chain()
+        clone = queryset._chain()  # type: ignore[attr-defined]  # django-stubs omits QuerySet._chain
         clone.__class__ = cls
         setattr(clone, cls._dst_spec_attr, spec)
         clone._dst_window_signature = window_predicate_signature(queryset.query)
-        return clone
+        # The class swap above made the clone an instance of ``cls``.
+        return cast("RecognizedFetchQuerySet", clone)
 
-    def _fetch_recognized_rows(self) -> list | None:
+    def _fetch_recognized_rows(self) -> list[models.Model] | None:
         """Return the strategy's rows, or ``None`` for every unrecognized shape."""
         raise NotImplementedError  # pragma: no cover - subclasses always override.
 
@@ -200,7 +208,10 @@ class RecognizedFetchQuerySet(QuerySet):
         if self._result_cache is None:
             rows = self._fetch_recognized_rows()
             if rows is not None:
-                self._result_cache = rows
+                # mypy: without ``--disallow-any-generics`` mypy leaves the stub's defaulted
+                # ``_Row`` unbound on a ``QuerySet`` subclass's ``_result_cache`` (with the
+                # flag it binds, hence ``unused-ignore``); the rows are its model instances.
+                self._result_cache = rows  # type: ignore[assignment, unused-ignore]
         # The superclass call is a no-op on a populated cache except for the
         # nested ``prefetch_related`` pass - which recognized rows need too
         # (single-parent rows are usually already populated because the
@@ -232,12 +243,12 @@ class NestedConnectionRequest:
     ``to_attr`` on each parent reached via ``lookup``.
     """
 
-    django_field: Any
+    django_field: ModelField
     relation_field_name: str
     prefix: str
-    child_queryset: Any
+    child_queryset: QuerySet[models.Model]
     join: RelationJoinDescriptor
-    order_by: tuple[Any, ...]
+    order_by: tuple[OrderEntry, ...]
     offset: int
     limit: int | None
     reverse: bool
@@ -249,7 +260,7 @@ class NestedConnectionRequest:
     # keyset connection resolving ``after:``, or ``None`` (offset windows AND
     # keyset first pages alike). Forward-only by the walker's fallback
     # discipline; ``apply_window_pagination`` enforces that loudly.
-    keyset_seek: Any | None = None
+    keyset_seek: KeysetSeek | None = None
 
     def __post_init__(self) -> None:
         """Enforce the probe/count mutual-exclusion at the strategy seam.
@@ -301,7 +312,7 @@ def attach_windowed_prefetch(
     request: NestedConnectionRequest,
     plan: OptimizationPlan,
     *,
-    wrap: Callable[[Any], Any] | None = None,
+    wrap: Callable[[QuerySet[models.Model]], QuerySet[models.Model]] | None = None,
 ) -> bool:
     """Window the request's child queryset and carry it as a ``to_attr`` Prefetch.
 
@@ -333,7 +344,7 @@ def attach_windowed_prefetch(
     if wrap is not None:
         windowed_queryset = wrap(windowed_queryset)
     append_prefetch_unique(
-        cast("MutableSequence[str | Prefetch]", plan.prefetch_related),
+        cast("MutableSequence[PrefetchLookup]", plan.prefetch_related),
         Prefetch(
             request.lookup,
             queryset=windowed_queryset,
@@ -418,7 +429,7 @@ def _builtin_strategies() -> Mapping[str, NestedConnectionStrategy]:
     return MappingProxyType({"windowed": WINDOWED_STRATEGY, "lateral": LATERAL_STRATEGY})
 
 
-def resolve_strategy(value: Any) -> NestedConnectionStrategy:
+def resolve_strategy(value: object) -> NestedConnectionStrategy:
     """Resolve a strategy selection to an instance, failing loud on typos.
 
     Accepts a registered name (``"windowed"`` / ``"lateral"``), ``"auto"``
@@ -473,7 +484,8 @@ def resolve_strategy(value: Any) -> NestedConnectionStrategy:
         # below applies.
         plan_callable = None
     if not isinstance(value, type) and callable(plan_callable):
-        return value
+        # A non-class value with a callable ``plan`` is a consumer strategy.
+        return cast("NestedConnectionStrategy", value)
     raise ConfigurationError(
         f"nested_connection_strategy must be a strategy name, 'auto', or an object "
         f"with a plan(request, plan) method; got {_safe_type_name(value)}.",

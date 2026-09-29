@@ -64,6 +64,7 @@ Rio runs several sessions on this checkout, same branch, same time. Normal.
 
 - **`uv`** owns env. `uv sync` = dev group; `uv sync --group pg` adds psycopg. Everything via `uv run`. Never `pip install` into `.venv`; `uv pip install` w/o `--python <path>` lands there.
 - **`ruff`** format + lint (`pyproject.toml`: line 99, E501 graced 110, Google docstrings). `*.md` excluded from format: fenced blocks are verbatim examples.
+- **`mypy`** (`uv run mypy`, no args): `[tool.mypy]` owns scope (package only, not `tests/`), the Python floor it checks against, near-strict flags, Django/DRF/Strawberry plugins. The venv runs a newer Python w/ lazy annotations, so an unquoted `TYPE_CHECKING`-only name passes mypy AND local tests yet `NameError`s on the floor; only a floor run catches it.
 - **`pytest`** + pytest-django/xdist/cov/asyncio. Config in `pytest.ini`, not pyproject. See "Tests".
 - **`uvx pre-commit`**: `install` once per clone; `run --files <paths>` pre-commit; `--all-files` sweep.
 - **`rg`** for search. Always print population size: empty grep ≡ grep that ran on nothing.
@@ -138,11 +139,12 @@ Local hooks, `.pre-commit-config.yaml`, run order. All via `uv run` (shared ruff
 
 1. **kanban-tracked-path-constants** (`scripts/build_kanban_tracked_path_constants.py`) — REWRITES constants module from `git ls-files`. Add/delete a tracked package/test file → the hook rewrites the module and fails the commit until the rewritten module is staged too. `always_run: true`, `pass_filenames: false`, no `files:` key (deleted paths never appear in the staged list). Sees a new file only once STAGED; `--all-files` before `git add` proves nothing. Unblock: `git add` the rewritten constants module alongside the add/delete, rerun the hooks, commit once; no constants-only sync commit.
 2. **source-layout** (`scripts/check_trailing_commas.py --fix`) — trailing-comma explode-at-threshold (4; 2 in `models.py`), ASCII-only `.py`, `.md` link-def scaffold, JSON/GraphQL brace explosion. Auto-fixes; a rewrite fails the run so you re-stage. ASCII rule `.py`-only; em dashes fine in `.md`.
-3. **ruff-format**, 4. **ruff-check --fix**.
-5. **check-kanban-anchors** (`scripts/check_kanban_anchors.py`) — card↔card slug, card↔glossary anchor, render-id collisions. Reads DB → fires on a retitle no staged file names.
-6. **check-citations** (`scripts/check_citations.py`) — every `path::Symbol` in first-party source + board must resolve. Runs last, whole tree (a rename rots citations in files you aren't committing). `path::Symbol` ONLY: `path #"substring"` + `docs/` prose out of scope; citation wrapped across two lines invisible.
+3. **ruff-check --fix**, 4. **ruff-format**.
+5. **mypy** (`uv run mypy`, whole package, `pass_filenames: false`) — fires on a staged package `.py` or `pyproject.toml`; a signature change reddens callers in files you aren't committing.
+6. **check-kanban-anchors** (`scripts/check_kanban_anchors.py`) — card↔card slug, card↔glossary anchor, render-id collisions. Reads DB → fires on a retitle no staged file names.
+7. **check-citations** (`scripts/check_citations.py`) — every `path::Symbol` in first-party source + board must resolve. Runs last, whole tree (a rename rots citations in files you aren't committing). `path::Symbol` ONLY: `path #"substring"` + `docs/` prose out of scope; citation wrapped across two lines invisible.
 
-CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruff format --check`, source-layout `--check`, citations `--check`, tracked-path constants `--check`, then `--check` on every generator (`build_kanban_md`, `build_kanban_html`, `build_glossary_md`, `build_tree_md`). Hand-edit to a rendered doc goes red THERE, not locally.
+CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruff format --check`, `mypy`, source-layout `--check`, citations `--check`, tracked-path constants `--check`, then `--check` on every generator (`build_kanban_md`, `build_kanban_html`, `build_glossary_md`, `build_tree_md`). Hand-edit to a rendered doc goes red THERE, not locally.
 
 `--check` measures WORKING TREE. Passes in a dirty tree w/ stale HEAD → CI red, local green. Measure HEAD: `git archive HEAD | tar -x -C <scratch>/head` and run the generator's `--check` inside that copy (`uv run --project <scratch>/head ...`). Swapping only `DJANGO_STRAWBERRY_KANBAN_DB` to a HEAD database still executes dirty renderer code, settings, migrations and, for `TREE.md`, dirty module docstrings, so it cannot say what HEAD renders.
 

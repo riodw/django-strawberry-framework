@@ -42,6 +42,11 @@ jobs:
         run: uv run ruff check .
       - name: Ruff Format Check
         run: uv run ruff format --check .
+      - name: Type check (mypy)
+        # `[tool.mypy]` in pyproject.toml owns the scope (the package), the
+        # Python floor it checks against, and the strictness flags; the Django
+        # stubs plugin reads the fakeshop test settings.
+        run: uv run mypy
       - name: Trailing-comma layout (>=4 elements; models.py >=2)
         run: uv run python scripts/check_trailing_commas.py --check
 

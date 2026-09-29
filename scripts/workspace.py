@@ -230,6 +230,7 @@ COMPOSE_PROJECT = "dsf-ws-postgres"
 LINT_COMMANDS = (
     "ruff check .",
     "ruff format --check .",
+    "mypy",
     "python scripts/check_trailing_commas.py --check",
     "python scripts/check_citations.py --check",
     "python scripts/build_kanban_tracked_path_constants.py --check",

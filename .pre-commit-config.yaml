@@ -51,6 +51,17 @@ repos:
         types: [python]
         require_serial: true
 
+      - id: mypy
+        name: mypy (package types)
+        entry: uv run mypy
+        language: system
+        # `pass_filenames: false`: `[tool.mypy]` owns the scope, and a file list
+        # would check only the staged files, missing the callers whose types a
+        # signature change breaks. Fires on any package source or config change.
+        files: ^(django_strawberry_framework/.*\.py|pyproject\.toml)$
+        pass_filenames: false
+        require_serial: true
+
       - id: check-kanban-anchors
         name: kanban anchors collision-free (card vs card, card vs glossary, render ids)
         entry: uv run python scripts/check_kanban_anchors.py

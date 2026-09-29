@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item
+from apps.products.services import seed_data
 from django.db.models import Prefetch
 from graphql import OperationType
 
@@ -42,6 +43,7 @@ from django_strawberry_framework.optimizer.walker import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
 
 
 @pytest.fixture(autouse=True)
@@ -1622,6 +1624,84 @@ def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():
         registry.clear()
 
     assert plan.prefetch_related == (explicit,)
+
+
+@pytest.mark.django_db
+def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set():
+    """A hinted ``Prefetch`` over a union is planned as the rows its primary keys select.
+
+    Django's reverse-FK prefetch adds the parent-batch predicate with
+    ``query.add_q()``, which a combinator's compiler drops; the planned
+    ``Prefetch`` carries the single-table ``pk__in`` rewrite instead, on the
+    hinted queryset's own alias, with its nested prefetches and ``to_attr``
+    lookup kept, so every parent receives exactly its own combined children.
+    """
+    seed_data(1)
+    registry.clear()
+    first, second = Item.objects.order_by("pk")[:2]
+    combined = (
+        Item.objects.using("default")
+        .prefetch_related("entries")
+        .filter(pk=first.pk)
+        .union(Item.objects.filter(pk=second.pk))
+    )
+    explicit = Prefetch("items", queryset=combined)
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
+    try:
+        plan = plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+    finally:
+        registry.clear()
+
+    (planned,) = plan.prefetch_related
+    assert planned.prefetch_to == "items"
+    assert planned.queryset.query.combinator is None
+    assert planned.queryset._db == "default"
+    assert planned.queryset._prefetch_related_lookups == ("entries",)
+    served = {
+        category.pk: sorted(item.pk for item in category.items.all())
+        for category in Category.objects.prefetch_related(planned)
+    }
+    expected = {category.pk: [] for category in Category.objects.all()}
+    for item in (first, second):
+        expected[item.category_id] = sorted([*expected[item.category_id], item.pk])
+    assert served == expected
+
+
+def test_plan_refuses_a_combined_prefetch_obj_hint_the_primary_key_set_cannot_carry():
+    """A hinted ``Prefetch`` over a ``union(all=True)`` fails at plan time with the combined text."""
+    registry.clear()
+    explicit = Prefetch("items", queryset=Item.objects.union(Item.objects.all(), all=True))
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
+    detail = "union: union(all=True) keeps duplicate rows, which a primary-key set cannot"
+    try:
+        with pytest.raises(ConfigurationError) as excinfo:
+            plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+    finally:
+        registry.clear()
+    assert str(excinfo.value) == (
+        f"OptimizerHint.prefetch(obj) on CategoryType.items: the hinted Prefetch queryset is "
+        f"combined ({detail}); " + _COMBINED_WHAT.format(model="Item", detail=detail)
+    )
 
 
 def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
@@ -5607,19 +5687,15 @@ def test_select_related_paths_carry_their_resolver_keys():
 @pytest.mark.parametrize("strategy_name", ["windowed", "lateral"])
 @pytest.mark.parametrize(
     ("shape", "reason"),
-    [
-        (lambda qs: qs[:10], "sliced"),
-        (lambda qs: qs.select_for_update(), "select_for_update"),
-        (lambda qs: qs.union(qs.model._default_manager.none()), "combined"),
-    ],
+    [(lambda qs: qs[:10], "sliced"), (lambda qs: qs.select_for_update(), "select_for_update")],
 )
 def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_name, shape, reason):
     """Unsafe consumer ``get_queryset`` shapes never reach a fetch strategy.
 
     A sliced child queryset used to crash INSIDE
     ``apply_window_pagination`` (Django: "Cannot reorder a query once a
-    slice has been taken") before any fallback, and ``select_for_update`` /
-    combined querysets cannot be represented by either strategy's SQL. The
+    slice has been taken") before any fallback, and a ``select_for_update``
+    queryset cannot be represented by either strategy's SQL. The
     shared gate (``nested_fetch.py::unwindowable_child_queryset_reason``)
     runs BEFORE strategy dispatch, so the outcome is the spec-033 Decision 6
     fully-unplanned fallback - no prefetch, no resolver keys, strictness
@@ -5672,6 +5748,67 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
             getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
         ), reason
         assert plan.planned_resolver_keys == (), reason
+    finally:
+        end_execution_frame(frame)
+        registry.clear()
+
+
+@pytest.mark.parametrize("strategy_name", ["windowed", "lateral"])
+def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name):
+    """A combined ``get_queryset`` child reaches the fetch strategy as its primary-key set.
+
+    The seal rebuilds the combinator as a single-table ``pk__in`` membership
+    query, which takes the window annotations and per-partition filters a
+    combinator cannot, so the nested connection is planned under both built-in
+    strategies instead of being left to the per-parent fallback.
+    """
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+    from django_strawberry_framework.optimizer._context import (
+        begin_execution_frame,
+        end_execution_frame,
+    )
+    from django_strawberry_framework.optimizer.nested_fetch import resolve_strategy
+
+    registry.clear()
+    frame = begin_execution_frame({}, nested=False, strategy=resolve_strategy(strategy_name))
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                return queryset.filter(title="a").union(queryset.filter(title="b"))
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        windows = [pf for pf in plan.prefetch_related if pf.to_attr == "_dst_books_connection"]
+        assert len(windows) == 1
+        assert windows[0].queryset.query.combinator is None
+        assert plan.planned_resolver_keys
     finally:
         end_execution_frame(frame)
         registry.clear()

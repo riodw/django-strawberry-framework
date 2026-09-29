@@ -674,6 +674,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── conftest.py                   # Shared fixtures for the fakeshop acceptance (live ``/graphql/``) suites.
 ├── test_auth_api.py              # Live ``/graphql/`` auth API acceptance tests.
 ├── test_client_api.py            # Live GraphQL HTTP acceptance tests for the ``testing`` package's test-client family.
+├── test_combined_visibility_api.py  # Live GraphQL HTTP tests for a combined ``get_queryset`` result served as its primary-key set.
 ├── test_connection_pagination_api.py  # Live /graphql pagination error containment and ``totalCount`` gating for connections.
 ├── test_debug_extension_api.py   # Live GraphQL HTTP tests for the ``DjangoDebugExtension`` request-visible contract.
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.

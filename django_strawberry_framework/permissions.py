@@ -37,7 +37,7 @@ depends on:
 - **Hook returns are validated, then normalized.** A target hook must return
   a ``QuerySet`` over the edge target's concrete table (proxy / concrete
   siblings are compatible; unrelated models and MTI child querysets are not),
-  unsliced, uncombined (no ``union()`` etc.), ungrouped (no aggregate
+  unsliced (a ``union()`` etc. arrives as its primary-key set), ungrouped (no aggregate
   ``annotate`` / ``values()`` grouping), without field-specific
   ``distinct(...)``, and without an ``annotate(...)`` or ``extra(select=...)``
   alias shadowing the target column, and on the root alias -- re-projection is
@@ -117,6 +117,7 @@ from .registry import registry
 # cascade-local.
 from .utils.querysets import (
     _CASCADE_SEAL_POLICY,
+    _COMBINED_WHAT,
     _UNSEALABLE_STATE_CAUSES,
     _defect_message,
     _prepared_visibility_source,
@@ -341,12 +342,13 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
 
     The cascade seals under ``_CASCADE_SEAL_POLICY``: ``require_model_rows``
     off (a ``.values()`` root is the cascade's supported input, exactly as it is
-    for a hook return), ``reject_sliced`` and ``reject_combined`` on (the walk
-    narrows by ``.filter(...)``, which Django refuses on either shape, so
-    accepting one would leak a raw ``TypeError`` / ``NotSupportedError``
-    mid-walk instead of the fail-closed configuration error). The reachable
-    codes are therefore ``type``, ``table``, ``untrusted``, ``sliced`` and
-    ``combined``.
+    for a hook return), ``reject_sliced`` on (the walk narrows by
+    ``.filter(...)``, which Django refuses after a slice, so accepting one would
+    leak a raw ``TypeError`` mid-walk instead of the fail-closed configuration
+    error) and ``rewrite_combined`` on (a combinator is walked as its
+    primary-key set, which takes ``.filter(...)``; a combinator that set would
+    change fails closed). The reachable codes are therefore ``type``,
+    ``table``, ``untrusted``, ``sliced`` and ``combined``.
     """
     name = cls.__name__
 
@@ -375,10 +377,8 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Any:
                     f"applied after a slice. Cascade first, slice after."
                 ),
                 "combined": (
-                    f"apply_cascade_permissions for {name} got a "
-                    f"{detail}() combined queryset; the cascade narrows "
-                    f"by .filter(...), which Django does not support after a combinator. "
-                    f"Cascade each branch before combining."
+                    f"apply_cascade_permissions for {name} got a combined root queryset; "
+                    + _COMBINED_WHAT.format(model=model.__name__, detail=detail)
                 ),
             },
             (code, detail),
@@ -394,16 +394,17 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
     The boundary owns the hook-result shape / concrete-table / alias /
     composability checks (``utils/querysets.py::_normalized_visibility_result``);
     this seam keeps the cascade's path-rich per-edge prose on those failures.
-    The ``type`` / ``table`` / ``alias`` / ``sliced`` / ``combined`` wordings are
-    the cascade's established strings; ``untrusted`` (a queryset whose state the
-    boundary cannot seal into a framework-owned execution queryset, with the
+    The ``type`` / ``table`` / ``alias`` / ``sliced`` wordings are the
+    cascade's established strings, ``combined`` shares the boundary's
+    combined-queryset text (``_COMBINED_WHAT``), and ``untrusted`` (a queryset
+    whose state the boundary cannot seal into a framework-owned execution queryset, with the
     causes ``utils/querysets.py #"_UNSEALABLE_STATE_CAUSES = ("`` names)
     is boundary-new and gets cascade-flavored prose of its own. The cascade runs
     under ``_CASCADE_SEAL_POLICY``, whose ``require_model_rows=False`` means the
     boundary never raises the ``projection`` code here - a ``.values()`` return
     is the cascade's supported input, not a defect - while its
-    ``reject_sliced`` / ``reject_combined`` are what surface the two shapes
-    ``_validated_target_subquery`` cannot re-project.
+    ``reject_sliced`` and ``rewrite_combined`` surface the sliced shape and the
+    combined shapes ``_validated_target_subquery`` cannot re-project.
     """
     edge = f"{field.model.__name__}.{field.name}"
     name = target_type.__name__
@@ -439,13 +440,9 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
                     f"subquery."
                 ),
                 "combined": (
-                    f"{name}.get_queryset returned a "
-                    f"{detail}() combined "
-                    f"queryset for the cascade subquery on "
-                    f"{edge}; re-projecting a combined "
-                    f"queryset only rewrites the outer projection while each branch "
-                    f"keeps its original column, so it cannot be safely bound to the "
-                    f"edge's target column."
+                    f"{name}.get_queryset returned a combined queryset for the cascade "
+                    f"subquery on {edge}; "
+                    + _COMBINED_WHAT.format(model=field.related_model.__name__, detail=detail)
                 ),
                 "alias": (
                     f"{name}.get_queryset returned a queryset on alias "
@@ -474,10 +471,12 @@ def _validated_target_subquery(
     (``utils/querysets.py::_normalized_visibility_result``, reached through
     ``apply_type_visibility_sync`` with the cascade's error renderer) already
     owns the shape / concrete-table / alias contract, and its
-    ``_CASCADE_SEAL_POLICY`` owns the two composability rejections that are not
-    re-projection-specific (``sliced`` and ``combined``): by the time a return
-    reaches this function it is a real ``QuerySet`` on the target's concrete
-    table, pinned to the root alias, unsliced and uncombined. What stays
+    ``_CASCADE_SEAL_POLICY`` owns the two composability answers that are not
+    re-projection-specific (``sliced`` refused; a combinator rewritten to its
+    primary-key set, or refused as ``combined`` when that set would change its
+    rows): by the time a return reaches this function it is a real ``QuerySet``
+    on the target's concrete table, pinned to the root alias, unsliced, and
+    never a combinator. What stays
     cascade-local is the RE-PROJECTION battery, the rejections with no boundary
     analogue because they exist only because this function calls
     ``.values(...)``. The accepted queryset is re-projected to
@@ -494,9 +493,12 @@ def _validated_target_subquery(
     visible set; a field-specific ``distinct(...)`` would keep different rows;
     an ``extra(select={...})`` or ``annotate(...)`` alias shadowing the target
     column would make ``.values(...)`` select the alias expression, not the
-    model column. The combined-queryset case is the same argument made one
-    layer up, in the seal, because a combinator also blocks the cascade's
-    ``.filter(...)`` narrowing at the root.
+    model column. The combined-queryset case is answered one layer up, in the
+    seal, because a combinator also blocks the cascade's ``.filter(...)``
+    narrowing at the root: the seal hands the cascade the combinator's
+    primary-key set, whose ``.values(...)`` re-projection binds one column of
+    one table, and refuses a combinator whose row set that rewrite would
+    change.
     """
     if target_qs.query.distinct_fields:
         raise ConfigurationError(
@@ -583,9 +585,10 @@ def apply_cascade_permissions(
 
     Raises:
         ConfigurationError: a malformed ``queryset`` (non-``QuerySet`` /
-            wrong concrete table / unsealable query state / sliced / combined --
-            the walk narrows a rebuilt queryset by ``.filter(...)``, which
-            supports neither of the last two); a bare-string ``fields=``
+            wrong concrete table / unsealable query state / sliced -- the walk
+            narrows a rebuilt queryset by ``.filter(...)``, which Django refuses
+            after a slice -- or a combinator whose primary-key set would change
+            its rows); a bare-string ``fields=``
             or a ``fields=``
             name that is unknown, non-cascadable, or an unsupported forward
             relation; a full walk over a model carrying an unsupported forward
@@ -594,7 +597,7 @@ def apply_cascade_permissions(
             application or a hook return EXPLICITLY routed off the root DB
             alias (an unrouted hook return is repinned onto it -- the shared
             visibility boundary's alias contract); a hook return that is not
-            an unsliced, uncombined, ungrouped, non-``distinct(...)``,
+            an unsliced, ungrouped, non-``distinct(...)``,
             non-column-shadowing queryset (a ``Manager`` is coerced through
             ``.all()``) over the edge target's concrete table.
         SyncMisuseError: a target type's ``get_queryset`` is ``async def``. The
@@ -612,9 +615,9 @@ def apply_cascade_permissions(
     # unfiltered query back to the outer hook-result seal. The cascade's own
     # renderer keeps the source defects attributed to THIS call, and
     # ``_CASCADE_SEAL_POLICY`` states the cascade's whole contract in one place:
-    # a ``.values()`` root is supported input, while a sliced or combined root
-    # -- neither of which ``.filter(...)`` can narrow -- is rejected by the seal
-    # itself rather than by a second battery after it.
+    # a ``.values()`` root is supported input, a sliced root (which ``.filter(...)``
+    # cannot narrow) is rejected by the seal itself rather than by a second battery
+    # after it, and a combined root arrives as its primary-key set, which it can.
     queryset, _required_alias = _prepared_visibility_source(
         cls,
         queryset,

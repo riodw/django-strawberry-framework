@@ -29,7 +29,7 @@ from django.apps.registry import Apps
 from django.db import connection, models, router
 from django.db.models import F, FilteredRelation, Prefetch, Q
 from django.db.models.expressions import RawSQL
-from django.db.models.functions import Coalesce, Trunc
+from django.db.models.functions import Coalesce, Trunc, Upper
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
@@ -40,12 +40,13 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
     _BOUND_VALUE_NORMALIZERS,
     _CASCADE_SEAL_POLICY,
+    _COMBINED_WHAT,
     _DEFAULT_SEAL_POLICY,
     _INERT_VALUE_TYPES,
-    _LIST_ARGUMENT_VISIBILITY_POLICY,
     _LIST_RELATION_CHILD_POLICY,
     _PLAIN_CONTAINER_TYPES,
     _PREFETCH_CHILD_POLICY,
+    _RAW_LIST_SOURCE_POLICY,
     _RETAINED_TYPES,
     SyncMisuseError,
     _bake_deferred_filter_or_defect,
@@ -5111,11 +5112,12 @@ def test_seal_policy_presets_answer_slice_and_combinator_independently():
     rejection at both of its own entry points, and it is why a
     ``require_model_rows=False`` surface used to get the slice licence it never
     asked for. The four presets pin the four answers in one place - a read
-    surface rejects a slice and admits a combinator (nothing in a read pipeline
-    re-projects one), the one-edge-down child whose own gate classifies a slice
-    admits one, the plain-list-relation child does not (Django refilters it at
-    fetch time), and the cascade rejects both a slice and a combinator because it
-    narrows by ``.filter(...)`` and re-projects to a single column.
+    surface rejects a slice, the one-edge-down child whose own gate classifies a
+    slice admits one, the plain-list-relation child does not (Django refilters it
+    at fetch time), and the cascade rejects a slice because it narrows by
+    ``.filter(...)``. Every one of them serves a combinator as its primary-key
+    set, which each can narrow and re-project; only the raw-list row source,
+    which recomposes nothing, keeps the combinator as it is.
     """
     base = Category.objects.all()
     sliced = base[:5]
@@ -5134,17 +5136,145 @@ def test_seal_policy_presets_answer_slice_and_combinator_independently():
         "sliced",
         "rows 0:5",
     )
-    assert _seal_or_defect(combined, Category, None, _DEFAULT_SEAL_POLICY)[1] is None
-    assert _seal_or_defect(combined, Category, None, _CASCADE_SEAL_POLICY)[1] == (
-        "combined",
-        "union",
-    )
+    for policy in (
+        _DEFAULT_SEAL_POLICY,
+        _CASCADE_SEAL_POLICY,
+        _PREFETCH_CHILD_POLICY,
+        _LIST_RELATION_CHILD_POLICY,
+    ):
+        sealed, defect = _seal_or_defect(combined, Category, None, policy)
+        assert defect is None
+        assert sealed.query.combinator is None
+    raw_sealed, raw_defect = _seal_or_defect(combined, Category, None, _RAW_LIST_SOURCE_POLICY)
+    assert raw_defect is None
+    assert raw_sealed.query.combinator == "union"
     # ``require_model_rows`` still answers only the projection question.
     assert _seal_or_defect(base.values("id"), Category, None, _DEFAULT_SEAL_POLICY)[1] == (
         "projection",
         "ValuesIterable",
     )
     assert _seal_or_defect(base.values("id"), Category, None, _CASCADE_SEAL_POLICY)[1] is None
+
+
+@pytest.mark.django_db
+def test_seal_serves_a_combinator_as_a_single_table_primary_key_membership_query():
+    """The sealed query is ``<model>.filter(pk__in=<combined>.values("pk"))`` on the caller's alias.
+
+    One table, one predicate, the combinator kept verbatim inside the subquery and
+    reduced to the primary-key column, so every surface can narrow it; the
+    explicit alias the result carried stays the sealed queryset's alias.
+    """
+    seed_data(1)
+    first, second = Category.objects.order_by("pk")[:2]
+    combined = (
+        Category.objects.using("default")
+        .filter(pk=first.pk)
+        .union(Category.objects.filter(pk=second.pk))
+        .order_by("-name")
+    )
+
+    sealed, defect = _seal_or_defect(combined, Category, None)
+
+    assert defect is None
+    assert sealed.db == "default"
+    assert sealed.query.combinator is None
+    assert sealed._fields is None
+    sql = str(sealed.query)
+    table = Category._meta.db_table
+    assert sql.startswith(f'SELECT "{table}"."id"')
+    assert f'WHERE "{table}"."id" IN (SELECT' in sql
+    assert " UNION SELECT " in sql
+    assert sql.endswith(f'ORDER BY "{table}"."name" DESC')
+    assert [row.pk for row in sealed] == [
+        row.pk for row in sorted((first, second), key=lambda c: c.name, reverse=True)
+    ]
+
+
+@pytest.mark.django_db
+def test_seal_carries_a_primary_key_ordering_of_a_combinator():
+    """``order_by("-pk")`` after a combinator is a column ordering the rewrite re-applies."""
+    seed_data(1)
+    first, second = Category.objects.order_by("pk")[:2]
+    combined = (
+        Category.objects.filter(pk=first.pk)
+        .union(Category.objects.filter(pk=second.pk))
+        .order_by("-pk")
+    )
+    sealed, defect = _seal_or_defect(combined, Category, None)
+    assert defect is None
+    assert sealed.query.combinator is None
+    assert [row.pk for row in sealed] == [second.pk, first.pk]
+
+
+@pytest.mark.parametrize(
+    ("build", "detail"),
+    [
+        pytest.param(
+            lambda qs: qs.union(qs.intersection(qs.annotate(n=F("id")))),
+            "union: a branch selects annotations ('n') that would be dropped from the rows",
+            id="nested-branch-annotations",
+        ),
+        pytest.param(
+            lambda qs: qs.union(qs.difference(qs.union(qs, all=True))),
+            "union: union(all=True) keeps duplicate rows, which a primary-key set cannot",
+            id="nested-union-all",
+        ),
+    ],
+)
+def test_seal_refuses_a_nested_combinator_whose_branch_the_primary_key_set_cannot_carry(
+    build,
+    detail,
+):
+    """The lost-property walk recurses into a combined branch at any depth."""
+    sealed, defect = _seal_or_defect(build(Category.objects.all()), Category, None)
+    assert sealed is None
+    assert defect == ("combined", detail)
+
+
+@pytest.mark.django_db
+def test_seal_serves_a_nested_combinator_as_its_primary_key_set():
+    """A combinator nested in a branch keeps its own set operation inside the subquery."""
+    seed_data(1)
+    first, second, third = Category.objects.order_by("pk")[:3]
+    qs = Category.objects.all()
+    combined = qs.filter(pk=first.pk).union(
+        qs.filter(pk__in=[second.pk, third.pk]).difference(qs.filter(pk=third.pk)),
+    )
+    sealed, defect = _seal_or_defect(combined, Category, None)
+    assert defect is None
+    assert sealed.query.combinator is None
+    assert sorted(row.pk for row in sealed) == [first.pk, second.pk]
+
+
+class _RawListSourceQuerySet(models.QuerySet):
+    """A project queryset class, so ``normalized_row_source`` rebuilds it."""
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("build", "expected_count"),
+    [
+        pytest.param(lambda a, b: a.union(b)[:2], 2, id="sliced-union"),
+        pytest.param(lambda a, b: a.union(b, all=True), 4, id="union-all"),
+    ],
+)
+def test_raw_list_row_source_keeps_a_combinator_as_it_is(build, expected_count):
+    """The raw-list bound windows a combinator as Django serves it, never rewritten or refused.
+
+    Nothing recomposes onto a raw-list source, so its rebuild keeps the
+    combinator, a slice on it, and a ``union(all=True)``'s duplicate rows.
+    """
+    seed_data(1)
+    first, second, third = Category.objects.order_by("pk")[:3]
+    base = _RawListSourceQuerySet(model=Category)
+    source = build(
+        base.filter(pk__in=[first.pk, second.pk]),
+        base.filter(pk__in=[second.pk, third.pk]),
+    )
+    rebuilt = normalized_row_source(source)
+    assert type(rebuilt) is models.QuerySet
+    assert rebuilt.query.combinator == "union"
+    assert len(list(rebuilt)) == expected_count
 
 
 def test_unrendered_defect_code_says_so_instead_of_mislabelling():
@@ -5216,7 +5346,7 @@ def test_seal_require_unevaluated():
     policy_uneval = _SealPolicy(
         require_model_rows=True,
         reject_sliced=True,
-        reject_combined=True,
+        rewrite_combined=True,
         require_shared_alias=False,
         require_unevaluated=True,
     )
@@ -5324,12 +5454,13 @@ def test_visibility_defect_messages():
             BookType,
             Category,
             None,
-            ("combined", "union"),
+            ("combined", "union: a lost property"),
             None,
         ),
     )
-    assert "BookType.get_queryset returned a combined queryset (union)" in err_msg_comb
-    assert "Return a plain uncombined QuerySet." in err_msg_comb
+    assert err_msg_comb == "BookType.get_queryset returned a combined queryset; " + (
+        _COMBINED_WHAT.format(model="Category", detail="union: a lost property")
+    )
 
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
@@ -5343,38 +5474,39 @@ def test_visibility_defect_messages():
     ):
         _prepared_visibility_source(DummyType, evaluated_qs, policy=policy_uneval)
 
-    combined_qs = Category.objects.all().union(Category.objects.all())
-    with pytest.raises(
-        ConfigurationError,
-        match="apply_type_visibility for DummyType requires an uncombined QuerySet",
-    ):
-        _prepared_visibility_source(
-            DummyType,
-            combined_qs,
-            policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
-        )
+    duplicated_qs = Category.objects.all().union(Category.objects.all(), all=True)
+    with pytest.raises(ConfigurationError) as excinfo:
+        _prepared_visibility_source(DummyType, duplicated_qs)
+    detail = "union: union(all=True) keeps duplicate rows, which a primary-key set cannot"
+    assert str(excinfo.value) == (
+        "apply_type_visibility for DummyType got a combined source queryset; "
+        + _COMBINED_WHAT.format(model="Category", detail=detail)
+    )
 
 
-def test_apply_type_visibility_sync_combined_result_error():
-    """apply_type_visibility_sync formats combined defect error using _visibility_result_error."""
+@pytest.mark.django_db
+def test_apply_type_visibility_sync_serves_a_combined_result_as_its_pk_set():
+    """A combined hook result is served as the rows its primary keys select, narrowable after.
+
+    The sealed value is a single-table ``pk__in`` membership query of model rows,
+    so a surface can still ``.filter(...)`` and ``.only(...)`` it, where Django
+    refuses both on the combinator itself; the rows are the combinator's row set.
+    """
+    seed_data(1)
+    names = sorted(Category.objects.values_list("name", flat=True))
+    first, second = names[0], names[1]
 
     class CombinedType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
         def get_queryset(cls, queryset, info):
-            return queryset.union(Category.objects.all())
+            return queryset.filter(name=first).union(queryset.filter(name=second))
 
-    with pytest.raises(
-        ConfigurationError,
-        match=r"CombinedType\.get_queryset returned a combined queryset \(union\); active list arguments forbid combined queries",
-    ):
-        apply_type_visibility_sync(
-            CombinedType,
-            Category.objects.all(),
-            SimpleNamespace(),
-            policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
-        )
+    sealed = apply_type_visibility_sync(CombinedType, Category.objects.all(), SimpleNamespace())
+    assert sealed.query.combinator is None
+    assert sorted(row.name for row in sealed) == [first, second]
+    assert [row.name for row in sealed.filter(name=second).only("name")] == [second]
 
 
 def test_validate_post_orderset_result_valid():
@@ -5403,7 +5535,7 @@ def test_validate_post_orderset_result_rejects_non_queryset():
     source_qs = Category.objects.all()
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got type defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced QuerySet of Category rows; got type defect",
     ):
         _validate_post_orderset_result(
             DummyType,
@@ -5422,7 +5554,7 @@ def test_validate_post_orderset_result_rejects_none():
     source_qs = Category.objects.all()
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got type defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced QuerySet of Category rows; got type defect",
     ):
         _validate_post_orderset_result(
             DummyType,
@@ -5442,7 +5574,7 @@ def test_validate_post_orderset_result_rejects_wrong_model():
     wrong_model_qs = Item.objects.all()
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got table defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced QuerySet of Category rows; got table defect",
     ):
         _validate_post_orderset_result(
             DummyType,
@@ -5463,7 +5595,7 @@ def test_validate_post_orderset_result_rejects_evaluated():
     eval_qs._result_cache = []
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got evaluated defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced QuerySet of Category rows; got evaluated defect",
     ):
         _validate_post_orderset_result(
             DummyType,
@@ -5483,7 +5615,7 @@ def test_validate_post_orderset_result_rejects_sliced():
     sliced_qs = Category.objects.all()[:5]
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got sliced defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced QuerySet of Category rows; got sliced defect",
     ):
         _validate_post_orderset_result(
             DummyType,
@@ -5493,24 +5625,52 @@ def test_validate_post_orderset_result_rejects_sliced():
         )
 
 
-def test_validate_post_orderset_result_rejects_combined():
-    """_validate_post_orderset_result rejects combined querysets."""
+@pytest.mark.django_db
+def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lost_property():
+    """A combined sidecar result is served as its primary-key set, re-sorted by its ordering.
+
+    A combinator that set cannot express (an outer ordering by an annotation the
+    rewritten query has no column for) fails closed with the shared
+    combined-queryset text rather than the one-sentence shape wording.
+    """
+    seed_data(1)
+    names = sorted(Category.objects.values_list("name", flat=True))
 
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    comb_qs = Category.objects.all().union(Category.objects.all())
-    with pytest.raises(
-        ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got combined defect",
-    ):
+    comb_qs = (
+        Category.objects.filter(name=names[0])
+        .union(Category.objects.filter(name=names[1]))
+        .order_by("-name")
+    )
+    sealed = _validate_post_orderset_result(
+        DummyType,
+        _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
+        comb_qs,
+        "MyOrderSet.apply_sync",
+    )
+    assert sealed.query.combinator is None
+    assert [row.name for row in sealed] == [names[1], names[0]]
+
+    upper = Category.objects.annotate(upper_name=Upper("name"))
+    lost_qs = upper.union(upper).order_by("upper_name")
+    with pytest.raises(ConfigurationError) as excinfo:
         _validate_post_orderset_result(
             DummyType,
             _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync"),
-            comb_qs,
+            lost_qs,
             "MyOrderSet.apply_sync",
         )
+    detail = (
+        "union: its ordering by 'upper_name' names a value that is not a Category column, "
+        "so the rewritten query cannot carry it"
+    )
+    assert str(excinfo.value) == (
+        "MyOrderSet.apply_sync returned a combined queryset; "
+        + _COMBINED_WHAT.format(model="Category", detail=detail)
+    )
 
 
 def test_validate_post_orderset_result_rejects_projection():
@@ -5523,7 +5683,7 @@ def test_validate_post_orderset_result_rejects_projection():
     values_qs = Category.objects.values("id")
     with pytest.raises(
         ConfigurationError,
-        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced, uncombined QuerySet of Category rows; got projection defect",
+        match=r"MyOrderSet\.apply_sync must return an unevaluated, unsliced QuerySet of Category rows; got projection defect",
     ):
         _validate_post_orderset_result(
             DummyType,

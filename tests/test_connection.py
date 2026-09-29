@@ -53,7 +53,7 @@ from apps.kanban.models import Status
 from apps.products import services
 from apps.products.models import Category, Item
 from django.db import models
-from django.db.models import F
+from django.db.models import F, Q
 from django.http import HttpRequest
 from graphql import GraphQLError
 from strawberry import relay
@@ -1758,7 +1758,7 @@ async def test_connection_async_pipeline_applies_filter_and_order():
 # --- Post-OrderSet seal on the connection field -------------------------------
 
 _CATEGORY_ORDER_SHAPE_PREFIX = (
-    "_CategoryOrder.apply_sync must return an unevaluated, unsliced, uncombined "
+    "_CategoryOrder.apply_sync must return an unevaluated, unsliced "
     "QuerySet of Category rows; got "
 )
 
@@ -1863,12 +1863,11 @@ _CONNECTION_MALFORMED_ORDER_ROWS = (
         (),
     ),
     (
-        "combined",
-        lambda cls, order_input, queryset, info: queryset.filter(name="a").union(
-            queryset.filter(name="b"),
-        ),
-        _CATEGORY_ORDER_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
+        "_CategoryOrder.apply_sync returned a combined queryset; the visibility boundary serves a "
+        "combined queryset as the set of Category primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
     ),
     (
         "awaitable-in-sync",
@@ -2005,7 +2004,7 @@ def test_connection_async_seal_rejects_a_sliced_apply_async_result(monkeypatch):
 
     assert result.errors is not None
     assert str(result.errors[0].message).startswith(
-        "_CategoryOrder.apply_async must return an unevaluated, unsliced, uncombined "
+        "_CategoryOrder.apply_async must return an unevaluated, unsliced "
         "QuerySet of Category rows; got sliced defect",
     )
 
@@ -3239,7 +3238,7 @@ def test_a_warm_connection_cache_refuses_alternate_metadata_for_its_target():
 
 
 _CATEGORY_FILTER_SHAPE_PREFIX = (
-    "_CategoryFilter.apply_sync must return an unevaluated, unsliced, uncombined "
+    "_CategoryFilter.apply_sync must return an unevaluated, unsliced "
     "QuerySet of Category rows; got "
 )
 
@@ -3303,12 +3302,11 @@ _CONNECTION_MALFORMED_FILTER_ROWS = (
         (),
     ),
     (
-        "combined",
-        lambda cls, input_value, queryset, info: queryset.filter(name="a").union(
-            queryset.filter(name="b"),
-        ),
-        _CATEGORY_FILTER_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        lambda cls, input_value, queryset, info: queryset.union(queryset, all=True),
+        "_CategoryFilter.apply_sync returned a combined queryset; the visibility boundary serves a "
+        "combined queryset as the set of Category primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
     ),
     (
         "awaitable-in-sync",
@@ -3428,7 +3426,7 @@ def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(monkey
 
     assert result.errors is not None
     assert str(result.errors[0].message).startswith(
-        "_CategoryFilter.apply_async must return an unevaluated, unsliced, uncombined "
+        "_CategoryFilter.apply_async must return an unevaluated, unsliced "
         "QuerySet of Category rows; got sliced defect",
     )
 
@@ -3437,27 +3435,76 @@ def _combined_get_queryset(cls, qs, info):
     return qs.filter(name__startswith="a").union(qs.filter(name__startswith="b"))
 
 
-@pytest.mark.django_db
-def test_connection_visibility_rejects_a_combinator_hook_only_when_a_sidecar_runs():
-    """``get_queryset`` returning a combinator: refused with a sidecar input, admitted without.
+def _a_or_b_category_names() -> list[str]:
+    return sorted(
+        Category.objects.filter(Q(name__startswith="a") | Q(name__startswith="b")).values_list(
+            "name",
+            flat=True,
+        ),
+    )
 
-    The list field's argument path seals visibility under
-    ``_LIST_ARGUMENT_VISIBILITY_POLICY`` because a filter or ordering applied to a
-    union raises inside Django; the connection selects the same policy for the
-    same requests (``connection.py::_sidecar_visibility_policy``) and keeps the
-    default read-surface policy when no sidecar will recompose the result.
+
+@pytest.mark.django_db
+def test_connection_visibility_serves_a_combinator_hook_with_and_without_a_sidecar():
+    """``get_queryset`` returning a combinator answers one contract on every request.
+
+    The seal serves the combinator as its primary-key set whether or not a
+    sidecar input is supplied, so a filter narrows it and an ordering re-sorts it
+    where Django would refuse both on the union itself, and the three requests
+    see the same rows.
     """
     services.seed_data(2)
     node_type = _make_sidecar_node_type("CombinatorHookNode", get_queryset=_combined_get_queryset)
     schema = _field_schema(node_type)
+    expected = _a_or_b_category_names()
+    assert expected
 
-    plain = schema.execute_sync(
+    for query in (
         "{ items { edges { node { name } } } }",
-        context_value=HttpRequest(),
-    )
-    assert plain.errors is None, plain.errors
+        _FILTERED_CONNECTION_QUERY,
+        "{ items(orderBy: [{name: DESC}]) { edges { node { name } } } }",
+    ):
+        result = schema.execute_sync(query, context_value=HttpRequest())
+        assert result.errors is None, (query, result.errors)
+        names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
+        assert sorted(names) == expected, query
+    assert names == expected[::-1]
 
-    filtered = schema.execute_sync(_FILTERED_CONNECTION_QUERY, context_value=HttpRequest())
-    assert filtered.errors is not None
-    assert filtered.data is None
-    assert "combined" in str(filtered.errors[0].message)
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("set_class", "query"),
+    [
+        pytest.param(
+            _CategoryOrder,
+            "{ items(orderBy: [{name: ASC}]) { edges { node { name } } } }",
+            id="order",
+        ),
+        pytest.param(_CategoryFilter, _FILTERED_CONNECTION_QUERY, id="filter"),
+    ],
+)
+def test_connection_serves_a_combined_sidecar_result_as_its_primary_key_set(
+    monkeypatch,
+    set_class,
+    query,
+):
+    """A sidecar ``apply_sync`` returning a union is windowed as the rows it selects."""
+    services.seed_data(2)
+    monkeypatch.setattr(
+        set_class,
+        "apply_sync",
+        classmethod(
+            lambda cls, value, queryset, info: (
+                queryset.filter(name__startswith="a")
+                .union(queryset.filter(name__startswith="b"))
+                .order_by("name")
+            ),
+        ),
+    )
+
+    schema = _field_schema(_make_sidecar_node_type("CombinedSidecarNode"))
+    result = schema.execute_sync(query, context_value=HttpRequest())
+
+    assert result.errors is None, result.errors
+    names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
+    assert names == _a_or_b_category_names()

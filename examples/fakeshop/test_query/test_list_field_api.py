@@ -2166,7 +2166,16 @@ def test_shipped_branches_a_presliced_source_is_named_before_the_ordering_runs()
 
 
 @pytest.mark.django_db
-def test_holder_branches_combined_seals(monkeypatch):
+def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key_sets(
+    monkeypatch,
+):
+    """A union source and a union ``OrderSet`` result are windowed as the rows they select.
+
+    Under an active list argument the source seal rebuilds the union as its
+    primary-key set before ``BranchType.get_queryset`` narrows it, and the
+    post-``OrderSet`` seal does the same to the override's return, so the
+    window is taken on a query Django can narrow and slice.
+    """
     library_models.Branch.objects.create(name="A", city="Boston")
     library_models.Branch.objects.create(name="B", city="Boston")
 
@@ -2196,26 +2205,24 @@ def test_holder_branches_combined_seals(monkeypatch):
 
     schema = DjangoSchema(query=_CombinedQuery, config=strawberry_config())
 
-    # Active argument (limit: 0 or offset: 0) rejects at source seal with ConfigurationError
     p_act = _post_sync(
         schema,
-        "{ branchesCombined(limit: 0) { name } }",
+        "{ branchesCombined(limit: 5) { name } }",
         extra_settings=_ERROR_POLICY_PASS_THROUGH,
     )
-    assert p_act["data"] is None
-    assert "combined" in p_act["errors"][0]["message"].lower()
-    assert visibility_calls == 0
+    assert "errors" not in p_act, p_act
+    assert sorted(row["name"] for row in p_act["data"]["branchesCombined"]) == ["A", "B"]
+    assert visibility_calls == 1
 
-    # Result seal: test-local custom OrderSet override returning a union combined queryset
-    def _malicious_apply_sync(
+    def _combined_apply_sync(
         cls,
         order_input,
         queryset,
         info,
     ):
-        return queryset.filter(name="A").union(queryset.filter(name="B"))
+        return queryset.filter(name="A").union(queryset.filter(name="B")).order_by("name")
 
-    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_apply_sync))
+    monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_combined_apply_sync))
 
     with override_settings(**_ERROR_POLICY_PASS_THROUGH):
         p_hook = graphql_payload(
@@ -2230,11 +2237,8 @@ def test_holder_branches_combined_seals(monkeypatch):
             }
             """,
         )
-    # Post-orderset validation rejects with the exact ``combined`` defect.
-    assert "errors" in p_hook
-    assert p_hook["data"] is None
-    assert p_hook["errors"][0]["message"].startswith(_BRANCH_ORDER_SHAPE_PREFIX)
-    assert "got combined defect" in p_hook["errors"][0]["message"]
+    assert "errors" not in p_hook, p_hook
+    assert p_hook["data"]["allLibraryBranchesViaListField"] == [{"name": "B"}]
 
 
 def _combined_genre_source(root, info):
@@ -2355,8 +2359,7 @@ def test_holder_genres_a_hook_carrying_a_consumer_expression_names_the_state_on_
 
 
 _BRANCH_ORDER_SHAPE_PREFIX = (
-    "BranchOrder.apply_sync must return an unevaluated, unsliced, uncombined "
-    "QuerySet of Branch rows; got "
+    "BranchOrder.apply_sync must return an unevaluated, unsliced QuerySet of Branch rows; got "
 )
 
 
@@ -2456,12 +2459,11 @@ _MALFORMED_APPLY_SYNC_ROWS = (
         0,
     ),
     (
-        "combined",
-        lambda cls, order_input, queryset, info: queryset.filter(name="A").union(
-            queryset.filter(name="B"),
-        ),
-        _BRANCH_ORDER_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
+        "BranchOrder.apply_sync returned a combined queryset; the visibility boundary serves "
+        "a combined queryset as the set of Branch primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         0,
     ),
     (
@@ -3149,12 +3151,13 @@ def test_holder_branches_a_combined_legacy_spelling_matches_the_reference(query,
 
 
 @pytest.mark.django_db
-def test_holder_branches_an_argument_rejects_the_combined_source_before_visibility(monkeypatch):
-    """Argument mode is where the two branches part.
+def test_holder_branches_an_argument_windows_the_combined_source_after_visibility(monkeypatch):
+    """Argument mode windows a union source as the rows it selects.
 
     A union source under omitted / all-null arguments takes the legacy policy
-    path; any non-null argument rejects at the source seal, and rejects there
-    before the visibility hook is reached at all.
+    path; a non-null argument takes the argument path, whose source seal serves
+    the union as its primary-key set, runs the visibility hook once over it and
+    windows the result.
     """
     client = _staff_client()
     counters, current_schema, _oracle = _combined_branch_oracle(monkeypatch, client)
@@ -3167,9 +3170,10 @@ def test_holder_branches_an_argument_rejects_the_combined_source_before_visibili
         extra_settings=_ERROR_POLICY_PASS_THROUGH,
     )
 
-    assert payload["data"] is None
-    assert "combined" in payload["errors"][0]["message"].lower()
-    assert counters["visibility"] == 0
+    assert "errors" not in payload, payload
+    assert len(payload["data"]["branches"]) == 1
+    assert payload["data"]["branches"][0]["name"] in {"A", "B"}
+    assert counters["visibility"] == 1
 
 
 # ---------------------------------------------------------------------------

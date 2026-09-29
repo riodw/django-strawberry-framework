@@ -91,7 +91,6 @@ from .types.base import _is_relay_shaped
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
-    _LIST_ARGUMENT_VISIBILITY_POLICY,
     apply_orderset_async,
     apply_orderset_sync,
     apply_type_visibility_async,
@@ -1431,18 +1430,11 @@ def _execute_queryset_pipeline_sync(
     orderset_class: type | None,
     is_async_context: bool,
 ) -> Any:
+    post_vis_qs = apply_type_visibility_sync(target_type, source, info, model=model)
     if not args_record.any_argument_supplied:
-        post_vis_qs = apply_type_visibility_sync(target_type, source, info, model=model)
         bounded = _windowed_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
         return wrap_async_queryset_adapter(bounded) if is_async_context else bounded
 
-    post_vis_qs = apply_type_visibility_sync(
-        target_type,
-        source,
-        info,
-        model=model,
-        policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
-    )
     # One task-local capture scope spans public ordering and the offset guard,
     # so the base ``OrderSet`` can hand its normalized terms to the guard without
     # writing into the consumer's ``info.context`` - opened only when that
@@ -1484,18 +1476,11 @@ async def _execute_queryset_pipeline_async(
     model: type[models.Model],
     orderset_class: type | None,
 ) -> Any:
+    post_vis_qs = await apply_type_visibility_async(target_type, source, info, model=model)
     if not args_record.any_argument_supplied:
-        post_vis_qs = await apply_type_visibility_async(target_type, source, info, model=model)
         bounded = _windowed_rows(post_vis_qs, info, max_rows, trusted=trusted_max_rows)
         return wrap_async_queryset_adapter(bounded)
 
-    post_vis_qs = await apply_type_visibility_async(
-        target_type,
-        source,
-        info,
-        model=model,
-        policy=_LIST_ARGUMENT_VISIBILITY_POLICY,
-    )
     # One task-local capture scope spans public ordering and the offset guard,
     # so the base ``OrderSet`` can hand its normalized terms to the guard without
     # writing into the consumer's ``info.context`` - opened only when that

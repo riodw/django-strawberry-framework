@@ -14,8 +14,10 @@ from strawberry.utils.str_converters import to_camel_case
 from ..exceptions import ConfigurationError
 from ..registry import register_subsystem_clear, registry
 from ..utils.querysets import (
+    _COMBINED_WHAT,
     _LIST_RELATION_CHILD_POLICY,
     _PREFETCH_CHILD_POLICY,
+    _pk_membership_query_or_defect,
     _SealPolicy,
     apply_type_visibility_sync,
     base_queryset,
@@ -1265,7 +1267,11 @@ def _apply_hint(
         # prefetch_related resolves via getattr); the consumer-facing
         # lookup vocabulary in the match below stays ``django_name``.
         rebased_prefetch = _prefetch_hint_for_path(
-            hint.prefetch_obj,
+            _hint_prefetch_over_pk_set(
+                hint.prefetch_obj,
+                django_name=django_name,
+                type_name=type_cls.__name__,
+            ),
             django_name=django_name,
             full_path=f"{prefix}{instance_accessor(django_field)}",
             type_name=type_cls.__name__,
@@ -1333,6 +1339,43 @@ def _apply_hint(
         )
         return True
     return False
+
+
+def _hint_prefetch_over_pk_set(
+    prefetch: Prefetch,
+    *,
+    django_name: str,
+    type_name: str,
+) -> Prefetch:
+    """Return ``prefetch`` with a combined queryset rewritten to its primary-key set.
+
+    Django's reverse-FK prefetch adds the parent-batch predicate to the child
+    queryset with ``query.add_q()``, which the combinator compiler drops, so a
+    hinted ``Prefetch(..., queryset=<union>)`` would scan the whole table and then
+    fail on the unmatched rows. The hinted queryset therefore takes the same
+    rewrite a sealed ``get_queryset`` result takes
+    (``utils/querysets.py::_pk_membership_query_or_defect``), keeping its
+    database alias, routing hints and nested prefetches, and a combinator the
+    rewrite would serve different rows for fails at plan time. Any other ``Prefetch`` is returned
+    unchanged.
+    """
+    inner = prefetch.queryset
+    if inner is None or not inner.query.combinator:
+        return prefetch
+    rewritten, defect = _pk_membership_query_or_defect(inner.query, inner.model)
+    if defect is not None:
+        raise ConfigurationError(
+            f"OptimizerHint.prefetch(obj) on {type_name}.{django_name}: the hinted "
+            f"Prefetch queryset is combined ({defect[1]}); "
+            + _COMBINED_WHAT.format(model=inner.model.__name__, detail=defect[1]),
+        )
+    queryset = models.QuerySet(
+        model=inner.model,
+        query=rewritten,
+        using=inner._db,
+        hints=dict(inner._hints),
+    ).prefetch_related(*inner._prefetch_related_lookups)
+    return Prefetch(prefetch.prefetch_through, queryset=queryset, to_attr=prefetch.to_attr)
 
 
 def _prefetch_hint_for_path(

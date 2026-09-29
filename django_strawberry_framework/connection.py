@@ -115,9 +115,6 @@ from .utils.connections import (
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
-    _DEFAULT_SEAL_POLICY,
-    _LIST_ARGUMENT_VISIBILITY_POLICY,
-    _SealPolicy,
     apply_filterset_async,
     apply_filterset_sync,
     apply_orderset_async,
@@ -1780,20 +1777,6 @@ def _sidecar_steps(definition: Any, filter_input: Any, order_by_input: Any) -> t
     return tuple(steps)
 
 
-def _sidecar_visibility_policy(steps: tuple[tuple, ...]) -> _SealPolicy:
-    """Pick the visibility seal policy for a pipeline that will run ``steps``.
-
-    A request carrying a sidecar input recomposes the sealed ``get_queryset``
-    result (a filter narrows it, an ordering re-sorts it), and Django raises a
-    raw error when either is applied to a combinator, so the read-surface seal
-    switches on ``reject_combined`` for exactly those requests. That is the list
-    field's argument-path rule (``_LIST_ARGUMENT_VISIBILITY_POLICY``), and the
-    two fields answer to it identically; a request with no sidecar input keeps
-    the default policy the hook always answered to.
-    """
-    return _LIST_ARGUMENT_VISIBILITY_POLICY if steps else _DEFAULT_SEAL_POLICY
-
-
 def _pipeline_sync(
     target_type: type,
     source: Any,
@@ -1827,13 +1810,13 @@ def _pipeline_sync(
     (``django_strawberry_framework/utils/querysets.py::apply_filterset_sync`` /
     ``::apply_orderset_sync``): routing intent is frozen before the override is
     handed the queryset, and the value it returns must still be a lazy,
-    unsliced, uncombined queryset of the captured model's rows on the captured
-    connection, because every later step here (the next sidecar, default
-    ordering, optimizer, the Relay window) can only NARROW it. When a sidecar
-    input is supplied the visibility seal runs under
-    ``_LIST_ARGUMENT_VISIBILITY_POLICY`` exactly as the list field's argument
-    path does, so a combinator ``get_queryset`` fails closed before a sidecar
-    recomposes it.
+    unsliced queryset of the captured model's rows on the captured connection,
+    because every later step here (the next sidecar, default ordering,
+    optimizer, the Relay window) can only NARROW it. The visibility seal runs
+    under the one default policy whether or not a sidecar input is supplied, so
+    ``get_queryset`` answers to one contract on every request: a combinator it
+    returns is served as its primary-key set, which a sidecar can narrow and
+    re-sort.
     """
     source, is_queryset = _prepare_pipeline_source(
         source,
@@ -1850,7 +1833,6 @@ def _pipeline_sync(
         source,
         info,
         model=definition.model,
-        policy=_sidecar_visibility_policy(steps),
     )
     for kind, set_class, value in steps:
         apply = apply_orderset_sync if kind == "order" else apply_filterset_sync
@@ -1880,8 +1862,8 @@ async def _pipeline_async(
     ``definition`` is the factory's one construction-time read, exactly as the
     sync sibling takes it. Both sidecar steps run the same post-sidecar seal
     (``django_strawberry_framework/utils/querysets.py::apply_filterset_async`` /
-    ``::apply_orderset_async``), and a supplied sidecar input selects the same
-    argument-path visibility policy the sync sibling uses.
+    ``::apply_orderset_async``), and the visibility seal takes the same one
+    default policy the sync sibling uses.
     """
     source, is_queryset = _prepare_pipeline_source(
         source,
@@ -1898,7 +1880,6 @@ async def _pipeline_async(
         source,
         info,
         model=definition.model,
-        policy=_sidecar_visibility_policy(steps),
     )
     for kind, set_class, value in steps:
         apply = apply_orderset_async if kind == "order" else apply_filterset_async

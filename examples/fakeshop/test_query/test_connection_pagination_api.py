@@ -381,8 +381,7 @@ def test_nested_connection_arguments_follow_declared_sidecars():
 
 
 _GENRE_ORDER_SHAPE_PREFIX = (
-    "GenreOrder.apply_sync must return an unevaluated, unsliced, uncombined "
-    "QuerySet of Genre rows; got "
+    "GenreOrder.apply_sync must return an unevaluated, unsliced QuerySet of Genre rows; got "
 )
 
 _GENRE_CONNECTION_ORDER_QUERY = (
@@ -554,12 +553,11 @@ _CONNECTION_MALFORMED_APPLY_SYNC_ROWS = (
         0,
     ),
     (
-        "combined",
-        lambda cls, order_input, queryset, info: queryset.filter(name="A").union(
-            queryset.filter(name="B"),
-        ),
-        _GENRE_ORDER_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        lambda cls, order_input, queryset, info: queryset.union(queryset, all=True),
+        "GenreOrder.apply_sync returned a combined queryset; the visibility boundary serves "
+        "a combined queryset as the set of Genre primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         0,
     ),
     (
@@ -750,8 +748,7 @@ _ASYNC_APPLY_CALLS: list = []
 
 
 _GENRE_ORDER_ASYNC_SHAPE_PREFIX = (
-    "GenreOrder.apply_async must return an unevaluated, unsliced, uncombined "
-    "QuerySet of Genre rows; got "
+    "GenreOrder.apply_async must return an unevaluated, unsliced QuerySet of Genre rows; got "
 )
 
 
@@ -776,14 +773,14 @@ async def _override_async_sliced(
     return queryset.order_by("name")[:1]
 
 
-async def _override_async_combined(
+async def _override_async_combined_duplicates(
     cls,
     order_input,
     queryset,
     info,
 ):
-    _ASYNC_APPLY_CALLS.append("combined")
-    return queryset.filter(name="A").union(queryset.filter(name="B"))
+    _ASYNC_APPLY_CALLS.append("combined-duplicates")
+    return queryset.union(queryset, all=True)
 
 
 async def _override_async_wrong_model(
@@ -949,10 +946,11 @@ _CONNECTION_MALFORMED_APPLY_ASYNC_ROWS = (
         None,
     ),
     (
-        "combined",
-        _override_async_combined,
-        _GENRE_ORDER_ASYNC_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        _override_async_combined_duplicates,
+        "GenreOrder.apply_async returned a combined queryset; the visibility boundary serves "
+        "a combined queryset as the set of Genre primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         None,
     ),
     (
@@ -1055,13 +1053,40 @@ async def test_connection_async_healthy_apply_async_override_still_returns_order
     assert names == ["A", "B", "C"]
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_connection_async_serves_a_combined_apply_async_result_as_its_primary_key_set(
+    monkeypatch,
+):
+    """An ``apply_async`` returning an ordered union is served as the rows it selects, in order."""
+
+    async def _combined(
+        cls,
+        order_input,
+        queryset,
+        info,
+    ):
+        _ASYNC_APPLY_CALLS.append("combined")
+        return queryset.filter(name="C").union(queryset.filter(name="A")).order_by("-name")
+
+    await _aseed_genres("C", "A", "B")
+    monkeypatch.setattr(GenreOrder, "apply_async", classmethod(_combined))
+
+    _ASYNC_APPLY_CALLS.clear()
+
+    payload = await _post_async_genres(_GENRE_ASYNC_CONNECTION_ORDER_QUERY)
+
+    assert _ASYNC_APPLY_CALLS == ["combined"], payload
+    assert "errors" not in payload, payload
+    names = [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]]
+    assert names == ["C", "A"]
+
+
 _GENRE_ASYNC_CONNECTION_FILTER_QUERY = (
     '{ genres(filter: {name: {iContains: "b"}}) { edges { node { name } } } }'
 )
 
 _GENRE_FILTER_ASYNC_SHAPE_PREFIX = (
-    "GenreFilter.apply_async must return an unevaluated, unsliced, uncombined "
-    "QuerySet of Genre rows; got "
+    "GenreFilter.apply_async must return an unevaluated, unsliced QuerySet of Genre rows; got "
 )
 
 
@@ -1086,14 +1111,14 @@ async def _filter_override_async_sliced(
     return queryset.order_by("name")[:1]
 
 
-async def _filter_override_async_combined(
+async def _filter_override_async_combined_duplicates(
     cls,
     filter_input,
     queryset,
     info,
 ):
-    _ASYNC_APPLY_CALLS.append("filter-combined")
-    return queryset.filter(name="A").union(queryset.filter(name="B"))
+    _ASYNC_APPLY_CALLS.append("filter-combined-duplicates")
+    return queryset.union(queryset, all=True)
 
 
 async def _filter_override_async_wrong_model(
@@ -1255,10 +1280,11 @@ _CONNECTION_MALFORMED_FILTER_APPLY_ASYNC_ROWS = (
         None,
     ),
     (
-        "combined",
-        _filter_override_async_combined,
-        _GENRE_FILTER_ASYNC_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        _filter_override_async_combined_duplicates,
+        "GenreFilter.apply_async returned a combined queryset; the visibility boundary serves "
+        "a combined queryset as the set of Genre primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         None,
     ),
     (

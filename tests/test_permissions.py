@@ -932,6 +932,40 @@ def test_hook_values_and_values_list_projections_are_normalized(hook):
         assert keeps in result
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "combine",
+    [
+        pytest.param(lambda qs: qs.filter(name="t").union(qs.filter(name="u")), id="union"),
+        pytest.param(
+            lambda qs: qs.exclude(name="hidden").intersection(qs.exclude(name="u")),
+            id="intersection",
+        ),
+        pytest.param(
+            lambda qs: qs.exclude(name="u").difference(qs.filter(name="hidden")),
+            id="difference",
+        ),
+    ],
+)
+def test_combined_hook_return_narrows_by_its_primary_key_set(combine):
+    """A combined hook return composes as the membership test on the target rows it selects.
+
+    The seal hands the cascade the combinator's primary-key set, which the edge
+    re-projects to its target column, so a parent survives exactly when its
+    target is one of the rows the combinator selects.
+    """
+    with _tables(_CtTarget, _CtParent):
+        parent_type = _register_ct_pair(lambda cls, qs, info: combine(qs))
+
+        visible = _CtTarget.objects.create(name="t")
+        hidden = _CtTarget.objects.create(name="hidden")
+        _CtParent.objects.create(name="keeps", target=visible)
+        _CtParent.objects.create(name="drops", target=hidden)
+
+        result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
+
+
 def _profiles_by_genre(*, visible, hidden, attack_code):
     """Seed one ``PatronProfile`` per genre, keyed by genre name through ``favorite_genre``."""
     for postal_code, genre in (("keeps", visible), (attack_code, hidden)):
@@ -1001,12 +1035,12 @@ def _hook_distinct(cls, qs, info):
     return qs.distinct("name")
 
 
-def _hook_union(cls, qs, info):
-    return qs.union(qs)
+def _hook_union_all(cls, qs, info):
+    return qs.union(qs, all=True)
 
 
-def _hook_intersection(cls, qs, info):
-    return qs.intersection(qs)
+def _hook_intersection_values(cls, qs, info):
+    return qs.intersection(qs).values("id")
 
 
 def _hook_grouped_count(cls, qs, info):
@@ -1037,8 +1071,12 @@ def _hook_off_alias(cls, qs, info):
         pytest.param(_hook_mti_child, "concrete table", id="mti-child-table"),
         pytest.param(_hook_sliced, "sliced", id="sliced"),
         pytest.param(_hook_distinct, "distinct", id="distinct"),
-        pytest.param(_hook_union, "combined", id="union"),
-        pytest.param(_hook_intersection, "combined", id="intersection"),
+        pytest.param(_hook_union_all, r"union: union\(all=True\) keeps duplicate", id="union-all"),
+        pytest.param(
+            _hook_intersection_values,
+            r"intersection: it projects \.values\('id'\) after the combinator",
+            id="intersection-values",
+        ),
         pytest.param(_hook_grouped_count, "grouped", id="grouped-count"),
         pytest.param(_hook_grouped_values, "grouped", id="grouped-values"),
         pytest.param(_hook_extra_shadow, "shadows", id="extra-shadow"),
@@ -1060,11 +1098,14 @@ def test_hook_return_rejections_fail_closed(hook, match):
     longer in this battery - the boundary coerces it
     (``test_hook_manager_return_is_coerced``). The combined / grouped /
     extra-shadow shapes are the ones where re-projecting to the target column
-    would change SEMANTICS, not just the selected column: ``.values(...)`` on a
-    union only rewrites the outer projection (each branch keeps its original
-    column), on a grouped queryset it changes the GROUP BY (widening the visible
-    set), and under a shadowing ``extra(select=...)`` alias it selects the
-    raw-SQL expression instead of the model column.
+    would change SEMANTICS, not just the selected column: a combinator is walked
+    as its primary-key set, which cannot keep a ``union(all=True)``'s duplicates
+    or an intersection computed over a ``.values(...)`` projection instead of
+    the primary key (the served shapes are
+    ``test_combined_hook_return_narrows_by_its_primary_key_set``);
+    ``.values(...)`` on a grouped queryset changes the GROUP BY (widening the
+    visible set); and under a shadowing ``extra(select=...)`` alias it selects
+    the raw-SQL expression instead of the model column.
     ``test_annotation_alias_shadow_cannot_bypass_visibility`` proves the
     real-row leak the annotate-shadow rejection closes.
     """
@@ -1337,8 +1378,8 @@ def _root_sliced():
     return _CtParent.objects.all()[:5]
 
 
-def _root_combined():
-    return _CtParent.objects.all().union(_CtParent.objects.all())
+def _root_combined_all():
+    return _CtParent.objects.all().union(_CtParent.objects.all(), all=True)
 
 
 @pytest.mark.parametrize(
@@ -1357,19 +1398,23 @@ def _root_combined():
         ),
         pytest.param(_root_sliced, "apply_cascade_permissions.*sliced", id="sliced"),
         pytest.param(
-            _root_combined,
-            "apply_cascade_permissions.*combined",
-            id="combined",
+            _root_combined_all,
+            r"apply_cascade_permissions for CtParentType got a combined root queryset; .*"
+            r"union: union\(all=True\) keeps duplicate rows",
+            id="combined-duplicates",
         ),
     ],
 )
 def test_root_queryset_shape_rejections(root_factory, match):
-    """The root call rejects non-querysets, wrong-model, sliced, and combined roots loudly.
+    """The root call rejects non-querysets, wrong-model, sliced, and duplicate-keeping roots loudly.
 
-    Sliced and combined roots cannot be ``.filter(...)``-narrowed; without the
-    up-front rejection the walk would leak a raw ``TypeError`` /
-    ``NotSupportedError`` from Django mid-composition instead of the
-    fail-closed configuration error.
+    A sliced root cannot be ``.filter(...)``-narrowed; without the up-front
+    rejection the walk would leak a raw ``TypeError`` from Django
+    mid-composition instead of the fail-closed configuration error. A combined
+    root is narrowed as its primary-key set
+    (``test_combined_root_is_narrowed_as_its_primary_key_set``), so only a
+    combinator that set would change - a ``union(all=True)``'s duplicates - is
+    refused.
 
     Every message names ``apply_cascade_permissions``: the shape checks are made
     by the shared visibility source boundary, but the consumer called THIS
@@ -1381,6 +1426,29 @@ def test_root_queryset_shape_rejections(root_factory, match):
     with pytest.raises(ConfigurationError, match=match):
         apply_cascade_permissions(parent_type, root_factory(), _INFO)
     assert _cascade_state.get() is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_combined_root_is_narrowed_as_its_primary_key_set():
+    """A union root is cascaded as the parent rows it selects, then narrowed by the edge.
+
+    Django refuses ``.filter(...)`` after a combinator; the seal rebuilds the
+    root as the membership test on its primary keys, which the walk narrows.
+    """
+    with _tables(_CtTarget, _CtParent):
+        parent_type = _register_ct_pair(lambda cls, qs, info: qs.exclude(name="hidden"))
+
+        visible = _CtTarget.objects.create(name="t")
+        hidden = _CtTarget.objects.create(name="hidden")
+        _CtParent.objects.create(name="keeps", target=visible)
+        _CtParent.objects.create(name="outside", target=visible)
+        _CtParent.objects.create(name="drops", target=hidden)
+        root = _CtParent.objects.filter(name="keeps").union(
+            _CtParent.objects.filter(name="drops"),
+        )
+
+        result = apply_cascade_permissions(parent_type, root, _INFO)
+        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
 
 
 def test_unsealable_root_query_class_fails_closed_with_cascade_prose():

@@ -3583,8 +3583,7 @@ query {
 
 
 _GENRE_FILTER_SHAPE_PREFIX = (
-    "GenreFilter.apply_sync must return an unevaluated, unsliced, uncombined "
-    "QuerySet of Genre rows; got "
+    "GenreFilter.apply_sync must return an unevaluated, unsliced QuerySet of Genre rows; got "
 )
 
 _GENRE_CONNECTION_FILTERED_QUERY = """
@@ -3648,12 +3647,11 @@ _MALFORMED_GENRE_FILTER_ROWS = (
         0,
     ),
     (
-        "combined",
-        lambda cls, input_value, queryset, info: queryset.filter(name="Alpha").union(
-            queryset.filter(name="Gamma"),
-        ),
-        _GENRE_FILTER_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        lambda cls, input_value, queryset, info: queryset.union(queryset, all=True),
+        "GenreFilter.apply_sync returned a combined queryset; the visibility boundary serves "
+        "a combined queryset as the set of Genre primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
         0,
     ),
     (
@@ -3735,6 +3733,30 @@ def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
         edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
     }
     assert names == {"Gamma", "Alpha"}
+
+
+@pytest.mark.django_db
+def test_genre_connection_serves_a_combined_filter_result_as_its_primary_key_set(monkeypatch):
+    """A ``GenreFilter.apply_sync`` returning a union is windowed as the rows it selects."""
+    from apps.library.filters_genre import GenreFilter
+
+    def _combined(
+        cls,
+        input_value,
+        queryset,
+        info,
+    ):
+        return queryset.filter(name="Alpha").union(queryset.filter(name="Echo"))
+
+    _seed_genres("Gamma", "Alpha", "Echo")
+    monkeypatch.setattr(GenreFilter, "apply_sync", classmethod(_combined))
+
+    payload = _post_graphql(_GENRE_CONNECTION_FILTERED_QUERY).json()
+    assert "errors" not in payload, payload
+    names = {
+        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
+    }
+    assert names == {"Alpha", "Echo"}
 
 
 @pytest.mark.django_db

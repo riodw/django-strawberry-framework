@@ -1625,8 +1625,7 @@ async def test_async_offset_rejects_a_raw_sql_order(monkeypatch):
 
 
 _BRANCH_ORDER_ASYNC_SHAPE_PREFIX = (
-    "BranchOrder.apply_async must return an unevaluated, unsliced, uncombined "
-    "QuerySet of Branch rows; got "
+    "BranchOrder.apply_async must return an unevaluated, unsliced QuerySet of Branch rows; got "
 )
 
 
@@ -1641,8 +1640,8 @@ class _ResidualAwaitable:
         return iter(())
 
 
-async def _async_combined(cls, order_input, queryset, info, **kwargs):
-    return queryset.filter(name="A").union(queryset.filter(name="B"))
+async def _async_combined_duplicates(cls, order_input, queryset, info, **kwargs):
+    return queryset.union(queryset, all=True)
 
 
 async def _async_evaluated(cls, order_input, queryset, info, **kwargs):
@@ -1694,10 +1693,11 @@ async def _async_residual(cls, order_input, queryset, info, **kwargs):
 #: override of an async seam, and a seam that hands back a second awaitable.
 _MALFORMED_APPLY_ASYNC_ROWS = (
     (
-        "combined",
-        _async_combined,
-        _BRANCH_ORDER_ASYNC_SHAPE_PREFIX + "combined defect",
-        (),
+        "combined-duplicates",
+        _async_combined_duplicates,
+        "BranchOrder.apply_async returned a combined queryset; the visibility boundary serves "
+        "a combined queryset as the set of Branch primary keys it selects",
+        ("union: union(all=True) keeps duplicate rows, which a primary-key set cannot",),
     ),
     (
         "evaluated",

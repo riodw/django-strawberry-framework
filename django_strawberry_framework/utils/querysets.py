@@ -47,10 +47,14 @@ a framework-owned plain ``django.db.models.QuerySet`` from the validated state.
 It NEVER returns the consumer object.
 
 What the seal preserves: the SQL query state (filters, annotations, joins,
-ordering, combinators, values projection), database routing / hints, and the
-prefetch metadata Django needs -- everything that determines which rows the SQL
-selects. What it deliberately drops: the consumer's executable override dispatch
-(the subclass identity itself), because that is precisely the leak vector. A
+ordering, values projection), database routing / hints, and the prefetch
+metadata Django needs -- everything that determines which rows the SQL selects.
+A combinator is preserved as the set of primary keys it selects, rebuilt as a
+``pk__in`` membership test the recomposing surfaces can narrow (the raw-list row
+source keeps it as it is), and a combinator whose rows that rewrite would change
+fails closed (``combined``). What it deliberately drops: the consumer's executable
+override dispatch (the subclass identity itself), because that is precisely the
+leak vector. A
 seal rebuilds only state made of Django's own objects, so anything else in it -- a
 consumer-defined query, expression, lookup or join class, a method assigned onto a
 query instance, a foreign row iterable, deferred-filter state Django never writes --
@@ -2766,14 +2770,15 @@ class _SealPolicy:
       rules for it. It stays ON for the walker's plain-list-relation child
       (``_LIST_RELATION_CHILD_POLICY``), which no gate classifies and which Django
       refilters at fetch time.
-    - ``reject_combined`` -- a ``union()`` / ``intersection()`` / ``difference()``
-      query is a defect. On for the cascade, which narrows by ``.filter(...)``
-      and re-projects to a single column, neither of which Django supports
-      after a combinator, and for both list-argument seals
-      (``_LIST_ARGUMENT_VISIBILITY_POLICY`` / ``_SIDECAR_RESULT_POLICY``),
-      which window the result with one ``[start:stop]`` slice a combined query
-      cannot take after ordering -- on the list field and the Relay connection
-      alike, wherever a list argument is active.
+    - ``rewrite_combined`` -- a ``union()`` / ``intersection()`` /
+      ``difference()`` query is served as the set of primary keys it selects:
+      the seal rebuilds it as ``<model>.filter(pk__in=<combined>.values("pk"))``
+      (``_pk_membership_query_or_defect``), because every recomposing surface
+      narrows, projects or prefetches through the sealed queryset and Django
+      supports none of that on a combinator. A combined shape whose rows that
+      rewrite would change fails closed with the ``combined`` defect. Off for
+      the raw-list row source alone, where nothing recomposes: its one
+      ``[start:stop]`` window runs on a combinator as Django serves it.
     - ``require_shared_alias`` -- the candidate's explicit ``_db`` must EQUAL the
       outer effective alias, INCLUDING when that alias is ``None``. Set solely
       for a ``Prefetch`` child, so one GraphQL resolution never spans two
@@ -2804,21 +2809,23 @@ class _SealPolicy:
 
     require_model_rows: bool = True
     reject_sliced: bool = True
-    reject_combined: bool = False
+    rewrite_combined: bool = True
     require_shared_alias: bool = False
     require_unevaluated: bool = False
     carry_result_cache: bool = False
 
 
-# Every read surface (Relay node defaults, connection root, list field, the
-# related-object hooks): model rows, nothing sliced to recompose onto, one alias.
+# Every read surface (Relay node defaults, connection root, list field with or
+# without list arguments, the related-object hooks): model rows, nothing sliced
+# to recompose onto, a combinator served as its primary-key set, one alias.
 _DEFAULT_SEAL_POLICY = _SealPolicy()
 # ``apply_cascade_permissions`` at BOTH of its ends -- the root it is handed and
 # every target hook's return. A ``.values()`` projection is supported input
-# (the cascade re-projects it), while sliced and combined shapes are rejected
-# because the walk narrows by ``.filter(...)`` and re-projects to the edge's
-# target column, neither of which Django supports on those shapes.
-_CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False, reject_combined=True)
+# (the cascade re-projects it), while a sliced shape is rejected because the
+# walk narrows by ``.filter(...)`` and re-projects to the edge's target column,
+# which Django refuses after a slice. A combinator reaches the walk as its
+# primary-key set, which takes both.
+_CASCADE_SEAL_POLICY = _SealPolicy(require_model_rows=False)
 # The optimizer walker's NESTED-CONNECTION ``Prefetch`` child, and every
 # consumer-supplied ``Prefetch`` child sealed by
 # ``_sealed_prefetch_related_lookups``. Its nested-connection gate
@@ -2838,29 +2845,26 @@ _PREFETCH_CHILD_POLICY = _SealPolicy(reject_sliced=False, require_shared_alias=T
 # such a child therefore gets the seal's typed ``sliced`` defect here, the same
 # contract every other bad-hook shape answers to.
 _LIST_RELATION_CHILD_POLICY = _SealPolicy(require_shared_alias=True)
-# List-field visibility policy for active argument execution: the default read-surface
-# policy with ``reject_combined=True`` so combinators (union, intersect, difference) fail
-# closed before a window is taken. It differs from ``_DEFAULT_SEAL_POLICY`` on that one axis
-# and on no other, which is what keeps ``get_queryset`` answering to one contract whether or
-# not the request carried arguments.
-_LIST_ARGUMENT_VISIBILITY_POLICY = _SealPolicy(reject_combined=True)
 # Post-sidecar result policy, one for both public ``FilterSet.apply_*`` and
-# ``OrderSet.apply_*`` returns: model rows, unevaluated, unsliced, uncombined. The
-# two sidecars hand back the same kind of object to the same downstream steps, so
-# they answer to one policy (Decision 8: a second constant would differ on nothing).
-_SIDECAR_RESULT_POLICY = _SealPolicy(reject_combined=True, require_unevaluated=True)
+# ``OrderSet.apply_*`` returns: model rows, unevaluated, unsliced, a combinator
+# served as its primary-key set. The two sidecars hand back the same kind of object
+# to the same downstream steps, so they answer to one policy (Decision 8: a second
+# constant would differ on nothing).
+_SIDECAR_RESULT_POLICY = _SealPolicy(require_unevaluated=True)
 # A raw-list row source about to be windowed by ``resource_policy.py``. Every axis
 # that exists to protect a RECOMPOSITION is off, because nothing recomposes here:
 # one ``[start:stop]`` is taken and Django takes it on a sliced query and on a
-# combinator alike. A ``.values()`` projection is a legitimate list of rows, and a
-# source the consumer already evaluated brings its rows with it: the fetched rows
-# travel onto the rebuild, so a project queryset class is windowed from what it
-# already holds and costs what Django's own manager costs. What is NOT optional is
-# the rebuild itself: the point of sealing here is that the slice runs on a
-# queryset this package built.
+# combinator alike, so a combinator is served as the query it is rather than
+# rewritten to its primary-key set. A ``.values()`` projection is a legitimate
+# list of rows, and a source the consumer already evaluated brings its rows with
+# it: the fetched rows travel onto the rebuild, so a project queryset class is
+# windowed from what it already holds and costs what Django's own manager costs.
+# What is NOT optional is the rebuild itself: the point of sealing here is that
+# the slice runs on a queryset this package built.
 _RAW_LIST_SOURCE_POLICY = _SealPolicy(
     require_model_rows=False,
     reject_sliced=False,
+    rewrite_combined=False,
     carry_result_cache=True,
 )
 
@@ -3047,9 +3051,11 @@ def _validate_post_orderset_result(
         # Every SHAPE defect renders one wording: the public method's contract is a
         # single sentence, and naming the code plus its detail is what makes each
         # rejection actionable. ``routing`` is the one defect that is not a shape
-        # problem, so it keeps its own arm. Spelled as an explicit per-code map
-        # rather than a ``_defect_message`` default so a code added to the seal
-        # without an arm here still self-names as a framework defect.
+        # problem, so it keeps its own arm, and ``combined`` keeps the shared
+        # combined-queryset text (``_COMBINED_WHAT``) because a combinator is served
+        # here unless it is a shape the primary-key rewrite would change. Spelled as
+        # an explicit per-code map rather than a ``_defect_message`` default so a code
+        # added to the seal without an arm here still self-names as a framework defect.
         #
         # ``alias`` is the one canonical code with no arm, because ``routing``
         # subsumes it at THIS site and nowhere else: the seal reaches the alias
@@ -3063,7 +3069,7 @@ def _validate_post_orderset_result(
         # the subset it can reach; an arm for a code that cannot arrive would be
         # wording no rejection can ever quote.
         shape_message = (
-            f"{method_name} must return an unevaluated, unsliced, uncombined "
+            f"{method_name} must return an unevaluated, unsliced "
             f"QuerySet of {model_name} rows; got {defect[0]} defect ({defect[1]})."
         )
         messages = dict.fromkeys(
@@ -3073,10 +3079,12 @@ def _validate_post_orderset_result(
                 "untrusted",
                 "evaluated",
                 "sliced",
-                "combined",
                 "projection",
             ),
             shape_message,
+        )
+        messages["combined"] = f"{method_name} returned a combined queryset; " + (
+            _COMBINED_WHAT.format(model=model_name, detail=defect[1])
         )
         messages["routing"] = f"{method_name} changed database routing intent; {defect[1]}."
         raise ConfigurationError(_defect_message(messages, defect, method_name))
@@ -3113,7 +3121,8 @@ def _apply_sidecar_sync(
     routing intent is frozen before the consumer override receives the
     queryset, and the value it hands back is validated against
     ``_SIDECAR_RESULT_POLICY`` (lazy, model rows of the captured model,
-    unsliced, uncombined, same routing) before any later step sees it. Every
+    unsliced, a combinator served as its primary-key set, same routing)
+    before any later step sees it. Every
     step after a sidecar can only NARROW the sealed queryset (spec-030
     Decision 7), so an override that widens, re-routes, re-tables or
     pre-evaluates its result is rejected here rather than silently serving
@@ -3262,6 +3271,120 @@ async def apply_filterset_async(
     )
 
 
+def _is_model_column(name: str, model: type[models.Model]) -> bool:
+    """Return whether ``name`` (its leading ``-`` already stripped) names a column of ``model``."""
+    if name == "pk":
+        return True
+    return any(
+        field.name == name or field.attname == name for field in model._meta.concrete_fields
+    )
+
+
+# The ``sql.Query`` state ``_combined_lost_property`` and
+# ``_pk_membership_query_or_defect`` read, audited over every published Django
+# release 5.2.16 .. 6.1.1 (19 releases): ``combinator``, ``combinator_all``,
+# ``combined_queries``, ``values_select``, ``select_for_update``, ``order_by``,
+# ``standard_ordering`` and ``low_mark`` / ``high_mark`` are class-level
+# ``sql.Query`` slots; ``annotation_select``, ``extra_select`` and ``is_sliced``
+# are properties. They are read, never patched. In every audited release the
+# outer query of a combinator is a clone of branch 0 whose ordering
+# (``extra_order_by`` included) ``_combinator_query`` clears, and ``extra()``
+# after a combinator raises, so no outer ``extra(order_by=)`` ordering exists to
+# lose; ``values(...)`` after a combinator sets only the OUTER projection, which the
+# compiler copies into every branch without a ``values()`` of its own (so the
+# combinator is computed over those columns); ``reverse()`` after a combinator
+# flips the outer ``standard_ordering``; an outer ``select_for_update()`` never
+# emits ``FOR UPDATE`` (``SQLCompiler.as_sql``), so it is no lost property.
+
+
+def _combined_lost_property(query: Any, model: type[models.Model], *, outer: bool) -> str | None:
+    """Name the property a primary-key-set rewrite of ``query`` would lose, or ``None``.
+
+    ``query`` is a combined ``sql.Query``. The rewrite keeps exactly the SET of
+    primary keys the combinator selects, so anything the combinator carries
+    beyond that set -- duplicate rows, selected annotations, ``extra(select=)``
+    aliases, a branch or outer projection, a row lock, an outer ordering the base
+    table cannot express, an outer slice -- is a lost property, and the caller fails closed
+    on it rather than serving different rows. ``outer`` is ``True`` for the
+    query the surface receives and ``False`` for a nested combinator branch,
+    whose own ordering and slice stay inside the subquery the rewrite keeps.
+
+    From the seal, ``query`` is proven genuine and acyclic first
+    (``_combined_query_table_defect`` walks every branch); from the optimizer
+    walker's ``OptimizerHint.prefetch`` path it is trusted schema configuration
+    that no seal has walked.
+    """
+    if query.combinator_all:
+        return "union(all=True) keeps duplicate rows, which a primary-key set cannot"
+    if outer:
+        for entry in query.order_by:
+            if not isinstance(entry, str) or not _is_model_column(entry.lstrip("-"), model):
+                return (
+                    f"its ordering by {entry!r} names a value that is not a "
+                    f"{model.__name__} column, so the rewritten query cannot carry it"
+                )
+        if query.is_sliced:
+            return "it is sliced, and a LIMIT/OFFSET cannot ride inside the primary-key subquery"
+        if query.values_select:
+            cols = ", ".join(repr(col) for col in query.values_select)
+            return (
+                f"it projects .values({cols}) after the combinator, which computes the "
+                "combinator over those columns instead of the primary key"
+            )
+    for branch in query.combined_queries:
+        if branch.combinator:
+            nested = _combined_lost_property(branch, model, outer=False)
+            if nested is not None:
+                return nested
+            continue
+        if branch.annotation_select:
+            names = ", ".join(repr(name) for name in branch.annotation_select)
+            return f"a branch selects annotations ({names}) that would be dropped from the rows"
+        if branch.extra_select:
+            names = ", ".join(repr(name) for name in branch.extra_select)
+            return f"a branch selects extra(select=...) aliases ({names}) that would be dropped"
+        if branch.values_select:
+            cols = ", ".join(repr(col) for col in branch.values_select)
+            return (
+                f"a branch projects .values({cols}), which the primary-key subquery "
+                "cannot re-project"
+            )
+        if branch.select_for_update:
+            return (
+                "a branch carries select_for_update(), which the database refuses inside "
+                "a compound query"
+            )
+    return None
+
+
+def _pk_membership_query_or_defect(
+    query: Any,
+    model: type[models.Model],
+) -> tuple[Any | None, tuple[str, str] | None]:
+    """Rewrite a combined ``query`` as ``<model>.filter(pk__in=<combined>.values("pk"))``.
+
+    Returns ``(rewritten, None)``: a fresh single-table ``sql.Query`` over
+    ``model`` whose one predicate is membership in the combinator's primary-key
+    set, with the outer ordering and its direction re-applied
+    (``_combined_lost_property`` has proven every entry a column). Every surface
+    can then narrow, project and prefetch through it, which Django supports on no
+    combinator. Returns
+    ``(None, ("combined", "<combinator>: <lost property>"))`` for a shape the
+    rewrite would serve different rows for.
+    """
+    lost = _combined_lost_property(query, model, outer=True)
+    if lost is not None:
+        return None, ("combined", f"{query.combinator}: {lost}")
+    combined = models.QuerySet(model=model, query=query)
+    rewritten = models.QuerySet(model=model).filter(pk__in=combined.order_by().values("pk"))
+    if query.order_by:
+        rewritten = rewritten.order_by(*query.order_by)
+    # ``reverse()`` after a combinator flips only this flag; carried, the rewrite
+    # keeps the reversed order (including a reversed ``Meta.ordering``).
+    rewritten.query.standard_ordering = query.standard_ordering
+    return rewritten.query, None
+
+
 def _seal_or_defect(
     candidate: Any,
     model: type[models.Model],
@@ -3275,7 +3398,7 @@ def _seal_or_defect(
     The single sealing primitive both boundary sites run. Returns
     ``(sealed_queryset, None)`` on success, or ``(None, (code, detail))`` on the
     first defect. Codes run ``type`` -> ``table`` -> ``untrusted`` -> ``routing``
-    -> ``evaluated`` -> ``sliced`` -> ``combined`` -> ``projection`` -> ``alias``
+    -> ``evaluated`` -> ``sliced`` -> ``projection`` -> ``combined`` -> ``alias``
     (the one canonical ordering
     every site shares; a new code takes a FIXED position in it, and owes an arm
     at every message-building site that can reach it), except that the outer
@@ -3363,19 +3486,23 @@ def _seal_or_defect(
       one edge down only where something downstream answers for the slice: the
       optimizer walker's nested-connection child, whose own gate degrades a sliced
       child instead of recomposing, and a consumer's own ``Prefetch`` child.
-    - ``combined`` -- when ``policy.reject_combined`` (the cascade and the two
-      list-argument seals): the query carries a ``union()`` / ``intersection()``
-      / ``difference()`` combinator. The cascade narrows by ``.filter(...)`` and
-      re-projects to the edge's target column; Django supports neither after a
-      combinator, and a re-projection would only rewrite the OUTER select while
-      each branch kept its own column. An argument-bearing list resolution
-      orders and then windows the result, which a combined query cannot take.
     - ``projection`` -- only when ``policy.require_model_rows`` (every surface
-      except the cascade): the row iterable is not ``ModelIterable`` (a
-      ``.values()`` / ``.values_list()`` projection whose rows are not model
-      instances). The cascade runs with ``require_model_rows=False`` because it
-      re-projects the sealed queryset to the edge's target column and never
-      iterates it.
+      except the cascade and the raw-list row source): the row iterable is not
+      ``ModelIterable`` (a ``.values()`` / ``.values_list()`` projection whose
+      rows are not model instances). The cascade runs with
+      ``require_model_rows=False`` because it re-projects the sealed queryset to
+      the edge's target column and never iterates it.
+    - ``combined`` -- when ``policy.rewrite_combined`` (every surface except the
+      raw-list row source) and the query carries a ``union()`` /
+      ``intersection()`` / ``difference()`` combinator that
+      ``_pk_membership_query_or_defect`` cannot rewrite to its primary-key set
+      without changing its rows (``_combined_lost_property`` names the lost
+      property). Every other combinator is SERVED as that set: the sealed
+      queryset is ``<model>.filter(pk__in=<combined>.values("pk"))`` with the
+      outer ordering re-applied, a queryset of model rows every surface can
+      narrow, re-project and prefetch through, where Django refuses
+      ``.filter()`` / ``.only()`` after a combinator and silently drops a
+      reverse-FK ``Prefetch``'s parent predicate from one.
     - ``alias`` -- a value explicitly routed off ``required_alias``. For a
       top-level source an UNROUTED value (``_db is None``) is never an alias defect;
       the seal pins it via ``using=`` at construction. For a prefetch child
@@ -3551,12 +3678,24 @@ def _seal_or_defect(
         return None, ("evaluated", "the result cache is populated")
     if policy.reject_sliced and rebuilt_query.is_sliced:
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
-    # ``combinator`` is a plain ``str | None`` slot on the proven-genuine
-    # ``sql.Query``, read off the reconstructed clone -- no consumer dispatch.
-    if policy.reject_combined and rebuilt_query.combinator:
-        return None, ("combined", str(rebuilt_query.combinator))
     if policy.require_model_rows and iterable is not ModelIterable:
         return None, ("projection", _safe_class_name(iterable))
+    fields = state.get("_fields")
+    # ``combinator`` is a plain ``str | None`` slot on the proven-genuine
+    # ``sql.Query``, read off the reconstructed clone -- no consumer dispatch. A
+    # combined result is served as the set of primary keys it selects: the
+    # recomposing surfaces narrow, project and prefetch through the sealed
+    # queryset, none of which Django supports on a combinator, so the combinator
+    # becomes the right-hand side of a ``pk__in`` membership test on a fresh
+    # single-table query of model rows. It runs after the projection check, so a
+    # ``.values()`` combinator a model-row surface refuses is never turned into
+    # model rows. A shape whose rows that rewrite would change fails closed.
+    if policy.rewrite_combined and rebuilt_query.combinator:
+        rebuilt_query, combined_defect = _pk_membership_query_or_defect(rebuilt_query, qmodel)
+        if combined_defect is not None:
+            return None, combined_defect
+        iterable = ModelIterable
+        fields = None
     if policy.require_shared_alias:
         # A prefetch child: its explicit ``_db`` must EQUAL the outer effective alias,
         # INCLUDING when that alias is ``None`` (an unrouted parent forces an unrouted
@@ -3584,7 +3723,7 @@ def _seal_or_defect(
     # a fresh fetch is always correct, whereas copying an untrusted cache could pre-seed
     # synthetic related instances that bypass the related type's own visibility hook).
     sealed._iterable_class = iterable
-    sealed._fields = state.get("_fields")
+    sealed._fields = fields
     sealed._prefetch_related_lookups = sealed_prefetch
     sealed._sticky_filter = state.get("_sticky_filter") is True
     sealed._for_write = state.get("_for_write") is True
@@ -3737,6 +3876,17 @@ _UNSEALABLE_STATE_CAUSES = (
     "builtin; a foreign row iterable; a Prefetch it cannot rebuild; or deferred-filter "
     "state Django never writes. Build the queryset with Django's own query, expression "
     "and lookup classes, and do not assign to its internals."
+)
+# What a ``combined`` refusal tells the consumer, shared by every surface that renders
+# one (``{model}`` is the model whose primary keys the rewrite selects, ``{detail}`` the
+# seal's ``"<combinator>: <lost property>"``): each surface prefixes its own subject, and
+# the contract and advice stay one text.
+_COMBINED_WHAT = (
+    "the visibility boundary serves a combined queryset as the set of {model} primary keys "
+    "it selects (every surface narrows, projects or prefetches through that set with "
+    ".filter(pk__in=...)), and this one cannot be reduced to that set without changing its "
+    "rows: {detail}. Return an uncombined QuerySet (compose the branches with Q objects or "
+    "pk__in subqueries) or drop that property from the branches."
 )
 
 
@@ -3901,9 +4051,8 @@ def _visibility_result_error(
                     f"Return the unsliced queryset and let the surface paginate."
                 ),
                 "combined": (
-                    f"{name}.get_queryset returned a combined queryset ({detail}); "
-                    f"active list arguments forbid combined queries. Return a plain uncombined "
-                    f"QuerySet."
+                    f"{name}.get_queryset returned a combined queryset; "
+                    + _COMBINED_WHAT.format(model=model_name, detail=detail)
                 ),
                 "projection": (
                     f"{name}.get_queryset returned a {detail} projection; the "
@@ -3954,7 +4103,8 @@ def _prepared_visibility_source(
     Django row iterable, a pending deferred filter in the exact shape Django
     writes), and whatever else
     ``policy`` (a ``_SealPolicy``, default ``_DEFAULT_SEAL_POLICY``) requires:
-    model rows, no slice, and for the cascade no combinator. The
+    model rows and no slice (the cascade admits a projection), with a
+    combinator served as its primary-key set. The
     sealed object is a fresh framework-owned plain ``QuerySet`` rebuilt from the
     source's query state, so the hook receives a trusted queryset regardless of
     what the caller passed; an already-evaluated source seals to a fresh,
@@ -4022,9 +4172,8 @@ def _prepared_visibility_source(
                         f"and let the surface paginate."
                     ),
                     "combined": (
-                        f"apply_type_visibility for {name} requires an uncombined QuerySet; "
-                        f"got a {detail} queryset. Combined queries (union, intersection, difference) "
-                        f"cannot be safely filtered or ordered."
+                        f"apply_type_visibility for {name} got a combined source queryset; "
+                        + _COMBINED_WHAT.format(model=model_name, detail=detail)
                     ),
                     "projection": (
                         f"apply_type_visibility for {name} got a {detail} projection "
@@ -4142,8 +4291,8 @@ def apply_type_visibility_sync(
     per-edge prose; other surfaces take the shared defaults.
     ``policy`` is the seal's option set (``_SealPolicy``), applied to BOTH the
     source and the result so the two seals of one call cannot diverge. It
-    defaults to ``_DEFAULT_SEAL_POLICY`` (model rows, no slice, no combinator
-    licence); ``permissions.py`` passes ``_CASCADE_SEAL_POLICY`` and the
+    defaults to ``_DEFAULT_SEAL_POLICY`` (model rows, no slice, a combinator
+    served as its primary-key set); ``permissions.py`` passes ``_CASCADE_SEAL_POLICY`` and the
     optimizer walker's prefetch-child plan path passes one of its two child
     policies -- ``_PREFETCH_CHILD_POLICY`` for a nested-connection child
     (``spec-045-visibility_boundary-0_0_14`` Decision 5 degrade-to-unplanned,

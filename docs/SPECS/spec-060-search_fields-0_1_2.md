@@ -132,8 +132,7 @@ is the audit ledger. Load-bearing entries:
   and permission-gated), row-preserving to-many compilation through
   `optimizer/predicates.py`
   ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)),
-  the active-search non-queryset guard extension, the combined-queryset
-  preflight.
+  the active-search non-queryset guard extension.
 - [ ] **Slice 4 — live activation + composability.** Uncomment all four
   `search_fields` declarations in `examples/fakeshop/apps/products/schema.py`
   (fixing their stale card-number comments), add the library to-many
@@ -652,13 +651,7 @@ after the filterset step and before the orderset step:
       ([Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal));
    3. the permission-gate pass
       ([Decision 13](#decision-13--search-honors-filterset-permission-gates));
-   4. the combined-queryset preflight — an active search over a
-      `union()` / `intersection()` / `difference()` result raises ONE
-      typed, actionable error naming the combinator, for direct-only and
-      to-many plans alike (a direct-only plan must not fall through to
-      Django's raw `NotSupportedError` while a to-many plan gets the
-      `optimizer/predicates.py` typed error);
-   5. compilation — direct paths as plain `Q` predicates, to-many paths
+   4. compilation — direct paths as plain `Q` predicates, to-many paths
       as correlated visibility-aware `EXISTS` branches, OR'd and
       `.filter()`-joined
       ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)).
@@ -694,7 +687,7 @@ Calling the synchronous runner bare from the async twin is rejected: it
 would either raise the async-safety error on the first gate ORM read or
 block the loop on any synchronous I/O. Both colors preserve the ordered
 runtime sequence above verbatim: inactive gate, length cap, permission
-pass, combined-queryset preflight, visibility derivation, compilation. An earlier revision of this spec claimed one
+pass, visibility derivation, compilation. An earlier revision of this spec claimed one
 colorless helper; that claim was only true under visibility-blind
 relational traversal, which [Decision 12](#decision-12--visibility-aware-relational-search)
 rejects.
@@ -882,8 +875,8 @@ pins the import-cycle constraint forcing that home); the pipeline no-op
 gate, the non-queryset sidecar guard, and every other presence test
 import the one object. Inactive input (`None`, `""`,
 whitespace-only) is an unconditional no-op that returns the same queryset
-object — it runs before the length cap, the permission pass, the
-combinator preflight, and the guard, so whitespace input can never become
+object — it runs before the length cap, the permission pass, and the
+guard, so whitespace input can never become
 an observable error. When the gate passes, the *applied* value is the raw
 input, not the stripped one — an intentional phrase keeps its interior
 spacing untouched.
@@ -1160,7 +1153,7 @@ implement the original per-action policy.
 | --- | --- | --- |
 | 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 061; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
 | 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call with the exact owning definition, permission-dispatch plan built after `_bind_filtersets` (assign only after both succeed, retry-safe) |
-| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; combined-queryset preflight; guard coverage |
+| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; guard coverage |
 | 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")` and the acceptance-only `LoanType` reverse-FK search surface (Decision 7); live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
 | 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version quintet / README marketing / CHANGELOG defer to card 061 (Decision 10) |
 
@@ -1238,9 +1231,9 @@ implement the original per-action policy.
   `check_<field>_permission` gate raises loudly for denied viewers on any
   active search (Decision 13).
 - **Combined queryset** (`union()` / `intersection()` / `difference()`) —
-  an active search raises one typed error naming the combinator, for
-  direct-only and to-many plans alike; inactive search returns first
-  (Decision 6).
+  the visibility seal hands a combined `get_queryset` or sidecar result to
+  search as the set of primary keys it selects, so search composes over it
+  like any queryset and needs no preflight.
 - **Multiple `DjangoType`s over one model** — each type's frozen plan is
   keyed to the exact type definition; a connection serving the secondary
   type uses the secondary's plan, visibility hook, and SDL argument, and
@@ -1350,8 +1343,9 @@ query-object inspection only):
   `.alias()`, or `.distinct()` to the searched queryset. This is the
   package-side half of the live "search + selected relations" case
   below.
-- Combined-queryset preflight: direct-only and to-many plans both raise
-  the one typed error naming the combinator; inactive search does not.
+- Combined source: an active search over a combined `get_queryset` result
+  (direct-only and to-many plans) returns the rows the uncombined
+  equivalent returns.
 - Multi-database routing: an explicit non-default alias survives through
   direct-only and to-many compilation.
 - Exact-owner (multi-type) coverage: primary/secondary types over one
@@ -1653,7 +1647,7 @@ compiler shape.
   the row-boundary phrase oracle pass live with exact ordered IDs,
   `totalCount`, and page boundaries; the borrowing docs state both DRF
   `SearchFilter` divergences together.
-- [ ] The `SEARCH_MAX_LENGTH` cap, combined-queryset preflight, and
+- [ ] The `SEARCH_MAX_LENGTH` cap, search over a combined source, and
   active-search guard threading are live-tested.
 - [ ] `tests/filters/test_search_fields.py` + `tests/test_connection.py`
   cover the package-internal matrix (plan builder, SQL shape on a plain

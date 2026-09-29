@@ -3600,8 +3600,8 @@ def test_optimizer_context_all_exports():
         assert hasattr(ctx_mod, name)
 
 
-def test_publish_scoped_relations_handles_falsy_and_none_when_active_and_inactive():
-    """``publish_scoped_relations`` handles None, empty collections, and generators safely."""
+def test_publish_scoped_relations_handles_empty_and_generator_keys_when_active_and_inactive():
+    """``publish_scoped_relations`` records nothing for empty keys and consumes generators."""
     from django_strawberry_framework.optimizer._context import (
         begin_execution_frame,
         end_execution_frame,
@@ -3609,16 +3609,14 @@ def test_publish_scoped_relations_handles_falsy_and_none_when_active_and_inactiv
         relation_is_optimizer_scoped,
     )
 
-    # Inactive: safe no-op on falsy and non-iterables
-    publish_scoped_relations(None)
+    # Inactive: no frame to record into
     publish_scoped_relations(set())
     publish_scoped_relations([])
     publish_scoped_relations(())
 
-    # Active: safe no-op on falsy and proper consumption of iterables/generators
+    # Active: iterables and generators are consumed
     frame = begin_execution_frame({}, nested=False)
     try:
-        publish_scoped_relations(None)
         publish_scoped_relations(set())
         publish_scoped_relations([])
         publish_scoped_relations(["rel_a@Type"])

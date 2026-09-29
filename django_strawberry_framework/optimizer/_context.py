@@ -330,8 +330,6 @@ def converted_selections_memo() -> dict[ConvertedMemoKey, list[Selection]] | Non
 
 def publish_scoped_relations(keys: Iterable[str]) -> None:
     """Record ``keys`` as optimizer-planned for this execution (idempotent union)."""
-    if not keys:
-        return
     frame = _active_frame()
     if frame is not None:
         frame.scoped_relations.update(keys)

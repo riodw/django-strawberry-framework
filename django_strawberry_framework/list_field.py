@@ -12,7 +12,7 @@ import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -117,15 +117,14 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
 
 __all__ = ("DjangoListField", "ListArgumentError")
 
-_KNOWN_LIST_ARGUMENT_REASONS: frozenset[str] = frozenset(
-    {
-        "negative",
-        "non_integer",
-        "order_required",
-        "over_ceiling",
-        "queryset_required",
-    },
-)
+_ListArgumentReason = Literal[
+    "negative",
+    "non_integer",
+    "order_required",
+    "over_ceiling",
+    "queryset_required",
+]
+_KNOWN_LIST_ARGUMENT_REASONS: frozenset[str] = frozenset(get_args(_ListArgumentReason))
 
 
 def _validate_djangotype_target(
@@ -270,7 +269,7 @@ class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
         self,
         field: str,
         argument: str,
-        reason: str,
+        reason: _ListArgumentReason,
         value: object = None,
         ceiling: int | None = None,
         order_argument: str | None = None,

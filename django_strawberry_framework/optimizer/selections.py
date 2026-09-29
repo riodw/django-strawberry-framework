@@ -62,7 +62,7 @@ from ._context import converted_selections_memo
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing import TypeAlias
 
-    from graphql.language.ast import FieldNode, FragmentDefinitionNode, Node
+    from graphql.language.ast import FieldNode, FragmentDefinitionNode, NamedTypeNode, Node
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.info import Info
     from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField, Selection
@@ -187,10 +187,14 @@ def ast_to_converted_selections(
         out: list[Selection] = []
         for node in nodes:
             if isinstance(node, InlineFragmentNode):
-                condition = node.type_condition
+                # graphql-core types ``type_condition`` non-optional, but the parser leaves it
+                # ``None`` on a typeless inline fragment (``... @include(if: $x) { ... }``).
+                condition: NamedTypeNode | None = node.type_condition
                 out.append(
                     InlineFragment(
-                        type_condition=(condition.name.value if condition is not None else None),
+                        # mypy: Strawberry types ``InlineFragment.type_condition`` as ``str``;
+                        # a typeless fragment has no condition to name
+                        type_condition=(condition.name.value if condition is not None else None),  # type: ignore[arg-type]
                         directives=convert_directives(info, node.directives),
                         selections=_convert(ast_child_selections(node)),
                     ),
@@ -317,7 +321,8 @@ def resolve_unvisited_fragment(
     """
     if not isinstance(node, FragmentSpreadNode):
         return None
-    frag_name = node.name.value if node.name else None
+    # mypy: graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
+    frag_name = node.name.value if node.name else None  # type: ignore[truthy-bool]
     if frag_name is None:
         return None
     visit_key: FragmentVisitKey = frag_name if depth is None else (frag_name, depth)
@@ -345,7 +350,8 @@ def directive_variable_names(node: Node) -> set[str]:
     for directive in getattr(node, "directives", ()) or ():
         if not isinstance(directive, DirectiveNode):
             continue
-        d_name = directive.name.value if directive.name else None
+        # mypy: graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
+        d_name = directive.name.value if directive.name else None  # type: ignore[truthy-bool]
         if d_name not in ("skip", "include"):
             continue
         for arg in directive.arguments or ():

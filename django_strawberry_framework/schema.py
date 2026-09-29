@@ -172,7 +172,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
 
     def _marked_mutation_class(
         self,
-        parent_type: GraphQLObjectType,
+        parent_type: GraphQLObjectType | None,
         field_nodes: list[FieldNode],
     ) -> type | None:
         """Return the field's bound mutation class, or ``None`` for any unmarked field.

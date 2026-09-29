@@ -410,7 +410,7 @@ def _model_choice_identity_annotation(
 
 
 def _choice_enum_from_filter(
-    filter_instance: ChoiceFilter,
+    filter_instance: Filter,
     type_name: str,
     model_field: ModelField | None,
 ) -> type[enum.Enum]:
@@ -820,7 +820,7 @@ def _unwrap_enum_member(value: object) -> object:
 
 
 def _build_range_input_class(
-    filter_instance: RangeFilter,
+    filter_instance: Filter,
     inner: _TypeForm,
     filterset_cls: type[FilterSet] | None = None,
 ) -> type:
@@ -857,7 +857,8 @@ def _build_range_input_class(
     cache = getattr(filter_instance, "_range_input_classes", None)
     if cache is None:
         cache = {}
-        filter_instance._range_input_classes = cache
+        # mypy: a per-instance cache slot no filter class declares
+        filter_instance._range_input_classes = cache  # type: ignore[attr-defined]
     cached = cache.get(cache_key)
     if cached is not None:
         return cast("type", cached)  # the slot only holds classes built below
@@ -872,7 +873,7 @@ def _build_range_input_class(
 
 
 def _normalize_range_value(
-    filter_instance: RangeFilter,
+    filter_instance: Filter,
     raw_value: object,
     field_name: str | None = None,
 ) -> dict[str, object]:
@@ -1095,7 +1096,9 @@ def _build_input_fields(
         # ``email_must_have_at_sign``) we use ``top_name`` so the
         # downstream form receives the correct key.
         django_source_path = top_name if top_name in declared_filters else sample_filter.field_name
-        return bag_class | None, django_source_path
+        # mypy: ``get_filters`` binds every filter's ``field_name`` (a declared filter
+        # defaults to its attribute name), so the path is never ``None`` here.
+        return bag_class | None, django_source_path  # type: ignore[return-value]
 
     # The per-field emission scaffold (python-attr flatten -> camel-case ->
     # optional kwargs -> related lazy-ref vs leaf -> triple + ``FieldSpec``) is
@@ -1144,8 +1147,7 @@ def _model_field_for_filter(
     field_name = getattr(filter_instance, "field_name", None)
     if not field_name:
         return None
-    # django-filter is unstubbed: ``get_model_field`` returns ``Model._meta.get_field``'s result.
-    return cast("ModelField | None", get_model_field(model, field_name))
+    return get_model_field(model, field_name)
 
 
 def construct_search(all_filters: Mapping[str, object]) -> dict[str, str]:

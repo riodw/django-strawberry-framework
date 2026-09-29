@@ -391,8 +391,10 @@ def _custom_visibility_type(field_meta: FieldMeta) -> type | None:
     """
     if field_meta.related_model is None:
         return None
+    # mypy: ``FieldMeta.related_model`` copies the Django field's ``related_model``, which
+    # is still the lazy-reference string when the relation never resolved
     if not isinstance(field_meta.related_model, type):
-        return None
+        return None  # type: ignore[unreachable]
     target_type = registry.get(field_meta.related_model)
     if target_type is None:
         return None

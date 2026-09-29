@@ -842,8 +842,9 @@ def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
         decoded = gid
 
     try:
-        type_name = decoded.type_name
-        node_id = decoded.node_id
+        # A caller-built ``GlobalID`` (or subclass) carries whatever its slots were given.
+        type_name: object = decoded.type_name
+        node_id: object = decoded.node_id
     except BaseException as exc:
         raise ConfigurationError(
             "decode_global_id: GlobalID fields could not be read; both type_name and "

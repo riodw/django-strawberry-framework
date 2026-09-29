@@ -94,6 +94,12 @@ dev = [
     "django-stubs>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
     "mypy>=2.3.1",
+    # typeshed stubs for the soft dependencies the package subclasses: django-filter
+    # (the filters family) and channels (the WebSocket consumer and router). Each
+    # stub release names the upstream line it covers (``26.1.*`` / ``4.3.*``), so
+    # bump it with the library. django-debug-toolbar ships its own ``py.typed``.
+    "types-django-filter>=26.1.0.20260906",
+    "types-channels>=4.3.0.20260518",
 ]
 # Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
 # ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the
@@ -234,10 +240,12 @@ multiline-quotes = "double"
 max-line-length = 110
 
 # mypy checks the shipped package (``py.typed`` makes its annotations public).
-# Default mode plus the flags that keep suppressions honest: an unneeded
-# ``# type: ignore`` or redundant ``cast`` is itself an error. The Django plugin
-# loads the fakeshop test settings, exactly as pytest does. The soft
-# dependencies without type information are silenced by name only.
+# ``--strict`` minus ``disallow_any_explicit``, plus the optional checks below, and
+# the flags that keep suppressions honest: an unneeded ``# type: ignore`` or
+# redundant ``cast`` is itself an error. The Django plugin loads the fakeshop test
+# settings, exactly as pytest does. Every dependency is typed (its own
+# ``py.typed``, django-stubs, or the typeshed stubs in the ``dev`` group), so no
+# module is exempt from import checking.
 [tool.mypy]
 python_version = "3.10"
 files = ["django_strawberry_framework"]
@@ -249,31 +257,37 @@ plugins = [
 ]
 check_untyped_defs = true
 disallow_any_generics = true
+disallow_any_unimported = true
 disallow_incomplete_defs = true
+disallow_subclassing_any = true
 disallow_untyped_calls = true
 disallow_untyped_decorators = true
 disallow_untyped_defs = true
 # Every method that overrides a base (Strawberry, Django, graphql-core hooks included)
 # carries ``@override``, so an upstream rename that leaves an override orphaned fails here.
-enable_error_code = ["explicit-override"]
+# The rest of the list plus ``warn_unreachable`` / ``strict_equality_for_none`` make a
+# guard that its own annotations call dead an error: each such guard either narrows a
+# value typed as wide as what really arrives, or carries a commented ignore saying why
+# the contract stays narrow (GOAL.md "Trust boundary").
+enable_error_code = [
+    "explicit-override",
+    "mutable-override",
+    "possibly-undefined",
+    "redundant-expr",
+    "truthy-bool",
+    "truthy-iterable",
+]
 extra_checks = true
 no_implicit_reexport = true
 strict_equality = true
+strict_equality_for_none = true
 warn_redundant_casts = true
 warn_return_any = true
+warn_unreachable = true
 warn_unused_ignores = true
 
 [tool.django-stubs]
 django_settings_module = "config.test_settings"
-
-[[tool.mypy.overrides]]
-module = [
-    "channels.*",
-    "daphne.*",
-    "debug_toolbar.*",
-    "django_filters.*",
-]
-ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

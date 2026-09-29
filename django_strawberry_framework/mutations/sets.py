@@ -84,7 +84,7 @@ from .operations import (
 from .permissions import DjangoModelPermission, run_permission_classes
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
     from typing import Protocol, TypeAlias, TypeVar
 
     from strawberry.types import Info
@@ -175,7 +175,9 @@ def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> 
     """
     if not isinstance(meta, type):
         raise ConfigurationError(f"{name}.Meta must be a class; got {_safe_arg_repr(meta)}.")
-    declared = {key for key in vars(meta) if not (isinstance(key, str) and key.startswith("_"))}
+    # A metaclass can inject non-string keys into the consumer's ``Meta`` namespace.
+    meta_keys: Iterable[object] = vars(meta)
+    declared = {key for key in meta_keys if not (isinstance(key, str) and key.startswith("_"))}
     unknown = sorted(
         declared - allowed,
         key=lambda k: (not isinstance(k, str), str(k)),
@@ -1358,12 +1360,37 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # (the function-local import inside the generated seam keeps the module-load order
     # independent of ``resolvers.py``); the form + serializer flavors override this
     # pair with their own ``resolver_seams(...)`` call (the eight
-    # near-identical seam bodies single-sited as one factory).
-    resolve_sync, resolve_async = resolver_seams(
-        "django_strawberry_framework.mutations.resolvers",
-        "resolve_mutation_sync",
-        "resolve_mutation_async",
-    )
+    # near-identical seam bodies single-sited as one factory). A type checker sees
+    # the pair as the classmethods the factory builds, so a subclass may override
+    # either with a method.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+        @classmethod
+        def resolve_sync(
+            cls,
+            info: Info[object, object],
+            *,
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
+            """Dispatch the mutation synchronously."""
+
+        @classmethod
+        def resolve_async(
+            cls,
+            info: Info[object, object],
+            *,
+            data: object,
+            id: object,  # noqa: A002
+        ) -> object:
+            """Dispatch the mutation asynchronously."""
+
+    else:
+        resolve_sync, resolve_async = resolver_seams(
+            "django_strawberry_framework.mutations.resolvers",
+            "resolve_mutation_sync",
+            "resolve_mutation_async",
+        )
 
     def check_permission(
         self,

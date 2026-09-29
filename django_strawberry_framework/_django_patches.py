@@ -124,13 +124,17 @@ from .conf import upstream_patches_enabled
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.backends.base.base import BaseDatabaseWrapper
+    from django.test.testcases import _DatabaseFailure as _DatabaseFailureClass
 
+# Every audited Django release (5.2 - 6.1) defines this private wrapper; ``None``
+# is the drift sentinel for a release that renames or removes it.
+_DatabaseFailure: "type[_DatabaseFailureClass] | None"
 try:
     from django.test.testcases import _DatabaseFailure
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
-    _DatabaseFailure = None  # type: ignore[assignment,misc]  # import-failure sentinel
+    _DatabaseFailure = None
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"

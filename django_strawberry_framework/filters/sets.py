@@ -316,14 +316,17 @@ def _reverse_o2o_extra(field: OneToOneRel) -> dict[str, object]:
     remote field name to join on) but keeps the null label for a nullable relation.
     """
     return {
-        "queryset": filterset.remote_queryset(field),
+        # mypy: typeshed narrows ``remote_queryset`` to ``Field``; upstream documents and
+        # calls it for a ``ForeignObjectRel`` too (``related_model`` + limit choices).
+        "queryset": filterset.remote_queryset(field),  # type: ignore[arg-type]
         "null_label": _df_settings.NULL_CHOICE_LABEL if field.null else None,
     }
 
 
 def _reverse_rel_extra(field: ManyToOneRel | ManyToManyRel) -> dict[str, object]:
     """Package-owned mirror of upstream's ``ManyToOneRel`` / ``ManyToManyRel`` extra."""
-    return {"queryset": filterset.remote_queryset(field)}
+    # mypy: typeshed narrows ``remote_queryset`` to ``Field``; see ``_reverse_o2o_extra``.
+    return {"queryset": filterset.remote_queryset(field)}  # type: ignore[arg-type]
 
 
 # The package-AUTHORED public generation-policy table. Mirrors
@@ -995,7 +998,9 @@ def _candidate_metadata_for(
     if provenance is None or provenance.origin not in _FRAMEWORK_GENERATED_ORIGINS:
         return None
     try:
-        path_plan = classify_path(model, filter_instance.field_name)
+        # mypy: every ``get_filters`` output filter has a bound ``field_name`` (a declared
+        # filter defaults to its attribute name).
+        path_plan = classify_path(model, filter_instance.field_name)  # type: ignore[arg-type]
     except PathResolutionError:
         if not provenance.expanded_from:
             # Direct framework leaf -- a genuine defect; surface it loudly.
@@ -1015,7 +1020,24 @@ def _candidate_metadata_for(
     )
 
 
-class FilterSetMetaclass(filterset.FilterSetMetaclass):
+if TYPE_CHECKING:
+
+    class _FilterSetMetaclassBase(filterset.FilterSetMetaclass):
+        """The class attributes upstream's metaclass ``__new__`` sets on every class it builds.
+
+        Declared on a type-checking-only base: annotations in the metaclass body itself
+        would give it an ``__annotations__`` that shadows every built class's own.
+        """
+
+        declared_filters: OrderedDict[str, Filter]
+        base_filters: OrderedDict[str, Filter]
+        _meta: filterset.FilterSetOptions
+
+else:
+    _FilterSetMetaclassBase = filterset.FilterSetMetaclass
+
+
+class FilterSetMetaclass(_FilterSetMetaclassBase):
     """Discover `RelatedFilter` declarations and bind them to the new class.
 
     Direct port of `django_graphene_filters/filterset.py::FilterSetMetaclass`.
@@ -1045,7 +1067,7 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         # count).
         promote_set_meta_fields(attrs.get("Meta"), fields_alias=FILTERSET_FIELDS_ALIAS)
 
-        # django-filter is unstubbed: its metaclass ``__new__`` returns the built class.
+        # Upstream's ``__new__`` is typed to return its own metaclass; ``cls`` built it.
         new_class = cast("FilterSetMetaclass", super().__new__(cls, name, bases, attrs))
 
         # Collect the ``RelatedFilter`` declarations and bind each to the new
@@ -1076,7 +1098,10 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
             # ``django-filter`` computed ``base_filters`` during ``super().__new__``.
             # Rebuild from the now-corrected declaration map through its
             # implementation so model-generated filters remain intact.
-            new_class.base_filters = filterset.BaseFilterSet.get_filters.__func__(new_class)
+            # mypy: a classmethod read off its class is a bound method; ``__func__`` rebinds it
+            new_class.base_filters = filterset.BaseFilterSet.get_filters.__func__(  # type: ignore[attr-defined]
+                new_class,
+            )
 
         # Stamp consumer-declared filter attributes with a ``declared`` provenance
         # record. ``declared_filters`` is the authoritative declarative collection,
@@ -1292,6 +1317,7 @@ class FilterSet(
     # ------------------------------------------------------------------
 
     @classmethod
+    @override
     def get_filters(cls) -> OrderedDict[str, Filter]:
         """Return declared + Meta-derived + related-expanded filters.
 
@@ -1331,8 +1357,7 @@ class FilterSet(
         get_base = super().get_filters
 
         def _build() -> OrderedDict[str, Filter]:
-            # django-filter is unstubbed: ``get_filters`` builds an ``OrderedDict`` of filters.
-            all_filters = cast("OrderedDict[str, Filter]", get_base())
+            all_filters = get_base()
             model = cls._meta.model
             candidates: dict[str, CandidateFilterMetadata] = {}
             if model is not None:
@@ -1454,8 +1479,11 @@ class FilterSet(
         """
         return cls.__dict__.get("_expanded_snapshot")
 
+    # mypy: typeshed types ``get_fields`` as ``dict[str, Field]``; upstream returns an
+    # ``OrderedDict`` of field name to lookup list, the shape this override keeps.
     @classmethod
-    def get_fields(cls) -> OrderedDict[str, object]:
+    @override
+    def get_fields(cls) -> OrderedDict[str, object]:  # type: ignore[override]
         """Expand per-field ``"__all__"`` and narrow the top-level ``"__all__"`` sweep.
 
         These are two DISTINCT features that happen to share the ``"__all__"``
@@ -1507,7 +1535,7 @@ class FilterSet(
                     "'__all__', a lookup-bag dict, or a re-readable collection of field names"
                 ),
             )
-        # django-filter is unstubbed: ``get_fields`` maps each field name to its lookups.
+        # Upstream's field-name-to-lookups map (see the ``override`` note above).
         fields = cast("OrderedDict[str, object]", super().get_fields())
         model = cls._meta.model
 
@@ -1559,8 +1587,11 @@ class FilterSet(
     # spec-027 Decision 4 owner-aware Relay-vs-scalar conditional.
     # ------------------------------------------------------------------
 
+    # mypy: typeshed types ``filter_for_field`` as never ``None``; upstream returns ``None``
+    # for an unrecognized field under ``WARN`` / ``IGNORE`` (see the first branch below).
     @classmethod
-    def filter_for_field(
+    @override
+    def filter_for_field(  # type: ignore[override]
         cls,
         field: ModelField,
         field_name: str,
@@ -1591,7 +1622,13 @@ class FilterSet(
         replacement. A fan-out JOIN can otherwise return the same parent
         once per matching child, corrupting list rows and connection counts.
         """
-        default = super().filter_for_field(field, field_name, lookup_expr)
+        # mypy: typeshed narrows ``field`` to ``Field``; upstream ``get_filters`` passes the
+        # ``ForeignObjectRel`` of a reverse relation too.
+        default: Filter | None = super().filter_for_field(
+            field,  # type: ignore[arg-type]
+            field_name,
+            lookup_expr,
+        )
         if default is None:
             # Upstream's unrecognized-field contract. django-filter's
             # ``filter_for_field`` returns ``None`` for a model field with no
@@ -1641,7 +1678,9 @@ class FilterSet(
         ):
             effective_origin = "override_generated"
         framework_added_distinct = (
-            path_traverses_to_many(cls._meta.model, field_name)
+            # mypy: generation runs only for a model-backed set; upstream ``get_filters``
+            # returns the declared filters alone when ``Meta.model`` is unset.
+            path_traverses_to_many(cls._meta.model, field_name)  # type: ignore[arg-type]
             and generation_shape_capable
             and effective_origin == "framework_default"
         )
@@ -1726,11 +1765,13 @@ class FilterSet(
         # a GlobalID one for a Relay-node target and a raw-pk one otherwise.
         # Re-selecting by cardinality alone dropped a forward-FK ``in`` back to the
         # scalar class and rejected the list.
+        # mypy: ``default.extra`` holds the constructor kwargs upstream built ``default``
+        # from, forwarded verbatim.
         identity_replacement = type(default)(
             field_name=default.field_name,
             lookup_expr=default.lookup_expr,
             distinct=requires_distinct,
-            **_strip_model_choice_extras(default.extra),
+            **_strip_model_choice_extras(default.extra),  # type: ignore[arg-type]
         )
         _stamp(identity_replacement, "package_replacement")
         # A forward FK/O2O bound on a NON-pk ``to_field`` stores and joins on that
@@ -1809,7 +1850,12 @@ class FilterSet(
         ``BooleanField`` override upstream, and this oracle agrees.
         """
         try:
-            resolved_field, lookup_type = resolve_field(field, lookup_expr or "exact")
+            # mypy: typeshed narrows ``field`` to ``Field``; upstream resolves a
+            # ``ForeignObjectRel`` the same way.
+            resolved_field, lookup_type = resolve_field(
+                field,  # type: ignore[arg-type]
+                lookup_expr or "exact",
+            )
         except FieldLookupError:
             return "override_generated"
         selection_cls = models.BooleanField if lookup_type == "isnull" else type(resolved_field)
@@ -1855,9 +1901,11 @@ class FilterSet(
         merged_defaults = dict(cls.FILTER_DEFAULTS)
         if overrides:
             merged_defaults.update(overrides)
-        selected_entry = try_dbfield(merged_defaults.get, selection_cls)
+        # mypy: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance; upstream
+        # calls it with each CLASS on ``field_class``'s MRO.
+        selected_entry = try_dbfield(merged_defaults.get, selection_cls)  # type: ignore[arg-type]
         selected_norm = _normalize_policy_entry(selected_entry)
-        base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)
+        base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)  # type: ignore[arg-type]
         if selected_norm != base_norm:
             return "override_generated"
         return "framework_default"
@@ -1920,8 +1968,11 @@ class FilterSet(
             and cls.__init__ is FilterSet.__init__
         )
 
+    # mypy: typeshed types ``filter_for_lookup``'s class as never ``None``; upstream returns
+    # ``(None, {})`` for a field with no ``FILTER_DEFAULTS`` entry.
     @classmethod
-    def filter_for_lookup(
+    @override
+    def filter_for_lookup(  # type: ignore[override]
         cls,
         field: ModelField,
         lookup_type: str,
@@ -1959,7 +2010,11 @@ class FilterSet(
         ``cls.filter_for_lookup``, so the raise propagates before any leaf is
         built.
         """
-        default_class, params = super().filter_for_lookup(field, lookup_type)
+        # mypy: typeshed narrows ``field`` to ``Field``; see ``filter_for_field``.
+        default_class, params = super().filter_for_lookup(
+            field,  # type: ignore[arg-type]
+            lookup_type,
+        )
         if cls._is_own_pk_under_relay_owner(field):
             if cls._generation_origin_for_field(field, lookup_type) != "framework_default":
                 return default_class, params
@@ -2936,7 +2991,8 @@ class FilterSet(
             "Invalid filter input",
             extensions=coded_error_extensions(
                 FILTER_INVALID_ERROR_CODE,
-                errors=filterset_instance.errors.get_json_data(),
+                # mypy: typeshed types ``errors`` as a plain dict; it is the form's ``ErrorDict``
+                errors=filterset_instance.errors.get_json_data(),  # type: ignore[attr-defined]
             ),
         )
 
@@ -3081,6 +3137,7 @@ class FilterSet(
             queryset = queryset.filter(positive)
         return queryset
 
+    @override
     def filter_queryset(self, queryset: models.QuerySet[_M]) -> models.QuerySet[_M]:
         """Compose the tree-form ``and`` / ``or`` / ``not`` keys on top of the leaves.
 
@@ -3287,7 +3344,13 @@ class FilterSet(
             )
         constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)
         child_data = cls._normalize_input(child_input)
-        child_set = cls(data=child_data, queryset=constrained, request=request)
+        # mypy: typeshed narrows ``request`` to ``HttpRequest``; upstream only stores it, and
+        # the context request need not be a Django one.
+        child_set = cls(
+            data=child_data,
+            queryset=constrained,
+            request=request,  # type: ignore[arg-type]
+        )
         child_set._logic_depth = _depth
         child_set._apply_info = info
         child_set._nested_qs_by_branch_id = _nested_qs_by_branch_id
@@ -3405,7 +3468,12 @@ class FilterSet(
         data = cls._normalize_input(input_value)
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
-        filterset_instance = cls(data=data, queryset=constrained, request=request)
+        # mypy: typeshed narrows ``request`` to ``HttpRequest``; see ``_q_for_branch``.
+        filterset_instance = cls(
+            data=data,
+            queryset=constrained,
+            request=request,  # type: ignore[arg-type]
+        )
         filterset_instance._apply_info = info
         return filterset_instance, request
 
@@ -3439,8 +3507,7 @@ class FilterSet(
         if run_permissions:
             cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
-        # django-filter is unstubbed: ``qs`` is the filtered queryset.
-        return cast("models.QuerySet[models.Model]", filterset_instance.qs)
+        return filterset_instance.qs
 
     @classmethod
     def apply_sync(

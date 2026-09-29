@@ -378,6 +378,30 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .conf import upstream_patches_enabled
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Awaitable, Callable, Mapping
+
+    from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
+    from cross_web import HTTPException as _HTTPException
+    from strawberry.http.async_base_view import AsyncBaseHTTPView as _AsyncBaseHTTPView
+    from strawberry.http.base import BaseView as _BaseView
+    from strawberry.http.sync_base_view import SyncBaseHTTPView as _SyncBaseHTTPView
+    from strawberry.http.types import QueryParams
+
+    # The patched methods serve every parametrization of each generic view, so their
+    # ``self`` is the view's universal form.
+    _AnyBaseView = _BaseView[Any]
+    _AnySyncView = _SyncBaseHTTPView[Any, Any, Any, Any, Any]
+    _AnyAsyncView = _AsyncBaseHTTPView[Any, Any, Any, Any, Any, Any, Any]
+
+# Every audited release (strawberry-graphql 0.316.0 - 0.327.7, cross_web 0.6.0 -
+# 0.7.0) provides all five names; ``None`` is the drift sentinel for a release that
+# moves one, which ``_validate_upstream_shape`` refuses before any patch installs.
+BaseView: "type[_AnyBaseView] | None"
+HTTPException: "type[_HTTPException] | None"
+AsyncBaseHTTPView: "type[_AnyAsyncView] | None"
+SyncBaseHTTPView: "type[_AnySyncView] | None"
+replace_placeholders_with_files: "Callable[..., object] | None"
 try:
     from cross_web import HTTPException
     from strawberry.file_uploads.utils import replace_placeholders_with_files
@@ -387,23 +411,11 @@ try:
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
-    BaseView = None  # type: ignore[assignment,misc]  # import-failure sentinel
-    HTTPException = None  # type: ignore[assignment,misc]  # import-failure sentinel
-    AsyncBaseHTTPView = None  # type: ignore[assignment,misc]  # import-failure sentinel
-    SyncBaseHTTPView = None  # type: ignore[assignment,misc]  # import-failure sentinel
-    replace_placeholders_with_files = None  # type: ignore[assignment]  # import-failure sentinel
-
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Awaitable, Callable, Mapping
-
-    from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
-    from strawberry.http.types import QueryParams
-
-    # The patched methods serve every parametrization of each generic view, so their
-    # ``self`` is the view's universal form.
-    _AnyBaseView = BaseView[Any]
-    _AnySyncView = SyncBaseHTTPView[Any, Any, Any, Any, Any]
-    _AnyAsyncView = AsyncBaseHTTPView[Any, Any, Any, Any, Any, Any, Any]
+    BaseView = None
+    HTTPException = None
+    AsyncBaseHTTPView = None
+    SyncBaseHTTPView = None
+    replace_placeholders_with_files = None
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -434,19 +446,19 @@ def _captured_upstream_method(owner: type | None, name: str) -> object:
 # capture is ``None`` or a reshaped value only until ``_validate_upstream_shape``
 # refuses it, and the replacements that call them install only after it passes.
 _original_parse_json = cast(
-    "Callable[[_AnyBaseView, str | bytes], object]",
+    "Callable[[_AnyBaseView, str | bytes], object] | None",
     _captured_upstream_method(BaseView, "parse_json"),
 )
 _original_parse_query_params = cast(
-    "Callable[[_AnyBaseView, QueryParams], dict[str, object]]",
+    "Callable[[_AnyBaseView, QueryParams], dict[str, object]] | None",
     _captured_upstream_method(BaseView, "parse_query_params"),
 )
 _original_sync_parse_multipart = cast(
-    "Callable[[_AnySyncView, SyncHTTPRequestAdapter], dict[str, str]]",
+    "Callable[[_AnySyncView, SyncHTTPRequestAdapter], dict[str, str]] | None",
     _captured_upstream_method(SyncBaseHTTPView, "parse_multipart"),
 )
 _original_async_parse_multipart = cast(
-    "Callable[[_AnyAsyncView, AsyncHTTPRequestAdapter], Awaitable[dict[str, str]]]",
+    "Callable[[_AnyAsyncView, AsyncHTTPRequestAdapter], Awaitable[dict[str, str]]] | None",
     _captured_upstream_method(AsyncBaseHTTPView, "parse_multipart"),
 )
 
@@ -591,11 +603,14 @@ def _translated_parse_json(self: "_AnyBaseView", data: "str | bytes") -> object:
     two cannot drift about which raises count as client input.
     """
     try:
-        return _original_parse_json(self, data)
+        # mypy: runs only once _validate_upstream_shape() proved the capture callable
+        return _original_parse_json(self, data)  # type: ignore[misc]
     except UnicodeDecodeError as exc:
-        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc
+        # mypy: runs only once _validate_upstream_shape() proved HTTPException present
+        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc  # type: ignore[misc]
     except RecursionError as exc:
-        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc
+        # mypy: runs only once _validate_upstream_shape() proved HTTPException present
+        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc  # type: ignore[misc]
 
 
 def _patched_parse_json(
@@ -664,7 +679,8 @@ def _patched_parse_json(
         return parsed
     if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
         return parsed
-    raise HTTPException(
+    # mypy: runs only once _validate_upstream_shape() proved HTTPException present
+    raise HTTPException(  # type: ignore[misc]
         400,
         "The GraphQL request body must be a JSON object "
         "(or an array of operations for a batch request).",
@@ -754,7 +770,8 @@ def _raised_inside_the_upload_utility(exc: BaseException) -> bool:
     ``replace_placeholders_with_files``'s own frame, which is the exact call
     upstream wraps in a ``KeyError``-only ``except``.
     """
-    code = replace_placeholders_with_files.__code__
+    # mypy: runs only once _validate_upstream_shape() proved the utility present
+    code = replace_placeholders_with_files.__code__  # type: ignore[union-attr]
     traceback = exc.__traceback__
     while traceback is not None:
         if traceback.tb_frame.f_code is code:
@@ -785,11 +802,13 @@ def _patched_sync_parse_multipart(
     ``HTTPException`` and every unrelated application exception pass through.
     """
     try:
-        return _original_sync_parse_multipart(self, request)
+        # mypy: runs only once _validate_upstream_shape() proved the capture callable
+        return _original_sync_parse_multipart(self, request)  # type: ignore[misc]
     except _MULTIPART_TRAVERSAL_ERRORS as exc:
         if not _raised_inside_the_upload_utility(exc):
             raise
-        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
+        # mypy: runs only once _validate_upstream_shape() proved HTTPException present
+        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc  # type: ignore[misc]
 
 
 async def _patched_async_parse_multipart(
@@ -798,11 +817,13 @@ async def _patched_async_parse_multipart(
 ) -> "dict[str, str]":
     """Async twin of :func:`_patched_sync_parse_multipart`."""
     try:
-        return await _original_async_parse_multipart(self, request)
+        # mypy: runs only once _validate_upstream_shape() proved the capture callable
+        return await _original_async_parse_multipart(self, request)  # type: ignore[misc]
     except _MULTIPART_TRAVERSAL_ERRORS as exc:
         if not _raised_inside_the_upload_utility(exc):
             raise
-        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc
+        # mypy: runs only once _validate_upstream_shape() proved HTTPException present
+        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc  # type: ignore[misc]
 
 
 def _mark_patch_replacement(patched: object, original: object) -> None:
@@ -876,10 +897,11 @@ def apply() -> None:
     _validate_upstream_shape()
     if _patch_is_installed():
         return
-    BaseView.parse_json = _patched_parse_json  # type: ignore[method-assign]  # the patch itself
-    # mypy: the patch itself
-    BaseView.parse_query_params = _patched_parse_query_params  # type: ignore[method-assign]
-    # mypy: the patch itself
-    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart  # type: ignore[method-assign]
-    # mypy: the patch itself
-    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart  # type: ignore[method-assign]
+    # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
+    BaseView.parse_json = _patched_parse_json  # type: ignore[method-assign,union-attr]
+    # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
+    BaseView.parse_query_params = _patched_parse_query_params  # type: ignore[method-assign,union-attr]
+    # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
+    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart  # type: ignore[method-assign,union-attr]
+    # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
+    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart  # type: ignore[method-assign,union-attr]

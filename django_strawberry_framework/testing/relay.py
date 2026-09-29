@@ -64,7 +64,9 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     strategies (see the module docstring for the full contract).
     """
     try:
-        is_django_type = isinstance(type_cls, type) and issubclass(type_cls, DjangoType)
+        # mypy: ``type_cls: type`` is the public contract; the class check validates a
+        # test call that breaks it
+        is_django_type = isinstance(type_cls, type) and issubclass(type_cls, DjangoType)  # type: ignore[redundant-expr]
         definition = getattr(type_cls, "__django_strawberry_definition__", None)
         registered_definition = registry.get_definition(type_cls) if is_django_type else None
         is_registered_own_definition = (

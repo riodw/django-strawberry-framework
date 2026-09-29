@@ -1050,7 +1050,9 @@ def _is_connection_type(candidate: object) -> bool:
     unwrapped = unwrap_non_null(edges.type)
     if not isinstance(unwrapped, GraphQLList):
         return False
-    edge = get_named_type(unwrapped.of_type)
+    # ``of_type`` is ``Any`` upstream, which resolves ``get_named_type`` to its ``None``
+    # overload; the declared union is the function's own return type.
+    edge: GraphQLNamedType | None = get_named_type(unwrapped.of_type)
     return isinstance(edge, GraphQLObjectType) and set(edge.fields) >= _EDGE_MARKER_FIELDS
 
 
@@ -1263,7 +1265,9 @@ class _DocumentWalk:
                 continue
             if isinstance(node, InlineFragmentNode):
                 condition = parent
-                if node.type_condition is not None:
+                # mypy: graphql-core types ``type_condition`` non-optional; a typeless inline
+                # fragment carries None
+                if node.type_condition is not None:  # type: ignore[comparison-overlap]
                     condition = graphql_schema.get_type(node.type_condition.name.value) or parent
                 stack.extend(
                     (

@@ -356,7 +356,9 @@ def _build_router_class() -> type[Any]:
         return _ROUTER_CLASS
     with _ROUTER_CLASS_LOCK:
         if _ROUTER_CLASS is not None:
-            return _ROUTER_CLASS
+            # mypy: narrows the global from the unlocked check above; another thread
+            # may have built the class while this one waited on the lock.
+            return _ROUTER_CLASS  # type: ignore[unreachable]
         return _build_router_class_uncached()
 
 
@@ -528,8 +530,10 @@ def _build_router_class_uncached() -> type[Any]:
                     # middleware, and before any consumer is constructed. The
                     # HTTP branch needs neither - Django's own ALLOWED_HOSTS
                     # middleware already owns the question there.
+                    # mypy: channels-stubs types ``OriginValidator``'s scope as its private
+                    # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.
                     "websocket": DjangoWebSocketHostValidator(
-                        AllowedHostsOriginValidator(
+                        AllowedHostsOriginValidator(  # type: ignore[arg-type]
                             AuthMiddlewareStack(
                                 URLRouter(
                                     [

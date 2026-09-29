@@ -18,23 +18,16 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .conf import upstream_patches_enabled
 
-try:
-    from graphql.execution.execute import ExecutionContext
-    from graphql.pyutils import is_iterable
-except ImportError:  # pragma: no cover - exercised through patched imports in tests.
-    ExecutionContext = None  # type: ignore[assignment,misc]  # import-failure sentinel
-    is_iterable = None  # type: ignore[assignment]  # import-failure sentinel
-
-
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Callable, Iterable
 
     from graphql import FieldNode, GraphQLList, GraphQLOutputType, GraphQLResolveInfo
+    from graphql.execution.execute import ExecutionContext as _ExecutionContext
     from graphql.pyutils import AwaitableOrValue, Path
 
     _CompleteListValue = Callable[
         [
-            ExecutionContext,
+            _ExecutionContext,
             GraphQLList[GraphQLOutputType],
             list[FieldNode],
             GraphQLResolveInfo,
@@ -43,6 +36,18 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         ],
         AwaitableOrValue[list[object]],
     ]
+
+# Every graphql-core release the ``graphql-core<3.3`` pin in ``pyproject.toml`` admits
+# defines both names here; ``None`` stands in for a release that moves one, and
+# ``_validate_upstream_shape`` refuses it before anything is patched.
+ExecutionContext: "type[_ExecutionContext] | None"
+is_iterable: "Callable[[object], bool] | None"
+try:
+    from graphql.execution.execute import ExecutionContext
+    from graphql.pyutils import is_iterable
+except ImportError:  # pragma: no cover - exercised through patched imports in tests.
+    ExecutionContext = None
+    is_iterable = None
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -65,7 +70,7 @@ def _captured_upstream_method(owner: type | None, name: str) -> object:
 # ``None`` or a reshaped value only until ``_validate_upstream_shape`` refuses it; the
 # wrapper that calls it is installed only after that validation passes.
 _original_complete_list_value = cast(
-    "_CompleteListValue",
+    "_CompleteListValue | None",
     _captured_upstream_method(ExecutionContext, "complete_list_value"),
 )
 
@@ -96,14 +101,15 @@ def _validate_upstream_shape() -> None:
 
 
 def _patched_complete_list_value(
-    self: "ExecutionContext",
+    self: "_ExecutionContext",
     return_type: "GraphQLList[GraphQLOutputType]",
     field_nodes: "list[FieldNode]",
     info: "GraphQLResolveInfo",
     path: "Path",
     result: "AsyncIterable[object] | Iterable[object]",
 ) -> "AwaitableOrValue[list[object]]":
-    res = _original_complete_list_value(
+    # mypy: runs only once _validate_upstream_shape() proved the capture callable
+    res = _original_complete_list_value(  # type: ignore[misc]
         self,
         return_type,
         field_nodes,
@@ -111,7 +117,8 @@ def _patched_complete_list_value(
         path,
         result,
     )
-    if not is_iterable(result) and isinstance(result, AsyncIterable) and self.is_awaitable(res):
+    # mypy: runs only once _validate_upstream_shape() proved is_iterable callable
+    if not is_iterable(result) and isinstance(result, AsyncIterable) and self.is_awaitable(res):  # type: ignore[misc]
 
         async def _await_residual(awaitable: Any) -> Any:
             completed = await awaitable
@@ -145,5 +152,5 @@ def apply() -> None:
     _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself
-    ExecutionContext.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign]
+    # mypy: the patch itself, onto the class _validate_upstream_shape() proved present
+    ExecutionContext.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign,union-attr]

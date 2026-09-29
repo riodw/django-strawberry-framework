@@ -755,7 +755,8 @@ def check_instance_write_alias(model: type, alias: str, instance: models.Model) 
     divergence is a loud ``ConfigurationError`` before any write.
     """
     instance_alias = router.db_for_write(model, instance=instance)
-    if instance_alias is not None and instance_alias != alias:
+    # mypy: Django's router always answers an alias; the None check defends a replaced router
+    if instance_alias is not None and instance_alias != alias:  # type: ignore[comparison-overlap,redundant-expr]
         raise ConfigurationError(
             f"The database router routes {model.__name__} writes to {instance_alias!r} for this "
             f"instance, but the mutation's transaction is pinned to {alias!r} (the no-instance "
@@ -1010,23 +1011,27 @@ def _field_fingerprint(value: object) -> str:
                 frozenset,
             ),
         )
-        if is_container:
-            container_id = id(item)
-            if container_id in active:
-                raise ConfigurationError(
-                    "A located row's field value contains a reference cycle and cannot be "
-                    "fingerprinted for pre-save drift detection. Reject rather than walk "
-                    "consumer-controlled data whose structure has no end.",
-                )
-            active.add(container_id)
-            # Every container is read through its BASE iterator
-            # (``utils/canonical.py::base_container_values``) and every unordered
-            # one is ordered by the guarded key, never a bare ``repr``: a subclass
-            # that reports different contents per call, or a ``__repr__`` that
-            # returns a constant, would otherwise let two structurally different
-            # values fingerprint the SAME - and a drift check that cannot tell
-            # them apart is the fail-open this walk exists to prevent.
-            members = base_container_values(item)
+        if not is_container:
+            # Bytes / bytearray land here too (they are not containers): the
+            # leaf renderer reads their base buffer, never ``bytes(item)``.
+            parts.append(_leaf_token(item))
+            continue
+        container_id = id(item)
+        if container_id in active:
+            raise ConfigurationError(
+                "A located row's field value contains a reference cycle and cannot be "
+                "fingerprinted for pre-save drift detection. Reject rather than walk "
+                "consumer-controlled data whose structure has no end.",
+            )
+        active.add(container_id)
+        # Every container is read through its BASE iterator
+        # (``utils/canonical.py::base_container_values``) and every unordered
+        # one is ordered by the guarded key, never a bare ``repr``: a subclass
+        # that reports different contents per call, or a ``__repr__`` that
+        # returns a constant, would otherwise let two structurally different
+        # values fingerprint the SAME - and a drift check that cannot tell
+        # them apart is the fail-open this walk exists to prevent.
+        members = base_container_values(item)
         if isinstance(item, dict):
             parts.append("{")
             stack.append(_SnapshotClose("}", container_id))
@@ -1049,10 +1054,6 @@ def _field_fingerprint(value: object) -> str:
             parts.append("s{")
             stack.append(_SnapshotClose("}s", container_id))
             stack.extend(sorted(members, key=canonical_sort_key, reverse=True))
-        else:
-            # Bytes / bytearray land here too (they are not containers): the
-            # leaf renderer reads their base buffer, never ``bytes(item)``.
-            parts.append(_leaf_token(item))
     return "".join(parts)
 
 

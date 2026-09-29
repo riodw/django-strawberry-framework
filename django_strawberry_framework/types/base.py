@@ -74,6 +74,8 @@ from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Iterable
+
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
     from ..utils.typing import ConcreteField, ModelField
@@ -600,8 +602,10 @@ def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
     annotation-synthesis-time); centralizing the predicate keeps the
     Relay-shape contract single-sited.
     """
-    return any(isinstance(i, type) and issubclass(i, relay.Node) for i in interfaces) or (
-        isinstance(cls, type) and issubclass(cls, relay.Node)
+    # mypy: callers pass a class and its validated interface classes; the class checks keep
+    # a contract-breaking caller from reaching ``issubclass``
+    return any(isinstance(i, type) and issubclass(i, relay.Node) for i in interfaces) or (  # type: ignore[redundant-expr]
+        isinstance(cls, type) and issubclass(cls, relay.Node)  # type: ignore[redundant-expr]
     )
 
 
@@ -697,8 +701,9 @@ class DjangoType:
         # walks. The string-keys contract is validated HERE, once, at the
         # collection boundary - the same contain-hostile-input-at-the-gate
         # policy as ``_normalize_fields_spec``.
+        annotation_keys: Iterable[object] = consumer_annotations
         non_string_annotation_keys = sorted(
-            (key for key in consumer_annotations if not isinstance(key, str)),
+            (key for key in annotation_keys if not isinstance(key, str)),
             key=repr,
         )
         if non_string_annotation_keys:
@@ -920,7 +925,9 @@ class DjangoType:
 
 def _detect_custom_get_queryset(cls: type) -> bool:
     """Return whether ``cls`` or an intermediate base overrides ``get_queryset``."""
-    if not (isinstance(cls, type) and issubclass(cls, DjangoType)):
+    # mypy: the caller passes the class under creation; the class check keeps a
+    # contract-breaking caller from reaching ``issubclass``
+    if not (isinstance(cls, type) and issubclass(cls, DjangoType)):  # type: ignore[redundant-expr]
         return False
     for base in cls.__mro__:
         if base is DjangoType:
@@ -1204,7 +1211,8 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
     if isinstance(raw, str):
         raise ConfigurationError(_interfaces_shape_error(meta, "a string"))
     if isinstance(raw, type):
-        entries: tuple[type, ...] = (raw,)
+        # Consumer-declared entries stay unproven until the loop below checks each one.
+        entries: tuple[object, ...] = (raw,)
     elif isinstance(raw, (tuple, list)):
         entries = tuple(raw)
     else:
@@ -1257,7 +1265,8 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
         raise ConfigurationError(
             f"{meta.model.__name__}.Meta.interfaces contains duplicate entries: {sorted(duplicates)}.",
         )
-    return entries
+    # mypy: the loop raised on every entry that is not a class
+    return entries  # type: ignore[return-value]
 
 
 class _ValidatedMeta(NamedTuple):

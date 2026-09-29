@@ -1085,7 +1085,9 @@ def _resolve_keyset_connection(
                 has_next_page=False,
             ),
         )
-        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
+        # mypy: a QuerySet is always async-iterable; the check keeps the dispatch shape of
+        # ``ListConnection.resolve_connection``
+        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():  # type: ignore[redundant-expr]
 
             async def _resolve_count_only_async() -> _ConnectionT:
                 return _set_total_count(
@@ -1129,7 +1131,9 @@ def _resolve_keyset_connection(
             before_supplied=before_supplied,
         )
 
-    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
+    # mypy: a QuerySet is always async-iterable; the check keeps the dispatch shape of
+    # ``ListConnection.resolve_connection``
+    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():  # type: ignore[redundant-expr]
 
         async def _resolve_async() -> _ConnectionT:
             source = fetch_queryset[:fetch_limit]

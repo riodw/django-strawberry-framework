@@ -1289,7 +1289,7 @@ def iter_provided_input_fields(data: object) -> Iterator[tuple[str, object, Stra
 
 def build_strawberry_input_class(
     name: str,
-    field_specs: Sequence[tuple[str, object, dict[str, Any] | None]],
+    field_specs: Sequence[tuple[str, object, Mapping[str, Any] | None]],
     *,
     empty_message: str | None = None,
 ) -> type:
@@ -1564,7 +1564,7 @@ def iter_input_field_collisions(
 
 
 def build_lazy_input_annotation(
-    set_class: type,
+    set_class: object,
     *,
     expected_base: type,
     family_name: str,

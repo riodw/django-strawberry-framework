@@ -223,7 +223,7 @@ def _safe_transport_label(transport: Transport) -> str:
     ``_safe_type_name`` so the message stays actionable.
     """
     try:
-        raw = transport.value
+        raw: object = transport.value
     except BaseException:
         return _safe_type_name(transport)
     try:

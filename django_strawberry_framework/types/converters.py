@@ -641,7 +641,7 @@ def _sanitize_member_name(value: object, *, enum_name: str | None = None) -> str
 
 
 def build_enum_from_choices(
-    choice_pairs: Iterable[tuple[object, object]],
+    choice_pairs: Iterable[object],
     enum_name: str,
     *,
     source_label: str,
@@ -691,21 +691,20 @@ def build_enum_from_choices(
     normalized_pairs: list[tuple[object, object]] = []
     for entry in pairs:
         if isinstance(entry, (str, bytes)):
-            malformed = True
-        else:
-            try:
-                value, label = entry
-            except BaseException as exc:
-                raise ConfigurationError(
-                    f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
-                    "choices must be a flat sequence of (value, label) pairs.",
-                ) from exc
-            malformed = False
-        if malformed:
             raise ConfigurationError(
                 f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
                 "choices must be a flat sequence of (value, label) pairs.",
             )
+        value: object
+        label: object
+        try:
+            # mypy: a choice entry is consumer-declared; unpacking it IS the pair check
+            value, label = entry  # type: ignore[misc]
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
+                "choices must be a flat sequence of (value, label) pairs.",
+            ) from exc
         normalized_pairs.append((value, label))
 
     for _value, label in normalized_pairs:

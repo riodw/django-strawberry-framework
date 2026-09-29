@@ -674,7 +674,8 @@ class DjangoModelFormMutation(DjangoMutation):
     # reverse map. ``None`` until bind (mirrors ``_input_class``); a type checker
     # sees the bound list, since every form operation has an input.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        _input_field_specs: ClassVar[list[InputFieldSpec]]
+        # mypy: narrows the base's pre-bind ``None``; bind always stores the list before a read
+        _input_field_specs: ClassVar[list[InputFieldSpec]]  # type: ignore[mutable-override]
     else:
         _input_field_specs = None
 
@@ -947,7 +948,9 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # avoids. Reject it at class creation (the package's fail-loud contract), naming
         # the model-backed base + the two valid plain-form postures.
         for entry in permission_classes:
-            if isinstance(entry, type) and issubclass(entry, DjangoModelPermission):
+            # mypy: ``_validate_permission_classes`` returned classes only; the class
+            # check keeps ``issubclass`` safe if that contract is ever broken
+            if isinstance(entry, type) and issubclass(entry, DjangoModelPermission):  # type: ignore[redundant-expr]
                 raise ConfigurationError(
                     f"DjangoFormMutation {name}.Meta.permission_classes includes "
                     f"{entry.__name__}, which requires a model to resolve the write "

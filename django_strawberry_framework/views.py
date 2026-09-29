@@ -1019,7 +1019,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
     #: the strict decode below is reached on this transport whatever the
     #: upstream-patch setting says. The async twin needs no override: upstream's
     #: async adapter already hands over raw bytes.
-    request_adapter_class = _RawBodyRequestAdapter
+    request_adapter_class: type[DjangoHTTPRequestAdapter] = _RawBodyRequestAdapter
 
     @override
     def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:

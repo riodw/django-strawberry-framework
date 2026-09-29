@@ -131,7 +131,8 @@ def _annotation_names(type_cls: type) -> tuple[str, ...]:
     """Snapshot and validate a type's annotation keys before GraphQL conversion."""
     try:
         annotations = type_cls.__annotations__
-        names = tuple(annotations)
+        # A metaclass can inject non-string keys into a consumer class's annotations.
+        names: tuple[object, ...] = tuple(annotations)
     except BaseException as exc:
         raise ConfigurationError(
             f"Cannot finalize {_safe_class_name(type_cls)}: its annotations could not be read. "
@@ -1172,7 +1173,7 @@ def _bind_set_owner_common(
     set_cls: _SetT,
     definition: DjangoTypeDefinition,
     *,
-    get_model: Callable[[_SetT], type[models.Model] | None],
+    get_model: Callable[[_SetT], object],
     format_model_mismatch: Callable[[_SetT, DjangoTypeDefinition], str],
     before_second_owner_check: (
         Callable[[_SetT, DjangoTypeDefinition, DjangoTypeDefinition], None] | None
@@ -1230,7 +1231,9 @@ def _bind_set_owner_common(
     set_model = get_model(set_cls)
     if (
         set_model is not None
-        and definition.model is not None
+        # mypy: a real definition always records its model; the check keeps a model-less
+        # owner definition from reaching ``issubclass``
+        and definition.model is not None  # type: ignore[comparison-overlap,redundant-expr]
         and (not isinstance(set_model, type) or not issubclass(definition.model, set_model))
     ):
         # A non-class ``set_model`` (e.g. the Django lazy-ref string idiom on
@@ -1528,7 +1531,7 @@ def _format_owner_set_model_mismatch_error(
     *,
     family: str,
     meta_key: str,
-    set_model: type | None,
+    set_model: object,
     article: str,
     dash: str,
     purpose: str,

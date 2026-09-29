@@ -81,7 +81,7 @@ FRAMEWORK_GLOBALID_STRATEGIES = MODEL_LABEL_STRATEGIES | TYPE_NAME_STRATEGIES
 ENCODE_ONLY_GLOBALID_STRATEGIES = frozenset({"callable", "custom"})
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from typing import TypeAlias
 
     from django.core.files.uploadedfile import UploadedFile
@@ -123,11 +123,14 @@ class _EmptyListAwareFilterMethod(FilterMethod):
     here; the empty list reaches `self.method`.
     """
 
-    def __call__(self, qs: models.QuerySet[_M], value: object) -> object:
+    @override
+    def __call__(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Apply the custom method, treating empty list as a real value."""
         if value is None:
             return qs
-        return self.method(qs, self.f.field_name, value)
+        # mypy: ``FilterMethod.method`` is the consumer's ``method=`` callable, typed
+        # ``Callable[..., Any]`` upstream; its contract is to return the filtered queryset.
+        return self.method(qs, self.f.field_name, value)  # type: ignore[no-any-return]
 
 
 def _install_empty_list_aware_method(
@@ -143,9 +146,13 @@ def _install_empty_list_aware_method(
     subclass remains a per-filter type identity (graphene-parity public names);
     only the install sequence is shared.
     """
-    TypedFilter.method.fset(filter_instance, value)
+    # mypy: typeshed declares ``Filter.method`` a plain attribute; django-filter defines
+    # it as a property, whose ``fset`` this reuses.
+    TypedFilter.method.fset(filter_instance, value)  # type: ignore[union-attr]
     if value is not None:
-        filter_instance.filter = method_cls(filter_instance)
+        # mypy: django-filter's own ``method`` setter shadows ``filter`` per instance
+        # the same way (``self.filter = FilterMethod(self)``).
+        filter_instance.filter = method_cls(filter_instance)  # type: ignore[method-assign]
 
 
 def _apply_lookups(
@@ -162,8 +169,7 @@ def _apply_lookups(
     """
     if filter_instance.distinct:
         qs = qs.distinct()
-    # django-filter is unstubbed: ``get_method`` is ``qs.filter`` or ``qs.exclude``.
-    return cast("models.QuerySet[_M]", filter_instance.get_method(qs)(**lookups))
+    return filter_instance.get_method(qs)(**lookups)
 
 
 def _apply_lookup_predicate(
@@ -357,12 +363,14 @@ class ArrayFilter(TypedFilter):
         queryset).
     """
 
-    # mypy: django-filter is unstubbed, so the inherited ``method`` property setter is untyped
-    @TypedFilter.method.setter  # type: ignore[untyped-decorator]
+    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is
+    @override
+    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]
     def method(self, value: object) -> None:
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Apply the lookup; `[]` is a real value (not `EMPTY_VALUES`-ish).
 
@@ -431,9 +439,10 @@ class RangeField(Field):
 
     # django-stubs declares both as ``forms.Field`` instance variables; Django
     # defines them as class attributes, which is what these override.
+    # ``empty_values`` keeps the base's ``Sequence`` type: it is only read.
     # mypy: stub: instance var
     default_validators: ClassVar[list[_Validator]] = [validate_range]  # type: ignore[misc]
-    empty_values: ClassVar[list[object]] = [  # type: ignore[misc]  # stub: instance var
+    empty_values: ClassVar[Sequence[object]] = [  # type: ignore[misc]  # stub: instance var
         None,
         [None, None],
         (None, None),
@@ -469,12 +478,14 @@ class ListFilter(TypedFilter):
     supplied" pass-through.
     """
 
-    # mypy: django-filter is unstubbed, so the inherited ``method`` property setter is untyped
-    @TypedFilter.method.setter  # type: ignore[untyped-decorator]
+    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is
+    @override
+    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]
     def method(self, value: object) -> None:
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ListFilterMethod)
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Short-circuit empty-list inputs to `qs.none()` (or `qs` when excluding).
 
@@ -489,8 +500,7 @@ class ListFilter(TypedFilter):
         a coded reject.
         """
         if value is None:
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, value))
+            return super().filter(qs, value)
         value = _materialize_list_shaped_values(
             value,
             message="Invalid filter value: expected a list.",
@@ -498,8 +508,7 @@ class ListFilter(TypedFilter):
         )
         if len(value) == 0:
             return _match_none_queryset(self, qs)
-        # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-        return cast("models.QuerySet[_M]", super().filter(qs, value))
+        return super().filter(qs, value)
 
 
 def _coerce_int_in_members(
@@ -551,6 +560,7 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
       `exclude` filter the complement of "no row" is "every row", so it returns `qs`.
     """
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Coerce members, matching nothing when a non-empty input fully drops.
 
@@ -562,8 +572,7 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
         delivers are meaningful; everything else is a coded reject.
         """
         if value is None:
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, value))
+            return super().filter(qs, value)
         value = _materialize_list_shaped_values(
             value,
             message="Invalid filter value: expected a list of integers.",
@@ -572,22 +581,25 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
         if value in EMPTY_VALUES:
             # Explicit empty (``in: []``): keep django-filter's skip (no
             # membership values were supplied, so there is no constraint to honor).
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, value))
+            return super().filter(qs, value)
         parent = getattr(self, "parent", None)
         meta = getattr(parent, "_meta", None)
         model = getattr(meta, "model", None)
-        model_field = get_model_field(model, self.field_name) if model is not None else None
+        # mypy: a bound filter's ``field_name`` is never ``None``: django-filter's metaclass
+        # defaults it to the declaration name before any ``filter`` call.
+        model_field = (
+            get_model_field(model, self.field_name)  # type: ignore[arg-type]
+            if model is not None
+            else None
+        )
         if model_field is not None:
             kept = _coerce_int_in_members(model_field, value)
             if not kept:
                 # A non-empty membership list whose every value is out of range matches
                 # no row; never the empty-value skip that would return all rows.
                 return _match_none_queryset(self, qs)
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, kept))
-        # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-        return cast("models.QuerySet[_M]", super().filter(qs, value))
+            return super().filter(qs, kept)
+        return super().filter(qs, value)
 
 
 class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
@@ -613,6 +625,7 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
     ``BETWEEN`` would express if the backend could bind the value.
     """
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Apply the range as a decomposed ``gte`` + ``lte`` pair (never a raw ``BETWEEN``).
 
@@ -909,6 +922,7 @@ class GlobalIDFilter(Filter):
     any queryset clause runs.
     """
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Decode + validate the GlobalID; delegate to `Filter.filter` with `node_id`.
 
@@ -930,14 +944,12 @@ class GlobalIDFilter(Filter):
         predicate.
         """
         if value is None:
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, None))
+            return super().filter(qs, None)
         node_id = _decode_and_validate_global_id(value, self)
         pk_field_name = _marked_pk_field_name(self)
         if pk_field_name is not None:
             return _apply_lookup_predicate(self, qs, node_id, field_name=pk_field_name)
-        # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-        return cast("models.QuerySet[_M]", super().filter(qs, node_id))
+        return super().filter(qs, node_id)
 
 
 class _AbsentGlobalIDMultipleChoiceWidget(SelectMultiple):
@@ -1031,6 +1043,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
 
     field_class = _GlobalIDMultipleChoiceField
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Decode + validate every GlobalID; apply the lookup-shaped predicate.
 
@@ -1057,8 +1070,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         lists only.
         """
         if value is None:
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, None))
+            return super().filter(qs, None)
         value = _globalid_multiple_choice_values(value)
         if len(value) == 0:
             return _match_none_queryset(self, qs)
@@ -1066,8 +1078,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
             _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
         ]
         if self.lookup_expr != "in":
-            # unstubbed django-filter: ``Filter.filter`` returns the narrowed queryset
-            return cast("models.QuerySet[_M]", super().filter(qs, node_ids))
+            return super().filter(qs, node_ids)
         # ``_marked_pk_field_name`` DERIVES the pk-qualified relation path
         # ``f"{self.field_name}__pk"`` from the LIVE ``field_name`` (immune to
         # ``_expand_related_filter`` rebasing) for a non-pk-``to_field`` forward relation;
@@ -1204,6 +1215,7 @@ class RelationPkFilter(Filter):
     predicate and match by value.
     """
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Coerce the key through the target column and apply one relation predicate.
 
@@ -1233,6 +1245,7 @@ class RelationPkMultipleFilter(Filter):
 
     field_class = _RelationIdentityListField
 
+    @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
         """Coerce every member and apply ONE ``<relation>__in`` predicate over the survivors.
 
@@ -1333,7 +1346,8 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
                 "removed in 0.0.7 because it had no readers.",
             )
         self._has_explicit_queryset = kwargs.get("queryset") is not None
-        super().__init__(*args, **kwargs)
+        # mypy: forwarded verbatim; ``ModelChoiceFilter.__init__`` owns their validation.
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self._filterset = filterset
 
     def bind_filterset(self, filterset: type[FilterSet]) -> None:
@@ -1424,7 +1438,13 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     def filterset(self, value: _FilterSetTarget) -> None:
         self._set_target(value)
 
-    def get_queryset(self, request: object) -> models.QuerySet[models.Model] | None:
+    # mypy: typeshed types ``QuerySetRequestMixin.get_queryset`` as never ``None``; it returns
+    # the ``queryset=`` value verbatim, and that defaults to ``None``.
+    @override
+    def get_queryset(  # type: ignore[override]
+        self,
+        request: object,
+    ) -> models.QuerySet[models.Model] | None:
         """Derive the queryset from the target filterset's `Meta.model`.
 
         When no explicit `queryset=` was supplied at construction time,
@@ -1432,8 +1452,8 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         - the cookbook's documented auto-derivation contract. An explicit
         queryset is preserved verbatim.
         """
-        # django-filter is unstubbed: its ``get_queryset`` returns the ``queryset=`` value.
-        queryset = cast("models.QuerySet[models.Model] | None", super().get_queryset(request))
+        # ``None`` when no ``queryset=`` was supplied (see the ``override`` note above).
+        queryset: models.QuerySet[models.Model] | None = super().get_queryset(request)
         if queryset is None:
             target = self.filterset
             model = getattr(getattr(target, "_meta", None), "model", None)

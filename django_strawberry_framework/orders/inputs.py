@@ -365,7 +365,9 @@ def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: object) -> No
     if not any(iter_active_fields(orderset_cls, input_value, traversal)):
         return
     if (
-        isinstance(orderset_cls, type)
+        # mypy: every caller passes an OrderSet class; the class check keeps a
+        # contract-breaking direct caller out of the spec build
+        isinstance(orderset_cls, type)  # type: ignore[redundant-expr]
         and callable(getattr(orderset_cls, "get_fields", None))
         and not any(owner is orderset_cls for owner, _ in _field_specs)
     ):

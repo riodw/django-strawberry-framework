@@ -1,14 +1,21 @@
 """Django ``AppConfig`` - registers the package and applies its upstream patches at app load."""
 
+from typing import TYPE_CHECKING
+
 from django.apps import AppConfig
 from typing_extensions import override
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django_stubs_ext import StrOrPromise
 
 
 class DjangoStrawberryFrameworkConfig(AppConfig):
     """Register django-strawberry-framework with Django's app loader."""
 
     name = "django_strawberry_framework"
-    verbose_name = "Django Strawberry Framework"
+    # Declared at the base type: ``AppConfig.verbose_name`` is a mutable attribute that
+    # accepts a lazy translation, so a plain ``str`` here would narrow it covariantly.
+    verbose_name: "StrOrPromise" = "Django Strawberry Framework"
 
     @override
     def ready(self) -> None:

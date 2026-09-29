@@ -201,17 +201,22 @@ from typing import TYPE_CHECKING, cast
 
 from .conf import upstream_patches_enabled
 
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable
+
+    from cross_web import DjangoHTTPRequestAdapter as _DjangoHTTPRequestAdapter
+
+    _BodyGetter = Callable[[_DjangoHTTPRequestAdapter], str | bytes]
+
+# Every audited cross_web release (0.6.0 - 0.7.0) exports the adapter; ``None``
+# is the drift sentinel for a release that stops doing so.
+DjangoHTTPRequestAdapter: "type[_DjangoHTTPRequestAdapter] | None"
 try:
     from cross_web import DjangoHTTPRequestAdapter
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
-    DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]  # import-failure sentinel
-
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable
-
-    _BodyGetter = Callable[[DjangoHTTPRequestAdapter], str | bytes]
+    DjangoHTTPRequestAdapter = None
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"
@@ -285,7 +290,7 @@ def _validate_upstream_shape() -> None:
         )
 
 
-def _patched_body(self: "DjangoHTTPRequestAdapter") -> bytes:
+def _patched_body(self: "_DjangoHTTPRequestAdapter") -> bytes:
     """Return raw ``self.request.body`` bytes - the async adapter's contract.
 
     The return contract is unchanged by spec-046: raw bytes, never a
@@ -353,5 +358,5 @@ def apply() -> None:
     _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself
-    DjangoHTTPRequestAdapter.body = property(_patched_body)  # type: ignore[method-assign,assignment]
+    # mypy: the patch itself, onto the adapter _validate_upstream_shape() proved present
+    DjangoHTTPRequestAdapter.body = property(_patched_body)  # type: ignore[method-assign,union-attr]

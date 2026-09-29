@@ -2399,7 +2399,7 @@ def _prefetch_relation_target_or_none(
     current: type[models.Model] = parent_model
     for part in path.split(LOOKUP_SEP):
         try:
-            field = current._meta.get_field(part)
+            field: models.Field[Any, Any] | ForeignObjectRel | None = current._meta.get_field(part)
         except Exception:
             # Not in the field map: the default ``<model>_set`` / bare-name
             # reverse accessor spelling (a relation declared without a

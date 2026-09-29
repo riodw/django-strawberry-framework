@@ -277,7 +277,7 @@ class DjangoTypeDefinition:
 
     def related_target_for(
         self,
-        field_name: str,
+        field_name: object,
     ) -> tuple[DjangoTypeDefinition, ModelField] | None:
         """Return ``(target_definition, model_field)`` for a relation field.
 
@@ -433,14 +433,17 @@ def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
     from strawberry.relay.exceptions import NodeIDAnnotationError
 
     try:
-        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)
+        # mypy: every caller passes a class; the class check keeps a contract-breaking
+        # caller from reaching ``issubclass``
+        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)  # type: ignore[redundant-expr]
     except BaseException:
         return True
     if not is_node:
         return False
     try:
         # ``is_node`` above established the ``relay.Node`` subclass.
-        id_attr = cast("type[relay.Node]", origin).resolve_id_attr()
+        # A consumer ``Node`` may override ``resolve_id_attr`` to return anything.
+        id_attr: object = cast("type[relay.Node]", origin).resolve_id_attr()
     except NodeIDAnnotationError:
         # No ``NodeID`` annotation: the framework default resolves to "pk".
         return False

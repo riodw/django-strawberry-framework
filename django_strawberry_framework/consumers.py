@@ -1626,7 +1626,9 @@ async def _refreshed_actor(scope: Mapping[str, Any]) -> object:
     from .utils.sessions import session_store_class
 
     store = session_store_class()(scope["session"].session_key)
-    return await get_user({"session": store})
+    # mypy: channels-stubs types ``get_user``'s argument as a full ``_ChannelScope`` holding a
+    # lazy session; ``get_user`` reads only ``scope["session"]`` (see above).
+    return await get_user({"session": store})  # type: ignore[typeddict-item]
 
 
 def build_revalidating_consumer_class(
@@ -1654,7 +1656,8 @@ def build_revalidating_consumer_class(
     # no static type to name here.
     transport_ws_handler_base: Any = base_consumer_cls.graphql_transport_ws_handler_class
 
-    class _RevalidatingTransportWSHandler(transport_ws_handler_base):
+    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
+    class _RevalidatingTransportWSHandler(transport_ws_handler_base):  # type: ignore[misc, no-any-unimported]
         """``graphql-transport-ws``: revalidated admission, stoppable results."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1719,7 +1722,8 @@ def build_revalidating_consumer_class(
 
     graphql_ws_handler_base: Any = base_consumer_cls.graphql_ws_handler_class
 
-    class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):
+    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
+    class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):  # type: ignore[misc, no-any-unimported]
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -1750,7 +1754,8 @@ def build_revalidating_consumer_class(
 
     websocket_adapter_base: Any = base_consumer_cls.websocket_adapter_class
 
-    class _RevocationGatedWebSocketAdapter(websocket_adapter_base):
+    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
+    class _RevocationGatedWebSocketAdapter(websocket_adapter_base):  # type: ignore[misc, no-any-unimported]
         """The outbound checkpoint, on the seam both protocols share.
 
         One class-level ``send_json`` override, installed on the generated
@@ -1881,7 +1886,8 @@ def build_revalidating_consumer_class(
 
     consumer_base: Any = base_consumer_cls
 
-    class GraphQLWebSocketConsumer(consumer_base):
+    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
+    class GraphQLWebSocketConsumer(consumer_base):  # type: ignore[misc, no-any-unimported]
         """The package's WebSocket GraphQL consumer: upstream plus revalidation.
 
         Three ``super()``-delegating hooks - one per protocol for operation
@@ -2107,7 +2113,9 @@ class DjangoWebSocketHostValidator:
             # (``AllowedHostsOriginValidator`` lives in it) to build the router.
             from channels.security.websocket import WebsocketDenier
 
-            await WebsocketDenier()(scope, receive, send)
+            # mypy: channels-stubs types every channels application's scope as its private
+            # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.
+            await WebsocketDenier()(scope, receive, send)  # type: ignore[arg-type]
             return
         # Every other exception propagates deliberately (spec-046 Edge cases
         # #"The Host projection must not swallow its own bugs"): a projection bug

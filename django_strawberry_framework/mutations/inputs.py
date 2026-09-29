@@ -991,7 +991,9 @@ def build_payload_type(
         }
     else:
         slot = object_slot if object_slot is not None else payload_object_slot(object_type)
-        if not isinstance(slot, str) or not slot.isidentifier() or slot in _RESERVED_PAYLOAD_ATTRS:
+        # mypy: ``object_slot: str | None`` is the builder's contract; the str check
+        # rejects a caller that breaks it before ``isidentifier`` runs
+        if not isinstance(slot, str) or not slot.isidentifier() or slot in _RESERVED_PAYLOAD_ATTRS:  # type: ignore[redundant-expr]
             raise ConfigurationError(
                 f"object_slot {_safe_arg_repr(slot)} is not a usable payload object-field "
                 "name: it must be a valid Python identifier outside the reserved payload "

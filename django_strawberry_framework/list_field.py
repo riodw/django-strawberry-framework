@@ -407,7 +407,8 @@ def _resolve_argument_wire_name(info: Info[object, object], parameter_name: str)
     """
     fallback = _DEFAULT_WIRE_NAMES.get(parameter_name, parameter_name)
     try:
-        get_arg_def = info.get_argument_definition
+        # A consumer ``info_class`` can shadow the resolver with anything.
+        get_arg_def: object = info.get_argument_definition
     except AttributeError:
         return fallback
     except Exception as exc:
@@ -1219,7 +1220,9 @@ def _model_from_definition(definition: DjangoTypeDefinition) -> type[models.Mode
             f"DjangoListField could not read the model from the definition of "
             f"{_safe_class_name(getattr(definition, 'origin', definition))}: {exc}",
         ) from exc
-    if not (isinstance(model, type) and issubclass(model, models.Model)):
+    # mypy: the canonical definition records a model class; the check fails loud if that
+    # invariant is ever broken instead of seeding a resolver over a non-model
+    if not (isinstance(model, type) and issubclass(model, models.Model)):  # type: ignore[redundant-expr]
         raise ConfigurationError(
             f"DjangoListField target "
             f"{_safe_class_name(getattr(definition, 'origin', definition))} has a definition "
@@ -1249,7 +1252,8 @@ def _orderset_class_from_definition(definition: DjangoTypeDefinition) -> type[Or
 def _field_label(info: Info[object, object]) -> str:
     """Return the resolver field label without allowing consumer descriptors to escape."""
     try:
-        field_name = info.field_name
+        # A consumer ``info_class`` can shadow ``field_name`` with anything.
+        field_name: object = info.field_name
     except Exception:
         return "DjangoListField"
     return field_name if isinstance(field_name, str) and field_name else "DjangoListField"

@@ -28,16 +28,6 @@ from django_strawberry_framework.utils.execution_mode import (
     operation_is_async,
 )
 
-#: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
-#: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
-#: delegates to a name that install does not carry and no handler reads - so the
-#: rows about it are skipped rather than rewritten onto ``subscribe``, which
-#: there serves subscriptions alone and would prove a different contract.
-_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
-    not hasattr(strawberry.Schema, "stream"),
-    reason="Schema.stream landed in strawberry-graphql 0.319.0",
-)
-
 
 @strawberry.type
 class _Query:
@@ -89,7 +79,6 @@ async def test_an_awaited_operation_is_asynchronous_all_the_way_down():
     assert result.data == {"readings": "OperationMode.ASYNC|True|True"}
 
 
-@_SKIP_WITHOUT_STREAM
 @pytest.mark.asyncio
 async def test_a_streamed_operation_is_asynchronous_too():
     """``stream`` and ``subscribe`` come through the same flag as ``execute``."""

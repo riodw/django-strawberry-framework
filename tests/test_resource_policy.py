@@ -107,16 +107,6 @@ from django_strawberry_framework.resource_policy import (
 from django_strawberry_framework.schema import _consumer_extension_entries
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
 
-#: ``Schema.stream`` landed in strawberry-graphql 0.319.0. Below it the package
-#: has no streamed seam to answer for - ``consumers.py::_StopAwareSchema.stream``
-#: delegates to a name that install does not carry and no handler reads - so the
-#: rows about it are skipped rather than rewritten onto ``subscribe``, which
-#: there serves subscriptions alone and would prove a different contract.
-_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
-    not hasattr(strawberry.Schema, "stream"),
-    reason="Schema.stream landed in strawberry-graphql 0.319.0",
-)
-
 # ---------------------------------------------------------------------------
 # Construction and validation
 #
@@ -3287,10 +3277,10 @@ def test_an_operation_the_budget_rejected_does_not_begin_executing():
     """A rejection means nothing runs, restated where running starts.
 
     Publishing is what makes validation stand down, and every seam that reads a
-    pre-execution error stops there - except a streaming path that yields the
-    error frame and then executes the operation anyway, which some releases in
-    the supported range do. The hook execution begins from is entered only when
-    an operation is about to run, so it is where that contradiction is closed.
+    pre-execution error stops there - unless a validation hook set up after the
+    extension erased it, which a plain ``strawberry.Schema`` with a later
+    validation cache does. The hook execution begins from is entered only when an
+    operation is about to run, so it is where that contradiction is closed.
     What it reads is the recorded verdict rather than the published error,
     because the published error is a field anything in the extension chain
     writes.
@@ -3345,7 +3335,6 @@ class _StreamedSubscription:
         yield 1
 
 
-@_SKIP_WITHOUT_STREAM
 @pytest.mark.parametrize(
     "extensions",
     [[], [ValidationCache]],

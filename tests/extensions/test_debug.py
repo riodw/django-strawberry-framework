@@ -94,11 +94,6 @@ _EXCEPTION_MESSAGE_CAP = 4096
 _EXCEPTION_STACK_CAP = 16384
 _PAYLOAD_CAP = 262144
 _MARKER = "... [truncated]"
-_HAS_SCHEMA_STREAM = hasattr(strawberry.Schema, "stream")
-_SKIP_WITHOUT_STREAM = pytest.mark.skipif(
-    not _HAS_SCHEMA_STREAM,
-    reason="Schema.stream landed in strawberry-graphql 0.319.0",
-)
 
 
 @strawberry.type
@@ -823,9 +818,10 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(default_wrappe
 # ---------------------------------------------------------------------------
 # Scenario 13 - concurrent sync instance isolation at the dependency floor.
 #
-# The regression that fails under the pre-0.316 cached ``_sync_extensions``
-# lifecycle. Maintainers run this same test - selected by node id, never a
-# copied script - in an isolated ``strawberry-graphql==0.322.2`` environment:
+# Every supported Strawberry release builds fresh extension instances per sync
+# operation, and the floor is where that is proved: maintainers run this same
+# test - selected by node id, never a copied script - in an isolated
+# ``strawberry-graphql==0.322.2`` environment:
 #
 #   uv run pytest -o addopts="-v -n0" \
 #     "tests/extensions/test_debug.py::test_concurrent_sync_operations_use_isolated_instances"
@@ -1229,17 +1225,15 @@ def _exception_row(message, stack=""):
 
 # ---------------------------------------------------------------------------
 # Scenario 22 - the streaming seam (``Schema.stream``, the seam the package's
-# WebSocket consumers call for every operation type from strawberry-graphql
-# 0.319.0 on). The engine reads the extension results INSIDE the still-open
-# operation context there, so the executing hook - not the operation
-# teardown - must own the stash the streaming seam reads. The non-streaming
-# colors read the results after ``on_operation``'s rebuild overwrites it, so
-# every contract pinned above is unchanged. The four rows skip on a release
-# below 0.319.0, which has no ``Schema.stream`` (none is supported).
+# ``graphql-transport-ws`` consumer calls for every operation type). The engine
+# reads the extension results INSIDE the still-open operation context there, so
+# the executing hook - not the operation teardown - must own the stash the
+# streaming seam reads. The non-streaming colors read the results after
+# ``on_operation``'s rebuild overwrites it, so every contract pinned above is
+# unchanged.
 # ---------------------------------------------------------------------------
 
 
-@_SKIP_WITHOUT_STREAM
 async def test_streaming_seam_publishes_the_payload_the_engine_reads():
     """A streamed operation carries ``extensions["debug"]`` like execute does.
 
@@ -1278,7 +1272,6 @@ async def test_streaming_seam_publishes_the_payload_the_engine_reads():
     ]
 
 
-@_SKIP_WITHOUT_STREAM
 async def test_streaming_clean_operation_carries_both_lists():
     schema = strawberry.Schema(
         query=_OkQuery,
@@ -1293,7 +1286,6 @@ async def test_streaming_clean_operation_carries_both_lists():
     assert payload == {"sql": [], "exceptions": []}
 
 
-@_SKIP_WITHOUT_STREAM
 async def test_streaming_parse_failure_publishes_no_debug_key():
     """The no-key contract holds on the streaming seam for a never-executed operation."""
     schema = strawberry.Schema(
@@ -1310,7 +1302,6 @@ async def test_streaming_parse_failure_publishes_no_debug_key():
 
 
 @override_settings(DEBUG=False)
-@_SKIP_WITHOUT_STREAM
 async def test_streaming_fail_closed_gate_withholds_and_warns(caplog):
     """The inert gate holds on the streaming seam: no key, one warning, operation intact."""
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])

@@ -66,9 +66,9 @@ Where each pass reaches, stated as the boundary rather than as parity:
   a validation hook sets up and the last one to do so has the last word:
   ``schema.py::DjangoSchema`` appends :class:`_AdmissionGuard` behind every
   consumer entry for exactly that position. It is read once more at the hook
-  execution begins from, so a streaming path that yields the error frame and
-  then executes the operation anyway - which some releases in the supported
-  range do - meets it there.
+  execution begins from, so a plain ``strawberry.Schema`` whose consumer placed a
+  validation cache after this extension, which the pre-execution check then
+  waves through, still meets it there.
 - Pass 1 is the one that still raises, because its whole job is to refuse
   before the parser runs and a published error does not stop a parse. On a
   transport whose streaming path has no conversion for an exception out of that
@@ -1674,14 +1674,15 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
     def on_execute(self) -> Iterator[None]:
         """Refuse to begin executing an operation the admission stage rejected.
 
-        A rejection is a statement that nothing runs, and on every seam that
-        reads it nothing does. Where a release's streaming path yields the
-        pre-execution error and then goes on to execute the operation anyway,
-        execution BEGINNING is the contradiction, so the refusal is restated at
-        the hook execution starts from - which is the seam that same path
-        already converts into an error entry. Raising is correct here and wrong
-        at the charging hook: this one is entered only when an operation is
-        about to run.
+        A rejection is a statement that nothing runs. Where a validation hook
+        set up after this extension erased the published rejection - a plain
+        ``strawberry.Schema`` with a later validation cache, which has no
+        appended :class:`_AdmissionGuard` - the pre-execution check waves the
+        operation through, and execution BEGINNING is the contradiction, so the
+        refusal is restated at the hook execution starts from, which every
+        upstream execution path converts into an error entry. Raising is correct
+        here and wrong at the charging hook: this one is entered only when an
+        operation is about to run.
         """
         rejection = admission_rejection()
         if rejection is not None:

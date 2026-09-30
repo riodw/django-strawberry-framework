@@ -5472,16 +5472,6 @@ def _upstream_handler_sources():
     ]
 
 
-#: Every ``self.schema.<name>`` upstream's two handler modules read that the wrapper
-#: deliberately does NOT define, with the reason delegation is the right answer for
-#: it. A name here is a name whose call produces no result source to stop or mask:
-#: ``execute`` returns one already-torn-down result and never loops, which is why the
-#: releases that use it (<=0.318.1, for a query or mutation over graphql-transport-ws)
-#: need nothing from this wrapper. Every OTHER name upstream reads must be one the
-#: wrapper defines, or it is a result source escaping the seam.
-_AUDITED_DELEGATED_SCHEMA_READS = frozenset({"execute"})
-
-
 def _wrapped_schema_reads():
     """The result-source names ``_StopAwareSchema`` actually overrides.
 
@@ -5496,33 +5486,32 @@ def _wrapped_schema_reads():
     )
 
 
-def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
-    """The substituted schema is transparent, measured against upstream's own source.
+def _public_schema_names():
+    """The public names ``BaseSchema`` declares, the contract a handler reads from."""
+    from strawberry.schema import BaseSchema
+
+    return frozenset(name for name in vars(BaseSchema) if not name.startswith("_"))
+
+
+def test_the_stop_aware_schema_covers_every_upstream_schema_read():
+    """The substituted schema covers every read upstream makes of it, from its source.
 
     The stop protocol works by replacing the handler's own ``self.schema`` with a
     per-connection wrapper, and a wrapper is only safe while everything upstream asks
-    of that object either becomes stoppable or resolves to the real one. So the name
-    set is DERIVED from the installed handler modules rather than asserted from
-    memory: every ``self.schema.<name>`` is either one the wrapper defines - a call
-    whose result source has to become stoppable and masked - or an explicitly audited
-    delegation that reaches the real schema through ``__getattr__``.
+    of that object becomes stoppable and masked. So the name set is DERIVED from the installed handler modules rather than asserted from
+    memory: every ``self.schema.<name>`` must be one the wrapper defines - a call
+    whose result source has to become stoppable and masked.
 
-    **The assertion is a partition, not an equality, and that is the whole point of
-    the row.** Pinning the exact pair of names one release happens to read makes this
-    row fail on every upstream release that reads a different pair - including the
-    ones the wrapper already covers - while an unaudited NEW name is the failure that
-    actually matters: it resolves silently to the real schema, and a protocol's every
-    frame then reaches the wire unmasked and unstoppable. Upstream renamed this exact
-    seam once already (graphql-transport-ws moved from ``subscribe`` + ``execute`` to
-    ``stream`` at 0.319.0), so the row is written to hold across every audited
-    release from 0.316.0 on and to fail loudly on a fourth name rather than on the
-    second and third.
+    **The assertion is containment, not equality.** Pinning the exact pair of names
+    one release happens to read would fail on a release that reads only one of them,
+    which the wrapper already covers, while a NEW name is the failure that actually
+    matters: the wrapper forwards nothing, so a handler reading it fails instead of
+    running, and this row names the name before a connection does.
 
-    The second half is the ``isinstance`` question, which ``__getattr__`` cannot
-    answer for: a handler that type-tested the schema it was handed would reject the
-    wrapper outright, so the row proves upstream performs no such test. Both halves
-    are what make the wrapper transparent rather than merely convenient, and both
-    would go stale silently without a row that re-reads the source.
+    The second half is the ``isinstance`` question, which no attribute the wrapper
+    defines can answer for: a handler that type-tested the schema it was handed would
+    reject the wrapper outright, so the row proves upstream performs no such test.
+    Both halves would go stale silently without a row that re-reads the source.
 
     Only the HANDLERS' schema is substituted, never the view's, so
     ``AsyncBaseHTTPView.run`` is not part of the question: it reads the consumer's
@@ -5537,37 +5526,28 @@ def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
     for source in sources:
         reads.update(re.findall(r"self\.schema\.(\w+)", source))
         assert not re.search(r"(isinstance|type)\(\s*(self\.)?schema\b", source), (
-            "upstream now type-tests the schema it was handed, which a delegating "
-            "wrapper cannot satisfy"
+            "upstream now type-tests the schema it was handed, which a wrapper cannot satisfy"
         )
 
     wrapped = _wrapped_schema_reads()
     assert reads, "no self.schema read found at all - the regex or the modules moved"
-    uncovered = sorted(reads - wrapped - _AUDITED_DELEGATED_SCHEMA_READS)
+    uncovered = sorted(reads - wrapped)
     assert not uncovered, (
         "upstream reaches an operation's results through a schema attribute "
-        f"_StopAwareSchema does not cover: {uncovered}. Wrap it, or add it to "
-        "_AUDITED_DELEGATED_SCHEMA_READS with the reason its call produces nothing "
-        "to stop or mask."
+        f"_StopAwareSchema does not cover: {uncovered}."
     )
 
     wrapper = consumers_module._StopAwareSchema(SCHEMA, None)
-    # Every audited delegation is asserted whether or not the installed release reads
-    # it: the audit's claim is about the wrapper, and a release that stops reading a
-    # name must not be able to retire the proof that the name still delegates.
-    for name in _AUDITED_DELEGATED_SCHEMA_READS:
-        assert getattr(wrapper, name) == getattr(SCHEMA, name), name
     # Every name the wrapper claims is a name it really intercepts, whether or not
-    # the installed release reads it: a covered-but-delegating entry would be the
-    # same silent bypass with a reassuring docstring.
-    # ``getattr(..., None)`` rather than a plain read: a release below 0.319.0 has no
-    # ``Schema.stream`` at all, which is still not the real schema's attribute.
+    # the installed release reads it: a covered-but-delegating entry would be a
+    # silent bypass with a reassuring docstring.
     for name in wrapped:
-        assert getattr(wrapper, name) != getattr(SCHEMA, name, None), name
-    # ...and at least one of them is what the INSTALLED release actually dispatches
-    # through, so a release whose seam moved entirely outside the wrapper's surface
-    # cannot pass on the audited-delegation clause alone.
-    assert reads & wrapped, sorted(reads)
+        assert getattr(wrapper, name) != getattr(SCHEMA, name), name
+    # Every other name of the schema contract is refused rather than delegated, so a
+    # new upstream read cannot reach the real schema around the seam.
+    for name in sorted(_public_schema_names() - wrapped):
+        with pytest.raises(AttributeError):
+            getattr(wrapper, name)
 
 
 class _UnrenderableFrame:
@@ -5584,56 +5564,6 @@ class _UnrenderableFrame:
     @property
     def errors(self):
         raise AttributeError("an incremental patch frame carries no flat error list")
-
-
-class _AsyncIteratorWithoutClose:
-    """A valid legacy-protocol result source without the optional ``aclose`` hook."""
-
-    def __init__(self):
-        self._values = iter(("value",))
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        try:
-            return next(self._values)
-        except StopIteration as exc:
-            raise StopAsyncIteration from exc
-
-
-class _SchemaReturningAsyncIterator:
-    """A schema whose two result-source seams both hand back a bare async iterator."""
-
-    error_policy = None
-
-    async def subscribe(self, *args, **kwargs):
-        return _AsyncIteratorWithoutClose()
-
-    async def stream(self, *args, **kwargs):
-        return _AsyncIteratorWithoutClose()
-
-
-@pytest.mark.parametrize("seam", ["subscribe", "stream"])
-async def test_the_stop_aware_schema_accepts_an_async_iterator_without_aclose(seam):
-    """Legacy-compatible async iterators do not fail during the wrapper's cleanup.
-
-    Both result-source names are exercised because which one a handler reads
-    depends on the installed upstream release, and the two are separate methods
-    on the wrapper: covering only one would leave a whole protocol's cleanup
-    unasserted on the other's release.
-
-    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
-    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
-    """
-    schema = _SchemaReturningAsyncIterator()
-    wrapper = consumers_module._StopAwareSchema(
-        schema,
-        SimpleNamespace(_revocation=SimpleNamespace(revoked=False)),
-    )
-
-    source = await getattr(wrapper, seam)("subscription { value }")
-    assert [value async for value in source] == ["value"]
 
 
 async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unchanged():
@@ -6417,41 +6347,49 @@ async def test_a_stack_overflowing_document_is_refused_and_the_connection_ends(
 async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loop(
     subprotocol,
 ):
-    """A non-string ``query`` must not kill the message loop.
+    """A non-string ``query`` is one operation's masked error, never a dead loop.
 
-    The WebSocket can deliver a non-string ``query``. strawberry-graphql 0.316.x
-    parses it in the subscribe handler and graphql-core's lexer raises
-    ``TypeError``; the handler contains that as an operation error. Later
-    releases, the 0.322.2 floor included, parse inside the operation task. Either way the loop and the socket stay usable,
-    which the follow-up subscription round trip below proves.
+    The WebSocket can deliver a non-string ``query``. Upstream parses it inside the
+    operation task, where graphql-core's lexer raises ``TypeError`` and Strawberry
+    answers with a pre-execution error, so the failure belongs to that one
+    operation: it must not reach the package's loop containment, whose answer
+    would be a close. The error frame it gets carries the error policy's message,
+    because a ``TypeError`` is not a client-facing error and its text must not
+    reach the wire. A well-formed operation on the SAME socket must still be
+    served, and the socket must never close. The healthy operation is a
+    SUBSCRIPTION on both protocols, because the legacy ``Schema.subscribe`` rejects
+    a query outright (and emits no frame for it) - ``_TICK_SUBSCRIPTION`` is the one
+    operation that round-trips on both.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+    rejected = []
+    served = False
     async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
         await communicator.send_json_to(
             {"type": operation_frame, "id": "1", "payload": {"query": 42}},
         )
-        # The hostile payload's own failure is the operation task's business -
-        # whichever error frame it answers with is upstream's to send. What this
-        # row pins is the loop's survival: a well-formed operation on the SAME
-        # socket must still be served, and the socket must never close. The
-        # healthy operation is a SUBSCRIPTION on both protocols, because the
-        # legacy ``Schema.subscribe`` rejects a query outright (and emits no
-        # frame for it) - ``_TICK_SUBSCRIPTION`` is the one operation that
-        # round-trips on both.
         await _send_operation(communicator, _TICK_SUBSCRIPTION, op_id="2")
-        served = False
         for _ in range(5):
             message = await communicator.receive_output(timeout=10)
             if message["type"] == "websocket.close":
                 raise AssertionError("the message loop died on the non-string query")
             payload = json.loads(message["text"])
-            if payload.get("type") == success_frame and payload.get("id") == "2":
+            if payload.get("id") == "1":
+                rejected.append(payload)
+            elif payload.get("type") == success_frame and payload.get("id") == "2":
                 served = True
+            if rejected and served:
                 break
-        assert served, "the loop must still serve a well-formed operation"
+
+    assert served, "the loop must still serve a well-formed operation"
+    assert [frame["type"] for frame in rejected] == ["error"], rejected
+    errors = rejected[0]["payload"]
+    # graphql-transport-ws carries a list of errors, legacy graphql-ws one error.
+    errors = errors if isinstance(errors, list) else [errors]
+    assert [error["message"] for error in errors] == [DEFAULT_ERROR_POLICY.message], errors
 
 
 # The cancellation and raising-close arms of the loop containment are not

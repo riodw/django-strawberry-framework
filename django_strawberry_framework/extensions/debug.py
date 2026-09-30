@@ -657,11 +657,11 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
     The stash is written by TWO teardowns. ``on_execute``'s teardown runs the
     moment graphql-core returned - execution data is complete there, and on
     the engine's streaming path (``Schema.stream``, which the package's
-    WebSocket consumers call for every operation type from
-    strawberry-graphql 0.319.0 on) the engine reads the extension results
-    INSIDE the still-open operation context, BEFORE ``on_operation`` teardown
-    runs - so without an ``on_execute`` stash the streaming seam could never
-    carry ``extensions["debug"]`` at all. ``on_operation`` teardown then
+    ``graphql-transport-ws`` consumer calls for every operation type) the
+    engine reads the extension results INSIDE the still-open operation
+    context, BEFORE ``on_operation`` teardown runs - so without an
+    ``on_execute`` stash the streaming seam could never carry
+    ``extensions["debug"]`` at all. ``on_operation`` teardown then
     REBUILDS the stash from the completed log; on the non-streaming paths the
     engine reads the results after that rebuild, so the masking-extension
     list-order contract above keeps governing what execute/execute_sync

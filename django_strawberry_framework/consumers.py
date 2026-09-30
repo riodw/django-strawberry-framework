@@ -86,10 +86,9 @@ delegate to the real schema and return ``_stop_aware_results``, a generator that
 consults the connection's revocation state before pulling each value and simply
 RETURNS once the connection is revoked. Upstream's ``async for result in
 result_source`` loop therefore ends NORMALLY, at its own next iteration, and the
-wrapper closes the inner source when it exposes the optional ``aclose`` hook - so
-the subscription generator's ``finally`` runs deterministically, at the revocation,
-rather than whenever the interpreter's asyncgen finalizer gets to it. Async
-iterators without that hook remain valid on the legacy upstream path.
+wrapper closes the inner source in its own ``finally`` - so the subscription
+generator's ``finally`` runs deterministically, at the revocation, rather than
+whenever the interpreter's asyncgen finalizer gets to it.
 
 Termination is the mechanism, and cancellation is deliberately not: a revoked
 operation must be stopped even when every subsequent value is already available.
@@ -109,19 +108,10 @@ request fixes that: a cancellation delivered in the ``async for`` BODY unwinds
 the body and leaves the generator suspended, which is the opposite of closing it.
 
 **Two names, because the seam is one attribute read and the two protocols read
-different ones.** The legacy ``graphql-ws`` handler reads ``schema.subscribe``
-throughout, while the ``graphql-transport-ws`` handler reads ``schema.stream`` for
-EVERY operation from 0.319.0 on - the whole ``strawberry-graphql>=0.322.2`` range -
-having read ``schema.subscribe`` (plus ``schema.execute`` for a query or mutation)
-up to and including 0.318.1. Covering only one of the two names does not
-degrade the wrapper - it removes it, silently and for one whole protocol, because
-an uncovered name resolves through ``__getattr__`` straight to the real schema and
-every frame it produces then reaches the wire unmasked and unstoppable. Both names
-are therefore wrapped unconditionally, so an install anywhere in the supported
-range gets the same seam on both protocols; the name a given handler does not read
-is simply never called by it. A version test would be the wrong shape here - it
-would have to be revised on an upstream rename it cannot detect - and an upper bound
-in ``pyproject.toml`` would refuse the whole transport rather than serve it.
+different ones.** The legacy ``graphql-ws`` handler reads ``schema.subscribe``,
+while the ``graphql-transport-ws`` handler reads ``schema.stream`` for EVERY
+operation. Both names are wrapped, so both protocols get the same seam; the name a
+given handler does not read is simply never called by it.
 
 ``stream`` is WIDER than ``subscribe``: it also runs queries and mutations, and it
 yields their single result from INSIDE the extension lifecycle, so the wrapper
@@ -129,9 +119,6 @@ covers those operations on every supported release and must. They are not
 free-riding on a subscription mechanism - masking at the operation teardown has not
 run when that result is yielded, exactly as it has not run for a subscription's
 events, so the result source is the only seam their errors pass through as well.
-``execute``, the non-subscription path of releases below 0.319.0, still needs
-nothing and gets nothing: it returns one already-torn-down result and never loops,
-so it stays upstream's own call through ``__getattr__``.
 
 **The same result source is where the production error policy reaches a
 subscription** (spec-048 Decision 11). A query's errors are masked by
@@ -143,9 +130,7 @@ wire. ``_stop_aware_results`` therefore masks each result it yields, through the
 extension module's own ``mask_execution_result``, which returns a masked COPY and
 leaves the engine's result object holding its originals for the extensions that
 read them. A query or mutation that arrives here over ``stream`` is masked by the
-same pass and for the same reason (above); one that upstream ran through
-``schema.execute`` needs nothing here, because that call masks both what its
-teardown found and what it returns (``schema.py::DjangoSchema._masked_return``).
+same pass and for the same reason (above).
 
 Masking is applied only to a value of execution-result SHAPE, gated on the
 extension module's own ``is_maskable_result`` so the seams cannot drift on the
@@ -163,20 +148,20 @@ upstream refuses to render the shape at all.
 handler's own ``self.schema`` is replaced, and only ever with the connection's
 wrapper - ``AsyncBaseHTTPView.run`` reads the CONSUMER's ``self.schema``, passes
 it to the handler as an ordinary keyword, and never sees the wrapper at all. Across
-the supported range the two handler modules read exactly three attributes off the
-schema they were handed - ``subscribe``, ``stream``, and ``execute`` - and perform
-no ``isinstance`` or ``type`` test on it; ``subscribe`` and ``stream`` are the ones
-the wrapper defines, ``execute`` and every other name resolve through
-``__getattr__`` to the real schema by identity. The wrapper is therefore invisible
-to execution itself: the real schema builds the execution context, so
+the supported range the two handler modules read exactly two attributes off the
+schema they were handed - ``subscribe`` and ``stream``, the two the wrapper
+defines - and perform no ``isinstance`` or ``type`` test on it. The wrapper is
+invisible to execution itself: the real schema builds the execution context, so
 ``info.schema`` and every extension see the real object.
 
-A FOURTH name would be a new seam this wrapper does not cover, and it would be
-invisible: delegation keeps the protocol working, minus the masking and the stop. So
-the read set is re-derived from the INSTALLED handler modules by
-``tests/test_routers.py::test_the_stop_aware_schema_passes_every_upstream_schema_read_through``
-rather than trusted, and that row is what turns the next upstream rename into a
-failing test instead of a silently unwrapped protocol.
+The wrapper defines nothing else and forwards nothing, so a THIRD name would be a
+new seam it does not cover, and reading it off the wrapper raises
+``AttributeError`` rather than reaching the real schema: a protocol whose results
+moved to an uncovered name fails instead of running unmasked and unstoppable. The
+read set is re-derived from the INSTALLED handler modules by
+``tests/test_routers.py::test_the_stop_aware_schema_covers_every_upstream_schema_read``
+rather than trusted, so the next upstream rename is a failing test before it is a
+failing connection.
 
 **The close is a state machine, not a flag** (``_ConnectionRevocation``). Three
 facts have to stay separable - that revocation was DECIDED, that a close is IN
@@ -382,7 +367,7 @@ import asyncio
 import contextlib
 import math
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.core.exceptions import DisallowedHost
@@ -1321,7 +1306,7 @@ async def _revoke_connection(websocket: Any) -> None:
 
 
 async def _stop_aware_results(
-    source: AsyncIterator[object],
+    source: AsyncGenerator[object, None],
     consumer: Any,
     schema: object,
 ) -> AsyncGenerator[object, None]:
@@ -1371,18 +1356,15 @@ async def _stop_aware_results(
     under the lease, like any other frame. Taking the lease here would instead
     serialize the connection's result production behind its own sends.
 
-    ``finally`` closes the inner source when it exposes the async-generator
-    ``aclose`` hook, so the subscription's own ``finally`` runs at the revocation and
-    before teardown rather than whenever the interpreter's asyncgen finalizer reaches
-    it. An async iterator without that optional hook remains valid on the legacy
-    handler's older upstream path, which never required one. That is the package's
-    own guarantee rather than a restatement of upstream's, and it has to be: transport-ws
-    did not close its result source at all up to 0.318.1 (no ``finally``, no
-    ``aclosing``, and the local went out of scope) and wraps the loop in
-    ``aclosing`` from 0.319.0 on. Legacy's ``cleanup_operation`` closes whatever is
-    registered - which is now this generator, so closing it closes the real one
-    underneath - and the newer transport-ws ``aclosing`` closes this generator
-    exactly the same way, an already-finished generator's ``aclose`` being a no-op.
+    ``finally`` closes the inner source, so the subscription's own ``finally`` runs at
+    the revocation and before teardown rather than whenever the interpreter's asyncgen
+    finalizer reaches it. Both upstream handlers close only the source they were
+    handed, which is this generator: legacy's ``cleanup_operation`` closes whatever is
+    registered, and transport-ws wraps its loop in ``aclosing``. Closing this generator
+    is what closes the real one underneath, an already-finished generator's
+    ``aclose`` being a no-op. ``source`` is an async generator on every seam that
+    reaches here, because ``BaseSchema.subscribe`` and ``BaseSchema.stream`` are
+    declared to return one.
     """
     from .extensions.error_policy import (
         is_maskable_result,
@@ -1402,14 +1384,7 @@ async def _stop_aware_results(
                 result = mask_execution_result(result, policy)
             yield result
     finally:
-        # ``Schema.subscribe`` / ``stream`` are typed as async generators,
-        # but the upstream legacy handler accepts any async iterator. Keep
-        # that compatibility on the package's older Strawberry range too:
-        # the newer transport handler closes its source with ``aclosing``,
-        # while older handlers do not require an ``aclose`` method at all.
-        aclose = getattr(source, "aclose", None)
-        if aclose is not None:
-            await aclose()
+        await source.aclose()
 
 
 class _StopAwareSchema:
@@ -1422,14 +1397,10 @@ class _StopAwareSchema:
     argument, and for why the wrapper is invisible to execution itself.
 
     BOTH result-source names are defined, because which one a handler reads depends
-    on its protocol (and has moved between upstream releases), and covering only one
-    silently unwraps a whole protocol - see the module docstring for the range and
-    for why this is not a version test. ``__getattr__`` forwards every other name to
-    the wrapped schema object by identity, which is what keeps ``execute`` - the
-    non-subscription path of releases below 0.319.0, whose single already-torn-down
-    result never loops and needs no stopping - upstream's own call. ``__slots__``
-    keeps the two fields off that forwarding path, so a misspelled internal name is
-    an ``AttributeError`` here rather than a silent delegation to the real schema.
+    on its protocol. Nothing else is defined or forwarded (see the module docstring):
+    ``__slots__`` holds the two fields, so any other read - an upstream name this
+    wrapper does not cover, or a misspelled internal one - is an ``AttributeError``
+    rather than a delegation to the real schema.
     """
 
     __slots__ = ("_consumer", "_schema")
@@ -1438,30 +1409,22 @@ class _StopAwareSchema:
         self._schema = schema
         self._consumer = consumer
 
-    def __getattr__(self, name: str) -> Any:
-        """Forward every name but the two result-source calls to the real schema."""
-        return getattr(self._schema, name)
-
     async def subscribe(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
         """Return the real schema's subscription results, wrapped so they can stop.
 
-        The seam the legacy ``graphql-ws`` handler reads throughout the supported
-        range, and the one ``graphql-transport-ws`` also read up to 0.318.1.
+        The seam the legacy ``graphql-ws`` handler reads.
         """
         return self._stoppable(await self._schema.subscribe(*args, **kwargs))
 
     async def stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
         """Return the real schema's streamed results, wrapped so they can stop.
 
-        The seam ``graphql-transport-ws`` reads from 0.319.0 on, for EVERY operation
-        type rather than subscriptions alone. Defined unconditionally rather than
-        behind a version test: an install below 0.319.0 has no ``Schema.stream`` to
-        delegate to and no handler that reads the name, so this method is simply
-        never called there.
+        The seam ``graphql-transport-ws`` reads, for EVERY operation type rather
+        than subscriptions alone.
         """
         return self._stoppable(await self._schema.stream(*args, **kwargs))
 
-    def _stoppable(self, source: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    def _stoppable(self, source: AsyncGenerator[object, None]) -> AsyncGenerator[object, None]:
         """Wrap one upstream result source in the connection's stop-and-mask seam.
 
         Shared by both entry points so the two cannot diverge on what a result
@@ -1673,26 +1636,6 @@ def build_revalidating_consumer_class(
         # importing nothing from upstream's deep protocol-types modules.
         async def handle_subscribe(self, message: Mapping[str, object]) -> None:
             if not await revalidate_operation_actor(self):
-                return
-            # strawberry-graphql 0.316.x parses ``payload["query"]`` in this
-            # method; graphql-core's lexer raises ``TypeError`` on a non-string
-            # and that escape used to kill the message loop. Later releases, the
-            # 0.322.2 floor included, parse inside the operation task. Contain
-            # the non-string here as an operation error so the loop survives on
-            # every release rather than taking the loop-containment close.
-            payload = message.get("payload")
-            if (
-                isinstance(payload, dict)
-                and "query" in payload
-                and not isinstance(payload["query"], str)
-            ):
-                await self.send_message(
-                    {
-                        "id": message["id"],
-                        "type": "error",
-                        "payload": [{"message": "Query must be a string."}],
-                    },
-                )
                 return
             await super().handle_subscribe(message)
 

@@ -219,9 +219,11 @@ method signature - or a moved upload utility - fails loudly at installation.
 Upstream status
 ---------------
 
-Unfixed upstream as of ``strawberry-graphql`` 0.317.2 (the latest
-release) and ``main`` (checked 2026-06-18). ``BaseView.parse_json``
-still catches only ``json.JSONDecodeError``:
+Unfixed upstream through ``strawberry-graphql`` 0.327.7, the latest
+audited release (every published release from 0.322.2 on carries the same
+``BaseView.parse_json`` body), and on ``main`` when last checked
+(2026-06-18). ``BaseView.parse_json`` still catches only
+``json.JSONDecodeError``:
 <https://github.com/strawberry-graphql/strawberry/blob/e7d4a8235a11a4c4fd2b9fa605c437c9f86e5fb7/strawberry/http/base.py#L45-L52>.
 
 No upstream issue or PR tracks this exact ``UnicodeDecodeError`` gap.
@@ -234,11 +236,13 @@ patch can be retired once upstream broadens the catch to also cover
 ``UnicodeDecodeError`` and ``RecursionError``; a future upstream shape
 change fails loudly so that retirement is deliberate.
 
-The second gap (non-object body) is likewise unfixed in 0.317.2 and
-``main`` (checked 2026-06-19). ``parse_http_body`` still handles only the
-``list`` (batch) branch and then calls ``data.get("query")`` with no
-``isinstance(data, dict)`` guard, and the batch branch still does
-``item.get(...)`` with no per-element ``isinstance(item, dict)`` guard:
+The second gap (non-object body) is likewise unfixed through 0.327.7 (the
+same ``parse_http_body`` bodies in every published release from 0.322.2 on)
+and on ``main`` when last checked (2026-06-19). ``parse_http_body`` still
+handles only the ``list`` (batch) branch and then calls
+``data.get("query")`` with no ``isinstance(data, dict)`` guard, and the
+batch branch still does ``item.get(...)`` with no per-element
+``isinstance(item, dict)`` guard:
 <https://github.com/strawberry-graphql/strawberry/blob/e7d4a8235a11a4c4fd2b9fa605c437c9f86e5fb7/strawberry/http/sync_base_view.py>
 (and the ``async_base_view.py`` sibling). It is tracked by the **open**
 issue #3398, "AttributeError when query passed is a list and not a dict"
@@ -394,7 +398,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     _AnySyncView = _SyncBaseHTTPView[Any, Any, Any, Any, Any]
     _AnyAsyncView = _AsyncBaseHTTPView[Any, Any, Any, Any, Any, Any, Any]
 
-# Every audited release (strawberry-graphql 0.316.0 - 0.327.7, cross_web 0.6.0 -
+# Every audited release (strawberry-graphql 0.322.2 - 0.327.7, cross_web 0.6.0 -
 # 0.7.0) provides all five names; ``None`` is the drift sentinel for a release that
 # moves one, which ``_validate_upstream_shape`` refuses before any patch installs.
 BaseView: "type[_AnyBaseView] | None"

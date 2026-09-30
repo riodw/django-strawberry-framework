@@ -509,8 +509,8 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
             ContextVar("django_strawberry_framework_operation_state", default=None),
         )
 
-    # mypy: a settable property overriding another module's attribute ignores
-    # its @override markers (both are present below)
+    # mypy: a settable property overriding a base class attribute ignores its
+    # @override markers (both are present below)
     @property  # type: ignore[explicit-override]
     @override
     def execution_context(self) -> Any:

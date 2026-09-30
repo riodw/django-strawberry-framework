@@ -231,6 +231,8 @@ LINT_COMMANDS = (
     "ruff check .",
     "ruff format --check .",
     "mypy",
+    "basedpyright",
+    "python scripts/check_public_types.py",
     "python scripts/check_trailing_commas.py --check",
     "python scripts/check_citations.py --check",
     "python scripts/build_kanban_tracked_path_constants.py --check",

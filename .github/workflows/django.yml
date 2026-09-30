@@ -44,9 +44,19 @@ jobs:
         run: uv run ruff format --check .
       - name: Type check (mypy)
         # `[tool.mypy]` in pyproject.toml owns the scope (the package), the
-        # Python floor it checks against, and the strictness flags; the Django
-        # stubs plugin reads the fakeshop test settings.
+        # Python it checks against (the lowest its stubs support; the floor
+        # cells prove the package's own floor), and the strictness flags; it
+        # loads no mypy plugin and never imports the fakeshop settings.
         run: uv run mypy
+      - name: Type check (basedpyright)
+        # `[tool.basedpyright]` checks the same scope at the same Python, in
+        # `standard` mode, with warnings failing the run.
+        run: uv run basedpyright
+      - name: Public API type completeness (basedpyright --verifytypes)
+        # Installs the package non-editable in a temporary environment and
+        # requires a 100% score with no diagnostic outside the script's exact-match
+        # allowlist (scripts/check_public_types.py).
+        run: uv run python scripts/check_public_types.py
       - name: Trailing-comma layout (>=4 elements; models.py >=2)
         run: uv run python scripts/check_trailing_commas.py --check
 

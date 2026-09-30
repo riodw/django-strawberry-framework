@@ -45,6 +45,7 @@ from django_strawberry_framework.filters.base import (
     RelationPkFilter,
     RelationPkMultipleFilter,
     _accepted_globalid_type_names,
+    _bound_field_name,
     _decode_and_validate_global_id,
     _relation_uses_non_pk_to_field,
     _target_definition_for,
@@ -511,6 +512,30 @@ def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predica
     encoded = [relay.to_base64("GenreType", "5"), relay.to_base64("GenreType", "9")]
     f.filter(qs, encoded)
     assert qs.captured == {"genres__in": ["5", "9"]}
+
+
+# ---------------------------------------------------------------------------
+# A bound filter's ORM path
+# ---------------------------------------------------------------------------
+
+
+def test_bound_field_name_reads_the_path_the_filterset_binds():
+    """A declared filter with no ``field_name`` is bound to its attribute name."""
+
+    class BookFilterSet(FilterSet):
+        title = Filter(lookup_expr="icontains")
+
+        class Meta:
+            model = models.Book
+            fields = ["id"]
+
+    assert _bound_field_name(BookFilterSet.base_filters["title"]) == "title"
+
+
+def test_bound_field_name_refuses_a_filter_with_no_path():
+    """A ``None`` path is refused by name, never handed to a model-field walk."""
+    with pytest.raises(ConfigurationError, match=r"^Filter has no field_name;"):
+        _bound_field_name(Filter())
 
 
 # ---------------------------------------------------------------------------

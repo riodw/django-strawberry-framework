@@ -333,6 +333,24 @@ def _marked_pk_field_name(filter_instance: Filter) -> str | None:
     return None
 
 
+def _bound_field_name(filter_instance: Filter) -> str:
+    """Return the ORM path of a filter bound to a ``FilterSet``.
+
+    django-filter's metaclass defaults every declared filter's ``field_name`` to its
+    attribute name and ``filter_for_field`` names every generated one, so a bound
+    filter's ``field_name`` is a string; only an unbound ``Filter()`` still carries
+    the ``None`` its constructor defaults to. A ``None`` here is a filter the
+    consumer rebound after class creation, refused rather than handed to a path walk.
+    """
+    field_name = filter_instance.field_name
+    if field_name is None:
+        raise ConfigurationError(
+            f"{_safe_type_name(filter_instance)} has no field_name; a filter bound to a "
+            "FilterSet must name the model field path it filters.",
+        )
+    return field_name
+
+
 class ArrayFilterMethod(_EmptyListAwareFilterMethod):
     """Empty-list-aware `FilterMethod` for `ArrayFilter` (see the shared base)."""
 
@@ -596,13 +614,8 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
         parent = getattr(self, "parent", None)
         meta = getattr(parent, "_meta", None)
         model = getattr(meta, "model", None)
-        # mypy: a bound filter's ``field_name`` is never ``None``: django-filter's metaclass
-        # defaults it to the declaration name before any ``filter`` call.
-        # basedpyright: same invariant; it rejects the ``None`` arm of ``field_name``
         model_field = (
-            get_model_field(model, self.field_name)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-            if model is not None
-            else None
+            get_model_field(model, _bound_field_name(self)) if model is not None else None
         )
         if model_field is not None:
             kept = _coerce_int_in_members(model_field, value)

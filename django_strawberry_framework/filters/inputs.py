@@ -65,6 +65,7 @@ from .base import (
     RelationPkFilter,
     RelationPkMultipleFilter,
     TypedFilter,
+    _bound_field_name,
     model_choice_identity_column,
     relation_identity_column,
 )
@@ -1097,11 +1098,10 @@ def _build_input_fields(
         # form key is the explicit class-attribute name (e.g.
         # ``email_must_have_at_sign``) we use ``top_name`` so the
         # downstream form receives the correct key.
-        django_source_path = top_name if top_name in declared_filters else sample_filter.field_name
-        # mypy: ``get_filters`` binds every filter's ``field_name`` (a declared filter
-        # defaults to its attribute name), so the path is never ``None`` here.
-        # basedpyright: same invariant; it rejects the ``None`` arm of ``field_name``
-        return bag_class | None, django_source_path  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
+        django_source_path = (
+            top_name if top_name in declared_filters else _bound_field_name(sample_filter)
+        )
+        return bag_class | None, django_source_path
 
     # The per-field emission scaffold (python-attr flatten -> camel-case ->
     # optional kwargs -> related lazy-ref vs leaf -> triple + ``FieldSpec``) is

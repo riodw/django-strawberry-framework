@@ -102,6 +102,7 @@ from .base import (
     RelatedFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
+    _bound_field_name,
     _relation_uses_non_pk_to_field,
 )
 from .inputs import (
@@ -999,11 +1000,9 @@ def _candidate_metadata_for(
     provenance = filter_generation_provenance(filter_instance)
     if provenance is None or provenance.origin not in _FRAMEWORK_GENERATED_ORIGINS:
         return None
+    field_path = _bound_field_name(filter_instance)
     try:
-        # mypy: every ``get_filters`` output filter has a bound ``field_name`` (a declared
-        # filter defaults to its attribute name).
-        # basedpyright: same invariant; it rejects the ``None`` arm of ``field_name``
-        path_plan = classify_path(model, filter_instance.field_name)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        path_plan = classify_path(model, field_path)
     except PathResolutionError:
         if not provenance.expanded_from:
             # Direct framework leaf -- a genuine defect; surface it loudly.

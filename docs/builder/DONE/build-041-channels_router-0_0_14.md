@@ -88,7 +88,7 @@ Verified at HEAD, symbol-qualified:
 | one `_CHANNELS_INSTALL_HINT` string | `django_strawberry_framework/routers.py` #"_CHANNELS_INSTALL_HINT" |
 | split present-but-incompatible hints (channels half / strawberry half) | `routers.py` #"_CHANNELS_BROKEN_HINT", #"_STRAWBERRY_CHANNELS_BROKEN_HINT" |
 | PEP 562 lazy `__getattr__` + `_ROUTER_CLASS` cache | `routers.py::__getattr__`, `routers.py::_build_router_class` |
-| `__all__ = ("DjangoGraphQLProtocolRouter",)` with the scoped `# noqa: F822` | `routers.py` #"PEP 562 lazy export" |
+| `__all__ = ("DjangoGraphQLProtocolRouter",)` with the scoped `# noqa: F822` | `git show e37448e5:django_strawberry_framework/routers.py` #"PEP 562 lazy export" |
 | `request_from_info()` Channels branch + wrapping adapter | `utils/permissions.py::ChannelsRequestAdapter`, `utils/permissions.py::_channels_request_adapter` |
 | its unit tests beside the helper's suite | `tests/utils/test_permissions.py` (recognition, delegation, scope fields, permission-hook read, rejection) |
 | `channels[daphne]>=4.3.2` in `[dependency-groups].dev` | `pyproject.toml` #"channels[daphne]>=4.3.2" |

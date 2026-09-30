@@ -36,10 +36,11 @@ Execution-mode split (spec plan "Implementation Changes"):
   ``close_old_connections`` before every dispatched message) runs on another
   thread, and concurrent windows hold independent transactions. The atomic
   lives on the thread's own stack, so a cancellation cannot strand it: it
-  reaches the completion, and the thread exits the atomic, rolled back, and
-  closes its connections. Under a sync caller blocked in ``async_to_sync`` the
-  window runs on that caller's thread and nests in whatever transaction the
-  caller holds, exactly as sync execution does.
+  reaches the completion, the thread exits the atomic, rolled back, and
+  closes its connections, and the cancelled task ends only after that. Under
+  a sync caller blocked in ``async_to_sync`` the window runs on that caller's
+  thread and nests in whatever transaction the caller holds, exactly as sync
+  execution does.
 
 Both modes apply the same two failure rules. Any error added during the window
 rolls it back. A window whose connection was closed inside it
@@ -140,6 +141,21 @@ def _close_thread_connections() -> None:
         if handle is not None:
             handle.close()
             connection.connection = None
+
+
+def _window_drained() -> None:
+    """Do nothing: queued behind a window, it completes once the window has returned."""
+
+
+async def _outlast_cancellation(done: asyncio.Future[None]) -> None:
+    """Wait until ``done`` completes, however often the awaiting task is cancelled.
+
+    The caller re-raises its own cancellation afterwards, so the task still ends
+    cancelled; only the moment it ends moves.
+    """
+    while not done.done():
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait((done,))
 
 
 class DjangoMutationExecutionContext(ExecutionContext):
@@ -368,6 +384,15 @@ class DjangoMutationExecutionContext(ExecutionContext):
         (both on the event loop). Either way the thread exits the atomic with
         the cancellation, rolled back.
 
+        A cancelled private window ends only once its thread has returned from
+        ``window``: ``SyncToAsync`` stops waiting for the thread when the
+        cancellation is repeated, so the task waits for a no-op queued behind
+        ``window`` on the executor's one worker, across any further
+        cancellation, and then re-raises. Without that the next mutation could
+        start while this window still holds its write. On a caller's thread no
+        wait is owed: the caller's executor runs work in order, so nothing the
+        caller runs next can overtake the window.
+
         ``AsyncToSync.executors.current`` is the one asgiref attribute read, and
         the precedence it relies on - ``SyncToAsync.__call__`` takes the caller's
         executor before any context, ``AsyncToSync.__call__`` publishes its
@@ -410,6 +435,8 @@ class DjangoMutationExecutionContext(ExecutionContext):
             )()
         except asyncio.CancelledError:
             cancelled = True
+            if executor is not None:
+                await _outlast_cancellation(asyncio.wrap_future(executor.submit(_window_drained)))
             raise
         finally:
             if executor is not None:

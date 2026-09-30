@@ -18,6 +18,7 @@ import contextlib
 import itertools
 import sqlite3
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -48,6 +49,7 @@ from django_strawberry_framework import (
     DjangoType,
     finalize_django_types,
 )
+from django_strawberry_framework import schema as schema_module
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils import write_transaction
@@ -705,14 +707,29 @@ async def test_a_client_complete_mid_window_never_strands_its_transaction():
     assert "window-following" in await _committed()
 
 
+@pytest.mark.parametrize("cancels", [1, 2, 3])
 @pytest.mark.django_db(transaction=True)
-async def test_a_window_cancelled_twice_while_held_rolls_back_and_the_next_mutation_commits():
-    """Repeated cancellation of an open window still exits its transaction, rolled back.
+async def test_a_cancelled_window_ends_after_its_thread_and_the_next_mutation_commits(
+    cancels,
+    monkeypatch,
+):
+    """A cancelled window's task ends only after its thread has left the window.
 
-    Both cancellations land while the window's thread is held in the pipeline.
+    Every cancellation lands while the window's thread is held in the pipeline,
+    and the thread's last step - closing its connections - is slowed, so a task
+    that stopped waiting for the thread would end while it is still running.
     The thread exits the atomic once the pipeline returns, so the held write is
     rolled back rather than left open, and the next mutation commits on its own.
     """
+    thread_left = threading.Event()
+    close_thread_connections = schema_module._close_thread_connections
+
+    def _slow_last_step() -> None:
+        time.sleep(0.3)
+        close_thread_connections()
+        thread_left.set()
+
+    monkeypatch.setattr(schema_module, "_close_thread_connections", _slow_last_step)
     schema = _category_create_schema()
     with _held_in_the_pipeline("window-cancelled") as (reached, release):
         cancelled = asyncio.create_task(
@@ -722,14 +739,16 @@ async def test_a_window_cancelled_twice_while_held_rolls_back_and_the_next_mutat
             ),
         )
         await asyncio.wait_for(reached.wait(), timeout=10)
-        cancelled.cancel()
-        await asyncio.sleep(0.05)
-        cancelled.cancel()
-        await asyncio.sleep(0.05)
+        for _ in range(cancels):
+            cancelled.cancel()
+            await asyncio.sleep(0.05)
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await cancelled
+        left_before_the_task_ended = thread_left.is_set()
+    thread_left.wait(10)
 
+    assert left_before_the_task_ended
     after = await schema.execute(
         _CREATE_CATEGORY,
         variable_values=_create_variables("window-after-cancel"),

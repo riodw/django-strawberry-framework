@@ -23,6 +23,7 @@ result is refused as ``sliced`` where the seal refuses slices and as ``combined`
 under a nested connection, whose seal licenses a slice the rewrite cannot carry.
 """
 
+import json
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
@@ -116,6 +117,24 @@ def _data(query: str, **kwargs: Any) -> dict[str, Any]:
     payload = _post(query, **kwargs)
     assert "errors" not in payload, payload
     return payload["data"]
+
+
+def _order_free(value: object) -> object:
+    """``value`` with every list sorted, for comparing payloads whose rows are unordered.
+
+    ``Genre`` and ``Book`` declare no ``Meta.ordering``, so a surface with no
+    ``orderBy`` serves its rows in whatever order the backend returns them: SQLite
+    happens to return primary-key order, Postgres a hash join's. The served SET is
+    the contract; a test whose surface is ordered asserts that order itself.
+    """
+    if isinstance(value, dict):
+        return {key: _order_free(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return sorted(
+            (_order_free(item) for item in value),
+            key=lambda item: json.dumps(item, sort_keys=True),
+        )
+    return value
 
 
 def _starts(column: str, letter: str) -> Q:
@@ -229,12 +248,16 @@ def _install_shape(
 
 
 def _both_hooks(monkeypatch, type_name, shape, column, query, **kwargs) -> dict[str, Any]:
-    """The data the combined hook serves, after asserting the uncombined hook serves the same."""
+    """The data the combined hook serves, after asserting the uncombined hook serves the same rows.
+
+    The two payloads are compared order-free (``_order_free``); a caller whose query
+    orders its rows asserts that order against the expected rows itself.
+    """
     _install_shape(monkeypatch, type_name, shape, column, combined=True)
     combined = _data(query, **kwargs)
     _install_shape(monkeypatch, type_name, shape, column, combined=False)
     uncombined = _data(query, **kwargs)
-    assert combined == uncombined
+    assert _order_free(combined) == _order_free(uncombined)
     return combined
 
 
@@ -933,7 +956,7 @@ def test_consumer_prefetch_of_a_combined_queryset_serves_its_rows(monkeypatch, s
             optimizer=optimizer,
         )
 
-    assert results[True] == results[False]
+    assert _order_free(results[True]) == _order_free(results[False])
     served = {
         row["name"]: sorted(book["title"] for book in row["books"])
         for row in results[True]["allLibraryGenresViaListField"]
@@ -1256,7 +1279,7 @@ def test_hinted_prefetch_of_a_combined_queryset_serves_its_rows(shape):
         schema = _hinted_shelf_schema(chosen(models.Book.objects.all(), "title"))
         results[combined] = _data("{ shelves { code books { title } } }", schema=schema)
 
-    assert results[True] == results[False]
+    assert _order_free(results[True]) == _order_free(results[False])
     assert {
         row["code"]: sorted(book["title"] for book in row["books"])
         for row in results[True]["shelves"]

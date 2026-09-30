@@ -146,15 +146,19 @@ def _assert_parity(
     queries=2,
     expect_lateral=True,
     count_free=False,
+    schemas=None,
 ):
     """Execute under both strategies; pin identical data and the lateral cost.
 
     Returns ``(data, captured)`` - the (parity-asserted) response data plus
     the lateral run's ``CaptureQueriesContext`` - so tests that layer extra
     SQL-shape asserts (the through-once tripwire) reuse this preamble instead
-    of re-spelling the capture/compare.
+    of re-spelling the capture/compare. ``schemas`` is a ``_library_schemas()``
+    pair for a test that compares several queries over ONE finalized type
+    graph; a second ``_library_schemas()`` call would redeclare its types after
+    finalization.
     """
-    windowed_schema, lateral_schema = _library_schemas()
+    windowed_schema, lateral_schema = schemas if schemas is not None else _library_schemas()
     windowed = windowed_schema.execute_sync(query)
     assert windowed.errors is None, windowed.errors
     with CaptureQueriesContext(db_connection) as captured:
@@ -409,13 +413,16 @@ def test_divergent_alias_total_count_sibling_keeps_count_on_both_laterals():
 def test_last_zero_serves_the_first_zero_page_under_both_strategies():
     """``last: 0`` is the planned ``first: 0`` lateral page: parity, two queries, same payload."""
     _seed_library()
+    schemas = _library_schemas()
     last_zero, _ = _assert_parity(
         f"{{ shelves {{ id booksConnection(last: 0) {{ {_FULL_PAGE} }} }} }}",
+        schemas=schemas,
     )
     first_zero, _ = _assert_parity(
         f"{{ shelves {{ id booksConnection(first: 0) {{ {_FULL_PAGE} }} }} }}",
+        schemas=schemas,
     )
-    assert last_zero == first_zero
+    assert _canonical(last_zero) == _canonical(first_zero)
 
 
 def test_stray_executor_thread_connections_are_tracked_for_session_close():

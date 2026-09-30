@@ -30,6 +30,7 @@ from django.db import connection, models, router
 from django.db.models import F, FilteredRelation, Prefetch, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce, Trunc, Upper
+from django.db.models.lookups import In
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 
@@ -5179,11 +5180,16 @@ def test_seal_serves_a_combinator_as_a_single_table_primary_key_membership_query
     assert sealed.db == "default"
     assert sealed.query.combinator is None
     assert sealed._fields is None
+    (membership,) = sealed.query.where.children
+    assert isinstance(membership, In)
+    assert membership.lhs.target is Category._meta.pk
+    assert membership.rhs.combinator == "union"
+    assert len(membership.rhs.combined_queries) == 2
+    assert membership.rhs.values_select == ("pk",)
+    # Vendor-neutral text only: a backend may parenthesize each compound branch.
     sql = str(sealed.query)
     table = Category._meta.db_table
     assert sql.startswith(f'SELECT "{table}"."id"')
-    assert f'WHERE "{table}"."id" IN (SELECT' in sql
-    assert " UNION SELECT " in sql
     assert sql.endswith(f'ORDER BY "{table}"."name" DESC')
     assert [row.pk for row in sealed] == [
         row.pk for row in sorted((first, second), key=lambda c: c.name, reverse=True)

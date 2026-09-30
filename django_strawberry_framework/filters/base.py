@@ -363,10 +363,12 @@ class ArrayFilter(TypedFilter):
         queryset).
     """
 
-    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is
+    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
+    # so ``.setter`` is untyped and the decorated def's type is ``Any`` (``misc`` under
+    # ``disallow_any_decorated``)
     @override
     @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]
-    def method(self, value: object) -> None:
+    def method(self, value: object) -> None:  # type: ignore[misc]
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
 
@@ -478,10 +480,12 @@ class ListFilter(TypedFilter):
     supplied" pass-through.
     """
 
-    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is
+    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
+    # so ``.setter`` is untyped and the decorated def's type is ``Any`` (``misc`` under
+    # ``disallow_any_decorated``)
     @override
     @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]
-    def method(self, value: object) -> None:
+    def method(self, value: object) -> None:  # type: ignore[misc]
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ListFilterMethod)
 

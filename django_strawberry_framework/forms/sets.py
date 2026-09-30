@@ -95,7 +95,7 @@ from .inputs import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from django.db import models
     from strawberry.types import Info
@@ -128,9 +128,9 @@ _ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = COMMON_WRITE_META_KEYS | frozens
 # ``DjangoFormMutationMetaclass``, ``bind_form_mutations``, and the tests
 # reference; ``_form_mutation_registry`` is the backing list the tests introspect.
 _form_mutation_declaration_registry = make_declaration_registry("DjangoFormMutation")
-register_form_mutation = _form_mutation_declaration_registry.register
-clear_form_mutation_registry = _form_mutation_declaration_registry.clear
-iter_form_mutations = _form_mutation_declaration_registry.iter_
+register_form_mutation: Callable[[type], None] = _form_mutation_declaration_registry.register
+clear_form_mutation_registry: Callable[[], None] = _form_mutation_declaration_registry.clear
+iter_form_mutations: Callable[[], tuple[type, ...]] = _form_mutation_declaration_registry.iter_
 _form_mutation_registry = _form_mutation_declaration_registry.store
 register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations")
 
@@ -170,6 +170,7 @@ _form_shape_build_cache: dict[
     tuple[FormClass, str, frozenset[str], tuple[tuple[str, type[forms.Field], bool, object], ...]],
     tuple[type, list[InputFieldSpec]],
 ]
+clear_form_shape_build_cache: Callable[[], None]
 _form_shape_build_cache, clear_form_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(clear_form_shape_build_cache, owner="forms.shape_cache")
 
@@ -737,12 +738,15 @@ class DjangoModelFormMutation(DjangoMutation):
     # The sync / async ``ModelForm`` resolver seams (delegate to the form
     # pipeline), via the shared ``resolver_seams`` factory. The
     # generated seams' function-local import of ``forms/resolvers.py`` keeps
-    # ``forms/sets.py`` free of a load-time edge to the resolver module.
-    resolve_sync, resolve_async = resolver_seams(
-        "django_strawberry_framework.forms.resolvers",
-        "resolve_form_sync",
-        "resolve_form_async",
-    )
+    # ``forms/sets.py`` free of a load-time edge to the resolver module. A type
+    # checker reads the pair from ``DjangoMutation``'s declaration, which is exactly
+    # the signature the ``with_id`` seams carry.
+    if not TYPE_CHECKING:
+        resolve_sync, resolve_async = resolver_seams(
+            "django_strawberry_framework.forms.resolvers",
+            "resolve_form_sync",
+            "resolve_form_async",
+        )
 
 
 # Plain-form metaclass: same validate-then-register lifecycle as
@@ -1055,13 +1059,26 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # pipeline), via the shared ``resolver_seams`` factory with ``with_id=False`` -
     # a model-less form has no row to locate, so the seam signature is
     # ``(info, *, data)``. The generated seams' function-local import
-    # keeps ``forms/sets.py`` free of a load-time edge to the resolver module.
-    resolve_sync, resolve_async = resolver_seams(
-        "django_strawberry_framework.forms.resolvers",
-        "resolve_form_sync",
-        "resolve_form_async",
-        with_id=False,
-    )
+    # keeps ``forms/sets.py`` free of a load-time edge to the resolver module. A
+    # type checker sees the pair as the classmethods the factory builds, declared
+    # the way ``mutations/sets.py::DjangoMutation`` declares its ``with_id`` pair.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+        @classmethod
+        def resolve_sync(cls, info: Info[Any, Any], *, data: object) -> object:
+            """Dispatch the mutation synchronously."""
+
+        @classmethod
+        def resolve_async(cls, info: Info[Any, Any], *, data: object) -> object:
+            """Dispatch the mutation asynchronously."""
+
+    else:
+        resolve_sync, resolve_async = resolver_seams(
+            "django_strawberry_framework.forms.resolvers",
+            "resolve_form_sync",
+            "resolve_form_async",
+            with_id=False,
+        )
 
 
 def bind_form_mutations() -> None:

@@ -36,7 +36,7 @@ from .mutations import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from django.contrib.auth.models import _User
     from strawberry.types import Info
@@ -54,6 +54,8 @@ CURRENT_USER_ALIAS_NAME = "CurrentUserAlias"
 # pins the resolved user primary as this module's ``CurrentUserAlias`` global via
 # the blessed ``materialize_generated_input_class`` parked-global path;
 # ``clear_current_user_alias_namespace`` empties the ledger.
+materialize_current_user_alias: Callable[[str, type], None]
+clear_current_user_alias_namespace: Callable[[], None]
 (
     _current_user_alias_names,
     materialize_current_user_alias,

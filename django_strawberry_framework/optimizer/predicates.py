@@ -43,7 +43,7 @@ attachment.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar
 
 from django.db.models import Exists, OuterRef, Q
 
@@ -75,8 +75,7 @@ def correlated_inner_root(queryset: QuerySet[_M]) -> QuerySet[_M]:
       composite primary keys compile to a tuple comparison on supported Django.
     """
     model = queryset.model
-    # The django-stubs plugin types ``filter()`` as ``Any``; it returns ``model``'s queryset.
-    return cast("QuerySet[_M]", model._base_manager.using(queryset.db).filter(pk=OuterRef("pk")))
+    return model._base_manager.using(queryset.db).filter(pk=OuterRef("pk"))
 
 
 def _effective_alias_names(queryset: QuerySet[models.Model]) -> set[str]:

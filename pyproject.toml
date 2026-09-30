@@ -88,12 +88,13 @@ dev = [
     "pyyaml>=6.0.2",
     "ruff>=0.15.0",
     # The package ships ``py.typed``, so its annotations are a public contract
-    # that downstream type checkers consume. mypy (config in ``[tool.mypy]``)
-    # checks them, with the Django and DRF stubs so framework types are real
-    # rather than ``Any``.
+    # that downstream type checkers consume. mypy (config in ``[tool.mypy]``) and
+    # basedpyright (config in ``[tool.basedpyright]``) both check them, with the
+    # Django and DRF stubs so framework types are real rather than ``Any``.
     "django-stubs>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
     "mypy>=2.3.1",
+    "basedpyright>=1.40.1",
     # typeshed stubs for two libraries the package subclasses: django-filter (a hard
     # dependency; the filters family) and channels (a soft one; the WebSocket consumer
     # and router). Each
@@ -243,20 +244,20 @@ max-line-length = 110
 # mypy checks the shipped package (``py.typed`` makes its annotations public).
 # Every ``--strict`` flag plus the optional checks below. ``--strict`` includes the
 # flags that keep suppressions honest: an unneeded ``# type: ignore`` or redundant
-# ``cast`` is itself an error. The Django plugin loads the fakeshop test
-# settings, exactly as pytest does. Every dependency is typed (its own
-# ``py.typed``, django-stubs, or the typeshed stubs in the ``dev`` group), so no
-# module is exempt from import checking.
+# ``cast`` is itself an error. No mypy plugin is loaded: the check reads only the
+# stubs' and packages' own annotations, so it sees the package exactly as a
+# downstream checker running no plugin does and never imports the example
+# project's settings. Every dependency is typed (its own ``py.typed``,
+# django-stubs, or the typeshed stubs in the ``dev`` group), so no module is exempt
+# from import checking. ``python_version`` is the lowest Python the installed stubs
+# support (they import ``typing.Self``); a lower one would read every ``Self`` return
+# as ``Any``. The package's own 3.10 floor is proven by the floor CI cell running the
+# suite on 3.10, not by the checker.
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 files = ["django_strawberry_framework"]
-mypy_path = "examples/fakeshop"
-plugins = [
-    "mypy_django_plugin.main",
-    "mypy_drf_plugin.main",
-    "strawberry.ext.mypy_plugin",
-]
 check_untyped_defs = true
+disallow_any_decorated = true
 disallow_any_generics = true
 disallow_any_unimported = true
 disallow_incomplete_defs = true
@@ -290,8 +291,18 @@ warn_return_any = true
 warn_unreachable = true
 warn_unused_ignores = true
 
-[tool.django-stubs]
-django_settings_module = "config.test_settings"
+# basedpyright is the second checker of the same public contract: same scope and
+# checked Python as ``[tool.mypy]`` (the comment above it says why 3.11), in
+# ``standard`` mode, and a warning fails the run. Every ``# type: ignore[...]`` line is
+# suppressed for pyright wholesale, whatever the bracketed code; mypy's
+# ``warn_unused_ignores`` keeps each one needed for mypy and says nothing about what it
+# hides from pyright. A suppression only pyright needs is spelled
+# ``# pyright: ignore[<rule>]``.
+[tool.basedpyright]
+include = ["django_strawberry_framework"]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+failOnWarnings = true
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

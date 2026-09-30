@@ -44,7 +44,14 @@ from __future__ import annotations
 
 import inspect
 import types
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from collections.abc import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Sequence,
+)
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from types import GenericAlias
@@ -1434,9 +1441,10 @@ def _build_total_count_connection(target_type: type, definition: DjangoTypeDefin
     or after delegating slicing to the base (spec-030 Decision 4).
     """
 
-    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``
+    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``,
+    # so the decorated def's type is ``Any`` (``misc`` under ``disallow_any_decorated``)
     @strawberry.field(description="Total number of nodes in the connection.")  # type: ignore[untyped-decorator]
-    def total_count(self: object) -> int:
+    def total_count(self: object) -> int:  # type: ignore[misc]
         # The field renders ``Int!`` (the ``__annotations__`` below win for the
         # SDL); ``-> int`` is the honest return type because the count path is
         # QuerySet-only (the connection field's spec-030 Decision 7 rule raises a ``GraphQLError``
@@ -2016,6 +2024,69 @@ def _synthesized_signature(
     return inspect.Signature(params, return_annotation=return_annotation), annotations
 
 
+def _async_connection_resolver(
+    target_type: type,
+    resolver: Callable[..., Awaitable[object]],
+    definition: DjangoTypeDefinition,
+) -> Callable[..., object]:
+    """Return ``_build_connection_resolver``'s async branch: await ``resolver``, then pipe."""
+
+    async def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
+        source = await resolver(root, info)
+        filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
+        return await _pipeline_async(
+            target_type,
+            source,
+            info,
+            definition=definition,
+            filter_input=filter_input,
+            order_by_input=order_by_input,
+        )
+
+    return _resolve
+
+
+def _sync_connection_resolver(
+    target_type: type,
+    resolver: Callable[..., Any] | None,
+    definition: DjangoTypeDefinition,
+) -> Callable[..., object]:
+    """Return ``_build_connection_resolver``'s sync branch: seed or call, then pipe.
+
+    ONE sync body serves the remaining three shapes - the default field (no
+    resolver: the type's initial queryset), a plain ``def`` resolver, and a
+    declared async-generator resolver (``is_async_callable`` is deliberately False
+    for async-generator functions). Strawberry's async ConnectionExtension accepts
+    the generator's AsyncIterable directly; the sync-shaped wrapper is intentional,
+    letting the native async executor consume it while the shared
+    ``utils/querysets.py::reject_async_iterable_in_sync_context`` guard turns
+    execute_sync misuse into a typed package error. The guard is a no-op for the
+    default branch (a QuerySet is synchronously iterable).
+    """
+
+    def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
+        if resolver is None:
+            source = base_queryset(definition.model)
+        else:
+            source = resolver(root, info)
+            reject_async_iterable_in_sync_context(
+                source,
+                flavor_noun="connection",
+                async_executor=operation_is_async(),
+            )
+        filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
+        return _pipeline_sync(
+            target_type,
+            source,
+            info,
+            definition=definition,
+            filter_input=filter_input,
+            order_by_input=order_by_input,
+        )
+
+    return _resolve
+
+
 def _build_connection_resolver(
     target_type: type,
     resolver: Callable[..., Any] | None,
@@ -2056,53 +2127,10 @@ def _build_connection_resolver(
       its return and the async ``get_queryset`` / ``apply_async`` hooks run on
       the async path.
     """
-    _resolve: Callable[..., object]
     if is_async_callable(resolver):
-
-        async def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
-            source = await resolver(root, info)
-            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
-            return await _pipeline_async(
-                target_type,
-                source,
-                info,
-                definition=definition,
-                filter_input=filter_input,
-                order_by_input=order_by_input,
-            )
-
+        _resolve = _async_connection_resolver(target_type, resolver, definition)
     else:
-        # ONE sync body serves the remaining three shapes - the default field
-        # (no resolver: the type's initial queryset), a plain ``def`` resolver,
-        # and a declared async-generator resolver (``is_async_callable`` is
-        # deliberately False for async-generator functions). Strawberry's async
-        # ConnectionExtension accepts the generator's AsyncIterable directly;
-        # the sync-shaped wrapper is intentional, letting the native async
-        # executor consume it while the shared
-        # ``utils/querysets.py::reject_async_iterable_in_sync_context`` guard
-        # turns execute_sync misuse into a typed package error. The guard is a
-        # no-op for the default branch (a QuerySet is synchronously iterable).
-
-        def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
-            if resolver is None:
-                source = base_queryset(definition.model)
-            else:
-                source = resolver(root, info)
-                reject_async_iterable_in_sync_context(
-                    source,
-                    flavor_noun="connection",
-                    async_executor=operation_is_async(),
-                )
-            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
-            return _pipeline_sync(
-                target_type,
-                source,
-                info,
-                definition=definition,
-                filter_input=filter_input,
-                order_by_input=order_by_input,
-            )
-
+        _resolve = _sync_connection_resolver(target_type, resolver, definition)
     signature, annotations = _synthesized_signature(target_type, definition)
     # mypy: typeshed's FunctionType omits __signature__
     _resolve.__signature__ = signature  # type: ignore[attr-defined]

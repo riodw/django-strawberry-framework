@@ -11,7 +11,7 @@ from typing import Any
 # (see ``optimizer/__init__.py``). Consumer-facing: the name is the key
 # clients use in Django's ``LOGGING`` config dict, so it is part of the
 # public surface even though it is not in ``__all__``.
-logger = logging.getLogger("django_strawberry_framework")
+logger: logging.Logger = logging.getLogger("django_strawberry_framework")
 
 from strawberry import auto  # noqa: E402  # logger must exist before subpackage imports
 

@@ -75,6 +75,8 @@ from .utils.querysets import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from django.db import models
+
     from .types.base import DjangoType
     from .types.relay import _RelayDjangoType
     from .utils.typing import ModelField
@@ -290,6 +292,8 @@ def _resolve_real_pk(
 
         pipeline = current_write_pipeline()
         using = None if pipeline is None else pipeline.alias
+    # The default manager itself, or the queryset its ``using()`` pins to ``using``.
+    manager: models.Manager[models.Model] | models.QuerySet[models.Model]
     manager = model_for(resolved_type)._default_manager
     if using is not None:
         manager = manager.using(using)

@@ -180,8 +180,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
             mutation_cls: _MutationClassT_contra,
             info: Info[object, object],
             *,
-            data: object = ...,
-            id: object = ...,  # noqa: A002
+            data: object = strawberry.UNSET,
+            id: object = strawberry.UNSET,  # noqa: A002
         ) -> object: ...
 
     class _AsyncResolverEntry(Protocol[_MutationClassT_contra]):
@@ -192,8 +192,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
             mutation_cls: _MutationClassT_contra,
             info: Info[object, object],
             *,
-            data: object = ...,
-            id: object = ...,  # noqa: A002
+            data: object = strawberry.UNSET,
+            id: object = strawberry.UNSET,  # noqa: A002
         ) -> Coroutine[object, object, object]: ...
 
 
@@ -721,8 +721,7 @@ def locate_instance(
     queryset = base_locked_queryset(model, alias, visible) if select_for_update else visible
     try:
         return queryset.get(pk=node_id)
-    # mypy: django-stubs omits DoesNotExist on the abstract Model base
-    except model.DoesNotExist:  # type: ignore[attr-defined]
+    except model.DoesNotExist:
         return None
 
 
@@ -1490,4 +1489,6 @@ def make_resolver_entries(
 # (spec-039). ``resolve_mutation_sync`` normalizes the ``UNSET`` kwargs to
 # ``_run_pipeline_sync``; ``resolve_mutation_async`` runs it through the shared async
 # boundary. The field factory (``mutations/fields.py``) reads both by name.
+resolve_mutation_sync: _SyncResolverEntry[type[DjangoMutation]]
+resolve_mutation_async: _AsyncResolverEntry[type[DjangoMutation]]
 resolve_mutation_sync, resolve_mutation_async = make_resolver_entries(_run_pipeline_sync)

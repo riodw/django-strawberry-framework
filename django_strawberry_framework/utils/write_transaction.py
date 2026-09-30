@@ -70,7 +70,7 @@ from __future__ import annotations
 import threading
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
 from django.db.models.fields.files import FieldFile
@@ -204,8 +204,8 @@ class WriteAliasContext:
     )
 
     def __init__(self, alias: str, *, lock: bool) -> None:
-        self.alias = alias
-        self.lock = lock
+        self.alias: str = alias
+        self.lock: bool = lock
         self.authorized_pk: object = None
         self.target_state: dict[str, object] | None = None
         self.write_phase: bool = False
@@ -740,8 +740,7 @@ def pin_write_queryset(
             "inside ONE transaction on the write alias; cross-alias writes are not supported. "
             "Remove the .using(...) call or fix the database router.",
         )
-    # ``QuerySet.using`` returns ``Self``; the stubs' model plugin types the call ``Any``.
-    return cast("_QuerySetT", queryset.using(alias))
+    return queryset.using(alias)
 
 
 def check_instance_write_alias(model: type, alias: str, instance: models.Model) -> None:
@@ -1030,13 +1029,13 @@ def _field_fingerprint(value: object) -> str:
         # that reports different contents per call, or a ``__repr__`` that
         # returns a constant, would otherwise let two structurally different
         # values fingerprint the SAME - and a drift check that cannot tell
-        # them apart is the fail-open this walk exists to prevent.
-        members = base_container_values(item)
+        # them apart is the fail-open this walk exists to prevent. Each branch reads
+        # the container it has narrowed, so a ``dict`` answers its ``(key, value)`` pairs.
         if isinstance(item, dict):
             parts.append("{")
             stack.append(_SnapshotClose("}", container_id))
             for key, member in sorted(
-                members,
+                base_container_values(item),
                 key=lambda pair: canonical_sort_key(pair[0]),
                 reverse=True,
             ):
@@ -1049,11 +1048,11 @@ def _field_fingerprint(value: object) -> str:
         elif isinstance(item, (list, tuple)):
             parts.append("[")
             stack.append(_SnapshotClose("]", container_id))
-            stack.extend(reversed(members))
+            stack.extend(reversed(base_container_values(item)))
         elif isinstance(item, (set, frozenset)):
             parts.append("s{")
             stack.append(_SnapshotClose("}s", container_id))
-            stack.extend(sorted(members, key=canonical_sort_key, reverse=True))
+            stack.extend(sorted(base_container_values(item), key=canonical_sort_key, reverse=True))
     return "".join(parts)
 
 
@@ -1156,12 +1155,10 @@ def base_locked_queryset(
     rejects ``FOR UPDATE`` on several of them). Visibility is still enforced (a
     hidden row is not in the subquery, so it is not locked and not found).
     """
-    # A ``model`` base-manager chain; the stubs' model plugin types it ``Any``.
-    return cast(
-        "QuerySet[_ModelT]",
+    return (
         model._base_manager.using(alias)
         .select_for_update()
-        .filter(pk__in=visible_queryset.values("pk")),
+        .filter(pk__in=visible_queryset.values("pk"))
     )
 
 

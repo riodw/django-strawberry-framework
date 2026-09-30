@@ -947,9 +947,10 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, obj
     ``optional_field_kwargs`` -> ``strawberry.field(name=...)`` because the
     wire tokens are Python keywords and cannot be dataclass field names.
     """
-    # mypy: runtime-built annotation
-    self_ref = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]  # type: ignore[valid-type]
-    list_ref = list[self_ref]
+    # A runtime-built annotation: the object ``Annotated[...]`` builds from a runtime
+    # name has no static type either checker models.
+    self_ref: Any = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
+    list_ref = GenericAlias(list, (self_ref,))
     return [
         (
             op.python_attr,

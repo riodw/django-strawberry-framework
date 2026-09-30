@@ -285,11 +285,7 @@ def base_queryset(model: type[_ModelT], *, using: str | None = None) -> models.Q
     not use this - it takes the raw manager and composes from there.
     """
     manager = model._default_manager
-    # A ``model`` default-manager chain; the stubs' model plugin types it ``Any``.
-    return cast(
-        "models.QuerySet[_ModelT]",
-        manager.using(using).all() if using is not None else manager.all(),
-    )
+    return manager.using(using).all() if using is not None else manager.all()
 
 
 def default_order(query: sql.Query, model: type[models.Model]) -> tuple[str | Combinable, ...]:
@@ -3138,7 +3134,7 @@ def _validate_post_orderset_result(
             f"{method_name} must return an unevaluated, unsliced "
             f"QuerySet of {model_name} rows; got {defect[0]} defect ({defect[1]})."
         )
-        messages = dict.fromkeys(
+        messages: dict[str, str] = dict.fromkeys(
             (
                 "type",
                 "table",
@@ -3452,7 +3448,9 @@ def _pk_membership_query_or_defect(
     if lost is not None:
         return None, ("combined", f"{query.combinator}: {lost}")
     combined: models.QuerySet[models.Model] = models.QuerySet(model=model, query=query)
-    rewritten = models.QuerySet(model=model).filter(pk__in=combined.order_by().values("pk"))
+    rewritten: models.QuerySet[models.Model] = models.QuerySet(model=model).filter(
+        pk__in=combined.order_by().values("pk"),
+    )
     if query.order_by:
         rewritten = rewritten.order_by(*query.order_by)
     # ``reverse()`` after a combinator flips only this flag; carried, the rewrite
@@ -4616,8 +4614,7 @@ def visible_related_object(
     # same relation-target lock the batched membership check applies.
     queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
     queryset = pipeline_scoped_queryset(queryset, related_model)
-    # A related-model row or ``None``; the stubs' model plugin types the chain ``Any``.
-    return cast("models.Model | None", queryset.filter(pk=pk).first())
+    return queryset.filter(pk=pk).first()
 
 
 def visible_related_objects(

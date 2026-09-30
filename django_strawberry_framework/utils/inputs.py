@@ -81,7 +81,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     class _Clearable(Protocol):
         """A ledger the namespace reset empties and otherwise never reads."""
 
-        def clear(self) -> None: ...
+        def clear(self) -> None:
+            """Drop every entry the ledger holds."""
 
     class _DynamicSetGetter(Protocol[_SetT]):
         """The Layer-6 ``get_<family>set_class`` getter ``make_dynamic_set_getter`` builds."""
@@ -242,8 +243,9 @@ def emit_set_input_field_triples(
                 # ``Related*(None, ...)`` placeholder - skip silently.
                 continue
             target_name = input_type_name_for(target)
-            # mypy: runtime-built annotation
-            inner = Annotated[target_name, strawberry.lazy(module_path)]  # type: ignore[valid-type]
+            # A runtime-built annotation: the object ``Annotated[...]`` builds from a
+            # runtime name has no static type either checker models.
+            inner: Any = Annotated[target_name, strawberry.lazy(module_path)]
             annotation: object = inner | None
             django_source_path = related_source_path_of(top_name, entry)
         else:
@@ -326,9 +328,9 @@ class FieldConversionBase:
         kind: str = SCALAR,
         required: bool,
     ) -> None:
-        self.annotation = annotation
-        self.kind = kind
-        self.required = required
+        self.annotation: Any = annotation
+        self.kind: str = kind
+        self.required: bool = required
 
 
 @dataclass(frozen=True)
@@ -1766,7 +1768,7 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
     def __init__(self, set_class: type[_FactorySetT]) -> None:
         """Store the root set class and its class-derived input type name."""
         self.set_class = set_class
-        self.input_type_name = set_input_type_name(set_class)
+        self.input_type_name: str = set_input_type_name(set_class)
 
     @property
     def _collision_registry(self) -> dict[str, type]:

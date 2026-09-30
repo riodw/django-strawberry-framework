@@ -558,7 +558,10 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list[models.Model] | None:
         visibility_where_sql=recognized.visibility_where_sql,
     )
     with connection.cursor() as cursor:
-        cursor.execute(sql, params)
+        # mypy: django-stubs admits a closed set of Python scalars as ``execute`` params;
+        # ``Field.get_db_prep_value`` returns whatever value the backend adapts, which
+        # the driver binds, so the params stay ``object``
+        cursor.execute(sql, params)  # type: ignore[arg-type]
         fetched = _apply_lateral_converters(spec, cursor.fetchall(), connection)
     return [_instantiate_row(spec, row, queryset.db) for row in fetched]
 
@@ -956,8 +959,7 @@ def _instantiate_row(spec: LateralWindowSpec, row: tuple[object, ...], db: str) 
         setattr(instance, WINDOW_TOTAL_COUNT, row[2 + width])
     for alias in spec.prefetch_value_aliases:
         setattr(instance, alias, parent_id)
-    # ``Model.from_db`` builds an instance of ``spec.model``.
-    return cast("models.Model", instance)
+    return instance
 
 
 class LateralPrefetchStrategy:
@@ -1121,7 +1123,8 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
         child_target_field = through_child_field.target_field
         if child_target_field.model._meta.db_table != child_meta.db_table:
             return None
-        child_join_column = child_target_field.column
+        # A foreign key targets a concrete field, whose ``column`` is its db column name.
+        child_join_column = cast("str", child_target_field.column)
         through_table = parent_link_field.model._meta.db_table
         parent_link_table = through_table
         through_child_column = through_child_field.column

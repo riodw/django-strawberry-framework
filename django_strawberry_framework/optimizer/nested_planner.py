@@ -720,8 +720,7 @@ def _project_scalar_only_window(
         append_unique(fields, column)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
-    # The django-stubs plugin types ``only()`` as ``Any``; it returns the same queryset type.
-    return cast("QuerySet[_M]", child_queryset.only(*fields))
+    return child_queryset.only(*fields)
 
 
 def _extend_only_projection(
@@ -749,15 +748,13 @@ def _extend_only_projection(
         if len(remaining) == len(names):
             return child_queryset
         cleared = child_queryset.defer(None)
-        # The django-stubs plugin types ``defer()`` / ``only()`` as ``Any``; each
-        # returns the same queryset type.
-        return cast("QuerySet[_M]", cleared.defer(*remaining) if remaining else cleared)
+        return cleared.defer(*remaining) if remaining else cleared
     if not names:
         return child_queryset
     missing = [attname for attname in attnames if attname not in names]
     if not missing:
         return child_queryset
-    return cast("QuerySet[_M]", child_queryset.only(*names, *missing))
+    return child_queryset.only(*names, *missing)
 
 
 def relation_connection_to_attr(relation_field_name: str, response_key: str | None = None) -> str:

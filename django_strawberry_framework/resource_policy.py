@@ -600,9 +600,9 @@ class _BudgetScope:
         lease: OperationLease[_RequestBudget],
         token: Token[OperationLease[_RequestBudget] | None],
     ) -> None:
-        self.lease = lease
-        self.token = token
-        self.adopted = False
+        self.lease: OperationLease[_RequestBudget] = lease
+        self.token: Token[OperationLease[_RequestBudget] | None] = token
+        self.adopted: bool = False
 
 
 def _armed_budget() -> _RequestBudget | None:
@@ -1147,9 +1147,7 @@ def _attach_cleanup_note(primary_error: BaseException, note: str) -> None:
     try:
         notes = [*getattr(primary_error, "__notes__", ())]
         notes.append(note)
-        # mypy: typeshed declares BaseException.__notes__ only from 3.11; this spelling
-        # serves the 3.10 floor
-        primary_error.__notes__ = notes  # type: ignore[attr-defined]
+        primary_error.__notes__ = notes
     except Exception:
         pass
 

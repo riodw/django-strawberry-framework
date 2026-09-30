@@ -38,6 +38,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
 
     from ..utils.relations import RelationKind
+    from ..utils.typing import ModelField
 
 
 class _DjangoFieldLike(Protocol):
@@ -51,7 +52,10 @@ class _DjangoFieldLike(Protocol):
     input shapes (forward field, reverse FK, M2M, O2O) all build cleanly
     without per-shape branching. Both members are read-only, which is what
     lets a reverse-relation descriptor (whose ``name`` is a property) satisfy
-    the contract beside a forward ``Field``.
+    the contract beside a forward ``Field``. ``from_django_field`` names
+    ``ModelField`` beside this protocol: the stubs declare a reverse relation's
+    ``name`` as a ``cached_property``, which pyright does not match against a
+    protocol property.
     """
 
     @property
@@ -174,7 +178,7 @@ class FieldMeta:
         return is_many_side_relation_kind(self.relation_kind)
 
     @classmethod
-    def from_django_field(cls, field: _DjangoFieldLike) -> FieldMeta:
+    def from_django_field(cls, field: _DjangoFieldLike | ModelField) -> FieldMeta:
         """Build a ``FieldMeta`` from a Django field descriptor.
 
         ``field.name`` and ``field.is_relation`` are the two load-bearing

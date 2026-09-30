@@ -196,6 +196,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.models import Manager, QuerySet
     from strawberry.types import Info
 
+    from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
     from ..utils.inputs import InputFieldSpec
     from ..utils.typing import ModelField
     from .serializer_converter import DRFField, DRFSerializer
@@ -2529,6 +2530,8 @@ def _run_serializer_pipeline_sync(
 # The serializer module entries, via the shared factory (spec-039). The
 # full pair is taken so the three write flavors cannot drift on the UNSET-kwargs
 # or async-boundary contract.
+resolve_serializer_sync: _SyncResolverEntry[type[SerializerMutation]]
+resolve_serializer_async: _AsyncResolverEntry[type[SerializerMutation]]
 resolve_serializer_sync, resolve_serializer_async = make_resolver_entries(
     _run_serializer_pipeline_sync,
 )

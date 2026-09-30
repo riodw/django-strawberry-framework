@@ -316,8 +316,8 @@ class ConnectionActorState:
     __slots__ = ("authenticated_provenance", "lock")
 
     def __init__(self) -> None:
-        self.authenticated_provenance = False
-        self.lock = asyncio.Lock()
+        self.authenticated_provenance: bool = False
+        self.lock: asyncio.Lock = asyncio.Lock()
 
 
 def connection_actor_state(scope: MutableMapping[str, object]) -> ConnectionActorState:

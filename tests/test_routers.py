@@ -104,6 +104,7 @@ The socket stays package-tier on the router either way - the probe serves no
 GraphQL and exists only to run Django's session lifecycle.
 """
 
+import ast
 import asyncio
 import contextlib
 import datetime
@@ -1418,6 +1419,94 @@ def test_graphql_http_consumer_left_the_router_module_entirely():
     """
     source = Path(routers_module.__file__).read_text(encoding="utf-8")
     assert "GraphQLHTTPConsumer" not in source
+
+
+def _source_of(node):
+    """``ast.unparse`` of ``node``, or ``None`` where the source spells nothing."""
+    return None if node is None else ast.unparse(node)
+
+
+def _parameter_row(parameter, kind, default=None):
+    """One parameter as ``(name, kind, annotation, default)``, each spelled as source."""
+    return (
+        parameter.arg,
+        kind,
+        _source_of(parameter.annotation),
+        _source_of(default),
+    )
+
+
+def _constructor_parameters(init):
+    """Every parameter of ``init`` as a ``_parameter_row``, in declaration order."""
+    arguments = init.args
+    positional = [*arguments.posonlyargs, *arguments.args]
+    defaults = [None] * (len(positional) - len(arguments.defaults)) + arguments.defaults
+    rows = [
+        _parameter_row(
+            parameter,
+            "positional-only" if index < len(arguments.posonlyargs) else "positional",
+            default,
+        )
+        for index, (parameter, default) in enumerate(zip(positional, defaults, strict=True))
+    ]
+    if arguments.vararg is not None:
+        rows.append(_parameter_row(arguments.vararg, "var-positional"))
+    rows += [
+        _parameter_row(parameter, "keyword-only", default)
+        for parameter, default in zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True)
+    ]
+    if arguments.kwarg is not None:
+        rows.append(_parameter_row(arguments.kwarg, "var-keyword"))
+    return rows
+
+
+def _router_constructor_definitions():
+    """The declared and the runtime ``DjangoGraphQLProtocolRouter.__init__``, parsed from source.
+
+    The declaration is the one inside a module-level ``if TYPE_CHECKING:`` block;
+    the runtime class is the one ``_build_router_class_uncached`` defines. Each
+    must be found exactly once, so a moved or duplicated class fails here rather
+    than comparing whichever definition happened to be found.
+    """
+    module = ast.parse(Path(routers_module.__file__).read_text(encoding="utf-8"))
+    found = {"declared": [], "runtime": []}
+    for statement in module.body:
+        if isinstance(statement, ast.If) and ast.unparse(statement.test) == "TYPE_CHECKING":
+            owner = "declared"
+        elif (
+            isinstance(statement, ast.FunctionDef)
+            and statement.name == "_build_router_class_uncached"
+        ):
+            owner = "runtime"
+        else:
+            continue
+        found[owner] += [
+            member
+            for candidate in statement.body
+            if isinstance(candidate, ast.ClassDef)
+            and candidate.name == "DjangoGraphQLProtocolRouter"
+            for member in candidate.body
+            if isinstance(member, ast.FunctionDef) and member.name == "__init__"
+        ]
+    assert {owner: len(inits) for owner, inits in found.items()} == {"declared": 1, "runtime": 1}
+    return found["declared"][0], found["runtime"][0]
+
+
+def test_the_declared_router_constructor_matches_the_runtime_one():
+    """The ``TYPE_CHECKING`` router declaration carries the runtime constructor exactly.
+
+    Checkers and downstream imports only ever see the declaration: the real class
+    exists once the module ``__getattr__`` runs ``_build_router_class_uncached``
+    behind the soft channels guard. Parameter names, kinds (positional /
+    keyword-only), annotations and defaults are compared as source, read with
+    ``ast`` so the comparison needs no channels import. A signature edit made to
+    one of the two classes alone fails here instead of type-checking every
+    consumer against a constructor that does not exist.
+
+    A property of the module's source, so no live query can observe it.
+    """
+    declared, runtime = _router_constructor_definitions()
+    assert _constructor_parameters(declared) == _constructor_parameters(runtime)
 
 
 def test_websocket_branch_wraps_origin_validator_outside_the_auth_stack():

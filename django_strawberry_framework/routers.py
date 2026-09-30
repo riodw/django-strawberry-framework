@@ -60,6 +60,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from types import ModuleType
     from typing import Protocol
 
+    from channels.routing import ProtocolTypeRouter
     from django.core.handlers.asgi import ASGIHandler
     from strawberry.channels import GraphQLWSConsumer
     from strawberry.schema import BaseSchema
@@ -69,13 +70,32 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
         def __call__(self, *, schema: BaseSchema) -> object: ...
 
+    class DjangoGraphQLProtocolRouter(ProtocolTypeRouter):
+        """The router class the module ``__getattr__`` builds on first access.
+
+        Declared for checkers and downstream imports with the constructor of the
+        runtime class ``_build_router_class_uncached`` defines, which carries the
+        documentation. The two constructors are held to one signature by
+        ``tests/test_routers.py::test_the_declared_router_constructor_matches_the_runtime_one``.
+        """
+
+        def __init__(
+            self,
+            schema: BaseSchema,
+            django_application: ASGIHandler,
+            *,
+            websocket_url_pattern: str = r"^graphql/?$",
+            websocket_consumer_class: object = None,
+            websocket_revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
+        ) -> None: ...
+
 
 # The one public symbol is resolved lazily via the PEP 562 module ``__getattr__``
-# below, so it is never a real module global; ruff's F822 (undefined name in
-# ``__all__``) is a false positive here. Listing it is deliberate: ``from
+# below, so at run time it is never a module global; the ``TYPE_CHECKING``
+# declaration above gives checkers its type. Listing it is deliberate: ``from
 # ...routers import *`` should opt into the router and thus the channels guard
 # (spec-041).
-__all__ = ("DjangoGraphQLProtocolRouter",)  # noqa: F822 - PEP 562 lazy export
+__all__ = ("DjangoGraphQLProtocolRouter",)
 
 # The single channels-ABSENT install hint (spec-041 Decision 5). The floor
 # itself is ``utils/imports.py::CHANNELS_FLOOR`` - the only other place it is

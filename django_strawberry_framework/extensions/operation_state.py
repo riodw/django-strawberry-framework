@@ -138,11 +138,10 @@ from ..utils.operation_lease import OperationLease
 from ..utils.private_state import PrivateAuthority
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import AsyncGenerator
+
     from strawberry.extensions.context import ExtensionContextManagerBase
-    from strawberry.schema._graphql_core import GraphQLIncrementalResult
-    from strawberry.schema.schema import StreamResult
     from strawberry.types import ExecutionContext
-    from strawberry.types.execution import ExecutionResult, PreExecutionError
     from typing_extensions import TypeIs
 
 #: The value type of whichever context variable a binding sets and resets.
@@ -170,7 +169,7 @@ class OperationState:
     __slots__ = ("__weakref__", "_resumed_bindings", "execution_context")
 
     def __init__(self, execution_context: ExecutionContext) -> None:
-        self.execution_context = execution_context
+        self.execution_context: ExecutionContext = execution_context
         self._resumed_bindings: list[tuple[ContextVar[Any], object]] = []
 
     def rebind_on_resume(
@@ -217,6 +216,8 @@ class OperationState:
 # The state type one operation-bound extension builds and reads back: the
 # ``OperationState`` subclass its ``_new_operation_state`` returns.
 _StateT = TypeVar("_StateT", bound=OperationState, covariant=True)
+#: One frame a streamed operation yields: whatever the stream it wraps yields.
+_FrameT = TypeVar("_FrameT")
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only aliases.
     #: Each operation-bound extension paired with the state built for this operation.
@@ -224,8 +225,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only aliases.
         tuple["_OperationBoundExtension[OperationState]", OperationState],
         ...,
     ]
-    #: One frame a streamed operation yields.
-    _StreamFrame = PreExecutionError | ExecutionResult | GraphQLIncrementalResult
 
 
 class _RunnerScope(NamedTuple):
@@ -529,7 +528,12 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
 
     @execution_context.setter
     @override
-    def execution_context(self, value: ExecutionContext | None) -> None:
+    # basedpyright: rejects any property overriding a base class attribute, settable or
+    # not, without comparing its getter and setter types
+    def execution_context(  # pyright: ignore[reportIncompatibleVariableOverride]
+        self,
+        value: ExecutionContext | None,
+    ) -> None:
         """Take the engine's assignment for the schemas it is the only signal for.
 
         Under a ``DjangoSchema`` the runner is handed this same context and
@@ -810,7 +814,7 @@ class _BoundScope:
             _unbind(self._bindings)
 
 
-class _ResumedStream:
+class _ResumedStream(Generic[_FrameT]):
     """A streamed operation's frames, each produced with the runner bound.
 
     An async iterator belongs to whoever holds it: a transport may advance it
@@ -833,25 +837,29 @@ class _ResumedStream:
 
     __slots__ = ("_runner", "_source")
 
-    def __init__(self, runner: DjangoExtensionsRunner, source: StreamResult) -> None:
+    def __init__(
+        self,
+        runner: DjangoExtensionsRunner,
+        source: AsyncGenerator[_FrameT, None],
+    ) -> None:
         self._runner = runner
         self._source = source
 
-    def __aiter__(self) -> _ResumedStream:
+    def __aiter__(self) -> _ResumedStream[_FrameT]:
         """Answer for itself, so the bindings cover every frame the caller pulls."""
         return self
 
-    async def __anext__(self) -> _StreamFrame:
+    async def __anext__(self) -> _FrameT:
         """Produce the next frame with this operation bound in the calling task."""
         with self._runner.resumed():
             return await self._source.__anext__()
 
-    async def asend(self, value: None) -> _StreamFrame:
+    async def asend(self, value: None) -> _FrameT:
         """Resume the stream with ``value``, bound in the calling task."""
         with self._runner.resumed():
             return await self._source.asend(value)
 
-    async def athrow(self, *args: Any, **kwargs: Any) -> _StreamFrame:
+    async def athrow(self, *args: Any, **kwargs: Any) -> _FrameT:
         """Throw into the stream, bound so its teardown reads its own operation."""
         with self._runner.resumed():
             return await self._source.athrow(*args, **kwargs)
@@ -941,7 +949,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         with _bound(self._scope(), self._operation_states, registrar=True):
             yield
 
-    def resumed_stream(self, source: StreamResult) -> _ResumedStream:
+    def resumed_stream(self, source: AsyncGenerator[_FrameT, None]) -> _ResumedStream[_FrameT]:
         """Wrap ``source`` so every frame it yields is produced with this operation bound."""
         return _ResumedStream(self, source)
 

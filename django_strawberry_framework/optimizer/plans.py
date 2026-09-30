@@ -1254,8 +1254,7 @@ def _apply_keyset_counted_window(
         # empty page (all children before the cursor) and a childless parent
         # stay distinguishable and the pre-seek count reaches the resolver.
         range_q = range_q | Q(**{WINDOW_ROW_NUMBER_ABS: 1})
-    # The django-stubs plugin types ``filter()`` as ``Any``; it returns the same queryset type.
-    return cast("QuerySet[_M]", queryset.filter(range_q))
+    return queryset.filter(range_q)
 
 
 def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
@@ -1299,7 +1298,9 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
             continue
         descending = getattr(entry, "descending", None)
         if descending is None:
-            desc = getattr(entry, "desc", None)
+            # ``F.desc`` and ``Expression.desc`` both return an ``OrderBy``; the probe's
+            # ``None`` covers an entry that carries no ``desc`` at all.
+            desc: Callable[[], OrderBy] | None = getattr(entry, "desc", None)
             if not callable(desc):
                 raise OptimizerError(
                     f"Cannot reverse connection order entry {entry!r}: it carries neither a "

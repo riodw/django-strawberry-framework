@@ -244,8 +244,7 @@ def _resolve_cursor_field_column(model: type[models.Model], name: str) -> ModelF
     ``validate_cursor_field_columns`` is what rejects it.
     """
     if name == "pk":
-        # The stubs' plugin types ``_meta`` of an unparametrized model class as ``Any``.
-        return cast("ConcreteField", model._meta.pk)
+        return model._meta.pk
     return model._meta.get_field(name)
 
 

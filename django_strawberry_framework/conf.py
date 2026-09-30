@@ -360,7 +360,7 @@ class Settings:
             ) from exc
 
 
-settings = Settings(None)
+settings: Settings = Settings(None)
 
 
 def upstream_patches_enabled(dependency: str) -> bool:

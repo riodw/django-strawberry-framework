@@ -1708,10 +1708,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 requested_limit=args_record.limit,
             )
 
-        # The two arms bind the one name to a coroutine function and a plain one, so it
-        # is declared up front.
-        _wrap: Callable[..., object]
-        if is_async_callable(user_resolver):
+        # Each wrapper is built in its own scope: one is a coroutine function and the
+        # other is not, and both keep ``_wrap`` as the resolver name Strawberry reads.
+        def _async_wrap() -> Callable[..., object]:
 
             async def _wrap(
                 *args: Any,
@@ -1747,7 +1746,10 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         orderset_class=orderset_class,
                     )
                 return await _resolve_async_iterable(source, info, args_record)
-        else:
+
+            return _wrap
+
+        def _sync_wrap() -> Callable[..., object]:
 
             def _wrap(
                 *args: Any,
@@ -1810,7 +1812,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     requested_limit=args_record.limit,
                 )
 
-        wrapped = _wrap
+            return _wrap
+
+        wrapped = _async_wrap() if is_async_callable(user_resolver) else _sync_wrap()
 
     signature, annotations = _synthesized_list_signature(orderset_class)
     # mypy: typeshed's FunctionType omits __signature__

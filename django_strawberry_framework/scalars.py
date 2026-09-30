@@ -22,11 +22,16 @@ from collections.abc import Mapping
 from typing import Any, NewType
 
 import strawberry
-from strawberry.file_uploads.scalars import Upload, UploadDefinition
+from strawberry.file_uploads.scalars import Upload
+from strawberry.file_uploads.scalars import UploadDefinition as _UploadDefinition
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
 from .exceptions import _safe_arg_repr, _safe_type_name
+
+# Strawberry binds its ``UploadDefinition`` without an annotation; the re-export
+# declares the ``ScalarDefinition`` that ``strawberry.scalar(...)`` returns.
+UploadDefinition: ScalarDefinition = _UploadDefinition
 
 # Re-export Strawberry's built-in ``Upload`` scalar (and its ``UploadDefinition``)
 # as the package's public upload scalar (spec-037). ``Upload`` is a

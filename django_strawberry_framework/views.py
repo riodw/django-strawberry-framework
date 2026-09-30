@@ -117,7 +117,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # one, its ``parse_json`` delegates to the other); at run time the mixin's base
     # stays ``object`` so it adds nothing to either view's MRO.
     class _BoundaryMixinBase(BaseView[Any], View):
-        pass
+        """The Strawberry ``BaseView`` plus Django ``View`` the boundary mixin extends."""
 else:
     _BoundaryMixinBase = object
 
@@ -586,23 +586,32 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
             delattr(request, _BOUNDARY_PREPARED_VIEW)
             return prepared[1]
 
+        # One name per arm, so neither def redeclares the other; ``wraps`` gives the
+        # returned callback upstream's ``__name__`` and ``__qualname__`` either way.
+        view: Callable[..., object]
+        # mypy (both arms): ``wraps`` types each def as a ``_Wrapped`` over both
+        # upstream's ``Callable[..., Any]`` and the def's own ``*args: Any,
+        # **kwargs: Any`` / ``-> Any`` signature, so ``Any`` enters from either side.
         if cls.view_is_async:
 
             @wraps(upstream_view)
-            async def view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+            async def async_view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
                 instance = prepared_view(request)
                 if instance is None:
                     return await upstream_view(request, *args, **kwargs)
                 return await instance.dispatch(request, *args, **kwargs)
 
+            view = async_view
         else:
 
             @wraps(upstream_view)
-            def view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+            def sync_view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
                 instance = prepared_view(request)
                 if instance is None:
                     return upstream_view(request, *args, **kwargs)
                 return instance.dispatch(request, *args, **kwargs)
+
+            view = sync_view
 
         setattr(view, _CSRF_EXEMPT, _CSRF_ORDERING_EXEMPTION)
         setattr(view, _BOUNDARY_MARKER, True)

@@ -183,10 +183,12 @@ def _get_payload(
     if not isinstance(payload, dict):
         return None
 
-    payload["debugToolbar"] = collections.OrderedDict(
-        [("panels", collections.OrderedDict())],
+    panels: collections.OrderedDict[str, dict[str, object]] = collections.OrderedDict()
+    debug_toolbar: collections.OrderedDict[str, object] = collections.OrderedDict(
+        [("panels", panels)],
     )
-    payload["debugToolbar"]["requestId"] = toolbar.request_id
+    debug_toolbar["requestId"] = toolbar.request_id
+    payload["debugToolbar"] = debug_toolbar
 
     for panel in reversed(toolbar.enabled_panels):
         if panel.panel_id == "TemplatesPanel":
@@ -195,7 +197,7 @@ def _get_payload(
         title = panel.title if panel.has_content else None
 
         subtitle = panel.nav_subtitle
-        payload["debugToolbar"]["panels"][panel.panel_id] = {
+        panels[panel.panel_id] = {
             "title": title() if callable(title) else title,
             "subtitle": subtitle() if callable(subtitle) else subtitle,
         }

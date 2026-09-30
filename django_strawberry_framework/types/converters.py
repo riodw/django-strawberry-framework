@@ -66,7 +66,7 @@ import keyword
 import re
 import uuid
 from collections.abc import Iterable
-from enum import Enum
+from enum import Enum, EnumMeta
 from types import GenericAlias
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
@@ -202,7 +202,8 @@ class _FileSystemPathFields:
     description a consumer's SDL will carry.
     """
 
-    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``
+    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``,
+    # so the decorated def's type is ``Any`` (``misc`` under ``disallow_any_decorated``)
     @strawberry.field(  # type: ignore[untyped-decorator]
         description=(
             "SECURITY: the file's absolute path on the server filesystem. Opted in "
@@ -210,7 +211,7 @@ class _FileSystemPathFields:
             "not client data. Null when the storage backend cannot produce one."
         ),
     )
-    def path(self) -> str | None:
+    def path(self) -> str | None:  # type: ignore[misc]
         """The absolute filesystem path, or ``None`` if storage cannot produce one."""
         return _safe_file_attr(self, "path")
 
@@ -747,7 +748,10 @@ def build_enum_from_choices(
             f"{source_label} choices sanitize to the same enum member: "
             f"{details}.  Rename one side or split into separate fields.",
         )
-    enum_cls = Enum(enum_name, members)  # type: ignore[misc]  # mypy wants a literal enum name
+    # The metaclass call ``Enum(enum_name, members)`` makes, spelled out: its type is the
+    # ``type[Enum]`` the functional API returns, where a checker reading ``Enum(...)``
+    # with a non-literal name either rejects it or types an ``Enum`` member.
+    enum_cls = EnumMeta.__call__(Enum, enum_name, members)
     return strawberry.enum(enum_cls)
 
 

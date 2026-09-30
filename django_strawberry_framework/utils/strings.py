@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
         def __call__(self, name: str) -> str:
             """Transform ``name``."""
+            ...
 
 
 __all__ = (

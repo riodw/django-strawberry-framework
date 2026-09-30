@@ -31,7 +31,17 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing import TypeAlias
 
     from django.db import models
-    from graphql import GraphQLNullableType, GraphQLResolveInfo
+    from graphql import (
+        GraphQLEnumType,
+        GraphQLInputObjectType,
+        GraphQLInterfaceType,
+        GraphQLList,
+        GraphQLObjectType,
+        GraphQLResolveInfo,
+        GraphQLScalarType,
+        GraphQLType,
+        GraphQLUnionType,
+    )
     from strawberry import Info
     from strawberry.schema import Schema
     from strawberry.schema.config import StrawberryConfig
@@ -52,6 +62,17 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     #: Both resolver ``info`` flavors: the resolve-time Strawberry ``Info`` and the
     #: plan-time graphql-core ``GraphQLResolveInfo``.
     EitherInfo: TypeAlias = Info[object, object] | GraphQLResolveInfo
+    #: What a ``GraphQLNonNull`` wraps: graphql-core's ``GraphQLNullableType``, with
+    #: the list member it leaves bare parametrized by ``GraphQLList``'s own bound.
+    _GraphQLNullableType: TypeAlias = (
+        GraphQLScalarType
+        | GraphQLObjectType
+        | GraphQLInterfaceType
+        | GraphQLUnionType
+        | GraphQLEnumType
+        | GraphQLInputObjectType
+        | GraphQLList[GraphQLType]
+    )
 
 __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
@@ -218,14 +239,15 @@ def unwrap_graphql_type(gql_type: object) -> object:
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         if not hasattr(gql_type, "of_type"):
             return gql_type
-        gql_type = gql_type.of_type
+        # Read by name: the probe above admits any object that carries ``of_type``.
+        gql_type = getattr(gql_type, "of_type")  # noqa: B009
     raise RuntimeError(
         f"unwrap_graphql_type: `of_type` wrapper stack exceeded "
         f"{MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
     )
 
 
-def unwrap_non_null(gql_type: _T) -> "_T | GraphQLNullableType":
+def unwrap_non_null(gql_type: _T) -> "_T | _GraphQLNullableType":
     """Peel ONLY ``GraphQLNonNull`` layers, bounded; leave list wrappers in place.
 
     The narrow sibling of :func:`unwrap_graphql_type`, for the callers that must

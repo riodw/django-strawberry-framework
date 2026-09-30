@@ -221,7 +221,7 @@ def clear_context_key(context: Any, key: str) -> None:
 
 
 @contextlib.contextmanager
-def restored_context_keys(context: Any, *keys: str) -> Iterator[None]:
+def restored_context_keys(context: object, *keys: str) -> Iterator[None]:
     """Snapshot ``keys``, run the body, and put them back - including on an exception.
 
     The inverse this module documented but did not ship. A nested execution

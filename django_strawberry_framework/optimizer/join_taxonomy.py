@@ -264,7 +264,9 @@ def _through_link_fields(
     ``(None, None)`` when the through model or the naming API is missing
     (synthetic doubles) - the classifier never raises.
     """
-    forward_field = _safe_getattr(field, "field")
+    # Either the relation's own forward field or ``field`` itself, read by the
+    # naming API below: a descriptor double rather than a typed field.
+    forward_field: Any = _safe_getattr(field, "field")
     if not _safe_truthy(forward_field):
         forward_field = field
     if through is None or not callable(_safe_getattr(forward_field, "m2m_field_name")):

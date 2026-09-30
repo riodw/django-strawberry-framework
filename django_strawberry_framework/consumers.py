@@ -1653,8 +1653,13 @@ def build_revalidating_consumer_class(
     three modules and tracks an upstream re-point automatically.
     """
     # Each base is read off ``base_consumer_cls`` at run time (see above), so it has
-    # no static type to name here.
-    transport_ws_handler_base: Any = base_consumer_cls.graphql_transport_ws_handler_class
+    # no static type to name here. The two handler attributes are read by name: upstream
+    # declares each as an instance variable typed over the view's own ``Context`` /
+    # ``RootValue`` type variables, which a read through the class leaves unbound.
+    transport_ws_handler_base: Any = getattr(  # noqa: B009
+        base_consumer_cls,
+        "graphql_transport_ws_handler_class",
+    )
 
     # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
     class _RevalidatingTransportWSHandler(transport_ws_handler_base):  # type: ignore[misc, no-any-unimported]
@@ -1720,7 +1725,7 @@ def build_revalidating_consumer_class(
                 # subclasses included - no hand-maintained list can drift.
                 await _contain_message_loop_failure(self, exc, "graphql-transport-ws")
 
-    graphql_ws_handler_base: Any = base_consumer_cls.graphql_ws_handler_class
+    graphql_ws_handler_base: Any = getattr(base_consumer_cls, "graphql_ws_handler_class")  # noqa: B009
 
     # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
     class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):  # type: ignore[misc, no-any-unimported]

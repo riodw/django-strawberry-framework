@@ -44,7 +44,7 @@ its converted-selection memo lives on - both below it in the dependency order.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
@@ -611,7 +611,12 @@ def connection_field_names(info: object) -> ConnectionFieldNames:
     documented naming knobs - are.
     """
     converter = getattr(schema_config_from_info(info), "name_converter", None)
-    apply_naming_config = getattr(converter, "apply_naming_config", None)
+    # Strawberry's ``NameConverter.apply_naming_config`` renders a python name as a ``str``.
+    apply_naming_config: Callable[[str], str] | None = getattr(
+        converter,
+        "apply_naming_config",
+        None,
+    )
     if not callable(apply_naming_config):
         return DEFAULT_CONNECTION_FIELD_NAMES
     return ConnectionFieldNames(

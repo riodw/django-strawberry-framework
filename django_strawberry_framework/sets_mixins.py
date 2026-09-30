@@ -644,8 +644,8 @@ class ActiveInputPermissionMixin:
         """
         invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
-    @staticmethod
-    def _permission_fallback_path(python_attr: str) -> str:
+    @classmethod
+    def _permission_fallback_path(cls, python_attr: str) -> str:
         """Map a python attr to its permission source path when no field-spec exists.
 
         Default: the attr IS the path (order side). ``FilterSet`` remaps

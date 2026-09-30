@@ -1037,9 +1037,12 @@ class SerializerMutation(DjangoMutation):
     # optimizer re-fetch -> payload, riding the promoted shared write skeleton), via
     # the shared ``resolver_seams`` factory. The generated seams'
     # function-local import of ``rest_framework/resolvers.py`` keeps this module free
-    # of a load-time edge to the resolver module (the ``forms/sets.py`` precedent).
-    resolve_sync, resolve_async = resolver_seams(
-        "django_strawberry_framework.rest_framework.resolvers",
-        "resolve_serializer_sync",
-        "resolve_serializer_async",
-    )
+    # of a load-time edge to the resolver module (the ``forms/sets.py`` precedent). A
+    # type checker reads the pair from ``DjangoMutation``'s declaration, which is
+    # exactly the signature the ``with_id`` seams carry.
+    if not TYPE_CHECKING:
+        resolve_sync, resolve_async = resolver_seams(
+            "django_strawberry_framework.rest_framework.resolvers",
+            "resolve_serializer_sync",
+            "resolve_serializer_async",
+        )

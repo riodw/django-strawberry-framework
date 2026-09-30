@@ -126,6 +126,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types import Info
 
     from ..mutations.inputs import FieldError
+    from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
     from .sets import DjangoFormMutation, DjangoModelFormMutation
 
     # A form-flavor mutation class: the ``ModelForm`` or the model-less plain base.
@@ -590,23 +591,27 @@ def _run_form_pipeline_sync(
     This is the single sync body the async path wraps in one
     ``sync_to_async(thread_sensitive=True)`` call.
     """
-    # The two arms bind the one name to differently-shaped steps, so it is declared
-    # up front; ``_primary_type is None`` IS the plain-vs-``ModelForm`` flavor split.
+    # ``_primary_type is None`` IS the plain-vs-``ModelForm`` flavor split; each arm
+    # names its own differently-shaped step and binds it to the one declared name.
     write_step: Callable[[models.Model | None, _DecodedForm], object]
     if mutation_cls._primary_type is None:
 
-        def write_step(
+        def plain_write_step(
             _instance: models.Model | None,
             decoded: _DecodedForm,
         ) -> Literal[True] | list[FieldError]:
             return _plain_form_write_step(mutation_cls, info, decoded)
+
+        write_step = plain_write_step
     else:
 
-        def write_step(
+        def modelform_write_step(
             instance: models.Model | None,
             decoded: _DecodedForm,
         ) -> models.Model | list[FieldError]:
             return _modelform_write_step(mutation_cls, info, instance, decoded)
+
+        write_step = modelform_write_step
 
     return run_write_pipeline_sync(
         mutation_cls,
@@ -631,4 +636,6 @@ def _run_form_pipeline_sync(
 # ``run_pipeline_async`` boundary (one ``sync_to_async(thread_sensitive=True)`` call,
 # so the ``transaction.atomic()`` + every ORM call run on one worker thread). Both
 # form bases' ``resolve_sync`` / ``resolve_async`` seams delegate here by name.
+resolve_form_sync: _SyncResolverEntry[_FormMutationClass]
+resolve_form_async: _AsyncResolverEntry[_FormMutationClass]
 resolve_form_sync, resolve_form_async = make_resolver_entries(_run_form_pipeline_sync)

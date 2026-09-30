@@ -68,9 +68,14 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
             first: object,
             second: object,
             msg: object = None,
-        ) -> None: ...
-        def assertIsNone(self, obj: object, msg: object = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
-        def assertTrue(self, expr: object, msg: object = None) -> None: ...  # noqa: N802 - unittest assertion vocabulary
+        ) -> None:
+            """Fail the test unless ``first == second``."""
+
+        def assertIsNone(self, obj: object, msg: object = None) -> None:  # noqa: N802 - unittest assertion vocabulary
+            """Fail the test unless ``obj is None``."""
+
+        def assertTrue(self, expr: object, msg: object = None) -> None:  # noqa: N802 - unittest assertion vocabulary
+            """Fail the test unless ``expr`` is truthy."""
 
 
 __all__ = [

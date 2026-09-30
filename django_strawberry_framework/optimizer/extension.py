@@ -785,9 +785,10 @@ def _collect_schema_reachable_types(schema: object) -> set[type]:
         if type_name is None or type_name in visited_type_names:
             return
         visited_type_names.add(type_name)
-        # Check if this type is a DjangoType.
+        # Check if this type is a DjangoType. The lookup is read by name: the probe
+        # admits any schema object that carries ``get_type_by_name``.
         definition = (
-            strawberry_schema.get_type_by_name(type_name)
+            getattr(strawberry_schema, "get_type_by_name")(type_name)  # noqa: B009
             if hasattr(strawberry_schema, "get_type_by_name")
             else None
         )

@@ -289,6 +289,7 @@ class NestedConnectionStrategy(Protocol):
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Attach fetch directives for one nested connection; ``True`` = planned."""
+        raise NotImplementedError
 
 
 #: The single public strategy-selection type. Every seam that lets a consumer

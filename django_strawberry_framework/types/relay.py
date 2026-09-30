@@ -374,8 +374,7 @@ def _raise_if_required(
     if not required:
         return
     model = model_for(cls)
-    # mypy: django-stubs omits DoesNotExist on the abstract Model base
-    raise model.DoesNotExist(  # type: ignore[attr-defined]
+    raise model.DoesNotExist(
         f"{_safe_class_name(model)}: no row matching {id_attr}={_safe_arg_repr(node_id)}.",
     )
 
@@ -408,9 +407,7 @@ def _apply_node_filter(
     sync path, ``.aget``/``.afirst`` on the async path). An id that coerced to
     no value never reaches here: the caller answers it without a query.
     """
-    # The stubs' plugin cannot resolve a lookup spelled as a runtime string, so a
-    # ``filter(**{...})`` over one is typed ``Any``; it returns ``qs``'s own class.
-    return cast("models.QuerySet[_ModelT]", qs.filter(**{id_attr: value}))
+    return qs.filter(**{id_attr: value})
 
 
 def _apply_nodes_filter(
@@ -419,7 +416,7 @@ def _apply_nodes_filter(
     values: list[object],
 ) -> models.QuerySet[_ModelT]:
     """Filter ``qs`` to the rows whose id slot is one of the coerced ``values``."""
-    return cast("models.QuerySet[_ModelT]", qs.filter(**{f"{id_attr}__in": values}))
+    return qs.filter(**{f"{id_attr}__in": values})
 
 
 # Keep the GlobalID strategy helpers in this Relay foundation module; do not
@@ -941,8 +938,7 @@ def _order_nodes(
             try:
                 output.append(index[key])
             except KeyError as exc:
-                # mypy: django-stubs omits DoesNotExist on the abstract Model base
-                raise model.DoesNotExist(  # type: ignore[attr-defined]
+                raise model.DoesNotExist(
                     f"{_safe_class_name(model)}: no row matching {id_attr}={key!r}.",
                 ) from exc
         else:

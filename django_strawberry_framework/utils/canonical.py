@@ -65,7 +65,7 @@ def base_container_values(value: object) -> tuple[object, ...]:
     for a type the interpreter does not define, so the honest answer is a typed
     refusal. Both callers gate on the five built-in types before arriving here
     (``utils/inputs.py::_hashable_meta_value``,
-    ``utils/write_transaction.py`` #"members = base_container_values(item)"), so
+    ``utils/write_transaction.py::_field_fingerprint``), so
     the refusal fires only for a future caller that widened its gate without
     deciding how an arbitrary iterable should be read.
     """

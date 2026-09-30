@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from django.db import models
 
@@ -27,7 +27,7 @@ from .exceptions import ConfigurationError
 from .utils.imports import import_attr_if_importable
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .types.definition import DjangoTypeDefinition
+    from .types.definition import DjangoTypeDefinition, GlobalIDStrategy
     from .types.relations import PendingRelation
 
 
@@ -56,13 +56,20 @@ def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any
 
 _subsystem_clears: dict[str, tuple[Callable[[], None], bool]] = {}
 
+
+class _GlobalIDSettingUnset(Enum):
+    """The one-member type of ``GLOBALID_SETTING_UNSET``, so an ``is`` check narrows it away."""
+
+    UNSET = "unset"
+
+
 # Sentinel for ``TypeRegistry._globalid_setting_snapshot`` meaning "not yet
 # computed this build" - distinct from ``None``, which is a valid snapshot value
 # (no ``RELAY_GLOBALID_STRATEGY`` override configured). The finalizer computes
 # the validated setting once per finalization and stores it here; the cache
 # boundary is the registry lifecycle, reset by ``clear()`` (spec-031 GlobalID
 # setting snapshot).
-GLOBALID_SETTING_UNSET: object = object()
+GLOBALID_SETTING_UNSET: Final = _GlobalIDSettingUnset.UNSET
 
 
 def register_subsystem_clear(
@@ -127,7 +134,9 @@ class TypeRegistry:
         # build, computed once by ``finalize_django_types`` and read by the Relay
         # loop. ``GLOBALID_SETTING_UNSET`` distinguishes "not yet computed" from a
         # ``None`` (no-override) snapshot; reset in ``clear()``.
-        self._globalid_setting_snapshot: object = GLOBALID_SETTING_UNSET
+        self._globalid_setting_snapshot: (
+            GlobalIDStrategy | Literal[_GlobalIDSettingUnset.UNSET] | None
+        ) = GLOBALID_SETTING_UNSET
 
     def _check_mutable(self) -> None:
         """Defense-in-depth guard: refuse mutation after ``mark_finalized``.
@@ -607,4 +616,4 @@ class TypeRegistry:
             clear()
 
 
-registry = TypeRegistry()
+registry: TypeRegistry = TypeRegistry()

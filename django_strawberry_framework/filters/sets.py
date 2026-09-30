@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn, TypeVar, cast
@@ -122,7 +122,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from types import MethodType
 
     from ..types.definition import DjangoTypeDefinition
-    from ..utils.typing import ForeignKeyField, ModelField
+    from ..utils.typing import ConcreteField, ForeignKeyField, ModelField
 
 _M = TypeVar("_M", bound=models.Model)
 
@@ -1049,7 +1049,7 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
     """
 
     def __new__(
-        cls: type[FilterSetMetaclass],
+        cls,
         name: str,
         bases: tuple[type, ...],
         attrs: dict[str, object],
@@ -1568,8 +1568,10 @@ class FilterSet(
             # forward-defensive no-op in case the upstream contract changes.
             return fields
 
-        # ADD the PK if upstream excluded it (typically the auto-id column).
-        pk_field = model._meta.pk
+        # ADD the PK if upstream excluded it (typically the auto-id column). Django
+        # leaves ``Options.pk`` ``None`` on an abstract model with no explicit primary
+        # key; django-stubs types it as always a ``Field``.
+        pk_field: ConcreteField | None = model._meta.pk
         if pk_field is not None and pk_field.name not in fields:
             fields[pk_field.name] = ["exact"]
 
@@ -2199,6 +2201,7 @@ class FilterSet(
             # dropped every owner-aware resolution to the registry
             # fallback). Mirrors `_is_own_pk_under_relay_owner` /
             # `_target_type_for_related_filter`, which both read `.origin`.
+            resolved: Callable[[object], tuple[DjangoTypeDefinition, ModelField] | None] | None
             resolved = getattr(owner, "related_target_for", None)
             if callable(resolved):
                 pair = resolved(field_name)
@@ -3206,8 +3209,7 @@ class FilterSet(
             _depth=depth,
             _nested_qs_by_branch_id=nested_map,
         )
-        # django-stubs types a queryset method on an unresolved model as ``Any``.
-        return cast("models.QuerySet[_M]", qs.filter(q))
+        return qs.filter(q)
 
     @classmethod
     def _evaluate_logic_tree(

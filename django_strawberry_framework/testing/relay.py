@@ -63,6 +63,9 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     types, finalized non-Relay-Node types, and ``callable`` / ``custom``
     strategies (see the module docstring for the full contract).
     """
+    # Bound before the ``try``: the gate below passes only when the ``try`` completed,
+    # which rebinds it to the class's own attribute.
+    definition: object = None
     try:
         # mypy: ``type_cls: type`` is the public contract; the class check validates a
         # test call that breaks it

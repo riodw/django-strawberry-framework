@@ -89,7 +89,7 @@ from .serializer_converter import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
     from django.db import models
 
@@ -1875,6 +1875,7 @@ def build_serializer_inputs(
 # ``SerializerMutation.input_type_name()``. Clear it with the generated-input
 # ledgers before every bind so nested cache hits cannot suppress re-materialization.
 _serializer_shape_build_cache: dict[SerializerInputShape, tuple[type, SerializerInputShape]]
+clear_serializer_shape_build_cache: Callable[[], None]
 _serializer_shape_build_cache, clear_serializer_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(
     clear_serializer_shape_build_cache,

@@ -161,9 +161,10 @@ class GraphQLRequestBodyBoundaryMiddleware:
         later entry in the chain - and reset in a ``finally`` so a raising view
         cannot leave it set for whatever the worker handles next.
         """
-        # Read into a local: typeshed's ``iscoroutinefunction`` is a TypeGuard, and
-        # guarding on ``self`` directly would re-type it as a bare callable.
-        is_async = iscoroutinefunction(self)
+        # A plain ``bool``: typeshed's ``iscoroutinefunction`` is a TypeGuard, and a guard
+        # on it - direct, or through a local, which pyright follows - would re-type
+        # ``self`` as a bare callable.
+        is_async = bool(iscoroutinefunction(self))
         if is_async:
             return self.__acall__(request)
         token = _boundary_middleware_request.set(request)

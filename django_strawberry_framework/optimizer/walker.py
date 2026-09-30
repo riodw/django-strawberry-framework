@@ -1423,7 +1423,7 @@ def _hint_prefetch_over_pk_set(
             f"Prefetch queryset is combined ({defect[1]}); "
             + _COMBINED_WHAT.format(model=inner.model.__name__, detail=defect[1]),
         )
-    queryset = models.QuerySet(
+    queryset: models.QuerySet[models.Model] = models.QuerySet(
         model=inner.model,
         query=rewritten,
         using=inner._db,  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db

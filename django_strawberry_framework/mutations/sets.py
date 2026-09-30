@@ -468,41 +468,57 @@ def resolver_seams(
     ``resolve_sync, resolve_async = resolver_seams(...)`` so both land in the class
     ``__dict__``.
     """
-    # The two arms bind the same names to differently-shaped functions (the
-    # model-less arm has no ``id``), so the names are declared once up front.
-    resolve_sync: Callable[..., object]
-    resolve_async: Callable[..., object]
+    # Each shape is built in its own scope: the model-less pair has no ``id``, and
+    # both pairs keep ``resolve_sync`` / ``resolve_async`` as their function names.
     if with_id:
+        return _id_resolver_seams(module_path, sync_name, async_name)
+    return _id_less_resolver_seams(module_path, sync_name, async_name)
 
-        def resolve_sync(
-            cls: type,
-            info: Info[object, object],
-            *,
-            data: object,
-            id: object,  # noqa: A002
-        ) -> object:
-            """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
-            return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
 
-        def resolve_async(
-            cls: type,
-            info: Info[object, object],
-            *,
-            data: object,
-            id: object,  # noqa: A002
-        ) -> object:
-            """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
-            return import_attr(module_path, async_name)(cls, info, data=data, id=id)
+def _id_resolver_seams(
+    module_path: str,
+    sync_name: str,
+    async_name: str,
+) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
+    """Build ``resolver_seams``' ``(info, *, data, id)`` pair (every model-backed flavor)."""
 
-    else:
+    def resolve_sync(
+        cls: type,
+        info: Info[object, object],
+        *,
+        data: object,
+        id: object,  # noqa: A002
+    ) -> object:
+        """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
+        return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
 
-        def resolve_sync(cls: type, info: Info[object, object], *, data: object) -> object:
-            """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
-            return import_attr(module_path, sync_name)(cls, info, data=data)
+    def resolve_async(
+        cls: type,
+        info: Info[object, object],
+        *,
+        data: object,
+        id: object,  # noqa: A002
+    ) -> object:
+        """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
+        return import_attr(module_path, async_name)(cls, info, data=data, id=id)
 
-        def resolve_async(cls: type, info: Info[object, object], *, data: object) -> object:
-            """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
-            return import_attr(module_path, async_name)(cls, info, data=data)
+    return classmethod(resolve_sync), classmethod(resolve_async)
+
+
+def _id_less_resolver_seams(
+    module_path: str,
+    sync_name: str,
+    async_name: str,
+) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
+    """Build ``resolver_seams``' ``(info, *, data)`` pair (the model-less plain form)."""
+
+    def resolve_sync(cls: type, info: Info[object, object], *, data: object) -> object:
+        """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
+        return import_attr(module_path, sync_name)(cls, info, data=data)
+
+    def resolve_async(cls: type, info: Info[object, object], *, data: object) -> object:
+        """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
+        return import_attr(module_path, async_name)(cls, info, data=data)
 
     return classmethod(resolve_sync), classmethod(resolve_async)
 
@@ -529,6 +545,7 @@ def resolver_seams(
 # stale class from a prior (failed or re-run) finalize never leaks across a
 # clear that does not itself re-bind.
 _shape_build_cache: dict[tuple[type[models.Model], str, frozenset[str]], type]
+clear_mutation_shape_build_cache: Callable[[], None]
 _shape_build_cache, clear_mutation_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(clear_mutation_shape_build_cache, owner="mutations.shape_cache")
 
@@ -712,9 +729,9 @@ def make_meta_validating_metaclass(
 # co-clear), the metaclass, ``mutations/fields.py``, and the tests reference;
 # ``_mutation_registry`` stays the backing list the idempotency tests introspect.
 _mutation_declaration_registry = make_declaration_registry("DjangoMutation")
-register_mutation = _mutation_declaration_registry.register
-clear_mutation_registry = _mutation_declaration_registry.clear
-iter_mutations = _mutation_declaration_registry.iter_
+register_mutation: Callable[[type], None] = _mutation_declaration_registry.register
+clear_mutation_registry: Callable[[], None] = _mutation_declaration_registry.clear
+iter_mutations: Callable[[], tuple[type, ...]] = _mutation_declaration_registry.iter_
 _mutation_registry = _mutation_declaration_registry.store
 register_subsystem_clear(clear_mutation_registry, owner="mutations.declarations")
 
@@ -851,26 +868,26 @@ class _ValidatedMutationMeta:
         nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
     ) -> None:
         self._sealed = False
-        self.model = model
-        self.operation = operation
-        self.input_class = input_class
-        self.partial_input_class = partial_input_class
-        self.fields = fields
-        self.exclude = exclude
-        self.permission_classes = permission_classes
+        self.model: type[models.Model] | None = model
+        self.operation: str = operation
+        self.input_class: type[WithStrawberryObjectDefinition] | None = input_class
+        self.partial_input_class: type[WithStrawberryObjectDefinition] | None = partial_input_class
+        self.fields: tuple[str, ...] | None = fields
+        self.exclude: tuple[str, ...] | None = exclude
+        self.permission_classes: tuple[type, ...] = permission_classes
         # The form-flavor snapshot (spec-038): a ``DjangoModelFormMutation``
         # / ``DjangoFormMutation`` records its ``Meta.form_class`` here so the form
         # ``build_input`` / resolver read one snapshot shape. The model flavor
         # leaves it ``None`` (it has no ``form_class``), so the model path is
         # byte-unchanged - the slot is net-new state never read by the model
         # bind/resolver.
-        self.form_class = form_class
+        self.form_class: Any = form_class
         # The serializer-flavor snapshot (spec-039): a ``SerializerMutation``
         # records its ``Meta.serializer_class`` here so the serializer ``build_input``
         # / resolver read one snapshot shape (mirroring ``form_class``). The model +
         # form flavors leave it ``None`` (net-new state, never read off the model /
         # form paths), so they stay byte-unchanged.
-        self.serializer_class = serializer_class
+        self.serializer_class: Any = serializer_class
         # The serializer-flavor ``Meta.optional_fields`` (spec-039): the
         # create-only force-optional override lives on the MUTATION's ``Meta`` (the
         # documented public key), NOT the serializer's own ``Meta``. Normalized at
@@ -878,18 +895,18 @@ class _ValidatedMutationMeta:
         # the serializer ``build_input`` threads it into
         # ``build_serializer_input_class`` so it participates in the input shape +
         # descriptor identity. The model + form flavors leave it ``None``.
-        self.optional_fields = optional_fields
+        self.optional_fields: tuple[str, ...] | None = optional_fields
         # The serializer-flavor schema-hook fingerprint: a stable digest of
         # the ``get_serializer_for_schema()`` field shape captured at class validation, so the
         # phase-2.5 bind can raise on a NONDETERMINISTIC hook that drifted. The model + form
         # flavors leave it ``None`` (net-new state, never read off their paths).
-        self.schema_fingerprint = schema_fingerprint
+        self.schema_fingerprint: tuple[tuple[object, ...], ...] | None = schema_fingerprint
         # The serializer-flavor ``Meta.injected_fields``: the auditable,
         # per-field replacement for the blanket ``get_serializer_kwargs``-override waiver -
         # names the required fields a ``get_serializer_kwargs`` override supplies into ``data``,
         # subtracted from the create-required guard AND verified present at runtime. The model +
         # form flavors leave it ``None``.
-        self.injected_fields = injected_fields
+        self.injected_fields: tuple[str, ...] | None = injected_fields
         # ``Meta.select_for_update`` (expanded by the 0.0.14 concurrency hardening): the
         # base-manager ``SELECT ... FOR UPDATE`` row lock on the update / delete
         # locate AND every relation-target check, constrained by the visibility pk
@@ -898,12 +915,12 @@ class _ValidatedMutationMeta:
         # (default ``True``; an explicit ``False`` opts into weaker concurrency).
         # Only the model-less plain form leaves the constructor default (``False`` -
         # it locates no row).
-        self.select_for_update = select_for_update
+        self.select_for_update: bool = select_for_update
         # The serializer-flavor ``Meta.nested_fields``: the explicit opt-in
         # ``{field_name: NestedSerializerConfig}`` map naming the nested serializer fields the
         # generated input builds RECURSIVELY (an un-named nested field fails loud). ``None`` when
         # no nesting is opted in. The model + form flavors leave it ``None``.
-        self.nested_fields = nested_fields
+        self.nested_fields: Mapping[str, NestedSerializerConfig] | None = nested_fields
         # Seal LAST: every validated slot is set; from here on the record is
         self._sealed = True
 
@@ -1473,7 +1490,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
             self,
             meta: _ValidatedMutationMeta,
             primary_type: _ObjectTypeT_contra,
-        ) -> type | None: ...
+        ) -> type | None:
+            """Build + materialize the operation's input class; ``None`` when it takes none."""
 
 
 def _resolve_primary_type(
@@ -1765,7 +1783,8 @@ def _strawberry_field_shape(field: StrawberryField) -> tuple[int, object]:
         seen.add(id(type_))
         if isinstance(type_, StrawberryList):
             depth += 1
-        type_ = type_.of_type
+        # Read by name: the probe above admits any wrapper that carries ``of_type``.
+        type_ = getattr(type_, "of_type")  # noqa: B009
     return depth, type_
 
 

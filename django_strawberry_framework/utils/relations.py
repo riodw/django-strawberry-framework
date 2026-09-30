@@ -316,8 +316,7 @@ def _resolve_segment_field(model: type[models.Model], segment: str) -> ModelFiel
     """
     try:
         if segment == "pk":
-            # The stubs' model plugin types ``Options.pk`` as ``Any``; it is the pk field.
-            return cast("ConcreteField", model._meta.pk)
+            return model._meta.pk
         return model._meta.get_field(segment)
     except FieldDoesNotExist:
         raise
@@ -678,7 +677,7 @@ def is_forward_many_to_many(field: object) -> bool:
 def is_forward_concrete_relation(field: ModelField) -> TypeGuard[ConcreteField]: ...
 @overload
 def is_forward_concrete_relation(field: _RelationFieldLike) -> bool: ...
-def is_forward_concrete_relation(field: _RelationFieldLike) -> bool:
+def is_forward_concrete_relation(field: object) -> bool:
     """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
 
     Cardinality is decided by ``relation_kind`` - this module's single site of

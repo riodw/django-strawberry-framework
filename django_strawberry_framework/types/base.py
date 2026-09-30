@@ -665,6 +665,11 @@ class DjangoType:
     __django_strawberry_definition__: ClassVar[DjangoTypeDefinition]
     # Installed alongside it by ``types/relay.py::install_is_type_of``.
     is_type_of: ClassVar[Callable[[object, object], bool]]
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+        # Rebuilt by ``__init_subclass__`` as the synthesized fields plus the
+        # consumer's own; declared so checkers read it as the ``object`` attribute
+        # it overrides, and never executed so the class records no such annotation.
+        __annotations__: dict[str, Any]
 
     @override
     def __init_subclass__(cls, **kwargs: object) -> None:

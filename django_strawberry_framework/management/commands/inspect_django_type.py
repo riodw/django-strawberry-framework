@@ -304,8 +304,7 @@ class Command(BaseCommand):
             return False
         if not _is_relay_shaped(definition.origin, definition.interfaces):
             return False
-        # The Django plugin types ``_meta`` on the abstract ``type[Model]`` as ``Any``.
-        return typing.cast("bool", field.name == definition.model._meta.pk.name)
+        return field.name == definition.model._meta.pk.name
 
     @classmethod
     def _relation_row(

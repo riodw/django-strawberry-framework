@@ -14,7 +14,7 @@ implementation no longer exhibits the bug pinned by
 
 import inspect
 from collections.abc import AsyncIterable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from .conf import upstream_patches_enabled
 
@@ -39,7 +39,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
 # Every graphql-core release the ``graphql-core<3.3`` pin in ``pyproject.toml`` admits
 # defines both names here; ``None`` stands in for a release that moves one, and
-# ``_validate_upstream_shape`` refuses it before anything is patched.
+# ``_upstream_captures`` refuses it before anything is patched or called.
 ExecutionContext: "type[_ExecutionContext] | None"
 is_iterable: "Callable[[object], bool] | None"
 try:
@@ -67,15 +67,28 @@ def _captured_upstream_method(owner: type | None, name: str) -> object:
     return method
 
 
-# ``None`` or a reshaped value only until ``_validate_upstream_shape`` refuses it; the
-# wrapper that calls it is installed only after that validation passes.
+# ``None`` or a reshaped value until ``_validate_upstream_shape`` refuses it; the
+# wrapper reads it only through ``_upstream_captures``, which refuses ``None``.
 _original_complete_list_value = cast(
     "_CompleteListValue | None",
     _captured_upstream_method(ExecutionContext, "complete_list_value"),
 )
 
 
-def _validate_upstream_shape() -> None:
+class _UpstreamCaptures(NamedTuple):
+    """The module's upstream captures, each proven present by ``_upstream_captures``."""
+
+    execution_context: "type[_ExecutionContext]"
+    is_iterable: "Callable[[object], bool]"
+    complete_list_value: "_CompleteListValue"
+
+
+def _upstream_captures() -> _UpstreamCaptures:
+    """Return the current captures, refusing any that is a ``None`` drift sentinel.
+
+    Reads the module globals on every call, so the install step and the wrapper
+    both see the same captures ``_validate_upstream_shape`` pinned.
+    """
     if (
         ExecutionContext is None
         or not callable(is_iterable)
@@ -87,7 +100,12 @@ def _validate_upstream_shape() -> None:
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"graphql_core": False} '
             "or use a supported graphql-core version.",
         )
-    parameters = tuple(inspect.signature(_original_complete_list_value).parameters.values())
+    return _UpstreamCaptures(ExecutionContext, is_iterable, _original_complete_list_value)
+
+
+def _validate_upstream_shape() -> _UpstreamCaptures:
+    upstream = _upstream_captures()
+    parameters = tuple(inspect.signature(upstream.complete_list_value).parameters.values())
     if len(parameters) != 6 or any(
         parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
     ):
@@ -98,6 +116,7 @@ def _validate_upstream_shape() -> None:
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"graphql_core": False} '
             "or use a supported graphql-core version.",
         )
+    return upstream
 
 
 def _patched_complete_list_value(
@@ -108,9 +127,8 @@ def _patched_complete_list_value(
     path: "Path",
     result: "AsyncIterable[object] | Iterable[object]",
 ) -> "AwaitableOrValue[list[object]]":
-    # mypy: runs only once _validate_upstream_shape() proved the capture callable
-    # basedpyright: calls the capture's None drift sentinel, same proof as mypy's
-    res = _original_complete_list_value(  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
+    upstream = _upstream_captures()
+    res = upstream.complete_list_value(
         self,
         return_type,
         field_nodes,
@@ -118,9 +136,11 @@ def _patched_complete_list_value(
         path,
         result,
     )
-    # mypy: runs only once _validate_upstream_shape() proved is_iterable callable
-    # basedpyright: calls is_iterable's None drift sentinel, same proof as mypy's
-    if not is_iterable(result) and isinstance(result, AsyncIterable) and self.is_awaitable(res):  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
+    if (
+        not upstream.is_iterable(result)
+        and isinstance(result, AsyncIterable)
+        and self.is_awaitable(res)
+    ):
 
         async def _await_residual(awaitable: Any) -> Any:
             completed = await awaitable
@@ -151,9 +171,8 @@ def apply() -> None:
     """Install the graphql-core workaround when its independent gate is enabled."""
     if not upstream_patches_enabled("graphql_core"):
         return
-    _validate_upstream_shape()
+    upstream = _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself, onto the class _validate_upstream_shape() proved present
-    # basedpyright: reads the class's None drift sentinel, same proof as mypy's
-    ExecutionContext.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportOptionalMemberAccess]
+    # mypy: the patch itself, assigned over the executor class's method
+    upstream.execution_context.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign]

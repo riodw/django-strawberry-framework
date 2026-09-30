@@ -255,7 +255,7 @@ def _captured_upstream_body_getter() -> "_BodyGetter | None":
 _original_body_fget = _captured_upstream_body_getter()
 
 
-def _validate_upstream_shape() -> None:
+def _validate_upstream_shape() -> "type[_DjangoHTTPRequestAdapter]":
     """Fail loudly when cross_web no longer exposes the property shape we replace.
 
     Pins the import-time-captured upstream getter (presence and ``(self)``
@@ -264,7 +264,7 @@ def _validate_upstream_shape() -> None:
     bare ``.decode()``. The live descriptor is only read by
     :func:`_patch_is_installed`; :func:`_patched_body` reads
     ``self.request.body`` directly (the async contract) and does not
-    call the captured getter.
+    call the captured getter. Returns the adapter class the patch installs onto.
     """
     if DjangoHTTPRequestAdapter is None:
         raise RuntimeError(
@@ -288,6 +288,7 @@ def _validate_upstream_shape() -> None:
             'Disable this patch with APPLY_UPSTREAM_PATCHES = {"cross_web": False} '
             "or use a supported cross_web version.",
         )
+    return DjangoHTTPRequestAdapter
 
 
 def _patched_body(self: "_DjangoHTTPRequestAdapter") -> bytes:
@@ -355,10 +356,10 @@ def apply() -> None:
     """
     if not upstream_patches_enabled("cross_web"):
         return
-    _validate_upstream_shape()
+    adapter = _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself, onto the adapter _validate_upstream_shape() proved present
-    # basedpyright: the adapter's None drift sentinel (same proof as mypy's), and the stub's
-    # setter-less ``body`` property, which the patch replaces rather than sets through
-    DjangoHTTPRequestAdapter.body = property(_patched_body)  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]
+    # mypy: the patch itself, assigned over the adapter's ``body`` property
+    # basedpyright: the stub's setter-less ``body`` property, which the patch replaces
+    # rather than sets through
+    adapter.body = property(_patched_body)  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]

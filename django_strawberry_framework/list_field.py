@@ -1040,8 +1040,9 @@ def _is_deterministic_order_lookup_chain(field: ModelField, pieces: Sequence[str
     """
     # ``Value`` stores its ``output_field`` verbatim, so a reverse relation's registered
     # lookups are read through it too; the stubs narrow the parameter to ``Field``.
+    # basedpyright: same stub narrowing; it rejects a ``ForeignObjectRel`` as ``output_field``.
     lhs: Expression | None
-    lhs = models.Value(None, output_field=field)  # type: ignore[arg-type]
+    lhs = models.Value(None, output_field=field)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
     *transforms, final = tuple(pieces) or ("exact",)
     for name in transforms:
         lhs = _approved_order_transform(lhs, name)

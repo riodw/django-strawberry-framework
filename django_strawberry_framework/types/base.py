@@ -1226,6 +1226,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
         return ()
     seen_ids: set[int] = set()
     duplicates: list[str] = []
+    interfaces: list[type] = []
     for entry in entries:
         if isinstance(entry, str):
             raise ConfigurationError(
@@ -1266,12 +1267,12 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
             duplicates.append(entry.__name__)
         else:
             seen_ids.add(entry_id)
+        interfaces.append(entry)
     if duplicates:
         raise ConfigurationError(
             f"{meta.model.__name__}.Meta.interfaces contains duplicate entries: {sorted(duplicates)}.",
         )
-    # mypy: the loop raised on every entry that is not a class
-    return entries  # type: ignore[return-value]
+    return tuple(interfaces)
 
 
 class _ValidatedMeta(NamedTuple):

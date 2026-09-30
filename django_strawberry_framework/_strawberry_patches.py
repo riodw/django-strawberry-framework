@@ -608,13 +608,16 @@ def _translated_parse_json(self: "_AnyBaseView", data: "str | bytes") -> object:
     """
     try:
         # mypy: runs only once _validate_upstream_shape() proved the capture callable
-        return _original_parse_json(self, data)  # type: ignore[misc]
+        # basedpyright: calls the capture's None drift sentinel, same proof as mypy's
+        return _original_parse_json(self, data)  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
     except UnicodeDecodeError as exc:
         # mypy: runs only once _validate_upstream_shape() proved HTTPException present
-        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc  # type: ignore[misc]
+        # basedpyright: calls HTTPException's None drift sentinel, same proof as mypy's
+        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
     except RecursionError as exc:
         # mypy: runs only once _validate_upstream_shape() proved HTTPException present
-        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc  # type: ignore[misc]
+        # basedpyright: calls HTTPException's None drift sentinel, same proof as mypy's
+        raise HTTPException(400, _UPSTREAM_JSON_PARSE_REASON) from exc  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
 
 
 def _patched_parse_json(
@@ -684,7 +687,8 @@ def _patched_parse_json(
     if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
         return parsed
     # mypy: runs only once _validate_upstream_shape() proved HTTPException present
-    raise HTTPException(  # type: ignore[misc]
+    # basedpyright: calls HTTPException's None drift sentinel, same proof as mypy's
+    raise HTTPException(  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
         400,
         "The GraphQL request body must be a JSON object "
         "(or an array of operations for a batch request).",
@@ -775,7 +779,8 @@ def _raised_inside_the_upload_utility(exc: BaseException) -> bool:
     upstream wraps in a ``KeyError``-only ``except``.
     """
     # mypy: runs only once _validate_upstream_shape() proved the utility present
-    code = replace_placeholders_with_files.__code__  # type: ignore[union-attr]
+    # basedpyright: reads the utility's None drift sentinel, same proof as mypy's
+    code = replace_placeholders_with_files.__code__  # type: ignore[union-attr]  # pyright: ignore[reportOptionalMemberAccess]
     traceback = exc.__traceback__
     while traceback is not None:
         if traceback.tb_frame.f_code is code:
@@ -807,12 +812,14 @@ def _patched_sync_parse_multipart(
     """
     try:
         # mypy: runs only once _validate_upstream_shape() proved the capture callable
-        return _original_sync_parse_multipart(self, request)  # type: ignore[misc]
+        # basedpyright: calls the capture's None drift sentinel, same proof as mypy's
+        return _original_sync_parse_multipart(self, request)  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
     except _MULTIPART_TRAVERSAL_ERRORS as exc:
         if not _raised_inside_the_upload_utility(exc):
             raise
         # mypy: runs only once _validate_upstream_shape() proved HTTPException present
-        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc  # type: ignore[misc]
+        # basedpyright: calls HTTPException's None drift sentinel, same proof as mypy's
+        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
 
 
 async def _patched_async_parse_multipart(
@@ -822,12 +829,14 @@ async def _patched_async_parse_multipart(
     """Async twin of :func:`_patched_sync_parse_multipart`."""
     try:
         # mypy: runs only once _validate_upstream_shape() proved the capture callable
-        return await _original_async_parse_multipart(self, request)  # type: ignore[misc]
+        # basedpyright: calls the capture's None drift sentinel, same proof as mypy's
+        return await _original_async_parse_multipart(self, request)  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
     except _MULTIPART_TRAVERSAL_ERRORS as exc:
         if not _raised_inside_the_upload_utility(exc):
             raise
         # mypy: runs only once _validate_upstream_shape() proved HTTPException present
-        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc  # type: ignore[misc]
+        # basedpyright: calls HTTPException's None drift sentinel, same proof as mypy's
+        raise HTTPException(400, _UPSTREAM_MULTIPART_PARSE_REASON) from exc  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
 
 
 def _mark_patch_replacement(patched: object, original: object) -> None:
@@ -902,10 +911,14 @@ def apply() -> None:
     if _patch_is_installed():
         return
     # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
-    BaseView.parse_json = _patched_parse_json  # type: ignore[method-assign,union-attr]
+    # basedpyright: reads the view's None drift sentinel, same proof as mypy's
+    BaseView.parse_json = _patched_parse_json  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportOptionalMemberAccess]
     # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
-    BaseView.parse_query_params = _patched_parse_query_params  # type: ignore[method-assign,union-attr]
+    # basedpyright: reads the view's None drift sentinel, same proof as mypy's
+    BaseView.parse_query_params = _patched_parse_query_params  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportOptionalMemberAccess]
     # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
-    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart  # type: ignore[method-assign,union-attr]
+    # basedpyright: reads the view's None drift sentinel, same proof as mypy's
+    SyncBaseHTTPView.parse_multipart = _patched_sync_parse_multipart  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportOptionalMemberAccess]
     # mypy: the patch itself, onto the view _validate_upstream_shape() proved present
-    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart  # type: ignore[method-assign,union-attr]
+    # basedpyright: reads the view's None drift sentinel, same proof as mypy's
+    AsyncBaseHTTPView.parse_multipart = _patched_async_parse_multipart  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportOptionalMemberAccess]

@@ -318,7 +318,8 @@ def _reverse_o2o_extra(field: OneToOneRel) -> dict[str, object]:
     return {
         # mypy: typeshed narrows ``remote_queryset`` to ``Field``; upstream documents and
         # calls it for a ``ForeignObjectRel`` too (``related_model`` + limit choices).
-        "queryset": filterset.remote_queryset(field),  # type: ignore[arg-type]
+        # basedpyright: same stub narrowing; it rejects a reverse relation for ``Field``
+        "queryset": filterset.remote_queryset(field),  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         "null_label": _df_settings.NULL_CHOICE_LABEL if field.null else None,
     }
 
@@ -326,7 +327,8 @@ def _reverse_o2o_extra(field: OneToOneRel) -> dict[str, object]:
 def _reverse_rel_extra(field: ManyToOneRel | ManyToManyRel) -> dict[str, object]:
     """Package-owned mirror of upstream's ``ManyToOneRel`` / ``ManyToManyRel`` extra."""
     # mypy: typeshed narrows ``remote_queryset`` to ``Field``; see ``_reverse_o2o_extra``.
-    return {"queryset": filterset.remote_queryset(field)}  # type: ignore[arg-type]
+    # basedpyright: same stub narrowing; it rejects a reverse relation for ``Field``
+    return {"queryset": filterset.remote_queryset(field)}  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 # The package-AUTHORED public generation-policy table. Mirrors
@@ -1000,7 +1002,8 @@ def _candidate_metadata_for(
     try:
         # mypy: every ``get_filters`` output filter has a bound ``field_name`` (a declared
         # filter defaults to its attribute name).
-        path_plan = classify_path(model, filter_instance.field_name)  # type: ignore[arg-type]
+        # basedpyright: same invariant; it rejects the ``None`` arm of ``field_name``
+        path_plan = classify_path(model, filter_instance.field_name)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
     except PathResolutionError:
         if not provenance.expanded_from:
             # Direct framework leaf -- a genuine defect; surface it loudly.
@@ -1481,9 +1484,11 @@ class FilterSet(
 
     # mypy: typeshed types ``get_fields`` as ``dict[str, Field]``; upstream returns an
     # ``OrderedDict`` of field name to lookup list, the shape this override keeps.
+    # basedpyright: same stub defect; it rejects the ``OrderedDict[str, object]`` return for
+    # ``dict[str, Field]``
     @classmethod
     @override
-    def get_fields(cls) -> OrderedDict[str, object]:  # type: ignore[override]
+    def get_fields(cls) -> OrderedDict[str, object]:  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
         """Expand per-field ``"__all__"`` and narrow the top-level ``"__all__"`` sweep.
 
         These are two DISTINCT features that happen to share the ``"__all__"``
@@ -1591,9 +1596,10 @@ class FilterSet(
 
     # mypy: typeshed types ``filter_for_field`` as never ``None``; upstream returns ``None``
     # for an unrecognized field under ``WARN`` / ``IGNORE`` (see the first branch below).
+    # basedpyright: same stub defect; it rejects the ``None`` arm against the ``Filter`` return
     @classmethod
     @override
-    def filter_for_field(  # type: ignore[override]
+    def filter_for_field(  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
         cls,
         field: ModelField,
         field_name: str,
@@ -1626,8 +1632,9 @@ class FilterSet(
         """
         # mypy: typeshed narrows ``field`` to ``Field``; upstream ``get_filters`` passes the
         # ``ForeignObjectRel`` of a reverse relation too.
+        # basedpyright: same stub narrowing; it rejects ``ModelField``'s ``ForeignObjectRel`` arm
         default: Filter | None = super().filter_for_field(
-            field,  # type: ignore[arg-type]
+            field,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             field_name,
             lookup_expr,
         )
@@ -1682,7 +1689,8 @@ class FilterSet(
         framework_added_distinct = (
             # mypy: generation runs only for a model-backed set; upstream ``get_filters``
             # returns the declared filters alone when ``Meta.model`` is unset.
-            path_traverses_to_many(cls._meta.model, field_name)  # type: ignore[arg-type]
+            # basedpyright: same invariant; it rejects the ``None`` arm of ``Meta.model``
+            path_traverses_to_many(cls._meta.model, field_name)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             and generation_shape_capable
             and effective_origin == "framework_default"
         )
@@ -1769,11 +1777,12 @@ class FilterSet(
         # scalar class and rejected the list.
         # mypy: ``default.extra`` holds the constructor kwargs upstream built ``default``
         # from, forwarded verbatim.
+        # basedpyright: same forwarding; it rejects ``object`` kwargs for typed ``Filter`` params
         identity_replacement = type(default)(
             field_name=default.field_name,
             lookup_expr=default.lookup_expr,
             distinct=requires_distinct,
-            **_strip_model_choice_extras(default.extra),  # type: ignore[arg-type]
+            **_strip_model_choice_extras(default.extra),  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         )
         _stamp(identity_replacement, "package_replacement")
         # A forward FK/O2O bound on a NON-pk ``to_field`` stores and joins on that
@@ -1854,8 +1863,9 @@ class FilterSet(
         try:
             # mypy: typeshed narrows ``field`` to ``Field``; upstream resolves a
             # ``ForeignObjectRel`` the same way.
+            # basedpyright: same stub narrowing; it rejects the ``ForeignObjectRel`` arm
             resolved_field, lookup_type = resolve_field(
-                field,  # type: ignore[arg-type]
+                field,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
                 lookup_expr or "exact",
             )
         except FieldLookupError:
@@ -1905,9 +1915,10 @@ class FilterSet(
             merged_defaults.update(overrides)
         # mypy: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance; upstream
         # calls it with each CLASS on ``field_class``'s MRO.
-        selected_entry = try_dbfield(merged_defaults.get, selection_cls)  # type: ignore[arg-type]
+        # basedpyright: same stub defect for both; it rejects a class-keyed ``dict.get`` as ``fn``
+        selected_entry = try_dbfield(merged_defaults.get, selection_cls)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         selected_norm = _normalize_policy_entry(selected_entry)
-        base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)  # type: ignore[arg-type]
+        base_norm = try_dbfield(_PACKAGE_POLICY_BASELINE.get, selection_cls)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         if selected_norm != base_norm:
             return "override_generated"
         return "framework_default"
@@ -1972,9 +1983,10 @@ class FilterSet(
 
     # mypy: typeshed types ``filter_for_lookup``'s class as never ``None``; upstream returns
     # ``(None, {})`` for a field with no ``FILTER_DEFAULTS`` entry.
+    # basedpyright: same stub defect; it rejects the ``None`` class arm against ``type[Filter]``
     @classmethod
     @override
-    def filter_for_lookup(  # type: ignore[override]
+    def filter_for_lookup(  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
         cls,
         field: ModelField,
         lookup_type: str,
@@ -2013,8 +2025,9 @@ class FilterSet(
         built.
         """
         # mypy: typeshed narrows ``field`` to ``Field``; see ``filter_for_field``.
+        # basedpyright: same stub narrowing; it rejects ``ModelField``'s ``ForeignObjectRel`` arm
         default_class, params = super().filter_for_lookup(
-            field,  # type: ignore[arg-type]
+            field,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             lookup_type,
         )
         if cls._is_own_pk_under_relay_owner(field):
@@ -2995,7 +3008,8 @@ class FilterSet(
             extensions=coded_error_extensions(
                 FILTER_INVALID_ERROR_CODE,
                 # mypy: typeshed types ``errors`` as a plain dict; it is the form's ``ErrorDict``
-                errors=filterset_instance.errors.get_json_data(),  # type: ignore[attr-defined]
+                # basedpyright: same stub defect; it reports ``get_json_data`` unknown on ``dict``
+                errors=filterset_instance.errors.get_json_data(),  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
             ),
         )
 
@@ -3348,10 +3362,11 @@ class FilterSet(
         child_data = cls._normalize_input(child_input)
         # mypy: typeshed narrows ``request`` to ``HttpRequest``; upstream only stores it, and
         # the context request need not be a Django one.
+        # basedpyright: same stub narrowing; it rejects ``object`` for ``HttpRequest | None``
         child_set = cls(
             data=child_data,
             queryset=constrained,
-            request=request,  # type: ignore[arg-type]
+            request=request,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         )
         child_set._logic_depth = _depth
         child_set._apply_info = info
@@ -3471,10 +3486,11 @@ class FilterSet(
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
         # mypy: typeshed narrows ``request`` to ``HttpRequest``; see ``_q_for_branch``.
+        # basedpyright: same stub narrowing; it rejects ``object`` for ``HttpRequest | None``
         filterset_instance = cls(
             data=data,
             queryset=constrained,
-            request=request,  # type: ignore[arg-type]
+            request=request,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         )
         filterset_instance._apply_info = info
         return filterset_instance, request

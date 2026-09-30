@@ -1426,10 +1426,15 @@ def _hint_prefetch_over_pk_set(
     queryset: models.QuerySet[models.Model] = models.QuerySet(
         model=inner.model,
         query=rewritten,
-        using=inner._db,  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db
-        hints=dict(inner._hints),  # type: ignore[attr-defined]  # django-stubs omits QuerySet._hints
+        # mypy: django-stubs omits QuerySet._db
+        # basedpyright: same stub omission, reported as an unknown attribute
+        using=inner._db,  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        # mypy: django-stubs omits QuerySet._hints
+        # basedpyright: same stub omission, reported as an unknown attribute
+        hints=dict(inner._hints),  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
         # mypy: django-stubs omits QuerySet._prefetch_related_lookups
-    ).prefetch_related(*inner._prefetch_related_lookups)  # type: ignore[attr-defined]
+        # basedpyright: same stub omission, reported as an unknown attribute
+    ).prefetch_related(*inner._prefetch_related_lookups)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
     return Prefetch(prefetch.prefetch_through, queryset=queryset, to_attr=prefetch.to_attr)
 
 

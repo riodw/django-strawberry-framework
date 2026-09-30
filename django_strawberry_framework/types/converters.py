@@ -700,7 +700,8 @@ def build_enum_from_choices(
         label: object
         try:
             # mypy: a choice entry is consumer-declared; unpacking it IS the pair check
-            value, label = entry  # type: ignore[misc]
+            # basedpyright: same reason; it rejects unpacking an ``object`` as not iterable
+            value, label = entry  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
         except BaseException as exc:
             raise ConfigurationError(
                 f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "

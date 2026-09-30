@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Count, Prefetch, Q, Window
+from django.db.models import Count, Prefetch, Q, Value, Window
 from django.db.models.functions import RowNumber
 from typing_extensions import override
 
@@ -1156,9 +1156,7 @@ def apply_window_pagination(
         ),
     }
     if with_total_count:
-        # mypy: django-stubs types Count's expression as Combinable | str; Func wraps a
-        # literal in Value
-        annotations[WINDOW_TOTAL_COUNT] = Window(Count(1), partition_by=partition_by)  # type: ignore[arg-type]
+        annotations[WINDOW_TOTAL_COUNT] = Window(Count(Value(1)), partition_by=partition_by)
     queryset = queryset.annotate(**annotations)
     if range_plan.reverse:
         if range_plan.lower_bound is not None:
@@ -1232,9 +1230,7 @@ def _apply_keyset_counted_window(
             partition_by=partition_by,
             order_by=order_by,
         ),
-        # mypy: django-stubs types Count's expression as Combinable | str; Func wraps a
-        # literal in Value
-        WINDOW_TOTAL_COUNT: Window(Count(1), partition_by=partition_by),  # type: ignore[arg-type]
+        WINDOW_TOTAL_COUNT: Window(Count(Value(1)), partition_by=partition_by),
         WINDOW_KEYSET_SEEK_COUNT: Window(Count("pk", filter=seek_q), partition_by=partition_by),
     }
     if range_plan.add_marker_rows:
@@ -1317,7 +1313,8 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
         if nulls_first is not None or nulls_last is not None:
             # mypy: django-stubs types ``OrderBy.nulls_first`` / ``nulls_last`` as ``bool``;
             # ``OrderBy.__init__`` stores ``None`` for the backend's default placement.
-            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first  # type: ignore[assignment]
+            # basedpyright: same stub defect; it rejects ``None`` for both ``bool`` attributes
+            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]
         reversed_order.append(clone)
     return reversed_order
 

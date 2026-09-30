@@ -359,4 +359,6 @@ def apply() -> None:
     if _patch_is_installed():
         return
     # mypy: the patch itself, onto the adapter _validate_upstream_shape() proved present
-    DjangoHTTPRequestAdapter.body = property(_patched_body)  # type: ignore[method-assign,union-attr]
+    # basedpyright: the adapter's None drift sentinel (same proof as mypy's), and the stub's
+    # setter-less ``body`` property, which the patch replaces rather than sets through
+    DjangoHTTPRequestAdapter.body = property(_patched_body)  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]

@@ -1590,7 +1590,8 @@ async def _refreshed_actor(scope: Mapping[str, Any]) -> object:
     store = session_store_class()(scope["session"].session_key)
     # mypy: channels-stubs types ``get_user``'s argument as a full ``_ChannelScope`` holding a
     # lazy session; ``get_user`` reads only ``scope["session"]`` (see above).
-    return await get_user({"session": store})  # type: ignore[typeddict-item]
+    # basedpyright: the same stub rejects a ``SessionBase`` where it types ``_LazySession``
+    return await get_user({"session": store})  # type: ignore[typeddict-item]  # pyright: ignore[reportArgumentType]
 
 
 def build_revalidating_consumer_class(
@@ -2062,7 +2063,8 @@ class DjangoWebSocketHostValidator:
 
             # mypy: channels-stubs types every channels application's scope as its private
             # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.
-            await WebsocketDenier()(scope, receive, send)  # type: ignore[arg-type]
+            # basedpyright: the same stub scope mismatch, as an argument type
+            await WebsocketDenier()(scope, receive, send)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             return
         # Every other exception propagates deliberately (spec-046 Edge cases
         # #"The Host projection must not swallow its own bugs"): a projection bug

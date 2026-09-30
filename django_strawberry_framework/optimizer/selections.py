@@ -194,7 +194,8 @@ def ast_to_converted_selections(
                     InlineFragment(
                         # mypy: Strawberry types ``InlineFragment.type_condition`` as ``str``;
                         # a typeless fragment has no condition to name
-                        type_condition=(condition.name.value if condition is not None else None),  # type: ignore[arg-type]
+                        # basedpyright: same reason; it rejects ``str | None`` for the ``str`` field
+                        type_condition=(condition.name.value if condition is not None else None),  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
                         directives=convert_directives(info, node.directives),
                         selections=_convert(ast_child_selections(node)),
                     ),

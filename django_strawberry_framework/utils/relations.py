@@ -634,10 +634,11 @@ def _path_traverses_to_many_cache_clear() -> None:
 
 
 # mypy models no attribute set on a plain ``def`` (python/mypy#2087).
-path_traverses_to_many.cache_clear = (  # type: ignore[attr-defined]  # mypy#2087
+# basedpyright: likewise rejects an attribute assigned on a plain ``def``.
+path_traverses_to_many.cache_clear = (  # type: ignore[attr-defined]  # pyright: ignore[reportFunctionMemberAccess]
     _path_traverses_to_many_cache_clear
 )
-path_traverses_to_many.cache_info = (  # type: ignore[attr-defined]  # mypy#2087
+path_traverses_to_many.cache_info = (  # type: ignore[attr-defined]  # pyright: ignore[reportFunctionMemberAccess]
     _path_traverses_to_many_cached.cache_info
 )
 

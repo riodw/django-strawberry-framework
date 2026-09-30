@@ -676,7 +676,8 @@ class DjangoModelFormMutation(DjangoMutation):
     # sees the bound list, since every form operation has an input.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
         # mypy: narrows the base's pre-bind ``None``; bind always stores the list before a read
-        _input_field_specs: ClassVar[list[InputFieldSpec]]  # type: ignore[mutable-override]
+        # basedpyright: same narrowing; it rejects an invariant mutable override of ``list | None``
+        _input_field_specs: ClassVar[list[InputFieldSpec]]  # type: ignore[mutable-override]  # pyright: ignore[reportIncompatibleVariableOverride]
     else:
         _input_field_specs = None
 

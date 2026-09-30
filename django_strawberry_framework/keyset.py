@@ -393,7 +393,8 @@ def serialize_cursor_value(field: ConcreteField, value: object) -> str:
         attname = getattr(field, "attname", getattr(field, "name", "?"))
         raise ValueError(f"NULL value for keyset cursor column {attname!r}")
     # mypy: value_from_object reads only obj.<attname>, which the shim carries
-    return field.value_to_string(SimpleNamespace(**{field.attname: value}))  # type: ignore[arg-type]
+    # basedpyright: same reason; it rejects the ``SimpleNamespace`` shim for the ``Model`` param
+    return field.value_to_string(SimpleNamespace(**{field.attname: value}))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def _deserialize_cursor_value(field: ConcreteField, raw: object, argument: str) -> object:

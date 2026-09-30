@@ -561,7 +561,8 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list[models.Model] | None:
         # mypy: django-stubs admits a closed set of Python scalars as ``execute`` params;
         # ``Field.get_db_prep_value`` returns whatever value the backend adapts, which
         # the driver binds, so the params stay ``object``
-        cursor.execute(sql, params)  # type: ignore[arg-type]
+        # basedpyright: same reason; it rejects ``list[object]`` as ``_ExecuteParameters``
+        cursor.execute(sql, params)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         fetched = _apply_lateral_converters(spec, cursor.fetchall(), connection)
     return [_instantiate_row(spec, row, queryset.db) for row in fetched]
 

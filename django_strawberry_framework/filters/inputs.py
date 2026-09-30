@@ -858,7 +858,8 @@ def _build_range_input_class(
     if cache is None:
         cache = {}
         # mypy: a per-instance cache slot no filter class declares
-        filter_instance._range_input_classes = cache  # type: ignore[attr-defined]
+        # basedpyright: same undeclared slot; it reports an unknown ``Filter`` attribute
+        filter_instance._range_input_classes = cache  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
     cached = cache.get(cache_key)
     if cached is not None:
         return cast("type", cached)  # the slot only holds classes built below
@@ -1099,7 +1100,8 @@ def _build_input_fields(
         django_source_path = top_name if top_name in declared_filters else sample_filter.field_name
         # mypy: ``get_filters`` binds every filter's ``field_name`` (a declared filter
         # defaults to its attribute name), so the path is never ``None`` here.
-        return bag_class | None, django_source_path  # type: ignore[return-value]
+        # basedpyright: same invariant; it rejects the ``None`` arm of ``field_name``
+        return bag_class | None, django_source_path  # type: ignore[return-value]  # pyright: ignore[reportReturnType]
 
     # The per-field emission scaffold (python-attr flatten -> camel-case ->
     # optional kwargs -> related lazy-ref vs leaf -> triple + ``FieldSpec``) is

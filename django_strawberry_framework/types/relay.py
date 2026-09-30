@@ -761,7 +761,8 @@ def _install_typename_closure(
 
     setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)
     # mypy: runtime classmethod install
-    type_cls.resolve_typename = classmethod(resolve_typename)  # type: ignore[method-assign,assignment]
+    # basedpyright: same reason; it rejects the ``classmethod`` for ``Node.resolve_typename``
+    type_cls.resolve_typename = classmethod(resolve_typename)  # type: ignore[method-assign,assignment]  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:

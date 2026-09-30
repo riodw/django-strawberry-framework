@@ -148,7 +148,9 @@ def _install_empty_list_aware_method(
     """
     # mypy: typeshed declares ``Filter.method`` a plain attribute; django-filter defines
     # it as a property, whose ``fset`` this reuses.
-    TypedFilter.method.fset(filter_instance, value)  # type: ignore[union-attr]
+    # basedpyright: same stub defect; it reports ``fset`` unknown on each arm of the declared
+    # ``Callable | str | None``
+    TypedFilter.method.fset(filter_instance, value)  # type: ignore[union-attr]  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
     if value is not None:
         # mypy: django-filter's own ``method`` setter shadows ``filter`` per instance
         # the same way (``self.filter = FilterMethod(self)``).
@@ -366,8 +368,10 @@ class ArrayFilter(TypedFilter):
     # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
     # so ``.setter`` is untyped and the decorated def's type is ``Any`` (``misc`` under
     # ``disallow_any_decorated``)
+    # basedpyright: same stub defect; it reports ``setter`` unknown on each arm of the declared
+    # ``Callable | str | None``
     @override
-    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]
+    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
     def method(self, value: object) -> None:  # type: ignore[misc]
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
@@ -443,8 +447,9 @@ class RangeField(Field):
     # defines them as class attributes, which is what these override.
     # ``empty_values`` keeps the base's ``Sequence`` type: it is only read.
     # mypy: stub: instance var
-    default_validators: ClassVar[list[_Validator]] = [validate_range]  # type: ignore[misc]
-    empty_values: ClassVar[Sequence[object]] = [  # type: ignore[misc]  # stub: instance var
+    # basedpyright: same stub defect for both; it rejects a ClassVar over the stub's instance var
+    default_validators: ClassVar[list[_Validator]] = [validate_range]  # type: ignore[misc]  # pyright: ignore[reportIncompatibleVariableOverride]
+    empty_values: ClassVar[Sequence[object]] = [  # type: ignore[misc]  # pyright: ignore[reportIncompatibleVariableOverride]
         None,
         [None, None],
         (None, None),
@@ -483,8 +488,10 @@ class ListFilter(TypedFilter):
     # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
     # so ``.setter`` is untyped and the decorated def's type is ``Any`` (``misc`` under
     # ``disallow_any_decorated``)
+    # basedpyright: same stub defect; it reports ``setter`` unknown on each arm of the declared
+    # ``Callable | str | None``
     @override
-    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]
+    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
     def method(self, value: object) -> None:  # type: ignore[misc]
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ListFilterMethod)
@@ -591,8 +598,9 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
         model = getattr(meta, "model", None)
         # mypy: a bound filter's ``field_name`` is never ``None``: django-filter's metaclass
         # defaults it to the declaration name before any ``filter`` call.
+        # basedpyright: same invariant; it rejects the ``None`` arm of ``field_name``
         model_field = (
-            get_model_field(model, self.field_name)  # type: ignore[arg-type]
+            get_model_field(model, self.field_name)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             if model is not None
             else None
         )
@@ -1008,8 +1016,9 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
         return True
 
     # mypy: upstream's list-only return cannot express the preserved omission.
+    # basedpyright: same widening; it rejects the ``None`` arm against the ``list[str]`` return
     @override
-    def to_python(self, value: object) -> list[str] | None:  # type: ignore[override]
+    def to_python(self, value: object) -> list[str] | None:  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
         """Preserve omission without bypassing ``Field.clean`` validation."""
         if value is None:
             return None
@@ -1351,7 +1360,8 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
             )
         self._has_explicit_queryset = kwargs.get("queryset") is not None
         # mypy: forwarded verbatim; ``ModelChoiceFilter.__init__`` owns their validation.
-        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        # basedpyright: same forwarding; it rejects ``object`` kwargs for the ``str | None`` params
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
         self._filterset = filterset
 
     def bind_filterset(self, filterset: type[FilterSet]) -> None:
@@ -1444,8 +1454,9 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
 
     # mypy: typeshed types ``QuerySetRequestMixin.get_queryset`` as never ``None``; it returns
     # the ``queryset=`` value verbatim, and that defaults to ``None``.
+    # basedpyright: same stub defect; it rejects the ``None`` arm against the ``QuerySet`` return
     @override
-    def get_queryset(  # type: ignore[override]
+    def get_queryset(  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         request: object,
     ) -> models.QuerySet[models.Model] | None:

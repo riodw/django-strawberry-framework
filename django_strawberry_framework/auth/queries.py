@@ -129,7 +129,8 @@ def current_user(
         arguments=[],
         # mypy: typeshed types a subscripted typing form as ``object``, not the alias
         # whose ``__or__`` builds the ``Optional`` at runtime
-        return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,  # type: ignore[operator]
+        # basedpyright: the same ``object`` return rejects the ``|`` operator
+        return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,  # type: ignore[operator]  # pyright: ignore[reportOperatorIssue]
         description=description,
         deprecation_reason=deprecation_reason,
         directives=directives,

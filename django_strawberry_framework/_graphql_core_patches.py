@@ -109,7 +109,8 @@ def _patched_complete_list_value(
     result: "AsyncIterable[object] | Iterable[object]",
 ) -> "AwaitableOrValue[list[object]]":
     # mypy: runs only once _validate_upstream_shape() proved the capture callable
-    res = _original_complete_list_value(  # type: ignore[misc]
+    # basedpyright: calls the capture's None drift sentinel, same proof as mypy's
+    res = _original_complete_list_value(  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
         self,
         return_type,
         field_nodes,
@@ -118,7 +119,8 @@ def _patched_complete_list_value(
         result,
     )
     # mypy: runs only once _validate_upstream_shape() proved is_iterable callable
-    if not is_iterable(result) and isinstance(result, AsyncIterable) and self.is_awaitable(res):  # type: ignore[misc]
+    # basedpyright: calls is_iterable's None drift sentinel, same proof as mypy's
+    if not is_iterable(result) and isinstance(result, AsyncIterable) and self.is_awaitable(res):  # type: ignore[misc]  # pyright: ignore[reportOptionalCall]
 
         async def _await_residual(awaitable: Any) -> Any:
             completed = await awaitable
@@ -153,4 +155,5 @@ def apply() -> None:
     if _patch_is_installed():
         return
     # mypy: the patch itself, onto the class _validate_upstream_shape() proved present
-    ExecutionContext.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign,union-attr]
+    # basedpyright: reads the class's None drift sentinel, same proof as mypy's
+    ExecutionContext.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign,union-attr]  # pyright: ignore[reportOptionalMemberAccess]

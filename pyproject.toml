@@ -297,16 +297,18 @@ warn_unused_ignores = true
 
 # basedpyright is the second checker of the same public contract: same scope and
 # checked Python as ``[tool.mypy]`` (the comment above it says why 3.11), in
-# ``standard`` mode, and a warning fails the run. Every ``# type: ignore[...]`` line is
-# suppressed for pyright wholesale, whatever the bracketed code; mypy's
-# ``warn_unused_ignores`` keeps each one needed for mypy and says nothing about what it
-# hides from pyright. A suppression only pyright needs is spelled
-# ``# pyright: ignore[<rule>]``.
+# ``standard`` mode, and a warning fails the run. Each checker reads only its own
+# suppression, and each fails on one it does not need: mypy owns ``# type: ignore[<code>]``
+# (``warn_unused_ignores``), basedpyright owns ``# pyright: ignore[<rule>]``
+# (``reportUnnecessaryTypeIgnoreComment``), so neither's suppression can hide the other's
+# error. A line both checkers reject carries both comments.
 [tool.basedpyright]
 include = ["django_strawberry_framework"]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 failOnWarnings = true
+enableTypeIgnoreComments = false
+reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

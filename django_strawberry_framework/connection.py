@@ -1236,7 +1236,9 @@ def _has_next_page_requested(info: Info[object, object]) -> bool:
 
 # The ``type-var`` ignore: a ``Meta.interfaces`` node type becomes a ``relay.Node`` only at
 # run time, so the package's ``NodeType`` stays unbounded.
-class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # type: ignore[type-var]
+# basedpyright: same reason; it rejects the unbounded ``NodeType`` against ``ListConnection``'s
+# ``Node`` bound.
+class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # type: ignore[type-var]  # pyright: ignore[reportInvalidTypeArguments]
     """Generic Relay connection base owning package pagination dispatch.
 
     Adds the spec-030 Decision 3 ``first`` + ``last`` guard, consumes optimized nested
@@ -1998,7 +2000,9 @@ def _synthesized_signature(
     annotations: dict[str, object] = {"info": Info}
     if definition.filterset_class is not None:
         # mypy: runtime-built annotation
-        filter_ann = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]
+        # basedpyright: same reason; ``filter_input_type`` returns ``object``, which declares
+        # no ``|``, while the runtime ``Annotated`` alias does
+        filter_ann = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]  # pyright: ignore[reportOperatorIssue]
         params.append(
             inspect.Parameter(
                 CONNECTION_FILTER_KWARG,

@@ -730,7 +730,9 @@ def pin_write_queryset(
     both. Fail closed instead of writing.
     """
     # ``None`` unless the hook called ``.using(...)``.
-    hook_alias = queryset._db  # type: ignore[attr-defined]  # django-stubs omits QuerySet._db
+    # mypy: django-stubs omits QuerySet._db
+    # basedpyright: same stub omission, reported as an unknown attribute
+    hook_alias = queryset._db  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
     if hook_alias is not None and hook_alias != alias:
         if owner is None:
             owner = f"{queryset.model.__name__} get_queryset"

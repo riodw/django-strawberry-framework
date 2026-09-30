@@ -1507,7 +1507,8 @@ def _scope_specs_over_serializer(
         # the pin fails closed on a cross-alias author queryset BEFORE any validation runs.
         # The schema/runtime agreement guard already rejected a relation whose queryset
         # names no model, so the author queryset is set here.
-        author_queryset = relation.queryset  # type: ignore[arg-type]  # drf-stubs: Manager.__get__
+        # basedpyright: drf-stubs types the attribute as a ``Manager``, whose ``__get__`` it binds
+        author_queryset = relation.queryset  # type: ignore[arg-type]  # drf-stubs: Manager.__get__  # pyright: ignore[reportAttributeAccessIssue]
         scoped = pin_write_queryset(
             cast("QuerySet[Any] | Manager[Any]", author_queryset).all(),
             pipeline.alias,

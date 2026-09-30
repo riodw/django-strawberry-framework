@@ -553,7 +553,8 @@ def _build_router_class_uncached() -> type[Any]:
                     # mypy: channels-stubs types ``OriginValidator``'s scope as its private
                     # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.
                     "websocket": DjangoWebSocketHostValidator(
-                        AllowedHostsOriginValidator(  # type: ignore[arg-type]
+                        # basedpyright: the same stub scope mismatch, as an argument type
+                        AllowedHostsOriginValidator(  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
                             AuthMiddlewareStack(
                                 URLRouter(
                                     [

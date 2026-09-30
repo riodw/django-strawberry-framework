@@ -30,6 +30,7 @@ Direct, decisive, reverses fast, expects same.
 - Pushback on a hidden flaw welcome, once. Surface, suggest better, defer. No lectures.
 - No preamble, sycophancy, over-explanation. 12y Django + Vue.
 - Status reply = result + what's broken + what's uncommitted. ≤3 sentences.
+- no need to mention commit(s) are un pushed.
 
 ## Session rules you will forget
 

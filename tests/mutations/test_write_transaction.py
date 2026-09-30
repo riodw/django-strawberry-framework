@@ -535,18 +535,33 @@ def _connections_really_close():
     A no-op on the Postgres tier, where a close is always real. The default tier's
     in-memory SQLite backend declines every close request (closing would destroy
     the database), so a connection closed inside a window could never be observed
-    there. For the duration this lifts that refusal, with a keeper handle holding
-    the shared-cache database alive, so a close does what it does on a file-backed
-    or server database: the handle closes, SQLite rolls its open transaction back,
-    and Django marks the connection ``closed_in_transaction``.
+    there. For the duration this lifts that refusal for ``default``, with a keeper
+    handle holding the shared-cache database alive, so a close does what it does on
+    a file-backed or server database: the handle closes, SQLite rolls its open
+    transaction back, and Django marks the connection ``closed_in_transaction``.
+
+    Every other in-memory alias keeps declining. Nothing holds those databases
+    alive or reopens their handles, so a real close there (``close_old_connections``
+    closes every alias the thread has open) would destroy that alias's test
+    database for every later test on the worker - ``shard_b`` under
+    ``FAKESHOP_SHARDED``.
     """
     default = connections["default"]
     if default.vendor != "sqlite" or not default.is_in_memory_db():
         yield
         return
+    declines_close = sqlite_base.DatabaseWrapper.is_in_memory_db
+
+    def _declines_close_unless_default(self) -> bool:
+        return self.alias != default.alias and declines_close(self)
+
     keeper = sqlite3.connect(default.settings_dict["NAME"], uri=True)
     try:
-        with patch.object(sqlite_base.DatabaseWrapper, "is_in_memory_db", lambda self: False):
+        with patch.object(
+            sqlite_base.DatabaseWrapper,
+            "is_in_memory_db",
+            _declines_close_unless_default,
+        ):
             yield
     finally:
         # The database lives only while some handle holds it. A sync row closes the

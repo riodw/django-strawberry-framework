@@ -86,10 +86,12 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
     from django.http import HttpRequest
     from strawberry.types import Info
+    from strawberry.types.base import WithStrawberryObjectDefinition
 
     from ..mutations.inputs import FieldError, ModelFieldIndex
     from ..mutations.resolvers import _M2MAssignments
-    from ..mutations.sets import _ValidatedMutationMeta
+    from ..mutations.sets import DeclarationRegistry, _ValidatedMutationMeta
+    from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
 
     # The register decode product: the constructed (unsaved) user, the M2M
@@ -110,7 +112,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         """One auth-ledger declaration (a fixed-surface holder or the register rider)."""
 
         _auth_surface: str
-        _primary_type: type | None
+        _primary_type: type[DjangoType] | None
         _payload_type_name: str | None
 
 
@@ -201,10 +203,12 @@ _SURFACE_FACTORY_NAMES = {
 # its own disjoint store. Cleared by ``TypeRegistry.clear()`` ONLY (the hand row
 # in ``registry.py``), never by the pre-bind reset - declarations must survive a
 # recover-in-place re-finalize so ``bind_auth_mutations()`` can re-read them.
-_auth_declaration_registry = make_declaration_registry(_AUTH_FAMILY_LABEL)
-register_auth_mutation: Callable[[type], None] = _auth_declaration_registry.register
+_auth_declaration_registry: DeclarationRegistry[_AuthDeclaration] = make_declaration_registry(
+    _AUTH_FAMILY_LABEL,
+)
+register_auth_mutation: Callable[[_AuthDeclaration], None] = _auth_declaration_registry.register
 clear_auth_mutation_registry: Callable[[], None] = _auth_declaration_registry.clear
-iter_auth_mutations: Callable[[], tuple[type, ...]] = _auth_declaration_registry.iter_
+iter_auth_mutations: Callable[[], tuple[_AuthDeclaration, ...]] = _auth_declaration_registry.iter_
 _auth_declarations = _auth_declaration_registry.store
 register_subsystem_clear(clear_auth_mutation_registry, owner="auth.declarations")
 
@@ -231,7 +235,7 @@ class _AuthMutationMetaSnapshot:
 
     __slots__ = ("_sealed", "operation", "permission_classes")
 
-    def __init__(self, operation: str, permission_classes: tuple[type, ...]) -> None:
+    def __init__(self, operation: str, permission_classes: tuple[type[object], ...]) -> None:
         self._sealed = False
         self.operation = operation
         self.permission_classes = permission_classes
@@ -267,7 +271,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
 
         _mutation_meta: _AuthMutationMetaSnapshot
         _auth_surface: str
-        _primary_type: type | None
+        _primary_type: type[DjangoType] | None
         _payload_type_name: str | None
 
 else:
@@ -313,7 +317,7 @@ _AuthDeclarationT = TypeVar("_AuthDeclarationT", _SealedAuthHolderMeta, type[Dja
 def _make_permission_holder(
     operation: str,
     holder_name: str,
-    permission_classes: tuple[type, ...],
+    permission_classes: tuple[type[object], ...],
 ) -> _SealedAuthHolderMeta:
     """Synthesize the module-internal permission holder for one fixed auth surface.
 
@@ -367,7 +371,7 @@ def _declared_auth_surface(surface: str) -> _AuthDeclaration | None:
 def _reject_conflicting_permission_classes(
     surface: str,
     declared_cls: _AuthDeclaration,
-    permission_classes: tuple[type, ...],
+    permission_classes: tuple[type[object], ...],
 ) -> None:
     """Raise unless a repeat declaration's ``permission_classes`` match the cached one.
 
@@ -395,8 +399,8 @@ def _reject_conflicting_permission_classes(
 def _declare_auth_surface(
     surface: str,
     label: str,
-    permission_classes: Iterable[type] | None,
-    synthesize: Callable[[tuple[type, ...]], _AuthDeclarationT],
+    permission_classes: Iterable[type[object]] | None,
+    synthesize: Callable[[tuple[type[object], ...]], _AuthDeclarationT],
 ) -> _AuthDeclarationT:
     """Resolve one auth surface's declaration class (cached, conflict-checked, or fresh).
 
@@ -426,7 +430,7 @@ def _declare_auth_surface(
 def _declare_fixed_auth_surface(
     surface: str,
     holder_name: str,
-    permission_classes: Iterable[type] | None,
+    permission_classes: Iterable[type[object]] | None,
 ) -> _SealedAuthHolderMeta:
     """Record (or re-record) one fixed auth surface; return its permission holder.
 
@@ -623,7 +627,7 @@ def _authenticated_actor_or_none(request: object) -> _User | None:
     return None
 
 
-def _failed_login_payload(payload_cls: type, slot: str) -> object:
+def _failed_login_payload(payload_cls: type[object], slot: str) -> object:
     """Build the ONE undifferentiated failed-login envelope (spec-040 Decision 5).
 
     ``node``/``result`` is ``None`` and ``errors`` carries a single non-field-keyed
@@ -667,7 +671,7 @@ def _transport_prologue(
     return request, transport, session
 
 
-def _login_result_payload(payload_cls: type, slot: str, user: _User | None) -> object:
+def _login_result_payload(payload_cls: type[object], slot: str, user: _User | None) -> object:
     """Build the failed-login envelope when ``user`` is ``None``, else the success payload.
 
     The shared two-line payload construction both login bodies (sync + async) open
@@ -688,7 +692,7 @@ def _login_authenticate(
     info: Info[object, object],
     username: str,
     password: str,
-) -> tuple[Any, sessions.Transport, SessionBase, type, str, _User | None]:
+) -> tuple[Any, sessions.Transport, SessionBase, type[object], str, _User | None]:
     """The all-sync login prologue: classify, capability, gate, preflight, authenticate.
 
     Runs steps 1-5 of the login state machine with NO session mutation:
@@ -727,7 +731,7 @@ def _login_authenticate(
     payload_cls = resolvers.payload_cls_for(holder_cls)
     # The login holder's primary is bound at finalize (``bind_auth_mutations``), before
     # any request reaches this prologue.
-    slot = payload_object_slot(cast("type", holder_cls._primary_type))
+    slot = payload_object_slot(cast("type[DjangoType]", holder_cls._primary_type))
     unstorable = (
         unencodable_text_error("username", username) is not None
         or unencodable_text_error("password", password) is not None
@@ -1077,7 +1081,7 @@ async def _logout_resolve_body_async(
 
 def login_mutation(
     *,
-    permission_classes: Iterable[type] | None = None,
+    permission_classes: Iterable[type[object]] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
@@ -1106,7 +1110,7 @@ def login_mutation(
 
 def logout_mutation(
     *,
-    permission_classes: Iterable[type] | None = None,
+    permission_classes: Iterable[type[object]] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
@@ -1297,7 +1301,9 @@ def _run_register_pipeline_sync(
     )
 
 
-def _synthesize_register_rider(permission_classes: tuple[type, ...]) -> type[DjangoMutation]:
+def _synthesize_register_rider(
+    permission_classes: tuple[type[object], ...],
+) -> type[DjangoMutation]:
     """Synthesize the concrete ``Register`` rider class (spec-040 Decision 6).
 
     A package-declared ``DjangoMutation`` subclass whose ``__name__`` is pinned to
@@ -1342,7 +1348,11 @@ def _synthesize_register_rider(permission_classes: tuple[type, ...]) -> type[Dja
 
         @classmethod
         @override
-        def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type:
+        def build_input(
+            cls,
+            meta: _ValidatedMutationMeta,
+            primary_type: type[DjangoType],
+        ) -> type[WithStrawberryObjectDefinition]:
             """Build the narrowed model-column input under the pinned ``RegisterInput`` name.
 
             The standard generator unchanged (``mutation_input_shape`` +
@@ -1404,7 +1414,7 @@ def _synthesize_register_rider(permission_classes: tuple[type, ...]) -> type[Dja
 
 def register_mutation(
     *,
-    permission_classes: Iterable[type] | None = None,
+    permission_classes: Iterable[type[object]] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
@@ -1444,7 +1454,7 @@ def register_mutation(
 def _resolve_user_primary_or_raise(
     user_model: type[models.Model],
     surfaces: Sequence[str],
-) -> type:
+) -> type[DjangoType]:
     """Resolve the user model's primary ``DjangoType``, or raise the auth-specific fix.
 
     Rides ``registry.get(user_model)`` - the SAME getter ``_resolve_primary_type``
@@ -1509,7 +1519,7 @@ def bind_auth_mutations() -> None:
         payload_cls = build_payload_type(
             "Login",
             object_type=primary,
-            object_slot=payload_object_slot(cast("type", primary)),
+            object_slot=payload_object_slot(cast("type[DjangoType]", primary)),
         )
         materialize_mutation_input_class(payload_cls.__name__, payload_cls)
         login_holder._payload_type_name = payload_cls.__name__
@@ -1528,7 +1538,7 @@ def bind_auth_mutations() -> None:
         # imported ``current_user`` (which imported ``queries``).
         from .queries import CURRENT_USER_ALIAS_NAME, materialize_current_user_alias
 
-        materialize_current_user_alias(CURRENT_USER_ALIAS_NAME, cast("type", primary))
+        materialize_current_user_alias(CURRENT_USER_ALIAS_NAME, cast("type[DjangoType]", primary))
     # ``register`` needs no auth-side emit work: the rider is an ordinary
     # ``DjangoMutation``, so ``bind_mutations()`` (next in the pinned order)
     # materializes its ``RegisterInput`` / ``RegisterPayload``; this bind's

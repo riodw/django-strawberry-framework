@@ -104,8 +104,8 @@ class FilterArgumentsFactory(GeneratedInputArgumentsFactory[FilterSet]):
     not inheritance.
     """
 
-    input_object_types: ClassVar[dict[str, type]] = {}
-    _type_filterset_registry: ClassVar[dict[str, type]] = {}
+    input_object_types: ClassVar[dict[str, type[object]]] = {}
+    _type_filterset_registry: ClassVar[dict[str, type[FilterSet]]] = {}
 
     _collision_registry_attr = "_type_filterset_registry"
     _factory_label = "FilterArgumentsFactory"

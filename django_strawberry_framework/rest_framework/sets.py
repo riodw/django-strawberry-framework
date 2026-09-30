@@ -119,6 +119,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
     from strawberry.types import Info
 
+    from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
     from .hook_context import SerializerHookContext
     from .serializer_converter import DRFBaseSerializer, DRFField, DRFSerializer
@@ -272,7 +273,7 @@ def _serializer_input_shape_for(
     *,
     operation_kind: str,
     field_map: dict[str, DRFField],
-) -> tuple[type, SerializerInputShape]:
+) -> tuple[type[object], SerializerInputShape]:
     """Return the serializer input class + descriptor through the shared shape cache."""
     input_cls, shape = build_serializer_input_class(
         meta.serializer_class,
@@ -412,7 +413,7 @@ def _assert_schema_source_ownership(
     apply_defaults: bool,
     nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
     path: str = "",
-    nested_path: tuple[type, ...] = (),
+    nested_path: tuple[type[DRFBaseSerializer], ...] = (),
 ) -> None:
     """Reject star / colliding writable sources at schema time (root + nested).
 
@@ -520,7 +521,7 @@ class SerializerMutation(DjangoMutation):
 
     @classmethod
     @override
-    def _resolve_model(cls, meta: type) -> type[models.Model] | None:
+    def _resolve_model(cls, meta: type[object]) -> type[models.Model] | None:
         """Resolve the model from ``Meta.serializer_class.Meta.model`` (the ``036`` seam override).
 
         Returns ``None`` for a missing ``serializer_class`` / a serializer with no
@@ -536,7 +537,7 @@ class SerializerMutation(DjangoMutation):
 
     @classmethod
     @override
-    def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
         """Validate a serializer-mutation ``Meta`` at class creation (spec-039 Decision 6).
 
         The serializer matrix (raising ``ConfigurationError`` naming the offending
@@ -803,7 +804,11 @@ class SerializerMutation(DjangoMutation):
 
     @classmethod
     @override
-    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
+    def build_input(
+        cls,
+        meta: _ValidatedMutationMeta,
+        primary_type: type[DjangoType],
+    ) -> type[object] | None:
         """Build + materialize the operation's serializer-derived input (the seam override).
 
         Mirrors the ``038`` form flavor's one-input-per-operation shape: a ``create``
@@ -881,7 +886,7 @@ class SerializerMutation(DjangoMutation):
         # ``get_serializer_injected_data`` (exact-match keys). The partial (update) shape is
         # never create-required guarded (all optional).
 
-        def _build() -> tuple[type, SerializerInputShape]:
+        def _build() -> tuple[type[object], SerializerInputShape]:
             # The create-required guard runs PER DECLARATION, BEFORE the per-shape
             # descriptor dedupe (the descriptor cache key excludes the injection state), so a
             # mutation that materializes a narrowed shape FIRST cannot suppress the guard for

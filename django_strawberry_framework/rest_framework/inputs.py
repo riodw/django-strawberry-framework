@@ -116,7 +116,7 @@ _materialized_names, _materialize_input, _clear_input_namespace = make_input_nam
 )
 
 
-def materialize_serializer_input_class(name: str, input_cls: type) -> None:
+def materialize_serializer_input_class(name: str, input_cls: type[object]) -> None:
     """Set ``input_cls`` as a real module global of ``rest_framework.inputs`` under ``name``.
 
     Thin family wrapper over the ``make_input_namespace`` materializer (which
@@ -433,7 +433,7 @@ def _fingerprint_converter_extra(field: DRFField) -> str | None:
 def _fingerprint_nested(
     field: DRFField,
     field_name: str,
-    seen: frozenset[type],
+    seen: frozenset[type[DRFBaseSerializer]],
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
 ) -> tuple[object, ...] | None:
     """Return a fingerprint of a nested serializer field, else ``None``.
@@ -496,7 +496,7 @@ def _fingerprint_nested(
 
 def _fingerprint_field_map(
     field_map: dict[str, DRFField],
-    seen: frozenset[type],
+    seen: frozenset[type[DRFBaseSerializer]],
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[tuple[object, ...], ...]:
     """The recursive fingerprint core (the nested recursion).
@@ -991,7 +991,7 @@ def describe_serializer_input(name: str) -> str | None:
     return "\n".join(lines)
 
 
-def _related_model_token(related_model: type | None) -> str:
+def _related_model_token(related_model: type[models.Model] | None) -> str:
     """Return a stable, process-independent identifier for a relation target model.
 
     Folded into ``_shape_token`` so two relation shapes that differ ONLY in their
@@ -1277,7 +1277,7 @@ def _walk_serializer_fields(
     is_partial: bool,
     optional_fields: frozenset[str],
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
-    nested_path: tuple[type, ...] = (),
+    nested_path: tuple[type[DRFBaseSerializer], ...] = (),
 ) -> tuple[
     list[InputFieldSpec],
     list[str],
@@ -1409,8 +1409,8 @@ def _walk_serializer_fields(
 
 
 def guard_nested_recursion(
-    nested_class: type,
-    nested_path: tuple[type, ...],
+    nested_class: type[DRFBaseSerializer],
+    nested_path: tuple[type[DRFBaseSerializer], ...],
     field_name: str,
 ) -> None:
     """Fail loud on a nested-serializer CYCLE or excessive DEPTH.
@@ -1436,9 +1436,9 @@ def guard_nested_recursion(
 
 
 def dedupe_serializer_input_shape(
-    input_cls: type,
+    input_cls: type[object],
     shape: SerializerInputShape,
-) -> tuple[type, SerializerInputShape]:
+) -> tuple[type[object], SerializerInputShape]:
     """Return the canonical ``(class, shape)`` pair from the per-pass shape cache.
 
     Post-build descriptor-keyed get-or-store: the serializer cache key is the
@@ -1460,9 +1460,9 @@ def dedupe_serializer_input_shape(
 
 
 def _dedupe_and_materialize_nested(
-    nested_cls: type,
+    nested_cls: type[object],
     nested_shape: SerializerInputShape,
-) -> tuple[type, SerializerInputShape]:
+) -> tuple[type[object], SerializerInputShape]:
     """Dedupe a nested input on its descriptor, materialize it, return the canonical pair.
 
     Two references to the SAME nested shape (within one build or across two top-level mutations)
@@ -1487,7 +1487,7 @@ def _resolve_nested_field(
     nested_config: NestedSerializerConfig,
     *,
     operation_kind: str,
-    nested_path: tuple[type, ...],
+    nested_path: tuple[type[DRFBaseSerializer], ...],
 ) -> tuple[str, object, InputFieldSpec]:
     """Resolve ONE opted-in nested serializer field to ``(python_attr, annotation, spec)``.
 
@@ -1645,8 +1645,8 @@ def build_serializer_input_class(
     optional_fields: object = None,
     field_map: dict[str, DRFField] | None = None,
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
-    _nested_path: tuple[type, ...] = (),
-) -> tuple[type, SerializerInputShape]:
+    _nested_path: tuple[type[DRFBaseSerializer], ...] = (),
+) -> tuple[type[object], SerializerInputShape]:
     """Build ONE ``@strawberry.input`` class from a serializer's schema-time fields.
 
     ``operation_kind`` is ``CREATE`` (each field's requiredness from
@@ -1796,7 +1796,7 @@ def build_serializer_inputs(
     guard_required: bool = True,
     field_map: dict[str, DRFField] | None = None,
     nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
-) -> tuple[type, SerializerInputShape, type, SerializerInputShape]:
+) -> tuple[type[object], SerializerInputShape, type[object], SerializerInputShape]:
     """Build BOTH the create + partial inputs for a serializer, with the create-required guard.
 
     Single entry point producing ``(<Serializer>Input, create_shape,
@@ -1874,7 +1874,10 @@ def build_serializer_inputs(
 # The serializer shape cache can be primed before finalization by
 # ``SerializerMutation.input_type_name()``. Clear it with the generated-input
 # ledgers before every bind so nested cache hits cannot suppress re-materialization.
-_serializer_shape_build_cache: dict[SerializerInputShape, tuple[type, SerializerInputShape]]
+_serializer_shape_build_cache: dict[
+    SerializerInputShape,
+    tuple[type[object], SerializerInputShape],
+]
 clear_serializer_shape_build_cache: Callable[[], None]
 _serializer_shape_build_cache, clear_serializer_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(

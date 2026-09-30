@@ -139,7 +139,7 @@ _materialized_names, _materialize_input, _clear_input_namespace = make_input_nam
 )
 
 
-def materialize_form_input_class(name: str, input_cls: type) -> None:
+def materialize_form_input_class(name: str, input_cls: type[object]) -> None:
     """Set ``input_cls`` as a real module global of ``forms.inputs`` under ``name``.
 
     Thin family wrapper over the ``make_input_namespace`` materializer (which
@@ -677,7 +677,7 @@ def build_form_input_class(
     fields: object = None,
     exclude: object = None,
     form_fields: Mapping[str, forms.Field] | None = None,
-) -> tuple[type, list[InputFieldSpec]]:
+) -> tuple[type[object], list[InputFieldSpec]]:
     """Build ONE ``@strawberry.input`` class from a form's declared fields.
 
     ``operation_kind`` is ``CREATE`` / ``FORM`` (the create-shaped input - each
@@ -860,7 +860,7 @@ def build_form_inputs(
     exclude: object = None,
     guard_required: bool = True,
     form_fields: Mapping[str, forms.Field] | None = None,
-) -> tuple[type, list[InputFieldSpec], type, list[InputFieldSpec]]:
+) -> tuple[type[object], list[InputFieldSpec], type[object], list[InputFieldSpec]]:
     """Build BOTH the create + partial inputs for a form, with the create-required guard.
 
     Single entry point producing ``(<FormClass>Input, create_specs,

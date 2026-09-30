@@ -140,6 +140,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types.execution import ExecutionContext
     from strawberry.types.nodes import Selection
 
+    from ..types.base import DjangoType
     from ..utils.typing import EitherInfo
     from ._context import FrozenVariableValue, PlanCacheKey
     from .field_meta import FieldMeta
@@ -757,7 +758,7 @@ class CacheInfo(NamedTuple):
     size: int
 
 
-def _collect_schema_reachable_types(schema: object) -> set[type]:
+def _collect_schema_reachable_types(schema: object) -> "set[type[DjangoType]]":
     """Return the set of ``DjangoType`` classes reachable from the schema's root types.
 
     Traverses from ``query_type``, ``mutation_type``, and
@@ -771,7 +772,7 @@ def _collect_schema_reachable_types(schema: object) -> set[type]:
     schema construction are excluded to avoid false-positive audit
     warnings.
     """
-    reachable: set[type] = set()
+    reachable: set[type[DjangoType]] = set()
     gql_schema = getattr(schema, "_schema", None)
     if gql_schema is None:
         return reachable
@@ -849,7 +850,7 @@ class _OriginAndModel(NamedTuple):
     rather than dereferencing individual legs.
     """
 
-    origin: type
+    origin: "type[DjangoType]"
     model: type[models.Model]
 
 
@@ -1244,7 +1245,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
     def apply_to(
         self,
-        target_type: type | None,
+        target_type: "type[DjangoType] | None",
         target_model: type[models.Model],
         queryset: "models.QuerySet[_M]",
         info: "GraphQLResolveInfo",
@@ -1340,7 +1341,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         selections: "Sequence[ConvertedSelection] | Callable[[], Sequence[ConvertedSelection]]",
         target_model: type[models.Model],
         info: "GraphQLResolveInfo",
-        origin: type | None,
+        origin: "type[DjangoType] | None",
     ) -> "OptimizationPlan":
         """Return the cached plan for ``(info, target_model, origin)`` or build a new one.
 
@@ -1550,7 +1551,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
     def _build_cache_key(
         info: "GraphQLResolveInfo",
         target_model: type[models.Model],
-        origin: type | None = None,
+        origin: "type[DjangoType] | None" = None,
     ) -> "PlanCacheKey":
         """Build the plan-cache key from resolver info, target model, and origin type.
 
@@ -1626,7 +1627,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
     def plan_relation(
         self,
         field: "FieldMeta",
-        target_type: type,
+        target_type: "type[DjangoType]",
         info: object,
     ) -> tuple[str, str]:
         """Plan a single relation traversal (O6 entry point).
@@ -1644,7 +1645,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
 
 
 def apply_connection_optimization(
-    target_type: type,
+    target_type: "type[DjangoType]",
     queryset: "models.QuerySet[_M]",
     info: "EitherInfo",
     *,

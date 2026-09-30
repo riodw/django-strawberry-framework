@@ -213,7 +213,7 @@ class WriteAliasContext:
         self.auth_aliases: frozenset[str] = frozenset()
 
 
-def resolve_write_alias(model: type | None) -> str:
+def resolve_write_alias(model: type[models.Model] | None) -> str:
     """Resolve the ONE router write alias the whole operation is pinned to.
 
     Asked once per operation (``router.db_for_write`` with no instance hint) and
@@ -244,7 +244,7 @@ def managed_write_transaction(alias: str) -> Iterator[None]:
         _MANAGED_WRITE_ALIAS.reset(token)
 
 
-def require_managed_write(mutation_cls: type) -> str:
+def require_managed_write(mutation_cls: WriteMutationClass) -> str:
     """Return the managed transaction's alias, or refuse the write (fail-before-write).
 
     The pipeline calls this FIRST - before the locate, before authorization,
@@ -745,7 +745,11 @@ def pin_write_queryset(
     return queryset.using(alias)
 
 
-def check_instance_write_alias(model: type, alias: str, instance: models.Model) -> None:
+def check_instance_write_alias(
+    model: type[models.Model],
+    alias: str,
+    instance: models.Model,
+) -> None:
     """Re-check the router WITH the located instance before writing (fail closed on divergence).
 
     ``resolve_write_alias`` necessarily routed without an instance (the row was
@@ -1210,7 +1214,7 @@ def conflict_error() -> FieldError:
     )
 
 
-def not_updated_exceptions(model: type) -> tuple[type[BaseException], ...]:
+def not_updated_exceptions(model: type[models.Model]) -> tuple[type[BaseException], ...]:
     """Return the exception types a zero-row forced update raises on this Django.
 
     Django 6.0 raises the typed per-model ``Model.NotUpdated`` (an

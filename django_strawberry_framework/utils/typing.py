@@ -273,7 +273,7 @@ def unwrap_non_null(gql_type: _T) -> "_T | _GraphQLNullableType":
     )
 
 
-def unwrap_container_type(strawberry_type: _T) -> "_T | StrawberryType | type":
+def unwrap_container_type(strawberry_type: _T) -> "_T | StrawberryType | type[object]":
     """Peel Strawberry ``StrawberryContainer`` layers only, bounded.
 
     The container-scoped sibling of ``unwrap_graphql_type`` for resolved
@@ -291,7 +291,7 @@ def unwrap_container_type(strawberry_type: _T) -> "_T | StrawberryType | type":
     """
     from strawberry.types.base import StrawberryContainer
 
-    peeled: _T | StrawberryType | type = strawberry_type
+    peeled: _T | StrawberryType | type[object] = strawberry_type
     for _ in range(MAX_TYPE_WRAPPER_DEPTH + 1):
         if not isinstance(peeled, StrawberryContainer):
             return peeled

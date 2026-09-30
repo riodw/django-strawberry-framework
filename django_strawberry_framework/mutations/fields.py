@@ -129,7 +129,7 @@ def _validate_mutation_target(mutation_cls: object) -> None:
         )
 
 
-def _has_mutation_protocol(mutation_cls: type) -> bool:
+def _has_mutation_protocol(mutation_cls: type[object]) -> bool:
     """Return whether a class carries the duck-typed mutation / form-mutation protocol.
 
     The protocol every dispatchable flavor exposes: a
@@ -149,7 +149,7 @@ def _has_mutation_protocol(mutation_cls: type) -> bool:
     )
 
 
-def _is_registered_mutation_target(mutation_cls: type) -> bool:
+def _is_registered_mutation_target(mutation_cls: type[object]) -> bool:
     """Return whether either phase-2.5 declaration ledger will bind ``mutation_cls``."""
     from ..forms.sets import iter_form_mutations
     from .sets import iter_mutations

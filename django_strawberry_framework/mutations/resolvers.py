@@ -140,6 +140,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types import Info
 
     from ..auth.mutations import _SealedAuthHolderMeta
+    from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
     from ..utils.typing import ConcreteField, ModelField
     from .inputs import ModelFieldIndex
@@ -150,6 +151,15 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # holders (zero-arg-constructible classes carrying ``check_permission`` and the
     # bind outputs, built by ``_SealedAuthHolderMeta``).
     _AuthorizedClass: TypeAlias = WriteMutationClass | _SealedAuthHolderMeta
+
+    class _GeneratedPayload(Protocol):
+        """An instance of a bind-materialized ``<Name>Payload`` class.
+
+        A Strawberry dataclass built from keyword field values: ``ok`` / ``errors`` for
+        the model-less shape, the object slot / ``errors`` for the model-backed one.
+        """
+
+        def __init__(self, **fields: object) -> None: ...
 
     # The provided M2M replace-sets the model decode hands its write step, in
     # assignment order: ``(m2m field name, decoded pk list)``.
@@ -289,14 +299,18 @@ def run_write_pipeline_sync(
 
         instance = None
         if needs_locate:
-            node_id, id_error = coerce_lookup_id(id, cast("type", primary_type), using=using)
+            node_id, id_error = coerce_lookup_id(
+                id,
+                cast("type[DjangoType]", primary_type),
+                using=using,
+            )
             if id_error is not None:
                 return _error_payload([id_error])
             # ``Meta.select_for_update`` (default True since the 0.0.14 concurrency hardening): a
             # base-manager ``SELECT ... FOR UPDATE`` on the update/delete locate, constrained by the
             # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
-                cast("type", primary_type),
+                cast("type[DjangoType]", primary_type),
                 node_id,
                 info,
                 alias=using,
@@ -404,7 +418,7 @@ def run_write_pipeline_sync(
                 )
 
             obj = refetch_optimized(
-                cast("type", primary_type),
+                cast("type[DjangoType]", primary_type),
                 saved_row.pk,
                 info,
                 alias=using,
@@ -420,7 +434,7 @@ def run_write_pipeline_sync(
 
 
 def error_payload_builder(
-    payload_cls: type,
+    payload_cls: type[_GeneratedPayload],
     slot: str | None,
     using: str,
 ) -> Callable[[list[FieldError]], object]:
@@ -681,7 +695,7 @@ def _relation_null_error(field_name: str) -> FieldError:
 
 
 def locate_instance(
-    target_type: type,
+    target_type: type[DjangoType],
     node_id: object,
     info: Info[object, object],
     *,
@@ -825,7 +839,7 @@ def _assign_m2m(instance: models.Model, m2m_assignments: _M2MAssignments) -> Non
 
 
 def refetch_optimized(
-    target_type: type,
+    target_type: type[DjangoType],
     pk: object,
     info: Info[object, object],
     *,
@@ -875,7 +889,7 @@ def refetch_optimized(
 
 
 def build_payload(
-    payload_cls: type,
+    payload_cls: type[object],
     slot: str,
     obj: object,
     errors: list[FieldError],
@@ -1298,7 +1312,7 @@ def save_or_field_errors(save_callable: Callable[[], object]) -> list[FieldError
 
 def coerce_lookup_id(
     id: object,  # noqa: A002
-    target_type: type,
+    target_type: type[DjangoType],
     *,
     using: str | None = None,
 ) -> tuple[object, FieldError | None]:
@@ -1378,7 +1392,7 @@ def _invalid_lookup_id_error() -> FieldError:
     return field_error("id", "Invalid id.", codes=FIELD_ERROR_CODE_INVALID)
 
 
-def payload_cls_for(mutation_cls: _AuthorizedClass) -> type:
+def payload_cls_for(mutation_cls: _AuthorizedClass) -> type[_GeneratedPayload]:
     """Return the materialized ``<Name>Payload`` class for a bound mutation (all three pipelines).
 
     The bind stashes the payload class name on the mutation
@@ -1398,7 +1412,10 @@ def payload_cls_for(mutation_cls: _AuthorizedClass) -> type:
     # An auth permission holder reaching a pipeline is a bound ``login`` / ``logout``
     # holder, whose payload name the auth bind stashed; the bind materialized that
     # payload class as a module global of ``mutations.inputs``.
-    return cast("type", getattr(inputs, cast("str", mutation_cls._payload_type_name)))
+    return cast(
+        "type[_GeneratedPayload]",
+        getattr(inputs, cast("str", mutation_cls._payload_type_name)),
+    )
 
 
 async def run_pipeline_async(

@@ -32,6 +32,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
     from strawberry.types.nodes import Selection
 
+    from ..types.base import DjangoType
     from .extension import DjangoOptimizerExtension
     from .nested_fetch import NestedConnectionStrategy
     from .plans import OptimizationPlan
@@ -50,7 +51,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         frozenset[tuple[str, FrozenVariableValue]],
         type[models.Model],
         tuple[str, ...],
-        type | None,
+        type[DjangoType] | None,
     ]
     #: A converted-selection memo key: one field node's id, or a group's ids.
     ConvertedMemoKey: TypeAlias = int | tuple[int, ...]

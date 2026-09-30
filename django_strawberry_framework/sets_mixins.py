@@ -48,7 +48,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
-from typing import Any, ClassVar, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from django.utils.module_loading import import_string
 
@@ -64,6 +64,10 @@ from .utils.permissions import (
     verbatim_path,
 )
 from .utils.strings import pascal_case_or_raise
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .filters.sets import FilterSetMetaclass
+    from .orders.sets import OrderSetMetaclass
 
 _T = TypeVar("_T")
 _D = TypeVar("_D", bound="RelatedSetTargetMixin")
@@ -136,7 +140,7 @@ class LazyRelatedClassMixin:
     consumer.
     """
 
-    def resolve_lazy_class(self, class_ref: object, bound_class: type | None) -> object:
+    def resolve_lazy_class(self, class_ref: object, bound_class: type[object] | None) -> object:
         """Resolve `class_ref` to a class.
 
         Strings resolve via two attempts:
@@ -206,7 +210,7 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
     _target_attr: str
     _owner_attr: str
 
-    def _bind_owner(self, owner: type) -> None:
+    def _bind_owner(self, owner: FilterSetMetaclass | OrderSetMetaclass) -> None:
         """Bind the owning set once; a second (possibly divergent) bind is a no-op."""
         if not hasattr(self, self._owner_attr):
             setattr(self, self._owner_attr, owner)
@@ -263,8 +267,8 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
 
 
 def collect_related_declarations(
-    new_class: type,
-    bases: tuple[type, ...],
+    new_class: FilterSetMetaclass | OrderSetMetaclass,
+    bases: tuple[type[object], ...],
     *,
     own_items: Iterable[tuple[str, object]],
     declaration_type: type[_D],
@@ -349,7 +353,7 @@ def collect_related_declarations(
 
 
 def expanded_once(
-    cls: type,
+    cls: type[object],
     *,
     cache_attr: str,
     guard_attr: str,
@@ -395,7 +399,7 @@ def expanded_once(
         setattr(cls, guard_attr, False)
 
 
-def should_cache_expansion(cls: type, *, related_attr: str, target_slot: str) -> bool:
+def should_cache_expansion(cls: type[object], *, related_attr: str, target_slot: str) -> bool:
     """Return whether a set class's expansion result may be cached.
 
     The two-condition cache-write gate ``FilterSet.get_filters`` and
@@ -421,7 +425,7 @@ def should_cache_expansion(cls: type, *, related_attr: str, target_slot: str) ->
 # are excluded from the re-readable contract even though they satisfy it
 # structurally. ``memoryview`` is included for the same reason: it is sized,
 # iterable and supports ``in``, so ``Collection`` accepts it.
-_TEXT_ATOM_TYPES: tuple[type, ...] = (
+_TEXT_ATOM_TYPES: tuple[type[str], type[bytes], type[bytearray], type[memoryview]] = (
     str,
     bytes,
     bytearray,
@@ -457,7 +461,7 @@ def is_re_readable_field_declaration(value: object) -> bool:
 
 
 def require_re_readable_field_declaration(
-    set_cls: type,
+    set_cls: type[object],
     value: object,
     *,
     subject: str,
@@ -693,7 +697,7 @@ class ActiveInputPermissionMixin:
         _input_value: object,
         _request: object,
         *,
-        _fired: dict[type, set[str]],
+        _fired: dict[type[object], set[str]],
         _bare: ActiveInputPermissionMixin,
         _depth: int,
     ) -> None:
@@ -717,7 +721,7 @@ class ActiveInputPermissionMixin:
         input_value: object,
         request: object,
         *,
-        _fired: dict[type, set[str]] | None = None,
+        _fired: dict[type[object], set[str]] | None = None,
         _bare: ActiveInputPermissionMixin | None = None,
         _depth: int = 0,
     ) -> None:

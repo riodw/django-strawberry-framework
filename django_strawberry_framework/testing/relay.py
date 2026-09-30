@@ -54,7 +54,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 __all__ = ["decode_global_id", "global_id_for"]
 
 
-def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
+def global_id_for(type_cls: type[object], id: object) -> str:  # noqa: A002
     """Return the encoded ``GlobalID`` string ``type_cls`` emits for ``id``.
 
     Reads the finalize-stamped ``effective_globalid_strategy`` (never the
@@ -67,7 +67,7 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     # which rebinds it to the class's own attribute.
     definition: object = None
     try:
-        # mypy: ``type_cls: type`` is the public contract; the class check validates a
+        # mypy: ``type_cls: type[object]`` is the public contract; the class check validates a
         # test call that breaks it
         is_django_type = isinstance(type_cls, type) and issubclass(type_cls, DjangoType)  # type: ignore[redundant-expr]
         definition = getattr(type_cls, "__django_strawberry_definition__", None)
@@ -118,5 +118,6 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     # ``root`` (only the ``callable`` branch does, and it is unreachable here per
     # the gate above), so the payload comes from the exact code path the live
     # ``resolve_typename`` closure runs.
-    payload = encode_typename(definition, strategy, type_cls, None)
+    # The gate above proved ``definition.origin is type_cls``.
+    payload = encode_typename(definition, strategy, definition.origin, None)
     return str(relay.GlobalID(type_name=payload, node_id=str(id)))

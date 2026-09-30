@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from django.db import models
 
@@ -27,6 +27,7 @@ from .exceptions import ConfigurationError
 from .utils.imports import import_attr_if_importable
 
 if TYPE_CHECKING:  # pragma: no cover
+    from .types.base import DjangoType
     from .types.definition import DjangoTypeDefinition, GlobalIDStrategy
     from .types.relations import PendingRelation
 
@@ -122,13 +123,13 @@ class TypeRegistry:
     """
 
     def __init__(self) -> None:
-        self._types: dict[type[models.Model], list[type]] = {}
-        self._primaries: dict[type[models.Model], type] = {}
-        self._models: dict[type, type[models.Model]] = {}
+        self._types: dict[type[models.Model], list[type[DjangoType]]] = {}
+        self._primaries: dict[type[models.Model], type[DjangoType]] = {}
+        self._models: dict[type[DjangoType], type[models.Model]] = {}
         self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
-        self._definitions: dict[type, DjangoTypeDefinition] = {}
+        self._definitions: dict[type[DjangoType], DjangoTypeDefinition] = {}
         self._pending: list[PendingRelation] = []
-        self._type_teardowns: dict[type, list[Callable[[], None]]] = {}
+        self._type_teardowns: dict[type[DjangoType], list[Callable[[], None]]] = {}
         self._finalized: bool = False
         # The validated ``RELAY_GLOBALID_STRATEGY`` snapshot for the current
         # build, computed once by ``finalize_django_types`` and read by the Relay
@@ -153,7 +154,11 @@ class TypeRegistry:
                 "(call registry.clear() before registering new types)",
             )
 
-    def _detach_type_from_model(self, model: type[models.Model], type_cls: type) -> None:
+    def _detach_type_from_model(
+        self,
+        model: type[models.Model],
+        type_cls: type[DjangoType],
+    ) -> None:
         """Remove ``type_cls`` from ``_types[model]`` and ``_models`` in lock-step.
 
         The exact inverse of the two mutations ``register`` performs when it
@@ -194,7 +199,7 @@ class TypeRegistry:
     def register(
         self,
         model: type[models.Model],
-        type_cls: type,
+        type_cls: type[DjangoType],
         *,
         primary: bool = False,
     ) -> bool:
@@ -254,7 +259,11 @@ class TypeRegistry:
             self._primaries[model] = type_cls
         return True
 
-    def register_type_teardown(self, type_cls: type, teardown: Callable[[], None]) -> None:
+    def register_type_teardown(
+        self,
+        type_cls: type[DjangoType],
+        teardown: Callable[[], None],
+    ) -> None:
         """Register one inverse for a framework-owned mutation of ``type_cls``.
 
         Finalization mutates consumer classes in place. Most of those mutations
@@ -276,7 +285,7 @@ class TypeRegistry:
             )
         self._type_teardowns.setdefault(type_cls, []).append(teardown)
 
-    def _run_type_teardowns(self, type_cls: type) -> None:
+    def _run_type_teardowns(self, type_cls: type[DjangoType]) -> None:
         """Run ``type_cls`` teardowns LIFO, retaining a failed callback for retry."""
         teardowns = self._type_teardowns.get(type_cls)
         if teardowns is None:
@@ -290,7 +299,7 @@ class TypeRegistry:
                 raise
         self._type_teardowns.pop(type_cls)
 
-    def unregister(self, type_cls: type) -> None:
+    def unregister(self, type_cls: type[DjangoType]) -> None:
         """Remove all traces of ``type_cls`` from the registry.
 
         Public mutator that drops ``type_cls`` from ``_types[model]``,
@@ -343,7 +352,7 @@ class TypeRegistry:
             lambda cache: cache.pop(type_cls, None),
         )
 
-    def get(self, model: type[models.Model]) -> type | None:
+    def get(self, model: type[models.Model]) -> type[DjangoType] | None:
         """Return the relation-resolution target for ``model``, or ``None``.
 
         Three return states:
@@ -364,7 +373,7 @@ class TypeRegistry:
             return candidates[0]
         return None
 
-    def model_for_type(self, type_cls: type | None) -> type[models.Model] | None:
+    def model_for_type(self, type_cls: type[object] | None) -> type[models.Model] | None:
         """Reverse-lookup: return the Django model for a registered ``DjangoType``.
 
         Used by ``DjangoOptimizerExtension`` to trace a resolver's
@@ -376,9 +385,12 @@ class TypeRegistry:
         """
         if type_cls is None:
             return None
-        return self._models.get(type_cls)
+        # The stored keys are ``DjangoType`` classes but the probe is any class:
+        # ``dict.get`` is typed to the stored key type, while an identity lookup by a
+        # wider key is sound, so the map is read through its class-keyed view.
+        return cast("dict[type[object], type[models.Model]]", self._models).get(type_cls)
 
-    def iter_types(self) -> Iterator[tuple[type[models.Model], type]]:
+    def iter_types(self) -> Iterator[tuple[type[models.Model], type[DjangoType]]]:
         """Yield ``(model, type_cls)`` pairs once per registered type.
 
         A model with multiple registered types appears multiple times in
@@ -390,7 +402,7 @@ class TypeRegistry:
             for type_cls in type_list:
                 yield (model, type_cls)
 
-    def primary_for(self, model: type[models.Model]) -> type | None:
+    def primary_for(self, model: type[models.Model]) -> type[DjangoType] | None:
         """Return the explicitly declared primary type for ``model``, or ``None``.
 
         Strict ``_primaries`` lookup. Distinct from ``get()``: returns
@@ -399,7 +411,7 @@ class TypeRegistry:
         """
         return self._primaries.get(model)
 
-    def types_for(self, model: type[models.Model]) -> tuple[type, ...]:
+    def types_for(self, model: type[models.Model]) -> tuple[type[DjangoType], ...]:
         """Return every registered type for ``model`` in registration order.
 
         Immutable snapshot. Returns ``()`` for an unregistered model.
@@ -414,7 +426,11 @@ class TypeRegistry:
         """
         return (model for model, types in self._types.items() if len(types) >= 2)
 
-    def register_definition(self, type_cls: type, definition: DjangoTypeDefinition) -> None:
+    def register_definition(
+        self,
+        type_cls: type[DjangoType],
+        definition: DjangoTypeDefinition,
+    ) -> None:
         """Register the collected definition object for ``type_cls``.
 
         Asymmetry note: ``type_cls`` is not required to be present in
@@ -435,7 +451,7 @@ class TypeRegistry:
     def register_with_definition(
         self,
         model: type[models.Model],
-        type_cls: type,
+        type_cls: type[DjangoType],
         definition: DjangoTypeDefinition,
         *,
         primary: bool = False,
@@ -464,9 +480,11 @@ class TypeRegistry:
                     self._primaries[model] = pre_primary
             raise
 
-    def get_definition(self, type_cls: type) -> DjangoTypeDefinition | None:
+    def get_definition(self, type_cls: type[object]) -> DjangoTypeDefinition | None:
         """Return the collected definition for ``type_cls``, or ``None``."""
-        return self._definitions.get(type_cls)
+        # Any class is a valid probe (see ``model_for_type``): read the
+        # ``DjangoType``-keyed map through its class-keyed view.
+        return cast("dict[type[object], DjangoTypeDefinition]", self._definitions).get(type_cls)
 
     def definition_for_graphql_name(self, name: str) -> DjangoTypeDefinition:
         """Return the unique Relay-Node ``DjangoTypeDefinition`` for a GraphQL type ``name``.
@@ -510,7 +528,7 @@ class TypeRegistry:
             f"DjangoTypes ({colliding})",
         )
 
-    def iter_definitions(self) -> Iterator[tuple[type, DjangoTypeDefinition]]:
+    def iter_definitions(self) -> Iterator[tuple[type[DjangoType], DjangoTypeDefinition]]:
         """Yield ``(type_cls, definition)`` pairs in registration order."""
         yield from self._definitions.items()
 

@@ -19,6 +19,7 @@ from typing_extensions import override
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..utils.typing import ModelField
+    from .base import DjangoType
 
 
 @dataclass(frozen=True, eq=False)
@@ -39,7 +40,7 @@ class PendingRelation:
     ``FieldMeta`` (cardinality, nullability) from that map, so the record carries none of it.
     """
 
-    source_type: type
+    source_type: type[DjangoType]
     source_model: type[models.Model]
     field_name: str
     django_field: ModelField

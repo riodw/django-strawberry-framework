@@ -121,9 +121,17 @@ _LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_O
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from types import MethodType
+    from typing import TypeAlias
 
+    from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
     from ..utils.typing import ConcreteField, ForeignKeyField, ModelField
+
+    # ``(field_name, target_type, child_filterset, child_input, child_base)`` per active
+    # related branch, as ``FilterSet._iter_visibility_steps`` yields it.
+    _VisibilityStep: TypeAlias = (
+        "tuple[str, type[DjangoType], type[FilterSet], object, models.QuerySet[models.Model]]"
+    )
 
 _M = TypeVar("_M", bound=models.Model)
 
@@ -135,7 +143,7 @@ _M = TypeVar("_M", bound=models.Model)
 # recreates DjangoTypes / FilterSets, never Django's field classes). It
 # therefore needs no clear hook -- the keys are Django field classes, not
 # package types.
-_lookups_for_field_class_cache: dict[type, list[str]] = {}
+_lookups_for_field_class_cache: dict[type[ModelField], list[str]] = {}
 
 # Reverse of ``LOOKUP_NAME_MAP``'s ``django_lookup -> (python_attr, ...)``
 # direction, built once at import so ``_form_key_for_python_attr`` is an O(1)
@@ -338,7 +346,7 @@ def _reverse_rel_extra(field: ManyToOneRel | ManyToManyRel) -> dict[str, object]
 # the package-owned ``extra`` providers above -- NOT a snapshot of the mutable global.
 # Installed as ``FilterSet.FILTER_DEFAULTS`` (deepcopyable + customizable, restoring
 # django-filter's inherited extension seam).
-_PUBLIC_PACKAGE_FILTER_DEFAULTS: dict[type, dict[str, object]] = {
+_PUBLIC_PACKAGE_FILTER_DEFAULTS: dict[type[ModelField], dict[str, object]] = {
     models.AutoField: {"filter_class": NumberFilter},
     models.CharField: {"filter_class": CharFilter},
     models.TextField: {"filter_class": CharFilter},
@@ -410,11 +418,13 @@ def _normalize_policy_entry(entry: Mapping[str, object] | None) -> _NormalizedPo
 # ``MappingProxyType`` is correct here (unlike the public table, this is never
 # deepcopied or customized). The ownership oracle compares the effective selection
 # against this by normalized VALUE.
-_PACKAGE_POLICY_BASELINE: Mapping[type, _NormalizedPolicyEntry | None] = MappingProxyType(
-    {
-        cls: _normalize_policy_entry(entry)
-        for cls, entry in _PUBLIC_PACKAGE_FILTER_DEFAULTS.items()
-    },
+_PACKAGE_POLICY_BASELINE: Mapping[type[ModelField], _NormalizedPolicyEntry | None] = (
+    MappingProxyType(
+        {
+            cls: _normalize_policy_entry(entry)
+            for cls, entry in _PUBLIC_PACKAGE_FILTER_DEFAULTS.items()
+        },
+    )
 )
 
 
@@ -708,7 +718,7 @@ _ALL_FAMILY_PROFILES: tuple[_FilterFamilyProfile, ...] = (
 # two bases directly. An arbitrary subclass of any key below is NOT audited (it may
 # override ``.filter`` or add state this package never reviewed) and therefore resolves
 # to NO profile.
-_FILTER_FAMILY_REGISTRY: Mapping[type, _FilterFamilyProfile] = MappingProxyType(
+_FILTER_FAMILY_REGISTRY: Mapping[type[object], _FilterFamilyProfile] = MappingProxyType(
     {
         # Package Relay-GlobalID relation families.
         GlobalIDMultipleChoiceFilter: _GLOBALID_MULTIPLE_PROFILE,
@@ -770,7 +780,7 @@ class _EmptyBodyDynamicCsvReference(Filter):
 _EMPTY_BODY_DYNAMIC_CSV_ATTRS: frozenset[str] = frozenset(vars(_EmptyBodyDynamicCsvReference))
 
 
-def _dynamic_csv_profile_for(klass: type) -> _FilterFamilyProfile | None:
+def _dynamic_csv_profile_for(klass: type[object]) -> _FilterFamilyProfile | None:
     """Return the sequence profile IFF ``klass`` is a genuine dynamic ``in``/``range`` CSV class.
 
     django-filter builds ``class ConcreteInFilter(BaseInFilter, <scalar>): pass`` (and the
@@ -1053,7 +1063,7 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
     def __new__(
         cls,
         name: str,
-        bases: tuple[type, ...],
+        bases: tuple[type[object], ...],
         attrs: dict[str, object],
     ) -> FilterSetMetaclass:
         """Build the class, collect `RelatedFilter`s, and bind them to the owner."""
@@ -1222,7 +1232,12 @@ class FilterSet(
     # inherits this by identity (``_is_generation_capable`` checks it); ownership is
     # decided against the PRIVATE normalized ``_PACKAGE_POLICY_BASELINE`` by value, not
     # against this public object's identity.
-    FILTER_DEFAULTS: ClassVar[dict[type, dict[str, object]]] = _PUBLIC_PACKAGE_FILTER_DEFAULTS
+    # mypy: the stub keys ``FILTER_DEFAULTS`` by ``type[Field]``, but django-filter's own
+    # table also keys the reverse relations (``OneToOneRel`` / ``ManyToOneRel`` / ``ManyToManyRel``)
+    # basedpyright: same stub key type; it rejects the invariant override with the true wider key
+    FILTER_DEFAULTS: ClassVar[dict[type[ModelField], dict[str, object]]] = (  # pyright: ignore[reportIncompatibleVariableOverride]
+        _PUBLIC_PACKAGE_FILTER_DEFAULTS  # type: ignore[assignment]
+    )
 
     # Binding seam - populated by `finalize_django_types` phase 2.5.
     _owner_definition: DjangoTypeDefinition | None = None
@@ -2193,7 +2208,11 @@ class FilterSet(
         return GlobalIDFilter
 
     @classmethod
-    def _resolve_relation_target_type(cls, field: object, field_name: str | None) -> type | None:
+    def _resolve_relation_target_type(
+        cls,
+        field: object,
+        field_name: str | None,
+    ) -> type[DjangoType] | None:
         """Look up the registered target `DjangoType` for a relation field.
 
         Consults `_owner_definition.related_target_for(...)` when the
@@ -2665,7 +2684,7 @@ class FilterSet(
         cls,
         input_value: object,
         parent_db: str | None = None,
-    ) -> Iterator[tuple[str, type, type[FilterSet], object, models.QuerySet[models.Model]]]:
+    ) -> Iterator[_VisibilityStep]:
         """Yield the pre-await state each visibility derive method needs.
 
         Returns ``(field_name, target_type, child_filterset, child_input,
@@ -2897,7 +2916,7 @@ class FilterSet(
         return result
 
     @staticmethod
-    def _target_type_for_related_filter(related_filter: RelatedFilter) -> type | None:
+    def _target_type_for_related_filter(related_filter: RelatedFilter) -> type[DjangoType] | None:
         """Resolve the `DjangoType` whose ``get_queryset()`` scopes the branch.
 
         Prefer the child filterset's *bound owner* - the type the consumer
@@ -2921,7 +2940,7 @@ class FilterSet(
         owner_type = getattr(child_owner, "origin", None) if child_owner is not None else None
         if owner_type is not None:
             # A bound owner is a ``DjangoTypeDefinition``, whose ``origin`` is the ``DjangoType``.
-            return cast("type", owner_type)
+            return cast("type[DjangoType]", owner_type)
         child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
         if child_model is None:
             return None
@@ -2943,7 +2962,7 @@ class FilterSet(
         input_value: object,
         request: object,
         *,
-        _fired: dict[type, set[str]],
+        _fired: dict[type[object], set[str]],
         _bare: ActiveInputPermissionMixin,
         _depth: int,
     ) -> None:

@@ -415,7 +415,11 @@ class OptimizationPlan:
 OptimizationPlan._assert_merge_field_inventory()
 
 
-def resolver_key(parent_type: type | None, field_name: str, runtime_path: tuple[str, ...]) -> str:
+def resolver_key(
+    parent_type: type[object] | None,
+    field_name: str,
+    runtime_path: tuple[str, ...],
+) -> str:
     """Return the branch-sensitive resolver key shared by walker and resolvers."""
     path = ".".join(runtime_path)
     if parent_type is None:
@@ -856,7 +860,7 @@ def order_entry_has_explicit_nulls(entry: object) -> bool:
     )
 
 
-def ends_in_unique_column(effective: tuple[object, ...], model: type) -> bool:
+def ends_in_unique_column(effective: tuple[object, ...], model: type[models.Model]) -> bool:
     """Return whether the effective ordering's terminal entry is a unique total order.
 
     Hoisted from ``connection.py`` (spec-033 Decision 11 sites the hoist) so the

@@ -130,7 +130,7 @@ _KNOWN_LIST_ARGUMENT_REASONS: frozenset[str] = frozenset(get_args(_ListArgumentR
 
 
 def _validate_djangotype_target(
-    target_type: type,
+    target_type: type[object],
     resolver: object,
     *,
     field: str,
@@ -221,7 +221,7 @@ def _validate_djangotype_target(
 
 
 def _validate_relay_djangotype_target(
-    target_type: type,
+    target_type: type[object],
     resolver: object,
     *,
     field: str,
@@ -246,7 +246,8 @@ def _validate_relay_djangotype_target(
     # re-reading the attribute directly here would let a stateful metaclass
     # answer the first (guarded, defaulted) read and detonate the second.
     definition = _validate_djangotype_target(target_type, resolver, field=field)
-    if not _is_relay_shaped(target_type, definition.interfaces):
+    # The base validator proved ``definition.origin is target_type``.
+    if not _is_relay_shaped(definition.origin, definition.interfaces):
         raise ConfigurationError(relay_error_message)
     return definition
 
@@ -1450,7 +1451,7 @@ def _order_normalization_scope(
 
 
 def _execute_queryset_pipeline_sync(
-    target_type: type,
+    target_type: type[DjangoType],
     source: models.QuerySet[models.Model],
     info: Info[object, object],
     args_record: _ListArguments,
@@ -1497,7 +1498,7 @@ def _execute_queryset_pipeline_sync(
 
 
 async def _execute_queryset_pipeline_async(
-    target_type: type,
+    target_type: type[DjangoType],
     source: models.QuerySet[models.Model],
     info: Info[object, object],
     args_record: _ListArguments,
@@ -1543,7 +1544,7 @@ async def _execute_queryset_pipeline_async(
 
 
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
-    target_type: type,
+    target_type: type[object],
     *,
     resolver: Callable[..., Any] | None = None,
     description: str | None = None,
@@ -1614,6 +1615,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     # every resolver dispatch below run on, so a stateful target metaclass has no
     # second read to answer differently.
     definition = _validate_djangotype_target(target_type, resolver, field="DjangoListField")
+    # The validator proved ``definition.origin is target_type``; the origin is the
+    # typed spelling of the same class.
+    node_type = definition.origin
     target_model = _model_from_definition(definition)
     orderset_class = _orderset_class_from_definition(definition)
     directives = validated_field_directives("DjangoListField", directives)
@@ -1663,7 +1667,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
             qs = base_queryset(target_model)
             if async_execution():
                 return _execute_queryset_pipeline_async(
-                    target_type,
+                    node_type,
                     qs,
                     info,
                     args_record,
@@ -1673,7 +1677,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     orderset_class=orderset_class,
                 )
             return _execute_queryset_pipeline_sync(
-                target_type,
+                node_type,
                 qs,
                 info,
                 args_record,
@@ -1732,12 +1736,12 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                 raw_source = await user_resolver(root, info)
                 source, is_qs = prepared_resolver_source(
                     raw_source,
-                    target_type,
+                    node_type,
                     async_guard=reject_residual_async_source,
                 )
                 if is_qs:
                     return await _execute_queryset_pipeline_async(
-                        target_type,
+                        node_type,
                         source,
                         info,
                         args_record,
@@ -1782,12 +1786,12 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     )
                 source, is_qs = prepared_resolver_source(
                     source,
-                    target_type,
+                    node_type,
                     async_guard=reject_awaitable_sync_source,
                 )
                 if is_qs:
                     return _execute_queryset_pipeline_sync(
-                        target_type,
+                        node_type,
                         source,
                         info,
                         args_record,

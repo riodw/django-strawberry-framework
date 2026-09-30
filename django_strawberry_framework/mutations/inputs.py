@@ -73,6 +73,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from strawberry.types.base import WithStrawberryObjectDefinition
 
+    from ..types.base import DjangoType
     from ..utils.typing import ConcreteField, ModelField
 
     # The bind-time ``input attr -> Django field`` index the model decode reads.
@@ -358,7 +359,7 @@ def input_field_required(field: ConcreteField) -> bool:
 
 def relation_id_scalar(
     related_model: type[models.Model],
-    related_primary_type: type | None,
+    related_primary_type: type[DjangoType] | None,
 ) -> object:
     """Return the GraphQL id scalar for a write-input relation to ``related_model``.
 
@@ -378,7 +379,7 @@ def relation_id_scalar(
 
 def relation_id_annotation(
     related_model: type[models.Model],
-    related_primary_type: type | None,
+    related_primary_type: type[DjangoType] | None,
     *,
     many: bool,
 ) -> object:
@@ -426,7 +427,7 @@ def annotate_queryset_relation(
     *,
     many: bool,
     python_attr: str,
-    primary_of: Callable[[type], type | None],
+    primary_of: Callable[[type[models.Model]], type[DjangoType] | None],
     missing: Callable[[], ConfigurationError],
 ) -> tuple[str, object, type[models.Model]]:
     """Return ``(python_attr, id-annotation, related_model)`` for a column-less relation.
@@ -454,7 +455,7 @@ def annotate_queryset_relation(
 def relation_input_annotation(
     field: ConcreteField,
     *,
-    related_primary_type: type | None,
+    related_primary_type: type[DjangoType] | None,
 ) -> tuple[str, str, object]:
     """Map a relation field to its ``(python_attr, graphql_name, annotation)`` triple.
 
@@ -598,7 +599,7 @@ def model_column_write_annotation(
     field: ModelField,
     type_name: str,
     *,
-    primary_of: Callable[[type], type | None],
+    primary_of: Callable[[type[models.Model]], type[DjangoType] | None],
     kind: str | None = None,
 ) -> object:
     """Return the GraphQL annotation for a backing column, without naming.
@@ -631,7 +632,7 @@ def model_column_input_annotation(
     field: ConcreteField,
     type_name: str,
     *,
-    primary_of: Callable[[type], type | None],
+    primary_of: Callable[[type[models.Model]], type[DjangoType] | None],
 ) -> tuple[str, str, object]:
     """Return ``(python_attr, graphql_name, annotation)`` for a model column.
 
@@ -811,12 +812,12 @@ def build_mutation_input(
     model: type[models.Model],
     *,
     operation_kind: str,
-    primary_type: type,
+    primary_type: type[DjangoType],
     fields: tuple[str, ...] | None = None,
     exclude: tuple[str, ...] | None = None,
     overrides: frozenset[str] | None = None,
     shape: MutationInputShape | None = None,
-) -> type:
+) -> type[WithStrawberryObjectDefinition]:
     """Build the ``<Model>Input`` / ``<Model>PartialInput`` ``@strawberry.input`` class.
 
     ``operation_kind`` is ``CREATE`` (honor the per-field required rule) or
@@ -938,7 +939,7 @@ def build_mutation_input(
 _RESERVED_PAYLOAD_ATTRS: frozenset[str] = frozenset({"ok", "errors"})
 
 
-def payload_object_slot(primary_type: type) -> str:
+def payload_object_slot(primary_type: type[DjangoType]) -> str:
     """Return the uniform payload object-slot name for a primary type.
 
     ``"node"`` for a Relay-Node-shaped primary type, ``"result"`` otherwise.
@@ -951,9 +952,9 @@ def payload_object_slot(primary_type: type) -> str:
 def build_payload_type(
     mutation_name: str,
     *,
-    object_type: type | None,
+    object_type: type[DjangoType] | None,
     object_slot: str | None = None,
-) -> type:
+) -> type[WithStrawberryObjectDefinition]:
     """Build the ``<Name>Payload`` ``@strawberry.type`` wrapper (spec-036 Decision 7 / spec-038 Decision 6).
 
     Two payload shapes from ONE builder + ONE materialize ledger (the
@@ -1006,4 +1007,6 @@ def build_payload_type(
             "errors": strawberry.field(default_factory=list),
         }
     cls = type(f"{mutation_name}Payload", (), namespace)
-    return strawberry.type(cls)
+    # basedpyright: strawberry.type's signature returns its argument's type unchanged, so the
+    # __strawberry_definition__ the decorator attaches is invisible without the cast
+    return cast("type[WithStrawberryObjectDefinition]", strawberry.type(cls))

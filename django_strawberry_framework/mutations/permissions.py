@@ -34,7 +34,8 @@ from ..utils.querysets import reject_async_in_sync_context
 from .operations import _OPERATION_PERMISSION_ACTION
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from typing import ClassVar, Protocol
+    from collections.abc import Callable
+    from typing import ClassVar, Protocol, TypeAlias
 
     from django.db import models
     from strawberry.types import Info
@@ -48,10 +49,25 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         The class carries its nested ``Meta`` and the ``_resolve_model`` seam.
         """
 
-        Meta: ClassVar[type]
+        Meta: ClassVar[type[object]]
 
         @classmethod
-        def _resolve_model(cls, meta: type) -> type[models.Model] | None: ...
+        def _resolve_model(cls, meta: type[object]) -> type[models.Model] | None: ...
+
+    class _WritePermission(Protocol):
+        """An instance of a validated ``Meta.permission_classes`` entry.
+
+        Class-creation validation admits any class exposing a callable
+        ``has_permission``; each class keeps its own signature for it
+        (``DjangoModelPermission`` narrows ``mutation``), so only callability is shared.
+        """
+
+        @property
+        def has_permission(self) -> Callable[..., object]: ...
+
+    # A validated ``Meta.permission_classes`` entry: a zero-arg-constructible class
+    # whose instances expose the ``has_permission`` write-authorization seam.
+    WritePermissionClass: TypeAlias = type[_WritePermission]
 
 
 # The recourse appended to a ``SyncMisuseError`` raised when a permission hook
@@ -232,7 +248,7 @@ class DenyAll:
     def has_permission(
         self,
         info: object,
-        mutation: type,
+        mutation: type[object],
         operation: str,
         data: object,
         instance: object = None,

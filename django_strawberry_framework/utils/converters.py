@@ -79,8 +79,10 @@ _ConversionT = TypeVar("_ConversionT", bound=FieldConversionBase)
 def convert_with_mro(
     field: _FieldT,
     *,
-    isinstance_prechecks: Sequence[tuple[type | tuple[type, ...], Callable[[Any], object]]],
-    scalar_registry: Mapping[type, object],
+    isinstance_prechecks: Sequence[
+        tuple[type[object] | tuple[type[object], ...], Callable[[Any], object]]
+    ],
+    scalar_registry: Mapping[type[_FieldT], object],
     fallthrough_error_factory: Callable[[_FieldT], Exception],
 ) -> Any:
     """Dispatch ``field`` to a conversion via ordered prechecks, an MRO walk, then a raise.

@@ -146,6 +146,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing_extensions import Self
 
     from .optimizer.selections import ConnectionFieldNames, ConvertedSelection
+    from .types.base import DjangoType
     from .types.definition import DjangoTypeDefinition
     from .utils.typing import ConcreteField, ModelField
 
@@ -173,6 +174,7 @@ NodeType = TypeVar("NodeType")
 # returns instances of the class it is handed, in the base's universal parametrization.
 _ConnectionT = TypeVar("_ConnectionT", bound="DjangoConnection[Any]")
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+_DjangoTypeT = TypeVar("_DjangoTypeT", bound="DjangoType")
 
 # Field name carried on the connection instance for the captured ``totalCount``;
 # ``None`` (the default) means the count was not requested / not run, which the
@@ -278,7 +280,7 @@ class _WindowedConnectionRows:
 
 
 def _build_windowed_fallback(
-    target_type: type,
+    target_type: type[DjangoType],
     source: object,
     info: Info[object, object],
     definition: DjangoTypeDefinition,
@@ -1358,10 +1360,10 @@ class _CachedConnectionType(NamedTuple):
     """
 
     definition: DjangoTypeDefinition
-    connection_type: type
+    connection_type: type[object]
 
 
-_connection_type_cache: dict[type, _CachedConnectionType] = {}
+_connection_type_cache: dict[type[DjangoType], _CachedConnectionType] = {}
 
 
 def clear_connection_type_cache() -> None:
@@ -1382,12 +1384,12 @@ register_subsystem_clear(clear_connection_type_cache, owner="connection.type_cac
 
 
 def _generate_connection_class(
-    target_type: type,
+    target_type: type[_DjangoTypeT],
     definition: DjangoTypeDefinition,
     populate: Callable[[dict[str, object]], None] | None = None,
     *,
     description: str | None = None,
-) -> type:
+) -> type[DjangoConnection[_DjangoTypeT]]:
     """Generate a concrete ``<TypeName>Connection`` subclass of ``DjangoConnection[target_type]``.
 
     The single-sited generation tail shared by both ``_connection_type_for``
@@ -1429,7 +1431,10 @@ def _generate_connection_class(
     return strawberry.type(generated, description=description)
 
 
-def _build_total_count_connection(target_type: type, definition: DjangoTypeDefinition) -> type:
+def _build_total_count_connection(
+    target_type: type[_DjangoTypeT],
+    definition: DjangoTypeDefinition,
+) -> type[DjangoConnection[_DjangoTypeT]]:
     """Generate the concrete ``<TypeName>Connection`` carrying ``totalCount``.
 
     The generated class subclasses ``DjangoConnection[target_type]`` (so it
@@ -1533,7 +1538,10 @@ async def _attach_count_async(
     return conn
 
 
-def _connection_type_for(target_type: type, definition: DjangoTypeDefinition) -> type:
+def _connection_type_for(
+    target_type: type[DjangoType],
+    definition: DjangoTypeDefinition,
+) -> type[object]:
     """Return (and cache) the connection class for a node ``DjangoType``.
 
     Always returns a generated concrete ``<TypeName>Connection`` subclass of
@@ -1569,7 +1577,7 @@ def _connection_type_for(target_type: type, definition: DjangoTypeDefinition) ->
 
     connection_options = definition.connection
     if connection_options and connection_options.get("total_count"):
-        connection_type: type = _build_total_count_connection(target_type, definition)
+        connection_type: type[object] = _build_total_count_connection(target_type, definition)
     else:
         # WHY concrete and not the ``DjangoConnection[target_type]`` alias:
         # handing the schema a generic ALIAS loses the package's
@@ -1691,7 +1699,7 @@ def _guard_source_not_pre_sliced(source: models.QuerySet[models.Model, object]) 
 
 
 def _finalize_queryset(
-    target_type: type,
+    target_type: type[DjangoType],
     qs: models.QuerySet[models.Model],
     info: Info[object, object],
     *,
@@ -1774,9 +1782,9 @@ def _finalize_queryset(
 
 def _prepare_pipeline_source(
     source: object,
-    target_type: type,
+    target_type: type[DjangoType],
     *,
-    async_guard: Callable[[object, type], None],
+    async_guard: Callable[[object, type[DjangoType]], None],
     filter_input: object,
     order_by_input: object,
 ) -> tuple[Any, bool]:
@@ -1849,7 +1857,7 @@ def _sidecar_steps(
 
 
 def _pipeline_sync(
-    target_type: type,
+    target_type: type[DjangoType],
     source: Any,
     info: Info[object, object],
     *,
@@ -1912,7 +1920,7 @@ def _pipeline_sync(
 
 
 async def _pipeline_async(
-    target_type: type,
+    target_type: type[DjangoType],
     source: Any,
     info: Info[object, object],
     *,
@@ -1959,7 +1967,7 @@ async def _pipeline_async(
 
 
 def _synthesized_signature(
-    target_type: type,
+    target_type: type[DjangoType],
     definition: DjangoTypeDefinition,
 ) -> tuple[inspect.Signature, dict[str, object]]:
     """Build the resolver ``__signature__`` + ``__annotations__`` carrying the sidecar args.
@@ -2029,7 +2037,7 @@ def _synthesized_signature(
 
 
 def _async_connection_resolver(
-    target_type: type,
+    target_type: type[DjangoType],
     resolver: Callable[..., Awaitable[object]],
     definition: DjangoTypeDefinition,
 ) -> Callable[..., object]:
@@ -2051,7 +2059,7 @@ def _async_connection_resolver(
 
 
 def _sync_connection_resolver(
-    target_type: type,
+    target_type: type[DjangoType],
     resolver: Callable[..., Any] | None,
     definition: DjangoTypeDefinition,
 ) -> Callable[..., object]:
@@ -2092,7 +2100,7 @@ def _sync_connection_resolver(
 
 
 def _build_connection_resolver(
-    target_type: type,
+    target_type: type[DjangoType],
     resolver: Callable[..., Any] | None,
     definition: DjangoTypeDefinition,
 ) -> Callable[..., object]:
@@ -2172,10 +2180,10 @@ def _window_rows_are_annotated(rows: list[object]) -> bool:
 
 
 def _build_relation_connection_resolver(
-    target_type: type,
+    target_type: type[DjangoType],
     accessor_name: str,
     relation_field_name: str,
-    declaring_type: type,
+    declaring_type: type[DjangoType],
     definition: DjangoTypeDefinition,
 ) -> Callable[..., object]:
     """Build the resolver for a Phase-2.5 synthesized relation connection (spec-032 Decision 6).
@@ -2325,7 +2333,7 @@ def _build_relation_connection_resolver(
 
 
 def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`
-    target_type: type,
+    target_type: type[object],
     *,
     resolver: Callable[..., Any] | None = None,
     description: str | None = None,
@@ -2368,9 +2376,12 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
             "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)"
         ),
     )
+    # The validator proved ``definition.origin is target_type``; the origin is the
+    # typed spelling of the same class.
+    node_type = definition.origin
     return relay.connection(
-        _connection_type_for(target_type, definition),
-        resolver=_build_connection_resolver(target_type, resolver, definition),
+        _connection_type_for(node_type, definition),
+        resolver=_build_connection_resolver(node_type, resolver, definition),
         description=description,
         deprecation_reason=deprecation_reason,
         # One shared gate for every field factory (list, mutation, node, auth,

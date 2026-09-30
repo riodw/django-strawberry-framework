@@ -100,6 +100,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
     from strawberry.types import Info
 
+    from ..mutations.sets import DeclarationRegistry
+    from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
     from .inputs import FormClass
 
@@ -127,10 +129,16 @@ _ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = COMMON_WRITE_META_KEYS | frozens
 # ``iter_form_mutations`` are the public names ``registry.py`` (the co-clear),
 # ``DjangoFormMutationMetaclass``, ``bind_form_mutations``, and the tests
 # reference; ``_form_mutation_registry`` is the backing list the tests introspect.
-_form_mutation_declaration_registry = make_declaration_registry("DjangoFormMutation")
-register_form_mutation: Callable[[type], None] = _form_mutation_declaration_registry.register
+_form_mutation_declaration_registry: DeclarationRegistry[type[DjangoFormMutation]] = (
+    make_declaration_registry("DjangoFormMutation")
+)
+register_form_mutation: Callable[[type[DjangoFormMutation]], None] = (
+    _form_mutation_declaration_registry.register
+)
 clear_form_mutation_registry: Callable[[], None] = _form_mutation_declaration_registry.clear
-iter_form_mutations: Callable[[], tuple[type, ...]] = _form_mutation_declaration_registry.iter_
+iter_form_mutations: Callable[[], tuple[type[DjangoFormMutation], ...]] = (
+    _form_mutation_declaration_registry.iter_
+)
 _form_mutation_registry = _form_mutation_declaration_registry.store
 register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations")
 
@@ -168,7 +176,7 @@ register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations
 # pre-bind input clear - it is a per-pass build cache).
 _form_shape_build_cache: dict[
     tuple[FormClass, str, frozenset[str], tuple[tuple[str, type[forms.Field], bool, object], ...]],
-    tuple[type, list[InputFieldSpec]],
+    tuple[type[object], list[InputFieldSpec]],
 ]
 clear_form_shape_build_cache: Callable[[], None]
 _form_shape_build_cache, clear_form_shape_build_cache = make_shape_build_cache()
@@ -245,7 +253,7 @@ def _cached_build_form_input(
     exclude: tuple[str, ...] | None,
     guard_required: bool,
     form_fields: Mapping[str, forms.Field] | None = None,
-) -> tuple[type, list[InputFieldSpec]]:
+) -> tuple[type[object], list[InputFieldSpec]]:
     """Build the operation's form input once per shape; return ``(input_cls, field_specs)``.
 
     Mirrors ``mutations/sets.py::_materialize_input_for``'s cache-by-shape-identity:
@@ -301,7 +309,7 @@ def _cached_build_form_input(
         else:
             guard_create_required_fields(form_class, effective, form_fields)
 
-    def _build() -> tuple[type, list[InputFieldSpec]]:
+    def _build() -> tuple[type[object], list[InputFieldSpec]]:
         if operation_kind == PARTIAL:
             return build_form_input_class(
                 form_class,
@@ -361,7 +369,7 @@ def _resolve_effective_form_field_names(
 
 
 def _normalized_form_field_selection(
-    meta: type,
+    meta: type[object],
     form_class: FormClass,
     *,
     form_fields: Mapping[str, forms.Field] | None = None,
@@ -473,7 +481,7 @@ def _build_and_stash_form_input(
     *,
     operation_kind: str,
     base: type[DjangoModelFormMutation] | type[DjangoFormMutation],
-) -> type:
+) -> type[object]:
     """Build + materialize a form input and stash its reverse map (both flavors' ``build_input`` tail).
 
     The shared body the two bases' ``build_input`` seams differ in only by their
@@ -557,7 +565,7 @@ class DjangoModelFormMutation(DjangoMutation):
 
     @classmethod
     @override
-    def _resolve_model(cls, meta: type) -> type[models.Model] | None:
+    def _resolve_model(cls, meta: type[object]) -> type[models.Model] | None:
         """Resolve the model from ``Meta.form_class._meta.model`` (the ``036`` seam override).
 
         Returns ``None`` for a missing ``form_class`` / a form with no ``_meta`` /
@@ -571,7 +579,7 @@ class DjangoModelFormMutation(DjangoMutation):
 
     @classmethod
     @override
-    def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
         """Validate a ``ModelForm``-mutation ``Meta`` at class creation (spec-038 Decision 6).
 
         The ``ModelForm`` matrix (raising ``ConfigurationError`` naming the
@@ -683,7 +691,11 @@ class DjangoModelFormMutation(DjangoMutation):
 
     @classmethod
     @override
-    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
+    def build_input(
+        cls,
+        meta: _ValidatedMutationMeta,
+        primary_type: type[DjangoType],
+    ) -> type[object] | None:
         """Build + materialize the operation's form-derived input (the seam override).
 
         Mirrors the ``036`` ``_materialize_input_for`` one-input-per-operation
@@ -808,7 +820,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # name. ``DjangoMutationField`` reads them. A type checker sees the bound
     # payload name, since only a bound mutation is resolved.
     _primary_type: ClassVar[None] = None
-    _input_class: ClassVar[type | None] = None
+    _input_class: ClassVar[type[object] | None] = None
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
         _payload_type_name: ClassVar[str]
     else:
@@ -825,7 +837,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     input_module_path: ClassVar[str] = FORMS_INPUTS_MODULE_PATH
 
     @classmethod
-    def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
         """Validate a plain-form-mutation ``Meta`` at class creation (spec-038 Decision 6 / 10).
 
         The plain-form matrix (raising ``ConfigurationError`` naming the offending
@@ -977,7 +989,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         )
 
     @classmethod
-    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type | None = None) -> type:
+    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: None = None) -> type[object]:
         """Build + materialize the plain form's model-less input (the ``"form"`` sentinel shape).
 
         A plain form has ONE input (create-shaped, the ``FORM`` sentinel kind -

@@ -104,7 +104,7 @@ def raw_choice_value(value: object) -> object:
     return str.__str__(raw_value) if isinstance(raw_value, str) else raw_value
 
 
-def coerce_relation_pk_or_none(related_model: type, pk: object) -> object:
+def coerce_relation_pk_or_none(related_model: type[models.Model], pk: object) -> object:
     """Coerce a raw M2M pk through the target's pk field; ``None`` if uncoercible / out of range.
 
     The raw-pk M2M counterpart to ``relay.py::_coerce_pk_or_none`` (which coerces a
@@ -130,7 +130,7 @@ def type_check_relation_id(
     value: object,
     *,
     graphql_name: str,
-    related_model: type,
+    related_model: type[models.Model],
 ) -> tuple[object, FieldError | None]:
     """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch.
 
@@ -195,7 +195,7 @@ def decode_visible_relation(
     value: object,
     *,
     graphql_name: str,
-    related_model: type,
+    related_model: type[models.Model],
     info: Info[object, object],
     async_recourse: str,
     skip: Callable[[object], bool],
@@ -284,7 +284,7 @@ def decode_visible_relation_ids(
     values: object,
     *,
     graphql_name: str,
-    related_model: type,
+    related_model: type[models.Model],
     info: Info[object, object],
     async_recourse: str,
 ) -> tuple[list[object] | None, FieldError | None]:

@@ -234,7 +234,7 @@ LOGIC_OPERATORS_BY_PYTHON_ATTR: Mapping[str, LogicOperatorDescriptor] = MappingP
 # ``clear_filter_input_namespace`` leaves class objects parked in
 # ``filters.inputs.__dict__``, per the parked-globals lifecycle stated on
 # ``utils/inputs.py::make_input_namespace``.
-_materialized_names: dict[str, type]
+_materialized_names: dict[str, type[object]]
 _field_specs: dict[tuple[type[FilterSet], str], FieldSpec]
 (
     _materialized_names,
@@ -286,7 +286,7 @@ def _pascal_case(name: str) -> str:
     )
 
 
-def _scalar_from_form_field(form_field: object) -> type:
+def _scalar_from_form_field(form_field: object) -> _TypeForm:
     """Pick a Strawberry-compatible scalar for a Django form field.
 
     Used by ``convert_filter_to_input_annotation`` for the
@@ -496,7 +496,7 @@ def _element_annotation(
 # original ``else``): convert's method-filter / ``isnull`` / scalar arm,
 # normalize's unwrap. A duck-typed non-``Filter`` still reaches that arm so
 # hostile-``__repr__`` diagnostics stay typed ``ConfigurationError``.
-_FILTER_INPUT_KIND_TYPES: tuple[type | tuple[type, ...], ...] = (
+_FILTER_INPUT_KIND_TYPES: tuple[type[object] | tuple[type[object], ...], ...] = (
     GlobalIDMultipleChoiceFilter,
     GlobalIDFilter,
     RelationPkMultipleFilter,
@@ -513,7 +513,7 @@ _FILTER_INPUT_KIND_TYPES: tuple[type | tuple[type, ...], ...] = (
 
 def _filter_input_prechecks(
     *handlers: Callable[[Filter], object],
-) -> list[tuple[type | tuple[type, ...], Callable[[Filter], object]]]:
+) -> list[tuple[type[object] | tuple[type[object], ...], Callable[[Filter], object]]]:
     """Zip the shared kind order with per-pass handlers.
 
     ``zip(..., strict=True)`` fails loud if convert or normalize forgets a
@@ -824,7 +824,7 @@ def _build_range_input_class(
     filter_instance: Filter,
     inner: _TypeForm,
     filterset_cls: type[FilterSet] | None = None,
-) -> type:
+) -> type[object]:
     """Return a Strawberry input dataclass with ``start: T | None`` and ``end: T | None``.
 
     Classes are cached on the filter instance by their full generation identity:
@@ -863,7 +863,7 @@ def _build_range_input_class(
         filter_instance._range_input_classes = cache  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
     cached = cache.get(cache_key)
     if cached is not None:
-        return cast("type", cached)  # the slot only holds classes built below
+        return cast("type[object]", cached)  # the slot only holds classes built below
     prefix = filterset_cls.__name__ if filterset_cls is not None else ""
     cls_name = f"{prefix}{_pascal_case(field_name)}RangeInputType"
     cls = build_input_class(
@@ -1174,7 +1174,7 @@ def construct_search(all_filters: Mapping[str, object]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def materialize_input_class(name: str, cls: type) -> None:
+def materialize_input_class(name: str, cls: type[object]) -> None:
     """Set ``cls`` as a real module global of ``filters.inputs`` under ``name``.
 
     Thin family wrapper over the ``make_set_input_namespace`` materializer.

@@ -41,6 +41,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.contrib.auth.models import _User
     from strawberry.types import Info
 
+    from ..types.base import DjangoType
     from .mutations import _SealedAuthHolderMeta
 
 AUTH_QUERIES_MODULE_PATH = "django_strawberry_framework.auth.queries"
@@ -54,7 +55,7 @@ CURRENT_USER_ALIAS_NAME = "CurrentUserAlias"
 # pins the resolved user primary as this module's ``CurrentUserAlias`` global via
 # the blessed ``materialize_generated_input_class`` parked-global path;
 # ``clear_current_user_alias_namespace`` empties the ledger.
-materialize_current_user_alias: Callable[[str, type], None]
+materialize_current_user_alias: Callable[[str, type[DjangoType]], None]
 clear_current_user_alias_namespace: Callable[[], None]
 (
     _current_user_alias_names,
@@ -104,7 +105,7 @@ def _current_user_resolve_body(
 
 def current_user(
     *,
-    permission_classes: Iterable[type] | None = None,
+    permission_classes: Iterable[type[object]] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),

@@ -84,6 +84,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.contrib.postgres.fields import ArrayField, HStoreField
 
     from ..utils.typing import ConcreteField, ModelField
+    from .base import DjangoType
 
 
 @overload
@@ -279,7 +280,7 @@ SCALAR_MAP: "dict[type[ConcreteField], Any]" = {
 # ``DjangoImageType`` rather than falling through to ``DjangoFileType``,
 # exactly as ``PositiveBigIntegerField`` resolves to ``BigInt`` before
 # ``IntegerField`` in SCALAR_MAP.
-FIELD_OUTPUT_TYPE_MAP: "dict[type[ConcreteField], type]" = {
+FIELD_OUTPUT_TYPE_MAP: "dict[type[ConcreteField], type[DjangoFileType]]" = {
     models.ImageField: DjangoImageType,
     models.FileField: DjangoFileType,
 }
@@ -290,7 +291,7 @@ FIELD_OUTPUT_TYPE_MAP: "dict[type[ConcreteField], type]" = {
 # already resolved by ``_field_output_type_for``, so keying it on the field
 # class again would duplicate the MRO walk and let the two maps disagree about
 # what an ``ImageField`` subclass resolves to.
-FILESYSTEM_PATH_OUTPUT_TYPE_MAP: dict[type, type] = {
+FILESYSTEM_PATH_OUTPUT_TYPE_MAP: dict[type[DjangoFileType], type[DjangoFileType]] = {
     DjangoImageType: DjangoImagePathType,
     DjangoFileType: DjangoFilePathType,
 }
@@ -497,7 +498,7 @@ def convert_scalar(
     return py_type
 
 
-def _field_output_type_for(field: "ModelField") -> type | None:
+def _field_output_type_for(field: "ModelField") -> type[DjangoFileType] | None:
     """Return the ``FIELD_OUTPUT_TYPE_MAP`` output object for ``field``, or ``None``.
 
     Walks ``type(field).__mro__`` against ``FIELD_OUTPUT_TYPE_MAP`` exactly as
@@ -813,7 +814,7 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
 
 def resolved_relation_annotation(
     field: "ModelField",
-    target_type: type,
+    target_type: "type[DjangoType]",
     *,
     field_meta: FieldMeta | None = None,
 ) -> object:

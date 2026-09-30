@@ -278,7 +278,7 @@ class RelationPathHop:
 
     segment: str
     kind: RelationKind
-    target_model: type
+    target_model: type[models.Model]
     many_side: bool
 
 
@@ -297,7 +297,7 @@ class ClassifiedPath:
     grouping key predicate generation consumes.
     """
 
-    model: type
+    model: type[models.Model]
     path: str
     hops: tuple[RelationPathHop, ...]
     terminal: ModelField

@@ -719,7 +719,7 @@ def _hook_mapping(
 # authoritative ``provided_data`` - so the freeze FAILS CLOSED on it rather than
 # promising an immutable view it cannot deliver. ``datetime`` covers ``date`` by
 # subclass; ``bytearray`` is handled separately (rendered as immutable ``bytes``).
-_IMMUTABLE_LEAF_TYPES: tuple[type, ...] = (
+_IMMUTABLE_LEAF_TYPES: tuple[type[object], ...] = (
     str,
     bytes,
     bool,
@@ -743,7 +743,7 @@ _IMMUTABLE_LEAF_TYPES: tuple[type, ...] = (
 # ``set``/``frozenset`` -> ``frozenset`` (children frozen at every depth). ``str`` /
 # ``bytes`` / ``bytearray`` are deliberately NOT here - they are leaves, not element
 # containers - so they are never iterated as structure.
-_FROZEN_VIEW_CONTAINERS: tuple[type, ...] = (
+_FROZEN_VIEW_CONTAINERS: tuple[type[object], ...] = (
     dict,
     list,
     tuple,

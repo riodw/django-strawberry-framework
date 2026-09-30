@@ -313,7 +313,7 @@ def applied_order(query: sql.Query, model: type[models.Model]) -> tuple[str | Co
     return tuple(query.order_by) or default_order(query, model)
 
 
-def initial_queryset(type_cls: type) -> models.QuerySet[models.Model]:
+def initial_queryset(type_cls: type[DjangoType]) -> models.QuerySet[models.Model]:
     """Return ``model._default_manager.all()`` for a ``DjangoType``'s model.
 
     Step 1 of the Relay node defaults' four-step shape and the default
@@ -611,7 +611,7 @@ def _base_table_defect(query: object, concrete: type[models.Model]) -> str | Non
     return None
 
 
-def _type_is_genuinely_django(node_type: type) -> bool:
+def _type_is_genuinely_django(node_type: type[object]) -> bool:
     """Return whether ``node_type`` is a genuine Django class by IDENTITY, not ``__module__``.
 
     Every clonable / compilable node embedded in a sealed ``sql.Query`` -- ``where``
@@ -662,7 +662,7 @@ def _type_is_genuinely_django(node_type: type) -> bool:
 # prove genuine-Django provenance like any other object (spec-045 Decision 2).
 # ``datetime.datetime`` is listed explicitly because exact-type
 # membership no longer inherits it from ``datetime.date``.
-_INERT_VALUE_TYPES: frozenset[type] = frozenset(
+_INERT_VALUE_TYPES: frozenset[type[object]] = frozenset(
     {
         str,
         bytes,
@@ -780,7 +780,7 @@ _SQL_TEMPLATE_ATTRS: tuple[str, ...] = (
 # state (no class supplies it), so validating it needs no class-level proof. Values are
 # pinned to the exact inert scalars Django itself stores there; a consumer object under
 # any key fails closed before the seal returns.
-_TEMPLATE_PARAM_VALUE_TYPES: frozenset[type] = frozenset(
+_TEMPLATE_PARAM_VALUE_TYPES: frozenset[type[object]] = frozenset(
     {
         str,
         int,
@@ -1039,7 +1039,7 @@ def _genuine_node_defect(
 # fails the seal CLOSED with no indication that the inventories disagree.
 # ``tests/utils/test_querysets.py`` asserts the rebuild side answers for every
 # member of this set, so the two cannot drift silently.
-_PLAIN_CONTAINER_TYPES: frozenset[type] = frozenset(
+_PLAIN_CONTAINER_TYPES: frozenset[type[object]] = frozenset(
     {
         list,
         tuple,
@@ -1050,7 +1050,7 @@ _PLAIN_CONTAINER_TYPES: frozenset[type] = frozenset(
 )
 
 
-def _is_plain_container(value_type: type) -> bool:
+def _is_plain_container(value_type: type[object]) -> bool:
     """Return whether ``value_type`` is EXACTLY one of the walked plain containers.
 
     Exact-type membership, never ``issubclass``: a ``list`` / ``dict`` SUBCLASS
@@ -1132,11 +1132,11 @@ _RHS_ATTRIBUTE_HOOKS: tuple[str, ...] = ("__getattr__", "__getattribute__")
 # compiler dispatches, because a dispatchable RHS is routed to the expression walk before
 # this rule is consulted. The exact-type discipline that governs ``_INERT_VALUE_TYPES``
 # elsewhere would fail-close ordinary consumer schemas here.
-_DIRECT_RHS_DATA_BASES: tuple[type, ...] = (*_INERT_VALUE_TYPES, enum.Enum, models.Model)
+_DIRECT_RHS_DATA_BASES: tuple[type[object], ...] = (*_INERT_VALUE_TYPES, enum.Enum, models.Model)
 
 # MRO entries whose own hook definitions are trusted: the data bases themselves plus
 # ``object`` (whose ``__getattribute__`` every type inherits).
-_DIRECT_RHS_TRUSTED_MRO: frozenset[type] = frozenset(_DIRECT_RHS_DATA_BASES) | {object}
+_DIRECT_RHS_TRUSTED_MRO: frozenset[type[object]] = frozenset(_DIRECT_RHS_DATA_BASES) | {object}
 
 _ATTR_MISSING = object()
 
@@ -1155,7 +1155,7 @@ def _static_attr_present(value: object, name: str) -> bool:
     return inspect.getattr_static(value, name, _ATTR_MISSING) is not _ATTR_MISSING
 
 
-def _rhs_hook_defect(value_type: type, label: str) -> tuple[str, str] | None:
+def _rhs_hook_defect(value_type: type[object], label: str) -> tuple[str, str] | None:
     """Return a defect if a direct-RHS type defines an attribute hook below its data bases.
 
     The MRO is read through ``type.__getattribute__`` and each class's namespace is
@@ -1534,7 +1534,7 @@ def _query_payload_defect(query: object) -> tuple[str, str] | None:
 # instance) and exact ``zoneinfo.ZoneInfo``, both immutable values whose every method is
 # the interpreter's own. Every retained member is immutable, so sharing one between the
 # candidate and the sealed query is unobservable.
-_RETAINED_LEAF_TYPES: frozenset[type] = (_INERT_VALUE_TYPES - {bytearray}) | {
+_RETAINED_LEAF_TYPES: frozenset[type[object]] = (_INERT_VALUE_TYPES - {bytearray}) | {
     datetime.timezone,
     zoneinfo.ZoneInfo,
 }
@@ -1549,7 +1549,7 @@ _RETAINED_LEAF_TYPES: frozenset[type] = (_INERT_VALUE_TYPES - {bytearray}) | {
 # value Django's own code extracts a pk from). One tuple so the rebuild-versus-retain
 # policy (``_is_reconstructable_node``) and the bound-value rule
 # (``_normalized_bound_value``) decide "trusted schema" identically and cannot drift.
-_RETAINED_SCHEMA_BASES: tuple[type, ...] = (
+_RETAINED_SCHEMA_BASES: tuple[type[object], ...] = (
     type,
     models.Field,
     ForeignObjectRel,
@@ -1563,15 +1563,15 @@ _RETAINED_SCHEMA_BASES: tuple[type, ...] = (
 # schema: the ONE writer is ``_is_reconstructable_node``'s ``_RETAINED_SCHEMA_BASES``
 # branch, so nothing a hostile hook plants can enter the set and thereby win the inline
 # retain-by-reference test in every LATER seal this process runs.
-_RETAINED_TYPES: set[type] = set(_RETAINED_LEAF_TYPES)
+_RETAINED_TYPES: set[type[object]] = set(_RETAINED_LEAF_TYPES)
 
 # Positive-only memo of ``_is_reconstructable_node``: exact genuine Django AST classes
 # proven once. Never holds a consumer type, so it cannot grow with consumer-defined
 # classes.
-_RECONSTRUCTABLE_NODE_TYPES: set[type] = set()
+_RECONSTRUCTABLE_NODE_TYPES: set[type[object]] = set()
 
 
-def _is_reconstructable_node(node_type: type) -> bool:
+def _is_reconstructable_node(node_type: type[object]) -> bool:
     """Return whether canonical reconstruction rebuilds an object of ``node_type``.
 
     The reconstruction rebuilds QUERY AST, not schema and not bound data. An object is
@@ -1727,7 +1727,7 @@ def _normalized_uuid(value: uuid.UUID) -> uuid.UUID:
 # ``IntegerChoices`` member (a ``str`` / ``int`` SUBCLASS) normalizes straight to its
 # underlying exact scalar. ``bool`` is absent because it cannot be subclassed, and
 # ``models.Model`` is absent because a model instance IS the bound foreign-key value.
-_BOUND_VALUE_NORMALIZERS: tuple[tuple[type, Callable[[Any], object]], ...] = (
+_BOUND_VALUE_NORMALIZERS: tuple[tuple[type[object], Callable[[Any], object]], ...] = (
     (str, _normalized_str),
     (bytes, _normalized_bytes),
     (bytearray, _normalized_bytearray),
@@ -2320,7 +2320,7 @@ def _combined_query_table_defect(
 # of ``.values()`` / ``.values_list()``. Anything else is a consumer-supplied
 # row synthesizer (the ``.first()`` / ``.__aiter__()`` synthetic-row vector) and
 # cannot be sealed.
-_DJANGO_ITERABLE_CLASSES: frozenset[type] = frozenset(
+_DJANGO_ITERABLE_CLASSES: frozenset[type[object]] = frozenset(
     {
         ModelIterable,
         ValuesIterable,
@@ -3078,7 +3078,7 @@ def _safe_routing_repr(value: object) -> str:
 
 
 def _validate_post_orderset_result(
-    target_type: type,
+    target_type: type[DjangoType],
     expected_routing: _RoutingIntent,
     post_order_candidate: object,
     method_name: str,
@@ -3158,7 +3158,7 @@ def _validate_post_orderset_result(
 
 
 def require_orderset_class(
-    target_type: type,
+    target_type: type[DjangoType],
     orderset_class: type[OrderSet] | None,
 ) -> type[OrderSet]:
     """Return the field's captured ``OrderSet``, or reject an ordering call without one.
@@ -3175,7 +3175,7 @@ def require_orderset_class(
 
 
 def _apply_sidecar_sync(
-    target_type: type,
+    target_type: type[DjangoType],
     set_class: type[FilterSet] | type[OrderSet],
     queryset: models.QuerySet[models.Model],
     input_value: object,
@@ -3218,7 +3218,7 @@ def _apply_sidecar_sync(
 
 
 async def _apply_sidecar_async(
-    target_type: type,
+    target_type: type[DjangoType],
     set_class: type[FilterSet] | type[OrderSet],
     queryset: models.QuerySet[models.Model],
     input_value: object,
@@ -3257,7 +3257,7 @@ async def _apply_sidecar_async(
 
 
 def apply_orderset_sync(
-    target_type: type,
+    target_type: type[DjangoType],
     orderset_class: type[OrderSet] | None,
     queryset: models.QuerySet[models.Model],
     order_by: object,
@@ -3275,7 +3275,7 @@ def apply_orderset_sync(
 
 
 async def apply_orderset_async(
-    target_type: type,
+    target_type: type[DjangoType],
     orderset_class: type[OrderSet] | None,
     queryset: models.QuerySet[models.Model],
     order_by: object,
@@ -3296,7 +3296,7 @@ async def apply_orderset_async(
 
 
 def apply_filterset_sync(
-    target_type: type,
+    target_type: type[DjangoType],
     filterset_class: type[FilterSet],
     queryset: models.QuerySet[models.Model],
     filter_input: object,
@@ -3321,7 +3321,7 @@ def apply_filterset_sync(
 
 
 async def apply_filterset_async(
-    target_type: type,
+    target_type: type[DjangoType],
     filterset_class: type[FilterSet],
     queryset: models.QuerySet[models.Model],
     filter_input: object,
@@ -4105,7 +4105,7 @@ def _defect_message(messages: dict[str, str], defect: tuple[str, str], subject: 
 
 
 def _visibility_result_error(
-    type_cls: type,
+    type_cls: type[DjangoType],
     model: type[models.Model],
     required_alias: str | None,
     defect: tuple[str, str],
@@ -4175,7 +4175,10 @@ def _visibility_result_error(
     )
 
 
-def _captured_model(type_cls: type, model: type[models.Model] | None) -> type[models.Model]:
+def _captured_model(
+    type_cls: type[DjangoType],
+    model: type[models.Model] | None,
+) -> type[models.Model]:
     """Return the caller's already-captured model, else read one for ``type_cls``.
 
     The seam that lets a surface holding its target's ``DjangoTypeDefinition``
@@ -4190,7 +4193,7 @@ def _captured_model(type_cls: type, model: type[models.Model] | None) -> type[mo
 
 
 def _prepared_visibility_source(
-    type_cls: type,
+    type_cls: type[DjangoType],
     queryset: object,
     *,
     model: type[models.Model] | None = None,
@@ -4306,7 +4309,7 @@ def _prepared_visibility_source(
 
 
 def _normalized_visibility_result(
-    type_cls: type,
+    type_cls: type[DjangoType],
     result: object,
     required_alias: str | None,
     render_error: Callable[[str, str], str] | None = None,
@@ -4461,7 +4464,7 @@ def apply_type_visibility_sync(
 
 
 def visibility_scoped_related_queryset(
-    related_type: type,
+    related_type: type[DjangoType],
     info: object,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
 ) -> models.QuerySet[models.Model]:
@@ -4738,7 +4741,7 @@ async def apply_type_visibility_async(
     )
 
 
-def reject_awaitable_sync_source(source: object, type_cls: type) -> None:
+def reject_awaitable_sync_source(source: object, type_cls: type[DjangoType]) -> None:
     """Reject an awaitable source from a sync list or connection resolver.
 
     A plain ``def`` that returns an awaitable is committed to the sync field
@@ -4757,7 +4760,7 @@ def reject_awaitable_sync_source(source: object, type_cls: type) -> None:
     )
 
 
-def reject_residual_async_source(source: object, type_cls: type) -> None:
+def reject_residual_async_source(source: object, type_cls: type[DjangoType]) -> None:
     """Reject a residual awaitable from an already-awaited async consumer resolver.
 
     Both async consumer pipelines await the consumer ``resolver=`` return
@@ -4788,9 +4791,9 @@ def reject_residual_async_source(source: object, type_cls: type) -> None:
 
 def prepared_resolver_source(
     result: object,
-    type_cls: type,
+    type_cls: type[DjangoType],
     *,
-    async_guard: Callable[[object, type], None],
+    async_guard: Callable[[object, type[DjangoType]], None],
     non_queryset_guard: Callable[[object], None] | None = None,
     queryset_guard: Callable[[models.QuerySet[models.Model]], None] | None = None,
 ) -> tuple[Any, bool]:
@@ -4828,7 +4831,11 @@ def prepared_resolver_source(
     return source, True
 
 
-def post_process_queryset_result_sync(type_cls: type, result: object, info: object) -> object:
+def post_process_queryset_result_sync(
+    type_cls: type[DjangoType],
+    result: object,
+    info: object,
+) -> object:
     """Normalize a consumer-resolver return then apply visibility (sync).
 
     The list-field consumer-resolver shape: a ``Manager`` is coerced to a
@@ -4852,7 +4859,7 @@ def post_process_queryset_result_sync(type_cls: type, result: object, info: obje
 
 
 async def post_process_queryset_result_async(
-    type_cls: type,
+    type_cls: type[DjangoType],
     result: object,
     info: object,
 ) -> object:

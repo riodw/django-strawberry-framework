@@ -19,11 +19,12 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
     from ..utils.typing import ModelField
+    from .base import DjangoType
 
     #: A consumer ``globalid_strategy`` encoder, validated to bind
     #: ``(type_cls, model, root)``. Its return is checked per call
     #: (``types/relay.py::encode_typename``), so it is typed ``object``.
-    GlobalIDEncoder: TypeAlias = Callable[[type, type[models.Model], object], object]
+    GlobalIDEncoder: TypeAlias = Callable[[type[DjangoType], type[models.Model], object], object]
     #: A validated ``globalid_strategy``: a ``STRING_GLOBALID_STRATEGIES`` name or an encoder.
     GlobalIDStrategy: TypeAlias = str | GlobalIDEncoder
 
@@ -164,7 +165,7 @@ class DjangoTypeDefinition:
           for a definition's lifetime.
     """
 
-    origin: type
+    origin: type[DjangoType]
     model: type[models.Model]
     name: str | None
     description: str | None
@@ -180,13 +181,13 @@ class DjangoTypeDefinition:
     consumer_assigned_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_scalar_fields: frozenset[str] = frozenset()
     primary: bool = False
-    interfaces: tuple[type, ...] = ()
+    interfaces: tuple[type[object], ...] = ()
     # ``interfaces`` is populated by ``_validate_meta``; consumed by
     # ``finalize_django_types()`` as the finalizer's source of truth for
     # base injection.
     filterset_class: type[FilterSet] | None = None
     orderset_class: type[OrderSet] | None = None
-    fields_class: type | None = None
+    fields_class: type[object] | None = None
     connection: dict[str, bool] | None = None
     # Keyset-cursor opt-in (the BACKLOG ``stable_cursor_field`` contract):
     # the validated ``Meta.cursor_field`` order strings, or ``None`` for the
@@ -385,7 +386,7 @@ class DjangoTypeDefinition:
         return result
 
 
-def origin_has_custom_id_resolver(origin: type, pk_name: str) -> bool:
+def origin_has_custom_id_resolver(origin: type[object], pk_name: str) -> bool:
     """Return whether ``origin`` customizes id resolution away from ``pk_name``.
 
     Shared by ``DjangoTypeDefinition.has_custom_id_resolver_for`` (the memoized
@@ -418,7 +419,7 @@ def _normalize_pk_name(pk_name: object) -> str | None:
     return normalized
 
 
-def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
+def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     """Return whether a Relay ``NodeID`` maps the id to a non-``pk_name`` column.
 
     A consumer ``relay.NodeID[...]`` annotation on a non-pk field (e.g.
@@ -455,7 +456,7 @@ def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
     return id_attr not in ("pk", pk_name)
 
 
-def _class_has_custom_id_resolver(type_cls: type, name: str) -> bool:
+def _class_has_custom_id_resolver(type_cls: type[object], name: str) -> bool:
     """Return whether ``type_cls`` defines a consumer id resolver marker."""
     try:
         class_dict = getattr(type_cls, "__dict__", {})

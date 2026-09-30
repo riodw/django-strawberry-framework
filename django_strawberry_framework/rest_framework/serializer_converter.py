@@ -102,6 +102,7 @@ from ..utils.strings import graphql_camel_name, pascal_case
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing import TypeAlias
 
+    from ..types.base import DjangoType
     from ..utils.typing import ConcreteField, ModelField
 
     # DRF's stub generics are invariant in every parameter, so the all-``Any``
@@ -208,7 +209,7 @@ _BUILTIN_SCALAR_CONVERTERS: dict[type[DRFField], SerializerFieldConverter] = {
 # mutates it. Like the read-side ``SCALAR_MAP`` it is a mutable module dict (a module
 # reload re-seeds it), so a consumer registration persists for the process and is NOT
 # reset by ``registry.clear()``.
-_SERIALIZER_FIELD_CONVERTERS: dict[type, SerializerFieldConverter] = dict(
+_SERIALIZER_FIELD_CONVERTERS: dict[type[DRFField], SerializerFieldConverter] = dict(
     _BUILTIN_SCALAR_CONVERTERS,
 )
 
@@ -224,7 +225,7 @@ _CONVERT_MULTIPLE_CHOICE = make_kind_converter(
 
 
 def register_serializer_field_converter(
-    field_class: type,
+    field_class: type[object],
     converter: SerializerFieldConverter,
     *,
     override: bool = False,
@@ -245,7 +246,7 @@ def register_serializer_field_converter(
     Mirrors the read-side ``types/converters.py::SCALAR_MAP`` extension hook (a mutable
     module dict); the registration persists for the process.
     """
-    # mypy: ``field_class: type`` is the public contract; the class check validates a
+    # mypy: ``field_class: type[object]`` is the public contract; the class check validates a
     # consumer call that breaks it
     if not (isinstance(field_class, type) and issubclass(field_class, serializers.Field)):  # type: ignore[redundant-expr]
         raise ConfigurationError(
@@ -732,7 +733,10 @@ def backing_model_field(model: type[models.Model] | None, field: DRFField) -> Mo
         return None
 
 
-def _require_relation_primary(field_name: str, related_model: type[models.Model]) -> type:
+def _require_relation_primary(
+    field_name: str,
+    related_model: type[models.Model],
+) -> type[DjangoType]:
     """Return the related model's primary ``DjangoType``, raising if none is registered.
 
     The serializer flavor is STRICTER than the form / model fallback (spec-039

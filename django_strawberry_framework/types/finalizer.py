@@ -48,7 +48,7 @@ offending type cannot be fixed in place.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
@@ -84,7 +84,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
+    from ..utils.inputs import GeneratedInputArgumentsFactory
     from ..utils.typing import ModelField
+    from .base import DjangoType
     from .definition import DjangoTypeDefinition
 
 # The sidecar family one phase-2.5 binding pass runs over: every hook in one
@@ -127,7 +129,7 @@ def _safe_str(value: object) -> str:
         return _safe_arg_repr(value)
 
 
-def _annotation_names(type_cls: type) -> tuple[str, ...]:
+def _annotation_names(type_cls: type[DjangoType]) -> tuple[str, ...]:
     """Snapshot and validate a type's annotation keys before GraphQL conversion."""
     try:
         annotations = type_cls.__annotations__
@@ -181,7 +183,9 @@ def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
     )
 
 
-def _format_ambiguity_error(offenders: list[tuple[type[models.Model], tuple[type, ...]]]) -> str:
+def _format_ambiguity_error(
+    offenders: list[tuple[type[models.Model], tuple[type[DjangoType], ...]]],
+) -> str:
     """Return the canonical primary-ambiguity error message.
 
     Sibling of ``_format_unresolved_targets_error`` above; both formatters live
@@ -226,7 +230,7 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
     generator now lives in ``finalize_django_types``, which materializes the
     walk once and passes it to both audits.
     """
-    offenders: list[tuple[type[models.Model], tuple[type, ...]]] = [
+    offenders: list[tuple[type[models.Model], tuple[type[DjangoType], ...]]] = [
         (model, registry.types_for(model))
         for model in multi_type_models
         if registry.primary_for(model) is None
@@ -237,7 +241,7 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
     raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
-def _field_surface_names(type_cls: type) -> dict[str, str]:
+def _field_surface_names(type_cls: type[DjangoType]) -> dict[str, str]:
     """Return ``{python_name: graphql_name}`` for the settled pre-decoration surface.
 
     Finalization changes the surface before ``strawberry.type`` freezes it:
@@ -292,7 +296,7 @@ def _field_surface_names(type_cls: type) -> dict[str, str]:
     return surface
 
 
-def _audit_field_surface(type_cls: type, definition: DjangoTypeDefinition) -> None:
+def _audit_field_surface(type_cls: type[DjangoType], definition: DjangoTypeDefinition) -> None:
     """Reject an empty or camel-colliding GraphQL field surface on ``type_cls``.
 
     Two misconfigurations Strawberry only catches late - as a generic
@@ -340,7 +344,7 @@ def _audit_field_surface(type_cls: type, definition: DjangoTypeDefinition) -> No
 
 
 def _format_model_label_routing_error(
-    offenders: list[tuple[type[models.Model], type, str | None]],
+    offenders: list[tuple[type[models.Model], type[DjangoType], str | None]],
 ) -> str:
     """Return the canonical model-label-routing-invariant error message.
 
@@ -410,14 +414,14 @@ def _audit_model_label_routing(multi_type_models: tuple[type[models.Model], ...]
     and the re-entrancy guard in ``install_globalid_typename_resolver`` keeps a
     re-run from misclassifying installed types.
     """
-    offenders: list[tuple[type[models.Model], type, str | None]] = []
+    offenders: list[tuple[type[models.Model], type[DjangoType], str | None]] = []
     for model in multi_type_models:
         emitter = _first_model_label_emitter(model)
         if emitter is None:
             continue
         # ``_audit_primary_ambiguity`` already rejected every multi-type model
         # without a declared primary, so ``primary`` is set.
-        primary = cast("type", registry.primary_for(model))
+        primary = cast("type[DjangoType]", registry.primary_for(model))
         primary_definition = registry.get_definition(primary)
         if primary_definition is None:
             raise ConfigurationError(
@@ -433,7 +437,7 @@ def _audit_model_label_routing(multi_type_models: tuple[type[models.Model], ...]
     raise ConfigurationError(_format_model_label_routing_error(offenders))
 
 
-def _first_model_label_emitter(model: type[models.Model]) -> type | None:
+def _first_model_label_emitter(model: type[models.Model]) -> type[DjangoType] | None:
     """Return the first registered type for ``model`` that emits model-label IDs.
 
     Iterates ``registry.types_for(model)`` in registration order and returns the
@@ -524,7 +528,7 @@ _SYNTHESIZED_RELATION_CONNECTION_MARKER = "_dst_synthesized_relation_connection"
 _MISSING_CLASS_MEMBER = object()
 
 
-def _suppress_relation_list_form(type_cls: type, name: str) -> None:
+def _suppress_relation_list_form(type_cls: type[DjangoType], name: str) -> None:
     """Remove a relation's generated list annotation + Phase-2 resolver (tolerant).
 
     The ``shape == "connection"`` path drops the generated ``list[T]`` form so
@@ -557,7 +561,7 @@ def _record_relation_connection(
 
 
 def _register_relation_connection_teardown(
-    type_cls: type,
+    type_cls: type[DjangoType],
     definition: DjangoTypeDefinition,
     *,
     generated: str,
@@ -921,7 +925,7 @@ def finalize_django_types() -> None:
     _audit_primary_ambiguity(multi_type_models)
 
     unresolved: list[PendingRelation] = []
-    resolved: list[tuple[PendingRelation, type, FieldMeta]] = []
+    resolved: list[tuple[PendingRelation, type[DjangoType], FieldMeta]] = []
     consumer_authored: list[PendingRelation] = []
     for pending in registry.iter_pending_relations():
         # definition is always set; pending records are added after
@@ -1338,7 +1342,7 @@ def _bind_filterset_owner(
 
 
 def _check_filterset_owner_axes(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
 ) -> None:
@@ -1366,7 +1370,7 @@ def _check_filterset_owner_axes(
 
 
 def _check_filterset_owner_get_queryset_safety(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
 ) -> None:
@@ -1399,7 +1403,7 @@ def _check_filterset_owner_get_queryset_safety(
 
 
 def _check_filterset_owner_pk_identity(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
 ) -> None:
@@ -1427,7 +1431,7 @@ def _check_filterset_owner_pk_identity(
 
 
 def _format_owner_target_mismatch_error(
-    set_cls: type,
+    set_cls: type[FilterSet] | type[OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     field_name: str,
@@ -1471,7 +1475,7 @@ def _format_owner_target_mismatch_error(
 
 
 def _format_owner_pk_mismatch_error(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
 ) -> str:
@@ -1498,7 +1502,7 @@ def _format_owner_pk_mismatch_error(
 
 
 def _format_owner_get_queryset_mismatch_error(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
 ) -> str:
@@ -1526,7 +1530,7 @@ def _format_owner_get_queryset_mismatch_error(
 
 
 def _format_owner_set_model_mismatch_error(
-    set_cls: type,
+    set_cls: type[FilterSet] | type[OrderSet],
     owner: DjangoTypeDefinition,
     *,
     family: str,
@@ -1596,7 +1600,7 @@ def _format_owner_model_mismatch_error(
 
 
 def _format_orphan_sets_error(
-    orphans: list[type],
+    orphans: Sequence[type[FilterSet] | type[OrderSet]],
     *,
     family: str,
     helper: str,
@@ -1630,9 +1634,9 @@ def _format_orphan_sets_error(
 
 
 def _format_unregistered_related_target_error(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     field_name: str,
-    child_filterset: type | None,
+    child_filterset: type[FilterSet] | None,
 ) -> str:
     """Return the canonical unregistered-``RelatedFilter``-target finalize message.
 
@@ -1692,7 +1696,7 @@ def _bind_orderset_owner(orderset_cls: type[OrderSet], definition: DjangoTypeDef
 
 
 def _format_owner_orderset_model_mismatch_error(
-    orderset_cls: type,
+    orderset_cls: type[OrderSet],
     owner: DjangoTypeDefinition,
 ) -> str:
     """Return the first-bind owner/orderset model-mismatch message.
@@ -1734,9 +1738,12 @@ class _SidecarBindingSpec(Generic[_SetT]):
     related_noun: str
     bind_owner: Callable[[_SetT, DjangoTypeDefinition], None]
     helper_ledger: set[_SetT]
-    factory_cls: type
-    materialize: Callable[[str, type], None]
-    format_orphans: Callable[[list[type]], str]
+    factory_cls: Callable[
+        [_SetT],
+        GeneratedInputArgumentsFactory[FilterSet] | GeneratedInputArgumentsFactory[OrderSet],
+    ]
+    materialize: Callable[[str, type[object]], None]
+    format_orphans: Callable[[list[_SetT]], str]
     expand: Callable[[_SetT], None]
     post_expand_audit: Callable[[list[_SetT]], None] | None
 
@@ -1855,7 +1862,7 @@ def _bind_sidecar_sets(spec: _SidecarBindingSpec[_SetT]) -> None:
     # materialization so a failure here doesn't leave half-materialized input
     # classes in the inputs-module namespace.
     wired_set = set(wired)
-    orphans: list[type] = sorted(
+    orphans: list[_SetT] = sorted(
         spec.helper_ledger - wired_set,
         key=_safe_qualified_class_name,
     )
@@ -1990,7 +1997,7 @@ def _audit_globalid_filter_strategies(wired: list[type[FilterSet]]) -> None:
 
 
 def _format_globalid_encode_only_filter_error(
-    filterset_cls: type,
+    filterset_cls: type[FilterSet],
     field_name: str,
     target: DjangoTypeDefinition,
     strategy: str,

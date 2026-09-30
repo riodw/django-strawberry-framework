@@ -89,8 +89,8 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):
     an instance), not inheritance.
     """
 
-    input_object_types: ClassVar[dict[str, type]] = {}
-    _type_orderset_registry: ClassVar[dict[str, type]] = {}
+    input_object_types: ClassVar[dict[str, type[object]]] = {}
+    _type_orderset_registry: ClassVar[dict[str, type[OrderSet]]] = {}
 
     _collision_registry_attr = "_type_orderset_registry"
     _factory_label = "OrderArgumentsFactory"

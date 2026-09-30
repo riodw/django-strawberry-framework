@@ -83,6 +83,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types.nodes import Arguments
 
     from ..keyset import CursorColumn
+    from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
     from ..utils.typing import ConcreteField, ModelField
     from .field_meta import FieldMeta
@@ -105,12 +106,12 @@ _M = TypeVar("_M", bound=models.Model)
 # ``django.contrib.postgres`` is unimportable; loud ``AttributeError`` if the
 # module loads but the class is missing. Absence leaves plain ``models.Index``
 # as the sole B-tree-backed type (the safe default).
-_PostgresBTreeIndex: type | None = import_attr_if_importable(
+_PostgresBTreeIndex: type[models.Index] | None = import_attr_if_importable(
     "django.contrib.postgres.indexes",
     "BTreeIndex",
 )
 
-_BTREE_INDEX_TYPES: tuple[type, ...] = (
+_BTREE_INDEX_TYPES: tuple[type[models.Index], ...] = (
     (models.Index,) if _PostgresBTreeIndex is None else (models.Index, _PostgresBTreeIndex)
 )
 
@@ -1080,22 +1081,25 @@ def plan_connection_relation(
     prefix: str,
     info: GraphQLResolveInfo | None,
     runtime_prefixes: tuple[tuple[str, ...], ...],
-    type_cls: type | None,
+    type_cls: type[DjangoType] | None,
     model: type[models.Model],
     enable_only: bool = True,
     resolve_optimizer_hints: Callable[[DjangoTypeDefinition | None], dict[str, OptimizerHint]],
     resolve_relation_target: Callable[
         [DjangoTypeDefinition | None, str, FieldMeta],
-        tuple[type | None, DjangoTypeDefinition | None],
+        tuple[type[DjangoType] | None, DjangoTypeDefinition | None],
     ],
     response_key_arguments_conflict: Callable[[FieldSelection], bool],
     aliased_arguments_diverge: Callable[[FieldSelection], bool],
-    target_has_custom_get_queryset: Callable[[type | None, DjangoTypeDefinition | None], bool],
+    target_has_custom_get_queryset: Callable[
+        [type[DjangoType] | None, DjangoTypeDefinition | None],
+        bool,
+    ],
     resolver_identities_for: Callable[
         [
             FieldSelection,
             str,
-            type | None,
+            type[DjangoType] | None,
             tuple[tuple[str, ...], ...],
         ],
         tuple[tuple[tuple[str, ...], ...], tuple[str, ...]],

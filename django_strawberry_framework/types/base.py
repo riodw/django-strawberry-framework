@@ -547,7 +547,7 @@ def _has_node_id_marker(hint: object) -> bool:
     )
 
 
-def _id_annotation_is_relay_node_id(cls: type) -> bool:
+def _id_annotation_is_relay_node_id(cls: "type[DjangoType]") -> bool:
     r"""Return True when ``cls.__annotations__['id']`` is ``relay.NodeID[...]``.
 
     Reads ``cls.__annotations__`` directly - no ``typing.get_type_hints``
@@ -591,7 +591,7 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
     return _has_node_id_marker(raw)
 
 
-def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
+def _is_relay_shaped(cls: "type[DjangoType]", interfaces: tuple[type[object], ...]) -> bool:
     """Return True when ``cls`` or any entry in ``interfaces`` is a Relay-Node-shaped type.
 
     Single source of truth for the predicate that drives both the
@@ -928,7 +928,7 @@ class DjangoType:
         return definition.has_custom_get_queryset
 
 
-def _detect_custom_get_queryset(cls: type) -> bool:
+def _detect_custom_get_queryset(cls: type[object]) -> bool:
     """Return whether ``cls`` or an intermediate base overrides ``get_queryset``."""
     # mypy: the caller passes the class under creation; the class check keeps a
     # contract-breaking caller from reaching ``issubclass``
@@ -1008,7 +1008,7 @@ def _normalize_sequence_spec(value: object, key: str = "exclude") -> tuple[str, 
 
 
 def _consumer_assigned_fields(
-    cls: type,
+    cls: type[DjangoType],
     fields: "tuple[ModelField, ...]",
 ) -> tuple[frozenset[str], frozenset[str]]:
     """Return (relation, scalar) names assigned to explicit Strawberry field objects.
@@ -1099,7 +1099,7 @@ def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, object]:
 
 def _format_unknown_fields_error(
     *,
-    model: type,
+    model: type[models.Model],
     attr: str,
     unknown: list[str],
     available: set[str],
@@ -1179,10 +1179,10 @@ _RELAY_NON_INTERFACE_HELPERS: tuple[tuple[object, str, str], ...] = (
 )
 
 
-def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
+def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
     """Validate and normalize ``Meta.interfaces`` per Decision 4.
 
-    Returns a normalized ``tuple[type, ...]`` ready to pass through to
+    Returns a normalized ``tuple[type[object], ...]`` ready to pass through to
     ``DjangoTypeDefinition.interfaces``. Returns ``()`` when the key is
     absent or set to an empty tuple/list (Decision 4,
     spec-011 #"An empty tuple is the same as not declaring").
@@ -1226,7 +1226,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type, ...]:
         return ()
     seen_ids: set[int] = set()
     duplicates: list[str] = []
-    interfaces: list[type] = []
+    interfaces: list[type[object]] = []
     for entry in entries:
         if isinstance(entry, str):
             raise ConfigurationError(
@@ -1285,7 +1285,7 @@ class _ValidatedMeta(NamedTuple):
     sites in ``__init_subclass__``.
     """
 
-    interfaces: tuple[type, ...]
+    interfaces: tuple[type[object], ...]
     name: str | None
     primary: bool
     optimizer_hints: dict[str, object]
@@ -1302,7 +1302,7 @@ class _ValidatedMeta(NamedTuple):
     filesystem_path_fields: frozenset[str]
 
 
-def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
+def _validate_meta(cls: type[DjangoType], meta: type[object]) -> _ValidatedMeta:
     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
 
     Takes ``cls`` (the class object, available at ``__init_subclass__`` time)
@@ -1909,12 +1909,12 @@ def _select_fields(
 
 
 def _build_annotations(
-    cls: type,
+    cls: type[DjangoType],
     fields: "tuple[ModelField, ...]",
     *,
     source_model: type[models.Model],
     consumer_authored_fields: frozenset[str] = frozenset(),
-    interfaces: tuple[type, ...] = (),
+    interfaces: tuple[type[object], ...] = (),
     nullable_overrides: frozenset[str] = frozenset(),
     required_overrides: frozenset[str] = frozenset(),
     filesystem_path_fields: frozenset[str] = frozenset(),

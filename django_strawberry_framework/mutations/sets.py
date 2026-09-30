@@ -45,7 +45,8 @@ never resolved.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple, cast, get_origin
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_origin
 
 import strawberry
 from django.db import models
@@ -93,7 +94,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from ..forms.sets import DjangoFormMutation
     from ..rest_framework.inputs import NestedSerializerConfig
+    from ..types.base import DjangoType
     from .inputs import ModelFieldIndex, MutationInputShape
+    from .permissions import WritePermissionClass
 
     # A shape-build cache key, and the per-flavor stash value a build answers
     # beside its input class (the form's ``field_specs`` list, the serializer shape).
@@ -144,7 +147,7 @@ def _safe_frozenset_membership(value: object, choices: frozenset[str]) -> bool:
         return False
 
 
-def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:
+def require_non_delete_operation(base_label: str, name: str, meta: type[object]) -> str:
     """Return ``Meta.operation`` if it is create/update, else raise the shared reject.
 
     The getattr + membership check both model-backed form and serializer
@@ -162,7 +165,7 @@ def require_non_delete_operation(base_label: str, name: str, meta: type) -> str:
     return operation
 
 
-def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> None:
+def reject_unknown_meta_keys(name: str, meta: object, allowed: frozenset[str]) -> None:
     """Raise the ``Meta``-typo guard if ``meta`` declares a key outside ``allowed``.
 
     The ``unknown = sorted(declared - allowed)`` typo guard every ``_validate_meta``
@@ -187,7 +190,7 @@ def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> 
 
 
 def normalize_meta_field_selection(
-    meta: type,
+    meta: type[object],
     *,
     flavor: str,
 ) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
@@ -214,7 +217,7 @@ def normalize_meta_field_selection(
     return fields, exclude
 
 
-def _hook_overridden(cls: type, base: type, name: str) -> bool:
+def _hook_overridden(cls: type[object], base: type[object], name: str) -> bool:
     """Return whether ``cls`` overrides the ``name`` method relative to ``base``.
 
     The identity check ``forms/sets.py::_form_kwargs_overridden`` uses for the
@@ -229,12 +232,12 @@ def _hook_overridden(cls: type, base: type, name: str) -> bool:
 
 
 def cached_build_input(
-    cache: dict[_KeyT, tuple[type, _PayloadT]],
+    cache: dict[_KeyT, tuple[type[object], _PayloadT]],
     shape_key: _KeyT,
     *,
     guard: Callable[[], None],
-    build_fn: Callable[[], tuple[type, _PayloadT]],
-) -> tuple[type, _PayloadT]:
+    build_fn: Callable[[], tuple[type[object], _PayloadT]],
+) -> tuple[type[object], _PayloadT]:
     """Run the per-declaration guard, THEN the per-shape cache lookup.
 
     The promoted guard-before-cache-lookup core for flavors whose cache key is
@@ -268,10 +271,10 @@ def cached_build_input(
 def build_and_stash_input(
     cls: WriteMutationClass,
     *,
-    build: Callable[[], tuple[type, _PayloadT]],
-    materialize: Callable[[str, type], None],
+    build: Callable[[], tuple[type[object], _PayloadT]],
+    materialize: Callable[[str, type[object]], None],
     specs_of: Callable[[_PayloadT], list[InputFieldSpec]],
-) -> type:
+) -> type[object]:
     """Materialize a built input + stash its reverse map on the mutation.
 
     The materialize-then-stash tail the form + serializer ``build_input`` seams
@@ -308,7 +311,7 @@ def construction_kwargs(*, instance: models.Model | None = None, **base: Any) ->
 
 def require_backing_class(
     name: str,
-    meta: type,
+    meta: type[object],
     *,
     key: str,
     base_label: str,
@@ -401,7 +404,12 @@ def backing_model_of(meta: _ValidatedMutationMeta) -> type[models.Model]:
     return cast("type[models.Model]", meta.model)
 
 
-def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> type[models.Model] | None:
+def resolve_meta_model(
+    meta: type[object],
+    *,
+    key: str,
+    meta_attr: str,
+) -> type[models.Model] | None:
     """Resolve a backing class's ``Meta.model`` via the shared three-getattr chain.
 
     The ``getattr(meta, key) -> getattr(backing, meta_attr) -> getattr(backing_meta,
@@ -419,7 +427,7 @@ def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> type[models.M
 
 def resolve_backed_model_or_raise(
     cls: type[DjangoMutation],
-    meta: type,
+    meta: type[object],
     *,
     base_label: str,
     key: str,
@@ -483,7 +491,7 @@ def _id_resolver_seams(
     """Build ``resolver_seams``' ``(info, *, data, id)`` pair (every model-backed flavor)."""
 
     def resolve_sync(
-        cls: type,
+        cls: type[object],
         info: Info[object, object],
         *,
         data: object,
@@ -493,7 +501,7 @@ def _id_resolver_seams(
         return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
 
     def resolve_async(
-        cls: type,
+        cls: type[object],
         info: Info[object, object],
         *,
         data: object,
@@ -512,11 +520,11 @@ def _id_less_resolver_seams(
 ) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
     """Build ``resolver_seams``' ``(info, *, data)`` pair (the model-less plain form)."""
 
-    def resolve_sync(cls: type, info: Info[object, object], *, data: object) -> object:
+    def resolve_sync(cls: type[object], info: Info[object, object], *, data: object) -> object:
         """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
         return import_attr(module_path, sync_name)(cls, info, data=data)
 
-    def resolve_async(cls: type, info: Info[object, object], *, data: object) -> object:
+    def resolve_async(cls: type[object], info: Info[object, object], *, data: object) -> object:
         """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
         return import_attr(module_path, async_name)(cls, info, data=data)
 
@@ -544,13 +552,20 @@ def _id_less_resolver_seams(
 # start of ``bind_mutations()`` AND co-cleared from ``registry.clear()`` so a
 # stale class from a prior (failed or re-run) finalize never leaks across a
 # clear that does not itself re-bind.
-_shape_build_cache: dict[tuple[type[models.Model], str, frozenset[str]], type]
+_shape_build_cache: dict[
+    tuple[type[models.Model], str, frozenset[str]],
+    type[WithStrawberryObjectDefinition],
+]
 clear_mutation_shape_build_cache: Callable[[], None]
 _shape_build_cache, clear_mutation_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(clear_mutation_shape_build_cache, owner="mutations.shape_cache")
 
 
-class DeclarationRegistry(NamedTuple):
+_DeclarationT = TypeVar("_DeclarationT")
+
+
+@dataclass(frozen=True)
+class DeclarationRegistry(Generic[_DeclarationT]):
     """The ``(register, clear, iter, store)`` quad ``make_declaration_registry`` returns.
 
     A flat named bundle (not a tuple of bare callables) so a caller assigns the
@@ -558,16 +573,18 @@ class DeclarationRegistry(NamedTuple):
     ``store`` list for the tests that introspect it directly (e.g. the
     ``_mutation_registry.count(...)`` idempotency assertion). ``register`` /
     ``clear`` / ``iter_`` carry the dedup / clear / snapshot mechanics; ``store``
-    is the disjoint ``list[type]`` they close over.
+    is the disjoint list they close over. Generic over the declaration class each
+    ledger records (a frozen dataclass, not a ``NamedTuple``: a generic
+    ``NamedTuple`` needs Python 3.11).
     """
 
-    register: Callable[[type], None]
+    register: Callable[[_DeclarationT], None]
     clear: Callable[[], None]
-    iter_: Callable[[], tuple[type, ...]]
-    store: list[type]
+    iter_: Callable[[], tuple[_DeclarationT, ...]]
+    store: list[_DeclarationT]
 
 
-def make_declaration_registry(label: str) -> DeclarationRegistry:
+def make_declaration_registry(label: str) -> DeclarationRegistry[_DeclarationT]:
     """Build a fresh declaration registry + its ``(register, clear, iter)`` callables.
 
     The Decision-13 shared-mechanics factory: given a human ``label``
@@ -590,9 +607,9 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
     ``registry.clear()`` rows - the over-consolidation trap spec-038 Decision 13
     names is avoided by keeping the storage separate).
     """
-    store: list[type] = []
+    store: list[_DeclarationT] = []
 
-    def register(declaration_cls: type) -> None:
+    def register(declaration_cls: _DeclarationT) -> None:
         if registry.is_finalized():
             raise ConfigurationError(
                 f"Cannot declare {label} {_safe_class_name(declaration_cls)} after finalization; "
@@ -612,18 +629,18 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
     def clear() -> None:
         store.clear()
 
-    def iter_() -> tuple[type, ...]:
+    def iter_() -> tuple[_DeclarationT, ...]:
         return tuple(store)
 
     return DeclarationRegistry(register=register, clear=clear, iter_=iter_, store=store)
 
 
 def make_meta_validating_metaclass(
-    register: Callable[[type], None],
+    register: Callable[[_DeclarationT], None],
     *,
     name: str,
     module: str,
-) -> type:
+) -> type[object]:
     """Build a metaclass that validates ``Meta`` and registers the concrete subclass.
 
     The Decision-13 twin of ``make_declaration_registry``: given a ``register``
@@ -668,9 +685,9 @@ def make_meta_validating_metaclass(
         def __new__(
             cls: type[MetaValidatingMetaclass],
             name: str,
-            bases: tuple[type, ...],
+            bases: tuple[type[object], ...],
             attrs: dict[str, Any],
-        ) -> type:
+        ) -> MetaValidatingMetaclass:
             """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
             new_class = super().__new__(cls, name, bases, attrs)
             meta = attrs.get("Meta")
@@ -681,7 +698,9 @@ def make_meta_validating_metaclass(
             # names); the metaclass itself declares neither.
             validated = cast("_MetaValidated", new_class)
             validated._mutation_meta = validated._validate_meta(meta)
-            register(new_class)
+            # The class just built is the ledger's declaration class; neither checker
+            # can tie this metaclass instance to the element type its ledger records.
+            register(cast("_DeclarationT", new_class))
             return new_class
 
         @override
@@ -728,10 +747,14 @@ def make_meta_validating_metaclass(
 # / ``iter_mutations`` stay the importable public names ``registry.py`` (the
 # co-clear), the metaclass, ``mutations/fields.py``, and the tests reference;
 # ``_mutation_registry`` stays the backing list the idempotency tests introspect.
-_mutation_declaration_registry = make_declaration_registry("DjangoMutation")
-register_mutation: Callable[[type], None] = _mutation_declaration_registry.register
+_mutation_declaration_registry: DeclarationRegistry[type[DjangoMutation]] = (
+    make_declaration_registry("DjangoMutation")
+)
+register_mutation: Callable[[type[DjangoMutation]], None] = _mutation_declaration_registry.register
 clear_mutation_registry: Callable[[], None] = _mutation_declaration_registry.clear
-iter_mutations: Callable[[], tuple[type, ...]] = _mutation_declaration_registry.iter_
+iter_mutations: Callable[[], tuple[type[DjangoMutation], ...]] = (
+    _mutation_declaration_registry.iter_
+)
 _mutation_registry = _mutation_declaration_registry.store
 register_subsystem_clear(clear_mutation_registry, owner="mutations.declarations")
 
@@ -858,7 +881,7 @@ class _ValidatedMutationMeta:
         partial_input_class: type[WithStrawberryObjectDefinition] | None,
         fields: tuple[str, ...] | None,
         exclude: tuple[str, ...] | None,
-        permission_classes: tuple[type, ...],
+        permission_classes: tuple[WritePermissionClass, ...],
         form_class: Any = None,
         serializer_class: Any = None,
         optional_fields: tuple[str, ...] | None = None,
@@ -874,7 +897,7 @@ class _ValidatedMutationMeta:
         self.partial_input_class: type[WithStrawberryObjectDefinition] | None = partial_input_class
         self.fields: tuple[str, ...] | None = fields
         self.exclude: tuple[str, ...] | None = exclude
-        self.permission_classes: tuple[type, ...] = permission_classes
+        self.permission_classes: tuple[WritePermissionClass, ...] = permission_classes
         # The form-flavor snapshot (spec-038): a ``DjangoModelFormMutation``
         # / ``DjangoFormMutation`` records its ``Meta.form_class`` here so the form
         # ``build_input`` / resolver read one snapshot shape. The model flavor
@@ -946,9 +969,9 @@ def _validate_permission_classes(
     mutation_name: str,
     value: Any,
     *,
-    unset_default: tuple[type, ...] = (DjangoModelPermission,),
+    unset_default: tuple[WritePermissionClass, ...] = (DjangoModelPermission,),
     base_label: str = "DjangoMutation",
-) -> tuple[type, ...]:
+) -> tuple[WritePermissionClass, ...]:
     """Validate + normalize ``Meta.permission_classes`` at class creation.
 
     An invalid ``permission_classes`` entry is rejected at
@@ -1013,7 +1036,7 @@ def _validate_permission_classes(
     return tuple(classes)
 
 
-def validate_select_for_update(flavor: str, mutation_name: str, meta: type) -> bool:
+def validate_select_for_update(flavor: str, mutation_name: str, meta: type[object]) -> bool:
     """Validate ``Meta.select_for_update`` for a model-backed flavor (0.0.14 concurrency hardening).
 
     Every model-backed write flavor (model / ``ModelForm`` / serializer) shares
@@ -1039,10 +1062,10 @@ def validate_select_for_update(flavor: str, mutation_name: str, meta: type) -> b
 
 def model_backed_permission_and_lock(
     name: str,
-    meta: type,
+    meta: type[object],
     *,
     flavor: str,
-) -> tuple[tuple[type, ...], bool]:
+) -> tuple[tuple[WritePermissionClass, ...], bool]:
     """Return ``(permission_classes, select_for_update)`` for a model-backed write flavor.
 
     Every model-backed ``_validate_meta`` (model / ModelForm) pairs the
@@ -1113,10 +1136,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # the ``strawberry.lazy`` payload return-ref. Left ``None`` until the bind runs;
     # a type checker sees the bound types, since only a bound mutation is resolved.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        _primary_type: ClassVar[type]
+        _primary_type: ClassVar[type[DjangoType]]
     else:
         _primary_type = None
-    _input_class: ClassVar[type | None] = None
+    _input_class: ClassVar[type[object] | None] = None
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
         _payload_type_name: ClassVar[str]
     else:
@@ -1129,7 +1152,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     _model_fields_by_attr: ClassVar[ModelFieldIndex | None] = None
 
     @classmethod
-    def _resolve_model(cls, meta: type) -> type[models.Model] | None:
+    def _resolve_model(cls, meta: type[object]) -> type[models.Model] | None:
         """Resolve the mutation's Django model from ``Meta`` (the model-resolution seam).
 
         In 0.0.11 the only source is ``Meta.model``. This is the overridable hook
@@ -1142,7 +1165,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         return getattr(meta, "model", None)
 
     @classmethod
-    def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
         """Validate a concrete mutation's nested ``Meta`` at class creation (spec-036 Decision 5).
 
         The overridable validation seam the metaclass invokes
@@ -1309,7 +1332,11 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     input_module_path: ClassVar[str] = INPUTS_MODULE_PATH
 
     @classmethod
-    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
+    def build_input(
+        cls,
+        meta: _ValidatedMutationMeta,
+        primary_type: type[DjangoType],
+    ) -> type[object] | None:
         """Build + materialize the operation's generated input class (the bind hook seam).
 
         The overridable input-materialization seam ``bind_write_declarations`` calls at
@@ -1465,12 +1492,16 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
 
         _mutation_meta: object
 
-        def _validate_meta(self, meta: type) -> object: ...
+        def _validate_meta(self, meta: type[object]) -> object: ...
 
     # The payload object type one ledger's drain resolves: the primary
     # ``DjangoType`` for the model-backed ledger, ``None`` for the model-less one.
-    _ObjectTypeT = TypeVar("_ObjectTypeT", bound="type | None")
-    _ObjectTypeT_contra = TypeVar("_ObjectTypeT_contra", bound="type | None", contravariant=True)
+    _ObjectTypeT = TypeVar("_ObjectTypeT", bound="type[DjangoType] | None")
+    _ObjectTypeT_contra = TypeVar(
+        "_ObjectTypeT_contra",
+        bound="type[DjangoType] | None",
+        contravariant=True,
+    )
 
     class _BoundDeclaration(Protocol[_ObjectTypeT_contra]):
         """A registered declaration as the phase-2.5 drain reads and stashes it.
@@ -1482,22 +1513,22 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
 
         __name__: str
         _mutation_meta: _ValidatedMutationMeta
-        _primary_type: type | None
-        _input_class: type | None
+        _primary_type: type[DjangoType] | None
+        _input_class: type[object] | None
         _payload_type_name: str | None
 
         def build_input(
             self,
             meta: _ValidatedMutationMeta,
             primary_type: _ObjectTypeT_contra,
-        ) -> type | None:
+        ) -> type[object] | None:
             """Build + materialize the operation's input class; ``None`` when it takes none."""
 
 
 def _resolve_primary_type(
-    mutation_cls: _BoundDeclaration[type],
+    mutation_cls: _BoundDeclaration[type[DjangoType]],
     model: type[models.Model],
-) -> type:
+) -> type[DjangoType]:
     """Resolve ``model``'s primary ``DjangoType`` for a mutation, or raise (spec-036 Decision 11).
 
     Distinguishes the two finalize-time error cases (spec-036 Error shapes):
@@ -1532,8 +1563,8 @@ def _resolve_primary_type(
 def _materialize_input_for(
     mutation_name: str,
     meta: _ValidatedMutationMeta,
-    primary_type: type,
-) -> type | None:
+    primary_type: type[DjangoType],
+) -> type[WithStrawberryObjectDefinition] | None:
     """Build + materialize the operation's input class, or return ``None`` for ``delete``.
 
     ``create`` builds the ``<Model>Input`` (``CREATE`` kind); ``update`` builds the
@@ -1603,10 +1634,10 @@ def _materialize_input_for(
 def _materialize_merged_input(
     mutation_name: str,
     meta: _ValidatedMutationMeta,
-    primary_type: type,
+    primary_type: type[DjangoType],
     operation_kind: str,
     consumer_input: type[WithStrawberryObjectDefinition],
-) -> type:
+) -> type[WithStrawberryObjectDefinition]:
     """Merge a consumer ``input_class`` with the generated remainder (spec-010).
 
     The consumer-authored ``@strawberry.input`` declares only the field(s) it
@@ -1791,7 +1822,7 @@ def _strawberry_field_shape(field: StrawberryField) -> tuple[int, object]:
 def bind_mutation_outputs(
     mutation_cls: _BoundDeclaration[_ObjectTypeT],
     *,
-    input_cls: type | None,
+    input_cls: type[object] | None,
     object_type: _ObjectTypeT,
 ) -> None:
     """Build the payload, materialize it, and stash bind outputs on ``mutation_cls``.
@@ -1826,7 +1857,7 @@ def bind_mutation_outputs(
 def bind_write_declarations(
     *,
     cache: dict[_KeyT, _PayloadT],
-    iterate: Callable[[], tuple[type, ...]],
+    iterate: Callable[[], tuple[type[object], ...]],
     resolve_object_type: Callable[
         [_BoundDeclaration[_ObjectTypeT], _ValidatedMutationMeta],
         _ObjectTypeT,

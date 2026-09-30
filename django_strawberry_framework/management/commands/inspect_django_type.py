@@ -174,7 +174,7 @@ class Command(BaseCommand):
         return self._resolve_bare_name(arg, name_converter)
 
     @staticmethod
-    def _resolve_bare_name(name: str, name_converter: NameConverter) -> type:
+    def _resolve_bare_name(name: str, name_converter: NameConverter) -> type[DjangoType]:
         """Resolve a bare type name via a unique SDL / Meta.name / Python name match.
 
         Matches the converter-applied SDL name (``_sdl_type_name`` - honors both a
@@ -184,7 +184,7 @@ class Command(BaseCommand):
         so a single type matching on several surfaces still appends once; distinct
         types that collide on either surface raise the ambiguity ``CommandError``.
         """
-        matches: list[type] = []
+        matches: list[type[DjangoType]] = []
         for type_cls, definition in registry.iter_definitions():
             surfaces = (_sdl_type_name(type_cls, definition, name_converter), type_cls.__name__)
             if name in surfaces:
@@ -571,7 +571,7 @@ def _consumer_converter_label(definition: "DjangoTypeDefinition", name: str) -> 
 
 
 def _sdl_type_name(
-    type_cls: type,
+    type_cls: type[DjangoType],
     definition: "DjangoTypeDefinition",
     name_converter: NameConverter,
 ) -> str:

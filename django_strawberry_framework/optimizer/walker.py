@@ -59,21 +59,16 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # construction still holds its mutable directive lists; ``OptimizationPlan``
     # types them as the ``Sequence`` a finalized plan's tuples also satisfy.
     from collections.abc import Iterable, Mapping, MutableSequence, Sequence
-    from typing import Protocol
 
     from django.db.models import QuerySet
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.schema.name_converter import NameConverter
     from strawberry.types.nodes import Arguments
 
+    from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
     from .plans import PrefetchLookup
     from .selections import ConvertedSelection, FieldSelection
-
-    class _CustomGetQuerysetReporter(Protocol):
-        """A registered class answering the ``get_queryset`` downgrade question itself."""
-
-        def has_custom_get_queryset(self) -> bool: ...
 
 
 # The selection-traversal primitives live in ``optimizer/selections.py`` so the
@@ -172,7 +167,7 @@ def plan_optimizations(
     info: GraphQLResolveInfo | None = None,
     *,
     runtime_prefixes: tuple[tuple[str, ...], ...] | None = None,
-    source_type: type | None = None,
+    source_type: type[DjangoType] | None = None,
 ) -> OptimizationPlan:
     """Walk the selection tree and produce an ``OptimizationPlan``.
 
@@ -211,7 +206,7 @@ def plan_optimizations(
 
 def plan_relation(
     field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     info: object,  # noqa: ARG001
     *,
     target_definition: DjangoTypeDefinition | None = None,
@@ -233,7 +228,7 @@ def plan_relation(
             field.name,
             # The walk pairs a definition with its origin, so a downgrade verdict
             # always has a target type.
-            cast("type", target_type).__name__,
+            cast("type[DjangoType]", target_type).__name__,
         )
         return ("prefetch", "custom_get_queryset")
     if is_many_side_relation_kind(relation_kind(field)):
@@ -242,7 +237,7 @@ def plan_relation(
 
 
 def _target_has_custom_get_queryset(
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     target_definition: DjangoTypeDefinition | None = None,
 ) -> bool:
     """Report whether a relation target overrides ``get_queryset``.
@@ -262,10 +257,7 @@ def _target_has_custom_get_queryset(
     """
     if target_definition is not None:
         return target_definition.has_custom_get_queryset
-    return (
-        target_type is not None
-        and cast("_CustomGetQuerysetReporter", target_type).has_custom_get_queryset()
-    )
+    return target_type is not None and target_type.has_custom_get_queryset()
 
 
 def _schema_name_converter(info: object) -> NameConverter | None:
@@ -273,7 +265,10 @@ def _schema_name_converter(info: object) -> NameConverter | None:
     return getattr(schema_config_from_info(info), "name_converter", None)
 
 
-def _graphql_names_by_python_name(type_cls: type | None, info: object) -> dict[str, str]:
+def _graphql_names_by_python_name(
+    type_cls: type[DjangoType] | None,
+    info: object,
+) -> dict[str, str]:
     """Return authoritative GraphQL names for the Strawberry fields on ``type_cls``."""
     definition = getattr(type_cls, "__strawberry_definition__", None)
     converter = _schema_name_converter(info)
@@ -313,7 +308,7 @@ class _ForwardNames(NamedTuple):
 # converter, so the ``id`` in its key cannot be reused while it lives.
 # Correctness-neutral under concurrency like the plan cache: the value is
 # deterministic, so a dropped or double insert only changes the hit rate.
-_forward_names_memo: dict[tuple[type | None, int], _ForwardNames] = {}
+_forward_names_memo: dict[tuple[type[DjangoType] | None, int], _ForwardNames] = {}
 
 
 def clear_forward_names() -> None:
@@ -358,7 +353,7 @@ def _forward_names(
     field_map: Mapping[str, FieldMeta],
     relation_connections: Mapping[str, str],
     *,
-    type_cls: type | None,
+    type_cls: type[DjangoType] | None,
     info: GraphQLResolveInfo | None,
     definition: DjangoTypeDefinition | None = None,
 ) -> _ForwardNames:
@@ -408,7 +403,7 @@ def _field_by_graphql_name(
     graphql_name: str,
     field_map: Mapping[str, FieldMeta],
     *,
-    type_cls: type | None = None,
+    type_cls: type[DjangoType] | None = None,
     info: GraphQLResolveInfo | None = None,
     definition: DjangoTypeDefinition | None = None,
 ) -> tuple[str, FieldMeta] | None:
@@ -428,7 +423,7 @@ def _resolve_selection_target(
     field_map: Mapping[str, FieldMeta],
     relation_connections: Mapping[str, str],
     *,
-    type_cls: type | None,
+    type_cls: type[DjangoType] | None,
     info: GraphQLResolveInfo | None,
     definition: DjangoTypeDefinition | None = None,
 ) -> tuple[str, str, FieldMeta | None] | None:
@@ -465,8 +460,8 @@ def _resolve_selection_target(
 def _resolve_field_map(
     model: type[models.Model],
     *,
-    source_type: type | None = None,
-) -> tuple[type | None, DjangoTypeDefinition | None, dict[str, FieldMeta]]:
+    source_type: type[DjangoType] | None = None,
+) -> tuple[type[DjangoType] | None, DjangoTypeDefinition | None, dict[str, FieldMeta]]:
     """Return ``(registered DjangoType, definition, field_map)`` for ``model``.
 
     Prefers the canonical ``DjangoTypeDefinition.field_map`` registered
@@ -505,7 +500,7 @@ def _resolve_relation_target(
     definition: DjangoTypeDefinition | None,
     django_name: str,
     django_field: FieldMeta,
-) -> tuple[type | None, DjangoTypeDefinition | None]:
+) -> tuple[type[DjangoType] | None, DjangoTypeDefinition | None]:
     """Return one relation target as ``(origin, definition)``.
 
     The owner definition's ``related_target_for`` already resolved the child
@@ -548,7 +543,7 @@ def _resolve_optimizer_hints(definition: DjangoTypeDefinition | None) -> dict[st
 
 def _build_child_queryset(
     field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     info: GraphQLResolveInfo | None,
     has_custom_qs: bool,
     *,
@@ -628,7 +623,7 @@ def _build_child_queryset(
         # parent's own seal has run.
         queryset = apply_type_visibility_sync(
             # ``has_custom_qs`` is True only for a resolved target type.
-            cast("type", target_type),
+            cast("type[DjangoType]", target_type),
             queryset,
             info,
             model=target_model,
@@ -639,7 +634,7 @@ def _build_child_queryset(
 
 def _build_connection_child_queryset(
     field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     info: GraphQLResolveInfo | None,
     has_custom_qs: bool,
     *,
@@ -667,7 +662,7 @@ def _build_connection_child_queryset(
 def _resolver_identities_for(
     sel: FieldSelection,
     field_name: str,
-    type_cls: type | None,
+    type_cls: type[DjangoType] | None,
     runtime_prefixes: tuple[tuple[str, ...], ...],
 ) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]:
     """Return ``(runtime_paths, resolver_identities)`` for one selection.
@@ -712,7 +707,7 @@ def _walk_selections(
     info: GraphQLResolveInfo | None = None,
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
     *,
-    source_type: type | None = None,
+    source_type: type[DjangoType] | None = None,
     enable_only: bool = True,
 ) -> None:
     """Recursive workhorse: descend one normalized level of the selection tree.
@@ -907,7 +902,7 @@ def _walk_selections(
             django_field=django_field,
             django_name=django_name,
             # Hints come only from a registered definition, so ``type_cls`` is set.
-            type_cls=cast("type", type_cls),
+            type_cls=cast("type[DjangoType]", type_cls),
             target_type=target_type,
             target_definition=target_definition,
             plan=plan,
@@ -948,7 +943,7 @@ def _dispatch_single_relation(
     prefer_prefetch: bool,
     sel: FieldSelection,
     django_field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
@@ -1000,7 +995,7 @@ def _dispatch_single_relation(
 def _plan_select_relation(
     sel: FieldSelection,
     django_field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
@@ -1061,7 +1056,7 @@ def _plan_select_relation(
 def _plan_prefetch_relation(
     sel: FieldSelection,
     django_field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
@@ -1169,7 +1164,7 @@ def _record_relation_access(
 def _build_prefetch_child_queryset(
     sel: FieldSelection,
     django_field: FieldMeta,
-    target_type: type | None,
+    target_type: type[DjangoType] | None,
     target_definition: DjangoTypeDefinition | None,
     parent_plan: OptimizationPlan,
     info: GraphQLResolveInfo | None,
@@ -1243,8 +1238,8 @@ def _apply_hint(
     sel: FieldSelection,
     django_field: FieldMeta,
     django_name: str,
-    type_cls: type,
-    target_type: type | None,
+    type_cls: type[DjangoType],
+    target_type: type[DjangoType] | None,
     target_definition: DjangoTypeDefinition | None,
     plan: OptimizationPlan,
     prefix: str,
@@ -1548,7 +1543,10 @@ def _selected_scalar_names(
     return scalar_names
 
 
-def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None) -> bool:
+def _has_custom_id_resolver(
+    target_type: type[DjangoType] | None,
+    target_pk_name: str | None,
+) -> bool:
     """Return ``True`` when target type customizes the selected id field.
 
     Routes through the registered definition's memoized check when one exists,
@@ -1804,7 +1802,7 @@ def _plan_connection_relation(
     prefix: str,
     info: GraphQLResolveInfo | None,
     runtime_prefixes: tuple[tuple[str, ...], ...],
-    type_cls: type | None,
+    type_cls: type[DjangoType] | None,
     model: type[models.Model],
     enable_only: bool = True,
 ) -> None:

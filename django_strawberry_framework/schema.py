@@ -108,6 +108,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types import ExecutionContext as StrawberryExecutionContext
     from strawberry.types import ExecutionResult as StrawberryExecutionResult
 
+    from .mutations.sets import WriteMutationClass
+
 #: What one window's ``run`` produces, handed back unchanged.
 _WindowT = TypeVar("_WindowT")
 
@@ -190,7 +192,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         self,
         parent_type: GraphQLObjectType | None,
         field_nodes: list[FieldNode],
-    ) -> type | None:
+    ) -> WriteMutationClass | None:
         """Return the field's bound mutation class, or ``None`` for any unmarked field.
 
         Only TOP-LEVEL mutation fields qualify (``parent_type`` is the schema's
@@ -1212,7 +1214,7 @@ def _is_resolvable_extension_entry(entry: object) -> bool:
     return issubclass(type(entry), SchemaExtension) or callable(entry)
 
 
-def _is_extension(extension: object, extension_type: type) -> bool:
+def _is_extension(extension: object, extension_type: type[SchemaExtension]) -> bool:
     """Whether a RESOLVED entry is of ``extension_type``, by its type alone.
 
     ``isinstance`` consults ``__class__``, which a consumer object answers with
@@ -1335,7 +1337,7 @@ def _consumer_extension_entries(
     return entries, declared
 
 
-def _declared_authority(entry: object) -> type | None:
+def _declared_authority(entry: object) -> type[SchemaExtension] | None:
     """The enforcement kind ``entry`` declares directly, or ``None`` for any other entry.
 
     A class or an instance names its type without anything being run, which is
@@ -1376,7 +1378,7 @@ def _entry_resource_policy(entry: Any) -> ResourcePolicy | None:
     return policy if type(policy) is ResourcePolicy else None
 
 
-def _entry_type(entry: Any) -> type:
+def _entry_type(entry: Any) -> type[object]:
     """The class an entry names - itself, or the type of the instance it is.
 
     Read with ``type()``, never ``isinstance``: a consumer instance answers
@@ -1388,6 +1390,6 @@ def _entry_type(entry: Any) -> type:
     return entry if issubclass(type(entry), type) else type(entry)
 
 
-def _extension_entry_matches(extension: object, extension_type: type) -> bool:
+def _extension_entry_matches(extension: object, extension_type: type[SchemaExtension]) -> bool:
     """Match a class or instance entry by its real type, without invoking factories."""
     return issubclass(_entry_type(extension), extension_type)

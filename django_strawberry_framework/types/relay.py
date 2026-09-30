@@ -64,7 +64,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-def implements_relay_node(type_cls: type) -> TypeGuard[type[relay.Node]]:
+def implements_relay_node(type_cls: type[DjangoType]) -> TypeGuard[type[_RelayDjangoType]]:
     """Return whether ``type_cls`` is a subclass of ``strawberry.relay.Node``.
 
     Used by ``finalize_django_types()`` Phase 2.5 (after ``__bases__``
@@ -139,7 +139,7 @@ def install_is_type_of(type_cls: type[DjangoType]) -> None:
     type_cls.is_type_of = is_type_of
 
 
-def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
+def apply_interfaces(type_cls: type[DjangoType], definition: DjangoTypeDefinition) -> None:
     """Inject ``definition.interfaces`` into ``type_cls.__bases__`` (Phase 2.5).
 
     Skips interfaces already in ``type_cls.__mro__`` so a class that
@@ -172,7 +172,7 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
         ) from exc
 
 
-def _check_composite_pk_for_relay_node(type_cls: type) -> None:
+def _check_composite_pk_for_relay_node(type_cls: type[_RelayDjangoType]) -> None:
     """Raise ``ConfigurationError`` when a Relay-declared type has a composite pk.
 
     Decision 2 (spec-015 #"Composite primary keys (Django 5.2+) are explicitly out of scope"):
@@ -256,7 +256,7 @@ def _stamp_relay_id_attr(type_cls: type[relay.Node]) -> None:
     setattr(type_cls, _RELAY_ID_ATTR_SLOT, id_attr)
 
 
-def _resolve_id_attr_default(cls: type) -> str:
+def _resolve_id_attr_default(cls: type[_RelayDjangoType]) -> str:
     """Default ``Node.resolve_id_attr`` - stamped at finalize, ``"pk"`` fallback.
 
     Reads the ``_stamp_relay_id_attr`` slot from the class's OWN
@@ -358,7 +358,7 @@ def _node_value_or_none(cls: type[_RelayDjangoType], node_id: object) -> object:
 
 
 def _raise_if_required(
-    cls: type,
+    cls: type[_RelayDjangoType],
     id_attr: str,
     node_id: object,
     *,
@@ -561,7 +561,7 @@ def _accepts_type_name_decode(effective_strategy: str | None) -> bool:
 def encode_typename(
     definition: DjangoTypeDefinition,
     strategy: GlobalIDStrategy,
-    type_cls: type,
+    type_cls: type[DjangoType],
     root: object,
 ) -> str:
     """Compute the ``GlobalID`` type-name slot for one resolved strategy.
@@ -628,7 +628,7 @@ def encode_typename(
 _FRAMEWORK_CLOSURE_MARKER = "_dsf_globalid_framework_closure"
 
 
-def _inherits_framework_closure(type_cls: type) -> bool:
+def _inherits_framework_closure(type_cls: type[relay.Node]) -> bool:
     """Return whether ``type_cls``'s MRO-resolved ``resolve_typename`` is a framework closure.
 
     True when the attribute (own or inherited) is a closure
@@ -643,7 +643,7 @@ def _inherits_framework_closure(type_cls: type) -> bool:
     return getattr(existing_func, _FRAMEWORK_CLOSURE_MARKER, False)
 
 
-def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
+def _consumer_overrode_resolve_typename(type_cls: type[relay.Node]) -> bool:
     """Return whether ``type_cls`` declares its own ``resolve_typename``.
 
     MRO-aware ``existing.__func__ is relay.Node.resolve_typename.__func__``
@@ -753,7 +753,11 @@ def _install_typename_closure(
     override.
     """
 
-    def resolve_typename(cls: type, root: object, info: Info[object, object]) -> str:  # noqa: ARG001
+    def resolve_typename(
+        cls: type[_RelayDjangoType],
+        root: object,
+        info: Info[object, object],  # noqa: ARG001
+    ) -> str:
         # Strawberry's resolve_typename seam passes ``(cls, root, info)``; the
         # encoder contract dropped ``info`` (pre-1.0), so only ``root`` is
         # forwarded to ``encode_typename``.
@@ -910,7 +914,7 @@ def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
 
 
 def _order_nodes(
-    cls: type,
+    cls: type[_RelayDjangoType],
     results: list[_ModelT],
     coerced_keys: list[str | None],
     id_attr: str,
@@ -988,7 +992,7 @@ def _resolve_node_default(
 
 
 async def _resolve_node_async(
-    cls: type,
+    cls: type[_RelayDjangoType],
     id_attr: str,
     node_id: object,
     value: object,
@@ -1058,7 +1062,7 @@ def _resolve_nodes_default(
 
 
 async def _resolve_nodes_async(
-    cls: type,
+    cls: type[_RelayDjangoType],
     id_attr: str,
     node_ids: Iterable[object] | None,
     *,

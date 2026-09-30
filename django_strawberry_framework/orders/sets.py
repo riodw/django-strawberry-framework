@@ -261,7 +261,10 @@ def _record_applied_normalization(
         ledger.publish(_AppliedNormalization(cls, input_value, tuple(data)))
 
 
-def _validate_normalized_terms(cls: type, data: object) -> list[tuple[str, Ordering | None]]:
+def _validate_normalized_terms(
+    cls: type[OrderSet],
+    data: object,
+) -> list[tuple[str, Ordering | None]]:
     """Enforce the OrderSet._normalize_input return contract at the pipeline boundary.
 
     Guarantees that normalized order data is a list of 2-tuples of (field_path: str,
@@ -310,7 +313,7 @@ class OrderSetMetaclass(type):
     def __new__(
         cls: type[OrderSetMetaclass],
         name: str,
-        bases: tuple[type, ...],
+        bases: tuple[type[object], ...],
         attrs: dict[str, object],
     ) -> OrderSetMetaclass:
         """Build the class, collect ``RelatedOrder`` declarations, bind owner."""

@@ -51,7 +51,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import inspect
-from collections.abc import Awaitable, Iterable, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast
 
@@ -191,7 +191,7 @@ def _coerce_pk_or_none(resolved_type: type[_RelayDjangoType], node_id: object) -
     return coerce_field_value_or_none(field, node_id)
 
 
-def _check_typed_match(target_type: type | None, resolved: type[_RelayDjangoType]) -> None:
+def _check_typed_match(target_type: type[object] | None, resolved: type[_RelayDjangoType]) -> None:
     """Raise the typed-form mismatch ``GraphQLError``; no-op for the bare form.
 
     Identity comparison (``resolved is not target_type``) on the decoded
@@ -240,7 +240,7 @@ class DecodeResult(NamedTuple):
 
     status: GlobalIDDecode
     pk: object
-    resolved_type: type | None
+    resolved_type: type[_RelayDjangoType] | None
 
 
 def _resolve_real_pk(
@@ -302,7 +302,7 @@ def _resolve_real_pk(
 
 def decode_model_global_id(
     value: object,
-    expected_model: type,
+    expected_model: type[models.Model],
     *,
     using: str | None = None,
 ) -> DecodeResult:
@@ -340,7 +340,7 @@ def decode_model_global_id(
     return DecodeResult(GlobalIDDecode.OK, real_pk, resolved_type)
 
 
-def _validate_node_target(target_type: type, *, field: str) -> None:
+def _validate_node_target(target_type: type[object], *, field: str) -> None:
     """Run the four shared target guards plus the Relay-Node-shaped fifth guard.
 
     Thin wrapper over ``list_field.py::_validate_relay_djangotype_target`` -- the
@@ -361,8 +361,8 @@ def _validate_node_target(target_type: type, *, field: str) -> None:
 
 
 def _interleave(
-    positions: list[tuple[type, int] | None],
-    per_type_results: dict[type, list[object]],
+    positions: Sequence[tuple[type[_RelayDjangoType], int] | None],
+    per_type_results: Mapping[type[_RelayDjangoType], Sequence[object]],
 ) -> list[object]:
     """Reassemble per-type result lists into input order with ``null`` holes.
 
@@ -383,7 +383,7 @@ def _interleave(
 
 
 def _check_nodes_result(
-    resolved_type: type,
+    resolved_type: type[_RelayDjangoType],
     result: Any,
     node_ids: Sequence[str],
 ) -> Iterable[object]:
@@ -416,7 +416,7 @@ def _check_nodes_result(
     return cast("Iterable[object]", result)
 
 
-def _stamp_node_type(resolved_type: type, node: _NodeT) -> _NodeT:
+def _stamp_node_type(resolved_type: type[_RelayDjangoType], node: _NodeT) -> _NodeT:
     """Stamp the decode-resolved ``DjangoType`` on a fetched node instance.
 
     The bare ``node``/``nodes`` fields hand graphql-core a raw model
@@ -452,13 +452,16 @@ def _stamp_node_type(resolved_type: type, node: _NodeT) -> _NodeT:
     return node
 
 
-async def _await_and_stamp(resolved_type: type, awaitable: Awaitable[_NodeT]) -> _NodeT:
+async def _await_and_stamp(
+    resolved_type: type[_RelayDjangoType],
+    awaitable: Awaitable[_NodeT],
+) -> _NodeT:
     """Await an async ``resolve_node`` result, then stamp it (async sibling)."""
     return _stamp_node_type(resolved_type, await awaitable)
 
 
 def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoNodeField(GenreType)`
-    target_type: type | None = None,
+    target_type: type[object] | None = None,
     *,
     description: str | None = None,
     deprecation_reason: str | None = None,
@@ -532,7 +535,7 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
 
 
 def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoNodesField(GenreType)`
-    target_type: type | None = None,
+    target_type: type[object] | None = None,
     *,
     description: str | None = None,
     deprecation_reason: str | None = None,
@@ -593,7 +596,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         # ``relay.node()`` batch passes (``Node.resolve_nodes(node_ids:
         # Iterable[str])``); the coercion only gates.
         groups: dict[type[_RelayDjangoType], list[str]] = {}
-        positions: list[tuple[type, int] | None] = []
+        positions: list[tuple[type[_RelayDjangoType], int] | None] = []
         for resolved, node_id in decoded:
             if _coerce_pk_or_none(resolved, node_id) is None:
                 positions.append(None)
@@ -610,7 +613,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
             # gathering coroutine".
 
             async def _gather() -> list[object]:
-                per_type: dict[type, list[object]] = {}
+                per_type: dict[type[_RelayDjangoType], list[object]] = {}
                 for resolved_type, node_ids in groups.items():
                     # ``resolve_nodes`` is AwaitableOrValue: the framework
                     # default returns a coroutine in async context, but a valid

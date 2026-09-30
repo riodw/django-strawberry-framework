@@ -427,7 +427,7 @@ _PATCH_ORIGINAL_ATTRIBUTE = "_django_strawberry_framework_original"
 _PATCH_OWNER = "django_strawberry_framework._strawberry_patches"
 
 
-def _captured_upstream_method(owner: type | None, name: str) -> object:
+def _captured_upstream_method(owner: type[object] | None, name: str) -> object:
     """Return the upstream method, retaining it across an in-process reload.
 
     The AppConfig may be called again after ``importlib.reload()`` in tests or

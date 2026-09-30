@@ -454,7 +454,7 @@ def verbatim_path(python_attr: str) -> str:
 
 
 def active_permission_targets(
-    cls: type,
+    cls: type[ActiveInputPermissionMixin],
     input_value: object,
     *,
     field_specs: Mapping[Any, GeneratedInputFieldSpec],
@@ -505,7 +505,7 @@ def active_permission_targets(
 
 
 def active_related_branches(
-    cls: type,
+    cls: type[ActiveInputPermissionMixin],
     input_value: object,
     *,
     related_attr: str,
@@ -550,11 +550,11 @@ def active_related_branches(
 
 
 def _fire_gate_on_class(
-    gate_cls: type,
+    gate_cls: type[object],
     field_path: str,
     request: object,
     *,
-    fired: dict[type, set[str]],
+    fired: dict[type[object], set[str]],
 ) -> None:
     """Fire ``check_<field_path>_permission`` on a fresh bare instance of ``gate_cls``.
 
@@ -568,11 +568,11 @@ def _fire_gate_on_class(
 
 
 def _fire_flat_relation_path_gates(
-    owning_cls: type,
+    owning_cls: type[ActiveInputPermissionMixin],
     source_path: str,
     request: object,
     *,
-    fired: dict[type, set[str]],
+    fired: dict[type[object], set[str]],
     related_attr: str,
     target_attr: str,
 ) -> None:
@@ -608,7 +608,7 @@ def _fire_flat_relation_path_gates(
     if len(hops) < 2:
         # Not a relation traversal -- the owner's own field gate is authoritative.
         return
-    current_cls = owning_cls
+    current_cls: type[object] = owning_cls
     terminal_index = len(hops) - 1
     index = 0
     while index < terminal_index:
@@ -654,7 +654,7 @@ def _fire_flat_relation_path_gates(
         _fire_gate_on_class(current_cls, hops[terminal_index], request, fired=fired)
 
 
-def _related_declarations(cls: type, related_attr: str) -> tuple[tuple[Any, Any], ...]:
+def _related_declarations(cls: type[object], related_attr: str) -> tuple[tuple[Any, Any], ...]:
     """Read a set's related declarations without trusting mapping overrides.
 
     The read + ``None`` normalization + mapping proof are the shared front half
@@ -694,7 +694,7 @@ def run_active_input_permission_checks(
     input_value: object,
     request: object,
     *,
-    fired: dict[type, set[str]],
+    fired: dict[type[object], set[str]],
     bare: ActiveInputPermissionMixin,
     target_attr: str,
     related_attr: str,

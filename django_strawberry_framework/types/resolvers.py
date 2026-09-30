@@ -71,6 +71,7 @@ from .converters import _field_output_type_for
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..utils.typing import ModelField
+    from .base import DjangoType
 
 # Every generated relation / file resolver: Strawberry binds ``(root, info)``.
 _FieldResolver = Callable[[object, Info[object, object]], object]
@@ -231,7 +232,7 @@ def _check_n1(
     info: object,
     root: object,
     field_name: str,
-    parent_type: type | None = None,
+    parent_type: "type[DjangoType] | None" = None,
     *,
     kind: RelationKind | Literal["connection_to_attr"] | None,
     accessor_name: str | None = None,
@@ -351,7 +352,10 @@ def _name_resolver(resolver: _FieldResolver, field_name: str) -> _FieldResolver:
     return resolver
 
 
-def _field_meta_for_resolver(field: "ModelField", parent_type: type | None) -> FieldMeta:
+def _field_meta_for_resolver(
+    field: "ModelField",
+    parent_type: "type[DjangoType] | None",
+) -> FieldMeta:
     """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it.
 
     Production callers MUST pass ``parent_type=cls`` so the branch-sensitive
@@ -378,7 +382,7 @@ def _field_meta_for_resolver(field: "ModelField", parent_type: type | None) -> F
     return FieldMeta.from_django_field(field)
 
 
-def _custom_visibility_type(field_meta: FieldMeta) -> type | None:
+def _custom_visibility_type(field_meta: FieldMeta) -> "type[DjangoType] | None":
     """Return a registered target type whose custom visibility hook must run here.
 
     Optimizer prefetch planning applies a custom target ``get_queryset`` to the
@@ -406,7 +410,7 @@ def _custom_visibility_type(field_meta: FieldMeta) -> type | None:
 
 def _visible_related_object(
     related: object,
-    target_type: type,
+    target_type: "type[DjangoType]",
     info: Info[object, object],
 ) -> AwaitableOrValue[models.Model | None]:
     """Re-check one relation object through its target visibility hook."""
@@ -430,7 +434,7 @@ def _visible_related_object(
 
 def _visible_many_rows(
     source: models.QuerySet[models.Model],
-    target_type: type,
+    target_type: "type[DjangoType]",
     info: Info[object, object],
 ) -> AwaitableOrValue[list[models.Model]]:
     """Apply target visibility, then bound and materialize a many-side relation.
@@ -455,7 +459,7 @@ def _visible_many_rows(
 
 def _optimizer_scoped_relation(
     info: Info[object, object],
-    parent_type: type | None,
+    parent_type: "type[DjangoType] | None",
     field_name: str,
     *,
     precomputed_key: str | None = None,
@@ -496,7 +500,7 @@ def _optimizer_scoped_relation(
 
 def _make_relation_resolver(
     field: "ModelField",
-    parent_type: type | None = None,
+    parent_type: "type[DjangoType] | None" = None,
 ) -> _FieldResolver:
     """Generate a resolver for a Django relation field.
 
@@ -824,7 +828,7 @@ def _make_relation_resolver(
 
 
 def _attach_relation_resolvers(
-    cls: type,
+    cls: "type[DjangoType]",
     fields: "tuple[ModelField, ...]",
     *,
     skip_field_names: frozenset[str] = frozenset(),
@@ -874,7 +878,7 @@ def _make_file_resolver(field: "ModelField") -> _FieldResolver:
 
 
 def _attach_file_resolvers(
-    cls: type,
+    cls: "type[DjangoType]",
     fields: "tuple[ModelField, ...]",
     *,
     skip_field_names: frozenset[str] = frozenset(),

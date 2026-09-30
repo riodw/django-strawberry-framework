@@ -137,6 +137,7 @@ from .utils.querysets import (
 from .utils.querysets import SyncMisuseError as SyncMisuseError
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .types.base import DjangoType
     from .utils.typing import ForeignKeyField, ModelField
 
 
@@ -163,7 +164,7 @@ class _TraversalState:
     """
 
     alias: str
-    active: tuple[type, ...]
+    active: tuple[type[DjangoType], ...]
     path: tuple[str, ...]
 
 
@@ -334,7 +335,10 @@ def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) ->
     return requested
 
 
-def _root_error_renderer(cls: type, model: type[models.Model]) -> Callable[[str, str], str]:
+def _root_error_renderer(
+    cls: type[DjangoType],
+    model: type[models.Model],
+) -> Callable[[str, str], str]:
     """Build the cascade's error renderer for the shared visibility SOURCE boundary.
 
     The twin of :func:`_edge_error_renderer`, for the other end of the helper:
@@ -395,7 +399,7 @@ def _root_error_renderer(cls: type, model: type[models.Model]) -> Callable[[str,
 
 
 def _edge_error_renderer(
-    target_type: type,
+    target_type: type[DjangoType],
     field: ForeignKeyField,
     alias: str,
 ) -> Callable[[str, str], str]:
@@ -469,7 +473,7 @@ def _edge_error_renderer(
 
 
 def _validated_target_subquery(
-    target_type: type,
+    target_type: type[DjangoType],
     target_qs: models.QuerySet[models.Model, object],
     field: ForeignKeyField,
 ) -> models.QuerySet[models.Model, dict[str, object]]:
@@ -551,7 +555,7 @@ def _validated_target_subquery(
     return target_qs.values(attname)
 
 
-def _cycle_error(state: _TraversalState, cls: type) -> ConfigurationError:
+def _cycle_error(state: _TraversalState, cls: type[DjangoType]) -> ConfigurationError:
     """Build the path-rich fail-closed cycle error for re-entry into ``cls``."""
     path = " -> ".join((*state.path, cls.__name__))
     return ConfigurationError(
@@ -563,7 +567,7 @@ def _cycle_error(state: _TraversalState, cls: type) -> ConfigurationError:
 
 
 def apply_cascade_permissions(
-    cls: type,
+    cls: type[DjangoType],
     queryset: models.QuerySet[models.Model, object],
     info: object,
     fields: Iterable[str] | None = None,
@@ -678,7 +682,7 @@ def apply_cascade_permissions(
 
 
 def _walk(
-    cls: type,
+    cls: type[DjangoType],
     model: type[models.Model],
     queryset: models.QuerySet[models.Model, object],
     info: object,
@@ -727,7 +731,7 @@ def _walk(
 
 
 async def aapply_cascade_permissions(
-    cls: type,
+    cls: type[DjangoType],
     queryset: models.QuerySet[models.Model, object],
     info: object,
     fields: Iterable[str] | None = None,

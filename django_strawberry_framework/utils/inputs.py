@@ -65,6 +65,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Iterable, Sequence
     from typing import Protocol
 
+    from strawberry.types.base import WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
 
     from ..sets_mixins import ClassBasedTypeNameMixin
@@ -166,15 +167,15 @@ def optional_input_field(
 
 
 def emit_set_input_field_triples(
-    set_cls: type,
+    set_cls: type[_FactorySetT],
     entries: Iterable[tuple[str, _EntryT]],
     *,
-    related_target_of: Callable[[str, _EntryT], tuple[bool, type | None]],
+    related_target_of: Callable[[str, _EntryT], tuple[bool, type[_FactorySetT] | None]],
     related_source_path_of: Callable[[str, _EntryT], str],
     leaf_of: Callable[[str, str, _EntryT], tuple[object, str]],
-    input_type_name_for: Callable[[type], str],
+    input_type_name_for: Callable[[type[_FactorySetT]], str],
     module_path: str,
-    field_specs: dict[tuple[type, str], GeneratedInputFieldSpec],
+    field_specs: dict[tuple[type[_FactorySetT], str], GeneratedInputFieldSpec],
 ) -> list[tuple[str, object, dict[str, object]]]:
     """Emit the per-field input triples + ``FieldSpec`` rows for one set class.
 
@@ -232,7 +233,7 @@ def emit_set_input_field_triples(
     # clean. Writing them as each field is emitted left the family's
     # ``field_specs`` table half-populated when a later member collided - a
     # schema build that failed loud but not cleanly.
-    staged_specs: list[tuple[tuple[type, str], GeneratedInputFieldSpec]] = []
+    staged_specs: list[tuple[tuple[type[_FactorySetT], str], GeneratedInputFieldSpec]] = []
     for top_name, entry in entries:
         python_attr = flatten_lookup_path(top_name)
         graphql_name = graphql_camel_name(python_attr)
@@ -393,7 +394,7 @@ class InputFieldSpec:
 def make_input_namespace(
     module_path: str,
     family_label: str,
-) -> tuple[dict[str, type], Callable[[str, type], None], Callable[[], None]]:
+) -> tuple[dict[str, type[object]], Callable[[str, type[object]], None], Callable[[], None]]:
     """Return the ``(ledger, materialize_fn, clear_fn)`` trio for a generated-input namespace.
 
     The promoted ONE-LEDGER lifecycle the mutation + form + serializer input
@@ -432,9 +433,9 @@ def make_input_namespace(
     not also reload it would then fail to resolve. Every ``clear_*`` in this
     package therefore resets LEDGERS only, never the module ``__dict__``.
     """
-    ledger: dict[str, type] = {}
+    ledger: dict[str, type[object]] = {}
 
-    def materialize_fn(name: str, cls: type) -> None:
+    def materialize_fn(name: str, cls: type[object]) -> None:
         materialize_generated_input_class(
             name,
             cls,
@@ -459,9 +460,9 @@ def make_set_input_namespace(
     set_module: str,
     set_class_name: str,
 ) -> tuple[
-    dict[str, type],
-    dict[tuple[type, str], GeneratedInputFieldSpec],
-    Callable[[str, type], None],
+    dict[str, type[object]],
+    dict[tuple[type[_FactorySetT], str], GeneratedInputFieldSpec],
+    Callable[[str, type[object]], None],
     Callable[[], None],
 ]:
     """Return the set-family ``(ledger, field_specs, materialize_fn, clear_fn)`` quartet.
@@ -488,7 +489,7 @@ def make_set_input_namespace(
     composing ``make_input_namespace`` and swapping in the heavy clear.
     """
     ledger, materialize_fn, _light_clear = make_input_namespace(module_path, family_label)
-    field_specs: dict[tuple[type, str], GeneratedInputFieldSpec] = {}
+    field_specs: dict[tuple[type[_FactorySetT], str], GeneratedInputFieldSpec] = {}
 
     def clear_fn() -> None:
         clear_generated_input_namespace(
@@ -1294,7 +1295,7 @@ def build_strawberry_input_class(
     field_specs: Sequence[tuple[str, object, Mapping[str, Any] | None]],
     *,
     empty_message: str | None = None,
-) -> type:
+) -> type[WithStrawberryObjectDefinition]:
     """Construct a ``@strawberry.input``-decorated dataclass.
 
     ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
@@ -1416,16 +1417,19 @@ def build_strawberry_input_class(
             else strawberry.field(**strawberry_field_kwargs)
         )
     cls = type(name, (), namespace)
-    return strawberry.input(cls, name=name)
+    # mypy: strawberry.input's signature returns its argument's type unchanged, so the
+    # __strawberry_definition__ the decorator attaches is invisible without the cast
+    # basedpyright: same reason as mypy
+    return cast("type[WithStrawberryObjectDefinition]", strawberry.input(cls, name=name))
 
 
 def materialize_generated_input_class(
     name: str,
-    cls: type,
+    cls: type[object],
     *,
     module_path: str,
     family_label: str,
-    ledger: dict[str, type],
+    ledger: dict[str, type[object]],
 ) -> None:
     """Pin ``cls`` as a real module global of ``module_path`` under ``name``.
 
@@ -1465,8 +1469,8 @@ def materialize_generated_input_class(
 def duplicate_name_message(
     verb: str,
     name: str,
-    existing: type,
-    claimant: type,
+    existing: type[object],
+    claimant: type[object],
     *,
     family_label: str,
     rename_noun: str,
@@ -1568,11 +1572,11 @@ def iter_input_field_collisions(
 def build_lazy_input_annotation(
     set_class: object,
     *,
-    expected_base: type,
+    expected_base: type[_FactorySetT],
     family_name: str,
     expected_label: str,
-    ledger: set[type],
-    input_type_name_for: Callable[[type], str],
+    ledger: set[type[_FactorySetT]],
+    input_type_name_for: Callable[[type[_FactorySetT]], str],
     module_path: str,
 ) -> object:
     """Return the ``Annotated[..., strawberry.lazy(...)]`` forward-ref for a set's input class.
@@ -1600,7 +1604,7 @@ def build_lazy_input_annotation(
     return Annotated[input_type_name_for(set_class), strawberry.lazy(module_path)]
 
 
-def iter_set_subclasses(root: type) -> list[type]:
+def iter_set_subclasses(root: type[_SetT]) -> list[type[_SetT]]:
     """Return every concrete subclass of ``root`` (depth-first, dedup by identity).
 
     Uses ``type.__subclasses__()`` which only yields LIVE subclasses;
@@ -1608,9 +1612,9 @@ def iter_set_subclasses(root: type) -> list[type]:
     for a test-isolation clear -- a definition that has already been collected
     has no binding state to reset.
     """
-    seen: set[type] = set()
-    result: list[type] = []
-    stack: list[type] = list(root.__subclasses__())
+    seen: set[type[_SetT]] = set()
+    result: list[type[_SetT]] = []
+    stack: list[type[_SetT]] = list(root.__subclasses__())
     while stack:
         cls = stack.pop()
         if cls in seen:
@@ -1642,7 +1646,7 @@ def _safe_import(module_path: str, attr: str) -> Any:
 
 def clear_generated_input_namespace(
     *,
-    materialized_names: dict[str, type],
+    materialized_names: dict[str, type[object]],
     field_specs: _Clearable,
     factory_module: str,
     factory_class_name: str,
@@ -1740,7 +1744,7 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
     # redefine ``input_object_types`` and its named collision registry as fresh
     # dicts. No default here, so a forgetful subclass AttributeErrors loudly
     # instead of silently sharing the base's namespace.
-    input_object_types: ClassVar[dict[str, type]]
+    input_object_types: ClassVar[dict[str, type[object]]]
     _collision_registry_attr: ClassVar[str]
     _factory_label: ClassVar[str]
     _family_label: ClassVar[str]
@@ -1771,13 +1775,16 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
         self.input_type_name: str = set_input_type_name(set_class)
 
     @property
-    def _collision_registry(self) -> dict[str, type]:
+    def _collision_registry(self) -> dict[str, type[_FactorySetT]]:
         """The family collision registry, addressed through its spec-named attr."""
         # Each family factory declares the registry this attr names as a fresh dict.
-        return cast("dict[str, type]", getattr(type(self), self._collision_registry_attr))
+        return cast(
+            "dict[str, type[_FactorySetT]]",
+            getattr(type(self), self._collision_registry_attr),
+        )
 
     @property
-    def arguments(self) -> type:
+    def arguments(self) -> type[object]:
         """BFS-build the root set and return its input class.
 
         Idempotent: subsequent reads against the same set hit the cache.

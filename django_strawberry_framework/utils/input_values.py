@@ -322,7 +322,7 @@ def related_declaration_mapping(owner: object, related_attr: str) -> Mapping[obj
 
 
 def iter_active_fields(
-    set_cls: type,
+    set_cls: type[object],
     input_value: object,
     config: SetInputTraversal,
 ) -> Iterator[ActiveField]:

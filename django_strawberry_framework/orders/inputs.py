@@ -138,7 +138,7 @@ class Ordering(enum.Enum):
 # keeps the spec-named public wrappers and a ledger disjoint from
 # ``filters.inputs`` per spec-028 Decision 9. ``clear_order_input_namespace``
 # leaves class objects parked in ``orders.inputs.__dict__``.
-_materialized_names: dict[str, type]
+_materialized_names: dict[str, type[object]]
 _field_specs: dict[tuple[type[OrderSet], str], FieldSpec]
 (
     _materialized_names,
@@ -374,7 +374,7 @@ def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: object) -> No
         _build_input_fields(orderset_cls)
 
 
-def materialize_input_class(name: str, input_cls: type) -> None:
+def materialize_input_class(name: str, input_cls: type[object]) -> None:
     """Set ``input_cls`` as a real module global of ``orders.inputs`` under ``name``.
 
     Thin family wrapper over the ``make_set_input_namespace`` materializer.

@@ -42,7 +42,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from typing_extensions import override
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, _safe_arg_repr
 from ..mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
@@ -202,9 +202,9 @@ _SURFACE_FACTORY_NAMES = {
 # in ``registry.py``), never by the pre-bind reset - declarations must survive a
 # recover-in-place re-finalize so ``bind_auth_mutations()`` can re-read them.
 _auth_declaration_registry = make_declaration_registry(_AUTH_FAMILY_LABEL)
-register_auth_mutation = _auth_declaration_registry.register
-clear_auth_mutation_registry = _auth_declaration_registry.clear
-iter_auth_mutations = _auth_declaration_registry.iter_
+register_auth_mutation: Callable[[type], None] = _auth_declaration_registry.register
+clear_auth_mutation_registry: Callable[[], None] = _auth_declaration_registry.clear
+iter_auth_mutations: Callable[[], tuple[type, ...]] = _auth_declaration_registry.iter_
 _auth_declarations = _auth_declaration_registry.store
 register_subsystem_clear(clear_auth_mutation_registry, owner="auth.declarations")
 
@@ -1141,8 +1141,10 @@ def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...
     appears once). Takes the model as an argument - never reading
     ``get_user_model()`` inline - so both the default and a
     custom-``USERNAME_FIELD`` / custom-``REQUIRED_FIELDS`` model are directly
-    testable with a test-scoped model (no ``AUTH_USER_MODEL`` swap). Unknown /
-    non-editable / reverse names are rejected by DELEGATING to the standard
+    testable with a test-scoped model (no ``AUTH_USER_MODEL`` swap). A
+    non-string ``USERNAME_FIELD`` raises a ``ConfigurationError`` naming the
+    model before any name is validated. Unknown / non-editable / reverse names
+    are rejected by DELEGATING to the standard
     ``editable_input_fields`` validation (which already raises a
     ``ConfigurationError`` naming field + model), never a re-implemented check.
     Known account-control fields (``is_active`` / ``is_staff`` /
@@ -1151,8 +1153,17 @@ def derive_register_fields(user_model: type[AbstractBaseUser]) -> tuple[str, ...
     keeps privilege and activation state server-owned instead of silently
     turning an unusual user-model declaration into public registration input.
     """
-    # mypy: django-stubs omits AbstractBaseUser.USERNAME_FIELD, which Django's base methods read
-    names = [user_model.USERNAME_FIELD, *user_model.REQUIRED_FIELDS, "password"]  # type: ignore[attr-defined]
+    # Django reads ``USERNAME_FIELD`` as a field name but never checks its type when the
+    # model class is built, and django-stubs declares it only on ``AbstractUser`` (its
+    # ``ModelBase.__getattr__`` admits only ``objects``), so the attribute is read by
+    # name and the value is an ``object`` until the check below proves it a ``str``.
+    username_field: object = getattr(user_model, "USERNAME_FIELD")  # noqa: B009
+    if not isinstance(username_field, str):
+        raise ConfigurationError(
+            f"register_mutation() needs {user_model.__name__}.USERNAME_FIELD to be a field "
+            f"name string; got {_safe_arg_repr(username_field)}.",
+        )
+    names = [username_field, *user_model.REQUIRED_FIELDS, "password"]
     deduped = tuple(dict.fromkeys(names))
     protected = sorted(_REGISTER_PROTECTED_FIELDS.intersection(deduped))
     if protected:

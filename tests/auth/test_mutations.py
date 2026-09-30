@@ -1196,6 +1196,32 @@ def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields(
         derive_register_fields(BrokenRequiredUser)
 
 
+def test_derive_register_fields_rejects_a_non_string_username_field():
+    """A non-string ``USERNAME_FIELD`` is refused before any name is validated.
+
+    Django never checks ``USERNAME_FIELD``'s type when the model class is built,
+    and no fakeshop user can declare a non-string one; it alone reaches the
+    non-string raise in
+    ``django_strawberry_framework/auth/mutations.py::derive_register_fields``.
+    """
+
+    class NonStringLoginUser(djmodels.Model):
+        handle = djmodels.CharField(max_length=50)
+        password = djmodels.CharField(max_length=128)
+
+        USERNAME_FIELD = 7
+        REQUIRED_FIELDS = ()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"NonStringLoginUser\.USERNAME_FIELD to be a field name string; got 7\.",
+    ):
+        derive_register_fields(NonStringLoginUser)
+
+
 def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
     """The spec-040 D6 seam: value captured, marker preserved, attr never constructed."""
     from django_strawberry_framework.mutations.inputs import EXCLUDED, mutation_input_field_specs

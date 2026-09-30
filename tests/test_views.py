@@ -38,6 +38,7 @@ database, so no ``django_db`` marker and no registry mutation.
 
 import contextlib
 import importlib
+import inspect
 import io
 import json
 import logging
@@ -253,35 +254,35 @@ def test_an_unknown_as_view_kwarg_is_rejected_by_djangos_class_attribute_guard(v
         view_class.as_view(schema=SCHEMA, not_a_view_kwarg=1)
 
 
-def test_async_view_as_view_is_marked_as_a_coroutine_function():
-    """The async twin's ``as_view()`` result is a coroutine function; the sync one is not.
+def test_async_view_as_view_is_a_real_coroutine_function():
+    """The async twin's ``as_view()`` result is an ``async def``; the sync one is not.
 
     Upstream's ``AsyncGraphQLView.as_view`` calls ``markcoroutinefunction`` on the
     view it returns - Django would otherwise report ``view_is_async`` as ``False``
     (neither view defines ``get`` / ``post`` handlers) and dispatch the async view
-    on an executor thread. A subclass inherits that unchanged; this pins it.
+    on an executor thread. The package's callback must be a coroutine function by
+    its own code, not only through the marker ``wraps`` copies: Python 3.10 / 3.11's
+    ``inspect.iscoroutinefunction`` ignores that marker, so a sync wrapper would
+    read as sync to any detector that uses it.
     """
-    assert iscoroutinefunction(AsyncDjangoGraphQLView.as_view(schema=SCHEMA)) is True
-    assert iscoroutinefunction(DjangoGraphQLView.as_view(schema=SCHEMA)) is False
+    async_callback = AsyncDjangoGraphQLView.as_view(schema=SCHEMA)
+    sync_callback = DjangoGraphQLView.as_view(schema=SCHEMA)
+    assert iscoroutinefunction(async_callback) is True
+    assert iscoroutinefunction(sync_callback) is False
+    assert async_callback.__code__.co_flags & inspect.CO_COROUTINE
+    assert not sync_callback.__code__.co_flags & inspect.CO_COROUTINE
 
 
 async def test_async_as_view_dispatches_fresh_and_middleware_prepared_instances():
     """The async ``as_view`` branch hands a middleware-prepared instance the dispatch.
 
-    The branch is reachable only through a consumer subclass that declares async
-    HTTP handlers: neither package view defines ``get`` / ``post``, so Django's
-    ``view_is_async`` computes ``False`` for both and the package's own
-    ``as_view`` takes its sync arm - which is why the async handler below is a
-    real one rather than a hard-coded ``view_is_async``. Whichever arm runs, an
-    instance the boundary middleware already constructed and set up must be the
-    instance that dispatches, and the request stamp must be consumed exactly
-    once so a second callback cannot inherit it.
+    ``AsyncDjangoGraphQLView`` itself takes the branch: its upstream callback is a
+    coroutine function. An instance the boundary middleware already constructed
+    and set up must be the instance that dispatches, and the request stamp must
+    be consumed exactly once so a second callback cannot inherit it.
     """
 
     class RecordingAsyncView(AsyncDjangoGraphQLView):
-        async def get(self, request, *args, **kwargs):
-            return HttpResponse("handler")
-
         async def dispatch(self, request, *args, **kwargs):
             return HttpResponse(getattr(self, "marker", "fresh"))
 
@@ -2559,7 +2560,7 @@ def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class
     shared mixin, which is what makes it impossible for one of them to be exempt
     and the other not. And the marking must not cost the async transport its
     coroutine dispatch, so the async row re-asserts what
-    ``test_async_view_as_view_is_marked_as_a_coroutine_function`` states - here in
+    ``test_async_view_as_view_is_a_real_coroutine_function`` states - here in
     the presence of the wrapper that could have dropped it - along with the
     ``as_view`` bookkeeping ``functools.wraps`` carries through.
     """

@@ -86,6 +86,7 @@ import codecs
 from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from asgiref.sync import iscoroutinefunction
 from cross_web import DjangoHTTPRequestAdapter, HTTPException
 from django.conf import settings
 from django.utils.decorators import classonlymethod
@@ -574,8 +575,8 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         can still lose the ordering (a wrapper that drops the attributes, and a
         consumer middleware that reads the body inbound).
         """
-        # A coroutine function when ``view_is_async``: django-stubs types ``View.as_view``'s
-        # sync callback only.
+        # A coroutine function whenever upstream marks it one: django-stubs types
+        # ``View.as_view``'s sync callback only.
         upstream_view: Callable[..., Any] = super().as_view(**initkwargs)
         mount = object()
 
@@ -586,13 +587,18 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
             delattr(request, _BOUNDARY_PREPARED_VIEW)
             return prepared[1]
 
-        # One name per arm, so neither def redeclares the other; ``wraps`` gives the
-        # returned callback upstream's ``__name__`` and ``__qualname__`` either way.
+        # The arm follows the callback Django will call, never ``view_is_async``: that
+        # reads the HTTP handlers, and ``AsyncGraphQLView`` defines none - its
+        # ``as_view`` marks the callback instead - so the async view gets a real
+        # coroutine function, which every async detector recognizes, not a sync one
+        # that is async only through the marker ``wraps`` copies. One name per arm, so
+        # neither def redeclares the other; ``wraps`` gives the returned callback
+        # upstream's ``__name__`` and ``__qualname__`` either way.
         view: Callable[..., object]
         # mypy (both arms): ``wraps`` types each def as a ``_Wrapped`` over both
         # upstream's ``Callable[..., Any]`` and the def's own ``*args: Any,
         # **kwargs: Any`` / ``-> Any`` signature, so ``Any`` enters from either side.
-        if cls.view_is_async:
+        if iscoroutinefunction(upstream_view):
 
             @wraps(upstream_view)
             async def async_view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]

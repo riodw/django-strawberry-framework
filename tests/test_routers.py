@@ -6086,11 +6086,11 @@ async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unaut
 # task. Both handlers' dispatch loops are upstream's own and carry no
 # containment, so before ``_contain_message_loop_failure`` a frame the
 # dispatcher cannot shape - a JSON scalar or array instead of an object, an
-# unhashable operation id, a missing or non-mapping payload, a ``stop`` for an
-# id that was never started, a document nested past the parser's stack budget -
-# raised a raw TypeError/KeyError/RecursionError out of the loop, killed the
-# message-loop task, and left the socket OPEN with nothing reading it: a
-# client-controlled dead connection, never closed, never reclaimed.
+# unhashable operation id, a missing or non-mapping payload, a document nested
+# past the parser's stack budget - raised a raw TypeError/KeyError/RecursionError
+# out of the loop, killed the message-loop task, and left the socket OPEN with
+# nothing reading it: a client-controlled dead connection, never closed, never
+# reclaimed.
 #
 # The rows below drive the LIVE router on BOTH subprotocols, and every one
 # asserts the two halves the defect had: the hostile frame is REFUSED with
@@ -6274,46 +6274,34 @@ async def test_a_missing_payload_is_refused_per_protocol(subprotocol):
     await communicator.disconnect()
 
 
+@pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])
 @pytest.mark.django_db(transaction=True)
-async def test_a_legacy_stop_for_an_unstarted_id_is_refused_and_the_connection_ends():
-    """``stop`` for an id that was never started must not kill the legacy loop.
+async def test_a_stop_for_an_operation_the_connection_is_not_running_leaves_a_live_socket(
+    subprotocol,
+):
+    """A client stop naming no running operation is a no-op, never a close.
 
-    ``cleanup_operation`` indexes ``self.tasks[operation_id]`` unconditionally, so
-    a client ``stop`` for an id that was never started - or a duplicate ``stop``
-    for one already cleaned up - used to kill the message-loop task outright.
-    The transport-ws protocol's own ``complete`` early-returns for an unknown id,
-    which is the contrast row below.
+    Three ids the connection is not running: one whose operation finished on its
+    own, the same id stopped a second time, and one never started. None is a
+    malformed frame, so the socket must still serve an operation afterwards and
+    must write nothing for the stops themselves - the next frame read is the new
+    operation's result. On legacy graphql-ws this is the package's own
+    ``handle_stop`` guard: upstream's ``cleanup_operation`` indexes ``self.tasks``
+    unconditionally through strawberry-graphql 0.327.1, so without the guard the
+    duplicate and never-started stops escape the loop and end the connection.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    async with _open_ws(_router(), subprotocol=_LEGACY_WS) as communicator:
-        await communicator.send_json_to({"type": "stop", "id": "nope"})
-        await communicator.send_json_to({"type": "stop", "id": "nope"})
-        closed, frames = await _drain_until_close(communicator)
-    assert frames == [], frames
-    assert closed["code"] == _INVALID_FRAME_CLOSE_CODE
-    await communicator.disconnect()
-
-
-@pytest.mark.django_db(transaction=True)
-async def test_a_transport_ws_complete_for_an_unstarted_id_still_leaves_a_live_socket():
-    """The contained-upstream contrast: an unknown ``complete`` is not an error.
-
-    Upstream's own ``cleanup_operation`` early-returns for an id it does not
-    know, so the connection must still be usable after two of them - the row
-    that proves the loop containment did not take over work upstream already
-    contains, and that a surviving connection still answers control frames.
-
-    Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
-    sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
-    """
-    async with _open_ws(_router(), subprotocol=_TRANSPORT_WS) as communicator:
-        await communicator.send_json_to({"type": "complete", "id": "nope"})
-        await communicator.send_json_to({"type": "complete", "id": "nope"})
-        await communicator.send_json_to({"type": "ping"})
-        pong = await communicator.receive_json_from(timeout=10)
-        assert pong == {"type": "pong"}
+    cancel_frame = _PROTOCOL_CANCEL_FRAMES[subprotocol]
+    _operation_frame, success_frame = _PROTOCOL_FRAMES[subprotocol]
+    async with _open_ws(_router(), subprotocol=subprotocol) as communicator:
+        finished = await _ws_operation(communicator, _TICK_SUBSCRIPTION, op_id="1")
+        assert finished["type"] == success_frame, finished
+        for op_id in ("1", "1", "never-started"):
+            await communicator.send_json_to({"type": cancel_frame, "id": op_id})
+        served = await _ws_operation(communicator, _TICK_SUBSCRIPTION, op_id="2")
+    assert served == {"type": success_frame, "id": "2", "payload": {"data": {"tick": "tock"}}}
 
 
 @pytest.mark.parametrize("subprotocol", [_TRANSPORT_WS, _LEGACY_WS])

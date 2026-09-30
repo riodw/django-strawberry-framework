@@ -277,9 +277,8 @@ task.** Both handlers' message loops are upstream's own and carry no
 containment: ``handle_message`` dispatches client-supplied values straight into
 indexing and mapping lookups, so a frame that is not the object the dispatcher
 assumes - a JSON scalar or array, an unhashable operation id, a missing or
-non-mapping payload, a ``stop`` for an id that was never started - raises a raw
-``TypeError``/``KeyError`` out of the loop and kills the connection task. The
-socket then sits OPEN with nothing reading it, a client-controlled dead
+non-mapping payload - raises a raw ``TypeError``/``KeyError`` out of the loop and
+kills the connection task. The socket then sits OPEN with nothing reading it, a client-controlled dead
 connection the ASGI server never reclaims. Both generated handler subclasses
 therefore override ``handle`` (not ``handle_message``: the ``RecursionError`` a
 pathologically nested document raises inside ``iter_json`` unwinds the loop
@@ -474,9 +473,9 @@ _INTERNAL_ERROR_CLOSE_REASON = "Internal error"
 #: for: ``TypeError`` (indexing or hashing a value that is not the object the
 #: dispatcher assumes - a JSON scalar or array frame, an unhashable operation id,
 #: a non-mapping payload), ``KeyError`` (a frame missing a field the dispatcher
-#: reads unconditionally - no ``type``, no ``payload``, a legacy ``stop`` for an
-#: id that was never started), and ``RecursionError`` (a document nested past the
-#: parser's stack budget, raised inside the ``async for`` over ``iter_json``).
+#: reads unconditionally - no ``type``, no ``payload``, no ``id``), and
+#: ``RecursionError`` (a document nested past the parser's stack budget, raised
+#: inside the ``async for`` over ``iter_json``).
 #: Membership is what the close code is chosen by, so an escape outside this set
 #: is reported as the server's fault rather than dressed up as a parse failure.
 #: The classification is deliberately coarse in one direction only: a server-side
@@ -1463,9 +1462,9 @@ async def _contain_message_loop_failure(handler: Any, exc: Exception, protocol: 
     carries containment - ``handle_message`` dispatches client-supplied values
     straight into indexing and mapping lookups, and a frame that is not the
     object the protocol's dispatcher assumes (a JSON scalar or array instead of
-    an object, an unhashable operation id, a missing or non-mapping payload, a
-    ``stop`` for an id that was never started) raises a raw ``TypeError`` /
-    ``KeyError`` out of the loop and kills the connection task. The socket then
+    an object, an unhashable operation id, a missing or non-mapping payload)
+    raises a raw ``TypeError`` / ``KeyError`` out of the loop and kills the
+    connection task. The socket then
     sits OPEN with nothing reading it: no close, no frames, no teardown - a
     client-controlled dead connection the ASGI server will never reclaim.
 
@@ -1684,16 +1683,36 @@ def build_revalidating_consumer_class(
                 return
             await super().handle_start(message)
 
+        # ``message`` is upstream's ``StopMessage`` TypedDict; see above.
+        async def handle_stop(self, message: Mapping[str, object]) -> None:
+            """Stop the named operation; a ``stop`` for an id not running is a no-op.
+
+            A client may name an operation this connection is not running: one
+            that already finished on its own, one it already stopped, or one it
+            never started. None of them is a malformed frame, so none of them may
+            end the connection - the same answer transport-ws's own
+            ``cleanup_operation`` gives an unknown ``complete``. Upstream's legacy
+            ``cleanup_operation`` indexes ``self.tasks`` unconditionally through
+            strawberry-graphql 0.327.1 and early-returns for an unknown id from
+            0.327.2, so the membership test here gives every supported release
+            the later answer. ``self.tasks`` is the registry to test: upstream
+            creates the operation's task entry in ``handle_start`` before the task
+            registers its result source, and removes both together. A frame with
+            no ``id``, or an unhashable one, still raises out of the loop and
+            takes the invalid-message close.
+            """
+            if message["id"] not in self.tasks:
+                return
+            await super().handle_stop(message)
+
         async def handle(self) -> None:
             """The legacy handler's identical loop containment.
 
             Upstream's legacy loop is THINNER than transport-ws's, not sturdier:
-            its dispatcher catches nothing, and ``cleanup_operation`` indexes
-            ``self.tasks`` unconditionally, so a ``stop`` for an id that was
-            never started kills the loop outright. The legacy protocol therefore
-            needs the guard at least as much, and gets the identical one,
-            including the client-shape / server-side close split - see the
-            transport-ws override above for the full rationale.
+            its dispatcher catches nothing. The legacy protocol therefore needs
+            the guard at least as much, and gets the identical one, including the
+            client-shape / server-side close split - see the transport-ws
+            override above for the full rationale.
             """
             try:
                 await super().handle()

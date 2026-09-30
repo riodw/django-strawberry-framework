@@ -32,12 +32,16 @@ classifiers = [
 ]
 dependencies = [
     "Django>=5.2.16",
-    # 0.316.0 is the per-operation extension-isolation floor (spec-044
-    # Decision 6): earlier releases cache class-created sync extensions on
+    # 0.322.2 is the first release whose ``SliceMetadata.from_arguments`` ends a
+    # ``first`` + ``before`` page at the cursor (``end = min(end, start + first)``);
+    # 0.316.0 through 0.322.1 start that page one row before the cursor and ignore
+    # ``after``, and ``utils/connections.py::page_arguments`` turns every
+    # ``before`` page without ``first``/``last`` into ``first=cap``. The floor also
+    # keeps per-operation extension isolation (spec-044 Decision 6, from 0.316.0):
+    # earlier releases cache class-created sync extensions on
     # ``Schema._sync_extensions``, so concurrent requests share one instance's
-    # engine-owned ``execution_context``. 0.316.0 materializes classes and
-    # factories per operation on both execution colors.
-    "strawberry-graphql>=0.316.0",
+    # engine-owned ``execution_context``.
+    "strawberry-graphql>=0.322.2",
     # Strawberry allows ``graphql-core<3.4.0``, but 3.3.0 rewrites execution into
     # ``graphql.execution.executor`` and drops ``ExecutionContext`` from
     # ``graphql.execution.execute``, which ``schema.py`` imports and

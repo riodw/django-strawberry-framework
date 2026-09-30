@@ -674,7 +674,7 @@ requires-dist = [
     { name = "django", specifier = ">=5.2.16" },
     { name = "django-filter", specifier = ">=25.2" },
     { name = "graphql-core", specifier = ">=3.2.0,<3.3" },
-    { name = "strawberry-graphql", specifier = ">=0.316.0" },
+    { name = "strawberry-graphql", specifier = ">=0.322.2" },
     { name = "typing-extensions", specifier = ">=4.4.0" },
 ]
 

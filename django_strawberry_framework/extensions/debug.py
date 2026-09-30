@@ -18,7 +18,7 @@ the diagnostic cannot amplify a large operation into an enormous response.
 
 The opt-in is passing the **class** in ``strawberry.Schema``'s
 ``extensions=`` list (one fresh instance per operation - requires the
-package's ``strawberry-graphql>=0.316.0`` floor)::
+package's ``strawberry-graphql>=0.322.2`` floor)::
 
     _optimizer = DjangoOptimizerExtension()
     schema = strawberry.Schema(

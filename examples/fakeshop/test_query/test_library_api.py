@@ -4661,8 +4661,8 @@ def test_genre_connection_first_and_last_rejected():
 def test_genre_connection_first_zero_empty_edges():
     """(c) ``first: 0`` yields empty edges + valid pageInfo, count still pre-slice.
 
-    ``pageInfo`` is delegated to Strawberry's ``ListConnection``; against the
-    locked ``0.316.0`` a zero window over a non-empty set overfetches one row,
+    ``pageInfo`` is delegated to Strawberry's ``ListConnection``; on every
+    supported release a zero window over a non-empty set overfetches one row,
     drops it, and reports ``hasNextPage: True`` with a null ``endCursor`` (empty
     edges). ``totalCount`` is the pre-slice count, so ``first: 0`` does not zero
     it (the count is selected here, so it runs).

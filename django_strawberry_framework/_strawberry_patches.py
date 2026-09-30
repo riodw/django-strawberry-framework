@@ -152,8 +152,8 @@ Unlike the ``UnicodeDecodeError`` widening (which is correct wherever
 grafted onto a generic JSON helper, so it fires at every ``parse_json``
 call site in the installed strawberry - nine in total, though one is
 unreachable (``AsyncBaseHTTPView.parse_multipart_subscriptions`` is
-defined but never called anywhere in the installed 0.316.0 package, so
-its body parse is dead code today; eight sites are reachable):
+defined but never called anywhere in the installed package at 0.322.2 or
+0.324.0, so its body parse is dead code; eight sites are reachable):
 
 - the sync and async POST-body sites (``sync_base_view.py`` /
   ``async_base_view.py``) the guard was designed for, plus the async
@@ -482,7 +482,7 @@ _UPSTREAM_MULTIPART_PARSE_REASON = "Unable to parse the multipart body"
 
 
 # The exact upstream body :func:`_patched_parse_query_params` supersedes
-# (verbatim at strawberry-graphql 0.316.0, dedented). Because the shield
+# (verbatim at strawberry-graphql 0.322.2 and 0.324.0, dedented). Because the shield
 # REIMPLEMENTS upstream's body instead of wrapping and delegating to it, an
 # upstream body change does not flow through the patch the way it does for
 # the delegating ``parse_json`` wrapper. ``_validate_upstream_shape``
@@ -661,7 +661,7 @@ def _patched_parse_json(
 
     The body-envelope guard is a request-*body* contract enforced from a
     generic JSON helper, so it fires at every upstream ``parse_json`` call
-    site (nine, one of them dead code at 0.316.0; see the module
+    site (nine, one of them dead code at 0.322.2; see the module
     docstring's inventory): correct at the seven body/multipart sites (at
     the multipart sites it converts an upstream scalar-``operations``/``map``
     ``500`` into this ``400``; the paired multipart delegates handle the

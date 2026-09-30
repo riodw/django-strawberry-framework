@@ -989,7 +989,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # intentionally instance-shared.
         super().__init__()
         # ``execution_context`` stays accepted for direct-construction
-        # compatibility only: at the ``strawberry-graphql>=0.316.0`` floor the
+        # compatibility only: at the ``strawberry-graphql>=0.322.2`` floor the
         # engine invokes class/factory entries in ``extensions=[...]`` with
         # ZERO arguments and assigns ``extension.execution_context`` afterward,
         # so Strawberry itself never passes this keyword (spec-044 Decision 6

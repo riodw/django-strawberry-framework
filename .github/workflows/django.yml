@@ -127,14 +127,15 @@ jobs:
         # (spec-049 Decision 5).
         #
         # The minimum-support nodes (Django 5.2.16 / Python 3.10) also
-        # force-install exactly strawberry-graphql==0.316.0 so the advertised
-        # per-operation extension-isolation floor (spec-044 Decision 6) is
-        # durably exercised on every push/PR, coverage-free (the latest node
-        # keeps the coverage gate).
+        # force-install exactly strawberry-graphql==0.322.2 so the advertised
+        # floor (the first release that bounds a `first` + `before` connection
+        # page at its cursor, and past spec-044 Decision 6's per-operation
+        # extension isolation) is durably exercised on every push/PR,
+        # coverage-free (the latest node keeps the coverage gate).
         include: >-
           ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
-            {"django": "5.2.16", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
-            {"django": "5.2.16", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.316.0", "compatibility_only": "1"},
+            {"django": "5.2.16", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.322.2", "compatibility_only": "1"},
+            {"django": "5.2.16", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.322.2", "compatibility_only": "1"},
             {"django": "5.2.*", "python": "3.11", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "5.2.*", "python": "3.11", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "5.2.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
@@ -154,7 +155,7 @@ jobs:
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
-            {"django": "5.2.16", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0", "compatibility_only": "1"},
+            {"django": "5.2.16", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.322.2", "compatibility_only": "1"},
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"}
           ]') }}
 
@@ -203,8 +204,8 @@ jobs:
         # Both ends are load-bearing, and the TOP end is the one that is easy to
         # lose: the WebSocket transport wraps whichever schema attribute upstream's
         # protocol handlers dispatch an operation's results through, and upstream
-        # has renamed that attribute inside the supported range (0.319.0 moved
-        # graphql-transport-ws from `subscribe` + `execute` to `stream`). An
+        # has renamed that attribute before (0.319.0 moved graphql-transport-ws
+        # from `subscribe` + `execute` to `stream`). An
         # unwrapped rename is silent -- the delegating wrapper forwards it to the
         # real schema and the protocol keeps working, minus the masking and the
         # revocation stop. `tests/test_routers.py` re-derives the read set from the

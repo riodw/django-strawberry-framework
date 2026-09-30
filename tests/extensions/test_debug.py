@@ -11,7 +11,7 @@ unwind, bounded-log slicing, ``get_results``' no-stash / idempotence contract
 recovery path), masking-extension ordering, extensions-map merge precedence
 and result-map replacement, the async shared-wrapper overlap restore, nested
 same-thread attribution, concurrent sync instance isolation at the
-``strawberry-graphql==0.316.0`` floor, the post-execution diagnostic
+``strawberry-graphql==0.322.2`` floor, the post-execution diagnostic
 non-interference degrade, the cursor-construction capture-interval boundary,
 sibling-hook SQL ordering, the fail-closed ``settings.DEBUG`` gate's inert
 path (no acquire / no snapshot; spec-048 Decision 5), a DELETED ``DEBUG``
@@ -825,7 +825,7 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(default_wrappe
 #
 # The regression that fails under the pre-0.316 cached ``_sync_extensions``
 # lifecycle. Maintainers run this same test - selected by node id, never a
-# copied script - in an isolated ``strawberry-graphql==0.316.0`` environment:
+# copied script - in an isolated ``strawberry-graphql==0.322.2`` environment:
 #
 #   uv run pytest -o addopts="-v -n0" \
 #     "tests/extensions/test_debug.py::test_concurrent_sync_operations_use_isolated_instances"
@@ -1234,8 +1234,8 @@ def _exception_row(message, stack=""):
 # operation context there, so the executing hook - not the operation
 # teardown - must own the stash the streaming seam reads. The non-streaming
 # colors read the results after ``on_operation``'s rebuild overwrites it, so
-# every contract pinned above is unchanged. The four rows skip on the
-# ``strawberry-graphql==0.316.0`` floor, which has no ``Schema.stream``.
+# every contract pinned above is unchanged. The four rows skip on a release
+# below 0.319.0, which has no ``Schema.stream`` (none is supported).
 # ---------------------------------------------------------------------------
 
 

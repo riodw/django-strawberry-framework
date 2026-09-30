@@ -49,7 +49,7 @@ CHANNELS_FLOOR = "4.3.2"
 # is compared against nothing, so it drifts silently away from the
 # ``strawberry-graphql`` row in ``pyproject.toml``. That row is the only other
 # place the floor is written and must be bumped with this one.
-STRAWBERRY_FLOOR = "0.316.0"
+STRAWBERRY_FLOOR = "0.322.2"
 
 _T = TypeVar("_T")
 

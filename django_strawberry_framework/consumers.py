@@ -108,31 +108,30 @@ outright. Neither an ``await asyncio.sleep(0)`` after the request nor a repeated
 request fixes that: a cancellation delivered in the ``async for`` BODY unwinds
 the body and leaves the generator suspended, which is the opposite of closing it.
 
-**Two names, because the seam is one attribute read and the package supports a
-RANGE of upstream releases.** The name a handler dispatches an operation's results
-through is not stable across ``strawberry-graphql>=0.316.0``: the legacy
-``graphql-ws`` handler reads ``schema.subscribe`` throughout, while the
-``graphql-transport-ws`` handler read ``schema.subscribe`` (plus ``schema.execute``
-for a query or mutation) up to and including 0.318.1 and reads ``schema.stream``
-for EVERY operation from 0.319.0 on. Covering only one of the two names does not
+**Two names, because the seam is one attribute read and the two protocols read
+different ones.** The legacy ``graphql-ws`` handler reads ``schema.subscribe``
+throughout, while the ``graphql-transport-ws`` handler reads ``schema.stream`` for
+EVERY operation from 0.319.0 on - the whole ``strawberry-graphql>=0.322.2`` range -
+having read ``schema.subscribe`` (plus ``schema.execute`` for a query or mutation)
+up to and including 0.318.1. Covering only one of the two names does not
 degrade the wrapper - it removes it, silently and for one whole protocol, because
 an uncovered name resolves through ``__getattr__`` straight to the real schema and
 every frame it produces then reaches the wire unmasked and unstoppable. Both names
 are therefore wrapped unconditionally, so an install anywhere in the supported
-range gets the same seam on both protocols; the name a given release does not read
-is simply never called. A version test would be the wrong shape here - it would
-have to be revised on an upstream rename it cannot detect - and an upper bound in
-``pyproject.toml`` would refuse the whole transport rather than serve it.
+range gets the same seam on both protocols; the name a given handler does not read
+is simply never called by it. A version test would be the wrong shape here - it
+would have to be revised on an upstream rename it cannot detect - and an upper bound
+in ``pyproject.toml`` would refuse the whole transport rather than serve it.
 
 ``stream`` is WIDER than ``subscribe``: it also runs queries and mutations, and it
 yields their single result from INSIDE the extension lifecycle, so the wrapper
-covers those operations on the newer releases and must. They are not free-riding
-on a subscription mechanism - masking at the operation teardown has not run when
-that result is yielded, exactly as it has not run for a subscription's events, so
-the result source is the only seam their errors pass through as well. ``execute``,
-the older releases' non-subscription path, still needs nothing and still gets
-nothing: it returns one already-torn-down result and never loops, so it stays
-upstream's own call through ``__getattr__``.
+covers those operations on every supported release and must. They are not
+free-riding on a subscription mechanism - masking at the operation teardown has not
+run when that result is yielded, exactly as it has not run for a subscription's
+events, so the result source is the only seam their errors pass through as well.
+``execute``, the non-subscription path of releases below 0.319.0, still needs
+nothing and gets nothing: it returns one already-torn-down result and never loops,
+so it stays upstream's own call through ``__getattr__``.
 
 **The same result source is where the production error policy reaches a
 subscription** (spec-048 Decision 11). A query's errors are masked by
@@ -1423,14 +1422,14 @@ class _StopAwareSchema:
     argument, and for why the wrapper is invisible to execution itself.
 
     BOTH result-source names are defined, because which one a handler reads depends
-    on the installed upstream release and covering only one silently unwraps a whole
-    protocol - see the module docstring for the range and for why this is not a
-    version test. ``__getattr__`` forwards every other name to the wrapped schema
-    object by identity, which is what keeps ``execute`` - the older releases'
-    non-subscription path, whose single already-torn-down result never loops and
-    needs no stopping - upstream's own call. ``__slots__`` keeps the two fields off
-    that forwarding path, so a misspelled internal name is an ``AttributeError``
-    here rather than a silent delegation to the real schema.
+    on its protocol (and has moved between upstream releases), and covering only one
+    silently unwraps a whole protocol - see the module docstring for the range and
+    for why this is not a version test. ``__getattr__`` forwards every other name to
+    the wrapped schema object by identity, which is what keeps ``execute`` - the
+    non-subscription path of releases below 0.319.0, whose single already-torn-down
+    result never loops and needs no stopping - upstream's own call. ``__slots__``
+    keeps the two fields off that forwarding path, so a misspelled internal name is
+    an ``AttributeError`` here rather than a silent delegation to the real schema.
     """
 
     __slots__ = ("_consumer", "_schema")
@@ -1446,8 +1445,8 @@ class _StopAwareSchema:
     async def subscribe(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
         """Return the real schema's subscription results, wrapped so they can stop.
 
-        The seam both protocols read up to 0.318.1, and the one the legacy
-        ``graphql-ws`` handler reads throughout the supported range.
+        The seam the legacy ``graphql-ws`` handler reads throughout the supported
+        range, and the one ``graphql-transport-ws`` also read up to 0.318.1.
         """
         return self._stoppable(await self._schema.subscribe(*args, **kwargs))
 
@@ -1675,12 +1674,12 @@ def build_revalidating_consumer_class(
         async def handle_subscribe(self, message: Mapping[str, object]) -> None:
             if not await revalidate_operation_actor(self):
                 return
-            # Floor strawberry (0.316.x) parses ``payload["query"]`` in this
+            # strawberry-graphql 0.316.x parses ``payload["query"]`` in this
             # method; graphql-core's lexer raises ``TypeError`` on a non-string
-            # and that escape used to kill the message loop. Later releases
-            # parse inside the operation task. Contain the non-string here as
-            # an operation error so the loop survives on every supported
-            # release rather than taking the loop-containment close.
+            # and that escape used to kill the message loop. Later releases, the
+            # 0.322.2 floor included, parse inside the operation task. Contain
+            # the non-string here as an operation error so the loop survives on
+            # every release rather than taking the loop-containment close.
             payload = message.get("payload")
             if (
                 isinstance(payload, dict)

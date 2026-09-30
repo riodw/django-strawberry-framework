@@ -157,10 +157,10 @@ from tests._soft_dependency import evicted_modules, simulated_absence
 # themselves could never catch the hint drifting from the dev-group floor.
 _HINT_SUBSTRING = "channels>=4.3.2"
 # The Strawberry floor the hint recommends must be the floor the package METADATA
-# accepts: ``pyproject.toml`` requires ``strawberry-graphql>=0.316.0`` and the
-# minimum CI matrix node pins exactly ``0.316.0``, so an older floor here would be
+# accepts: ``pyproject.toml`` requires ``strawberry-graphql>=0.322.2`` and the
+# minimum CI matrix node pins exactly ``0.322.2``, so an older floor here would be
 # advice to install a version the install would reject.
-_STRAWBERRY_FLOOR_SUBSTRING = "strawberry-graphql>=0.316.0"
+_STRAWBERRY_FLOOR_SUBSTRING = "strawberry-graphql>=0.322.2"
 
 # Same discipline for the revocation close and the two new construction hints: a
 # RE-TYPED literal, never the imported constant, so a drift fails a test instead
@@ -5514,9 +5514,9 @@ def test_the_stop_aware_schema_passes_every_upstream_schema_read_through():
     actually matters: it resolves silently to the real schema, and a protocol's every
     frame then reaches the wire unmasked and unstoppable. Upstream renamed this exact
     seam once already (graphql-transport-ws moved from ``subscribe`` + ``execute`` to
-    ``stream`` at 0.319.0), so the row is written to hold across
-    ``strawberry-graphql>=0.316.0`` and to fail loudly on a fourth name rather than
-    on the second and third.
+    ``stream`` at 0.319.0), so the row is written to hold across every audited
+    release from 0.316.0 on and to fail loudly on a fourth name rather than on the
+    second and third.
 
     The second half is the ``isinstance`` question, which ``__getattr__`` cannot
     answer for: a handler that type-tested the schema it was handed would reject the
@@ -6419,10 +6419,10 @@ async def test_a_non_string_query_delivered_over_a_socket_does_not_break_the_loo
 ):
     """A non-string ``query`` must not kill the message loop.
 
-    The WebSocket can deliver a non-string ``query``. Floor strawberry parses
-    it in the subscribe handler and graphql-core's lexer raises ``TypeError``;
-    the handler contains that as an operation error. Later releases parse
-    inside the operation task. Either way the loop and the socket stay usable,
+    The WebSocket can deliver a non-string ``query``. strawberry-graphql 0.316.x
+    parses it in the subscribe handler and graphql-core's lexer raises
+    ``TypeError``; the handler contains that as an operation error. Later
+    releases, the 0.322.2 floor included, parse inside the operation task. Either way the loop and the socket stay usable,
     which the follow-up subscription round trip below proves.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP

@@ -4463,7 +4463,7 @@ def test_extension_accepts_strawberry_execution_context_kwarg():
 def test_singleton_factory_extensions_form_emits_no_deprecation_warning():
     """The migrated ``extensions=[lambda: _optimizer]`` form does not warn.
 
-    Strawberry 0.316.0's ``Schema.__init__`` emits a ``DeprecationWarning``
+    Strawberry's ``Schema.__init__`` emits a ``DeprecationWarning``
     when an extension *instance* is passed in ``extensions=[...]``. The
     singleton-factory form passes a *callable*, so no such warning fires.
     ``simplefilter("always")`` is set inside the context so a warning that

@@ -125,7 +125,7 @@ def _next_reserved_alias(
 
 def attach_exists(
     queryset: QuerySet[_M],
-    inner_queryset: QuerySet[models.Model],
+    inner_queryset: QuerySet[models.Model, object],
 ) -> tuple[QuerySet[_M], Q]:
     """Attach ``Exists(inner_queryset)`` under a reserved alias, row-preservingly.
 

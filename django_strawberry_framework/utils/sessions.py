@@ -98,7 +98,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncIterator, Callable, MutableMapping
+from collections.abc import AsyncGenerator, Callable, MutableMapping
 from typing import TYPE_CHECKING, TypeVar, cast
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -390,7 +390,7 @@ async def actor_transition(
     scope: MutableMapping[str, object],
     *,
     was_authenticated: bool,
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None, None]:
     """Own the connection's actor lease across a package-owned actor transition.
 
     The auth side of the same primitive, named for what it means there. Wrapped

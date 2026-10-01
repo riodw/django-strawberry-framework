@@ -734,12 +734,24 @@ class DjangoModelFormMutation(DjangoMutation):
             base=DjangoModelFormMutation,
         )
 
-    get_form_kwargs = _default_get_form_kwargs
-    # A type checker reads the ``ModelForm`` flavor's ``get_form`` as returning a
-    # ``ModelForm`` (the resolver saves it and reads its ``instance``); the runtime
-    # attribute is the shared default. ``ModelForm``'s model parameter is invariant,
-    # so ``Any`` there lets an override return its own ``ModelForm[<Model>]``.
+    # A type checker reads both construction hooks as methods, so a consumer override is
+    # checked against a method signature; the runtime attributes are the shared defaults
+    # ``_form_kwargs_overridden`` compares by identity. It reads the ``ModelForm`` flavor's
+    # ``get_form`` as returning a ``ModelForm`` (the resolver saves it and reads its
+    # ``instance``); ``ModelForm``'s model parameter is invariant, so ``Any`` there lets an
+    # override return its own ``ModelForm[<Model>]``.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+        def get_form_kwargs(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+        ) -> dict[str, Any]:
+            """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
+            ...
 
         def get_form(
             self,
@@ -753,6 +765,7 @@ class DjangoModelFormMutation(DjangoMutation):
             ...
 
     else:
+        get_form_kwargs = _default_get_form_kwargs
         get_form = _default_get_form
 
     @classmethod
@@ -988,9 +1001,8 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # avoids. Reject it at class creation (the package's fail-loud contract), naming
         # the model-backed base + the two valid plain-form postures.
         for entry in permission_classes:
-            # ``_validate_permission_classes`` returned classes only; the class check keeps
-            # ``issubclass`` safe if that contract is ever broken
-            if isinstance(entry, type) and issubclass(entry, DjangoModelPermission):
+            # ``_validate_permission_classes`` returns classes only.
+            if issubclass(entry, DjangoModelPermission):
                 raise ConfigurationError(
                     f"DjangoFormMutation {name}.Meta.permission_classes includes "
                     f"{entry.__name__}, which requires a model to resolve the write "
@@ -1041,8 +1053,36 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             base=DjangoFormMutation,
         )
 
-    get_form_kwargs = _default_get_form_kwargs
-    get_form = _default_get_form
+    # A type checker reads both construction hooks as methods, so a consumer override is
+    # checked against a method signature; the runtime attributes are the shared defaults
+    # ``_form_kwargs_overridden`` compares by identity.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+        def get_form_kwargs(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+        ) -> dict[str, Any]:
+            """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
+            ...
+
+        def get_form(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+        ) -> forms.BaseForm:
+            """Construct the bound form (``form_class(**get_form_kwargs(...))``)."""
+            ...
+
+    else:
+        get_form_kwargs = _default_get_form_kwargs
+        get_form = _default_get_form
 
     def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         """The plain-form write hook (spec-038 Decision 6 / Decision 8 step 5).

@@ -106,7 +106,7 @@ def test_discover_providers_handles_import_error():
 def test_discover_providers_handles_unsignaturable_method():
     """When ``inspect.signature`` raises, discover_providers continues."""
     fake = Faker()
-    real_signature = services.inspect.signature
+    real_signature = inspect.signature
 
     def boom_signature(obj, *args, **kwargs):
         # Trigger only on an arbitrary callable so the rest still runs.
@@ -114,7 +114,7 @@ def test_discover_providers_handles_unsignaturable_method():
             raise ValueError("synthetic")
         return real_signature(obj, *args, **kwargs)
 
-    with patch.object(services.inspect, "signature", side_effect=boom_signature):
+    with patch.object(inspect, "signature", side_effect=boom_signature):
         result = services.discover_providers(fake)
     # The "person" provider's ``name`` method should now be excluded.
     assert "name" not in result.get("person", [])

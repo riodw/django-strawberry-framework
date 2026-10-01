@@ -212,9 +212,10 @@ def main() -> int:
     package_file = package_files.pop()
     repo_root = REPO_ROOT
     resolved_package = Path(package_file).resolve()
+    script_blobs = instrument_ids(Path(__file__), repo_root)
     provenance = {
         "git_head": git_head(repo_root),
-        "instrument_ids": instrument_ids(Path(__file__), repo_root),
+        "instrument_ids": script_blobs,
         "interpreter": sys.executable,
         "package_digest": package_digest(resolved_package.parent),
         "package_file": str(resolved_package),
@@ -225,7 +226,7 @@ def main() -> int:
     print("provenance")
     print(f"  package      {provenance['package_file']}")
     print(f"  digest       {provenance['package_digest']}")
-    for path, blob in provenance["instrument_ids"].items():
+    for path, blob in script_blobs.items():
         print(f"  script       {path} blob {blob}")
     print(f"  tree         {repo_root} (git HEAD {provenance['git_head']}, supplementary)")
     print(f"  interpreter  {sys.executable} (python {provenance['python']})")

@@ -158,7 +158,7 @@ except ModuleNotFoundError:  # imported as ``scripts.workspace`` (repo root on p
     from scripts import _bench_common
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
+    from collections.abc import Callable, Generator, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = "django_strawberry_framework"
@@ -403,7 +403,7 @@ def baseline_sha(repo_root: Path) -> str:
 
 
 @contextlib.contextmanager
-def file_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
+def file_lock(path: Path, *, blocking: bool = True) -> Generator[None, None, None]:
     """Hold an exclusive ``flock`` on ``path``; the kernel drops it if the process dies."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)

@@ -34,6 +34,7 @@ from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql
 from strawberry import relay
+from typing_extensions import TypedDict
 
 #: Settings that open the spec-048 error policy's pass-through gate for ONE live
 #: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
@@ -51,7 +52,23 @@ _ERROR_POLICY_PASS_THROUGH = {
 }
 
 
-def _seed_board():
+class _SeededBoard(TypedDict):
+    """The rows :func:`_seed_board` writes that the tests read back, by role."""
+
+    filters: models.Card
+    conn: models.Card
+    item_filters: models.CardItem
+    item_conn: models.CardItem
+    reference: models.CardReference
+    glossary_link: models.CardGlossaryTerm
+    related_glossary_link: models.CardGlossaryTerm
+    board_doc: models.BoardDoc
+    board_doc_reference: models.BoardDocCardReference
+    current_tracked_path: models.TrackedPath
+    historical_tracked_path: models.TrackedPath
+
+
+def _seed_board() -> _SeededBoard:
     """A tiny deterministic board: two cards + docs + lookups + edges."""
     done = models.Status.objects.create(key="done", label="Done", order=3)
     todo = models.Status.objects.create(key="todo", label="To Do", order=0)

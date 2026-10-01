@@ -89,7 +89,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types.base import WithStrawberryObjectDefinition
 
     from ..mutations.inputs import FieldError, ModelFieldIndex
-    from ..mutations.resolvers import _M2MAssignments
+    from ..mutations.resolvers import _GeneratedPayload, _M2MAssignments
     from ..mutations.sets import DeclarationRegistry, _ValidatedMutationMeta
     from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
@@ -98,16 +98,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # The register decode product: the constructed (unsaved) user, the M2M
     # replace-sets, the ``full_clean`` exclude list, and the captured raw password.
     _RegisterDecoded: TypeAlias = tuple[_User, _M2MAssignments, list[str], object]
-
-    class _OkPayload(Protocol):
-        """The model-less ``{ ok, errors }`` payload instance logout returns."""
-
-        ok: bool
-
-    class _OkPayloadClass(Protocol):
-        """The materialized ``LogoutPayload`` class, as the logout teardowns build it."""
-
-        def __call__(self, *, ok: bool, errors: list[FieldError]) -> _OkPayload: ...
 
     class _AuthLedgerEntry(Protocol):
         """One auth-ledger declaration (a fixed-surface holder or the register rider)."""
@@ -919,7 +909,7 @@ async def _login_resolve_body_async(
 def _logout_prologue(
     holder_cls: _SealedAuthHolderMeta,
     info: Info[object, object],
-) -> tuple[object, sessions.Transport, _OkPayloadClass]:
+) -> tuple[object, sessions.Transport, type[_GeneratedPayload]]:
     """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
 
     Runs steps 1-3 of the logout state machine with NO session mutation:
@@ -948,12 +938,15 @@ def _logout_prologue(
     )
     resolvers.authorize_or_raise(holder_cls, info, "logout", None, instance=None)
     # The logout holder's payload is the bind-materialized model-less ``LogoutPayload``.
-    payload_cls = cast("_OkPayloadClass", resolvers.payload_cls_for(holder_cls))
+    payload_cls = resolvers.payload_cls_for(holder_cls)
     return request, transport, payload_cls
 
 
-def _logout_observation(request: object, payload_cls: _OkPayloadClass) -> _OkPayload:
-    """Capture the pre-teardown ``ok`` observation and build the logout payload.
+def _logout_observation(
+    request: object,
+    payload_cls: type[_GeneratedPayload],
+) -> tuple[bool, object]:
+    """Capture the pre-teardown ``ok`` observation and build the logout payload from it.
 
     The shared pair both logout teardowns open their critical section with (auth
     session-lifecycle hardening): ``ok`` is whether an authenticated actor existed
@@ -964,10 +957,10 @@ def _logout_observation(request: object, payload_cls: _OkPayloadClass) -> _OkPay
     same point the observation is captured today.
     """
     ok = _authenticated_actor_or_none(request) is not None
-    return payload_cls(ok=ok, errors=[])
+    return ok, payload_cls(ok=ok, errors=[])
 
 
-def _django_http_logout(request: HttpRequest, payload_cls: _OkPayloadClass) -> _OkPayload:
+def _django_http_logout(request: HttpRequest, payload_cls: type[_GeneratedPayload]) -> object:
     """Capture the actor, build the payload, then run Django's native logout; fail closed.
 
     The Django HTTP teardown. The
@@ -984,7 +977,7 @@ def _django_http_logout(request: HttpRequest, payload_cls: _OkPayloadClass) -> _
     possible and the error propagates - never a false ``{ok: true}``. This path holds
     no asyncio lock; the scope lock is Channels-scope-only.
     """
-    payload = _logout_observation(request, payload_cls)
+    _ok, payload = _logout_observation(request, payload_cls)
     try:
         auth.logout(request)
     except BaseException:  # incl. asyncio.CancelledError: anonymize where possible + re-raise
@@ -996,8 +989,8 @@ def _django_http_logout(request: HttpRequest, payload_cls: _OkPayloadClass) -> _
 
 async def _channels_logout(
     request: ChannelsRequestAdapter,
-    payload_cls: _OkPayloadClass,
-) -> _OkPayload:
+    payload_cls: type[_GeneratedPayload],
+) -> object:
     """The Channels twin of ``_django_http_logout``, awaited natively under the scope lock.
 
     ``channels.auth.logout`` (a ``database_sync_to_async`` callable) fires
@@ -1048,11 +1041,11 @@ async def _channels_logout(
     from channels.auth import logout as channels_logout
 
     async with sessions.scope_session_lock(request):
-        payload = _logout_observation(request, payload_cls)
+        ok, payload = _logout_observation(request, payload_cls)
         # ``scope_session_lock`` rejects a scope that is not a ``MutableMapping``
         # (``sessions._require_mutable_scope``) before the lock is held.
         scope = cast("MutableMapping[str, object]", request.scope)
-        async with actor_transition(scope, was_authenticated=payload.ok):
+        async with actor_transition(scope, was_authenticated=ok):
             try:
                 # basedpyright: channels-stubs types ``logout``'s scope as its private
                 # ``_ChannelScope`` (a WebSocket scope); ``logout`` only reads the ``session`` /

@@ -36,7 +36,7 @@ from django.urls import clear_url_caches, path
 from graphql_client import graphql_payload, post_graphql
 from strawberry.django.context import StrawberryDjangoContext
 from strawberry.schema.name_converter import NameConverter
-from typing_extensions import override
+from typing_extensions import TypedDict, override
 
 import django_strawberry_framework.list_field as list_field_module
 from django_strawberry_framework import (
@@ -60,6 +60,7 @@ from django_strawberry_framework.views import DjangoGraphQLView
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
+    from django.http import HttpResponse
 
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
@@ -3025,7 +3026,22 @@ _SHIPPED_ALL_NULL = (
 )
 
 
-def _legacy_branch_oracle(monkeypatch):
+class _ParityOracle(TypedDict):
+    """A legacy reference's claims: its raw response, branch SQL, hook count and final marks."""
+
+    response: HttpResponse
+    sql: list[str]
+    visibility: int
+    marks: tuple[str, int, int | None]
+
+
+class _RowsParityOracle(_ParityOracle):
+    """A :class:`_ParityOracle` that also carries the reference's parsed rows."""
+
+    rows: list[dict[str, object]]
+
+
+def _legacy_branch_oracle(monkeypatch) -> tuple[dict[str, int], DjangoSchema, _RowsParityOracle]:
     """Seed the rows, run the pre-card reference, and hand back its every claim.
 
     The oracle is a test-local legacy schema publishing the same ``branches``
@@ -3056,7 +3072,7 @@ def _legacy_branch_oracle(monkeypatch):
     marks = _PARITY_CAPTURE["legacy_marks"]
     assert marks[1] == 0
     assert marks[2] is not None
-    oracle = {
+    oracle: _RowsParityOracle = {
         "response": response,
         "sql": sql,
         "visibility": visibility,
@@ -3126,7 +3142,10 @@ _COMBINED_LEGACY_QUERIES = [
 ]
 
 
-def _combined_branch_oracle(monkeypatch, client):
+def _combined_branch_oracle(
+    monkeypatch,
+    client,
+) -> tuple[dict[str, int], DjangoSchema, _ParityOracle]:
     """Run the pre-card reference over a union source and hand back its every claim.
 
     Both schemas publish the same ``branches`` field name over the same source
@@ -3163,7 +3182,7 @@ def _combined_branch_oracle(monkeypatch, client):
     assert "errors" not in payload, payload
     assert sorted(row["name"] for row in payload["data"]["branches"]) == ["A", "B"]
     assert len(sql) == 1
-    oracle = {
+    oracle: _ParityOracle = {
         "response": response,
         "sql": sql,
         "visibility": visibility,

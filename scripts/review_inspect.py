@@ -1027,14 +1027,15 @@ def _collect_scopes(tree: ast.Module) -> list[_Scope]:
 
 def _nested_statements(node: ast.AST) -> list[ast.stmt]:
     """Return statements nested in a compound statement's blocks (not in nested scopes)."""
-    statements: list[ast.stmt] = []
+    # Read by name across node classes, so an entry is unproven until narrowed below.
+    candidates: list[object] = []
     for name in ("body", "orelse", "finalbody"):
-        statements.extend(getattr(node, name, None) or [])
+        candidates.extend(getattr(node, name, None) or [])
     for handler in getattr(node, "handlers", None) or []:
-        statements.extend(handler.body)
+        candidates.extend(handler.body)
     for case in getattr(node, "cases", None) or []:
-        statements.extend(case.body)
-    return [statement for statement in statements if isinstance(statement, ast.stmt)]
+        candidates.extend(case.body)
+    return [statement for statement in candidates if isinstance(statement, ast.stmt)]
 
 
 def _scope_kind(node: ast.AST, is_method: bool) -> str:

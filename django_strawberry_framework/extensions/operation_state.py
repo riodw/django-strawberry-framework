@@ -123,7 +123,7 @@ per-operation state through.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast
 from weakref import ref
@@ -138,7 +138,7 @@ from ..utils.operation_lease import OperationLease
 from ..utils.private_state import PrivateAuthority
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Generator
     from types import TracebackType
     from typing import TypeAlias
 
@@ -175,7 +175,7 @@ class OperationState:
     the only thing keeping it - and the request it names - alive.
     """
 
-    __slots__ = ("__weakref__", "_resumed_bindings", "execution_context")
+    __slots__: tuple[str, ...] = ("__weakref__", "_resumed_bindings", "execution_context")
 
     def __init__(self, execution_context: ExecutionContext) -> None:
         self.execution_context: ExecutionContext = execution_context
@@ -517,6 +517,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
             self,
             ContextVar("django_strawberry_framework_operation_state", default=None),
         )
+        super().__init__()
 
     @property
     @override
@@ -751,7 +752,7 @@ def _bound(
     states: _OperationStates,
     *,
     registrar: bool = False,
-) -> Iterator[None]:
+) -> Generator[None, None, None]:
     """Hold ``scope`` and ``states`` bound for the body."""
     bindings = _bind(scope, states, registrar=registrar)
     try:
@@ -944,7 +945,7 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))
 
     @contextlib.contextmanager
-    def resumed(self) -> Iterator[None]:
+    def resumed(self) -> Generator[None, None, None]:
         """Hold this operation bound for one resumption of its streamed result.
 
         What :class:`_ResumedStream` wraps every drive of the generator in, and

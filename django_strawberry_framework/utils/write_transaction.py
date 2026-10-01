@@ -82,7 +82,7 @@ from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
 from .canonical import base_container_values, canonical_sort_key
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable, Iterable, Iterator, Sequence
+    from collections.abc import Callable, Generator, Iterable, Sequence
     from typing import Protocol, TypeAlias
 
     from django.db import models
@@ -229,7 +229,7 @@ def resolve_write_alias(model: type[models.Model] | None) -> str:
 
 
 @contextmanager
-def managed_write_transaction(alias: str) -> Iterator[None]:
+def managed_write_transaction(alias: str) -> Generator[None, None, None]:
     """Mark a completion-spanning transaction open on ``alias`` (the execution-context seam).
 
     Entered by ``DjangoMutationExecutionContext`` around each generated
@@ -261,7 +261,7 @@ def require_managed_write(mutation_cls: WriteMutationClass) -> str:
 
 
 @contextmanager
-def write_pipeline(alias: str, *, lock: bool) -> Iterator[None]:
+def write_pipeline(alias: str, *, lock: bool) -> Generator[None, None, None]:
     """Pin the shared relation-check helpers to ``alias`` (+ ``lock``) for one operation."""
     token = _WRITE_PIPELINE.set(WriteAliasContext(alias, lock=lock))
     try:
@@ -271,7 +271,7 @@ def write_pipeline(alias: str, *, lock: bool) -> Iterator[None]:
 
 
 @contextmanager
-def open_write_pipeline(mutation_cls: WriteMutationClass) -> Iterator[str]:
+def open_write_pipeline(mutation_cls: WriteMutationClass) -> Generator[str, None, None]:
     """Open the nested atomic + pinned write-pipeline context for one mutation.
 
     Shared substrate for every write flavor: resolve the managed alias, then
@@ -287,7 +287,7 @@ def open_write_pipeline(mutation_cls: WriteMutationClass) -> Iterator[str]:
 
 
 @contextmanager
-def pipeline_write_phase() -> Iterator[None]:
+def pipeline_write_phase() -> Generator[None, None, None]:
     """Mark the pinned-alias WRITE phase open for the duration of one save / delete call.
 
     Entered by the flavor write steps around exactly the statement-issuing write
@@ -386,7 +386,7 @@ def _enforce_read_only_barrier(barrier_alias: str) -> Callable[[], None]:
 
 
 @contextmanager
-def authorization_phase(auth_aliases: Iterable[str]) -> Iterator[None]:
+def authorization_phase(auth_aliases: Iterable[str]) -> Generator[None, None, None]:
     """Open the dedicated AUTHORIZATION phase: auth-alias access inside a rolled-back transaction.
 
     Wraps EXACTLY the single permission-evaluation call inside the alias guard.
@@ -569,7 +569,7 @@ def make_cross_alias_save_guard(
 
 
 @contextmanager
-def pipeline_alias_guard(owner: str, alias: str) -> Iterator[None]:
+def pipeline_alias_guard(owner: str, alias: str) -> Generator[None, None, None]:
     """Police the pipeline's SQL by alias AND phase (fail closed).
 
     Installed by the pipeline skeletons around the consumer-reachable phases
@@ -853,7 +853,7 @@ class _ValueSnapshot:
     comparison has to be a name a reader sees at the call site.
     """
 
-    __slots__ = ()
+    __slots__: tuple[str, ...] = ()
 
     def matches(self, current: object) -> bool:
         """Return whether ``current`` still holds the value this snapshot captured."""
@@ -1057,7 +1057,8 @@ def _field_fingerprint(value: object) -> str:
             parts.append("[")
             stack.append(_SnapshotClose("]", container_id))
             stack.extend(reversed(base_container_values(sequence)))
-        elif isinstance(item, (set, frozenset)):
+        else:
+            # The container check above leaves a ``set`` / ``frozenset`` as the only kind here.
             members: set[object] | frozenset[object] = item
             parts.append("s{")
             stack.append(_SnapshotClose("}s", container_id))

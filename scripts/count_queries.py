@@ -324,7 +324,11 @@ def main() -> int:
             print(f"{cardinality:>5} ERROR: {errors}")
             continue
         root_rows = root_row_count(result.data)
-        cell = {"cardinality": cardinality, "queries": len(ctx), "root_rows": root_rows}
+        cell: dict[str, Any] = {
+            "cardinality": cardinality,
+            "queries": len(ctx),
+            "root_rows": root_rows,
+        }
         if args.show_sql:
             cell["sql"] = [entry["sql"] for entry in ctx.captured_queries]
         cells.append(cell)

@@ -46,7 +46,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import enum
-from collections.abc import AsyncIterator, MutableMapping
+from collections.abc import AsyncGenerator, MutableMapping
 from typing import TYPE_CHECKING, cast
 
 from django.http import HttpRequest
@@ -279,7 +279,9 @@ def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[st
 
 
 @contextlib.asynccontextmanager
-async def scope_session_lock(adapter: ChannelsRequestAdapter) -> AsyncIterator[asyncio.Lock]:
+async def scope_session_lock(
+    adapter: ChannelsRequestAdapter,
+) -> AsyncGenerator[asyncio.Lock, None]:
     """Hold the per-scope ``asyncio.Lock`` for the duration of the ``async with`` block.
 
     The single acquisition helper the login / logout state machines serialize

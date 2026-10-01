@@ -315,6 +315,9 @@ class TargetVersion(TimeStampedModel):
         on_delete=models.PROTECT,
     )
 
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
+
     class Meta(TimeStampedModel.Meta):
         ordering = [
             "major",
@@ -373,6 +376,7 @@ class SpecDoc(TimeStampedModel):
 
     # Declared for the type checker (annotation-only; see ``Card``).
     card_id: int | None
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         verbose_name = "spec doc"
@@ -400,6 +404,9 @@ class TrackedPath(TimeStampedModel):
     path = models.TextField(unique=True)
     state = models.SlugField(choices=TRACKED_PATH_STATES, default=TRACKED_PATH_CURRENT)
     is_directory = models.BooleanField(default=False)
+
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = ["path"]
@@ -683,6 +690,7 @@ class CardReference(TimeStampedModel):
     source_card_id: int | None
     target_card_id: int | None
     kind_id: int | None
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -766,6 +774,7 @@ class CardGlossaryTerm(TimeStampedModel):
 
     # Declared for the type checker (annotation-only; see ``Card``).
     card_id: int | None
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -811,6 +820,9 @@ class ParityClaim(TimeStampedModel):
     card = models.ForeignKey(Card, related_name="parity_claims", on_delete=models.CASCADE)
     upstream = models.ForeignKey(Upstream, related_name="parity_claims", on_delete=models.PROTECT)
     level = models.ForeignKey(ParityLevel, related_name="parity_claims", on_delete=models.PROTECT)
+
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         verbose_name = "parity claim"
@@ -902,6 +914,9 @@ class CardItem(TimeStampedModel):
         on_delete=models.PROTECT,
     )
 
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
+
     class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
@@ -933,6 +948,9 @@ class Label(TimeStampedModel):
 
     key = models.SlugField(unique=True)
     color = models.TextField(blank=True, default="")
+
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         verbose_name = "label"
@@ -975,6 +993,7 @@ class CardTransition(TimeStampedModel):
 
     # Declared for the type checker (annotation-only; see ``Card``).
     from_status_id: int | None
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -1102,6 +1121,7 @@ class BoardDoc(TimeStampedModel):
 
     # Declared for the type checker (annotation-only; see ``Card``).
     card_references: RelatedManager[BoardDocCardReference]
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -1145,6 +1165,9 @@ class BoardDocCardReference(TimeStampedModel):
     )
     raw_text = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
+
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [

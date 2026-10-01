@@ -69,7 +69,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
     from .plans import PrefetchLookup
-    from .selections import ConvertedSelection, FieldSelection, RuntimePrefixCarrier
+    from .selections import ConvertedSelection, FieldSelection
 
 
 # The selection-traversal primitives live in ``optimizer/selections.py`` so the
@@ -686,11 +686,10 @@ def _resolver_identities_for(
     extraction) overrides the inherited ``runtime_prefixes``; the runtime path
     is the cartesian product over those prefixes and ``_response_keys(sel)``.
     """
+    # Only the walker's ``SimpleNamespace`` clones carry runtime prefixes.
+    carried_prefixes = _selection_runtime_prefixes(sel)
     selection_runtime_prefixes: tuple[tuple[str, ...], ...] = (
-        # Only the walker's ``SimpleNamespace`` clones carry runtime prefixes.
-        tuple(cast("RuntimePrefixCarrier", sel)._optimizer_runtime_prefixes)
-        if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
-        else runtime_prefixes
+        tuple(carried_prefixes) if carried_prefixes is not None else runtime_prefixes
     )
     runtime_paths = tuple(
         (*runtime_prefix, response_key)

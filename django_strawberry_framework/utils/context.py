@@ -29,7 +29,7 @@ be conflated when refactoring.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Generator
 from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -231,7 +231,7 @@ def clear_context_key(context: object, key: str) -> None:
 
 
 @contextlib.contextmanager
-def restored_context_keys(context: object, *keys: str) -> Iterator[None]:
+def restored_context_keys(context: object, *keys: str) -> Generator[None, None, None]:
     """Snapshot ``keys``, run the body, and put them back - including on an exception.
 
     The inverse this module documented but did not ship. A nested execution

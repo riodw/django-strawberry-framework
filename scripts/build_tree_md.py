@@ -84,6 +84,8 @@ IGNORED_TREE_FILENAMES = frozenset(
 IGNORED_TREE_DIRNAMES = frozenset(
     {"__pycache__", "migrations"},
 )
+#: The default extra ``ignored_dirnames``: no directory beyond the standing set.
+NO_EXTRA_IGNORED_DIRNAMES: frozenset[str] = frozenset()
 #: Rendered nodes that cannot carry a docstring-derived description.
 #:
 #: Every OTHER rendered file and directory must resolve to a non-empty summary or
@@ -743,7 +745,11 @@ def iter_tree_positions(items: Sequence[T], prefix: str = "") -> Iterator[tuple[
         yield item, tree_position(prefix, index, count)
 
 
-def sorted_children(path: Path, *, ignored_dirnames: frozenset[str] = frozenset()) -> list[Path]:
+def sorted_children(
+    path: Path,
+    *,
+    ignored_dirnames: frozenset[str] = NO_EXTRA_IGNORED_DIRNAMES,
+) -> list[Path]:
     """Return the rendered child paths of ``path`` in deterministic tree order.
 
     Only ``is_tree_member`` children qualify, so an untracked or ignored file,
@@ -769,7 +775,7 @@ def render_children(
     path: Path,
     prefix: str = "",
     *,
-    ignored_dirnames: frozenset[str] = frozenset(),
+    ignored_dirnames: frozenset[str] = NO_EXTRA_IGNORED_DIRNAMES,
 ) -> list[str]:
     """Render children under ``path`` using tree connector glyphs."""
     lines = []

@@ -412,6 +412,9 @@ _OPAQUE_SCALAR = strawberry.scalar(
     parse_value=_record_parse,
 )
 
+#: The ``take`` argument's default: an ``OpaqueValue`` holding nothing.
+_NO_OPAQUE_VALUE = OpaqueValue(None)
+
 
 #: A raw list longer than the package's default ``max_list_rows`` and shorter
 #: than the widened bound the tampering row writes over the exported default, so
@@ -514,7 +517,7 @@ class _AuthorityQuery:
         return list(bounded_rows(_UNCONFIGURED_SOURCE_ROWS, info, None))
 
     @strawberry.field
-    def take(self, payload: OpaqueValue = OpaqueValue(None)) -> str:
+    def take(self, payload: OpaqueValue = _NO_OPAQUE_VALUE) -> str:
         return "ok"
 
 

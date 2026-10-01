@@ -120,7 +120,7 @@ import enum
 import fractions
 import threading
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast, overload
@@ -2105,7 +2105,7 @@ def _write_witness(
     mutation_cls: type[SerializerMutation],
     model: type[models.Model],
     alias: str,
-) -> Iterator[list[_WrittenRow]]:
+) -> Generator[list[_WrittenRow], None, None]:
     """Observe + police the ORM writes of the consumer-controlled write phase.
 
     Two guards scoped to the write phase (hooks, validation, and ``serializer.save()``),

@@ -341,8 +341,8 @@ class TestToolbarPresent:
     @pytest.mark.parametrize(
         ("encoding_middleware", "encoding"),
         [
-            ("test_debug_toolbar_api._StampGzipContentEncodingMiddleware", "gzip"),
-            ("test_debug_toolbar_api._StampBrotliContentEncodingMiddleware", "br"),
+            (f"{__name__}.{_StampGzipContentEncodingMiddleware.__qualname__}", "gzip"),
+            (f"{__name__}.{_StampBrotliContentEncodingMiddleware.__qualname__}", "br"),
         ],
         ids=["gzip", "br"],
     )

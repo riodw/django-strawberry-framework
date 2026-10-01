@@ -556,7 +556,8 @@ class TitledEntry(models.Model):
 
     class Meta:
         abstract = True
-        ordering = ["title"]
+        # Typed to admit a child Meta's ``ordering = None`` (see ``ReadingListEntry``).
+        ordering: list[str] | None = ["title"]
 
     @override
     def __str__(self) -> str:

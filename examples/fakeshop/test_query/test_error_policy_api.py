@@ -61,6 +61,7 @@ import json
 import logging
 import re
 import threading
+from collections.abc import Callable
 from functools import cache
 
 import pytest
@@ -77,7 +78,7 @@ from graphql import GraphQLError
 from graphql_client import post_graphql
 from strawberry import relay
 from strawberry.extensions.base_extension import SchemaExtension
-from typing_extensions import override
+from typing_extensions import TypedDict, override
 
 from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
@@ -277,12 +278,19 @@ def _deliberate_hook_exception():
     return GraphQLError(_DELIBERATE_HOOK_MESSAGE, extensions={"code": "CONSUMER_HOOK_REJECTION"})
 
 
+class _ArmedHookFailure(TypedDict):
+    """The hook and half armed to fail (``None`` when disarmed), and what it raises."""
+
+    where: str | None
+    build: Callable[[], Exception]
+
+
 #: Which hook and half the consumer extension below fails at for the row running
 #: now, and what it raises there. Module state rather than a constructor
 #: argument, because the entry is a CLASS: the schema resolves a fresh extension
 #: per operation, so the row arms the failure before it posts and whatever
 #: extension the operation builds carries it.
-_HOOK_FAILURE = {"where": None, "build": _hook_exception}
+_HOOK_FAILURE: _ArmedHookFailure = {"where": None, "build": _hook_exception}
 
 
 class _HookFailure(SchemaExtension):

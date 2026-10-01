@@ -45,7 +45,7 @@ from django_strawberry_framework.conf import testing_endpoint_setting
 from django_strawberry_framework.exceptions import _safe_arg_repr
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping
+    from collections.abc import AsyncGenerator, Awaitable, Generator, Mapping
     from typing import Protocol, TypedDict
 
     from django.contrib.auth.models import _User
@@ -480,7 +480,7 @@ class TestClient(_GraphQLTestClientBase[Client]):
         return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
 
     @contextlib.contextmanager
-    def login(self, user: _User) -> Iterator[None]:
+    def login(self, user: _User) -> Generator[None, None, None]:
         """Run the block authenticated as ``user`` - ``force_login`` on entry, ``logout`` on exit.
 
         The logout runs even when the block raises, so a failing assertion
@@ -541,7 +541,7 @@ class AsyncTestClient(_GraphQLTestClientBase[AsyncClient]):
         return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
 
     @contextlib.asynccontextmanager
-    async def login(self, user: _User) -> AsyncIterator[None]:
+    async def login(self, user: _User) -> AsyncGenerator[None, None]:
         """The async ``login()`` bracket - ``force_login`` / ``logout`` via ``sync_to_async``.
 
         Session writes are ORM work, hence the ``sync_to_async`` wrapping;

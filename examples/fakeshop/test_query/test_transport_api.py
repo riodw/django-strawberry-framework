@@ -186,7 +186,7 @@ def _with_a_middleware_that_sets_the_encoding():
     place - the deployment is "a project that also does this", not "a project with
     nothing else".
     """
-    entry = f"{__name__}._LatinOneEncodingMiddleware"
+    entry = f"{__name__}.{_LatinOneEncodingMiddleware.__qualname__}"
     assert entry not in settings.MIDDLEWARE, settings.MIDDLEWARE
     return override_settings(MIDDLEWARE=[*settings.MIDDLEWARE, entry])
 
@@ -685,7 +685,9 @@ def _recording_upload_handlers():
     ``sys.modules`` under ``__name__`` - the same mechanism the probe URLconf
     relies on.
     """
-    return override_settings(FILE_UPLOAD_HANDLERS=[f"{__name__}._RecordingUploadHandler"])
+    return override_settings(
+        FILE_UPLOAD_HANDLERS=[f"{__name__}.{_RecordingUploadHandler.__qualname__}"],
+    )
 
 
 def _csrf_failure_probe(request, reason=""):
@@ -845,7 +847,9 @@ def test_project_middleware_executes_on_the_graphql_http_route():
     seed_data(1)
     _MIDDLEWARE_PATHS.clear()
 
-    with override_settings(MIDDLEWARE=[*settings.MIDDLEWARE, f"{__name__}._SentinelMiddleware"]):
+    with override_settings(
+        MIDDLEWARE=[*settings.MIDDLEWARE, f"{__name__}.{_SentinelMiddleware.__qualname__}"],
+    ):
         response = _post(Client(), _ITEMS)
 
     assert response.status_code == 200

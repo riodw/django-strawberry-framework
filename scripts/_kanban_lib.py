@@ -68,12 +68,15 @@ COMPUTED_TOKEN_NAMES = frozenset(
     },
 )
 
+# The default ``computed_tokens``: text whose renderer fills no computed token.
+NO_COMPUTED_TOKENS: frozenset[str] = frozenset()
+
 
 def unresolvable_placeholders(
     text: str,
     *,
     reference_orders: Container[int],
-    computed_tokens: Container[str] = frozenset(),
+    computed_tokens: Container[str] = NO_COMPUTED_TOKENS,
 ) -> list[str]:
     r"""Return every ``{{...}}`` in ``text`` that no renderer can resolve, in order.
 

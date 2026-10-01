@@ -70,6 +70,7 @@ around each test, so the local field is built inside the request helper, after
 that reload, and the slot is cleared when the request ends.
 """
 
+import importlib
 import inspect
 
 import pytest
@@ -678,7 +679,7 @@ def _async_genre_connection_schema():
     # The composed project schema is imported first so the sidecar input
     # classes this field's synthesized signature forward-references have
     # been materialized by ``finalize_django_types``.
-    import config.schema  # noqa: F401
+    importlib.import_module("config.schema")
     from apps.library.schema import GenreType
 
     @strawberry.type

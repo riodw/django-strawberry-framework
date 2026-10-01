@@ -37,7 +37,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Generator, Mapping, Sequence
+
+    from django.test.utils import CaptureQueriesContext
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FAKESHOP = REPO_ROOT / "examples" / "fakeshop"
@@ -343,7 +345,7 @@ def bootstrap_fakeshop_django(mode: BootstrapMode) -> BenchProvenance:
 
 
 @contextmanager
-def capture_queries(alias: str = "default") -> Iterator[Any]:
+def capture_queries(alias: str = "default") -> Generator[CaptureQueriesContext, None, None]:
     """Count the SQL one block of work issues on ``alias``.
 
     Wraps ``django.test.utils.CaptureQueriesContext`` so every script counts
@@ -445,7 +447,7 @@ def summarize_rounds(rounds: Sequence[Sequence[float]]) -> dict[str, float]:
 def build_report(
     *,
     tool: str,
-    provenance: dict[str, str],
+    provenance: Mapping[str, object],
     params: dict[str, Any],
     rows: list[dict[str, Any]],
     failures: list[str],

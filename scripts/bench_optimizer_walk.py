@@ -55,6 +55,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
+from unittest import mock
 
 from _bench_common import (
     FAKESHOP,
@@ -185,11 +186,8 @@ def _capture_walk_inputs(
 
     if optimizer is not None:
         reset_plan_cache(optimizer)
-    ext_mod.plan_optimizations = _recorder
-    try:
+    with mock.patch.object(ext_mod, "plan_optimizations", _recorder):
         result = schema.execute_sync(query, variable_values=variables)
-    finally:
-        ext_mod.plan_optimizations = real_plan_optimizations
     if result.errors:
         raise RuntimeError(result.errors)
     return captured[0] if captured else None

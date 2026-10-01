@@ -1587,7 +1587,7 @@ def main(argv: list[str] | None = None) -> int:
         f"(layout {violations}, non-ASCII {len(ascii_hits)}); errors {errors + unmatched}",
     )
     if args.json:
-        document = {
+        document: dict[str, object] = {
             "mode": "check" if check else "fix",
             "paths": list(args.paths),
             "summary": {

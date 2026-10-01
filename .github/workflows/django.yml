@@ -44,7 +44,7 @@ jobs:
         run: uv run ruff format --check .
       - name: Type check (basedpyright)
         # `[tool.basedpyright]` in pyproject.toml owns the scope (the package,
-        # scripts/ and fakeshop minus test_query/ and apps/*/tests/), the Python it
+        # scripts/, examples/ and the root conftest.py), the Python it
         # checks against (the lowest its stubs support; the floor cells prove the
         # package's own floor) and the strictness rules, with warnings failing the
         # run; it never imports the fakeshop settings.

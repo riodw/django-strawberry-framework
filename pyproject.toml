@@ -260,14 +260,14 @@ max-line-length = 110
 # rule-scoped: ``# type: ignore`` is not read at all, and a suppression the run does not
 # need is itself an error.
 [tool.basedpyright]
-include = ["django_strawberry_framework", "scripts", "examples/fakeshop"]
-exclude = [
-    "**/node_modules",
-    "**/__pycache__",
-    "**/.*",
-    "examples/fakeshop/test_query",
-    "examples/fakeshop/apps/*/tests",
+include = [
+    "django_strawberry_framework",
+    "scripts",
+    "examples",
+    "conftest.py",
+    "line_count.py",
 ]
+exclude = ["**/node_modules", "**/__pycache__", "**/.*"]
 executionEnvironments = [
     { root = "scripts", extraPaths = ["examples/fakeshop"] },
     { root = "examples/fakeshop" },

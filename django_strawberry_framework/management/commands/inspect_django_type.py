@@ -156,7 +156,12 @@ class Command(BaseCommand):
         if not (isinstance(target, type) and issubclass(target, DjangoType)):
             raise CommandError(f"{options['type']} is not a DjangoType subclass")
 
-        definition = getattr(target, "__django_strawberry_definition__", None)
+        # ``DjangoType`` declares the attribute; the package's registration writes it.
+        definition: DjangoTypeDefinition | None = getattr(
+            target,
+            "__django_strawberry_definition__",
+            None,
+        )
         if definition is None:
             raise CommandError(
                 f"{target.__name__} is not a registered DjangoType "
@@ -336,10 +341,8 @@ class Command(BaseCommand):
                 generated,
                 scalar_namer,
             )
-        graphql_type = _render_annotation(
-            definition.origin.__annotations__[field.name],
-            scalar_namer,
-        )
+        annotation: object = definition.origin.__annotations__[field.name]
+        graphql_type = _render_annotation(annotation, scalar_namer)
         kind = field_meta.relation_kind
         converter = f"relation: {_RELATION_KIND_LABELS.get(kind, kind)}"
         nullable = "no (list)" if field_meta.is_many_side else _yes_no(field_meta.nullable)
@@ -404,7 +407,7 @@ class Command(BaseCommand):
     ) -> tuple[str, str, str]:
         """Build the row for a scalar field, reading nullability from the annotation."""
         scalar_namer = scalar_namer or _scalar_name
-        annotation = definition.origin.__annotations__[field.name]
+        annotation: object = definition.origin.__annotations__[field.name]
         graphql_type = _render_annotation(annotation, scalar_namer)
         nullable = _yes_no(_annotation_is_optional(annotation))
         # A FileField / ImageField column is converted on the read side by
@@ -595,7 +598,11 @@ def _sdl_type_name(
     # class-owned metadata as finalized; otherwise use this DjangoType
     # definition's own GraphQL name so bare-name resolution can still reach the
     # clean unfinalized-type diagnostic.
-    strawberry_definition = type_cls.__dict__.get("__strawberry_definition__")
+    # Only ``strawberry.type`` (``strawberry/types/object_type.py::_process_type``)
+    # writes this class-dict key, and it writes a ``StrawberryObjectDefinition``.
+    strawberry_definition: StrawberryObjectDefinition | None = type_cls.__dict__.get(
+        "__strawberry_definition__",
+    )
     if strawberry_definition is None:
         return definition.graphql_type_name
     return name_converter.from_type(strawberry_definition)
@@ -649,11 +656,13 @@ def _render_annotation(annotation: object, scalar_namer: _ScalarNamer = _scalar_
     """
     origin = typing.get_origin(annotation)
     if origin in (typing.Union, pytypes.UnionType):
-        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        union_args: tuple[object, ...] = typing.get_args(annotation)
+        args = [a for a in union_args if a is not type(None)]
         if len(args) == 1:
             return _render_annotation(args[0], scalar_namer).rstrip("!")
         return " | ".join(_render_annotation(a, scalar_namer).rstrip("!") for a in args)
     if origin is list:
+        inner: object
         (inner,) = typing.get_args(annotation)
         return f"[{_render_annotation(inner, scalar_namer)}]!"
     return f"{scalar_namer(annotation)}!"

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from django.db import models
 
@@ -32,7 +32,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from .types.relations import PendingRelation
 
 
-def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any], None]) -> None:
+def _clear_if_importable(
+    module_path: str,
+    attr_name: str,
+    action: Callable[[object], object],
+) -> None:
     """Best-effort: import ``module_path.attr_name`` and run ``action`` on it.
 
     The cycle-safe local-import shape for a PER-TYPE co-clear -
@@ -349,7 +353,9 @@ class TypeRegistry:
         _clear_if_importable(
             "django_strawberry_framework.connection",
             "_connection_type_cache",
-            lambda cache: cache.pop(type_cls, None),
+            # The attribute is ``connection.py``'s own ``_connection_type_cache``, a dict
+            # keyed by ``DjangoType`` class, read by name to dodge the import cycle.
+            lambda cache: cast("dict[type[DjangoType], object]", cache).pop(type_cls, None),
         )
 
     def get(self, model: type[models.Model]) -> type[DjangoType] | None:
@@ -373,22 +379,23 @@ class TypeRegistry:
             return candidates[0]
         return None
 
-    def model_for_type(self, type_cls: type[object] | None) -> type[models.Model] | None:
+    def model_for_type(self, type_cls: object) -> type[models.Model] | None:
         """Reverse-lookup: return the Django model for a registered ``DjangoType``.
 
         Used by ``DjangoOptimizerExtension`` to trace a resolver's
         GraphQL return type back to a Django model so it can walk
         ``model._meta.get_fields()`` against the resolver's selection set.
-        Returns ``None`` for unregistered classes (and for ``None`` itself,
+        Returns ``None`` for any unregistered probe (and for ``None`` itself,
         so the optimizer can pipeline through unwrapped wrapper types
         without an extra guard).
         """
         if type_cls is None:
             return None
-        # The stored keys are ``DjangoType`` classes but the probe is any class:
-        # ``dict.get`` is typed to the stored key type, while an identity lookup by a
-        # wider key is sound, so the map is read through its class-keyed view.
-        return cast("dict[type[object], type[models.Model]]", self._models).get(type_cls)
+        # The stored keys are ``DjangoType`` classes but the probe is any object (a
+        # Strawberry definition's ``origin``, which is a ``GraphQLScalarType`` instance
+        # for a scalar): ``dict.get`` is typed to the stored key type, while an identity
+        # lookup by a wider key is sound, so the map is read through an object-keyed view.
+        return cast("dict[object, type[models.Model]]", self._models).get(type_cls)
 
     def iter_types(self) -> Iterator[tuple[type[models.Model], type[DjangoType]]]:
         """Yield ``(model, type_cls)`` pairs once per registered type.
@@ -480,11 +487,11 @@ class TypeRegistry:
                     self._primaries[model] = pre_primary
             raise
 
-    def get_definition(self, type_cls: type[object]) -> DjangoTypeDefinition | None:
+    def get_definition(self, type_cls: object) -> DjangoTypeDefinition | None:
         """Return the collected definition for ``type_cls``, or ``None``."""
-        # Any class is a valid probe (see ``model_for_type``): read the
-        # ``DjangoType``-keyed map through its class-keyed view.
-        return cast("dict[type[object], DjangoTypeDefinition]", self._definitions).get(type_cls)
+        # Any object is a valid probe (see ``model_for_type``): read the
+        # ``DjangoType``-keyed map through its object-keyed view.
+        return cast("dict[object, DjangoTypeDefinition]", self._definitions).get(type_cls)
 
     def definition_for_graphql_name(self, name: str) -> DjangoTypeDefinition:
         """Return the unique Relay-Node ``DjangoTypeDefinition`` for a GraphQL type ``name``.

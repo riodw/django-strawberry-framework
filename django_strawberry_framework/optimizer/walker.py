@@ -63,12 +63,13 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.models import QuerySet
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.schema.name_converter import NameConverter
+    from strawberry.types.field import StrawberryField
     from strawberry.types.nodes import Arguments
 
     from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
     from .plans import PrefetchLookup
-    from .selections import ConvertedSelection, FieldSelection
+    from .selections import ConvertedSelection, FieldSelection, RuntimePrefixCarrier
 
 
 # The selection-traversal primitives live in ``optimizer/selections.py`` so the
@@ -273,16 +274,19 @@ def _graphql_names_by_python_name(
     definition = getattr(type_cls, "__strawberry_definition__", None)
     converter = _schema_name_converter(info)
     names: dict[str, str] = {}
-    for field in getattr(definition, "fields", ()):
-        python_name = getattr(field, "python_name", None)
+    # A Strawberry type's ``__strawberry_definition__`` is a
+    # ``StrawberryObjectDefinition``, whose ``fields`` are ``StrawberryField``s.
+    strawberry_fields: Iterable[StrawberryField] = getattr(definition, "fields", ())
+    for field in strawberry_fields:
+        # ``StrawberryField.python_name`` reads a slot that may still be unset.
+        python_name: str | None = getattr(field, "python_name", None)
         if python_name is None:
             continue
         if converter is not None:
             names[python_name] = converter.get_graphql_name(field)
         else:
-            names[python_name] = getattr(field, "graphql_name", None) or to_camel_case(
-                python_name,
-            )
+            graphql_name: str | None = getattr(field, "graphql_name", None)
+            names[python_name] = graphql_name or to_camel_case(python_name)
     return names
 
 
@@ -339,7 +343,7 @@ def _build_forward_names(
         connections.setdefault(candidate, relation_name)
     fields: dict[str, tuple[str, FieldMeta]] = {}
     for field in field_map.values():
-        django_name = getattr(field, "name", None)
+        django_name: str | None = getattr(field, "name", None)
         if django_name is None:
             continue
         candidate = graphql_names.get(django_name)
@@ -682,9 +686,9 @@ def _resolver_identities_for(
     extraction) overrides the inherited ``runtime_prefixes``; the runtime path
     is the cartesian product over those prefixes and ``_response_keys(sel)``.
     """
-    selection_runtime_prefixes = (
+    selection_runtime_prefixes: tuple[tuple[str, ...], ...] = (
         # Only the walker's ``SimpleNamespace`` clones carry runtime prefixes.
-        tuple(cast("SimpleNamespace", sel)._optimizer_runtime_prefixes)
+        tuple(cast("RuntimePrefixCarrier", sel)._optimizer_runtime_prefixes)
         if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
         else runtime_prefixes
     )
@@ -749,7 +753,9 @@ def _walk_selections(
     # primary type merely because the Django model matches. The classifier must
     # not call into graphql-core schema introspection.
     merged = _merge_aliased_selections(_included_field_selections(selections))
-    relation_connections = getattr(definition, "relation_connections", None) or {}
+    relation_connections: Mapping[str, str] = (
+        getattr(definition, "relation_connections", None) or {}
+    )
     for sel in merged:
         # Resolve the selection name through the ONE consolidated resolver
         # (fast-path exact reversal, memoized forward name maps on a miss). It
@@ -1271,9 +1277,9 @@ def _apply_hint(
     if hint.prefetch_obj is not None:
         hinted_to_attr = getattr(hint.prefetch_obj, "to_attr", None)
         if hinted_to_attr and not consumer_assigned:
-            # Django lands ``to_attr`` rows on that attribute
-            # instead of ``_prefetched_objects_cache[accessor]`` - which is
-            # what the GENERATED relation resolver reads. Accepting the hint
+            # Django lands ``to_attr`` rows on that attribute instead of its
+            # prefetch cache (``_prefetched_objects_cache``) - which is what the
+            # GENERATED relation resolver reads. Accepting the hint
             # would record the relation as planned (silencing strictness)
             # while every row still lazy-loads. Only a consumer-assigned
             # resolver can consume the attribute, so anything else fails
@@ -1281,8 +1287,8 @@ def _apply_hint(
             raise ConfigurationError(
                 f"OptimizerHint.prefetch(Prefetch(..., to_attr={hinted_to_attr!r})) on "
                 f"{type_cls.__name__}.{django_name}: the generated relation resolver "
-                "reads Django's prefetch cache by accessor name and would ignore rows "
-                "landed on the to_attr (per-row lazy loads behind a plan strictness "
+                "reads Django's prefetch cache (_prefetched_objects_cache) and would "
+                "ignore rows landed on the to_attr (per-row lazy loads behind a plan strictness "
                 "trusts). Drop to_attr from the hinted Prefetch, or assign your own "
                 "resolver for the field (consumer-assigned relations may hint with "
                 "to_attr because their resolver owns the attribute contract).",
@@ -1441,7 +1447,7 @@ def _prefetch_hint_for_path(
     type_name: str,
 ) -> Prefetch[str]:
     """Return ``prefetch`` adapted from a type-relative lookup to ``full_path``."""
-    lookup = getattr(prefetch, "prefetch_through", None)
+    lookup: str | None = getattr(prefetch, "prefetch_through", None)
     if lookup is None:
         raise ConfigurationError(
             f"OptimizerHint.prefetch(obj) on {type_name}.{django_name} "
@@ -1648,8 +1654,10 @@ def _merge_aliased_selections(selections: Sequence[FieldSelection]) -> Sequence[
                 getattr(sel, "selections", None) or [],
             )
             response_key = _response_key(sel)
-            if response_key not in merged._optimizer_response_keys:
-                merged._optimizer_response_keys.append(response_key)
+            # The first-seen branch below built this as a ``list[str]``.
+            merged_keys: list[str] = merged._optimizer_response_keys
+            if response_key not in merged_keys:
+                merged_keys.append(response_key)
             _merge_runtime_prefixes(merged, sel)
             # Preserve per-response-key argument payloads so a synthesized
             # connection sibling's pagination/sidecar arguments stay
@@ -1707,8 +1715,9 @@ def _record_response_key_arguments(merged: SimpleNamespace, selection: FieldSele
     resolved variable do not conflict.
     """
     response_key = _response_key(selection)
-    payload = getattr(selection, "arguments", None) or {}
-    per_key = merged._optimizer_response_key_arguments
+    payload: Arguments = getattr(selection, "arguments", None) or {}
+    # ``_merge_aliased_selections`` built this map from response keys to payloads.
+    per_key: dict[str, Arguments] = merged._optimizer_response_key_arguments
     if response_key in per_key and _normalized_alias_payload(
         per_key[response_key],
     ) != _normalized_alias_payload(payload):
@@ -1763,7 +1772,12 @@ def _aliased_arguments_diverge(selection: FieldSelection) -> bool:
     outside ``_merge_aliased_selections`` (direct test/helper callers) carry
     no per-response-key map and never diverge.
     """
-    per_key = getattr(selection, "_optimizer_response_key_arguments", None)
+    # ``_merge_aliased_selections`` built this map from response keys to payloads.
+    per_key: dict[str, Arguments] | None = getattr(
+        selection,
+        "_optimizer_response_key_arguments",
+        None,
+    )
     if not per_key:
         return False
     payloads = [_normalized_alias_payload(payload) for payload in per_key.values()]
@@ -1773,7 +1787,13 @@ def _aliased_arguments_diverge(selection: FieldSelection) -> bool:
 
 def _selection_runtime_prefixes(selection: FieldSelection) -> list[tuple[str, ...]] | None:
     """Return selection-specific runtime prefixes carried by connection extraction."""
-    prefixes = getattr(selection, "_optimizer_runtime_prefixes", None)
+    # Every writer (``with_runtime_prefix`` and the merge below) stores a list of
+    # runtime-path tuples.
+    prefixes: Iterable[tuple[str, ...]] | None = getattr(
+        selection,
+        "_optimizer_runtime_prefixes",
+        None,
+    )
     if prefixes is None:
         return None
     return list(prefixes)
@@ -1784,12 +1804,14 @@ def _merge_runtime_prefixes(merged: SimpleNamespace, selection: FieldSelection) 
     incoming = _selection_runtime_prefixes(selection)
     if incoming is None:
         return
-    if merged._optimizer_runtime_prefixes is None:
+    # The first-seen merge branch stored a list of runtime-path tuples or ``None``.
+    carried: list[tuple[str, ...]] | None = merged._optimizer_runtime_prefixes
+    if carried is None:
         merged._optimizer_runtime_prefixes = incoming
         return
     for prefix in incoming:
-        if prefix not in merged._optimizer_runtime_prefixes:
-            merged._optimizer_runtime_prefixes.append(prefix)
+        if prefix not in carried:
+            carried.append(prefix)
 
 
 def _plan_connection_relation(

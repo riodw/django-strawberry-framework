@@ -115,7 +115,7 @@ class ErrorPolicy:
                 f"ErrorPolicy.enabled must be a bool; got {describe_value(self.enabled)}.",
             )
         for name in ("message", "correlation_extension_key"):
-            value = getattr(self, name)
+            value: object = getattr(self, name)
             if type(value) is not str or not value:
                 raise ConfigurationError(
                     f"ErrorPolicy.{name} must be a non-empty string; got {describe_value(value)}.",

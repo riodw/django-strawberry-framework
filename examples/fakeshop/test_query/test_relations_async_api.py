@@ -1,4 +1,4 @@
-"""Live GraphQL proof that generated relations lazy-load from an async context.
+"""Live GraphQL proof that generated relations lazy-load and read prefetches in async.
 
 ``django_strawberry_framework/types/resolvers.py`` grew three async arms that
 lazy-load a relation through ``sync_to_async(getattr, thread_sensitive=True)``
@@ -12,7 +12,8 @@ error, so ``errors is None`` plus an exact ``data`` match IS the regression
 assertion here; weakening either half to a bare status check discards the
 point of the suite.
 
-Two constraints govern every case in this module, and both are load-bearing:
+Two constraints govern every lazy-load case in this module, and both are
+load-bearing:
 
 * **The targets must have no custom visibility.** Each new arm is gated on
   ``visibility_type is None``, so the relation target type must not declare
@@ -21,10 +22,21 @@ Two constraints govern every case in this module, and both are load-bearing:
   not, and neither does the products app's ``CategoryType`` -- routing a case
   through any of those lands on the visibility arm instead and silently stops
   covering the intended line while still passing.
-* **No optimizer.** Each schema below is built WITHOUT
+* **No optimizer.** Each lazy-load schema below is built WITHOUT
   ``DjangoOptimizerExtension`` on purpose. An installed optimizer plans the
   relation, the row arrives already fetched, ``_will_lazy_load_single`` is
   False, and the async arms never execute.
+
+The prefetched cases invert both constraints on purpose. Their many-side rows
+arrive already in Django's prefetch cache - planned by the composed schema's
+optimizer, or prefetched by the consumer's own root resolver - and
+``many_resolver`` must read each relation kind under the key Django stored it
+under. The reverse side of ``VenueSponsor.venues``, declared without
+``related_name``, is keyed by its query name ``venuesponsor`` rather than its
+``venuesponsor_set`` accessor; a miss there hands ``bounded_rows_async`` the
+evaluated prefetch queryset, whose slice is a ``list`` no ``async for`` can
+iterate. The reverse-FK ``repairticket`` targets ``RepairTicketType``, so its
+unplanned consumer prefetch also crosses the visibility arm.
 
 The shipped fakeshop mount at ``examples/fakeshop/config/urls.py`` is the SYNC
 view, so -- exactly as ``test_products_visibility_api.py`` does -- this module
@@ -199,3 +211,123 @@ async def test_async_reverse_one_to_one_lazy_loads_over_http():
             {"name": "Patron Without Card", "card": None},
         ],
     }
+
+
+def _seed_sponsor_graph():
+    """Two venues, two sponsors over the no-``related_name`` M2M, and three tickets.
+
+    ``VenueSponsor.venues`` declares no ``related_name``: a venue reaches its
+    sponsors through the ``venuesponsor_set`` accessor while Django keys the
+    prefetched rows under the query name ``venuesponsor``. ``RepairTicket.venue``
+    is the reverse-FK control, whose prefetch key IS its accessor; the
+    withdrawn ``VOID-`` ticket is hidden by ``RepairTicketType.get_queryset``.
+    """
+    annex = models.Venue.objects.create(name="Annex")
+    depot = models.Venue.objects.create(name="Depot")
+    models.RepairTicket.objects.create(code="T-1", venue=annex)
+    models.RepairTicket.objects.create(code="VOID-2", venue=annex)
+    models.RepairTicket.objects.create(code="T-3", venue=depot)
+    acme = models.VenueSponsor.objects.create(name="Acme")
+    acme.venues.add(annex, depot)
+    models.VenueSponsor.objects.create(name="Globex").venues.add(annex)
+
+
+_SPONSOR_GRAPH_DATA = {
+    "venues": [
+        {
+            "name": "Annex",
+            "venuesponsor": [{"name": "Acme"}, {"name": "Globex"}],
+            "repairticket": [{"code": "T-1"}],
+        },
+        {"name": "Depot", "venuesponsor": [{"name": "Acme"}], "repairticket": [{"code": "T-3"}]},
+    ],
+    "sponsors": [
+        {"name": "Acme", "venues": [{"name": "Annex"}, {"name": "Depot"}]},
+        {"name": "Globex", "venues": [{"name": "Annex"}]},
+    ],
+}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_planned_many_side_prefetches_resolve_over_http():
+    """Optimizer-planned prefetches of every many-side kind resolve inside the event loop.
+
+    The composed fakeshop schema (``DjangoOptimizerExtension`` installed) plans
+    ``venuesponsor`` (reverse M2M without ``related_name``), ``venues`` (its
+    forward side) and ``repairticket`` (reverse FK) as prefetches, so
+    ``many_resolver`` must find each one in ``_prefetched_objects_cache`` under
+    the key Django stored it under. Reading the reverse M2M under its accessor
+    ``venuesponsor_set`` misses, and the manager fall-through then hands
+    ``bounded_rows_async`` the prefetched, already-evaluated queryset, whose
+    slice is a ``list`` the ``async for`` cannot iterate.
+    """
+    await sync_to_async(_seed_sponsor_graph)()
+
+    def _build():
+        from config.schema import schema
+
+        return schema
+
+    schema = await sync_to_async(_build)()
+    payload = await _post_async(
+        schema,
+        """
+        {
+          venues: allLibraryVenues { name venuesponsor { name } repairticket { code } }
+          sponsors: allLibraryVenueSponsors { name venues { name } }
+        }
+        """,
+    )
+
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == _SPONSOR_GRAPH_DATA
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_consumer_prefetched_many_side_resolves_over_http():
+    """A consumer's own ``prefetch_related`` of every many-side kind resolves in the event loop.
+
+    No optimizer: the root resolvers prefetch the relations themselves, so the
+    rows reach ``many_resolver`` in Django's prefetch cache unplanned. The reverse
+    M2M (``venuesponsor``, target without ``get_queryset``) and the forward M2M
+    (``venues``) are served from that cache; the reverse FK ``repairticket``
+    targets ``RepairTicketType``, whose custom ``get_queryset`` re-reads the
+    unplanned cache through ``_visible_many_rows`` and keeps ``VOID-2`` hidden.
+    """
+    await sync_to_async(_seed_sponsor_graph)()
+
+    def _build():
+        from apps.library.schema import VenueSponsorType, VenueType
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            async def venues(self) -> list[VenueType]:
+                return await sync_to_async(list)(
+                    models.Venue.objects.prefetch_related(
+                        "venuesponsor_set",
+                        "repairticket_set",
+                    ).order_by("name"),
+                )
+
+            @strawberry.field
+            async def sponsors(self) -> list[VenueSponsorType]:
+                return await sync_to_async(list)(
+                    models.VenueSponsor.objects.prefetch_related("venues").order_by("name"),
+                )
+
+        return strawberry.Schema(query=Query, config=strawberry_config())
+
+    schema = await sync_to_async(_build)()
+    payload = await _post_async(
+        schema,
+        """
+        {
+          venues { name venuesponsor { name } repairticket { code } }
+          sponsors { name venues { name } }
+        }
+        """,
+    )
+
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == _SPONSOR_GRAPH_DATA

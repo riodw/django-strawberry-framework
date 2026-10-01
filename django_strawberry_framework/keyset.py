@@ -226,7 +226,7 @@ def validate_cursor_field_references(
     """
     if not order_refs:
         raise ConfigurationError(f"{owner} must contain at least one order string.")
-    parsed = []
+    parsed: list[tuple[str, bool]] = []
     seen: set[str] = set()
     for order_ref in order_refs:
         name, descending = split_order_ref(order_ref, owner=owner)
@@ -258,7 +258,7 @@ def cursor_columns_for(
     resolution failure here (a model change after finalize) surfaces as the
     loud ``FieldDoesNotExist`` it is.
     """
-    columns = []
+    columns: list[CursorColumn] = []
     for order_ref in order_refs:
         name, descending = split_order_ref(order_ref)
         # A validated entry is a local concrete column, never a reverse relation.
@@ -306,7 +306,7 @@ def declared_cursor_state_for_definition(
     definition carries no declaration (or is not one) - the offset vocabulary
     applies.
     """
-    cursor_field = getattr(definition, "cursor_field", None)
+    cursor_field: tuple[str, ...] | None = getattr(definition, "cursor_field", None)
     if cursor_field is None:
         return None
     # A declared ``cursor_field`` was just read off it, so it is a definition.
@@ -400,7 +400,7 @@ def serialize_cursor_value(field: ConcreteField, value: object) -> str:
 def _deserialize_cursor_value(field: ConcreteField, raw: object, argument: str) -> object:
     """Invert ``serialize_cursor_value``; malformed/non-canonical values raise."""
     try:
-        value = field.to_python(raw)
+        value: object = field.to_python(raw)
         # Re-serializing after ``to_python`` validates the exact field-authored
         # wire shape. Authenticated payloads cannot be forged, but this still
         # detects model-field drift between mint and decode (and malformed
@@ -527,9 +527,9 @@ def encode_keyset_cursor(
     v1 contract forbids NULL cursor columns, and ``value_to_string(None)`` is
     not a safe encoding for Char/Text fields (it becomes the string ``"None"``).
     """
-    values = []
+    values: list[str] = []
     for column in columns:
-        value = getattr(row, column.value_source)
+        value: object = getattr(row, column.value_source)
         if value is None:
             raise keyset_contract_error(
                 "require non-nullable ordering columns; a NULL value was read "
@@ -565,15 +565,23 @@ def decode_keyset_cursor(
     if prefix != KEYSET_CURSOR_PREFIX:
         raise _invalid_cursor_error(argument)
     payload = _decrypt_cursor_payload(encrypted, argument)
-    if not isinstance(payload, dict) or payload.get("o") != fingerprint:
+    if not isinstance(payload, dict):
         raise _invalid_cursor_error(argument)
-    raw_values = payload.get("v")
-    if not isinstance(raw_values, list) or len(raw_values) != len(columns):
+    # The decoded JSON object's keys and values are unchecked beyond the reads below.
+    fields: dict[object, object] = payload
+    if fields.get("o") != fingerprint:
+        raise _invalid_cursor_error(argument)
+    raw_values = fields.get("v")
+    if not isinstance(raw_values, list):
+        raise _invalid_cursor_error(argument)
+    # Each element is checked by ``_deserialize_cursor_value``, which takes ``object``.
+    raw_list: list[object] = raw_values
+    if len(raw_list) != len(columns):
         raise _invalid_cursor_error(argument)
     return KeysetCursor(
         values=tuple(
             _deserialize_cursor_value(column.field, raw, argument)
-            for column, raw in zip(columns, raw_values, strict=True)
+            for column, raw in zip(columns, raw_list, strict=True)
         ),
     )
 

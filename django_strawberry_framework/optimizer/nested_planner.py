@@ -77,6 +77,7 @@ from .selections import (
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import MutableSequence
 
+    from django.contrib.postgres.indexes import BTreeIndex
     from django.db.models import QuerySet
     from django.db.models.options import Options
     from graphql.type.definition import GraphQLResolveInfo
@@ -88,11 +89,12 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..utils.typing import ConcreteField, ModelField
     from .field_meta import FieldMeta
     from .hints import OptimizerHint
-    from .nested_fetch import NestedConnectionStrategy
+    from .nested_fetch import NestedConnectionStrategy, StrategySelection
     from .plans import OrderEntry
-    from .selections import FieldSelection
+    from .selections import FieldSelection, ResponseKeyArgumentsCarrier
 
 _M = TypeVar("_M", bound=models.Model)
+_RowT = TypeVar("_RowT")
 
 # The exact ``Index`` types proven to build an ordinary ORDER-serving B-tree:
 # the plain ``models.Index`` and PostgreSQL's ``BTreeIndex``. ``GinIndex`` /
@@ -105,10 +107,11 @@ _M = TypeVar("_M", bound=models.Model)
 # ``types/converters.py``'s postgres field classes): ``None`` when
 # ``django.contrib.postgres`` is unimportable; loud ``AttributeError`` if the
 # module loads but the class is missing. Absence leaves plain ``models.Index``
-# as the sole B-tree-backed type (the safe default).
-_PostgresBTreeIndex: type[models.Index] | None = import_attr_if_importable(
-    "django.contrib.postgres.indexes",
-    "BTreeIndex",
+# as the sole B-tree-backed type (the safe default). The cast names the class the
+# by-name lookup returns.
+_PostgresBTreeIndex: type[models.Index] | None = cast(
+    "type[BTreeIndex] | None",
+    import_attr_if_importable("django.contrib.postgres.indexes", "BTreeIndex"),
 )
 
 _BTREE_INDEX_TYPES: tuple[type[models.Index], ...] = (
@@ -230,7 +233,7 @@ def _select_nested_strategy(hint: OptimizerHint | None) -> NestedConnectionStrat
     (``nested_fetch.py::active_strategy``). The knob is schema-static, so this
     selection never enters the instance-bound plan cache key.
     """
-    name = getattr(hint, "nested_strategy", None)
+    name: StrategySelection | None = getattr(hint, "nested_strategy", None)
     if name is not None:
         return resolve_strategy(name)
     return active_strategy()
@@ -298,7 +301,7 @@ def _concrete_order_terms(
 
 def _index_leading_terms(
     meta: Options[models.Model],
-    index: models.Index,
+    index: object,
 ) -> list[tuple[str, bool]] | None:
     """Return an index's leading ``(attname, descending)`` terms, or ``None`` when uninspectable.
 
@@ -334,7 +337,9 @@ def _index_leading_terms(
         return None
     if getattr(index, "opclasses", None):
         return None
-    field_names = getattr(index, "fields", None)
+    # The exact-type gate above admits only ``models.Index`` / ``BTreeIndex``, whose
+    # ``__init__`` stores ``fields`` as a list of field-name strings.
+    field_names: Sequence[str] | None = getattr(index, "fields", None)
     if not field_names:
         return None
     terms: list[tuple[str, bool]] = []
@@ -725,9 +730,9 @@ def _project_scalar_only_window(
 
 
 def _extend_only_projection(
-    child_queryset: QuerySet[_M],
+    child_queryset: QuerySet[_M, _RowT],
     attnames: tuple[str, ...],
-) -> QuerySet[_M]:
+) -> QuerySet[_M, _RowT]:
     """Ensure ``attnames`` load under an existing ``.only()`` / ``.defer()`` projection.
 
     The keyset cursor-column loader: a keyset page mints edge cursors from
@@ -1199,7 +1204,7 @@ def plan_connection_relation(
     keyed_windows, malformed_keys, fallback_keys = _divergent_key_windows(
         (
             # Diverging aliases exist only on the walker's merged ``SimpleNamespace``.
-            cast("SimpleNamespace", sel)._optimizer_response_key_arguments
+            cast("ResponseKeyArgumentsCarrier", sel)._optimizer_response_key_arguments
             if divergent
             else {None: getattr(sel, "arguments", None) or {}}
         ),

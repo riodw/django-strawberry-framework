@@ -14,16 +14,17 @@ implementation no longer exhibits the bug pinned by
 
 import inspect
 from collections.abc import AsyncIterable
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
 from .conf import upstream_patches_enabled
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable
 
     from graphql import FieldNode, GraphQLList, GraphQLOutputType, GraphQLResolveInfo
     from graphql.execution.execute import ExecutionContext as _ExecutionContext
     from graphql.pyutils import AwaitableOrValue, Path
+    from typing_extensions import TypeIs
 
     _CompleteListValue = Callable[
         [
@@ -119,6 +120,17 @@ def _validate_upstream_shape() -> _UpstreamCaptures:
     return upstream
 
 
+_T = TypeVar("_T")
+
+
+def _is_awaitable(
+    value: "AwaitableOrValue[_T]",
+    context: "_ExecutionContext",
+) -> "TypeIs[Awaitable[_T]]":
+    """``context.is_awaitable(value)``, typed as the narrowing graphql-core's ``bool`` omits."""
+    return context.is_awaitable(value)
+
+
 def _patched_complete_list_value(
     self: "_ExecutionContext",
     return_type: "GraphQLList[GraphQLOutputType]",
@@ -139,12 +151,15 @@ def _patched_complete_list_value(
     if (
         not upstream.is_iterable(result)
         and isinstance(result, AsyncIterable)
-        and self.is_awaitable(res)
+        and _is_awaitable(res, self)
     ):
-
-        async def _await_residual(awaitable: Any) -> Any:
+        # Upstream's ``async_iterable_to_list`` is typed ``-> Any`` but returns the
+        # recursive ``complete_list_value`` result, itself possibly awaitable (the bug).
+        async def _await_residual(
+            awaitable: "Awaitable[AwaitableOrValue[list[object]]]",
+        ) -> "list[object]":
             completed = await awaitable
-            if self.is_awaitable(completed):
+            if _is_awaitable(completed, self):
                 return await completed
             return completed
 

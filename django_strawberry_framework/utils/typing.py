@@ -27,8 +27,10 @@ import inspect
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast, get_args, get_origin
 
+from typing_extensions import Never
+
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from typing import TypeAlias
+    from typing import Protocol, TypeAlias
 
     from django.db import models
     from graphql import (
@@ -49,19 +51,32 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     # The package's shared type aliases (type-checking only; nothing imports them
     # at runtime).
-    #: A concrete or forward-relation model ``Field``, in the stub's universal
-    #: parametrization (its value types vary per column class).
-    ConcreteField: TypeAlias = models.Field[Any, Any]
+    #: A concrete or forward-relation model ``Field`` of any column class. The read
+    #: type is covariant, so ``object`` admits every column; the contravariant set
+    #: type has no such bound (``Never`` makes basedpyright type a dataclass slot
+    #: holding the field as a ``__set__`` descriptor accepting only ``Never``).
+    ConcreteField: TypeAlias = models.Field[Any, object]
     #: Every field ``Model._meta.get_field`` / ``get_fields`` returns: a
     #: ``ConcreteField`` or a reverse ``ForeignObjectRel`` (django-stubs' own
     #: ``_AnyField``).
     ModelField: TypeAlias = ConcreteField | models.ForeignObjectRel
-    #: A forward ``ForeignKey`` / ``OneToOneField`` (the stub's universal
-    #: parametrization): a cascadable edge, or a join's link column.
-    ForeignKeyField: TypeAlias = models.ForeignKey[Any, Any]
+    #: A forward ``ForeignKey`` / ``OneToOneField``, parametrized as ``ConcreteField``
+    #: is: a cascadable edge, or a join's link column.
+    ForeignKeyField: TypeAlias = models.ForeignKey[Any, object]
     #: Both resolver ``info`` flavors: the resolve-time Strawberry ``Info`` and the
     #: plan-time graphql-core ``GraphQLResolveInfo``.
     EitherInfo: TypeAlias = Info[object, object] | GraphQLResolveInfo
+
+    class OptionalWidenable(Protocol):
+        """A runtime annotation (a class, ``NewType``, alias, or scalar) that ``| None`` widens.
+
+        What the package's ``T | None`` widening needs of an annotation value, which
+        is cast to it at the widening site: basedpyright rejects ``|`` on
+        ``TypeForm[object]`` and matches no ``NewType`` scalar against this protocol.
+        """
+
+        def __or__(self, other: None, /) -> object: ...
+
     #: What a ``GraphQLNonNull`` wraps: graphql-core's ``GraphQLNullableType``, with
     #: the list member it leaves bare parametrized by ``GraphQLList``'s own bound.
     _GraphQLNullableType: TypeAlias = (
@@ -169,7 +184,7 @@ def _callable_inspection_target(value: object) -> object:
     )
 
 
-def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[Any, Any, Any]]]:
+def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[object, Never, object]]]:
     """Return whether calling ``value`` yields a coroutine.
 
     ``inspect.iscoroutinefunction`` only reports on the value handed to it

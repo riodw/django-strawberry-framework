@@ -3874,3 +3874,70 @@ def test_cascaded_item_list_stays_silent_under_strictness_raise():
     ]
     assert len(item_sql) == 1, captured.captured_queries
     assert len(category_sql) == 1, captured.captured_queries
+
+
+@pytest.mark.django_db
+def test_consumer_prefetched_many_to_many_stays_silent_under_strictness_raise():
+    """A consumer-prefetched M2M is recognized as loaded on both of its sides.
+
+    The holders return LISTS, so the optimizer plans neither relation and
+    ``strictness="raise"`` reaches the cache probe in
+    ``django_strawberry_framework/types/resolvers.py::_check_n1``. Django keys the
+    reverse side of ``VenueSponsor.venues`` (declared without ``related_name``)
+    under the query name ``venuesponsor``, not the ``venuesponsor_set`` accessor,
+    so a probe on the accessor reports the prefetched rows as an unplanned N+1.
+    The forward ``venues`` side is the control; its target ``VenueType`` declares
+    ``get_queryset``, so its unplanned cache is re-read through the visibility
+    boundary per sponsor. The reverse side is served from the consumer's prefetch:
+    ``library_venuesponsor`` is read by that prefetch and by the ``sponsors`` root,
+    never per venue.
+    """
+    annex = library_models.Venue.objects.create(name="Annex")
+    depot = library_models.Venue.objects.create(name="Depot")
+    acme = library_models.VenueSponsor.objects.create(name="Acme")
+    acme.venues.add(annex, depot)
+    library_models.VenueSponsor.objects.create(name="Globex").venues.add(annex)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def venues(self) -> list[library_schema.VenueType]:
+            return list(
+                library_models.Venue.objects.prefetch_related("venuesponsor_set").order_by("name"),
+            )
+
+        @strawberry.field
+        def sponsors(self) -> list[library_schema.VenueSponsorType]:
+            return list(
+                library_models.VenueSponsor.objects.prefetch_related("venues").order_by("name"),
+            )
+
+    optimizer = DjangoOptimizerExtension(strictness="raise")
+    schema = DjangoSchema(
+        query=Query,
+        extensions=[lambda: optimizer],
+        config=strawberry_config(),
+    )
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_sync(
+            schema,
+            "{ venues { name venuesponsor { name } } sponsors { name venues { name } } }",
+        )
+
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == {
+        "venues": [
+            {"name": "Annex", "venuesponsor": [{"name": "Acme"}, {"name": "Globex"}]},
+            {"name": "Depot", "venuesponsor": [{"name": "Acme"}]},
+        ],
+        "sponsors": [
+            {"name": "Acme", "venues": [{"name": "Annex"}, {"name": "Depot"}]},
+            {"name": "Globex", "venues": [{"name": "Annex"}]},
+        ],
+    }
+    sponsor_sql = [
+        entry["sql"]
+        for entry in captured.captured_queries
+        if entry["sql"].split(" FROM ", 1)[-1].startswith('"library_venuesponsor"')
+    ]
+    assert len(sponsor_sql) == 2, captured.captured_queries

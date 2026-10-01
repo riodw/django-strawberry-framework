@@ -21,7 +21,7 @@ the distinct-class collision guard.
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..mutations.fields import _lazy_ref
 from ..registry import register_subsystem_clear
@@ -42,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types import Info
 
     from ..types.base import DjangoType
+    from ..utils.typing import OptionalWidenable
     from .mutations import _SealedAuthHolderMeta
 
 AUTH_QUERIES_MODULE_PATH = "django_strawberry_framework.auth.queries"
@@ -128,10 +129,15 @@ def current_user(
         sync_body=sync_body,
         async_body=_sync_bridged_async_body(sync_body),
         arguments=[],
-        # mypy: typeshed types a subscripted typing form as ``object``, not the alias
-        # whose ``__or__`` builds the ``Optional`` at runtime
-        # basedpyright: the same ``object`` return rejects the ``|`` operator
-        return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,  # type: ignore[operator]  # pyright: ignore[reportOperatorIssue]
+        # ``_lazy_ref`` builds an ``Annotated[...]`` typing alias, whose ``__or__``
+        # builds the ``Optional`` at runtime.
+        return_annotation=(
+            cast(
+                "OptionalWidenable",
+                _lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH),
+            )
+            | None
+        ),
         description=description,
         deprecation_reason=deprecation_reason,
         directives=directives,

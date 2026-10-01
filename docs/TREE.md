@@ -471,6 +471,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_check_any.py             # Script tests for the explicit-``Any`` gate in ``scripts/check_any.py``.
 ├── test_check_citations.py       # Script tests for the ``path::Symbol`` citation gate.
 ├── test_check_public_types.py    # Script tests for the public-API type-completeness gate in ``scripts/check_public_types.py``.
 ├── test_check_trailing_commas.py # Script tests for the ``source-layout`` gate in ``scripts/check_trailing_commas.py``.
@@ -696,7 +697,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
 ├── test_products_visibility_api.py  # Live GraphQL proof that generated relations enforce target visibility themselves.
-├── test_relations_async_api.py   # Live GraphQL proof that generated relations lazy-load from an async context.
+├── test_relations_async_api.py   # Live GraphQL proof that generated relations lazy-load and read prefetches in async.
 ├── test_resource_policy_api.py   # Live ``/graphql/`` execution-resource-policy acceptance tests.
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
@@ -723,6 +724,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
 ├── test_build_kanban_html.py     # Tests for KANBAN version-tuple parsing, placeholder resolvability, and truncation.
 ├── test_build_tree_md.py         # Tests for TREE renderer planned descriptions, replacements, and source discovery.
+├── test_check_any.py             # Script tests for the explicit-``Any`` gate in ``scripts/check_any.py``.
 ├── test_check_citations.py       # Script tests for the ``path::Symbol`` citation gate.
 ├── test_check_public_types.py    # Script tests for the public-API type-completeness gate in ``scripts/check_public_types.py``.
 ├── test_check_trailing_commas.py # Script tests for the ``source-layout`` gate in ``scripts/check_trailing_commas.py``.

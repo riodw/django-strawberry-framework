@@ -83,6 +83,16 @@ repos:
         pass_filenames: false
         require_serial: true
 
+      - id: check-any
+        name: explicit typing.Any only at allowlisted sites
+        entry: uv run python scripts/check_any.py
+        language: system
+        # Census of the whole package (a removed `Any` makes an allowlist entry stale
+        # in a file you may not be committing), so no filenames; fires on any package
+        # source plus its own source (which holds the allowlist).
+        files: ^(django_strawberry_framework/.*\.py|scripts/check_any\.py)$
+        pass_filenames: false
+
       - id: check-kanban-anchors
         name: kanban anchors collision-free (card vs card, card vs glossary, render ids)
         entry: uv run python scripts/check_kanban_anchors.py

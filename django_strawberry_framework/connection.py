@@ -141,14 +141,25 @@ from .utils.relations import relation_kind
 from .utils.typing import is_async_callable, unwrap_container_type
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import Literal, TypeAlias
+
     from strawberry.types.base import WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
     from typing_extensions import Self
 
+    from .filters.sets import FilterSet
     from .optimizer.selections import ConnectionFieldNames, ConvertedSelection
+    from .orders.sets import OrderSet
     from .types.base import DjangoType
     from .types.definition import DjangoTypeDefinition
+    from .utils.querysets import NormalizedSource
     from .utils.typing import ConcreteField, ModelField
+
+    #: One sidecar step: its kind pairs the set class with that family's apply entry.
+    _SidecarStep: TypeAlias = (
+        tuple[Literal["filter"], type[FilterSet], object]
+        | tuple[Literal["order"], type[OrderSet], object]
+    )
 
     class _SelectionPredicate(Protocol):
         """A per-selection observer: ``connection_total_count_selected`` and its sibling."""
@@ -174,6 +185,8 @@ NodeType = TypeVar("NodeType")
 # returns instances of the class it is handed, in the base's universal parametrization.
 _ConnectionT = TypeVar("_ConnectionT", bound="DjangoConnection[Any]")
 _ModelT = TypeVar("_ModelT", bound=models.Model)
+# A queryset's row type, carried through unchanged (``object`` for an unchecked source).
+_RowT = TypeVar("_RowT")
 _DjangoTypeT = TypeVar("_DjangoTypeT", bound="DjangoType")
 
 # Field name carried on the connection instance for the captured ``totalCount``;
@@ -307,7 +320,7 @@ def _build_windowed_fallback(
     )
 
 
-def _window_edge_class(cls: type[_ConnectionT]) -> type[relay.Edge[Any]]:
+def _window_edge_class(cls: type[_ConnectionT]) -> type[relay.Edge[relay.Node]]:
     """Resolve the connection's edge class exactly as ``ListConnection`` does.
 
     ``get_object_definition`` -> ``edges`` field -> ``resolve_type`` -> unwrap
@@ -322,7 +335,7 @@ def _window_edge_class(cls: type[_ConnectionT]) -> type[relay.Edge[Any]]:
     field_def = cast("StrawberryField", type_def.get_field("edges"))
     # ``edges`` is ``list[Edge[Node]]``, so the unwrapped container is the Edge subclass.
     return cast(
-        "type[relay.Edge[Any]]",
+        "type[relay.Edge[relay.Node]]",
         unwrap_container_type(field_def.resolve_type(type_definition=type_def)),
     )
 
@@ -497,7 +510,7 @@ def _resolve_from_window(
         # ``has_next_page`` is "any post-seek row exists" (the annotated seek
         # count - zero here by construction, since one such row would BE the
         # page), and a supplied cursor is the previous-page signal.
-        total = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
+        total: int | None = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
         if total is None:
             # Count-free marker-only FORWARD shape (the probed offset overshoot
             # and the edges-only offset overshoot): the marker proves children
@@ -615,7 +628,7 @@ def _resolve_from_window(
     # page-relative to pre-seek, so the counted shape reads the annotated
     # POST-SEEK count instead (missing annotation = plan drift: fall back
     # rather than serve a wrong flag).
-    first_rn = getattr(page_rows[0], WINDOW_ROW_NUMBER)
+    first_rn: int = getattr(page_rows[0], WINDOW_ROW_NUMBER)
     if range_plan.next_page_probe:
         has_next_page = probe_row_seen
     elif keyset_seek_supplied:
@@ -870,8 +883,8 @@ def _resolve_order_path_field(model: type[models.Model], path: str) -> ConcreteF
 
 def _keyset_order_state(
     state: DeclaredCursorState,
-    queryset: models.QuerySet[_ModelT],
-) -> tuple[tuple[CursorColumn, ...], str, models.QuerySet[_ModelT]]:
+    queryset: models.QuerySet[_ModelT, _RowT],
+) -> tuple[tuple[CursorColumn, ...], str, models.QuerySet[_ModelT, _RowT]]:
     """Resolve the ROOT slicing state for a keyset queryset's effective order.
 
     The default-ordered page (the effective order IS the declared
@@ -956,7 +969,7 @@ def _keyset_order_state(
 class _KeysetPage:
     """One fetched keyset page plus the spec-algorithm pageInfo inputs."""
 
-    rows: list[models.Model]
+    rows: list[object]
     overfetched: bool
     backward: bool
     after_supplied: bool
@@ -1029,8 +1042,10 @@ def _resolve_keyset_connection(
             "seek and mint from database rows; the connection resolver must "
             "return a QuerySet (or a Manager), not a plain iterable.",
         )
-    _guard_source_not_pre_sliced(nodes)
-    columns, fingerprint, queryset = _keyset_order_state(state, nodes)
+    # Model rows are not checked; a consumer-returned QuerySet's rows stay ``object``.
+    source: models.QuerySet[models.Model, object] = nodes
+    _guard_source_not_pre_sliced(source)
+    columns, fingerprint, queryset = _keyset_order_state(state, source)
     count_source = queryset
     after_supplied = is_supplied(after)
     before_supplied = is_supplied(before)
@@ -1131,7 +1146,7 @@ def _resolve_keyset_connection(
         )
         return _set_total_count(conn, want_count=want_count, value=total)
 
-    def _page(rows: list[models.Model]) -> _KeysetPage:
+    def _page(rows: list[object]) -> _KeysetPage:
         return _KeysetPage(
             rows=rows,
             overfetched=len(rows) == fetch_limit,
@@ -1497,7 +1512,7 @@ def _guard_total_count_countable(nodes: object, *, want_count: bool) -> None:
         )
 
 
-def _attach_count_sync(conn: _ConnectionT, nodes: Any, *, want_count: bool) -> _ConnectionT:
+def _attach_count_sync(conn: _ConnectionT, nodes: object, *, want_count: bool) -> _ConnectionT:
     """Attach the post-filter pre-slice count to a resolved connection (sync)."""
     _guard_total_count_countable(nodes, want_count=want_count)
     if not want_count:
@@ -1511,12 +1526,15 @@ def _attach_count_sync(conn: _ConnectionT, nodes: Any, *, want_count: bool) -> _
         # shape, so past this point ``want_count=True`` implies a QuerySet and
         # the bound method is safe to read (and only called when wanted).
         return conn
-    return _set_total_count(conn, want_count=True, value=nodes.count)
+    # mypy: ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``;
+    # a raising guard in another function cannot narrow ``nodes`` here
+    counted = cast("models.QuerySet[models.Model, object]", nodes)
+    return _set_total_count(conn, want_count=True, value=counted.count)
 
 
 async def _attach_count_async(
     conn_awaitable: Awaitable[_ConnectionT],
-    nodes: Any,
+    nodes: object,
     *,
     want_count: bool,
 ) -> _ConnectionT:
@@ -1534,7 +1552,10 @@ async def _attach_count_async(
         # The ``await`` keeps this step explicitly colored (the package's
         # sync/async convention); the attr write itself still routes through
         # the single ``_set_total_count`` writer.
-        _set_total_count(conn, want_count=True, value=await nodes.acount())
+        # mypy: ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``;
+        # a raising guard in another function cannot narrow ``nodes`` here
+        counted = cast("models.QuerySet[models.Model, object]", nodes)
+        _set_total_count(conn, want_count=True, value=await counted.acount())
     return conn
 
 
@@ -1703,7 +1724,7 @@ def _finalize_queryset(
     qs: models.QuerySet[models.Model],
     info: Info[object, object],
     *,
-    definition: Any,
+    definition: DjangoTypeDefinition,
 ) -> models.QuerySet[models.Model]:
     """Apply the color-agnostic pipeline tail: deterministic total order, then optimizer plan.
 
@@ -1787,7 +1808,7 @@ def _prepare_pipeline_source(
     async_guard: Callable[[object, type[DjangoType]], None],
     filter_input: object,
     order_by_input: object,
-) -> tuple[Any, bool]:
+) -> NormalizedSource:
     """Normalize the pipeline source and apply the connection's per-branch guards.
 
     The color-agnostic head shared by ``_pipeline_sync`` / ``_pipeline_async``.
@@ -1832,7 +1853,7 @@ def _sidecar_steps(
     definition: DjangoTypeDefinition,
     filter_input: object,
     order_by_input: object,
-) -> tuple[tuple[str, Any, object], ...]:
+) -> tuple[_SidecarStep, ...]:
     """Return the ``(kind, set_class, input)`` sidecar steps this call actually applies.
 
     The gate is one rule - supplied AND declared - and the ORDER is contractual
@@ -1848,7 +1869,7 @@ def _sidecar_steps(
     ``::apply_orderset_sync`` and their async twins); both run the one
     post-sidecar seal.
     """
-    steps: list[tuple[str, Any, object]] = []
+    steps: list[_SidecarStep] = []
     if is_supplied(filter_input) and definition.filterset_class is not None:
         steps.append(("filter", definition.filterset_class, filter_input))
     if is_supplied(order_by_input) and definition.orderset_class is not None:
@@ -1858,7 +1879,7 @@ def _sidecar_steps(
 
 def _pipeline_sync(
     target_type: type[DjangoType],
-    source: Any,
+    source: object,
     info: Info[object, object],
     *,
     definition: DjangoTypeDefinition,
@@ -1897,31 +1918,47 @@ def _pipeline_sync(
     returns is served as its primary-key set, which a sidecar can narrow and
     re-sort.
     """
-    source, is_queryset = _prepare_pipeline_source(
+    prepared = _prepare_pipeline_source(
         source,
         target_type,
         async_guard=reject_awaitable_sync_source,
         filter_input=filter_input,
         order_by_input=order_by_input,
     )
-    if not is_queryset:
-        return source
+    if prepared[1] is False:
+        return prepared[0]
     steps = _sidecar_steps(definition, filter_input, order_by_input)
     qs = apply_type_visibility_sync(
         target_type,
-        source,
+        prepared[0],
         info,
         model=definition.model,
     )
-    for kind, set_class, value in steps:
-        apply = apply_orderset_sync if kind == "order" else apply_filterset_sync
-        qs = apply(target_type, set_class, qs, value, info, model=definition.model)
+    for step in steps:
+        if step[0] == "order":
+            qs = apply_orderset_sync(
+                target_type,
+                step[1],
+                qs,
+                step[2],
+                info,
+                model=definition.model,
+            )
+        else:
+            qs = apply_filterset_sync(
+                target_type,
+                step[1],
+                qs,
+                step[2],
+                info,
+                model=definition.model,
+            )
     return _finalize_queryset(target_type, qs, info, definition=definition)
 
 
 async def _pipeline_async(
     target_type: type[DjangoType],
-    source: Any,
+    source: object,
     info: Info[object, object],
     *,
     definition: DjangoTypeDefinition,
@@ -1944,25 +1981,41 @@ async def _pipeline_async(
     ``::apply_orderset_async``), and the visibility seal takes the same one
     default policy the sync sibling uses.
     """
-    source, is_queryset = _prepare_pipeline_source(
+    prepared = _prepare_pipeline_source(
         source,
         target_type,
         async_guard=reject_residual_async_source,
         filter_input=filter_input,
         order_by_input=order_by_input,
     )
-    if not is_queryset:
-        return source
+    if prepared[1] is False:
+        return prepared[0]
     steps = _sidecar_steps(definition, filter_input, order_by_input)
     qs = await apply_type_visibility_async(
         target_type,
-        source,
+        prepared[0],
         info,
         model=definition.model,
     )
-    for kind, set_class, value in steps:
-        apply = apply_orderset_async if kind == "order" else apply_filterset_async
-        qs = await apply(target_type, set_class, qs, value, info, model=definition.model)
+    for step in steps:
+        if step[0] == "order":
+            qs = await apply_orderset_async(
+                target_type,
+                step[1],
+                qs,
+                step[2],
+                info,
+                model=definition.model,
+            )
+        else:
+            qs = await apply_filterset_async(
+                target_type,
+                step[1],
+                qs,
+                step[2],
+                info,
+                model=definition.model,
+            )
     return _finalize_queryset(target_type, qs, info, definition=definition)
 
 
@@ -2010,7 +2063,7 @@ def _synthesized_signature(
         # mypy: runtime-built annotation
         # basedpyright: same reason; ``filter_input_type`` returns ``object``, which declares
         # no ``|``, while the runtime ``Annotated`` alias does
-        filter_ann = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]  # pyright: ignore[reportOperatorIssue]
+        filter_ann: object = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]  # pyright: ignore[reportOperatorIssue]
         params.append(
             inspect.Parameter(
                 CONNECTION_FILTER_KWARG,
@@ -2060,7 +2113,7 @@ def _async_connection_resolver(
 
 def _sync_connection_resolver(
     target_type: type[DjangoType],
-    resolver: Callable[..., Any] | None,
+    resolver: Callable[..., object] | None,
     definition: DjangoTypeDefinition,
 ) -> Callable[..., object]:
     """Return ``_build_connection_resolver``'s sync branch: seed or call, then pipe.
@@ -2077,6 +2130,7 @@ def _sync_connection_resolver(
     """
 
     def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
+        source: object
         if resolver is None:
             source = base_queryset(definition.model)
         else:
@@ -2101,7 +2155,7 @@ def _sync_connection_resolver(
 
 def _build_connection_resolver(
     target_type: type[DjangoType],
-    resolver: Callable[..., Any] | None,
+    resolver: Callable[..., object] | None,
     definition: DjangoTypeDefinition,
 ) -> Callable[..., object]:
     """Build the field resolver: the pipeline body plus the synthesized signature.
@@ -2258,7 +2312,7 @@ def _build_relation_connection_resolver(
     to_attr = _relation_connection_to_attr(relation_field_name)
 
     def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:
-        source = getattr(root, accessor_name).all()
+        source: object = getattr(root, accessor_name).all()
         # Per-response-key window first (divergent aliases): the attr
         # is a pure function of ``info.path.key`` - the resolve-time twin of
         # the response key the walker planned under. ``probe_attr`` tracks
@@ -2271,7 +2325,7 @@ def _build_relation_connection_resolver(
             cast("str", info.path.key),
         )
         probe_attr = per_key_attr
-        window_rows = getattr(root, per_key_attr, None)
+        window_rows: object = getattr(root, per_key_attr, None)
         if window_rows is None:
             probe_attr = to_attr
             window_rows = getattr(root, to_attr, None)
@@ -2335,7 +2389,7 @@ def _build_relation_connection_resolver(
 def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`
     target_type: type[object],
     *,
-    resolver: Callable[..., Any] | None = None,
+    resolver: Callable[..., object] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),

@@ -97,7 +97,7 @@ reconstruction.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from django import forms
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
@@ -120,7 +120,7 @@ from ..utils.write_values import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Callable, Container
-    from typing import TypeAlias
+    from typing import Protocol, TypeAlias, TypeVar
 
     from django.db import models
     from strawberry.types import Info
@@ -133,6 +133,22 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     _FormMutationClass: TypeAlias = type[DjangoModelFormMutation] | type[DjangoFormMutation]
     # The form ``decode_step`` product: the form-keyed bound ``(data, files)`` pair.
     _DecodedForm: TypeAlias = tuple[dict[str, object], dict[str, object]]
+
+    _FormT = TypeVar("_FormT", bound=forms.BaseForm)
+    _FormT_co = TypeVar("_FormT_co", bound=forms.BaseForm, covariant=True)
+
+    class _FormBuilder(Protocol[_FormT_co]):
+        """A form mutation instance, as its ``get_form`` construction hook builds a form."""
+
+        def get_form(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+        ) -> _FormT_co: ...
+
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) form pipeline. Mirrors the
@@ -476,12 +492,12 @@ def _modelform_decode_step(
 
 
 def _bound_form_or_field_errors(
-    holder: DjangoModelFormMutation | DjangoFormMutation,
+    holder: _FormBuilder[_FormT],
     info: Info[object, object],
     decoded: _DecodedForm,
     *,
     instance: models.Model | None,
-) -> tuple[Any, list[FieldError] | None]:
+) -> tuple[_FormT, None] | tuple[None, list[FieldError]]:
     """Construct the bound form and run ``is_valid()`` once (both form flavors).
 
     Returns ``(form, None)`` on success or ``(None, errors)`` on a validation
@@ -512,14 +528,15 @@ def _modelform_write_step(
     re-fetches it by pk under the G2 plan) or a ``list[FieldError]`` on a validation
     / write failure.
     """
-    form, errors = _bound_form_or_field_errors(
+    bound = _bound_form_or_field_errors(
         mutation_cls(),
         info,
         decoded,
         instance=instance,
     )
-    if errors is not None:
-        return errors
+    if bound[1] is not None:
+        return bound[1]
+    form = bound[0]
 
     # The pinned-alias WRITE phase opens for exactly ``form.save()``: the form
     # construction + ``is_valid()`` above are database-read-only under the
@@ -528,8 +545,8 @@ def _modelform_write_step(
         write_error = save_or_field_errors(form.save)
     if write_error is not None:
         return write_error
-    # The consumer-overridable ``get_form`` hook is untyped; a ``ModelForm``
-    # mutation's form is a ``ModelForm``, whose ``instance`` is the saved row.
+    # ``get_form`` returns a ``ModelForm[Any]`` (its model parameter is invariant),
+    # whose ``instance`` is the saved row.
     return cast("models.Model", form.instance)
 
 
@@ -546,14 +563,15 @@ def _plain_form_write_step(
     ``{ ok: true }``.
     """
     holder = mutation_cls()
-    form, errors = _bound_form_or_field_errors(
+    bound = _bound_form_or_field_errors(
         holder,
         info,
         decoded,
         instance=None,
     )
-    if errors is not None:
-        return errors
+    if bound[1] is not None:
+        return bound[1]
+    form = bound[0]
 
     # ``perform_mutate`` is the only write window (mirrors ``form.save`` /
     # ``serializer.save`` / ``instance.delete`` on the other flavors).

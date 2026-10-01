@@ -328,7 +328,9 @@ def normalize_input_value(
         if field.kind == RELATED:
             # ``RelatedOrder`` branch -- recurse into the target orderset and
             # prefix every child path with this branch's django source path.
-            child_orderset = field.related_obj.orderset
+            # ``related_orders`` holds only the ``RelatedOrder`` declarations the
+            # metaclass collected (``sets_mixins.py::collect_related_declarations``).
+            child_orderset = cast("RelatedOrder", field.related_obj).orderset
             if child_orderset is None:
                 continue
             prefix = field.spec.django_source_path

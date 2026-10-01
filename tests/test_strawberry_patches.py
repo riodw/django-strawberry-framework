@@ -65,6 +65,7 @@ own ``bytes`` semantics survive here untouched, because that is what a
 consumer mounting Strawberry's own view is entitled to.
 """
 
+import functools
 import json
 from unittest import mock
 
@@ -477,6 +478,20 @@ def test_apply_fails_loudly_when_the_upload_utility_moves():
     dependency-shape change, and it fails at ``apply()`` like every other.
     """
     with mock.patch.object(patches, "replace_placeholders_with_files", None):
+        with pytest.raises(RuntimeError, match="replace_placeholders_with_files"):
+            patches.apply()
+
+
+def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
+    """The frame-scoped ``400`` reads the utility's code object, so callability is not enough.
+
+    A release that wrapped the utility in a callable with no ``__code__`` (a
+    ``functools.partial``, a C function) would otherwise pass capture and then
+    raise ``AttributeError`` from inside the traversal handler, replacing the
+    request's own error.
+    """
+    wrapped = functools.partial(patches.replace_placeholders_with_files)
+    with mock.patch.object(patches, "replace_placeholders_with_files", wrapped):
         with pytest.raises(RuntimeError, match="replace_placeholders_with_files"):
             patches.apply()
 

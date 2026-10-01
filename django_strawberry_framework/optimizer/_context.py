@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import contextlib
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from ..utils.context import clear_context_key, get_context_value, stash_on_context
 from ..utils.operation_lease import OperationLease
@@ -360,7 +360,7 @@ def operation_publishes_to_context() -> bool:
     return frame is not None and frame.publishes_to_context
 
 
-def optimizer_value(context: object, key: str, default: object = None) -> Any:
+def optimizer_value(context: object, key: str, default: object = None) -> object:
     """Read one optimizer stash for the operation running here.
 
     The running operation's own mapping answers, without falling through to the

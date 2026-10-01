@@ -53,6 +53,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
     from django.db.models import QuerySet
     from django.db.models.expressions import Combinable, Expression, F, OrderBy
+    from django.db.models.options import Options
     from django.db.models.sql.query import Query
 
     from ..keyset import KeysetSeek
@@ -473,7 +474,7 @@ def runtime_path_from_path(path: object) -> tuple[str, ...]:
     for _ in range(_MAX_PATH_DEPTH):
         if node is None:
             return tuple(reversed(keys))
-        key = getattr(node, "key", None)
+        key: object = getattr(node, "key", None)
         if not isinstance(key, int) and key is not None:
             keys.append(str(key))
         node = getattr(node, "prev", None)
@@ -736,7 +737,7 @@ def _select_path_traversable(
         except FieldDoesNotExist:
             return False
         aliases = {segment}
-        attname = getattr(field_obj, "attname", None)
+        attname: str | None = getattr(field_obj, "attname", None)
         if attname:
             aliases.add(attname)
         scoped = (
@@ -830,7 +831,7 @@ def order_entry_name_and_direction(entry: object) -> tuple[str, bool] | None:
         descending = entry.startswith("-")
         name = entry[1:] if descending else entry
         return (name, descending) if name else None
-    expression = getattr(entry, "expression", None)
+    expression: object = getattr(entry, "expression", None)
     expression_name = (
         getattr(expression, "name", None)
         if expression is not None
@@ -886,7 +887,7 @@ def ends_in_unique_column(effective: tuple[object, ...], model: type[models.Mode
     if parsed is None:
         return False
     ref = parsed[0]
-    meta = getattr(model, "_meta", None)
+    meta: Options[models.Model] | None = getattr(model, "_meta", None)
     if meta is None:
         return False
     pk = getattr(meta, "pk", None)
@@ -1535,7 +1536,7 @@ def _prefetch_lookup_paths(entries: Iterable[PrefetchLookup], prefix: str = "") 
             continue
         path = f"{prefix}__{prefetch_to}" if prefix else prefetch_to
         paths.add(path)
-        inner = getattr(entry, "queryset", None)
+        inner: object = getattr(entry, "queryset", None)
         inner_lookups = _consumer_prefetch_lookups(inner) if inner is not None else []
         if inner_lookups:
             paths.update(_prefetch_lookup_paths(inner_lookups, path))

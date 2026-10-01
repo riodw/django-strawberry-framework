@@ -382,14 +382,84 @@ from .utils.sessions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import MutableMapping
+    from typing import Protocol
+
     from asgiref.typing import (
         ASGI3Application,
         ASGIReceiveCallable,
         ASGISendCallable,
         WebSocketScope,
     )
+    from django.contrib.sessions.backends.base import SessionBase
     from strawberry.channels import GraphQLWSConsumer
     from strawberry.schema import BaseSchema
+
+    class _RevocationOwner(Protocol):
+        """The consumer as the stop-aware result source reads it: its revocation state."""
+
+        @property
+        def _revocation(self) -> _ConnectionRevocation: ...
+
+    class _RevalidatedConsumer(_RevocationOwner, Protocol):
+        """The consumer as the revalidation decision reads it.
+
+        ``scope`` is the connection's ASGI scope, a plain ``dict`` that Channels'
+        middleware and the package both write to, hence the open value type.
+        """
+
+        @property
+        def scope(self) -> MutableMapping[str, object]: ...
+
+        @property
+        def revalidation_window(self) -> float: ...
+
+    class _ClosableSocket(Protocol):
+        """The WebSocket adapter's close, the one write every refusal makes."""
+
+        async def close(self, *, code: int, reason: str) -> None:
+            """Close the socket with the WebSocket close ``code`` and ``reason``."""
+
+    class _GatedSocket(_ClosableSocket, Protocol):
+        """The WebSocket adapter as the checkpoints read it: its close and its consumer."""
+
+        @property
+        def ws_consumer(self) -> _RevalidatedConsumer: ...
+
+    class _ContainedHandler(Protocol):
+        """A protocol handler as the message-loop containment reads it."""
+
+        @property
+        def websocket(self) -> _ClosableSocket: ...
+
+    class _AdmissionHandler(Protocol):
+        """A protocol handler as the admission checkpoint reads it."""
+
+        @property
+        def connection_acknowledged(self) -> bool: ...
+
+        @property
+        def view(self) -> _RevalidatedConsumer: ...
+
+        @property
+        def websocket(self) -> _GatedSocket: ...
+
+    class _SchemaSeat(Protocol):
+        """A protocol handler as ``_install_stop_aware_schema`` reads and writes it.
+
+        Read once, right after upstream's ``__init__`` stored its ``schema=``
+        keyword, so the read is upstream's schema and the write is the wrapper.
+        """
+
+        @property
+        def view(self) -> _RevocationOwner: ...
+
+        @property
+        def schema(self) -> BaseSchema: ...
+
+        @schema.setter
+        def schema(self, value: _StopAwareSchema, /) -> None: ...
+
 
 #: The outgoing frame a revalidated send hands to the transport unchanged.
 _MessageT = TypeVar("_MessageT")
@@ -641,7 +711,7 @@ class _ConnectionRevocation:
 
     def __init__(self) -> None:
         self.state = _REVOCATION_PERMITTED
-        self.attempt: Any = None
+        self.attempt: asyncio.Task[None] | None = None
         self.attempts = 0
 
     @property
@@ -658,7 +728,7 @@ class _ConnectionRevocation:
         if self.state == _REVOCATION_PERMITTED:
             self.state = _REVOCATION_DECIDED
 
-    async def close(self, websocket: object) -> None:
+    async def close(self, websocket: _ClosableSocket) -> None:
         """Start the one permitted close attempt, or await the one already in flight.
 
         Callers hold the connection's actor lease, so the state read and the task
@@ -680,10 +750,13 @@ class _ConnectionRevocation:
             self.state = _REVOCATION_CLOSING
             self.attempt = asyncio.create_task(self._attempt_close(websocket))
         if self.state == _REVOCATION_CLOSING:
-            if self.attempt.done() and self.attempt.cancelled():
+            # ``CLOSING`` is entered only together with the ``create_task`` store above,
+            # so an attempt task is always held here.
+            attempt = cast("asyncio.Task[None]", self.attempt)
+            if attempt.done() and attempt.cancelled():
                 self.state = _REVOCATION_ABANDONED
                 return
-            await asyncio.shield(self.attempt)
+            await asyncio.shield(attempt)
 
     async def settle(self) -> None:
         """End this connection's close attempt, if it ever started one.
@@ -721,7 +794,7 @@ class _ConnectionRevocation:
                 await self.attempt
             raise
 
-    async def _attempt_close(self, websocket: Any) -> None:
+    async def _attempt_close(self, websocket: _ClosableSocket) -> None:
         """Commit one ``4403`` close, and record what actually happened.
 
         Runs as the connection's own task, and records the outcome AFTER its own
@@ -773,7 +846,7 @@ class _ConnectionRevocation:
         self.state = _REVOCATION_CLOSED
 
 
-async def revalidate_operation_actor(handler: Any) -> bool:
+async def revalidate_operation_actor(handler: _AdmissionHandler) -> bool:
     """Admission checkpoint: may a NEW operation start on this connection?
 
     Returns ``True`` to let upstream run the operation. Returns ``False`` after
@@ -921,7 +994,7 @@ async def revalidate_operation_actor(handler: Any) -> bool:
 
 
 async def send_revalidated_operation_frame(
-    websocket: Any,
+    websocket: _GatedSocket,
     message: _MessageT,
     send: Callable[[_MessageT], Awaitable[None]],
 ) -> None:
@@ -1046,7 +1119,7 @@ async def send_revalidated_operation_frame(
         return
 
 
-async def _actor_is_current(consumer: Any) -> bool:
+async def _actor_is_current(consumer: _RevalidatedConsumer) -> bool:
     """Return whether the connection's scope actor is valid **now**.
 
     The ONE decision both checkpoints await (spec-046 Helper-reuse: "every
@@ -1094,7 +1167,7 @@ async def _actor_is_current(consumer: Any) -> bool:
         )
         return False
     try:
-        is_authenticated = getattr(actor, "is_authenticated", False)
+        is_authenticated: object = getattr(actor, "is_authenticated", False)
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
         raise
     except BaseException:
@@ -1153,7 +1226,10 @@ async def _actor_is_current(consumer: Any) -> bool:
     try:
         if (
             window > 0.0
-            and _monotonic() - scope.get(_REVALIDATED_AT_SCOPE_KEY, -math.inf) < window
+            # The key is package-private and written below only as a monotonic float; any
+            # other value raises out of the arithmetic into the handler below.
+            and _monotonic() - cast("float", scope.get(_REVALIDATED_AT_SCOPE_KEY, -math.inf))
+            < window
         ):
             return True
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
@@ -1187,7 +1263,7 @@ async def _actor_is_current(consumer: Any) -> bool:
         refreshed = None
 
     try:
-        is_refreshed_authenticated = (
+        is_refreshed_authenticated: object = (
             getattr(refreshed, "is_authenticated", False) if refreshed is not None else False
         )
     except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
@@ -1246,7 +1322,7 @@ async def _actor_is_current(consumer: Any) -> bool:
     return True
 
 
-async def _revoke_connection(websocket: Any) -> None:
+async def _revoke_connection(websocket: _GatedSocket) -> None:
     """Publish the revocation decision, then drive the connection's close.
 
     The ONE entry point both checkpoints take into
@@ -1306,7 +1382,7 @@ async def _revoke_connection(websocket: Any) -> None:
 
 async def _stop_aware_results(
     source: AsyncGenerator[object, None],
-    consumer: Any,
+    consumer: _RevocationOwner,
     schema: object,
 ) -> AsyncGenerator[object, None]:
     """Yield ``source``'s masked results until the connection is revoked, then end.
@@ -1404,7 +1480,7 @@ class _StopAwareSchema:
 
     __slots__ = ("_consumer", "_schema")
 
-    def __init__(self, schema: BaseSchema, consumer: Any) -> None:
+    def __init__(self, schema: BaseSchema, consumer: _RevocationOwner) -> None:
         self._schema = schema
         self._consumer = consumer
 
@@ -1442,7 +1518,7 @@ class _StopAwareSchema:
         return _stop_aware_results(source, self._consumer, self._schema)
 
 
-def _install_stop_aware_schema(handler: Any) -> None:
+def _install_stop_aware_schema(handler: _SchemaSeat) -> None:
     """Give one protocol handler the connection's stop-aware schema.
 
     Called by both handler subclasses after ``super().__init__`` has stored
@@ -1453,7 +1529,11 @@ def _install_stop_aware_schema(handler: Any) -> None:
     handler.schema = _StopAwareSchema(handler.schema, handler.view)
 
 
-async def _contain_message_loop_failure(handler: Any, exc: Exception, protocol: str) -> None:
+async def _contain_message_loop_failure(
+    handler: _ContainedHandler,
+    exc: Exception,
+    protocol: str,
+) -> None:
     """Refuse a connection whose message loop escaped, saying honestly whose fault it was.
 
     The loop-containment half of the exception-containment invariant (the
@@ -1558,7 +1638,7 @@ async def _contain_message_loop_failure(handler: Any, exc: Exception, protocol: 
         )
 
 
-async def _refreshed_actor(scope: Mapping[str, Any]) -> object:
+async def _refreshed_actor(scope: Mapping[str, object]) -> object:
     """Reload the connection's session and resolve its actor, or ``AnonymousUser``.
 
     ``channels.auth.get_user`` is reused verbatim rather than reimplemented: it
@@ -1586,7 +1666,9 @@ async def _refreshed_actor(scope: Mapping[str, Any]) -> object:
 
     from .utils.sessions import session_store_class
 
-    store = session_store_class()(scope["session"].session_key)
+    # ``AuthMiddlewareStack``'s ``SessionMiddleware`` stores the engine's lazy
+    # ``SessionStore`` under ``"session"`` (channels-stubs: ``_ChannelScope.session``).
+    store = session_store_class()(cast("SessionBase", scope["session"]).session_key)
     # mypy: channels-stubs types ``get_user``'s argument as a full ``_ChannelScope`` holding a
     # lazy session; ``get_user`` reads only ``scope["session"]`` (see above).
     # basedpyright: the same stub rejects a ``SessionBase`` where it types ``_LazySession``
@@ -1627,7 +1709,7 @@ def build_revalidating_consumer_class(
     class _RevalidatingTransportWSHandler(transport_ws_handler_base):  # type: ignore[misc, no-any-unimported]
         """``graphql-transport-ws``: revalidated admission, stoppable results."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(*args, **kwargs)
             _install_stop_aware_schema(self)
 
@@ -1673,7 +1755,7 @@ def build_revalidating_consumer_class(
     class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):  # type: ignore[misc, no-any-unimported]
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(*args, **kwargs)
             _install_stop_aware_schema(self)
 
@@ -1731,8 +1813,8 @@ def build_revalidating_consumer_class(
         patching step that a future refactor could forget to perform.
         """
 
-        # ``message`` is a protocol frame mapping on either protocol; ``Any``
-        # for the same reason the handler hooks above use it.
+        # ``message`` is a protocol frame mapping on either protocol, annotated
+        # the way the handler hooks above annotate theirs.
         async def send_json(self, message: Mapping[str, object]) -> None:
             """Revalidate an information-bearing frame; write nothing once revoked.
 
@@ -1907,9 +1989,9 @@ def build_revalidating_consumer_class(
 
         def __init__(
             self,
-            *args: Any,
+            *args: object,
             revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
-            **kwargs: Any,
+            **kwargs: object,
         ) -> None:
             # Stored BEFORE ``super().__init__``: upstream's initializer starts
             # the consumer's own machinery, and the checkpoints read both of these

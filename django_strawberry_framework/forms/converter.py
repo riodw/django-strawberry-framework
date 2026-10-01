@@ -275,8 +275,10 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
         scalar_registry=_SCALAR_FORM_FIELDS,
         fallthrough_error_factory=_unsupported_form_field,
     )
-    # Every precheck handler and registry converter above builds a FormFieldConversion.
-    return cast("FormFieldConversion", finish_field_conversion(result, field))
+    # Every precheck handler above returns a finished conversion and every registry
+    # entry is a ``make_scalar_converter`` callable; each builds a FormFieldConversion.
+    conversion = cast("FormFieldConversion | Callable[[forms.Field], FormFieldConversion]", result)
+    return cast("FormFieldConversion", finish_field_conversion(conversion, field))
 
 
 def _unsupported_form_field(field: forms.Field) -> ConfigurationError:

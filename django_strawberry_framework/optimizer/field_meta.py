@@ -21,7 +21,7 @@ Django descriptors into the walk.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from ..exceptions import OptimizerError, _safe_type_name
 from ..utils.relations import (
@@ -220,7 +220,7 @@ class FieldMeta:
         field: object,
         *,
         is_relation: bool,
-        field_name: str | None = None,
+        field_name: object = None,
     ) -> FieldMeta:
         """Build a ``FieldMeta`` from a guard-cleared field-shaped descriptor.
 
@@ -247,7 +247,13 @@ class FieldMeta:
                 f"FieldMeta expected a string field name; got {_safe_type_name(field_name)}.",
             )
         target_field = relation_attr(field, "target_field", None)
-        related_model = relation_attr(field, "related_model", None)
+        # Trusted, not checked: a Django relation's ``related_model`` is a model class
+        # or ``None`` (a resolver-path stand-in may carry a lighter class that
+        # ``_target_pk_name`` reads defensively).
+        related_model = cast(
+            "type[models.Model] | None",
+            relation_attr(field, "related_model", None),
+        )
         target_pk_name = _target_pk_name(related_model)
         target_field_name = (
             relation_attr(target_field, "name", None) if target_field is not None else None
@@ -348,13 +354,13 @@ def _target_pk_name(model: type[models.Model] | None) -> str | None:
     if model is None:
         return None
     try:
-        meta = getattr(model, "_meta", None)
+        meta: object = getattr(model, "_meta", None)
         if meta is None:
             return None
-        pk = getattr(meta, "pk", None)
+        pk: object = getattr(meta, "pk", None)
         if pk is None:
             return None
-        pk_name = getattr(pk, "name", None)
+        pk_name: object = getattr(pk, "name", None)
         return pk_name if isinstance(pk_name, str) else None
     except BaseException:
         return None

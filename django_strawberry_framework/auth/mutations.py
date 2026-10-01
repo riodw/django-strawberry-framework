@@ -77,7 +77,7 @@ from ..utils.sessions import actor_transition
 from . import sessions
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable, Coroutine, Iterable, Sequence
+    from collections.abc import Callable, Coroutine, Iterable, MutableMapping, Sequence
     from typing import Protocol
 
     from django.contrib.auth.base_user import AbstractBaseUser
@@ -93,6 +93,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..mutations.sets import DeclarationRegistry, _ValidatedMutationMeta
     from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
+    from ..utils.permissions import ChannelsRequestAdapter
 
     # The register decode product: the constructed (unsaved) user, the M2M
     # replace-sets, the ``full_clean`` exclude list, and the captured raw password.
@@ -566,7 +567,7 @@ def _authenticated_actor_or_none(request: object) -> _User | None:
     propagate so a real store outage is not hidden as anonymous.
     """
     try:
-        user = getattr(request, "user", None)
+        user: object = getattr(request, "user", None)
     except (
         TypeError,
         ValueError,
@@ -578,7 +579,7 @@ def _authenticated_actor_or_none(request: object) -> _User | None:
     if user is None:
         return None
     try:
-        is_authenticated = getattr(user, "is_authenticated", False)
+        is_authenticated: object = getattr(user, "is_authenticated", False)
     except (
         TypeError,
         ValueError,
@@ -649,7 +650,7 @@ def _transport_prologue(
     *,
     supported: Callable[[sessions.Transport], bool],
     unsupported_message: str,
-) -> tuple[Any, sessions.Transport, SessionBase]:
+) -> tuple[object, sessions.Transport, SessionBase]:
     """Resolve + classify the request, enforce transport capability, require a session.
 
     The ONE shared transport prologue login and logout both open with (auth
@@ -692,7 +693,7 @@ def _login_authenticate(
     info: Info[object, object],
     username: str,
     password: str,
-) -> tuple[Any, sessions.Transport, SessionBase, type[object], str, _User | None]:
+) -> tuple[object, sessions.Transport, SessionBase, type[object], str, _User | None]:
     """The all-sync login prologue: classify, capability, gate, preflight, authenticate.
 
     Runs steps 1-5 of the login state machine with NO session mutation:
@@ -736,7 +737,19 @@ def _login_authenticate(
         unencodable_text_error("username", username) is not None
         or unencodable_text_error("password", password) is not None
     )
-    user = None if unstorable else auth.authenticate(request, username=username, password=password)
+    user = (
+        None
+        if unstorable
+        else auth.authenticate(
+            # mypy: django-stubs types ``authenticate``'s request as an ``HttpRequest``;
+            # Django hands it to each backend untouched, and on Channels HTTP it is the
+            # request-like ``ChannelsRequestAdapter``
+            # basedpyright: the same stub request type, as an argument type
+            request,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+            username=username,
+            password=password,
+        )
+    )
     return request, transport, session, payload_cls, slot, user
 
 
@@ -774,7 +787,11 @@ def _django_http_login_establish(request: HttpRequest, user: _User) -> None:
         raise
 
 
-async def _channels_http_login_establish(request: Any, session: SessionBase, user: _User) -> None:
+async def _channels_http_login_establish(
+    request: ChannelsRequestAdapter,
+    session: SessionBase,
+    user: _User,
+) -> None:
     """Establish + durably persist the Channels HTTP session; compensate fail-closed.
 
     The Channels twin of ``_django_http_login_establish``, awaited natively (never a
@@ -797,12 +814,19 @@ async def _channels_http_login_establish(request: Any, session: SessionBase, use
     from channels.auth import login as channels_login
 
     async with sessions.scope_session_lock(request):
+        # ``scope_session_lock`` rejects a scope that is not a ``MutableMapping``
+        # (``sessions._require_mutable_scope``) before the lock is held.
+        scope = cast("MutableMapping[str, object]", request.scope)
         try:
-            await channels_login(request.scope, user)
+            # mypy: channels-stubs types ``login``'s scope as its private ``_ChannelScope``
+            # (a WebSocket scope); ``login`` only reads the ``session`` / ``user`` keys
+            # and writes ``user``, on the HTTP scope handed here
+            # basedpyright: the same stub scope mismatch, as an argument type
+            await channels_login(scope, user)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             await session.asave()
         except BaseException as primary:  # incl. asyncio.CancelledError: compensate + re-raise
             try:
-                request.scope["user"] = AnonymousUser()
+                scope["user"] = AnonymousUser()
                 await session.aflush()
             except BaseException:
                 raise primary  # noqa: B904 - cleanup chains via __context__ (PEP 3134)
@@ -839,12 +863,16 @@ def _login_resolve_body(
     payload = _login_result_payload(payload_cls, slot, user)
     if user is None:
         return payload
+    # ``sessions.classify_transport`` returns a Channels transport only for a
+    # ``ChannelsRequestAdapter`` and ``DJANGO_HTTP`` only for an ``HttpRequest``;
+    # ``sessions.login_supported`` already rejected ``CHANNELS_WEBSOCKET``.
     if transport is sessions.Transport.CHANNELS_HTTP:
         from asgiref.sync import async_to_sync
 
-        async_to_sync(_channels_http_login_establish)(request, session, user)
+        channels_request = cast("ChannelsRequestAdapter", request)
+        async_to_sync(_channels_http_login_establish)(channels_request, session, user)
     else:
-        _django_http_login_establish(request, user)
+        _django_http_login_establish(cast("HttpRequest", request), user)
     return payload
 
 
@@ -885,14 +913,16 @@ async def _login_resolve_body_async(
     payload = _login_result_payload(payload_cls, slot, user)
     if user is None:
         return payload
-    await _channels_http_login_establish(request, session, user)
+    # The same ``info`` classified as ``CHANNELS_HTTP`` above, and
+    # ``sessions.classify_transport`` returns that only for a ``ChannelsRequestAdapter``.
+    await _channels_http_login_establish(cast("ChannelsRequestAdapter", request), session, user)
     return payload
 
 
 def _logout_prologue(
     holder_cls: _SealedAuthHolderMeta,
     info: Info[object, object],
-) -> tuple[Any, sessions.Transport, _OkPayloadClass]:
+) -> tuple[object, sessions.Transport, _OkPayloadClass]:
     """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
 
     Runs steps 1-3 of the logout state machine with NO session mutation:
@@ -967,7 +997,10 @@ def _django_http_logout(request: HttpRequest, payload_cls: _OkPayloadClass) -> _
     return payload
 
 
-async def _channels_logout(request: Any, payload_cls: _OkPayloadClass) -> _OkPayload:
+async def _channels_logout(
+    request: ChannelsRequestAdapter,
+    payload_cls: _OkPayloadClass,
+) -> _OkPayload:
     """The Channels twin of ``_django_http_logout``, awaited natively under the scope lock.
 
     ``channels.auth.logout`` (a ``database_sync_to_async`` callable) fires
@@ -1019,12 +1052,19 @@ async def _channels_logout(request: Any, payload_cls: _OkPayloadClass) -> _OkPay
 
     async with sessions.scope_session_lock(request):
         payload = _logout_observation(request, payload_cls)
-        async with actor_transition(request.scope, was_authenticated=payload.ok):
+        # ``scope_session_lock`` rejects a scope that is not a ``MutableMapping``
+        # (``sessions._require_mutable_scope``) before the lock is held.
+        scope = cast("MutableMapping[str, object]", request.scope)
+        async with actor_transition(scope, was_authenticated=payload.ok):
             try:
-                await channels_logout(request.scope)
+                # mypy: channels-stubs types ``logout``'s scope as its private
+                # ``_ChannelScope`` (a WebSocket scope); ``logout`` only reads the
+                # ``session`` / ``user`` keys and writes ``user``
+                # basedpyright: the same stub scope mismatch, as an argument type
+                await channels_logout(scope)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
             except BaseException:  # incl. CancelledError: anonymize where possible + re-raise
                 with contextlib.suppress(Exception):
-                    request.scope["user"] = AnonymousUser()
+                    scope["user"] = AnonymousUser()
                 raise
             return payload
 
@@ -1046,11 +1086,14 @@ def _logout_resolve_body(holder_cls: _SealedAuthHolderMeta, info: Info[object, o
     but is routed through the same bridge for completeness.
     """
     request, transport, payload_cls = _logout_prologue(holder_cls, info)
+    # ``sessions.classify_transport`` returns ``DJANGO_HTTP`` only for an ``HttpRequest``
+    # and a Channels transport only for a ``ChannelsRequestAdapter``.
     if transport is sessions.Transport.DJANGO_HTTP:
-        return _django_http_logout(request, payload_cls)
+        return _django_http_logout(cast("HttpRequest", request), payload_cls)
     from asgiref.sync import async_to_sync
 
-    return async_to_sync(_channels_logout)(request, payload_cls)
+    channels_request = cast("ChannelsRequestAdapter", request)
+    return async_to_sync(_channels_logout)(channels_request, payload_cls)
 
 
 async def _logout_resolve_body_async(
@@ -1076,7 +1119,9 @@ async def _logout_resolve_body_async(
         holder_cls,
         info,
     )
-    return await _channels_logout(request, payload_cls)
+    # The same ``info`` classified as a Channels transport above, and
+    # ``sessions.classify_transport`` returns that only for a ``ChannelsRequestAdapter``.
+    return await _channels_logout(cast("ChannelsRequestAdapter", request), payload_cls)
 
 
 def login_mutation(

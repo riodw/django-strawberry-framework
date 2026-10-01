@@ -117,7 +117,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # subclass that is also a Strawberry ``BaseView`` (its ``as_view`` extends the
     # one, its ``parse_json`` delegates to the other); at run time the mixin's base
     # stays ``object`` so it adds nothing to either view's MRO.
-    class _BoundaryMixinBase(BaseView[Any], View):
+    class _BoundaryMixinBase(BaseView[HttpRequest], View):
         """The Strawberry ``BaseView`` plus Django ``View`` the boundary mixin extends."""
 else:
     _BoundaryMixinBase = object
@@ -540,7 +540,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
 
     @classonlymethod
     @override
-    def as_view(cls, **initkwargs: Any) -> Any:  # noqa: N805 - Django's own signature
+    def as_view(cls, **initkwargs: object) -> Any:  # noqa: N805 - Django's own signature
         """Return upstream's view callback, stamped with the ordering protocol.
 
         The ordering half of the body boundary (spec-046 Decision 18), stamped
@@ -601,7 +601,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         if iscoroutinefunction(upstream_view):
 
             @wraps(upstream_view)
-            async def async_view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+            async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:  # type: ignore[misc]
                 instance = prepared_view(request)
                 if instance is None:
                     return await upstream_view(request, *args, **kwargs)
@@ -611,7 +611,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         else:
 
             @wraps(upstream_view)
-            def sync_view(request: HttpRequest, *args: Any, **kwargs: Any) -> Any:  # type: ignore[misc]
+            def sync_view(request: HttpRequest, *args: object, **kwargs: object) -> object:  # type: ignore[misc]
                 instance = prepared_view(request)
                 if instance is None:
                     return upstream_view(request, *args, **kwargs)
@@ -1037,7 +1037,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
     request_adapter_class: type[DjangoHTTPRequestAdapter] = _RawBodyRequestAdapter
 
     @override
-    def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
+    def run(self, request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
         """Enforce the request boundary, then run CSRF, then upstream's ``run``.
 
         The order is the contract (spec-046 Decision 7): nothing here may touch
@@ -1090,7 +1090,7 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):
     """
 
     @override
-    async def run(self, request: HttpRequest, *args: Any, **kwargs: Any) -> Any:
+    async def run(self, request: HttpRequest, *args: object, **kwargs: object) -> Any:
         """Enforce the request boundary, then run CSRF, then upstream's ``run``.
 
         The sync twin's docstring is the contract; the only difference is the

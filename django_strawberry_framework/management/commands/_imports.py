@@ -51,4 +51,9 @@ def import_string_or_command_error(dotted_path: str) -> object:
             f"{dotted_path!r} is not a valid dotted object path: a module path is required.",
         )
     _validate_absolute_module_path(dotted_path, module_name, label="dotted object path")
-    return import_or_command_error(lambda: import_string(dotted_path))
+
+    def _import() -> object:
+        # django-stubs types ``import_string`` as returning ``Any``; it is an arbitrary object.
+        return import_string(dotted_path)
+
+    return import_or_command_error(_import)

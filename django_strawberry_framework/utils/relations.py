@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, TypeGuard, cast, overload
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeGuard, cast, overload
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models.constants import LOOKUP_SEP
@@ -17,7 +17,7 @@ from django_strawberry_framework.exceptions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Sequence, Sized
 
     from django.db import models
     from django.db.models.lookups import Lookup, Transform
@@ -81,7 +81,7 @@ def relation_attr(
     default: object = _MISSING,
     *,
     lenient: bool = False,
-) -> Any:
+) -> object:
     """Read relation metadata without allowing consumer objects to escape raw errors.
 
     ``lenient`` selects the FAILURE POLICY, and it is the only axis on which the
@@ -428,7 +428,7 @@ def classify_path(model: type[models.Model], field_path: str) -> ClassifiedPath:
     )
 
 
-def validate_lookup_expr(terminal: ModelField, lookup_expr: str) -> type[Lookup[Any]]:
+def validate_lookup_expr(terminal: ModelField, lookup_expr: str) -> type[Lookup[object]]:
     """Validate a django-filter lookup expression against a classified terminal.
 
     A contract SEPARATE from path classification. ``terminal`` is a
@@ -530,7 +530,9 @@ def _lenient_traverses_to_many(model: type[models.Model], field_path: str) -> bo
                 return False
             if is_many_side_relation_kind(relation_kind(field)):
                 return True
-            related = getattr(field, "related_model", None)
+            # ``Field.related_model`` checks the app registry is ready, so it is a resolved
+            # model class or ``None`` (``GenericForeignKey`` declares ``None``).
+            related: type[models.Model] | None = getattr(field, "related_model", None)
         except BaseException:
             return False
         if related is None:
@@ -803,7 +805,8 @@ def has_composite_pk(model: type[models.Model]) -> bool:
     """
     try:
         meta = model._meta
-        pk_fields = getattr(meta, "pk_fields", None)
+        # Django 5.2+ ``Options.pk_fields`` is a list of fields; older Django lacks it.
+        pk_fields: Sized | None = getattr(meta, "pk_fields", None)
         return pk_fields is not None and len(pk_fields) > 1
     except BaseException as exc:
         raise ConfigurationError(

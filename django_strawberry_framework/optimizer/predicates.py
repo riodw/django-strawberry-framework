@@ -95,7 +95,7 @@ def _effective_alias_names(queryset: QuerySet[models.Model]) -> set[str]:
     names: set[str] = set()
     for field in queryset.model._meta.get_fields():
         names.add(field.name)
-        attname = getattr(field, "attname", None)
+        attname: str | None = getattr(field, "attname", None)
         if attname is not None:
             names.add(attname)
     names.add("pk")

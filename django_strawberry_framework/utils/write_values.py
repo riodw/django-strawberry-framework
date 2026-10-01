@@ -100,7 +100,7 @@ def raw_choice_value(value: object) -> object:
     it stores and validates against. A non-enum scalar is passed through unchanged;
     an explicit ``None`` (a provided null) stays ``None``.
     """
-    raw_value = value.value if isinstance(value, Enum) else value
+    raw_value: object = value.value if isinstance(value, Enum) else value
     return str.__str__(raw_value) if isinstance(raw_value, str) else raw_value
 
 
@@ -340,7 +340,7 @@ def _no_relation_extra(_spec: InputFieldSpec) -> Mapping[str, object]:
 
 
 def store_decoded(
-    dest: dict[str, Any],
+    dest: dict[str, object],
     spec: InputFieldSpec,
     pair: tuple[object, FieldError | None],
 ) -> FieldError | None:
@@ -360,7 +360,7 @@ def store_decoded(
 
 
 def decoded_into(
-    dest: dict[str, Any],
+    dest: dict[str, object],
     decode: Callable[[InputFieldSpec, object], tuple[object, FieldError | None]],
 ) -> _FieldHandler:
     """Build a kind handler: ``decode(spec, value)`` then ``store_decoded``.
@@ -376,7 +376,7 @@ def decoded_into(
 
 
 def scalar_into(
-    dest: dict[str, Any],
+    dest: dict[str, object],
     *,
     field_name: Callable[[InputFieldSpec], str] = _spec_field_name,
 ) -> _FieldHandler:
@@ -392,7 +392,7 @@ def scalar_into(
 
 
 def file_into(
-    dest: dict[str, Any],
+    dest: dict[str, object],
 ) -> _FieldHandler:
     """FILE handler: store the Upload under ``spec.target_name``.
 
@@ -403,7 +403,7 @@ def file_into(
 
 
 def relation_into(
-    dest: dict[str, Any],
+    dest: dict[str, object],
     *,
     single: _RelationDecoder,
     multi: _RelationDecoder,
@@ -434,12 +434,12 @@ def relation_into(
 
 
 def decode_field_handlers(
-    dest: dict[str, Any],
+    dest: dict[str, object],
     *,
     info: Info[object, object],
     single: _RelationDecoder,
     multi: _RelationDecoder,
-    file_dest: dict[str, Any] | None = None,
+    file_dest: dict[str, object] | None = None,
     field_name: Callable[[InputFieldSpec], str] = _spec_field_name,
     extra: Callable[[InputFieldSpec], Mapping[str, object]] = _no_relation_extra,
     extra_handlers: dict[str, _FieldHandler] | None = None,

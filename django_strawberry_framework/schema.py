@@ -100,15 +100,24 @@ from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import Protocol
+
     from django.db.transaction import Atomic
-    from graphql import FieldNode, GraphQLObjectType
+    from graphql import FieldNode, GraphQLFieldMap, GraphQLObjectType
     from graphql.pyutils import AwaitableOrValue, Path
     from strawberry.extensions.runner import SchemaExtensionsRunner
     from strawberry.schema.schema import StreamResult
     from strawberry.types import ExecutionContext as StrawberryExecutionContext
     from strawberry.types import ExecutionResult as StrawberryExecutionResult
+    from typing_extensions import TypeIs
 
     from .mutations.sets import WriteMutationClass
+
+    class _DBAPIConnection(Protocol):
+        """The raw handle a Django connection wraps, as far as closing it goes (PEP 249)."""
+
+        def close(self) -> object: ...
+
 
 #: What one window's ``run`` produces, handed back unchanged.
 _WindowT = TypeVar("_WindowT")
@@ -139,7 +148,7 @@ def _close_thread_connections() -> None:
     for connection in connections.all(initialized_only=True):
         with contextlib.suppress(DatabaseError):
             connection.close()
-        handle = connection.connection
+        handle: _DBAPIConnection | None = connection.connection
         if handle is not None:
             handle.close()
             connection.connection = None
@@ -213,16 +222,16 @@ class DjangoMutationExecutionContext(ExecutionContext):
             return None
         field_node = field_nodes[0]
         node_name = getattr(field_node, "name", None)
-        field_name = getattr(node_name, "value", None)
+        field_name: str | None = getattr(node_name, "value", None)
         if not field_name:
             return None
-        parent_fields = getattr(parent_type, "fields", None)
+        parent_fields: GraphQLFieldMap | None = getattr(parent_type, "fields", None)
         if not isinstance(parent_fields, dict):
             return None
         field_def = parent_fields.get(field_name)
         if field_def is None:  # introspection (``__typename``) has no field entry here.
             return None
-        strawberry_field = (getattr(field_def, "extensions", None) or {}).get(
+        strawberry_field: object = (getattr(field_def, "extensions", None) or {}).get(
             "strawberry-definition",
         )
         base_resolver = getattr(strawberry_field, "base_resolver", None)
@@ -238,7 +247,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         as ``collected_errors.errors``. Both are append-only during execution,
         so a before/after length comparison stays valid on either shape.
         """
-        collected = getattr(self, "collected_errors", None)
+        collected: object = getattr(self, "collected_errors", None)
         if collected is not None:
             return getattr(collected, "errors", [])
         return getattr(self, "errors", [])
@@ -1323,7 +1332,11 @@ def _consumer_extension_entries(
             continue
         if role is not DjangoResourcePolicyExtension:
             continue
-        policy = _entry_resource_policy(entry)
+        # ``_declared_authority`` answered with this entry's exact type (``type()``, the
+        # entry itself for a class), a proof the checkers cannot carry back to ``entry``.
+        policy = _entry_resource_policy(
+            cast("DjangoResourcePolicyExtension | type[DjangoResourcePolicyExtension]", entry),
+        )
         if policy is None:
             continue
         if declared is not None:
@@ -1363,7 +1376,9 @@ def _declared_authority(entry: object) -> type[SchemaExtension] | None:
     return None
 
 
-def _entry_resource_policy(entry: Any) -> ResourcePolicy | None:
+def _entry_resource_policy(
+    entry: DjangoResourcePolicyExtension | type[DjangoResourcePolicyExtension],
+) -> ResourcePolicy | None:
     """The explicit policy a directly supplied resource-policy INSTANCE was built with.
 
     ``None`` for a class entry, which was never constructed and therefore
@@ -1372,13 +1387,18 @@ def _entry_resource_policy(entry: Any) -> ResourcePolicy | None:
     extension's own canonical copy, read through the private record that holds
     it rather than off the object.
     """
-    if issubclass(type(entry), type):
+    if _is_class(entry):
         return None
     policy = entry._policy
     return policy if type(policy) is ResourcePolicy else None
 
 
-def _entry_type(entry: Any) -> type[object]:
+def _is_class(entry: object) -> TypeIs[type[object]]:
+    """Whether ``entry`` IS a class, asked of ``type()`` so no ``__class__`` answers for it."""
+    return issubclass(type(entry), type)
+
+
+def _entry_type(entry: object) -> type[object]:
     """The class an entry names - itself, or the type of the instance it is.
 
     Read with ``type()``, never ``isinstance``: a consumer instance answers
@@ -1387,7 +1407,7 @@ def _entry_type(entry: Any) -> type[object]:
     pass for an entry that declares nothing. ``type()`` cannot be answered and
     cannot raise.
     """
-    return entry if issubclass(type(entry), type) else type(entry)
+    return entry if _is_class(entry) else type(entry)
 
 
 def _extension_entry_matches(extension: object, extension_type: type[SchemaExtension]) -> bool:

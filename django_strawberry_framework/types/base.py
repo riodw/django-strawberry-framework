@@ -76,6 +76,8 @@ from .relay import install_is_type_of
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Iterable
 
+    from typing_extensions import TypeIs
+
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
     from ..utils.typing import ConcreteField, ModelField
@@ -301,6 +303,11 @@ def _validate_connection(
     return dict(connection)
 
 
+def _is_str_tuple(entries: tuple[object, ...]) -> "TypeIs[tuple[str, ...]]":
+    """Return whether every entry of ``entries`` is a ``str``."""
+    return all(isinstance(entry, str) for entry in entries)
+
+
 def _validate_cursor_field(
     meta: _ModelMeta,
     value: object,
@@ -332,13 +339,13 @@ def _validate_cursor_field(
             f"sequence of order strings; got {_safe_arg_repr(value)}",
         )
     try:
-        entries = tuple(value)
+        entries: tuple[object, ...] = tuple(value)
     except BaseException as exc:
         raise ConfigurationError(
             f"{meta.model.__name__}.Meta.cursor_field must be a non-empty non-string "
             f"sequence of order strings; got {_safe_arg_repr(value)}",
         ) from exc
-    if not entries or not all(isinstance(entry, str) for entry in entries):
+    if not entries or not _is_str_tuple(entries):
         raise ConfigurationError(
             f"{meta.model.__name__}.Meta.cursor_field must be a non-empty non-string "
             f"sequence of order strings; got {_safe_arg_repr(value)}",
@@ -542,9 +549,10 @@ def _has_node_id_marker(hint: object) -> bool:
     ``NodeIDPrivate`` instance lives in ``typing.get_args(...)``'s
     metadata slot.
     """
-    return typing.get_origin(hint) is Annotated and any(
-        isinstance(arg, NodeIDPrivate) for arg in typing.get_args(hint)
-    )
+    if typing.get_origin(hint) is not Annotated:
+        return False
+    args: tuple[object, ...] = typing.get_args(hint)
+    return any(isinstance(arg, NodeIDPrivate) for arg in args)
 
 
 def _id_annotation_is_relay_node_id(cls: "type[DjangoType]") -> bool:
@@ -609,7 +617,7 @@ def _is_relay_shaped(cls: "type[DjangoType]", interfaces: tuple[type[object], ..
     )
 
 
-def _meta_attr(meta: object, key: str, default: object = None) -> Any:
+def _meta_attr(meta: object, key: str, default: object = None) -> object:
     """Read one ``Meta`` attribute, containing hostile attribute access.
 
     ``getattr(meta, key, default)`` only swallows ``AttributeError``; a Meta
@@ -669,7 +677,7 @@ class DjangoType:
         # Rebuilt by ``__init_subclass__`` as the synthesized fields plus the
         # consumer's own; declared so checkers read it as the ``object`` attribute
         # it overrides, and never executed so the class records no such annotation.
-        __annotations__: dict[str, Any]
+        __annotations__: dict[str, object]
 
     @override
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -683,7 +691,7 @@ class DjangoType:
         # ``test_has_custom_get_queryset_inherits_through_abstract_base_without_meta``.
         has_custom_get_queryset = _detect_custom_get_queryset(cls)
         cls._is_default_get_queryset = not has_custom_get_queryset
-        meta = cls.__dict__.get("Meta")
+        meta: object = cls.__dict__.get("Meta")
         if meta is None:
             return
         if registry.is_finalized():
@@ -692,8 +700,10 @@ class DjangoType:
                 "after finalization. Call registry.clear() first if this is a test.",
             )
         validated = _validate_meta(cls, meta)
-        fields = _select_fields(meta.model, validated.fields_spec, validated.exclude_spec)
-        _validate_optimizer_hints(validated.optimizer_hints, fields, model=meta.model)
+        # ``_validate_meta`` above rejected a ``Meta`` whose ``model`` is not a Django model.
+        model_meta = cast("_ModelMeta", meta)
+        fields = _select_fields(model_meta.model, validated.fields_spec, validated.exclude_spec)
+        _validate_optimizer_hints(validated.optimizer_hints, fields, model=model_meta.model)
 
         field_map = {f.name: FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
@@ -799,7 +809,7 @@ class DjangoType:
         )
         relay_shaped = _is_relay_shaped(cls, validated.interfaces)
         _validate_nullability_override_targets(
-            model=meta.model,
+            model=model_meta.model,
             selected_fields=fields,
             consumer_authored_fields=consumer_authored_fields,
             relay_shaped=relay_shaped,
@@ -807,13 +817,13 @@ class DjangoType:
             required_overrides=validated.required_overrides,
         )
         _validate_filesystem_path_targets(
-            model=meta.model,
+            model=model_meta.model,
             selected_fields=fields,
             consumer_authored_fields=consumer_authored_fields,
             filesystem_path_fields=validated.filesystem_path_fields,
         )
         _validate_relation_shape_targets(
-            model=meta.model,
+            model=model_meta.model,
             relation_shapes=validated.relation_shapes,
             selected_fields=fields,
             field_map=field_map,
@@ -847,18 +857,21 @@ class DjangoType:
         synthesized, pending = _build_annotations(
             cls,
             fields,
-            source_model=meta.model,
+            source_model=model_meta.model,
             consumer_authored_fields=consumer_authored_fields,
             interfaces=validated.interfaces,
             nullable_overrides=validated.nullable_overrides,
             required_overrides=validated.required_overrides,
             filesystem_path_fields=validated.filesystem_path_fields,
         )
+        # Read in the order the definition lists them: ``model`` before ``description``.
+        model = model_meta.model
+        description: Any = _meta_attr(meta, "description")
         definition = DjangoTypeDefinition(
             origin=cls,
-            model=meta.model,
+            model=model,
             name=validated.name,
-            description=_meta_attr(meta, "description"),
+            description=description,
             fields_spec=validated.fields_spec,
             exclude_spec=validated.exclude_spec,
             selected_fields=tuple(fields),
@@ -880,7 +893,12 @@ class DjangoType:
             globalid_strategy=validated.globalid_strategy,
             relation_shapes=validated.relation_shapes,
         )
-        registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
+        registry.register_with_definition(
+            model_meta.model,
+            cls,
+            definition,
+            primary=validated.primary,
+        )
         for pending_relation in pending:
             registry.add_pending_relation(pending_relation)
         cls.__annotations__ = {**synthesized, **consumer_annotations}
@@ -948,7 +966,7 @@ def _normalize_fields_spec(value: object) -> tuple[str, ...] | Literal["__all__"
         return value
     if isinstance(value, str):
         if value == "__all__":
-            return cast('Literal["__all__"]', value)
+            return "__all__"
         raise ConfigurationError(
             "Meta.fields must be '__all__' or a non-string sequence of field names",
         )
@@ -1051,7 +1069,7 @@ def _consumer_assigned_fields(
     """
     relation_assigned: set[str] = set()
     scalar_assigned: set[str] = set()
-    class_dict = cls.__dict__
+    class_dict: Mapping[str, object] = cls.__dict__
     for field in fields:
         if field.name not in class_dict:
             continue
@@ -1219,7 +1237,8 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
         # Consumer-declared entries stay unproven until the loop below checks each one.
         entries: tuple[object, ...] = (raw,)
     elif isinstance(raw, (tuple, list)):
-        entries = tuple(raw)
+        raw_entries: Sequence[object] = raw
+        entries = tuple(raw_entries)
     else:
         raise ConfigurationError(_interfaces_shape_error(meta, type(raw).__name__))
     if entries == ():
@@ -1255,7 +1274,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
                 f"DjangoType subclasses (got {entry.__name__}). DjangoType is not a "
                 "Strawberry interface.",
             )
-        definition = getattr(entry, "__strawberry_definition__", None)
+        definition: object = getattr(entry, "__strawberry_definition__", None)
         if definition is None or not getattr(definition, "is_interface", False):
             raise ConfigurationError(
                 f"{meta.model.__name__}.Meta.interfaces entry {entry.__name__} is not a "
@@ -1302,7 +1321,7 @@ class _ValidatedMeta(NamedTuple):
     filesystem_path_fields: frozenset[str]
 
 
-def _validate_meta(cls: type[DjangoType], meta: type[object]) -> _ValidatedMeta:
+def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
 
     Takes ``cls`` (the class object, available at ``__init_subclass__`` time)

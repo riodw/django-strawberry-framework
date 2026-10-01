@@ -436,7 +436,7 @@ def _declares_seekable(stream: object) -> bool:
     probed accidentally.
     """
     try:
-        seekable = getattr(stream, "seekable", None)
+        seekable: object = getattr(stream, "seekable", None)
     except Exception:  # a capability attribute that fails answers no, not maybe
         return False
     if seekable is None:
@@ -564,7 +564,7 @@ def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> 
     project relying on a ``DATA_UPLOAD_MAX_MEMORY_SIZE`` lower than the package cap
     would lose it. The package must add a ceiling, never remove one.
     """
-    chunks = []
+    chunks: list[bytes] = []
     read_so_far = 0
     while read_so_far <= limit:
         chunk = request.read(min(_READ_CHUNK_BYTES, limit + 1 - read_so_far))

@@ -35,7 +35,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
 from django.db import models
 from graphql.language.ast import (
@@ -133,10 +133,12 @@ from .selections import (
 from .walker import plan_optimizations, plan_relation
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Iterable
     from types import SimpleNamespace
 
     from graphql.language.ast import FragmentDefinitionNode, Node, OperationDefinitionNode
-    from graphql.type.definition import GraphQLResolveInfo
+    from graphql.type.definition import GraphQLObjectType, GraphQLResolveInfo
+    from graphql.type.schema import GraphQLSchema
     from strawberry.types.execution import ExecutionContext
     from strawberry.types.nodes import Selection
 
@@ -434,7 +436,7 @@ def _hashable_variable_value(value: object) -> "FrozenVariableValue":
     return _freeze_variable_value(value, set())
 
 
-def _freeze_variable_value(value: Any, active_containers: set[int]) -> "FrozenVariableValue":
+def _freeze_variable_value(value: object, active_containers: set[int]) -> "FrozenVariableValue":
     """Recursive implementation for ``_hashable_variable_value``."""
     value_type_id = id(type(value))
     try:
@@ -464,7 +466,11 @@ def _freeze_variable_value(value: Any, active_containers: set[int]) -> "FrozenVa
     active_containers.add(container_id)
     try:
         try:
+            # The three flags hold the ``isinstance`` verdicts taken once above, so a
+            # hostile ``__instancecheck__`` runs once; checkers do not narrow
+            # through a stored bool, so each branch restates its verdict.
             if is_mapping:
+                mapping = cast("Mapping[object, object]", value)
                 return (
                     "mapping",
                     value_type_id,
@@ -473,19 +479,20 @@ def _freeze_variable_value(value: Any, active_containers: set[int]) -> "FrozenVa
                             _freeze_variable_value(key, active_containers),
                             _freeze_variable_value(item, active_containers),
                         )
-                        for key, item in value.items()
+                        for key, item in mapping.items()
                     ),
                 )
+            members = cast("Iterable[object]", value)
             if is_set:
                 return (
                     "set",
                     value_type_id,
-                    frozenset(_freeze_variable_value(item, active_containers) for item in value),
+                    frozenset(_freeze_variable_value(item, active_containers) for item in members),
                 )
             return (
                 "list" if isinstance(value, list) else "tuple",
                 value_type_id,
-                tuple(_freeze_variable_value(item, active_containers) for item in value),
+                tuple(_freeze_variable_value(item, active_containers) for item in members),
             )
         except Exception:
             # Custom scalar parsers may return hostile container subclasses.
@@ -773,7 +780,9 @@ def _collect_schema_reachable_types(schema: object) -> "set[type[DjangoType]]":
     warnings.
     """
     reachable: set[type[DjangoType]] = set()
-    gql_schema = getattr(schema, "_schema", None)
+    # Strawberry's ``Schema.__init__`` stores the graphql-core schema it builds at
+    # ``_schema``.
+    gql_schema: GraphQLSchema | None = getattr(schema, "_schema", None)
     if gql_schema is None:
         return reachable
     strawberry_schema = _strawberry_schema_from_schema(schema)
@@ -782,7 +791,8 @@ def _collect_schema_reachable_types(schema: object) -> "set[type[DjangoType]]":
     def _walk_gql_type(gql_type: object) -> None:
         """Recursively collect DjangoType origins from a graphql-core type."""
         gql_type = unwrap_graphql_type(gql_type)
-        type_name = getattr(gql_type, "name", None)
+        # An unwrapped graphql-core type is a named type, whose ``name`` is a string.
+        type_name: str | None = getattr(gql_type, "name", None)
         if type_name is None or type_name in visited_type_names:
             return
         visited_type_names.add(type_name)
@@ -798,13 +808,14 @@ def _collect_schema_reachable_types(schema: object) -> "set[type[DjangoType]]":
             if origin is not None and registry.get_definition(origin) is not None:
                 reachable.add(origin)
         # Recurse into fields.
-        fields = getattr(gql_type, "fields", None)
+        # A graphql-core object / interface / input type's ``fields`` map names to fields.
+        fields: Mapping[str, object] | None = getattr(gql_type, "fields", None)
         if fields is not None:
             for field_obj in fields.values():
                 _walk_gql_type(getattr(field_obj, "type", None))
 
         # Recurse into union types.
-        union_types = getattr(gql_type, "types", None)
+        union_types: Iterable[object] | None = getattr(gql_type, "types", None)
         if union_types is not None:
             for u_type in union_types:
                 _walk_gql_type(u_type)
@@ -821,7 +832,7 @@ def _collect_schema_reachable_types(schema: object) -> "set[type[DjangoType]]":
             "get_implementations",
         ):
             impls = gql_schema.get_implementations(gql_type)
-            impl_objects = getattr(impls, "objects", None)
+            impl_objects: Iterable[GraphQLObjectType] | None = getattr(impls, "objects", None)
             if impl_objects is not None:
                 for impl_type in impl_objects:
                     _walk_gql_type(impl_type)
@@ -870,7 +881,8 @@ def _resolve_model_from_return_type(info: "GraphQLResolveInfo") -> _OriginAndMod
     queryset through unchanged.
     """
     rt = unwrap_graphql_type(info.return_type)
-    type_name = getattr(rt, "name", None)
+    # An unwrapped graphql-core type is a named type, whose ``name`` is a string.
+    type_name: str | None = getattr(rt, "name", None)
     if type_name is None:
         return None
     strawberry_schema = _strawberry_schema_from_info(info)
@@ -1111,7 +1123,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # is ``None`` for a direct caller that invokes ``on_execute`` outside
         # any operation.
         state = self._operation_state()
-        execution_context = self.execution_context
+        execution_context: ExecutionContext | None = self.execution_context
         # This operation's own store for every optimizer stash. What the package
         # reads back is here, so an operation running inside another one can
         # neither erase nor answer for the outer operation's plan; the request's
@@ -1217,9 +1229,10 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         def finish(val: object) -> object:
             return wrap_async_queryset_adapter(val) if was_adapted else val
 
-        inner_result, is_queryset = normalize_query_source(inner_result)
-        if not is_queryset:
-            return finish(inner_result)
+        normalized = normalize_query_source(inner_result)
+        if normalized[1] is False:
+            return finish(normalized[0])
+        inner_result = normalized[0]
         # G1 (spec-035 Decision 3): a consumer-evaluated root queryset passes
         # through unchanged. Placement is load-bearing in both directions - it
         # sits AFTER the Manager coercion (a coerced ``.all()`` is always a
@@ -1241,7 +1254,10 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
                 info.field_name,
             )
             return finish(inner_result)
-        return finish(self.apply_to(resolved.origin, resolved.model, inner_result, info))
+        # Trusted, not checked: the root queryset's rows are planned as model instances
+        # (a ``values()`` root is not refused before ``apply_to``).
+        root_queryset = cast("models.QuerySet[models.Model]", inner_result)
+        return finish(self.apply_to(resolved.origin, resolved.model, root_queryset, info))
 
     def apply_to(
         self,
@@ -1450,11 +1466,12 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         # parent and nested-connection plans coexist without collision.
         # ``DST_OPTIMIZER_PLAN`` stays LAST-WINS introspection data (not a
         # correctness sentinel - do not union it).
-        _stash_for_optimizer(info.context, DST_OPTIMIZER_PLAN, plan)
+        context: object = info.context
+        _stash_for_optimizer(context, DST_OPTIMIZER_PLAN, plan)
         fk_id_elisions = plan.finalized_fk_id_elisions
         if fk_id_elisions is None:
             fk_id_elisions = frozenset(plan.fk_id_elisions)
-        self._stash_union(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, fk_id_elisions)
+        self._stash_union(context, DST_OPTIMIZER_FK_ID_ELISIONS, fk_id_elisions)
         planned_resolver_keys = plan.finalized_planned_resolver_keys
         if planned_resolver_keys is None:
             planned_resolver_keys = frozenset(plan.planned_resolver_keys)
@@ -1467,9 +1484,9 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
             plan_lookup_paths = plan.finalized_lookup_paths
             if plan_lookup_paths is None:
                 plan_lookup_paths = frozenset(lookup_paths(plan))
-            self._stash_union(info.context, DST_OPTIMIZER_PLANNED, planned_resolver_keys)
-            self._stash_union(info.context, DST_OPTIMIZER_LOOKUP_PATHS, plan_lookup_paths)
-            _stash_for_optimizer(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
+            self._stash_union(context, DST_OPTIMIZER_PLANNED, planned_resolver_keys)
+            self._stash_union(context, DST_OPTIMIZER_LOOKUP_PATHS, plan_lookup_paths)
+            _stash_for_optimizer(context, DST_OPTIMIZER_STRICTNESS, self.strictness)
 
     @staticmethod
     def _stash_union(context: object, key: str, new: frozenset[str]) -> None:
@@ -1602,7 +1619,7 @@ class DjangoOptimizerExtension(_OperationBoundExtension[_OptimizerOperationState
         parts = memo.get(id(operation)) if memo is not None else None
         if parts is None:
             doc_key, relevant_var_names = _doc_cache_entry(operation, fragments)
-            variable_values = info.variable_values or {}
+            variable_values: Mapping[str, object] = info.variable_values or {}
             # The name-keyed pagination collector deliberately over-collects, so
             # any GraphQL input shape (including an arbitrary custom-scalar
             # result) can reach this frozenset through a same-named argument on a

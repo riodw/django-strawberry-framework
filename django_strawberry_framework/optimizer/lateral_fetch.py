@@ -563,7 +563,9 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list[models.Model] | None:
         # the driver binds, so the params stay ``object``
         # basedpyright: same reason; it rejects ``list[object]`` as ``_ExecuteParameters``
         cursor.execute(sql, params)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-        fetched = _apply_lateral_converters(spec, cursor.fetchall(), connection)
+        # DB-API ``fetchall`` returns the result rows as sequences of column values.
+        raw_rows: Sequence[Sequence[object]] = cursor.fetchall()
+        fetched = _apply_lateral_converters(spec, raw_rows, connection)
     return [_instantiate_row(spec, row, queryset.db) for row in fetched]
 
 
@@ -589,14 +591,15 @@ def _apply_lateral_converters(
         spec.parent_link_field.target_field.get_col(spec.parent_link_table),
         *(field.get_col(spec.db_table) for field in spec.select_fields),
     ]
-    converters = {}
+    # A converter is called ``(value, expression, connection)`` and returns the value.
+    converters: dict[int, tuple[list[Callable[..., object]], Col]] = {}
     for position, expression in enumerate(expressions):
-        chain = connection.ops.get_db_converters(expression) + expression.get_db_converters(
-            connection,
-        )
+        chain: list[Callable[..., object]] = connection.ops.get_db_converters(
+            expression,
+        ) + expression.get_db_converters(connection)
         if chain:
             converters[position] = (chain, expression)
-    converted = []
+    converted: list[tuple[object, ...]] = []
     for raw_row in rows:
         row = list(raw_row)
         for position, (chain, expression) in converters.items():
@@ -714,7 +717,7 @@ def _is_window_qual(node: object) -> bool:
     recognizers use it to separate the window quals from the prefetch ``__in`` /
     visibility / keyset residue while scanning the fetch-time WHERE tree.
     """
-    children = getattr(node, "children", None)
+    children: _NodeChildren | None = getattr(node, "children", None)
     if children is not None:
         # A qual carrying ``children`` is a ``WhereNode``.
         return not cast("Node", node).negated and all(_is_window_qual(sub) for sub in children)
@@ -736,7 +739,7 @@ def _normalize_window_node(node: object, names_by_id: dict[int, str]) -> WindowS
     Django lookup) rides the signature verbatim, so a ``gt`` bound never compares
     equal to an ``lte`` one.
     """
-    children = getattr(node, "children", None)
+    children: _NodeChildren | None = getattr(node, "children", None)
     if children is not None:
         subs: list[WindowSignature] = []
         for child in children:
@@ -827,13 +830,14 @@ def _keyset_seek_quals_match(nodes: _NodeChildren, spec: LateralWindowSpec) -> b
     def is_lookup(node: object, lookup_name: str, index: int) -> bool:
         if getattr(node, "lookup_name", None) != lookup_name:
             return False
-        target = getattr(getattr(node, "lhs", None), "target", None)
+        # A column lookup's ``lhs`` is a ``Col``, whose ``target`` is the field.
+        target: ConcreteField | None = getattr(getattr(node, "lhs", None), "target", None)
         if target is None or getattr(target, "column", None) != column_names[index]:
             return False
         if target.model._meta.db_table != spec.db_table:
             return False
         # A qual carrying ``lookup_name`` is a ``Lookup``.
-        rhs = cast("Lookup[object]", node).rhs
+        rhs: object = cast("Lookup[object]", node).rhs
         return not hasattr(rhs, "resolve_expression") and rhs == plan.values[index]
 
     def is_cmp(node: object, index: int) -> bool:
@@ -844,7 +848,7 @@ def _keyset_seek_quals_match(nodes: _NodeChildren, spec: LateralWindowSpec) -> b
         return False
     if len(column_names) == 1:
         return is_cmp(expansion, 0)
-    arms = getattr(expansion, "children", None)
+    arms: _NodeChildren | None = getattr(expansion, "children", None)
     # A qual carrying ``children`` is a ``WhereNode``.
     expansion_node = cast("Node", expansion)
     if (
@@ -859,11 +863,14 @@ def _keyset_seek_quals_match(nodes: _NodeChildren, spec: LateralWindowSpec) -> b
             if not is_cmp(arm, 0):
                 return False
             continue
-        arm_children = getattr(arm, "children", None)
+        arm_children: _NodeChildren | None = getattr(arm, "children", None)
+        # A qual carrying ``children`` is a ``WhereNode``; the reads below run only
+        # once ``arm_children`` proved it.
+        arm_node = cast("Node", arm)
         if (
             arm_children is None
-            or arm.negated
-            or arm.connector != "AND"
+            or arm_node.negated
+            or arm_node.connector != "AND"
             or len(arm_children) != index + 1
         ):
             return False
@@ -924,13 +931,14 @@ def _parent_in_values(node: object, *, column: str, table: str) -> list[object] 
     """
     if getattr(node, "lookup_name", None) != "in":
         return None
-    target = getattr(getattr(node, "lhs", None), "target", None)
+    # A column lookup's ``lhs`` is a ``Col``, whose ``target`` is the field.
+    target: ConcreteField | None = getattr(getattr(node, "lhs", None), "target", None)
     if target is None or getattr(target, "column", None) != column:
         return None
     if target.model._meta.db_table != table:
         return None
     # A qual carrying ``lookup_name`` is a ``Lookup``.
-    rhs = cast("Lookup[object]", node).rhs
+    rhs: object = cast("Lookup[object]", node).rhs
     if not isinstance(rhs, (list, tuple)):
         return None
     if any(hasattr(value, "resolve_expression") for value in rhs):
@@ -1083,7 +1091,8 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
             return None
         visibility_where = query.where.clone()
     child_meta = child_queryset.model._meta
-    child_pk_column = getattr(child_meta.pk, "column", None)
+    # A composite primary key carries no single ``column``.
+    child_pk_column: str | None = getattr(child_meta.pk, "column", None)
     if child_pk_column is None:
         return None  # composite primary key - no single default child join column.
     if type(child_queryset) is not QuerySet:

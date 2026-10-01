@@ -29,7 +29,7 @@ function-locally (the repo's established cross-package seam, see
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.utils.functional import Promise
@@ -177,7 +177,7 @@ def field_error(path: str, messages: object, *, codes: object = None) -> FieldEr
     )
 
 
-def _str_list(value: Any) -> list[str]:
+def _str_list(value: object) -> list[str]:
     """Coerce a bare string or an iterable into a ``list[str]``.
 
     The one body behind ``field_error``'s ``messages`` AND ``codes`` coercion
@@ -212,7 +212,9 @@ def _str_list(value: Any) -> list[str]:
     if not is_iter:
         return [_safe_text(value)]
     try:
-        items = list(value)
+        # ``is_iter`` above is the ``isinstance(value, Iterable)`` proof; neither checker
+        # carries a narrowing through a bool assigned inside a ``try``.
+        items = list(cast("Iterable[object]", value))
     except BaseException:
         return [_unprintable(value)]
     return [_safe_text(item) for item in items]
@@ -310,7 +312,9 @@ def null_field_error(path: str) -> FieldError:
     return field_error(path, "This field cannot be null.", codes=FIELD_ERROR_CODE_NULL)
 
 
-def _error_dict_entry(item: Any) -> tuple[object, Any] | None:
+def _error_dict_entry(
+    item: tuple[object, Iterable[object]],
+) -> tuple[object, Iterable[object]] | None:
     """Unpack one ``ValidationError.error_dict`` item without trusting its shape."""
     try:
         field_name, field_errors = item

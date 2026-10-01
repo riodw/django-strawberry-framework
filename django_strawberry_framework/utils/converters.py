@@ -64,6 +64,12 @@ class _MroContinue:
 MRO_CONTINUE = _MroContinue()
 
 
+class _MroGetter(Protocol):
+    """``type.__dict__["__mro__"]``: the getset descriptor behind ``type.__mro__``."""
+
+    def __get__(self, instance: type[object], /) -> tuple[type[object], ...]: ...
+
+
 class _RequiredFlagField(Protocol):
     """A flavor field whose requiredness a converter reads (``forms`` / DRF ``Field``)."""
 
@@ -84,7 +90,7 @@ def convert_with_mro(
     ],
     scalar_registry: Mapping[type[_FieldT], object],
     fallthrough_error_factory: Callable[[_FieldT], Exception],
-) -> Any:
+) -> object:
     """Dispatch ``field`` to a conversion via ordered prechecks, an MRO walk, then a raise.
 
     The flavor-agnostic body of ``forms/converter.py::convert_form_field``,
@@ -146,7 +152,8 @@ def convert_with_mro(
     # equality implementation, and ordinary dict membership would invoke it
     # before the converter can reach its parent or typed fallthrough.
     registry_entries = dict(scalar_registry)
-    for klass in type.__dict__["__mro__"].__get__(type(field)):
+    mro_getter: _MroGetter = type.__dict__["__mro__"]
+    for klass in mro_getter.__get__(type(field)):
         for registered, converter in registry_entries.items():
             if registered is klass:
                 return converter

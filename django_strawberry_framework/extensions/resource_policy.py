@@ -81,7 +81,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from graphql import (
     DirectiveNode,
@@ -145,6 +145,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         DocumentNode,
         GraphQLArgument,
         GraphQLField,
+        GraphQLInputField,
+        GraphQLInputFieldMap,
         GraphQLNamedType,
         GraphQLSchema,
         GraphQLType,
@@ -328,18 +330,20 @@ def _mutation_input_specs(field_def: object) -> Mapping[str, InputFieldSpec] | N
     shape under which a spec says one thing and the wire another: the specs are
     recorded from the SAME merged input dataclass the schema materialized.
     """
-    strawberry_field = (getattr(field_def, "extensions", None) or {}).get(
+    strawberry_field: object = (getattr(field_def, "extensions", None) or {}).get(
         _STRAWBERRY_DEFINITION_BACKREF,
     )
     resolver = getattr(getattr(strawberry_field, "base_resolver", None), "wrapped_func", None)
     mutation_cls = getattr(resolver, MUTATION_CLASS_MARKER, None)
-    specs = getattr(mutation_cls, "_input_field_specs", None)
+    # The marker is stamped by ``mutations/fields.py::DjangoMutationField`` with a
+    # package mutation class, which declares ``_input_field_specs`` (``mutations/sets.py``).
+    specs: list[InputFieldSpec] | None = getattr(mutation_cls, "_input_field_specs", None)
     if not specs:
         return None
     return {spec.graphql_name: spec for spec in specs}
 
 
-def _nested_specs_map(spec: object) -> Mapping[str, InputFieldSpec] | None:
+def _nested_specs_map(spec: InputFieldSpec | None) -> Mapping[str, InputFieldSpec] | None:
     """Return the field-spec map of a NESTED input's own fields, or ``None``.
 
     A serializer nested-serializer field records its nested rows' own reverse
@@ -348,7 +352,7 @@ def _nested_specs_map(spec: object) -> Mapping[str, InputFieldSpec] | None:
     classified by the same bind signal as a top-level one. ``None`` for every
     non-nested field, which is every field of every non-serializer flavor.
     """
-    nested = getattr(spec, "nested_specs", None)
+    nested: tuple[InputFieldSpec, ...] | None = getattr(spec, "nested_specs", None)
     if not nested:
         return None
     return {nested_spec.graphql_name: nested_spec for nested_spec in nested}
@@ -427,7 +431,7 @@ class _ValueBudget:
         it reads it (:meth:`_charge_upload`), which is the only place that can
         say what an unusable answer there means.
         """
-        limit = getattr(self.policy, bound)
+        limit: int = getattr(self.policy, bound)
         if charged > limit:
             raise ResourceLimitExceeded(bound, limit, charged, detail)
 
@@ -458,7 +462,7 @@ class _ValueBudget:
         this bounds, and a refusal to measure is a typed rejection of the bound
         being measured rather than whatever the container raised.
         """
-        limit = getattr(self.policy, bound)
+        limit: int = getattr(self.policy, bound)
         collected: list[_MemberT] = []
         try:
             for member in members():
@@ -538,10 +542,11 @@ class _ValueBudget:
             if node_value is None:
                 continue
             if isinstance(node_type, GraphQLList):
+                list_type: GraphQLList[GraphQLType] = node_type
                 if not self._charge_container(
                     node_value,
                     stack,
-                    node_type,
+                    list_type,
                     path,
                     in_mutation,
                     argument,
@@ -561,7 +566,7 @@ class _ValueBudget:
                         "the request's argument values carry more input nodes than the policy allows",
                     )
                     self._charge_list_family(
-                        node_type.of_type,
+                        list_type.of_type,
                         1,
                         in_mutation=in_mutation,
                         argument=argument,
@@ -569,7 +574,7 @@ class _ValueBudget:
                     )
                     stack.append(
                         (
-                            node_type.of_type,
+                            list_type.of_type,
                             node_value,
                             (*path, object()),
                             None,
@@ -635,31 +640,48 @@ class _ValueBudget:
         refusal can quote an exact size nothing downstream will use.
         """
         if isinstance(value, Mapping):
-            if _closes_a_cycle(value, path):
+            mapping: Mapping[object, object] = value
+            if _closes_a_cycle(mapping, path):
                 return True
-            if type(value) is dict:
-                entries: Collection[tuple[str, object]] = value.items()
-                width = len(value)
+            if type(mapping) is dict:
+                entries: Collection[tuple[object, object]] = mapping.items()
+                width = len(mapping)
             else:
-                entries = self._bounded_members(lambda: value.items(), "max_container_width")
+                entries = self._bounded_members(lambda: mapping.items(), "max_container_width")
                 width = len(entries)
             self._reject(
                 "max_container_width",
                 width,
                 "an input object carries more fields than the policy allows",
             )
-            item_type = node_type.fields if isinstance(node_type, GraphQLInputObjectType) else None
-            child_path = (*path, value)
+            # graphql-core's ``cached_property`` types ``fields`` ``Any``; the property
+            # itself returns a ``GraphQLInputFieldMap``.
+            field_map: GraphQLInputFieldMap | None = (
+                node_type.fields if isinstance(node_type, GraphQLInputObjectType) else None
+            )
+            child_path = (*path, mapping)
             for name, item in entries:
-                field_def = item_type.get(name) if item_type is not None else None
+                # A key is whatever the value carried, and a lookup by a key that is
+                # not a name just misses, so both name-keyed maps are read through
+                # object-keyed views.
+                field_def = (
+                    cast("Mapping[object, GraphQLInputField]", field_map).get(name)
+                    if field_map is not None
+                    else None
+                )
                 # Specs resolve only under a declared input object: a hostile
                 # mapping parked under a scalar argument is charged, never
                 # classified, and a child's own spec map comes from ITS field
                 # spec's nested records (``nested_specs``), never inherited.
-                field_spec = spec_map.get(name) if item_type is not None and spec_map else None
+                field_spec = (
+                    cast("Mapping[object, InputFieldSpec]", spec_map).get(name)
+                    if field_map is not None and spec_map
+                    else None
+                )
+                field_type: GraphQLType | None = getattr(field_def, "type", None)
                 stack.append(
                     (
-                        getattr(field_def, "type", None),
+                        field_type,
                         item,
                         child_path,
                         field_spec,
@@ -669,13 +691,14 @@ class _ValueBudget:
             return True
         if not isinstance(value, (list, tuple)):
             return False
-        if _closes_a_cycle(value, path):
+        sequence: list[object] | tuple[object, ...] = value
+        if _closes_a_cycle(sequence, path):
             return True
-        if type(value) in _EXACT_SEQUENCE_TYPES:
-            members: Collection[object] = value
-            width = len(value)
+        if type(sequence) in _EXACT_SEQUENCE_TYPES:
+            members: Collection[object] = sequence
+            width = len(sequence)
         else:
-            members = self._bounded_members(lambda: value, "max_container_width")
+            members = self._bounded_members(lambda: sequence, "max_container_width")
             width = len(members)
         self._reject(
             "max_container_width",
@@ -683,17 +706,18 @@ class _ValueBudget:
             "a list argument is wider than the policy allows",
         )
         if isinstance(node_type, GraphQLList):
+            list_type: GraphQLList[GraphQLType] = node_type
             self._charge_list_family(
-                node_type.of_type,
+                list_type.of_type,
                 width,
                 in_mutation=in_mutation,
                 argument=argument,
                 spec=spec,
             )
-            item_type = node_type.of_type
+            item_type: GraphQLType | None = list_type.of_type
         else:
             item_type = None
-        child_path = (*path, value)
+        child_path = (*path, sequence)
         # List items hang under the FIELD that declared the list, so each item
         # carries that field's spec map: a nested row's own fields classify from
         # the row's own specs. The item itself is not a field value, so its spec
@@ -998,7 +1022,7 @@ def _page_bound(
     for argument in node.arguments:
         if argument.name.value not in ("first", "last"):
             continue
-        value = value_from_ast_untyped(argument.value, variables)
+        value: object = value_from_ast_untyped(argument.value, variables)
         if type(value) is int and value >= 0:
             return min(value, policy.max_page_size)
     return policy.max_page_size
@@ -1044,15 +1068,16 @@ def _is_connection_type(candidate: object) -> bool:
     """
     if not isinstance(candidate, GraphQLObjectType):
         return False
-    edges = candidate.fields.get(_CONNECTION_MARKER_FIELD)
+    # graphql-core's ``cached_property`` types ``fields`` ``Any``; the property itself
+    # returns a ``GraphQLFieldMap``.
+    edges: GraphQLField | None = candidate.fields.get(_CONNECTION_MARKER_FIELD)
     if edges is None:
         return False
     unwrapped = unwrap_non_null(edges.type)
     if not isinstance(unwrapped, GraphQLList):
         return False
-    # ``of_type`` is ``Any`` upstream, which resolves ``get_named_type`` to its ``None``
-    # overload; the declared union is the function's own return type.
-    edge: GraphQLNamedType | None = get_named_type(unwrapped.of_type)
+    edge_list: GraphQLList[GraphQLType] = unwrapped
+    edge = get_named_type(edge_list.of_type)
     return isinstance(edge, GraphQLObjectType) and set(edge.fields) >= _EDGE_MARKER_FIELDS
 
 
@@ -1084,11 +1109,12 @@ def _type_system_directives(definition: Node) -> Iterator[DirectiveNode]:
             yield node
             continue
         for key in node.keys:
-            child = getattr(node, key, None)
+            child: object = getattr(node, key, None)
             if isinstance(child, Node):
                 stack.append(child)
             elif isinstance(child, (list, tuple)):
-                stack.extend(item for item in child if isinstance(item, Node))
+                children: list[object] | tuple[object, ...] = child
+                stack.extend(item for item in children if isinstance(item, Node))
 
 
 def _declared_input_type(graphql_schema: GraphQLSchema, type_node: TypeNode) -> GraphQLType | None:
@@ -1228,7 +1254,7 @@ class _DocumentWalk:
         """Walk one root's selections, charging values everywhere and shape where ``shape``."""
         graphql_schema = self.graphql_schema
         # (node, parent type, cost multiplier, fragment spread path, shape)
-        stack: list[tuple[Any, GraphQLNamedType | None, int, frozenset[str], bool]] = [
+        stack: list[tuple[SelectionNode, GraphQLNamedType | None, int, frozenset[str], bool]] = [
             (
                 selection,
                 parent,
@@ -1280,6 +1306,9 @@ class _DocumentWalk:
                     for selection in reversed(node.selection_set.selections)
                 )
                 continue
+            # graphql-core's selection grammar has three node kinds and both fragment
+            # kinds continued above, so what remains is a field.
+            node = cast("FieldNode", node)
             if shape:
                 self.budget.charge_selection(node.alias is not None)
             field_def = _field_definition(graphql_schema, parent, node.name.value)
@@ -1359,7 +1388,7 @@ def charge_document(
         if isinstance(definition, FragmentDefinitionNode)
     }
     walk = _DocumentWalk(policy, graphql_schema, fragments)
-    supplied = variables if variables is not None else {}
+    supplied: Mapping[str, object] = variables if variables is not None else {}
     for definition in document.definitions:
         if isinstance(definition, OperationDefinitionNode):
             selected = operation_name is None or (
@@ -1532,7 +1561,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         explicit = self._policy
         if explicit is not None:
             return explicit
-        schema_policy = getattr(self.execution_context.schema, "resource_policy", None)
+        schema_policy: object = getattr(self.execution_context.schema, "resource_policy", None)
         return (
             schema_policy
             if isinstance(schema_policy, ResourcePolicy)

@@ -292,7 +292,11 @@ def build_and_stash_input(
     return input_cls
 
 
-def construction_kwargs(*, instance: models.Model | None = None, **base: Any) -> dict[str, Any]:
+def construction_kwargs(
+    *,
+    instance: models.Model | None = None,
+    **base: object,
+) -> dict[str, object]:
     """Build a construction-hook kwargs dict, adding ``instance`` only when non-``None`` (spec-039).
 
     The default construction-kwargs hooks share the ``{...base...}`` +
@@ -332,7 +336,7 @@ def require_backing_class(
     at that call site - its message names ``Meta.model``, not the shared
     subclass template. This helper owns only the shared presence clause.
     """
-    backing = getattr(meta, key, None)
+    backing: object = getattr(meta, key, None)
     if backing is None:
         raise ConfigurationError(
             f"{base_label} {name}.Meta declares no {key}; set Meta.{key} to a "
@@ -442,7 +446,7 @@ def resolve_backed_model_or_raise(
     """
     model = cls._resolve_model(meta)
     if model is None:
-        backing = getattr(meta, key)
+        backing: object = getattr(meta, key)
         raise ConfigurationError(
             f"{base_label} {_safe_class_name(cls)}.Meta.{key} {_safe_class_name(backing)} resolves no model; "
             f"a {noun} must set Meta.model so the mutation has a model + a DjangoType to return.",
@@ -498,7 +502,10 @@ def _id_resolver_seams(
         id: object,  # noqa: A002
     ) -> object:
         """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
-        return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
+        # The attribute is the flavor's own resolver entry, imported by name at
+        # resolve time to break the import cycle; its signature is the seam's.
+        entry = cast("Callable[..., object]", import_attr(module_path, sync_name))
+        return entry(cls, info, data=data, id=id)
 
     def resolve_async(
         cls: type[object],
@@ -508,7 +515,10 @@ def _id_resolver_seams(
         id: object,  # noqa: A002
     ) -> object:
         """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
-        return import_attr(module_path, async_name)(cls, info, data=data, id=id)
+        # The attribute is the flavor's own resolver entry, imported by name at
+        # resolve time to break the import cycle; its signature is the seam's.
+        entry = cast("Callable[..., object]", import_attr(module_path, async_name))
+        return entry(cls, info, data=data, id=id)
 
     return classmethod(resolve_sync), classmethod(resolve_async)
 
@@ -522,11 +532,17 @@ def _id_less_resolver_seams(
 
     def resolve_sync(cls: type[object], info: Info[object, object], *, data: object) -> object:
         """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
-        return import_attr(module_path, sync_name)(cls, info, data=data)
+        # The attribute is the flavor's own resolver entry, imported by name at
+        # resolve time to break the import cycle; its signature is the seam's.
+        entry = cast("Callable[..., object]", import_attr(module_path, sync_name))
+        return entry(cls, info, data=data)
 
     def resolve_async(cls: type[object], info: Info[object, object], *, data: object) -> object:
         """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
-        return import_attr(module_path, async_name)(cls, info, data=data)
+        # The attribute is the flavor's own resolver entry, imported by name at
+        # resolve time to break the import cycle; its signature is the seam's.
+        entry = cast("Callable[..., object]", import_attr(module_path, async_name))
+        return entry(cls, info, data=data)
 
     return classmethod(resolve_sync), classmethod(resolve_async)
 

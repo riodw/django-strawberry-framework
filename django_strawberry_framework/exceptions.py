@@ -119,7 +119,7 @@ def _safe_class_name(value: object, *, qualified: bool = False) -> str:
     """
     attribute = "__qualname__" if qualified else "__name__"
     try:
-        name = getattr(value, attribute)
+        name: object = getattr(value, attribute)
     except BaseException:
         return _safe_type_name(value)
     try:

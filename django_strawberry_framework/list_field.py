@@ -109,9 +109,13 @@ from .utils.querysets import (
 from .utils.typing import is_async_callable
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from collections.abc import Coroutine, Mapping
+    from typing import Never
+
     from django.db.models.expressions import Expression
     from django.db.models.options import Options
     from django.db.models.sql.query import Query
+    from graphql import GraphQLArgument
 
     from .orders.sets import OrderSet
     from .types.definition import DjangoTypeDefinition
@@ -197,7 +201,7 @@ def _validate_djangotype_target(
             f"{field} requires a DjangoType subclass; got {_safe_class_name(target_type)}.",
         )
     try:
-        definition = getattr(target_type, "__django_strawberry_definition__", None)
+        definition: object = getattr(target_type, "__django_strawberry_definition__", None)
     except Exception:
         # Contained: a metaclass whose __getattr__ raises anything other than
         # AttributeError must reach the typed rejection below, not escape raw.
@@ -215,8 +219,8 @@ def _validate_djangotype_target(
         )
     if resolver is not None and not callable(resolver):
         raise ConfigurationError(f"{field} resolver must be callable.")
-    # The ``is None`` arm above rejected a missing definition; mypy's ``is canonical``
-    # narrowing re-widens it to the registry's Optional return.
+    # The guards above proved ``definition is canonical`` and not None; neither
+    # checker narrows a read attribute by identity with a non-literal value.
     return cast("DjangoTypeDefinition", definition)
 
 
@@ -380,12 +384,13 @@ def _published_wire_name(
             f"Failed to read the schema field for argument {parameter_name!r}: {exc}",
         ) from exc
     try:
-        published_args = parent_type.fields[field_name].args
+        # graphql-core's ``cached_property`` types ``fields`` ``Any``; the property
+        # itself returns a ``GraphQLFieldMap``, whose fields carry a ``GraphQLArgumentMap``.
+        published_args: dict[str, GraphQLArgument] = parent_type.fields[field_name].args
         for wire_name, graphql_argument in published_args.items():
-            extensions = graphql_argument.extensions or {}
+            extensions: Mapping[str, object] = graphql_argument.extensions or {}
             if extensions.get(GraphQLCoreConverter.DEFINITION_BACKREF) is arg_def:
-                # graphql-core types the ``fields`` map ``Any``; its argument keys are names.
-                return cast("str", wire_name)
+                return wire_name
     except Exception as exc:
         raise ConfigurationError(
             f"Failed to read the published arguments for {parameter_name!r} on "
@@ -997,8 +1002,9 @@ def _is_deterministic_order_value(
     if hasattr(value, "resolve_expression"):
         return _is_deterministic_order_term(query, value, opts, seen, prefix)
     if isinstance(value, _ORDER_VALUE_CONTAINERS):
+        members: list[object] | tuple[object, ...] | set[object] | frozenset[object] = value
         return all(
-            _is_deterministic_order_value(query, member, opts, seen, prefix) for member in value
+            _is_deterministic_order_value(query, member, opts, seen, prefix) for member in members
         )
     return True
 
@@ -1262,8 +1268,8 @@ def _field_label(info: Info[object, object]) -> str:
 
 
 def _resolver_root_and_info(
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
 ) -> tuple[object, Info[object, object]]:
     """Extract Strawberry's positional resolver context and reject unknown call inputs."""
     if len(args) > 2:
@@ -1284,12 +1290,15 @@ def _resolver_root_and_info(
             info = kwargs["info"]
         except KeyError as exc:
             raise TypeError("DjangoListField resolver requires info.") from exc
-    return root, info
+    # Trusted, not checked: Strawberry binds its own ``Info`` to the resolver
+    # parameter annotated ``Info`` - here the synthesized keyword-only ``info``
+    # (``strawberry/schema/schema_converter.py`` #"kwargs[info_parameter.name] = info").
+    return root, cast("Info[object, object]", info)
 
 
 def _argument_record(
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    args: tuple[object, ...],
+    kwargs: Mapping[str, object],
     *,
     max_rows: int | None,
     trusted_max_rows: bool,
@@ -1338,7 +1347,7 @@ def _build_non_queryset_rejection_error(
 
 
 async def _handle_non_queryset_rejections_async(
-    source: Any,
+    source: object,
     args_record: _ListArguments,
     info: Info[object, object],
     *,
@@ -1452,7 +1461,7 @@ def _order_normalization_scope(
 
 def _execute_queryset_pipeline_sync(
     target_type: type[DjangoType],
-    source: models.QuerySet[models.Model],
+    source: models.QuerySet[models.Model, object],
     info: Info[object, object],
     args_record: _ListArguments,
     max_rows: int | None,
@@ -1499,7 +1508,7 @@ def _execute_queryset_pipeline_sync(
 
 async def _execute_queryset_pipeline_async(
     target_type: type[DjangoType],
-    source: models.QuerySet[models.Model],
+    source: models.QuerySet[models.Model, object],
     info: Info[object, object],
     args_record: _ListArguments,
     max_rows: int | None,
@@ -1546,7 +1555,7 @@ async def _execute_queryset_pipeline_async(
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
     target_type: type[object],
     *,
-    resolver: Callable[..., Any] | None = None,
+    resolver: Callable[..., object] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
@@ -1649,11 +1658,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     if resolver is None:
 
         def _default(
-            *args: Any,
+            *args: object,
             offset: object = None,
             limit: object = None,
             order_by: object = strawberry.UNSET,
-            **kwargs: Any,
+            **kwargs: object,
         ) -> object:
             _, info, args_record = _argument_record(
                 args,
@@ -1718,11 +1727,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         def _async_wrap() -> Callable[..., object]:
 
             async def _wrap(
-                *args: Any,
+                *args: object,
                 offset: object = None,
                 limit: object = None,
                 order_by: object = strawberry.UNSET,
-                **kwargs: Any,
+                **kwargs: object,
             ) -> object:
                 root, info, args_record = _argument_record(
                     args,
@@ -1733,16 +1742,23 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                     limit=limit,
                     order_by=order_by,
                 )
-                raw_source = await user_resolver(root, info)
-                source, is_qs = prepared_resolver_source(
+                # ``_async_wrap`` is built only when ``is_async_callable(user_resolver)``
+                # held; its narrowing does not reach into this closure.
+                async_resolver = cast(
+                    "Callable[..., Coroutine[object, Never, object]]",
+                    user_resolver,
+                )
+                raw_source = await async_resolver(root, info)
+                prepared = prepared_resolver_source(
                     raw_source,
                     node_type,
                     async_guard=reject_residual_async_source,
                 )
-                if is_qs:
+                source = prepared[0]
+                if prepared[1] is True:
                     return await _execute_queryset_pipeline_async(
                         node_type,
-                        source,
+                        prepared[0],
                         info,
                         args_record,
                         max_rows,
@@ -1757,11 +1773,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         def _sync_wrap() -> Callable[..., object]:
 
             def _wrap(
-                *args: Any,
+                *args: object,
                 offset: object = None,
                 limit: object = None,
                 order_by: object = strawberry.UNSET,
-                **kwargs: Any,
+                **kwargs: object,
             ) -> object:
                 root, info, args_record = _argument_record(
                     args,
@@ -1784,15 +1800,16 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
                         info,
                         args_record,
                     )
-                source, is_qs = prepared_resolver_source(
+                prepared = prepared_resolver_source(
                     source,
                     node_type,
                     async_guard=reject_awaitable_sync_source,
                 )
-                if is_qs:
+                source = prepared[0]
+                if prepared[1] is True:
                     return _execute_queryset_pipeline_sync(
                         node_type,
-                        source,
+                        prepared[0],
                         info,
                         args_record,
                         max_rows,

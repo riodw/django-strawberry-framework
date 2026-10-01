@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
@@ -54,7 +54,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db import models
 
     from ..sets_mixins import ActiveInputPermissionMixin
-    from .inputs import GeneratedInputFieldSpec
+    from .input_values import FieldSpecMap, RelatedBranch
 
 # Recourse text shared by every ``check_<field>_permission`` async-guard raise. A
 # filter / order permission gate is fired synchronously (on the async surface it
@@ -114,16 +114,16 @@ class ChannelsRequestAdapter:
     require the optional ``channels`` dependency (spec-041 Decision 11).
     """
 
-    def __init__(self, request: object, scope: Mapping[str, Any]) -> None:
+    def __init__(self, request: object, scope: Mapping[str, object]) -> None:
         self._request = request
         self._scope = scope
 
     @property
-    def scope(self) -> Mapping[str, Any]:
+    def scope(self) -> Mapping[str, object]:
         """Return the resolved Channels connection scope."""
         return self._scope
 
-    def _scope_value(self, key: str) -> Any:
+    def _scope_value(self, key: str) -> object:
         """Read a scope value without allowing a hostile mapping to escape raw."""
         try:
             return Mapping.get(self._scope, key)
@@ -133,25 +133,25 @@ class ChannelsRequestAdapter:
             ) from exc
 
     @property
-    def user(self) -> Any:
+    def user(self) -> object:
         """The scope's ``user`` (``AuthMiddlewareStack``-populated); ``None`` when absent."""
         return self._scope_value("user")
 
     @property
-    def session(self) -> Any:
+    def session(self) -> object:
         """The scope's ``session`` (``SessionMiddleware``-populated); ``None`` when absent."""
         return self._scope_value("session")
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         """Delegate every non-scope attribute to the original context value."""
         return getattr(self._request, name)
 
 
-def _channels_scope(request: object) -> Mapping[str, Any] | None:
+def _channels_scope(request: object) -> Mapping[str, object] | None:
     """Resolve Strawberry's HTTP or WebSocket Channels scope shape."""
     try:
-        consumer = getattr(request, "consumer", None)
-        scope = getattr(consumer, "scope", None)
+        consumer: object = getattr(request, "consumer", None)
+        scope: object = getattr(consumer, "scope", None)
     except BaseException:
         scope = None
     if isinstance(scope, Mapping):
@@ -259,7 +259,7 @@ def request_from_info(info: object, *, family_label: str) -> object:
     ``.apply`` would mis-describe the mutation caller.
     """
     try:
-        context = getattr(info, "context", None)
+        context: object = getattr(info, "context", None)
     except BaseException:
         context = None
     if context is None:
@@ -316,7 +316,9 @@ def resolve_auth_aliases() -> frozenset[str]:
     # ``AUTH_USER_MODEL`` is ``"app_label.ModelName"``; resolving it through the
     # same ``_safe_get_model`` as the other auth models keeps ONE code path (an
     # uninstalled / misconfigured model is skipped, never an error).
-    user_app_label, _, user_model_name = settings.AUTH_USER_MODEL.partition(".")
+    # django-stubs declares ``AUTH_USER_MODEL: str`` (``conf/global_settings.pyi``).
+    auth_user_model: str = settings.AUTH_USER_MODEL
+    user_app_label, _, user_model_name = auth_user_model.partition(".")
     candidates = [
         _safe_get_model(user_app_label, user_model_name),
         _safe_get_model("auth", "Permission"),
@@ -416,7 +418,7 @@ def invoke_permission_method(
     if fired is not None and method_name in fired:
         return
     try:
-        method = getattr(bare_instance, method_name, None)
+        method: object = getattr(bare_instance, method_name, None)
     except BaseException as exc:
         raise ConfigurationError(
             f"The {_safe_type_name(type(bare_instance))} permission gate "
@@ -457,13 +459,13 @@ def active_permission_targets(
     cls: type[ActiveInputPermissionMixin],
     input_value: object,
     *,
-    field_specs: Mapping[Any, GeneratedInputFieldSpec],
+    field_specs: FieldSpecMap,
     related_attr: str,
     logic_keys: frozenset[str],
     fallback_path: Callable[[str], str],
     unset_sentinel: object = None,
     handle_top_level_list: bool = False,
-) -> tuple[list[str], list[tuple[str, Any, object]]]:
+) -> tuple[list[str], list[RelatedBranch]]:
     """Partition active top-level fields into ``(leaf_paths, related_branches)`` in ONE walk.
 
     ``run_active_input_permission_checks`` needs both the per-field gate paths
@@ -491,7 +493,7 @@ def active_permission_targets(
         handle_top_level_list=handle_top_level_list,
     )
     leaf_paths: list[str] = []
-    branches: list[tuple[str, Any, object]] = []
+    branches: list[RelatedBranch] = []
     for field in iter_active_fields(cls, input_value, config):
         if field.kind == LEAF:
             leaf_paths.append(
@@ -511,7 +513,7 @@ def active_related_branches(
     related_attr: str,
     unset_sentinel: object = None,
     handle_top_level_list: bool = False,
-) -> list[tuple[str, Any, object]]:
+) -> list[RelatedBranch]:
     """List ``(field_name, related_obj, child_input)`` for present related branches.
 
     Active-branch scoping: a related branch is "active" when its key is present
@@ -613,10 +615,10 @@ def _fire_flat_relation_path_gates(
     index = 0
     while index < terminal_index:
         related = _related_declarations(current_cls, related_attr)
-        matches: list[tuple[int, Any, Any]] = []
+        matches: list[tuple[int, str, object]] = []
         for declared_attr, related_obj in related:
             try:
-                field_name = getattr(related_obj, "field_name", None)
+                field_name: object = getattr(related_obj, "field_name", None)
             except BaseException as exc:
                 raise ConfigurationError(
                     f"{_safe_type_name(current_cls)} declares an unreadable related "
@@ -643,7 +645,7 @@ def _fire_flat_relation_path_gates(
         # Parent relation branch gate on the current set, keyed on the PUBLIC attr
         # so it matches the ``check_<branch>_permission`` the nested form fires.
         _fire_gate_on_class(current_cls, declared_attr, request, fired=fired)
-        child_set = getattr(related_obj, target_attr, None)
+        child_set: object = getattr(related_obj, target_attr, None)
         if not isinstance(child_set, type):
             return
         current_cls = child_set
@@ -654,7 +656,7 @@ def _fire_flat_relation_path_gates(
         _fire_gate_on_class(current_cls, hops[terminal_index], request, fired=fired)
 
 
-def _related_declarations(cls: type[object], related_attr: str) -> tuple[tuple[Any, Any], ...]:
+def _related_declarations(cls: type[object], related_attr: str) -> tuple[tuple[str, object], ...]:
     """Read a set's related declarations without trusting mapping overrides.
 
     The read + ``None`` normalization + mapping proof are the shared front half
@@ -679,8 +681,13 @@ def _related_declarations(cls: type[object], related_attr: str) -> tuple[tuple[A
     # No emptiness short-circuit: a truthiness test would dispatch a hostile
     # ``__bool__`` / ``__len__``, and an empty mapping already materializes to
     # ``()`` through the unbound read below.
+    # ``sets_mixins.py::collect_related_declarations`` stores the collection keyed by
+    # each declaration's class-attribute name.
+    declarations = cast("Mapping[str, object]", related)
     try:
-        items = dict.items(related) if isinstance(related, dict) else related.items()
+        items = (
+            dict.items(declarations) if isinstance(declarations, dict) else declarations.items()
+        )
         return tuple(items)
     except BaseException as exc:
         raise ConfigurationError(
@@ -753,7 +760,13 @@ def run_active_input_permission_checks(
         )
 
     for field_name, related_obj, child_input in related_branches:
-        child_set = getattr(related_obj, target_attr, None)
+        # ``related_obj`` is a declaration ``sets_mixins.py::collect_related_declarations``
+        # collected; its target property admits only ``None`` or the family's set class
+        # (``RelatedSetTargetMixin._validate_target``).
+        child_set = cast(
+            "type[ActiveInputPermissionMixin] | None",
+            getattr(related_obj, target_attr, None),
+        )
         if child_set is not None and hasattr(child_set, "_run_permission_checks"):
             # Child set is (usually) a different class; it keys its own per-class
             # set inside the shared ``fired`` map and allocates its own bare.

@@ -33,7 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from asgiref.sync import sync_to_async
 from django.test import AsyncClient, Client, TestCase, TransactionTestCase
@@ -45,10 +45,11 @@ from django_strawberry_framework.conf import testing_endpoint_setting
 from django_strawberry_framework.exceptions import _safe_arg_repr
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import AsyncIterator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping
     from typing import Protocol, TypedDict
 
     from django.contrib.auth.models import _User
+    from django.test.client import _MonkeyPatchedASGIResponse, _MonkeyPatchedWSGIResponse
 
     class _ClientPostKwargs(TypedDict, total=False):
         """The keyword arguments the clients' ``request()`` forwards to ``Client.post``."""
@@ -145,7 +146,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
 
     def _finish_response(
         self,
-        resp: Any,
+        resp: _MonkeyPatchedWSGIResponse | _MonkeyPatchedASGIResponse,
         *,
         files: dict[str, object] | None,
         assert_no_errors: bool | None,
@@ -173,6 +174,24 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
 
         return response
 
+    @overload
+    def request(
+        self: _GraphQLTestClientBase[Client],
+        body: dict[str, object],
+        headers: dict[str, object] | None = None,
+        files: dict[str, object] | None = None,
+        *,
+        url: str | None = None,
+    ) -> _MonkeyPatchedWSGIResponse: ...
+    @overload
+    def request(
+        self: _GraphQLTestClientBase[AsyncClient],
+        body: dict[str, object],
+        headers: dict[str, object] | None = None,
+        files: dict[str, object] | None = None,
+        *,
+        url: str | None = None,
+    ) -> Awaitable[_MonkeyPatchedASGIResponse]: ...
     @override
     def request(
         self,
@@ -181,7 +200,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
         files: dict[str, object] | None = None,
         *,
         url: str | None = None,
-    ) -> Any:
+    ) -> _MonkeyPatchedWSGIResponse | Awaitable[_MonkeyPatchedASGIResponse]:
         """POST ``body`` to ``url`` (default ``self.path``) through the wrapped client.
 
         The concrete implementation of the base's one abstract seam, widened
@@ -274,8 +293,8 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
             )
 
         # ``cast``: the ``variables`` member checked above exists only for a
-        # non-empty ``variables`` dict.
-        self._assert_file_placeholders(cast("dict[str, object]", variables), files)
+        # non-empty ``variables`` mapping.
+        self._assert_file_placeholders(cast("Mapping[str, object]", variables), files)
 
         file_map = {key: [f"variables.{key}"] for key in files}
         return {"operations": json.dumps(body), "map": json.dumps(file_map), **files}
@@ -318,6 +337,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                         f"emitted map entry could never name a GraphQL variable.",
                     )
                 if isinstance(current, (list, tuple)):
+                    array: list[object] | tuple[object, ...] = current
                     # Multipart operation paths use ``object-path`` numeric segments:
                     # a list index is its canonical non-negative decimal rendering.
                     # Guard the conversion itself because digit-like Unicode and very
@@ -327,7 +347,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                     except ValueError:
                         index = None
                     try:
-                        size = len(current)
+                        size = len(array)
                     except Exception as exc:
                         # A container whose length is unreadable cannot be verified
                         # to carry the placeholder - a malformed call, failed with
@@ -344,7 +364,7 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
                             f"variables: {_safe_arg_repr(segment)} is not a valid index into a "
                             f"{size}-item array.",
                         )
-                    current = current[index]
+                    current = array[index]
                 elif isinstance(current, dict):
                     if segment not in current:
                         raise AssertionError(
@@ -398,7 +418,7 @@ class TestClient(_GraphQLTestClientBase[Client]):
     def query(
         self,
         query: str,
-        variables: dict[str, Any] | None = None,
+        variables: Mapping[str, object] | None = None,
         headers: dict[str, object] | None = None,
         files: dict[str, object] | None = None,
         assert_no_errors: bool | None = True,
@@ -495,7 +515,7 @@ class AsyncTestClient(_GraphQLTestClientBase[AsyncClient]):
     async def query(
         self,
         query: str,
-        variables: dict[str, Any] | None = None,
+        variables: Mapping[str, object] | None = None,
         headers: dict[str, object] | None = None,
         files: dict[str, object] | None = None,
         assert_no_errors: bool | None = True,
@@ -564,7 +584,7 @@ class GraphQLTestMixin:
         self: _GraphQLTestHost,
         query: str,
         *,
-        variables: dict[str, Any] | None = None,
+        variables: Mapping[str, object] | None = None,
         operation_name: str | None = None,
         headers: dict[str, object] | None = None,
         files: dict[str, object] | None = None,

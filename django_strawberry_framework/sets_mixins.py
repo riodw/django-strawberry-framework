@@ -46,9 +46,9 @@ sets.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.utils.module_loading import import_string
 
@@ -68,6 +68,7 @@ from .utils.strings import pascal_case_or_raise
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .filters.sets import FilterSetMetaclass
     from .orders.sets import OrderSetMetaclass
+    from .utils.input_values import RelatedBranch
 
 _T = TypeVar("_T")
 _D = TypeVar("_D", bound="RelatedSetTargetMixin")
@@ -223,10 +224,10 @@ class RelatedSetTargetMixin(LazyRelatedClassMixin):
         a failed read leaves the slot resolved and re-raises on every retry,
         the same observable behavior the inline family gates had.
         """
-        resolved = self.resolve_lazy_class(
-            getattr(self, self._target_attr),
-            getattr(self, self._owner_attr, None),
-        )
+        target = getattr(self, self._target_attr)
+        # ``_bind_owner`` is the one writer of the owner slot, and it stores a set class.
+        owner: type[object] | None = getattr(self, self._owner_attr, None)
+        resolved = self.resolve_lazy_class(target, owner)
         setattr(self, self._target_attr, resolved)
         if resolved is not None:
             # ``None`` is the shared skip-silently placeholder (the branch is
@@ -310,8 +311,10 @@ def collect_related_declarations(
     collected: OrderedDict[str, _D] = OrderedDict()
     if inherit_from_bases:
         for base in reversed(bases):
-            for name, declaration in getattr(base, collection_attr, {}).items():
-                collected[name] = declaration
+            # Every family class's ``collection_attr`` is the map this function stores below.
+            inherited: Mapping[str, _D] = getattr(base, collection_attr, {})
+            for name, inherited_declaration in inherited.items():
+                collected[name] = inherited_declaration
     for name, declaration in own_items:
         if isinstance(declaration, declaration_type):
             collected[name] = declaration
@@ -327,7 +330,7 @@ def collect_related_declarations(
         if name in class_values:
             continue
         for base in bases:
-            declarations = getattr(base, base_declarations_attr, {})
+            declarations: Mapping[str, object] = getattr(base, base_declarations_attr, {})
             if name in declarations:
                 selected = declarations[name]
                 if isinstance(selected, declaration_type):
@@ -607,7 +610,7 @@ class ActiveInputPermissionMixin:
         return request_from_info(info, family_label=cls._permission.family_label)
 
     @classmethod
-    def _extract_branch_value(cls, input_value: object, field_name: str) -> Any:
+    def _extract_branch_value(cls, input_value: object, field_name: str) -> object:
         """Return the value at ``field_name`` on a dataclass-or-dict input.
 
         Thin delegate to ``utils/permissions.py::extract_branch_value`` with
@@ -620,7 +623,7 @@ class ActiveInputPermissionMixin:
         )
 
     @classmethod
-    def _iter_active_related_branches(cls, input_value: object) -> list[tuple[str, Any, object]]:
+    def _iter_active_related_branches(cls, input_value: object) -> list[RelatedBranch]:
         """List ``(field_name, related_obj, child_input)`` for present branches.
 
         Thin delegate to ``utils/permissions.py::active_related_branches``.
@@ -669,7 +672,7 @@ class ActiveInputPermissionMixin:
     def _active_permission_targets(
         cls,
         input_value: object,
-    ) -> tuple[list[str], list[tuple[str, Any, object]]]:
+    ) -> tuple[list[str], list[RelatedBranch]]:
         """Single-pass ``(leaf source paths, active related branches)`` for one level.
 
         Thin delegate to ``utils/permissions.py::active_permission_targets``.
@@ -696,6 +699,7 @@ class ActiveInputPermissionMixin:
         cls,
         _input_value: object,
         _request: object,
+        /,
         *,
         _fired: dict[type[object], set[str]],
         _bare: ActiveInputPermissionMixin,

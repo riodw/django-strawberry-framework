@@ -57,7 +57,7 @@ from __future__ import annotations
 import datetime
 import decimal
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from types import GenericAlias
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
@@ -161,7 +161,8 @@ def _model_field_converter(field: DRFField) -> SerializerFieldConversion:
     loud THERE (never a silent ``String``), and a ``ModelField`` with no wrapped
     ``model_field`` cannot be typed and fails loud here.
     """
-    model_field = getattr(field, "model_field", None)
+    # drf-stubs: ``ModelField.model_field: models.Field``; ``None`` only when never wrapped.
+    model_field: ConcreteField | None = getattr(field, "model_field", None)
     if model_field is None:
         raise ConfigurationError(
             f"Serializer field {field.field_name!r} is a ModelField with no wrapped model_field; "
@@ -214,10 +215,16 @@ _SERIALIZER_FIELD_CONVERTERS: dict[type[DRFField], SerializerFieldConverter] = d
 )
 
 
-_CONVERT_RELATION_MULTI = make_kind_converter(SerializerFieldConversion, RELATION_MULTI)
-_CONVERT_RELATION_SINGLE = make_kind_converter(SerializerFieldConversion, RELATION_SINGLE)
-_CONVERT_FILE = make_kind_converter(SerializerFieldConversion, FILE)
-_CONVERT_MULTIPLE_CHOICE = make_kind_converter(
+_CONVERT_RELATION_MULTI: SerializerFieldConverter = make_kind_converter(
+    SerializerFieldConversion,
+    RELATION_MULTI,
+)
+_CONVERT_RELATION_SINGLE: SerializerFieldConverter = make_kind_converter(
+    SerializerFieldConversion,
+    RELATION_SINGLE,
+)
+_CONVERT_FILE: SerializerFieldConverter = make_kind_converter(SerializerFieldConversion, FILE)
+_CONVERT_MULTIPLE_CHOICE: SerializerFieldConverter = make_kind_converter(
     SerializerFieldConversion,
     SCALAR,
     annotation=list[str],
@@ -391,7 +398,8 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
     ``PrimaryKeyRelatedField(many=True)``, not ``ListField(child=relation)``).
     """
     field_name = getattr(field, "field_name", None)
-    child = getattr(field, "child", None)
+    # drf-stubs: ``ListField.child: Field``.
+    child: DRFField | None = getattr(field, "child", None)
     if child is None or type(child).__name__ == "_UnvalidatedField":
         raise ConfigurationError(
             f"Serializer field {field_name!r} is a ListField with no explicit child field; "
@@ -543,7 +551,10 @@ def convert_serializer_field(
         scalar_registry=_SERIALIZER_FIELD_CONVERTERS,
         fallthrough_error_factory=_unsupported_serializer_field,
     )
-    return _finish_serializer_conversion(result, field)
+    # Every precheck handler above returns a finished conversion (or raises) and every
+    # registry entry is a ``SerializerFieldConverter``; the skeleton hands either back.
+    conversion = cast("SerializerFieldConversion | SerializerFieldConverter", result)
+    return _finish_serializer_conversion(conversion, field)
 
 
 def _unsupported_serializer_field(field: DRFField) -> ConfigurationError:
@@ -647,7 +658,7 @@ def serializer_field_description(field: DRFField) -> str | None:
     """
     try:
         parts: list[str] = []
-        help_text = getattr(field, "help_text", None)
+        help_text: object = getattr(field, "help_text", None)
         if help_text:
             parts.append(str(help_text))
         facts: list[str] = []
@@ -657,7 +668,7 @@ def serializer_field_description(field: DRFField) -> str | None:
             "min_value",
             "max_value",
         ):
-            value = getattr(field, attr, None)
+            value: object = getattr(field, attr, None)
             if value is not None:
                 facts.append(f"{attr}={value}")
         if getattr(field, "allow_blank", False):
@@ -689,7 +700,8 @@ def require_one_segment_source(field: DRFField, *, field_label: str, must_map_to
     ). ``field_label`` / ``must_map_to`` keep the diagnostic nouns at
     each call site (column vs nested write) without a second predicate copy.
     """
-    source_attrs = getattr(field, "source_attrs", None)
+    # drf-stubs: ``Field.source_attrs: list[str]``, set by ``bind``.
+    source_attrs: list[str] | None = getattr(field, "source_attrs", None)
     if source_attrs is not None and len(source_attrs) != 1:
         # ``source="*"`` -> ``[]``; dotted ``source="a.b"`` -> ``["a", "b"]``.
         raise ConfigurationError(
@@ -918,8 +930,10 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     the first.
     """
     enum_name = f"{type_name}{pascal_case(_bound_field_name(field))}Enum"
+    # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
+    choices: Mapping[object, object] = field.choices
     enum_cls = build_enum_from_choices(
-        list(field.choices.items()),
+        list(choices.items()),
         enum_name,
         source_label=f"serializer field {field.field_name!r}",
     )

@@ -70,7 +70,7 @@ from __future__ import annotations
 import threading
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
 from django.db.models.fields.files import FieldFile
@@ -82,10 +82,11 @@ from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
 from .canonical import base_container_values, canonical_sort_key
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import Callable, Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator, Sequence
     from typing import Protocol, TypeAlias
 
     from django.db import models
+    from django.db.backends.base.base import BaseDatabaseWrapper
     from django.db.models import QuerySet
 
     from ..mutations.inputs import FieldError
@@ -371,7 +372,8 @@ def _enforce_read_only_barrier(barrier_alias: str) -> Callable[[], None]:
     # permitting auth-alias SQL on a now-writable connection.
     with connection.cursor() as cursor:
         cursor.execute("PRAGMA query_only")
-        row = cursor.fetchone()
+        # A DB-API row (PEP 249): a sequence, or ``None`` when no row came back.
+        row: Sequence[object] | None = cursor.fetchone()
         previously_on = bool(row[0]) if row else False
         cursor.execute("PRAGMA query_only = ON")
     restore = "ON" if previously_on else "OFF"
@@ -732,7 +734,7 @@ def pin_write_queryset(
     # ``None`` unless the hook called ``.using(...)``.
     # mypy: django-stubs omits QuerySet._db
     # basedpyright: same stub omission, reported as an unknown attribute
-    hook_alias = queryset._db  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    hook_alias: object = queryset._db  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
     if hook_alias is not None and hook_alias != alias:
         if owner is None:
             owner = f"{queryset.model.__name__} get_queryset"
@@ -989,7 +991,7 @@ def _field_fingerprint(value: object) -> str:
       same.
     """
     parts: list[str] = []
-    stack: list[Any] = [value]
+    stack: list[object] = [value]
     active: set[int] = set()
     nodes = 0
     while stack:
@@ -1038,10 +1040,11 @@ def _field_fingerprint(value: object) -> str:
         # them apart is the fail-open this walk exists to prevent. Each branch reads
         # the container it has narrowed, so a ``dict`` answers its ``(key, value)`` pairs.
         if isinstance(item, dict):
+            entries: dict[object, object] = item
             parts.append("{")
             stack.append(_SnapshotClose("}", container_id))
             for key, member in sorted(
-                base_container_values(item),
+                base_container_values(entries),
                 key=lambda pair: canonical_sort_key(pair[0]),
                 reverse=True,
             ):
@@ -1052,13 +1055,17 @@ def _field_fingerprint(value: object) -> str:
                 stack.append(_SnapshotClose("=v"))
                 stack.append(key)
         elif isinstance(item, (list, tuple)):
+            sequence: list[object] | tuple[object, ...] = item
             parts.append("[")
             stack.append(_SnapshotClose("]", container_id))
-            stack.extend(reversed(base_container_values(item)))
+            stack.extend(reversed(base_container_values(sequence)))
         elif isinstance(item, (set, frozenset)):
+            members: set[object] | frozenset[object] = item
             parts.append("s{")
             stack.append(_SnapshotClose("}s", container_id))
-            stack.extend(sorted(base_container_values(item), key=canonical_sort_key, reverse=True))
+            stack.extend(
+                sorted(base_container_values(members), key=canonical_sort_key, reverse=True),
+            )
     return "".join(parts)
 
 
@@ -1119,7 +1126,7 @@ def assert_no_target_drift(owner: str, instance: models.Model) -> None:
         if attname in deferred:
             continue
         try:
-            current = getattr(instance, attname)
+            current: object = getattr(instance, attname)
             if isinstance(value, _ValueSnapshot):
                 # Each by-value wrapper owns its own re-comparison, so this dispatch
                 # cannot fall out of step with ``_snapshot_field_value``'s capture
@@ -1250,7 +1257,8 @@ def forced_update_conflict_errors(
     Anything else re-raises: a genuine database error must propagate and roll
     the transaction back, never be swallowed into a retryable envelope.
     """
-    connection = transaction.get_connection(using=alias)
+    # ``transaction.get_connection`` returns ``connections[using]`` (untyped in the stubs).
+    connection: BaseDatabaseWrapper = transaction.get_connection(using=alias)
     if not connection.needs_rollback:
         model = type(instance)
         try:

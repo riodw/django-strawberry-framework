@@ -125,6 +125,7 @@ from .conf import upstream_patches_enabled
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.backends.base.base import BaseDatabaseWrapper
     from django.test.testcases import _DatabaseFailure as _DatabaseFailureClass
+    from typing_extensions import TypeIs
 
 # Every audited Django release (5.2 - 6.1) defines this private wrapper; ``None``
 # is the drift sentinel for a release that renames or removes it.
@@ -285,7 +286,7 @@ def _validate_upstream_shape() -> str:
     return source
 
 
-def _is_database_failure(method: object) -> bool:
+def _is_database_failure(method: object) -> "TypeIs[_DatabaseFailureClass]":
     """Return whether ``method`` is Django's disallowed-database wrapper."""
     return _DatabaseFailure is not None and isinstance(method, _DatabaseFailure)
 
@@ -371,7 +372,7 @@ def _patched_remove_databases_failures(cls: type[SimpleTestCase]) -> None:
             continue
         connection = connections[alias]
         for name, _ in _disallowed_connection_methods(cls, connection):
-            method = getattr(connection, name)
+            method: object = getattr(connection, name)
             if _is_database_failure(method):
                 setattr(connection, name, method.wrapped)
 

@@ -384,6 +384,8 @@ from .conf import upstream_patches_enabled
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Awaitable, Callable, Mapping
+    from types import CodeType
+    from typing import Protocol, TypeGuard
 
     from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter
     from cross_web import HTTPException as _HTTPException
@@ -391,12 +393,21 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.http.base import BaseView as _BaseView
     from strawberry.http.sync_base_view import SyncBaseHTTPView as _SyncBaseHTTPView
     from strawberry.http.types import QueryParams
+    from typing_extensions import Never
 
     # The patched methods serve every parametrization of each generic view, so their
-    # ``self`` is the view's universal form.
-    _AnyBaseView = _BaseView[Any]
-    _AnySyncView = _SyncBaseHTTPView[Any, Any, Any, Any, Any]
-    _AnyAsyncView = _AsyncBaseHTTPView[Any, Any, Any, Any, Any, Any, Any]
+    # ``self`` is the view's universal form: ``Never`` for the contravariant ``Request``,
+    # ``Any`` for the invariant rest (no single type is a supertype of every argument).
+    _AnyBaseView = _BaseView[Never]
+    _AnySyncView = _SyncBaseHTTPView[Never, Any, Any, Any, Any]
+    _AnyAsyncView = _AsyncBaseHTTPView[Never, Any, Any, Any, Any, Any, Any]
+
+    class _UploadUtility(Protocol):
+        """The upload utility as the traversal translation reads it: a plain function."""
+
+        @property
+        def __code__(self) -> CodeType: ...
+
 
 # Every audited release (strawberry-graphql 0.322.2 - 0.327.7, cross_web 0.6.0 -
 # 0.7.0) provides all five names; ``None`` is the drift sentinel for a release that
@@ -522,7 +533,7 @@ class _UpstreamCaptures(NamedTuple):
     http_exception: "type[_HTTPException]"
     sync_view: "type[_AnySyncView]"
     async_view: "type[_AnyAsyncView]"
-    replace_placeholders_with_files: "Callable[..., object]"
+    replace_placeholders_with_files: "_UploadUtility"
     parse_json: "Callable[[_AnyBaseView, str | bytes], object]"
     parse_query_params: "Callable[[_AnyBaseView, QueryParams], dict[str, object]]"
     sync_parse_multipart: "Callable[[_AnySyncView, SyncHTTPRequestAdapter], dict[str, str]]"
@@ -542,7 +553,9 @@ def _upstream_captures() -> _UpstreamCaptures:
         or HTTPException is None
         or SyncBaseHTTPView is None
         or AsyncBaseHTTPView is None
-        or not callable(replace_placeholders_with_files)
+        # The traversal translation reads the utility's code object, so a plain
+        # function is what the capture must prove, not mere callability.
+        or not inspect.isfunction(replace_placeholders_with_files)
         or not callable(_original_parse_json)
         or not callable(_original_parse_query_params)
         or not callable(_original_sync_parse_multipart)
@@ -654,6 +667,14 @@ def _translated_parse_json(self: "_AnyBaseView", data: "str | bytes") -> object:
         raise upstream.http_exception(400, _UPSTREAM_JSON_PARSE_REASON) from exc
 
 
+def _is_operation_batch(parsed: object) -> "TypeGuard[list[dict[object, object]]]":
+    """Whether ``parsed`` is a JSON array whose every element is an object."""
+    if not isinstance(parsed, list):
+        return False
+    items: list[object] = parsed
+    return all(isinstance(item, dict) for item in items)
+
+
 def _patched_parse_json(
     self: "_AnyBaseView",
     data: "str | bytes",
@@ -718,7 +739,7 @@ def _patched_parse_json(
     parsed = _translated_parse_json(self, data)
     if isinstance(parsed, dict):
         return parsed
-    if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+    if _is_operation_batch(parsed):
         return parsed
     raise _upstream_captures().http_exception(
         400,
@@ -798,10 +819,7 @@ _MULTIPART_TRAVERSAL_ERRORS = (
 )
 
 
-def _raised_inside_the_upload_utility(
-    exc: BaseException,
-    utility: "Callable[..., object]",
-) -> bool:
+def _raised_inside_the_upload_utility(exc: BaseException, utility: "_UploadUtility") -> bool:
     """Return ``True`` when ``exc`` was raised from ``utility``, the upstream upload utility.
 
     The delegated ``parse_multipart`` covers more than the traversal this patch

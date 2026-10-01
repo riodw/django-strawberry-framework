@@ -83,6 +83,8 @@ _input_type_name_for = set_input_type_name
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from typing import Protocol
 
+    from django_filters.filterset import FilterSetOptions
+
     from ..types.definition import DjangoTypeDefinition
     from ..utils.typing import ConcreteField, ModelField
     from .sets import FilterSet
@@ -639,7 +641,9 @@ def convert_filter_to_input_annotation(
         fallthrough_error_factory=_unexpected_filter_dispatch,
     )
     if not required:
-        annotation = annotation | None
+        # Every precheck handler above returns a runtime annotation (a class, ``NewType``,
+        # or scalar), and the registry is empty.
+        annotation = cast("_TypeForm", annotation) | None
     return annotation
 
 
@@ -855,7 +859,12 @@ def _build_range_input_class(
     """
     field_name = getattr(filter_instance, "field_name", "field") or "field"
     cache_key = (filterset_cls, field_name, inner)
-    cache = getattr(filter_instance, "_range_input_classes", None)
+    # The per-instance slot is written only here, keyed and valued as below.
+    cache: dict[tuple[type[FilterSet] | None, str, _TypeForm], type[object]] | None = getattr(
+        filter_instance,
+        "_range_input_classes",
+        None,
+    )
     if cache is None:
         cache = {}
         # mypy: a per-instance cache slot no filter class declares
@@ -863,7 +872,7 @@ def _build_range_input_class(
         filter_instance._range_input_classes = cache  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
     cached = cache.get(cache_key)
     if cached is not None:
-        return cast("type[object]", cached)  # the slot only holds classes built below
+        return cached
     prefix = filterset_cls.__name__ if filterset_cls is not None else ""
     cls_name = f"{prefix}{_pascal_case(field_name)}RangeInputType"
     cls = build_input_class(
@@ -895,12 +904,12 @@ def _normalize_range_value(
     the patch keys load-bearing for any caller walking ``data.keys()``.
     """
     base = field_name or filter_instance.field_name or "range"
-    start = (
+    start: object = (
         getattr(raw_value, "start", None)
         if not isinstance(raw_value, dict)
         else raw_value.get("start")
     )
-    end = (
+    end: object = (
         getattr(raw_value, "end", None)
         if not isinstance(raw_value, dict)
         else raw_value.get("end")
@@ -949,9 +958,9 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, obj
     ``optional_field_kwargs`` -> ``strawberry.field(name=...)`` because the
     wire tokens are Python keywords and cannot be dataclass field names.
     """
-    # A runtime-built annotation: the object ``Annotated[...]`` builds from a runtime
-    # name has no static type either checker models.
-    self_ref: Any = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
+    # basedpyright: it models an ``Annotated[...]`` value as the bare special form, which has
+    # no ``__or__``; the runtime ``Annotated`` alias widens with ``| None`` below.
+    self_ref = cast("_TypeForm", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])
     list_ref = GenericAlias(list, (self_ref,))
     return [
         (
@@ -979,7 +988,13 @@ def _build_input_fields(
     from .base import RelatedFilter as _RelatedFilter
 
     all_filters = filterset_cls.get_filters()
-    related_filters = getattr(filterset_cls, "related_filters", OrderedDict())
+    # The metaclass stores ``related_filters`` from
+    # ``sets_mixins.py::collect_related_declarations`` (``RelatedFilter`` only).
+    related_filters: Mapping[str, _RelatedFilter] = getattr(
+        filterset_cls,
+        "related_filters",
+        OrderedDict(),
+    )
     declared_filters = getattr(filterset_cls, "declared_filters", {})
     grouped: OrderedDict[str, OrderedDict[str, Filter]] = OrderedDict()
     for filter_name, filter_instance in all_filters.items():
@@ -1144,10 +1159,12 @@ def _model_field_for_filter(
     real relation as an unknown field). The reachable ``None`` path -- typo /
     missing hop -- is preserved unchanged.
     """
-    model = getattr(getattr(filterset_cls, "_meta", None), "model", None)
+    # django-filter's metaclass stores ``_meta = FilterSetOptions(...)`` on every filterset.
+    meta: FilterSetOptions | None = getattr(filterset_cls, "_meta", None)
+    model: type[models.Model] | None = getattr(meta, "model", None)
     if model is None:
         return None
-    field_name = getattr(filter_instance, "field_name", None)
+    field_name: str | None = getattr(filter_instance, "field_name", None)
     if not field_name:
         return None
     return get_model_field(model, field_name)

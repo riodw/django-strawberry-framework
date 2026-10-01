@@ -41,7 +41,7 @@ Public surface:
   resolved ``DjangoType`` (``target_type``). Cardinality / null widening
   is sourced from ``FieldMeta``; reused by ``types/finalizer.py``'s
   deferred-resolution path.
-- ``SCALAR_MAP`` - module-level ``dict[type[models.Field], Any]`` mapping
+- ``SCALAR_MAP`` - module-level ``dict[type[models.Field], TypeForm[object]]`` mapping
   Django field classes to their Python / Strawberry scalar. Mutable,
   last-write-wins, read on every ``convert_scalar`` call (no caching), so
   post-``finalize_django_types()`` mutations remain visible. The canonical
@@ -68,7 +68,7 @@ import uuid
 from collections.abc import Iterable
 from enum import Enum, EnumMeta
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 import strawberry
 from django.db import models
@@ -82,8 +82,9 @@ from ..utils.strings import pascal_case
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.contrib.postgres.fields import ArrayField, HStoreField
+    from typing_extensions import Never, TypeForm
 
-    from ..utils.typing import ConcreteField, ModelField
+    from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
     from .base import DjangoType
 
 
@@ -238,7 +239,7 @@ class DjangoImagePathType(DjangoImageType, _FileSystemPathFields):
     """
 
 
-SCALAR_MAP: "dict[type[ConcreteField], Any]" = {
+SCALAR_MAP: "dict[type[ConcreteField], TypeForm[object]]" = {
     models.AutoField: int,
     models.BigAutoField: int,
     models.SmallAutoField: int,
@@ -308,14 +309,14 @@ _GRAPHQL_RESERVED_ENUM_VALUES = frozenset(
 # unavailable (package import still succeeds on a dev environment without the
 # postgres driver), and a loud ``AttributeError`` if that module is importable but
 # somehow missing the expected class -- a broken environment that should fail rather
-# than silently degrade.
-_ARRAY_FIELD_CLS: "type[ArrayField[Any, Any]] | None" = import_attr_if_importable(
-    "django.contrib.postgres.fields",
-    "ArrayField",
+# than silently degrade. Each cast names the class its by-name lookup returns.
+_ARRAY_FIELD_CLS = cast(
+    "type[ArrayField[Never, object]] | None",
+    import_attr_if_importable("django.contrib.postgres.fields", "ArrayField"),
 )
-_HSTORE_FIELD_CLS: "type[HStoreField] | None" = import_attr_if_importable(
-    "django.contrib.postgres.fields",
-    "HStoreField",
+_HSTORE_FIELD_CLS = cast(
+    "type[HStoreField] | None",
+    import_attr_if_importable("django.contrib.postgres.fields", "HStoreField"),
 )
 
 
@@ -344,7 +345,7 @@ def _field_has_choices(field: "ConcreteField") -> bool:
         raise ConfigurationError(f"Could not inspect choices for {_field_label(field)}.") from exc
 
 
-def scalar_for_field(field: "ModelField") -> Any:
+def scalar_for_field(field: "ModelField") -> "TypeForm[object]":
     """Resolve a Django field to its ``SCALAR_MAP`` Python / Strawberry scalar.
 
     Walks ``type(field).__mro__`` so consumer-defined subclasses of a supported
@@ -490,11 +491,12 @@ def convert_scalar(
     # converter) so a column resolves to the same scalar on both sides. Walks
     # the MRO, so consumer subclasses of a supported field resolve to the
     # parent's scalar and an unsupported field raises ``ConfigurationError``.
-    py_type = scalar_for_field(field)
+    py_type: object = scalar_for_field(field)
     if _field_has_choices(field):
         py_type = convert_choices_to_enum(field, type_name)
     if effective_null:
-        py_type = py_type | None
+        # A ``SCALAR_MAP`` value or generated enum is a runtime annotation.
+        py_type = cast("OptionalWidenable", py_type) | None
     return py_type
 
 

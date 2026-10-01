@@ -257,7 +257,7 @@ def masking_is_active(policy: ErrorPolicy) -> bool:
     except Exception:
         return True
     try:
-        debug = settings.DEBUG
+        debug: object = settings.DEBUG
     except Exception:
         debug = None
     return enabled and debug is not True

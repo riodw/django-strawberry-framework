@@ -190,15 +190,16 @@ from .serializer_converter import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Iterable
-    from typing import TypeAlias
+    from typing import Protocol, TypeAlias
 
     from django.db import models
     from django.db.models import Manager, QuerySet
     from strawberry.types import Info
 
     from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
+    from ..mutations.sets import _ValidatedMutationMeta
     from ..utils.inputs import InputFieldSpec
-    from ..utils.typing import ModelField
+    from ..utils.typing import ForeignKeyField, ModelField
     from .serializer_converter import DRFField, DRFSerializer
     from .sets import SerializerMutation
 
@@ -211,6 +212,19 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     _RelationSnapshot: TypeAlias = _RelationIdentity | list[_RelationIdentity]
     # One ``post_save`` witness record: (instance, pk at write, created, alias).
     _WrittenRow: TypeAlias = tuple[models.Model, object, bool, str | None]
+    # A container the frozen hook view descends into (``_FROZEN_VIEW_CONTAINERS``), and the
+    # mutable accumulator its frozen children land in before the container is finalized.
+    _FrozenContainer: TypeAlias = (
+        dict[object, object] | list[object] | tuple[object, ...] | set[object] | frozenset[object]
+    )
+    _FrozenAccumulator: TypeAlias = dict[object, object] | list[object]
+
+    class _SaveBookkeeping(Protocol):
+        """The serializer surface the saved-result check reads: DRF's ``save()`` bookkeeping."""
+
+        @property
+        def instance(self) -> object: ...
+
 
 # The omission sentinel the reserved serializer-kwarg checks use: it keeps an
 # explicit ``data=None`` / ``instance=None`` return distinguishable from a hook
@@ -556,8 +570,9 @@ def _error_node_children(
     leaf (``None``).
     """
     if isinstance(errors, dict):
+        error_map: dict[object, object] = errors
         children: list[tuple[object, _ReverseMap, str]] = []
-        for key, value in errors.items():
+        for key, value in error_map.items():
             segment, child_map = _rekey_segment(str(key), reverse_map)
             children.append((value, child_map, join_error_path(prefix, segment)))
         return children
@@ -676,7 +691,7 @@ def _hook_mapping(
     mutation_cls: type[SerializerMutation],
     hook_name: str,
     value: object,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Coerce one mapping-valued hook result or raise a typed configuration error.
 
     The three serializer hooks that return keyword/data mappings are consumer extension points.
@@ -696,7 +711,7 @@ def _hook_mapping(
             f"got {_safe_type_name(value)}.",
         )
     try:
-        materialized = dict(value)
+        materialized: dict[object, object] = dict(value)
     except BaseException as exc:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.{hook_name} returned a mapping that "
@@ -709,7 +724,8 @@ def _hook_mapping(
             f"non-string key(s) {[repr(key) for key in offenders]!r}; hook mappings become "
             "serializer kwargs / data keys, so every key must be a plain string.",
         )
-    return materialized
+    # The offender check above rejected every key that is not exactly ``str``.
+    return cast("dict[str, object]", materialized)
 
 
 # Leaf value types the frozen hook view may expose BY REFERENCE: each cannot be
@@ -743,7 +759,13 @@ _IMMUTABLE_LEAF_TYPES: tuple[type[object], ...] = (
 # ``set``/``frozenset`` -> ``frozenset`` (children frozen at every depth). ``str`` /
 # ``bytes`` / ``bytearray`` are deliberately NOT here - they are leaves, not element
 # containers - so they are never iterated as structure.
-_FROZEN_VIEW_CONTAINERS: tuple[type[object], ...] = (
+_FROZEN_VIEW_CONTAINERS: tuple[
+    type[dict[object, object]],
+    type[list[object]],
+    type[tuple[object, ...]],
+    type[set[object]],
+    type[frozenset[object]],
+] = (
     dict,
     list,
     tuple,
@@ -802,22 +824,23 @@ def _frozen_hook_view(value: object) -> object:
     if not isinstance(value, _FROZEN_VIEW_CONTAINERS):
         return _freeze_leaf(value)
 
-    def _entries(container: Any) -> Iterator[tuple[object, object]]:
+    def _entries(container: _FrozenContainer) -> Iterator[tuple[object, object]]:
         return (
             iter(container.items()) if isinstance(container, dict) else iter(enumerate(container))
         )
 
-    def _new_acc(container: object) -> dict[object, object] | list[object]:
+    def _new_acc(container: object) -> _FrozenAccumulator:
         return {} if isinstance(container, dict) else []
 
-    def _finalize(source: object, acc: Any) -> object:
+    def _finalize(source: object, acc: _FrozenAccumulator) -> object:
         if isinstance(source, dict):
-            return MappingProxyType(acc)
+            # ``_new_acc`` built a dict accumulator for exactly this dict source.
+            return MappingProxyType(cast("dict[object, object]", acc))
         if isinstance(source, (set, frozenset)):
             return frozenset(acc)
         return tuple(acc)
 
-    def _place(target: Any, key: object, child: object) -> None:
+    def _place(target: _FrozenAccumulator, key: object, child: object) -> None:
         if isinstance(target, dict):
             target[key] = child
         else:
@@ -828,7 +851,15 @@ def _frozen_hook_view(value: object) -> object:
     # Frame: (source container, its entries iterator, the mutable accumulator the
     # frozen children land in, and the parent accumulator + key the FROZEN result
     # is placed into when this frame pops - ``None`` parent means the root).
-    frames: list[tuple[Any, Any, Any, Any, Any]] = [
+    frames: list[
+        tuple[
+            _FrozenContainer,
+            Iterator[tuple[object, object]],
+            _FrozenAccumulator,
+            _FrozenAccumulator | None,
+            object,
+        ]
+    ] = [
         (
             value,
             _entries(value),
@@ -1018,7 +1049,7 @@ def _merged_serializer_kwargs(
                 f"`context` that is not a mapping; got {_safe_type_name(raw_context)}.",
             )
         try:
-            context = dict(raw_context)
+            context: dict[object, object] = dict(raw_context)
         except BaseException as exc:
             raise ConfigurationError(
                 f"SerializerMutation {mutation_cls.__name__}.get_serializer_kwargs returned a "
@@ -1124,7 +1155,7 @@ def _assert_runtime_write_source_ownership(
     for spec in specs:
         if spec.kind not in (NESTED_SINGLE, NESTED_MULTI):
             continue
-        runtime = serializer.fields[spec.target_name]
+        runtime: DRFField = serializer.fields[spec.target_name]
         child_serializer, many = nested_serializer_child(runtime)
         raw_child = data.get(spec.target_name)
         child_values = raw_child if many and isinstance(raw_child, (list, tuple)) else [raw_child]
@@ -1160,7 +1191,7 @@ def _assert_field_agreement(
     runtime_fields = serializer.fields
     name = type(serializer).__name__
     target = spec.target_name
-    runtime = runtime_fields.get(target)
+    runtime: DRFField | None = runtime_fields.get(target)
     if runtime is None:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}: the schema exposes field "
@@ -1218,7 +1249,7 @@ def _assert_field_agreement(
     # requiredness / annotation answer is undeterminable, so it leaves the permit path
     # instead of being coerced onto it. Every bound mutation carries the snapshot, so the
     # attributes below are read directly.
-    meta = getattr(mutation_cls, "_mutation_meta", None)
+    meta: _ValidatedMutationMeta | None = getattr(mutation_cls, "_mutation_meta", None)
     if meta is None:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}: field {target!r} carries a schema "
@@ -1482,7 +1513,7 @@ def _scope_specs_over_serializer(
     pipeline = require_write_pipeline()
     for spec in specs:
         if spec.kind in (NESTED_SINGLE, NESTED_MULTI):
-            nested_field = serializer.fields.get(spec.target_name)
+            nested_field: DRFField | None = serializer.fields.get(spec.target_name)
             if nested_field is None:  # pragma: no cover - the agreement guard already required it.
                 continue
             child_serializer, _many = nested_serializer_child(nested_field)
@@ -1494,13 +1525,13 @@ def _scope_specs_over_serializer(
             continue
         if spec.kind not in (RELATION_SINGLE, RELATION_MULTI):
             continue
-        field = serializer.fields.get(spec.target_name)
+        field: DRFField | None = serializer.fields.get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
         # The agreement guard proved a relation spec's runtime field is a
         # PrimaryKeyRelatedField, or a ManyRelatedField over one.
         relation = cast(
-            "serializers.PrimaryKeyRelatedField[Any]",
+            "serializers.PrimaryKeyRelatedField[models.Model]",
             field.child_relation if isinstance(field, serializers.ManyRelatedField) else field,
         )
         # ``.all()`` normalizes a Manager to a QuerySet (preserving an explicit ``.using``);
@@ -1510,7 +1541,7 @@ def _scope_specs_over_serializer(
         # basedpyright: drf-stubs types the attribute as a ``Manager``, whose ``__get__`` it binds
         author_queryset = relation.queryset  # type: ignore[arg-type]  # drf-stubs: Manager.__get__  # pyright: ignore[reportAttributeAccessIssue]
         scoped = pin_write_queryset(
-            cast("QuerySet[Any] | Manager[Any]", author_queryset).all(),
+            cast("QuerySet[models.Model] | Manager[models.Model]", author_queryset).all(),
             pipeline.alias,
             owner=(f"{type(serializer).__name__}.{spec.target_name} relation queryset"),
         )
@@ -1587,7 +1618,8 @@ def _assert_save_kwargs_not_model_fields(
     field_names: set[str] = set()
     for field in model._meta.get_fields():
         field_names.add(field.name)
-        attname = getattr(field, "attname", None)
+        # django-stubs: a concrete ``Field.attname`` is ``str``; a reverse relation has none.
+        attname: str | None = getattr(field, "attname", None)
         if attname:
             field_names.add(attname)
     offenders = sorted(set(save_kwargs) & field_names)
@@ -1687,7 +1719,8 @@ def _relation_intent_snapshot(value: object) -> _RelationSnapshot:
     ``(object, pk, alias)`` tuple per row, in order.
     """
     if isinstance(value, list):
-        return [_relation_object_identity(item) for item in value]
+        rows: list[object] = value
+        return [_relation_object_identity(item) for item in rows]
     return _relation_object_identity(value)
 
 
@@ -1733,7 +1766,7 @@ def _instrument_intent_specs(
 ) -> None:
     """Instrument one serializer level's relation fields, recursing into nested serializers."""
     for spec in specs:
-        field = serializer.fields.get(spec.target_name)
+        field: DRFField | None = serializer.fields.get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
         field_path = join_error_path(path, spec.target_name)
@@ -1827,7 +1860,7 @@ def _assert_intent_specs(
     if not isinstance(validated_data, dict):  # pragma: no cover - DRF yields dicts here.
         return
     for spec in specs:
-        field = serializer.fields.get(spec.target_name)
+        field: DRFField | None = serializer.fields.get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
         source = field.source or spec.target_name
@@ -1989,11 +2022,11 @@ def _attest_saved_relations(
     model = backing_model_of(mutation_cls._mutation_meta)
     name = type(serializer).__name__
 
-    fk_checks: list[tuple[str, models.ForeignObject[Any, Any], object]] = []
+    fk_checks: list[tuple[str, ForeignKeyField, object]] = []
     for spec in _write_surface_specs(mutation_cls):
         if spec.kind != RELATION_SINGLE or spec.target_name not in relation_pks:
             continue
-        field = serializer.fields.get(spec.target_name)
+        field: DRFField | None = serializer.fields.get(spec.target_name)
         source = (field.source if field is not None and field.source else None) or (
             spec.source or spec.target_name
         )
@@ -2012,7 +2045,7 @@ def _attest_saved_relations(
             (
                 spec.target_name,
                 # The filter above leaves only a concrete forward FK / OneToOne column.
-                cast("models.ForeignObject[Any, Any]", model_field),
+                cast("ForeignKeyField", model_field),
                 relation_pks[spec.target_name],
             ),
         )
@@ -2024,7 +2057,7 @@ def _attest_saved_relations(
             .get(pk=saved.pk)
         )
         for target_name, model_field, expected_pk in fk_checks:
-            db_value = row[model_field.attname]
+            db_value: object = row[model_field.attname]
             if expected_pk is None:
                 intact = db_value is None
             else:
@@ -2146,7 +2179,7 @@ def _write_witness(
 
 def _checked_saved_result(
     mutation_cls: type[SerializerMutation],
-    serializer: Any,
+    serializer: _SaveBookkeeping,
     saved: object,
     authorized_pk: object,
     alias: str,
@@ -2244,9 +2277,7 @@ def _checked_saved_result(
             "by this mutation. Returning an existing instance without saving it is not an "
             "update and cannot be reported as success.",
         )
-    # ``saved`` passed the backing-model ``isinstance`` gate; the identity check
-    # against ``serializer.instance`` re-narrowed it to that attribute's ``Any``.
-    return cast("models.Model", saved)
+    return saved
 
 
 def _serializer_write_step(
@@ -2274,7 +2305,8 @@ def _serializer_write_step(
     ``messages``, never ``.detail``); an ``IntegrityError`` -> the shared ``036``
     integrity mapper - never a top-level ``GraphQLError`` at the write.
     """
-    serializer_class = mutation_cls._mutation_meta.serializer_class
+    # Class validation gated ``Meta.serializer_class`` to a ``ModelSerializer`` subclass.
+    serializer_class: type[DRFSerializer] = mutation_cls._mutation_meta.serializer_class
     reverse_map = _build_reverse_map(mutation_cls._input_field_specs)
     pipeline = require_write_pipeline()
     alias = pipeline.alias

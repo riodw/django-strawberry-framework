@@ -200,7 +200,7 @@ _INVALID_WEBSOCKET_URL_PATTERN_HINT = (
 # The built router class, cached by ``_build_router_class()``. A module global so
 # evicting this module from ``sys.modules`` drops the cache with it - the property
 # the eviction-simulated absence and degraded-install tests rely on.
-_ROUTER_CLASS: type[Any] | None = None
+_ROUTER_CLASS: type[ProtocolTypeRouter] | None = None
 _ROUTER_CLASS_LOCK = threading.Lock()
 
 
@@ -336,7 +336,7 @@ def _websocket_application(
     package_consumer_class: type[GraphQLWSConsumer],
     base_consumer_class: type[GraphQLWSConsumer],
     revalidation_window: float,
-) -> Any:
+) -> Callable[..., object]:
     """Resolve the WebSocket branch's ASGI application from the injection seam.
 
     Exactly three accepted shapes (spec-046 Decision 11): ``None`` selects the
@@ -369,7 +369,7 @@ def _websocket_application(
     )
 
 
-def _build_router_class() -> type[Any]:
+def _build_router_class() -> type[ProtocolTypeRouter]:
     """Return the one lazily-built router class, serializing its first construction."""
     global _ROUTER_CLASS
     if _ROUTER_CLASS is not None:
@@ -382,7 +382,7 @@ def _build_router_class() -> type[Any]:
         return _build_router_class_uncached()
 
 
-def _build_router_class_uncached() -> type[Any]:
+def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     """Materialize and cache ``DjangoGraphQLProtocolRouter`` behind the soft guard.
 
     ``require_channels()`` runs FIRST so every true-absence path routes through
@@ -558,10 +558,12 @@ def _build_router_class_uncached() -> type[Any]:
                             AuthMiddlewareStack(
                                 URLRouter(
                                     [
-                                        re_path(
-                                            websocket_url_pattern,
-                                            websocket_application,
-                                        ),
+                                        # mypy: django-stubs' ``re_path`` has no overload taking an
+                                        # ASGI application, and channels-stubs' ``URLRouter`` accepts
+                                        # only its check-only ``_ExtendedURLPattern``, which no call
+                                        # returns: Channels' documented ``re_path`` routing idiom.
+                                        # basedpyright: the same ``re_path`` stub gap, as a call error
+                                        re_path(websocket_url_pattern, websocket_application),  # type: ignore[list-item, arg-type]  # pyright: ignore[reportCallIssue, reportArgumentType]
                                     ],
                                 ),
                             ),

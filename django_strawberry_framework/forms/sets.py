@@ -460,7 +460,7 @@ def _default_get_form(
     data: dict[str, object],
     files: dict[str, object],
     instance: models.Model | None = None,
-) -> Any:
+) -> forms.BaseForm:
     """The default ``get_form`` body shared by both form bases (spec-038 Decision 8 step 4).
 
     The coarser construction hook: ``form_class(**self.get_form_kwargs(...))``. A
@@ -469,7 +469,8 @@ def _default_get_form(
     the common "inject a kwarg" case. Single-sourced so the construction path is
     identical for both flavors.
     """
-    form_class = type(self)._mutation_meta.form_class
+    # Both flavors' ``_validate_meta`` store a ``require_subclass``-checked form class.
+    form_class: FormClass = type(self)._mutation_meta.form_class
     return form_class(
         **self.get_form_kwargs(info, data=data, files=files, instance=instance),
     )
@@ -498,11 +499,13 @@ def _build_and_stash_form_input(
     serializer flavor) so a future change to the materialize-and-stash sequence
     touches one place.
     """
-    form_fields = _mutation_form_fields(cls, meta.form_class)
+    # The form flavor's ``_validate_meta`` stored a ``require_subclass``-checked form class.
+    form_class: FormClass = meta.form_class
+    form_fields = _mutation_form_fields(cls, form_class)
     return build_and_stash_input(
         cls,
         build=lambda: _cached_build_form_input(
-            meta.form_class,
+            form_class,
             operation_kind=operation_kind,
             fields=meta.fields,
             exclude=meta.exclude,
@@ -529,15 +532,17 @@ def _form_input_type_name_for(
     narrowing). Single-sited with ``_build_and_stash_form_input`` so the bind's name
     choice and the field-factory's ``data:`` ref derive the name identically.
     """
-    form_fields = _mutation_form_fields(mutation_cls, meta.form_class)
+    # The form flavor's ``_validate_meta`` stored a ``require_subclass``-checked form class.
+    form_class: FormClass = meta.form_class
+    form_fields = _mutation_form_fields(mutation_cls, form_class)
     effective = _resolve_effective_form_field_names(
-        meta.form_class,
+        form_class,
         fields=meta.fields,
         exclude=meta.exclude,
         form_fields=form_fields,
     )
     full = tuple(form_fields)
-    return form_input_type_name(meta.form_class, operation_kind, effective, full_field_names=full)
+    return form_input_type_name(form_class, operation_kind, effective, full_field_names=full)
 
 
 class DjangoModelFormMutation(DjangoMutation):
@@ -730,7 +735,25 @@ class DjangoModelFormMutation(DjangoMutation):
         )
 
     get_form_kwargs = _default_get_form_kwargs
-    get_form = _default_get_form
+    # A type checker reads the ``ModelForm`` flavor's ``get_form`` as returning a
+    # ``ModelForm`` (the resolver saves it and reads its ``instance``); the runtime
+    # attribute is the shared default. ``ModelForm``'s model parameter is invariant,
+    # so ``Any`` there lets an override return its own ``ModelForm[<Model>]``.
+    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+
+        def get_form(
+            self,
+            info: Info[object, object],
+            *,
+            data: dict[str, object],
+            files: dict[str, object],
+            instance: models.Model | None = None,
+        ) -> forms.ModelForm[Any]:
+            """Construct the bound ``ModelForm`` (``form_class(**get_form_kwargs(...))``)."""
+            ...
+
+    else:
+        get_form = _default_get_form
 
     @classmethod
     @override

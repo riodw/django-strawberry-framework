@@ -23,7 +23,7 @@ from __future__ import annotations
 import importlib
 import sys
 from types import ModuleType
-from typing import Any, TypeVar
+from typing import TypeVar
 
 __all__ = [
     "CHANNELS_FLOOR",
@@ -61,7 +61,7 @@ def _plain_text(value: _T) -> _T | str:
     return str.__str__(value)
 
 
-def import_attr_if_importable(module_path: str, attr_name: str) -> Any | None:
+def import_attr_if_importable(module_path: str, attr_name: str) -> object | None:
     """Import ``module_path`` best-effort and return its ``attr_name``; ``None`` on ImportError.
 
     The cycle-safe best-effort import owner: a partial-load environment (one
@@ -80,10 +80,11 @@ def import_attr_if_importable(module_path: str, attr_name: str) -> Any | None:
         module = importlib.import_module(module_path)
     except ImportError:
         return None
-    return getattr(module, attr_name)
+    attr: object = getattr(module, attr_name)
+    return attr
 
 
-def loaded_attr(module_path: str, attr_name: str) -> Any | None:
+def loaded_attr(module_path: str, attr_name: str) -> object | None:
     """Return ``module_path``'s ``attr_name`` only when the module is ALREADY loaded.
 
     The opt-in-preserving variant: it never imports on behalf of a consumer
@@ -97,10 +98,11 @@ def loaded_attr(module_path: str, attr_name: str) -> Any | None:
     module = sys.modules.get(module_path)
     if module is None:
         return None
-    return getattr(module, attr_name)
+    attr: object = getattr(module, attr_name)
+    return attr
 
 
-def import_attr(module_path: str, attr_name: str) -> Any:
+def import_attr(module_path: str, attr_name: str) -> object:
     """Import ``module_path`` (STRICT) and return its ``attr_name``.
 
     The strict member of the family: a broken import propagates (unlike the

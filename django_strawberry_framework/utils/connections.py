@@ -813,10 +813,10 @@ def resolve_relay_max_results(info: EitherInfo | None, max_results: int | None) 
 def derive_keyset_window_bounds(
     info: EitherInfo | None,
     *,
-    before: str | None,
-    after: str | None,  # noqa: ARG001 - signature parity with the offset twin; the seek, not the bounds, consumes it.
+    before: object,
+    after: object,  # noqa: ARG001 - signature parity with the offset twin; the seek, not the bounds, consumes it.
     first: int | None,
-    last: int | None,
+    last: object,
     max_results: int | None,
 ) -> ConnectionWindowBounds:
     """Derive the window bounds for a KEYSET (``cursor_field``) connection.

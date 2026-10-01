@@ -30,7 +30,10 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, cast
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Mapping, MutableMapping
 
 __all__ = (
     "MISSING",
@@ -51,7 +54,7 @@ itself is :func:`restored_context_keys`.
 """
 
 
-def get_context_value(context: Any, key: str, default: object = None) -> Any:
+def get_context_value(context: object, key: str, default: object = None) -> object:
     """Return ``key`` from an object-or-dict context, or ``default``.
 
     Dispatch mirrors ``stash_on_context`` so the read and write paths stay
@@ -92,7 +95,7 @@ def get_context_value(context: Any, key: str, default: object = None) -> Any:
         return default
     if not isinstance(context, dict):
         try:
-            val = getattr(context, key, MISSING)
+            val: object = getattr(context, key, MISSING)
         except Exception:
             # A consumer context can expose a descriptor that fails while
             # answering an internal key. Treat that shape as an unreadable
@@ -104,8 +107,11 @@ def get_context_value(context: Any, key: str, default: object = None) -> Any:
             return val
     try:
         if isinstance(context, dict):
-            return context.get(key, default)
-        return context[key]
+            found: object = context.get(key, default)
+            return found
+        # Item access is attempted on any context shape: one without ``__getitem__``
+        # raises ``TypeError``, which the ``except`` below turns into ``default``.
+        return cast("Mapping[str, object]", context)[key]
     except Exception:
         # Missing, frozen, or hostile mapping access all mean that this key is
         # unavailable. Keep the read fail-closed; write helpers intentionally
@@ -114,7 +120,7 @@ def get_context_value(context: Any, key: str, default: object = None) -> Any:
         return default
 
 
-def stash_on_context(context: Any, key: str, value: object) -> None:
+def stash_on_context(context: object, key: str, value: object) -> None:
     """Stash ``value`` on ``context`` under ``key``; silently skip if impossible.
 
     Dispatch order mirrors ``get_context_value``: ``dict`` instances are
@@ -172,7 +178,9 @@ def stash_on_context(context: Any, key: str, value: object) -> None:
             # catch-and-chain pattern, intentionally distinct.
             pass
     try:
-        context[key] = value
+        # Every context shape is tried: one without ``__setitem__`` raises ``TypeError``,
+        # absorbed below like a frozen mapping's.
+        cast("MutableMapping[str, object]", context)[key] = value
     except (TypeError, AttributeError):
         # ``MappingProxyType`` and other frozen mappings raise ``TypeError``
         # on ``__setitem__``; Django's locked ``QueryDict`` (a ``dict``
@@ -187,7 +195,7 @@ def stash_on_context(context: Any, key: str, value: object) -> None:
         return
 
 
-def clear_context_key(context: Any, key: str) -> None:
+def clear_context_key(context: object, key: str) -> None:
     """Delete ``key`` from ``context`` via the same access mode ``stash_on_context`` uses.
 
     Dispatch mirrors ``stash_on_context`` exactly: the ``dict``-vs-object
@@ -212,7 +220,9 @@ def clear_context_key(context: Any, key: str) -> None:
             # to ``stash_on_context``'s setattr-fail -> dict-write chain).
             pass
     try:
-        del context[key]
+        # Every context shape is tried: one without ``__delitem__`` raises ``TypeError``,
+        # absorbed below like an absent key's ``KeyError``.
+        del cast("MutableMapping[str, object]", context)[key]
     except (TypeError, AttributeError, KeyError):
         # Absent key, frozen mapping, or locked QueryDict (a ``dict`` subclass
         # whose ``__delitem__`` raises ``AttributeError`` when immutable) -

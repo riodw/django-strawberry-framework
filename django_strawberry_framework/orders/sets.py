@@ -29,7 +29,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, ClassVar, TypeVar
+from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.db import models
 from strawberry import UNSET
@@ -66,7 +66,10 @@ from .inputs import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from collections.abc import Collection, Mapping
+
     from django.db.models.expressions import OrderBy
+    from typing_extensions import TypeIs
 
     from ..types.definition import DjangoTypeDefinition
 
@@ -261,6 +264,22 @@ def _record_applied_normalization(
         ledger.publish(_AppliedNormalization(cls, input_value, tuple(data)))
 
 
+def _is_normalized_term(term: object) -> TypeIs[tuple[str, Ordering | None]]:
+    """Return whether ``term`` is an EXACT ``(str, Ordering | None)`` 2-tuple.
+
+    Exact-type checks only, so no consumer ``__len__`` / ``__getitem__`` /
+    ``__eq__`` fires while the term is inspected.
+    """
+    if type(term) is not tuple:
+        return False
+    members: tuple[object, ...] = term
+    return (
+        len(members) == 2
+        and type(members[0]) is str
+        and (members[1] is None or type(members[1]) is Ordering)
+    )
+
+
 def _validate_normalized_terms(
     cls: type[OrderSet],
     data: object,
@@ -283,18 +302,16 @@ def _validate_normalized_terms(
             f"OrderSet {cls.__qualname__}._normalize_input returned invalid data "
             f"{_safe_arg_repr(data)}; expected a list of (field_path, direction) tuples.",
         )
-    for term in data:
-        if (
-            type(term) is not tuple
-            or len(term) != 2
-            or type(term[0]) is not str
-            or (term[1] is not None and type(term[1]) is not Ordering)
-        ):
+    terms: list[object] = data
+    for term in terms:
+        if not _is_normalized_term(term):
             raise ConfigurationError(
                 f"OrderSet {cls.__qualname__}._normalize_input returned invalid term "
                 f"{_safe_arg_repr(term)}; expected a (field_path: str, direction: Ordering | None) tuple.",
             )
-    return data
+    # Every term passed ``_is_normalized_term`` above; no checker carries a
+    # per-element narrowing back onto the list.
+    return cast("list[tuple[str, Ordering | None]]", terms)
 
 
 class OrderSetMetaclass(type):
@@ -434,7 +451,10 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         def _build() -> OrderedDict[str, RelatedOrder | None]:
             fields = cls._expand_meta_fields()
-            for k, v in getattr(cls, "related_orders", {}).items():
+            # The metaclass stores ``related_orders`` from
+            # ``sets_mixins.py::collect_related_declarations`` (``RelatedOrder`` only).
+            related_orders: Mapping[str, RelatedOrder] = getattr(cls, "related_orders", {})
+            for k, v in related_orders.items():
                 fields[k] = v
 
             # The two-condition cache-write gate (own ``related_orders`` +
@@ -528,7 +548,8 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             accepted="'__all__' or a re-readable collection of field names",
         )
         model = getattr(meta, "model", None)
-        for field_path in meta_fields:
+        # ``require_re_readable_field_declaration`` refused anything but a collection.
+        for field_path in cast("Collection[object]", meta_fields):
             # Entry-TYPE validation is unconditional: a model-less related-only
             # set defers path validation to the concrete ``queryset.model`` at
             # apply time, but every entry is a path TOKEN here regardless, so a

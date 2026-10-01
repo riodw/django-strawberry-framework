@@ -80,9 +80,13 @@ from .relay import (
 from .resolvers import _attach_file_resolvers, _attach_relation_resolvers
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Callable, Mapping
+
     from strawberry.types.fields.resolver import StrawberryResolver
 
+    from ..filters.base import RelatedFilter
     from ..filters.sets import FilterSet
+    from ..orders.base import RelatedOrder
     from ..orders.sets import OrderSet
     from ..utils.inputs import GeneratedInputArgumentsFactory
     from ..utils.typing import ModelField
@@ -366,7 +370,7 @@ def _format_model_label_routing_error(
         for model, emitter, primary_strategy in offenders
     ]
     body = "\n".join(parts)
-    fixes = []
+    fixes: list[str] = []
     if any(strategy is not None for _model, _emitter, strategy in offenders):
         fixes.append(
             "Set the primary's Meta.globalid_strategy to 'model' or 'type+model' so the "
@@ -589,7 +593,7 @@ def _register_relation_connection_teardown(
     generated_resolver = cast("StrawberryResolver[object]", field_obj.base_resolver).wrapped_func
 
     def teardown() -> None:
-        current = type_cls.__dict__.get(generated, _MISSING_CLASS_MEMBER)
+        current: object = type_cls.__dict__.get(generated, _MISSING_CLASS_MEMBER)
         if current is field_obj or current is generated_resolver:
             delattr(type_cls, generated)
 
@@ -600,7 +604,9 @@ def _register_relation_connection_teardown(
         # Raw ``__dict__`` on purpose: the three branches below key off the entry
         # being ABSENT (3.14+) and off dict IDENTITY (<= 3.13). ``inspect.get_annotations``
         # never returns ``None`` and hands back a fresh dict, collapsing both.
-        current_annotations = type_cls.__dict__.get("__annotations__")  # noqa: RUF063
+        current_annotations: dict[str, object] | None = type_cls.__dict__.get(  # noqa: RUF063
+            "__annotations__",
+        )
         if current_annotations is None:
             # Python 3.14+ (PEP 649): the class ``__dict__`` never carries a
             # plain ``"__annotations__"`` entry, so restore the full
@@ -787,8 +793,8 @@ def _synthesize_relation_connections() -> None:
                 )
             annotations = type_cls.__annotations__
             annotations_snapshot = dict(annotations)
-            list_resolver = type_cls.__dict__.get(name, _MISSING_CLASS_MEMBER)
-            field_obj = relay.connection(
+            list_resolver: object = type_cls.__dict__.get(name, _MISSING_CLASS_MEMBER)
+            field_obj: StrawberryField = relay.connection(
                 _connection_type_for(target_type, target_definition),
                 # The resolver reads rows off the instance, so it gets the
                 # ACCESSOR (``get_accessor_name()``); ``name`` (the related
@@ -1134,7 +1140,13 @@ def finalize_django_types() -> None:
     # who never imported the auth subsystem never pays its import (the opt-in
     # contract): a declared auth surface implies the module is already loaded,
     # so the guard can only skip a genuinely auth-free process.
-    bind_auth = loaded_attr("django_strawberry_framework.auth.mutations", "bind_auth_mutations")
+    # The attribute is the package's own
+    # ``django_strawberry_framework/auth/mutations.py::bind_auth_mutations``, read by
+    # name so an unloaded auth subsystem stays unimported.
+    bind_auth = cast(
+        "Callable[[], object] | None",
+        loaded_attr("django_strawberry_framework.auth.mutations", "bind_auth_mutations"),
+    )
     if bind_auth is not None:
         bind_auth()
     bind_mutations()
@@ -1253,7 +1265,8 @@ def _bind_set_owner_common(
         return
     if before_second_owner_check is not None:
         before_second_owner_check(set_cls, previous, definition)
-    related = getattr(set_cls, related_attr, {}) or {}
+    # ``related_filters`` / ``related_orders``: the set metaclass's name-keyed declarations.
+    related: Mapping[str, object] = getattr(set_cls, related_attr, {}) or {}
     for field_name in related:
         prev_target = previous.related_target_for(field_name)
         new_target = definition.related_target_for(field_name)
@@ -1646,7 +1659,7 @@ def _format_unregistered_related_target_error(
     runtime message raised by ``FilterSet._iter_visibility_steps`` for the
     same misconfiguration so the two surfaces read as one contract.
     """
-    child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
+    child_model: object = getattr(getattr(child_filterset, "_meta", None), "model", None)
     target_label = (
         _safe_class_name(child_model, qualified=True)
         if child_model is not None
@@ -1764,7 +1777,9 @@ def _expand_orderset(orderset_cls: type[OrderSet]) -> None:
     ``ConfigurationError`` with ``__cause__`` preserved here.
     """
     orderset_cls.get_fields()
-    for related in getattr(orderset_cls, "related_orders", {}).values():
+    # The metaclass stores ``related_orders`` from ``collect_related_declarations``.
+    related_orders: Mapping[str, RelatedOrder] = getattr(orderset_cls, "related_orders", {})
+    for related in related_orders.values():
         _ = related.orderset
 
 
@@ -1784,9 +1799,11 @@ def _audit_unregistered_related_filter_targets(wired: list[type[FilterSet]]) -> 
     pending_filtersets: list[type[FilterSet]] = list(wired)
     while pending_filtersets:
         filterset_cls = pending_filtersets.pop()
-        for field_name, related_filter in (
+        # The metaclass stores ``related_filters`` from ``collect_related_declarations``.
+        related_filters: Mapping[str, RelatedFilter] = (
             getattr(filterset_cls, "related_filters", {}) or {}
-        ).items():
+        )
+        for field_name, related_filter in related_filters.items():
             child_filterset = related_filter.filterset
             if child_filterset is not None and child_filterset not in seen_filtersets:
                 seen_filtersets.add(child_filterset)
@@ -1827,7 +1844,8 @@ def _bind_sidecar_sets(spec: _SidecarBindingSpec[_SetT]) -> None:
     for _type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
-        set_cls = getattr(definition, spec.definition_attr)
+        # ``definition_attr`` names this family's ``DjangoTypeDefinition`` sidecar slot.
+        set_cls: _SetT | None = getattr(definition, spec.definition_attr)
         if set_cls is None:
             continue
         spec.bind_owner(set_cls, definition)

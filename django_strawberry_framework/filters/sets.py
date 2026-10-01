@@ -20,7 +20,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, NoReturn, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, NoReturn, TypeVar, cast
 
 import django_filters
 from django.db import models
@@ -122,6 +122,8 @@ _LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_O
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from types import MethodType
     from typing import TypeAlias
+
+    from django_filters.filterset import FilterSetOptions
 
     from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
@@ -313,7 +315,9 @@ def _forward_relation_extra(field: ForeignKeyField) -> dict[str, object]:
     }
 
 
-def _forward_m2m_extra(field: models.ManyToManyField[Any, Any]) -> dict[str, object]:
+def _forward_m2m_extra(
+    field: models.ManyToManyField[models.Model, models.Model],
+) -> dict[str, object]:
     """Package-owned mirror of upstream's ``ManyToManyField`` extra (queryset only)."""
     return {"queryset": filterset.remote_queryset(field)}
 
@@ -1382,7 +1386,12 @@ class FilterSet(
                 # own ``related_filters`` yet. Expanding an inherited map here
                 # would leak removed relations into django-filter's class-level
                 # ``base_filters`` snapshot.
-                related_filters_val = cls.__dict__.get("related_filters", OrderedDict())
+                # The metaclass stores ``related_filters`` from
+                # ``sets_mixins.py::collect_related_declarations`` (``RelatedFilter`` only).
+                related_filters_val: Mapping[str, RelatedFilter] = cls.__dict__.get(
+                    "related_filters",
+                    OrderedDict(),
+                )
                 for filter_name, f in related_filters_val.items():
                     expanded = _expand_related_filter(filter_name, f)
                     all_filters.update(expanded)
@@ -1927,6 +1936,10 @@ class FilterSet(
         merged_defaults = dict(cls.FILTER_DEFAULTS)
         if overrides:
             merged_defaults.update(overrides)
+        # ``try_dbfield`` returns the first non-empty ``fn(cls)`` result or None, so each read
+        # is one of its mapping's values.
+        selected_entry: Mapping[str, object] | None
+        base_norm: _NormalizedPolicyEntry | None
         # mypy: typeshed types ``try_dbfield``'s ``fn`` as taking a field instance; upstream
         # calls it with each CLASS on ``field_class``'s MRO.
         # basedpyright: same stub defect for both; it rejects a class-keyed ``dict.get`` as ``fn``
@@ -2172,13 +2185,16 @@ class FilterSet(
             return False
         if getattr(field, "is_relation", False):
             return False
-        model = getattr(getattr(cls, "_meta", None), "model", None)
+        # django-filter's metaclass stores ``_meta = FilterSetOptions(...)`` on every filterset.
+        meta: FilterSetOptions | None = getattr(cls, "_meta", None)
+        model: type[models.Model] | None = getattr(meta, "model", None)
         if model is None:
             return False
         pk = getattr(model._meta, "pk", None)
         if pk is None or field is not pk:
             return False
-        owner_type = getattr(owner, "origin", None)
+        # ``DjangoTypeDefinition.origin`` is the registered ``DjangoType`` class.
+        owner_type: type[DjangoType] | None = getattr(owner, "origin", None)
         return owner_type is not None and implements_relay_node(owner_type)
 
     @staticmethod
@@ -2289,9 +2305,12 @@ class FilterSet(
                 continue
             cls._validate_logic_branch_shape(op.wire_name, branch_value)
             if op.is_sequence:
+                # ``_validate_logic_branch_shape`` refused anything but a list or tuple
+                # for a sequence operator.
+                elements = cast("list[object] | tuple[object, ...]", branch_value)
                 children = [
                     child
-                    for child in branch_value
+                    for child in elements
                     if not is_inactive_value(child, unset_sentinel=UNSET)
                 ]
             else:
@@ -2304,7 +2323,7 @@ class FilterSet(
                 yield op, children
 
     @classmethod
-    def _validate_logic_branch_shape(cls, wire_key: str, value: Any) -> None:
+    def _validate_logic_branch_shape(cls, wire_key: str, value: object) -> None:
         """Reject a malformed logical container before it silently no-ops.
 
         Sequence operators (``and`` / ``or``) carry a LIST of filter inputs;
@@ -2355,7 +2374,8 @@ class FilterSet(
                 f"list of filter inputs, got a {type(value).__name__}. Wrap the "
                 f"clauses as '{wire_key}: [{{...}}]'.",
             )
-        for element in value:
+        # ``is_sequence`` held; mypy does not narrow through the aliased ``isinstance``.
+        for element in cast("list[object] | tuple[object, ...]", value):
             cls._validate_logic_element_shape(wire_key, element)
 
     @classmethod
@@ -2444,7 +2464,9 @@ class FilterSet(
                 "skip every check_* permission gate.",
             )
 
-        all_filters = cls.get_filters() if cls._meta.model is not None else {}
+        all_filters: Mapping[str, Filter] = (
+            cls.get_filters() if cls._meta.model is not None else {}
+        )
 
         # The dataclass-vs-dict walk, the ``None`` / ``UNSET`` active-input skip,
         # the ``_field_specs`` lookup, and the leaf / related / logic
@@ -2713,9 +2735,12 @@ class FilterSet(
         (report Defect 3). ``None`` leaves the router default in place for the
         single-database case and for direct callers who do not thread an alias.
         """
-        for field_name, related_filter, child_input in cls._iter_active_related_branches(
+        for field_name, declaration, child_input in cls._iter_active_related_branches(
             input_value,
         ):
+            # ``related_filters`` holds only the ``RelatedFilter`` declarations the
+            # metaclass collected (``sets_mixins.py::collect_related_declarations``).
+            related_filter = cast("RelatedFilter", declaration)
             target_type = cls._target_type_for_related_filter(related_filter)
             child_filterset = related_filter.filterset
             if target_type is None or child_filterset is None:
@@ -2734,7 +2759,9 @@ class FilterSet(
                     "silently return unfiltered rows. Register a DjangoType for "
                     "the target model or remove the RelatedFilter.",
                 )
-            child_model = child_filterset._meta.model
+            # Trusted, not checked here: a branch's child filterset declares
+            # ``Meta.model`` (a model-less child would fail inside ``base_queryset``).
+            child_model = cast("type[models.Model]", child_filterset._meta.model)
             child_base = base_queryset(child_model, using=parent_db)
             yield field_name, target_type, child_filterset, child_input, child_base
 
@@ -2936,12 +2963,21 @@ class FilterSet(
         case.
         """
         child_filterset = related_filter.filterset
-        child_owner = getattr(child_filterset, "_owner_definition", None)
-        owner_type = getattr(child_owner, "origin", None) if child_owner is not None else None
+        # ``FilterSet._owner_definition`` is the finalizer-bound ``DjangoTypeDefinition`` slot,
+        # whose ``origin`` is the ``DjangoType``.
+        child_owner: DjangoTypeDefinition | None = getattr(
+            child_filterset,
+            "_owner_definition",
+            None,
+        )
+        owner_type: type[DjangoType] | None = (
+            getattr(child_owner, "origin", None) if child_owner is not None else None
+        )
         if owner_type is not None:
-            # A bound owner is a ``DjangoTypeDefinition``, whose ``origin`` is the ``DjangoType``.
-            return cast("type[DjangoType]", owner_type)
-        child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
+            return owner_type
+        # django-filter's metaclass stores ``_meta = FilterSetOptions(...)`` on every filterset.
+        child_meta: FilterSetOptions | None = getattr(child_filterset, "_meta", None)
+        child_model: type[models.Model] | None = getattr(child_meta, "model", None)
         if child_model is None:
             return None
         # ``registry.get`` owns the primary-first precedence; see
@@ -2961,6 +2997,7 @@ class FilterSet(
         cls,
         input_value: object,
         request: object,
+        /,
         *,
         _fired: dict[type[object], set[str]],
         _bare: ActiveInputPermissionMixin,
@@ -3144,8 +3181,11 @@ class FilterSet(
         the whole loop degrades to today's behavior.
         """
         snapshot = type(self)._expansion_snapshot()
-        candidates = snapshot.candidates if snapshot is not None else {}
-        for name, value in self.form.cleaned_data.items():
+        candidates: Mapping[str, CandidateFilterMetadata] = (
+            snapshot.candidates if snapshot is not None else {}
+        )
+        cleaned_data: Mapping[str, object] = self.form.cleaned_data
+        for name, value in cleaned_data.items():
             candidate = candidates.get(name)
             filter_instance = self.filters[name]
             routed = candidate is not None and candidate.routable
@@ -3408,7 +3448,10 @@ class FilterSet(
         branch. Inactive branches do not constrain the parent.
         """
         constrained = parent_qs
-        for field_name, related_filter, _ in cls._iter_active_related_branches(input_value):
+        for field_name, declaration, _ in cls._iter_active_related_branches(input_value):
+            # ``related_filters`` holds only the ``RelatedFilter`` declarations the
+            # metaclass collected (``sets_mixins.py::collect_related_declarations``).
+            related_filter = cast("RelatedFilter", declaration)
             child_qs = child_qs_by_branch.get(field_name)
             explicit = (
                 related_filter.extra.get("queryset")

@@ -65,11 +65,12 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Iterable, Sequence
     from typing import Protocol
 
-    from strawberry.types.base import WithStrawberryObjectDefinition
+    from strawberry.types.base import StrawberryObjectDefinition, WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
 
     from ..sets_mixins import ClassBasedTypeNameMixin
     from ..types.definition import DjangoTypeDefinition
+    from .typing import OptionalWidenable
 
     class _NamedInputSpec(Protocol):
         """A generated-input naming record: its dataclass attr and its GraphQL name."""
@@ -78,6 +79,11 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         def input_attr(self) -> str: ...
         @property
         def graphql_name(self) -> str: ...
+
+    class _WritableSetMeta(Protocol):
+        """A consumer class ``Meta`` whose ``fields`` the synonym write-back sets."""
+
+        fields: object
 
     class _Clearable(Protocol):
         """A ledger the namespace reset empties and otherwise never reads."""
@@ -135,12 +141,12 @@ def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, obje
 
 
 def optional_input_field(
-    annotation: Any,
+    annotation: object,
     *,
     python_attr: str,
     graphql_name: str,
     widen: bool,
-) -> tuple[Any, dict[str, object]]:
+) -> tuple[object, dict[str, object]]:
     """Apply the write-input optional-widening tail to one field.
 
     The per-field tail the form and serializer input builders share, seated
@@ -161,7 +167,8 @@ def optional_input_field(
     if python_attr != graphql_name:
         field_kwargs["name"] = graphql_name
     if widen:
-        annotation = annotation | None
+        # Every flavor's converted annotation is a runtime annotation.
+        annotation = cast("OptionalWidenable", annotation) | None
         field_kwargs["default"] = strawberry.UNSET
     return annotation, field_kwargs
 
@@ -325,11 +332,11 @@ class FieldConversionBase:
     def __init__(
         self,
         *,
-        annotation: Any,
+        annotation: object,
         kind: str = SCALAR,
         required: bool,
     ) -> None:
-        self.annotation: Any = annotation
+        self.annotation: object = annotation
         self.kind: str = kind
         self.required: bool = required
 
@@ -679,7 +686,7 @@ def canonicalize_set_meta_fields(fields: object) -> object:
     return fields
 
 
-def promote_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> Any:
+def promote_set_meta_fields(source: object, *, fields_alias: str | None = None) -> object:
     """Resolve ``fields`` and copy an alias onto class Meta when needed.
 
     Returns the resolved fields value. A class Meta that supplied only
@@ -694,11 +701,12 @@ def promote_set_meta_fields(source: Any, *, fields_alias: str | None = None) -> 
     """
     fields, from_alias = resolve_set_meta_fields(source, fields_alias=fields_alias)
     if from_alias and not isinstance(source, dict):
-        source.fields = fields
+        # A class Meta answered ``fields_alias`` above; the write lands on that same object.
+        cast("_WritableSetMeta", source).fields = fields
     return fields
 
 
-def read_set_meta_fields(source: object, *, fields_alias: str | None = None) -> Any:
+def read_set_meta_fields(source: object, *, fields_alias: str | None = None) -> object:
     """Return resolved, cache-stable ``Meta.fields`` without mutating ``source``.
 
     The expansion / apply reader: ``resolve_set_meta_fields`` then
@@ -797,7 +805,9 @@ def normalize_set_meta_for_factory(
             f"Generated set metadata must be a mapping; got {_safe_type_name(meta)}.",
         )
     try:
-        safe_meta = {key: value for key, value in dict.items(meta) if key not in reserved_keys}
+        safe_meta: dict[str, object] = {
+            key: value for key, value in dict.items(meta) if key not in reserved_keys
+        }
     except BaseException as exc:
         raise ConfigurationError(
             "Generated set metadata entries could not be read.",
@@ -1279,12 +1289,19 @@ def iter_provided_input_fields(data: object) -> Iterator[tuple[str, object, Stra
     branch, spec lookup, short-circuit protocol) stays at each call site: this owns
     only the walk, not the routing.
     """
-    definition = getattr(data, "__strawberry_definition__", None)
+    # A bound input's class is a ``@strawberry.input``, whose definition Strawberry
+    # attaches as a ``StrawberryObjectDefinition`` (``WithStrawberryObjectDefinition``).
+    definition: StrawberryObjectDefinition | None = getattr(
+        data,
+        "__strawberry_definition__",
+        None,
+    )
     if definition is None:
         return
-    for field in getattr(definition, "fields", ()):
+    fields: Sequence[StrawberryField] = getattr(definition, "fields", ())
+    for field in fields:
         python_name = field.python_name
-        value = getattr(data, python_name, strawberry.UNSET)
+        value: object = getattr(data, python_name, strawberry.UNSET)
         if value is strawberry.UNSET:
             continue
         yield python_name, value, field
@@ -1292,7 +1309,7 @@ def iter_provided_input_fields(data: object) -> Iterator[tuple[str, object, Stra
 
 def build_strawberry_input_class(
     name: str,
-    field_specs: Sequence[tuple[str, object, Mapping[str, Any] | None]],
+    field_specs: Sequence[tuple[str, object, Mapping[str, object] | None]],
     *,
     empty_message: str | None = None,
 ) -> type[WithStrawberryObjectDefinition]:
@@ -1339,8 +1356,9 @@ def build_strawberry_input_class(
     Python class names distinct. Pinning keeps the package's injective type
     stem on the wire.
     """
-    namespace: dict[str, Any] = {"__annotations__": {}}
-    seen_graphql_names: dict[str, str] = {}
+    annotations: dict[str, object] = {}
+    namespace: dict[str, object] = {"__annotations__": annotations}
+    seen_graphql_names: dict[object, str] = {}
     try:
         specs = tuple(field_specs)
     except BaseException as exc:
@@ -1370,7 +1388,7 @@ def build_strawberry_input_class(
                 f"{_safe_type_name(field_spec)}.",
             ) from exc
         try:
-            kwargs = (
+            kwargs: dict[str, object] = (
                 dict(dict.items(raw_kwargs))
                 if isinstance(raw_kwargs, dict)
                 else ({} if raw_kwargs is None else dict(raw_kwargs))
@@ -1380,7 +1398,7 @@ def build_strawberry_input_class(
                 "Generated input field kwargs must be a mapping; "
                 f"entry {index} contains {_safe_type_name(raw_kwargs)}.",
             ) from exc
-        if python_attr in namespace["__annotations__"]:
+        if python_attr in annotations:
             raise ConfigurationError(
                 f"Generated input {name!r} declares input attribute {python_attr!r} more than "
                 "once; a later field would silently overwrite the earlier field.",
@@ -1406,7 +1424,7 @@ def build_strawberry_input_class(
         strawberry_field_kwargs: dict[str, Any] = {"name": kwargs.pop("name")}
         if "description" in kwargs:
             strawberry_field_kwargs["description"] = kwargs.pop("description")
-        namespace["__annotations__"][python_attr] = annotation
+        annotations[python_attr] = annotation
         # Every field carries a pinned ``name``, so it always gets a
         # ``strawberry.field``; pass ``default`` only when one was supplied so
         # a required field (e.g. a required FK ``categoryId``) stays non-null
@@ -1625,7 +1643,7 @@ def iter_set_subclasses(root: type[_SetT]) -> list[type[_SetT]]:
     return result
 
 
-def _safe_import(module_path: str, attr: str) -> Any:
+def _safe_import(module_path: str, attr: str) -> object:
     """Cycle-safe import of ``module_path.attr`` returning ``None`` on ImportError.
 
     Encapsulates the "best-effort, skip and continue" pattern the
@@ -1680,10 +1698,18 @@ def clear_generated_input_namespace(
     materialized_names.clear()
     field_specs.clear()
 
-    factory_cls = _safe_import(factory_module, factory_class_name)
+    # The family names its own ``GeneratedInputArgumentsFactory`` subclass and that
+    # factory's collision-registry dict (``make_set_input_namespace``'s kwargs).
+    factory_cls = cast(
+        "type[GeneratedInputArgumentsFactory[ClassBasedTypeNameMixin]] | None",
+        _safe_import(factory_module, factory_class_name),
+    )
     if factory_cls is not None:
         factory_cls.input_object_types.clear()
-        collision_registry = getattr(factory_cls, collision_registry_attr, None)
+        collision_registry = cast(
+            "_Clearable | None",
+            getattr(factory_cls, collision_registry_attr, None),
+        )
         if collision_registry is not None:
             collision_registry.clear()
 
@@ -1692,9 +1718,11 @@ def clear_generated_input_namespace(
         # The per-family binding-state attrs (owner / expansion cache / reentry
         # guard) come from the set base's ``_lifecycle`` descriptor, so the names
         # are not re-spelled at the call site.
-        lifecycle = getattr(set_root, "_lifecycle", None)
-        binding_attrs = getattr(lifecycle, "binding_attrs", ())
-        for subclass in iter_set_subclasses(set_root):
+        lifecycle: object = getattr(set_root, "_lifecycle", None)
+        # The set base declares ``_lifecycle`` as a ``SetLifecycleAttrs``.
+        binding_attrs: tuple[str, ...] = getattr(lifecycle, "binding_attrs", ())
+        # The family names its own set base class (``make_set_input_namespace``'s kwargs).
+        for subclass in iter_set_subclasses(cast("type[object]", set_root)):
             # ``delattr`` on the subclass so an inherited default (the set
             # base's ``_owner_definition = None``) is restored rather than
             # masked. Each attribute is removed only when set directly on the
@@ -1829,10 +1857,16 @@ class GeneratedInputArgumentsFactory(Generic[_FactorySetT]):
             if target_name not in self.input_object_types:
                 self._build_class_type(set_cls)
 
-            related_map = getattr(set_cls, self._related_attr, {}) or {}
+            related_map: object = getattr(set_cls, self._related_attr, {}) or {}
             if isinstance(related_map, Mapping):
                 for related in related_map.values():
-                    target = getattr(related, self._related_target_attr, None)
+                    # A related declaration's target property admits only ``None`` or the
+                    # family's set class (``RelatedSetTargetMixin._validate_target``).
+                    target: type[_FactorySetT] | None = getattr(
+                        related,
+                        self._related_target_attr,
+                        None,
+                    )
                     # ``Related*(None, ...)`` placeholder -- skip silently.
                     if target is not None and target not in seen:
                         pending.append(target)

@@ -250,7 +250,7 @@ def _stamp_relay_id_attr(type_cls: type[relay.Node]) -> None:
     type_cls._id_attr = None
     try:
         # mypy: a classmethod read off its class is typed without __func__
-        id_attr = relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
+        id_attr: str = relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         id_attr = "pk"
     setattr(type_cls, _RELAY_ID_ATTR_SLOT, id_attr)

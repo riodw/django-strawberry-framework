@@ -47,7 +47,7 @@ import asyncio
 import contextlib
 import enum
 from collections.abc import AsyncIterator, MutableMapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from django.http import HttpRequest
 
@@ -131,7 +131,7 @@ def require_channels() -> ModuleType:
     return require_optional_module("channels", install_hint=_CHANNELS_INSTALL_HINT)
 
 
-def classify_transport(request: Any) -> Transport:
+def classify_transport(request: object) -> Transport:
     """Resolve the ``request_from_info`` result to one explicit ``Transport`` mode.
 
     Begins with ``isinstance(request, ChannelsRequestAdapter)`` (attribute-presence
@@ -154,8 +154,10 @@ def classify_transport(request: Any) -> Transport:
         ) from exc
     if is_channels:
         require_channels()
+        # ``is_channels`` is the ``isinstance(request, ChannelsRequestAdapter)`` verdict above.
+        adapter = cast("ChannelsRequestAdapter", request)
         try:
-            scope = request.scope
+            scope = adapter.scope
         except BaseException as exc:
             raise ConfigurationError(
                 "The auth session boundary could not read the Channels request scope.",
@@ -248,7 +250,7 @@ def require_session(request: object, transport: Transport) -> SessionBase:
     this configuration error, so its wording is otherwise free).
     """
     try:
-        session = getattr(request, "session", None)
+        session: object = getattr(request, "session", None)
     except BaseException as exc:
         label = _safe_transport_label(transport)
         raise ConfigurationError(

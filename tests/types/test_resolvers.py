@@ -15,6 +15,7 @@ import datetime
 import uuid
 from types import SimpleNamespace
 
+import django
 import pytest
 from apps.products import services
 from apps.products.models import Category, Item
@@ -515,13 +516,13 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
     _check_n1(fake_info, root, "items", CategoryType, kind="many")
 
 
-def test_check_n1_probes_prefetch_cache_under_accessor_name():
-    """The cache probe keys on the ACCESSOR, the plan key on the field name.
+def test_check_n1_probes_prefetch_cache_under_cache_name():
+    """The cache probe keys on the CACHE NAME, the plan key on the field name.
 
-    Django stores many-side prefetches under the instance accessor
+    Django stores a reverse-FK prefetch under the instance accessor
     (``"plainbook_set"``), which diverges from ``field.name``
     (``"plainbook"``) for reverse relations without ``related_name``.
-    With ``accessor_name`` supplied - as every
+    With ``cache_name`` supplied - as every
     production resolver does - a manually prefetched relation is
     recognized as cached; the field-name fallback (test-double direct
     callers) would mislabel the same root as lazy and raise.
@@ -539,16 +540,16 @@ def test_check_n1_probes_prefetch_cache_under_accessor_name():
         path=_path("authors", 0, "plainbook"),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"plainbook_set": []})
-    # No raise: the accessor-keyed probe finds the prefetched rows.
+    # No raise: the cache-name-keyed probe finds the prefetched rows.
     _check_n1(
         fake_info,
         root,
         "plainbook",
         PlainAuthorType,
         kind="reverse_many_to_one",
-        accessor_name="plainbook_set",
+        cache_name="plainbook_set",
     )
-    # Without the accessor the probe falls back to the field name and
+    # Without the cache name the probe falls back to the field name and
     # misses the cache - documenting why production callers must pass it.
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: plainbook"):
         _check_n1(fake_info, root, "plainbook", PlainAuthorType, kind="reverse_many_to_one")
@@ -1699,3 +1700,224 @@ def test_resolver_helpers_edge_cases():
         skip_field_names=frozenset({"skipped_file"}),
     )
     assert not hasattr(DummyTarget, "skipped_file")
+
+
+# ---------------------------------------------------------------------------
+# Many-side rows Django serves from an MTI ancestor's prefetch
+# ---------------------------------------------------------------------------
+
+
+def _declare_mti_tag_models():
+    """Declare a forward many-to-many on an MTI parent, plus the parent's child.
+
+    Test-local because fakeshop carries no forward many-to-many on a model with
+    a multi-table child (its one inherited many-to-many, ``venuesponsor`` on the
+    ``Venue`` chain, is a reverse relation, which Django never serves from an
+    ancestor). ``managed = False`` keeps ``migrate`` away from the tables, which
+    ``_mti_tag_tables`` creates and drops; the suite's ``_restore_app_registry``
+    unregisters the classes after each test.
+    """
+    from django.db import models
+
+    class MtiTag(models.Model):
+        name = models.TextField()
+
+        class Meta:
+            app_label = "library"
+            managed = False
+            db_table = "resolvers_mti_tag"
+
+    class MtiPlace(models.Model):
+        name = models.TextField()
+        tags = models.ManyToManyField(MtiTag, db_table="resolvers_mti_place_tags")
+
+        class Meta:
+            app_label = "library"
+            managed = False
+            db_table = "resolvers_mti_place"
+
+    class MtiShop(MtiPlace):
+        class Meta:
+            app_label = "library"
+            managed = False
+            db_table = "resolvers_mti_shop"
+
+    return MtiTag, MtiPlace, MtiShop
+
+
+def _create_mti_tag_tables(*models_in_order):
+    with db_connection.schema_editor() as editor:
+        for model in models_in_order:
+            editor.create_model(model)
+
+
+def _drop_mti_tag_tables(*models_in_order):
+    with db_connection.schema_editor() as editor:
+        for model in reversed(models_in_order):
+            editor.delete_model(model)
+
+
+def _seed_mti_tags(tag_model, shop_model):
+    """Two shops: ``One`` tagged Alpha / Beta / Hidden, ``Two`` tagged Beta."""
+    alpha = tag_model.objects.create(name="Alpha")
+    beta = tag_model.objects.create(name="Beta")
+    hidden = tag_model.objects.create(name="Hidden")
+    shop_model.objects.create(name="One").tags.add(alpha, beta, hidden)
+    shop_model.objects.create(name="Two").tags.add(beta)
+
+
+def _shops_reached_through_prefetched_places(place_model):
+    """Prefetch ``tags`` on the PARENT rows, then walk down to each child.
+
+    ``place.mtishop`` caches the parent on the child's ``mtiplace_ptr``. From
+    Django 6.1 the child's ``tags`` manager answers from that ancestor's
+    prefetch, so its ``all()`` is an EVALUATED queryset while the child's own
+    ``_prefetched_objects_cache`` holds nothing.
+    """
+    places = place_model.objects.prefetch_related("tags").order_by("name")
+    return [place.mtishop for place in places]
+
+
+def _mti_tag_schema(
+    tag_model,
+    place_model,
+    shop_model,
+    *,
+    hide_prefix=None,
+    run_async,
+):
+    """Build a ``DjangoSchema`` whose ``shops`` root returns the walked-down children."""
+    import strawberry
+    from asgiref.sync import sync_to_async
+
+    from django_strawberry_framework import strawberry_config
+    from django_strawberry_framework.schema import DjangoSchema
+
+    if hide_prefix is None:
+
+        class MtiTagType(DjangoType):
+            class Meta:
+                model = tag_model
+                fields = ("id", "name")
+
+    else:
+
+        class MtiTagType(DjangoType):
+            class Meta:
+                model = tag_model
+                fields = ("id", "name")
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                return queryset.exclude(name__startswith=hide_prefix)
+
+    class MtiShopType(DjangoType):
+        class Meta:
+            model = shop_model
+            fields = ("id", "name", "tags")
+
+    finalize_django_types()
+
+    if run_async:
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            async def shops(self) -> list[MtiShopType]:
+                return await sync_to_async(_shops_reached_through_prefetched_places)(
+                    place_model,
+                )
+
+    else:
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def shops(self) -> list[MtiShopType]:
+                return _shops_reached_through_prefetched_places(place_model)
+
+    return DjangoSchema(query=Query, config=strawberry_config())
+
+
+_MTI_TAGS_QUERY = "{ shops { name tags { name } } }"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("hide_prefix", "first_shop_tags"),
+    (
+        pytest.param(None, ["Alpha", "Beta", "Hidden"], id="no-visibility-hook"),
+        pytest.param("Hidden", ["Alpha", "Beta"], id="unplanned-visibility-reread"),
+    ),
+)
+async def test_async_many_side_served_from_an_mti_ancestor_prefetch(hide_prefix, first_shop_tags):
+    """An ancestor-served evaluated queryset is routed like a prefetch cache entry.
+
+    The key read in ``many_resolver`` misses (the child's own cache is empty), so
+    the manager fall-through receives the ancestor's evaluated queryset. Without
+    a hook its rows are bounded as fetched; handed to ``bounded_rows_async`` they
+    would slice to a ``list`` and fail the ``async for``. With a hook the unplanned
+    rows are re-read through the visibility boundary, as a consumer prefetch is.
+    On Django below 6.1 the manager queries instead, which yields the same rows.
+    """
+    from asgiref.sync import sync_to_async
+
+    tag_model, place_model, shop_model = _declare_mti_tag_models()
+    models_in_order = (tag_model, place_model, shop_model)
+    await sync_to_async(_create_mti_tag_tables)(*models_in_order)
+    try:
+        await sync_to_async(_seed_mti_tags)(tag_model, shop_model)
+        schema = await sync_to_async(_mti_tag_schema)(
+            tag_model,
+            place_model,
+            shop_model,
+            hide_prefix=hide_prefix,
+            run_async=True,
+        )
+        result = await schema.execute(_MTI_TAGS_QUERY)
+    finally:
+        await sync_to_async(_drop_mti_tag_tables)(*models_in_order)
+
+    assert result.errors is None, result.errors
+    assert result.data == {
+        "shops": [
+            {"name": "One", "tags": [{"name": name} for name in first_shop_tags]},
+            {"name": "Two", "tags": [{"name": "Beta"}]},
+        ],
+    }
+
+
+@pytest.mark.skipif(
+    django.VERSION < (6, 1),
+    reason="Django below 6.1 never serves a child's many-to-many manager from an "
+    "ancestor's prefetch, so the child's tags are queried rather than served",
+)
+@pytest.mark.django_db(transaction=True)
+def test_sync_many_side_served_from_an_mti_ancestor_prefetch_costs_no_query():
+    """The ancestor's prefetched rows are served without a per-child tag query.
+
+    Four statements: the places, their ``tags`` prefetch, and one walk down to
+    each of the two shops. A per-child ``tags`` read would add two more.
+    """
+    from django.test.utils import CaptureQueriesContext
+
+    tag_model, place_model, shop_model = _declare_mti_tag_models()
+    models_in_order = (tag_model, place_model, shop_model)
+    _create_mti_tag_tables(*models_in_order)
+    try:
+        _seed_mti_tags(tag_model, shop_model)
+        schema = _mti_tag_schema(tag_model, place_model, shop_model, run_async=False)
+        with CaptureQueriesContext(db_connection) as captured:
+            result = schema.execute_sync(_MTI_TAGS_QUERY)
+    finally:
+        _drop_mti_tag_tables(*models_in_order)
+
+    assert result.errors is None, result.errors
+    assert result.data == {
+        "shops": [
+            {"name": "One", "tags": [{"name": "Alpha"}, {"name": "Beta"}, {"name": "Hidden"}]},
+            {"name": "Two", "tags": [{"name": "Beta"}]},
+        ],
+    }
+    assert len(captured.captured_queries) == 4, captured.captured_queries

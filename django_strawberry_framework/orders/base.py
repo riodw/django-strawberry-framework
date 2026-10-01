@@ -130,7 +130,8 @@ class RelatedOrder(RelatedSetTargetMixin):
         ``filters/base.py::RelatedFilter._validate_target``.
         """
         if not (isinstance(resolved, type) and issubclass(resolved, _order_set_class())):
-            owner = getattr(self, self._owner_attr, None)
+            # ``_bind_owner`` is the one writer of the owner slot, and it stores a set class.
+            owner: type[object] | None = getattr(self, self._owner_attr, None)
             owner_label = (
                 _safe_class_name(owner, qualified=True) if isinstance(owner, type) else "<unbound>"
             )

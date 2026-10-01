@@ -21,9 +21,9 @@ caller pre-computes the field list with
 """
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -75,6 +75,17 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
 # Every generated relation / file resolver: Strawberry binds ``(root, info)``.
 _FieldResolver = Callable[[object, Info[object, object]], object]
+
+
+class _NamedFieldResolver(Protocol):
+    """A generated resolver as ``_name_resolver`` renames it: a ``def`` with a writable name."""
+
+    __name__: str
+
+    def __call__(self, root: object, info: Info[object, object], /) -> object: ...
+
+
+_NamedFieldResolverT = TypeVar("_NamedFieldResolverT", bound=_NamedFieldResolver)
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
@@ -146,7 +157,7 @@ def _build_fk_id_stub(root: object, field_meta: FieldMeta) -> object:
     if _fk_attname_is_deferred(root, field_meta.attname):
         return _FK_ELISION_UNSAFE
     try:
-        related_id = getattr(root, field_meta.attname)
+        related_id: object = getattr(root, field_meta.attname)
     except AttributeError:
         return None
     if related_id is None:
@@ -196,6 +207,25 @@ def _will_lazy_load_many(root: object, field_name: str) -> bool:
     return field_name not in prefetch_cache
 
 
+def _prefetch_cache_name(field: object, accessor_name: str) -> str:
+    """Return the ``_prefetched_objects_cache`` key Django stores a many-side relation under.
+
+    A related manager keys its ``prefetch_related`` result by its own cache
+    name, not by the instance attribute it is reached through. The forward
+    ``ManyToManyField`` and ``GenericRelation`` managers key by the field name
+    and the reverse-FK manager by ``ForeignObjectRel.cache_name``, all of which
+    equal the accessor. The reverse side of a ``ManyToManyField`` keys by the
+    field's ``related_query_name()`` (``prefetch_cache_name`` in
+    ``django/db/models/fields/related_descriptors.py::create_forward_many_to_many_manager``),
+    which differs from its accessor whenever ``related_name`` is unset
+    (``venuesponsor`` against ``venuesponsor_set``) or ``related_query_name``
+    names something else.
+    """
+    if isinstance(field, models.ManyToManyRel):
+        return field.field.related_query_name()
+    return accessor_name
+
+
 def _strictness_for(context: object) -> str:
     """Return the N+1 strictness in force for this execution (``"off"`` when none).
 
@@ -235,7 +265,7 @@ def _check_n1(
     parent_type: "type[DjangoType] | None" = None,
     *,
     kind: RelationKind | Literal["connection_to_attr"] | None,
-    accessor_name: str | None = None,
+    cache_name: str | None = None,
     to_attr: str | None = None,
     reason: str | None = None,
     planned: AbstractSet[str] | None = _PLAN_UNREAD,
@@ -256,12 +286,13 @@ def _check_n1(
     ``tests/types/test_resolvers.py::test_check_n1_*``).
 
     ``field_name`` keys the PLAN lookup (the optimizer walker emits
-    resolver keys in field-name vocabulary); ``accessor_name`` keys the
-    instance CACHE probes - Django's prefetch/fields caches store under
-    the accessor, which diverges from ``field.name`` for reverse
-    relations without ``related_name``. Production
-    callers always supply it; ``None`` falls back to ``field_name`` for
-    test-double direct callers.
+    resolver keys in field-name vocabulary); ``cache_name`` keys the
+    instance CACHE probes - the key Django stores the loaded relation under:
+    the instance accessor in ``fields_cache`` for a single-valued relation, and
+    ``_prefetch_cache_name``'s answer in ``_prefetched_objects_cache`` for a
+    many side. Both diverge from ``field.name`` for reverse relations without
+    ``related_name``. Production callers always supply it; ``None`` falls back
+    to ``field_name`` for test-double direct callers.
 
     Connection contract (spec-033 Decision 8): the synthesized
     relation-connection resolver calls this with ``kind="connection_to_attr"``
@@ -312,7 +343,8 @@ def _check_n1(
     # once per row, not once per consumer. Other call sites omit
     # both and get the original read-and-compute behavior.
     if planned is _PLAN_UNREAD:
-        planned = _optimizer_value(context, DST_OPTIMIZER_PLANNED)
+        # The extension stashes its planned resolver-key set under this key.
+        planned = cast("AbstractSet[str] | None", _optimizer_value(context, DST_OPTIMIZER_PLANNED))
     key = (
         precomputed_key
         if precomputed_key is not None
@@ -325,7 +357,7 @@ def _check_n1(
         # only an absent ``to_attr`` means the per-parent pipeline will query.
         lazy = getattr(root, to_attr, None) is None if isinstance(to_attr, str) else True
     else:
-        probe_name = accessor_name or field_name
+        probe_name = cache_name or field_name
         if is_many_side_relation_kind(kind):
             lazy = _will_lazy_load_many(root, probe_name)
         else:
@@ -339,14 +371,13 @@ def _check_n1(
         _resolver_logger.warning("Potential N+1 on %s%s", field_name, suffix)
 
 
-def _name_resolver(resolver: _FieldResolver, field_name: str) -> _FieldResolver:
+def _name_resolver(resolver: _NamedFieldResolverT, field_name: str) -> _NamedFieldResolverT:
     """Stamp ``resolver.__name__`` to ``resolve_<field_name>``.
 
     Keeps GraphiQL traces readable and centralises the three
     cardinality-branch rename calls in ``_make_relation_resolver``.
-    Assumes ``resolver`` is a Python-function callable with a writeable
-    ``__name__`` attribute (all production call sites pass a module-local
-    ``def`` closure).
+    ``resolver`` is a module-local ``def`` closure, so its ``__name__`` is
+    writable (``_NamedFieldResolver``).
     """
     resolver.__name__ = f"resolve_{field_name}"
     return resolver
@@ -449,7 +480,13 @@ def _visible_many_rows(
 
         async def _resolve() -> list[models.Model]:
             visible = await apply_type_visibility_async(target_type, source, info)
-            bounded = await bounded_rows_async(visible, info)
+            # ``querysets.py::_normalized_visibility_result`` returns a fresh, unsliced,
+            # UNEVALUATED plain ``QuerySet`` (its seal never carries ``_result_cache``),
+            # so the bound's slice is a ``QuerySet``, never the evaluated-cache list.
+            bounded = cast(
+                "models.QuerySet[models.Model, models.Model]",
+                await bounded_rows_async(visible, info),
+            )
             return [row async for row in bounded]
 
         return _resolve()
@@ -568,18 +605,31 @@ def _make_relation_resolver(
     visibility_type = _custom_visibility_type(field_meta)
 
     if field_meta.is_many_side:
+        prefetch_cache_name = _prefetch_cache_name(field, accessor_name)
 
         def many_resolver(root: object, info: Info[object, object]) -> object:
-            _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
+            _check_n1(
+                info,
+                root,
+                field_name,
+                parent_type,
+                kind=kind,
+                cache_name=prefetch_cache_name,
+            )
             # Prefetched path (the optimized norm): Django stores the rows under
-            # ``_prefetched_objects_cache[accessor_name]`` - the same key the N+1
-            # probe above uses. Read it directly and return Django's materialized
-            # list, skipping the ``manager.all()`` QuerySet clone and the
-            # ``list(...)`` copy this otherwise pays per parent row.
+            # ``_prefetched_objects_cache[prefetch_cache_name]`` - the same key the
+            # N+1 probe above uses. Read it directly and return Django's
+            # materialized list, skipping the ``manager.all()`` QuerySet clone and
+            # the ``list(...)`` copy this otherwise pays per parent row.
             # Same rows, same order. Any miss falls through to the manager path.
-            prefetched = getattr(root, "_prefetched_objects_cache", None)
+            # Django's per-instance prefetch cache: cache name -> fetched queryset.
+            prefetched: Mapping[str, object] | None = getattr(
+                root,
+                "_prefetched_objects_cache",
+                None,
+            )
             if prefetched is not None:
-                cached = prefetched.get(accessor_name)
+                cached = prefetched.get(prefetch_cache_name)
                 if cached is not None:
                     # A cache the optimizer did not plan (a consumer's own
                     # ``prefetch_related``) was never offered to the target's
@@ -590,11 +640,11 @@ def _make_relation_resolver(
                         parent_type,
                         field_name,
                     ):
-                        return _visible_many_rows(
-                            getattr(root, accessor_name).all(),
-                            visibility_type,
-                            info,
-                        )
+                        manager_rows: models.QuerySet[models.Model] = getattr(
+                            root,
+                            accessor_name,
+                        ).all()
+                        return _visible_many_rows(manager_rows, visibility_type, info)
                     # The cache entry is a queryset, and reading what it has
                     # already fetched through ``getattr`` would dispatch a
                     # consumer subclass's own attribute access for the value the
@@ -605,27 +655,49 @@ def _make_relation_resolver(
                     # query whichever class the relation manager built.
                     cached = normalized_row_source(cached, origin=prefetch_origin)
                     result_cache = materialized_rows(cached)
-                    source = result_cache if result_cache is not None else cached
-                    return bounded_rows(source, info)
+                    cached_rows = result_cache if result_cache is not None else cached
+                    return bounded_rows(cached_rows, info)
             # The bound is applied to the QUERYSET, before ``list(...)``, so the
             # unprefetched path carries it into SQL as a ``LIMIT`` rather than
             # materializing the whole relation and discarding the tail
             # (``resource_policy.py::bounded_rows``). Building the queryset is
             # lazy, so it is safe to do before the async branch below.
-            source = getattr(root, accessor_name).all()
+            source: models.QuerySet[models.Model] = getattr(root, accessor_name).all()
+            # A relation the optimizer planned is prefetched on the queryset that
+            # produced this very instance, so Django keeps it in the instance's own
+            # cache and the key read above serves it. Whatever reaches this line
+            # was therefore never offered to the target's hook for this instance -
+            # it is unprefetched, or Django serves it from a cache the instance
+            # does not own (from Django 6.1 a many-to-many manager also answers
+            # from the prefetch of an MTI ancestor the instance was reached
+            # through) - so with a hook it is re-read through the boundary.
             if visibility_type is not None:
                 return _visible_many_rows(source, visibility_type, info)
+            # Without a hook, the queryset itself is asked whether Django served it
+            # from such a cache: an evaluated one is bounded from the rows it holds,
+            # with no query, as the prefetched branch bounds a cache entry.
+            row_source = normalized_row_source(source)
+            fetched_rows = materialized_rows(row_source)
+            if fetched_rows is not None:
+                return bounded_rows(fetched_rows, info)
             if async_execution():
                 # Unprefetched many-side under async: ``list(...)`` would execute
                 # the query on the event-loop thread. Iterate the bound queryset
                 # asynchronously instead - the same rows in the same order.
 
                 async def _resolve() -> list[models.Model]:
-                    bounded = await bounded_rows_async(source, info)
+                    # ``row_source`` is an exact, unevaluated ``QuerySet``: a manager's
+                    # ``all()`` is a queryset, ``normalized_row_source`` rebuilds a
+                    # subclass into a plain one, and the evaluated case was routed
+                    # above. Its slice is therefore a ``QuerySet``, never a ``list``.
+                    bounded = cast(
+                        "models.QuerySet[models.Model, models.Model]",
+                        await bounded_rows_async(row_source, info),
+                    )
                     return [row async for row in bounded]
 
                 return _resolve()
-            return list(bounded_rows(source, info))
+            return list(bounded_rows(row_source, info))
 
         return _name_resolver(many_resolver, field_name)
 
@@ -638,12 +710,12 @@ def _make_relation_resolver(
         )
 
         def reverse_one_to_one_resolver(root: object, info: Info[object, object]) -> object:
-            _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
+            _check_n1(info, root, field_name, parent_type, kind=kind, cache_name=accessor_name)
             if _will_lazy_load_single(root, accessor_name) and async_execution():
 
                 async def _resolve_async() -> object:
                     try:
-                        related = await sync_to_async(getattr, thread_sensitive=True)(
+                        related: object = await sync_to_async(getattr, thread_sensitive=True)(
                             root,
                             accessor_name,
                         )
@@ -661,7 +733,7 @@ def _make_relation_resolver(
                 return _resolve_async()
 
             try:
-                related = getattr(root, accessor_name)
+                related: object = getattr(root, accessor_name)
             except reverse_does_not_exist:
                 return None
             if visibility_type is not None and related is not None:
@@ -698,12 +770,17 @@ def _make_relation_resolver(
         # first; when neither is active - the common request shape - skip the walk
         # entirely. When at least one is active, walk once and share the key
         # across both checks.
+        # The extension stashes its elided resolver-key set and its planned
+        # resolver-key set under these keys.
         elisions = (
-            _optimizer_value(context, DST_OPTIMIZER_FK_ID_ELISIONS, _EMPTY_ELISIONS)
+            cast(
+                "AbstractSet[str]",
+                _optimizer_value(context, DST_OPTIMIZER_FK_ID_ELISIONS, _EMPTY_ELISIONS),
+            )
             if field_meta.attname is not None
             else _EMPTY_ELISIONS
         )
-        planned = _optimizer_value(context, DST_OPTIMIZER_PLANNED)
+        planned = cast("AbstractSet[str] | None", _optimizer_value(context, DST_OPTIMIZER_PLANNED))
         # Cheap per-row gate: a ``ContextVar`` read, not a second stash dispatch.
         # ``None`` (no extension ran) plus an absent plan sentinel means nothing
         # armed the guard and there is no plan to compare against, so the
@@ -716,7 +793,7 @@ def _make_relation_resolver(
 
                 async def _resolve_async() -> object:
                     try:
-                        related = await sync_to_async(getattr, thread_sensitive=True)(
+                        related: object = await sync_to_async(getattr, thread_sensitive=True)(
                             root,
                             field_name,
                         )
@@ -736,7 +813,7 @@ def _make_relation_resolver(
                 return _resolve_async()
 
             try:
-                related = getattr(root, field_name)
+                related: object = getattr(root, field_name)
             except related_does_not_exist:
                 return None
             if visibility_type is None or related is None:
@@ -777,7 +854,7 @@ def _make_relation_resolver(
             field_name,
             parent_type,
             kind=kind,
-            accessor_name=accessor_name,
+            cache_name=accessor_name,
             planned=planned,
             precomputed_key=key,
             force_unplanned=elision_unsafe,
@@ -787,7 +864,7 @@ def _make_relation_resolver(
 
             async def _resolve_async() -> object:
                 try:
-                    related = await sync_to_async(getattr, thread_sensitive=True)(
+                    related: object = await sync_to_async(getattr, thread_sensitive=True)(
                         root,
                         field_name,
                     )
@@ -871,7 +948,7 @@ def _make_file_resolver(field: "ModelField") -> _FieldResolver:
     field_name = field.name
 
     def file_resolver(root: object, info: Info[object, object]) -> object:  # noqa: ARG001 - info injected by Strawberry, unused here.
-        value = getattr(root, field_name)
+        value: object = getattr(root, field_name)
         return value if value else None
 
     return _name_resolver(file_resolver, field_name)

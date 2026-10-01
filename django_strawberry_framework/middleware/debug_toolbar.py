@@ -177,24 +177,27 @@ def _get_payload(
 
     try:
         content = force_str(response.content, encoding=response.charset)
-        payload = json.loads(content, object_pairs_hook=collections.OrderedDict)
+        payload: object = json.loads(content, object_pairs_hook=collections.OrderedDict)
     except (json.JSONDecodeError, LookupError, UnicodeError):
         return None
     if not isinstance(payload, dict):
         return None
+    # A decoded JSON object: every key is a ``str`` (``json.loads`` builds objects from
+    # string-keyed pairs), every value whatever the response carried.
+    document: dict[str, object] = payload
 
     panels: collections.OrderedDict[str, dict[str, object]] = collections.OrderedDict()
     debug_toolbar: collections.OrderedDict[str, object] = collections.OrderedDict(
         [("panels", panels)],
     )
     debug_toolbar["requestId"] = toolbar.request_id
-    payload["debugToolbar"] = debug_toolbar
+    document["debugToolbar"] = debug_toolbar
 
     for panel in reversed(toolbar.enabled_panels):
         if panel.panel_id == "TemplatesPanel":
             continue
 
-        title = panel.title if panel.has_content else None
+        title: object = panel.title if panel.has_content else None
 
         subtitle = panel.nav_subtitle
         panels[panel.panel_id] = {
@@ -202,7 +205,7 @@ def _get_payload(
             "subtitle": subtitle() if callable(subtitle) else subtitle,
         }
 
-    return payload
+    return document
 
 
 class DebugToolbarMiddleware(_DebugToolbarMiddleware):
@@ -289,7 +292,7 @@ class DebugToolbarMiddleware(_DebugToolbarMiddleware):
             return response
 
         try:
-            operation_name = json.loads(request.body).get("operationName")
+            operation_name: object = json.loads(request.body).get("operationName")
         except Exception:  # upstream verbatim: any unreadable body degrades to "inject"
             operation_name = None
 

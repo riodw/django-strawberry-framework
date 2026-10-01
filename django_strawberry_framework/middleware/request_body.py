@@ -371,7 +371,7 @@ def _require_boundary_before_csrf() -> None:
     """
     boundary_index = csrf_index = None
     for index, path in enumerate(settings.MIDDLEWARE):
-        entry = import_string(path)
+        entry: object = import_string(path)
         if not isinstance(entry, type):
             continue
         if issubclass(entry, GraphQLRequestBodyBoundaryMiddleware) and boundary_index is None:

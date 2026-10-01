@@ -60,12 +60,24 @@ from ..utils.typing import schema_config_from_info
 from ._context import converted_selections_memo
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from typing import TypeAlias
+    from typing import Protocol, TypeAlias
 
-    from graphql.language.ast import FieldNode, FragmentDefinitionNode, NamedTypeNode, Node
+    from graphql.language.ast import (
+        FieldNode,
+        FragmentDefinitionNode,
+        NamedTypeNode,
+        Node,
+        SelectionSetNode,
+    )
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.info import Info
-    from strawberry.types.nodes import FragmentSpread, InlineFragment, SelectedField, Selection
+    from strawberry.types.nodes import (
+        Arguments,
+        FragmentSpread,
+        InlineFragment,
+        SelectedField,
+        Selection,
+    )
 
     from ._context import ConvertedMemoKey
 
@@ -84,6 +96,24 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     #: A ``resolve_unvisited_fragment`` visit key: the fragment name, or
     #: ``(name, depth)`` for the depth-sensitive walk.
     FragmentVisitKey: TypeAlias = str | tuple[str, int]
+
+    class RuntimePrefixCarrier(Protocol):
+        """A walker clone carrying ``_optimizer_runtime_prefixes``.
+
+        ``with_runtime_prefix`` and the walker's alias merge store it as a list of
+        runtime-path tuples.
+        """
+
+        _optimizer_runtime_prefixes: list[tuple[str, ...]]
+
+    class ResponseKeyArgumentsCarrier(Protocol):
+        """A merged walker clone carrying its per-response-key argument payloads.
+
+        The walker's alias merge stores a map from response key to that
+        occurrence's converted arguments; read here as a ``None``-tolerant view.
+        """
+
+        _optimizer_response_key_arguments: Mapping[str | None, Arguments]
 
 # ---------------------------------------------------------------------------
 # AST -> converted-selection adapter - the package-owned ``convert_selections``
@@ -264,8 +294,10 @@ def prime_selected_fields(info: Info[object, object]) -> None:
     the regression net that would catch such a Strawberry-internals rename on a
     version bump.
     """
-    raw_info = getattr(info, "_raw_info", None)
-    field_nodes = getattr(raw_info, "field_nodes", None)
+    # Strawberry's ``Info`` keeps the graphql-core info at ``_raw_info``, whose
+    # ``field_nodes`` is a list of ``FieldNode``s.
+    raw_info: GraphQLResolveInfo | None = getattr(info, "_raw_info", None)
+    field_nodes: list[FieldNode] | None = getattr(raw_info, "field_nodes", None)
     if not field_nodes or "selected_fields" in info.__dict__:
         return
     info.__dict__["selected_fields"] = ast_to_converted_selections(
@@ -291,10 +323,14 @@ def ast_child_selections(node: Node) -> tuple[AstSelection, ...]:
     no ``selection_set``, so this returns ``()`` and the caller's
     per-child loop becomes a no-op.
     """
-    selection_set = getattr(node, "selection_set", None)
+    # Every graphql-core node that has a ``selection_set`` types it as a
+    # ``SelectionSetNode`` (optional on ``FieldNode``).
+    selection_set: SelectionSetNode | None = getattr(node, "selection_set", None)
     if selection_set is None:
         return ()
-    return tuple(selection_set.selections or ())
+    # graphql-core's parser fills a selection set only with these three node kinds
+    # (``Parser.parse_selection``); the node class types them as ``SelectionNode``.
+    return cast("tuple[AstSelection, ...]", tuple(selection_set.selections or ()))
 
 
 def resolve_unvisited_fragment(
@@ -348,7 +384,8 @@ def directive_variable_names(node: Node) -> set[str]:
     ``("skip", "include")`` membership and the ``VariableNode`` check live once.
     """
     names: set[str] = set()
-    for directive in getattr(node, "directives", ()) or ():
+    directives: Iterable[object] = getattr(node, "directives", ()) or ()
+    for directive in directives:
         if not isinstance(directive, DirectiveNode):
             continue
         # mypy: graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
@@ -384,7 +421,13 @@ def is_fragment(selection: object) -> bool:
 
 def should_include(selection: object) -> bool:
     """Evaluate ``@skip`` / ``@include`` directives on a converted selection."""
-    directives = getattr(selection, "directives", None)
+    # Strawberry's converted selections (and the walker clones copying them) carry
+    # ``Directives``: directive name -> converted argument payload.
+    directives: Mapping[str, Mapping[str, object]] | None = getattr(
+        selection,
+        "directives",
+        None,
+    )
     # Directive-free selections are the overwhelmingly common shape, and this
     # predicate runs once per selection per walk level; skip the two dict
     # probes when there is nothing to evaluate.
@@ -482,7 +525,8 @@ def included_field_selections(
 def named_children(selection: ConvertedSelection, name: str) -> list[FieldSelection]:
     """Return included direct children named ``name``, recursing through fragments."""
     children: list[FieldSelection] = []
-    for child in getattr(selection, "selections", None) or []:
+    members: Iterable[ConvertedSelection] = getattr(selection, "selections", None) or []
+    for child in members:
         if not should_include(child):
             continue
         if is_fragment(child):
@@ -513,15 +557,13 @@ def with_runtime_prefix(
     eventually plans.
     """
     if is_fragment(selection):
+        members: Iterable[ConvertedSelection] = getattr(selection, "selections", None) or []
         return SimpleNamespace(
             name=getattr(selection, "name", None),
             # ``is_fragment`` accepted it, so it carries a ``type_condition``.
             type_condition=cast("FragmentSelection", selection).type_condition,
             directives=getattr(selection, "directives", None) or {},
-            selections=[
-                with_runtime_prefix(child, runtime_prefixes)
-                for child in getattr(selection, "selections", None) or []
-            ],
+            selections=[with_runtime_prefix(child, runtime_prefixes) for child in members],
         )
     return SimpleNamespace(
         # ``is_fragment`` rejected it, so it is a field selection.
@@ -541,7 +583,8 @@ def node_children_with_runtime_prefix(
 ) -> list[SimpleNamespace]:
     """Clone node children with a connection-aware runtime prefix."""
     children: list[SimpleNamespace] = []
-    for child in getattr(node_selection, "selections", None) or []:
+    members: Iterable[ConvertedSelection] = getattr(node_selection, "selections", None) or []
+    for child in members:
         if not should_include(child):
             continue
         children.append(with_runtime_prefix(child, runtime_prefixes))
@@ -686,8 +729,10 @@ def direct_child_selected(selection_roots: Iterable[ConvertedSelection], name: s
         if not should_include(selection):
             return False
         if is_fragment(selection):
-            return any(_check(child) for child in getattr(selection, "selections", None) or [])
-        return getattr(selection, "name", None) == name
+            members: Iterable[ConvertedSelection] = getattr(selection, "selections", None) or []
+            return any(_check(child) for child in members)
+        selection_name: str | None = getattr(selection, "name", None)
+        return selection_name == name
 
     return any(_check(child) for child in selection_roots)
 
@@ -708,7 +753,7 @@ def connection_total_count_selected(
     by construction - which also means they share ONE resolved ``names``
     vocabulary and cannot disagree about what the field is called.
     """
-    children = getattr(selection, "selections", None) or []
+    children: Iterable[ConvertedSelection] = getattr(selection, "selections", None) or []
     return direct_child_selected(children, names.total_count)
 
 

@@ -139,10 +139,19 @@ from ..utils.private_state import PrivateAuthority
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import AsyncGenerator
+    from types import TracebackType
+    from typing import TypeAlias
 
     from strawberry.extensions.context import ExtensionContextManagerBase
     from strawberry.types import ExecutionContext
-    from typing_extensions import TypeIs
+    from typing_extensions import TypeIs, Unpack
+
+    #: The three values the context-manager protocol hands ``__exit__`` / ``__aexit__``.
+    _ExcInfo: TypeAlias = tuple[
+        type[BaseException] | None,
+        BaseException | None,
+        TracebackType | None,
+    ]
 
 #: The value type of whichever context variable a binding sets and resets.
 _ValueT = TypeVar("_ValueT")
@@ -793,7 +802,7 @@ class _BoundScope:
             _unbind(self._bindings)
             raise
 
-    def __exit__(self, *exc_info: Any) -> None:
+    def __exit__(self, *exc_info: Unpack[_ExcInfo]) -> None:
         try:
             return self._scope.__exit__(*exc_info)
         finally:
@@ -807,7 +816,7 @@ class _BoundScope:
             _unbind(self._bindings)
             raise
 
-    async def __aexit__(self, *exc_info: Any) -> None:
+    async def __aexit__(self, *exc_info: Unpack[_ExcInfo]) -> None:
         try:
             return await self._scope.__aexit__(*exc_info)
         finally:

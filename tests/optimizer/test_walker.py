@@ -5818,11 +5818,11 @@ def test_plan_rejects_to_attr_prefetch_hint_on_generated_relation():
     """B4: ``Prefetch(..., to_attr=...)`` hints fail loud.
 
     Django lands ``to_attr`` rows on that attribute, but the GENERATED
-    relation resolver reads ``_prefetched_objects_cache[accessor]`` - the
-    hint would record the relation as planned (silencing strictness) while
-    every row still lazy-loads. Plan time raises a ``ConfigurationError``
-    naming the field and the two fixes (drop ``to_attr``, or own the
-    resolver).
+    relation resolver reads Django's prefetch cache
+    (``_prefetched_objects_cache``) - the hint would record the relation as
+    planned (silencing strictness) while every row still lazy-loads. Plan time
+    raises a ``ConfigurationError`` naming the field and the two fixes (drop
+    ``to_attr``, or own the resolver).
     """
     registry.clear()
     explicit = Prefetch("items", queryset=Item.objects.only("name"), to_attr="bucket")

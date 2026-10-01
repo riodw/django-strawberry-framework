@@ -97,7 +97,7 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 # one truth test, two failure policies. The local names stay so the 22 call
 # sites below read as taxonomy code, and so the lenient policy is declared once
 # here instead of at each of them.
-def _safe_getattr(value: object, name: str, default: object = None) -> Any:
+def _safe_getattr(value: object, name: str, default: object = None) -> object:
     """Read a descriptor attribute without letting malformed doubles escape."""
     return relation_attr(value, name, default, lenient=True)
 
@@ -229,7 +229,7 @@ def _parent_join_column(field: object, kind: RelationKind) -> str | None:
                 _safe_getattr(field, "target_field_attname"),
             ),
         )
-    related_model = _safe_getattr(field, "related_model")
+    related_model: Any = _safe_getattr(field, "related_model")
     if related_model is None:
         return None
     try:
@@ -304,7 +304,7 @@ def _generic_child_attname(field: object, name_attr: str) -> str | None:
     ``get_field`` resolves for a genuine ``GenericRelation``, so no defensive
     ``FieldDoesNotExist`` swallow is needed once both inputs exist.
     """
-    related_model = _safe_getattr(field, "related_model")
+    related_model: Any = _safe_getattr(field, "related_model")
     child_field_name = _safe_getattr(field, name_attr)
     if related_model is None or child_field_name is None:
         return None
@@ -360,9 +360,10 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
         elif windowable:
             lateral_shape = LateralJoinShape.DIRECT_FK
             through = None
-            # The child-side FK carrying the parent id (a rel descriptor's
-            # ``.field``); ``None`` on a synthetic double without one.
-            parent_link_field = _safe_getattr(field, "field")
+            # The child-side FK carrying the parent id (a reverse FK / O2O rel
+            # descriptor's ``.field`` is its forward ``ForeignKey``); ``None`` on a
+            # synthetic double without one.
+            parent_link_field = cast("ForeignKeyField | None", _safe_getattr(field, "field"))
         else:
             lateral_shape = LateralJoinShape.UNSUPPORTED
             through = None

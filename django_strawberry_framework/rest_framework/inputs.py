@@ -396,7 +396,8 @@ def _fingerprint_relation_target(field: DRFField) -> str | None:
     if isinstance(field, serializers.ManyRelatedField):
         field = field.child_relation
     if isinstance(field, serializers.RelatedField):
-        model = getattr(getattr(field, "queryset", None), "model", None)
+        # drf-stubs: ``RelatedField.queryset`` is a ``QuerySet`` / ``Manager`` (or ``None``).
+        model: type[models.Model] | None = getattr(getattr(field, "queryset", None), "model", None)
         if model is not None:
             return f"{model.__module__}.{model.__qualname__}"
     return None
@@ -412,7 +413,9 @@ def _fingerprint_choices(field: DRFField) -> tuple[str, ...] | None:
     yields ``None``.
     """
     if isinstance(field, serializers.ChoiceField):
-        return tuple(str(value) for value in field.choices)
+        # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
+        choices: Mapping[object, object] = field.choices
+        return tuple(str(value) for value in choices)
     return None
 
 
@@ -477,7 +480,7 @@ def _fingerprint_nested(
     if child_class in seen:
         return ("<cycle>", child_class.__name__, many)
     try:
-        child_field_map = dict(child.fields)
+        child_field_map: dict[str, DRFField] = dict(child.fields)
     except ConfigurationError:
         raise
     except Exception as exc:  # any DRF/consumer failure -> a clear config error.
@@ -1687,7 +1690,11 @@ def build_serializer_input_class(
     # fail loud NOW (at every nesting level) if a ``nested_fields`` key does not name
     # an effective nested serializer field - a typo / excluded / non-nested key is a config error.
     validate_nested_config_keys(serializer_class, effective, nested_configs)
-    optional_fields = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
+    effective_optional: frozenset[str] = resolve_optional_fields(
+        serializer_class,
+        optional_fields,
+        tuple(effective),
+    )
     is_partial = operation_kind == PARTIAL
     if is_partial:
         # ``optional_fields`` is a NO-OP on update (spec-039 Decision 7): the partial
@@ -1695,7 +1702,7 @@ def build_serializer_input_class(
         # descriptor identity / name (an update mutation that sets ``optional_fields``
         # still dedupes to the canonical ``<Serializer>PartialInput``). Names were
         # validated above before this is zeroed.
-        optional_fields = frozenset()
+        effective_optional = frozenset()
     model = _serializer_model(serializer_class)
 
     # The provisional type name (for the choice-enum ``<TypeName><Field>Enum``
@@ -1718,7 +1725,7 @@ def build_serializer_input_class(
         provisional_name,
         serializer_class=serializer_class,
         is_partial=is_partial,
-        optional_fields=optional_fields,
+        optional_fields=effective_optional,
         nested_configs=nested_configs,
         nested_path=(*_nested_path, serializer_class),
     )
@@ -1730,7 +1737,7 @@ def build_serializer_input_class(
     # model, or a field with a different description) must NOT also claim the canonical
     # name, or two distinct descriptors collide on it at materialize. A narrowed /
     # ``optional_fields`` / hook-varied shape diverges and takes a deterministic
-    # descriptor-derived name. (The ``not optional_fields`` / ``fields is None`` /
+    # descriptor-derived name. (The ``not effective_optional`` / ``fields is None`` /
     # ``exclude is None`` clauses are retained so ANY explicit narrowing or optional
     # override takes a divergent name even when it happens to reproduce the default
     # identity.) ``descriptions`` is part of the identity so a description-only divergence
@@ -1750,7 +1757,7 @@ def build_serializer_input_class(
     is_full_shape = (
         default_identity is not None
         and current_identity == default_identity
-        and not optional_fields
+        and not effective_optional
         and fields is None
         and exclude is None
     )
@@ -1777,7 +1784,7 @@ def build_serializer_input_class(
         annotations=tuple(annotation_reprs),
         descriptions=tuple(descriptions),
         required_state=tuple(required_state),
-        optional_fields=optional_fields,
+        optional_fields=effective_optional,
         type_name=type_name,
     )
     # record the shape under its generated name for the debug registry (identical

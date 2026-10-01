@@ -40,7 +40,7 @@ unify the two.
 """
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import cast
 
 from django.conf import settings as django_settings
 from django.test.signals import setting_changed
@@ -164,7 +164,7 @@ ERROR_POLICY_KEY = "ERROR_POLICY"
 _LIVE_UNSET: object = object()
 
 
-def _normalize_user_settings(value: Any) -> dict[str, object]:
+def _normalize_user_settings(value: object) -> dict[object, object]:
     """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
 
     Branches:
@@ -181,8 +181,10 @@ def _normalize_user_settings(value: Any) -> dict[str, object]:
       tests that capture the same dict by reference observe their
       mutations).
     - Other ``Mapping`` instances -> copied into a plain ``dict`` so
-      the cache always exposes a uniform ``dict[str, object]`` shape to
-      ``Settings.user_settings`` consumers.
+      the cache always exposes a uniform ``dict`` shape to
+      ``Settings.user_settings`` consumers. Keys are not validated here (a
+      non-string key is simply never matched by ``Settings.__getattr__``), so
+      the cache is typed ``dict[object, object]``.
 
     Shared by ``Settings.__init__`` (eager construction),
     ``Settings.user_settings`` (lazy read from ``django.conf.settings``),
@@ -201,10 +203,13 @@ def _normalize_user_settings(value: Any) -> dict[str, object]:
         raise ConfigurationError(
             f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         )
-    if type(value) is dict:
-        return value
+    # mypy: ``is_mapping`` above proved ``value`` a ``Mapping``, but mypy does not narrow
+    # through an aliased ``isinstance`` result; its keys and values stay unchecked.
+    mapping = cast("Mapping[object, object]", value)
+    if type(mapping) is dict:
+        return mapping
     try:
-        return dict(value)
+        return dict(mapping)
     except ConfigurationError:
         raise
     except Exception as exc:
@@ -236,7 +241,7 @@ class Settings:
         which deletes the key without emitting the signal).
         """
         if user_settings is None:
-            self._user_settings: dict[str, object] | None = None
+            self._user_settings: dict[object, object] | None = None
             self._live_source: object = _LIVE_UNSET
             self._django_backed = True
         else:
@@ -245,7 +250,7 @@ class Settings:
             self._django_backed = False
 
     @property
-    def user_settings(self) -> dict[str, object]:
+    def user_settings(self) -> dict[object, object]:
         """Lazily load user-defined settings from ``django.conf.settings``.
 
         Missing or ``None`` top-level configuration is treated the same as an
@@ -321,7 +326,7 @@ class Settings:
         self._user_settings = normalized
         self._django_backed = True
 
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         """Retrieve a setting's value using attribute-style access.
 
         Dunder names short-circuit with a plain ``AttributeError`` so
@@ -411,7 +416,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
             f"upstream_patches_enabled() got unknown dependency {dependency!r}; add new "
             "patch-module names to UPSTREAM_PATCH_DEPENDENCIES so consumers can opt out.",
         )
-    configured = getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True)
+    configured: object = getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True)
     if type(configured) is bool:
         return configured
     try:
@@ -428,8 +433,10 @@ def upstream_patches_enabled(dependency: str) -> bool:
             # the final ``get``. ``dict()`` iteration is the single
             # consumption point; the plain copy is then the only object
             # validated and read.
+            # mypy: ``is_mapping`` above proved ``configured`` a ``Mapping``, but mypy does
+            # not narrow through an aliased ``isinstance`` result; entries stay unchecked here.
             try:
-                plain = dict(configured)
+                plain = dict(cast("Mapping[object, object]", configured))
             except Exception as exc:
                 raise ConfigurationError(
                     f"`{APPLY_UPSTREAM_PATCHES_KEY}` is not a valid mapping; iteration failed.",
@@ -452,20 +459,22 @@ def upstream_patches_enabled(dependency: str) -> bool:
                         f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
                         f"got {name!r}.",
                     )
-            unknown = set(plain) - UPSTREAM_PATCH_DEPENDENCIES
+            # Every key was just proven a ``str`` by the loop above.
+            keyed = cast("dict[str, object]", plain)
+            unknown = set(keyed) - UPSTREAM_PATCH_DEPENDENCIES
             if unknown:
                 raise ConfigurationError(
                     f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
                     f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
                 )
-            for name, value in plain.items():
+            for name, value in keyed.items():
                 if type(value) is not bool:
                     raise ConfigurationError(
                         f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
                         f"got {_safe_type_name(value)}.",
                     )
             # Every value was just proven an exact ``bool`` by the loop above.
-            return cast("bool", plain.get(dependency, True))
+            return cast("bool", keyed.get(dependency, True))
         except ConfigurationError:
             raise
         except Exception as exc:
@@ -478,7 +487,7 @@ def upstream_patches_enabled(dependency: str) -> bool:
     )
 
 
-def nested_connection_strategy_setting() -> str:
+def nested_connection_strategy_setting() -> object:
     """The configured default nested-connection fetch strategy name.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["NESTED_CONNECTION_STRATEGY"]``,
@@ -491,7 +500,7 @@ def nested_connection_strategy_setting() -> str:
     return getattr(settings, NESTED_CONNECTION_STRATEGY_KEY, "windowed")
 
 
-def single_parent_fast_path_setting() -> bool:
+def single_parent_fast_path_setting() -> object:
     """Whether the runtime single-parent degenerate window fast path is enabled.
 
     Reads DJANGO_STRAWBERRY_FRAMEWORK["SINGLE_PARENT_FAST_PATH"], default True.
@@ -530,7 +539,7 @@ def testing_endpoint_setting() -> str:
 testing_endpoint_setting.__test__ = False  # type: ignore[attr-defined]  # mypy: a def takes no new attrs  # pyright: ignore[reportFunctionMemberAccess]
 
 
-def hide_flat_filters_setting() -> bool:
+def hide_flat_filters_setting() -> object:
     """Whether generated filter inputs hide the flat relational traversal fields.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["HIDE_FLAT_FILTERS"]``, defaulting to
@@ -556,7 +565,7 @@ def relay_globalid_strategy_setting() -> object:
     return getattr(settings, RELAY_GLOBALID_STRATEGY_KEY, None)
 
 
-def max_request_body_bytes_setting() -> int | None:
+def max_request_body_bytes_setting() -> object:
     """The configured cumulative GraphQL request-body ceiling, in bytes.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["MAX_REQUEST_BODY_BYTES"]``, defaulting

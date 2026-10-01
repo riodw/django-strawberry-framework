@@ -14,6 +14,7 @@ from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Mapping
     from typing import TypeAlias
 
     from ..filters.sets import FilterSet
@@ -335,7 +336,11 @@ class DjangoTypeDefinition:
                 result = None
             else:
                 try:
-                    target_model = getattr(model_field, "related_model", None)
+                    target_model: type[models.Model] | None = getattr(
+                        model_field,
+                        "related_model",
+                        None,
+                    )
                 except BaseException:
                     target_model = None
                 if target_model is None:
@@ -397,7 +402,7 @@ def origin_has_custom_id_resolver(origin: type[object], pk_name: str) -> bool:
     if normalized_pk_name is None:
         return False
     try:
-        mro = getattr(origin, "__mro__", ())
+        mro: tuple[type[object], ...] = getattr(origin, "__mro__", ())
     except BaseException:
         return True
     resolver_names = (normalized_pk_name, f"resolve_{normalized_pk_name}")
@@ -459,7 +464,7 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
 def _class_has_custom_id_resolver(type_cls: type[object], name: str) -> bool:
     """Return whether ``type_cls`` defines a consumer id resolver marker."""
     try:
-        class_dict = getattr(type_cls, "__dict__", {})
+        class_dict: Mapping[str, object] = getattr(type_cls, "__dict__", {})
         if name not in class_dict:
             return False
         if name != "resolve_id":

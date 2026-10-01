@@ -226,7 +226,7 @@ def session_store_class() -> type[SessionBase]:
     from ..exceptions import ConfigurationError, describe_value
 
     try:
-        engine = settings.SESSION_ENGINE
+        engine: object = settings.SESSION_ENGINE
     except (
         AttributeError,
         KeyError,

@@ -158,8 +158,10 @@ def _validate_schema_field_map(name: str, field_map: object) -> dict[str, DRFFie
             f"SerializerMutation {name}.get_serializer_for_schema() must return a mapping of "
             f"field name -> DRF serializers.Field; got {_safe_arg_repr(field_map)}.",
         )
+    # Keys and values stay ``object`` until the per-entry guards below.
+    schema_map: Mapping[object, object] = field_map
     try:
-        entries = tuple(field_map.items())
+        entries = tuple(schema_map.items())
     except BaseException as exc:
         raise ConfigurationError(
             f"SerializerMutation {name}.get_serializer_for_schema() returned a mapping that "
@@ -308,7 +310,7 @@ def _validate_serializer_nested_fields(
     serializer_class: type[DRFSerializer],
     operation: str,
     field_map: dict[str, DRFField],
-    nested_fields: Any,
+    nested_fields: object,
 ) -> Mapping[str, NestedSerializerConfig] | None:
     """Validate + normalize ``Meta.nested_fields`` at class creation.
 
@@ -335,13 +337,16 @@ def _validate_serializer_nested_fields(
     if nested_fields is None:
         return None
     require_nested_fields_mapping(name, nested_fields)
+    # ``require_nested_fields_mapping`` raised unless this is a ``Mapping`` (a raising helper
+    # cannot narrow its argument); every key / value is still checked per entry below.
+    nested_mapping = cast("Mapping[object, object]", nested_fields)
     # The SAME untrusted-mapping containment the schema field map applies: the hook/Meta
     # boundary materializes ``.items()`` and unpacks each entry under a guard, so a hostile
     # mapping (a raising ``items()``, a midway-raising iterator, a wrong-arity entry) becomes
     # the typed configuration error instead of leaking a raw ``RuntimeError`` / ``ValueError``
     # during class creation.
     try:
-        entries = tuple(nested_fields.items())
+        entries = tuple(nested_mapping.items())
     except BaseException as exc:
         raise ConfigurationError(
             f"SerializerMutation {name}.Meta.nested_fields returned a mapping that could not "
@@ -367,6 +372,8 @@ def _validate_serializer_nested_fields(
                 f"got {_safe_arg_repr(field_name)}.",
             )
         require_nested_serializer_config(name, field_name, config)
+        # ``require_nested_serializer_config`` raised unless this is a ``NestedSerializerConfig``.
+        nested_config = cast("NestedSerializerConfig", config)
         field = field_map.get(field_name)
         if field is None:
             raise ConfigurationError(
@@ -381,7 +388,7 @@ def _validate_serializer_nested_fields(
                 "nested Serializer / ListSerializer fields (a relation is a "
                 "PrimaryKeyRelatedField).",
             )
-        normalized[field_name] = config
+        normalized[field_name] = nested_config
     if not normalized:
         # An EMPTY declaration is no declaration (the ``_assert_schema_source_ownership`` /
         # ``validate_nested_config_keys`` falsy-means-absent convention): it passes no nested
@@ -591,7 +598,7 @@ class SerializerMutation(DjangoMutation):
         # the Serializer type-gate is the shared ``require_subclass``; the
         # ModelSerializer-specific second gate stays here - its message names
         # ``Meta.model``, not the shared subclass template.
-        serializer_class = require_subclass(
+        serializer_class: type[DRFSerializer] = require_subclass(
             name,
             require_backing_class(
                 name,
@@ -798,7 +805,7 @@ class SerializerMutation(DjangoMutation):
         snapshot is assigned, so a subclass redefining ``Meta.serializer_class`` validates
         against ``cls.Meta.serializer_class`` (its OWN ``Meta``), not the parent's.
         """
-        meta = cls.__dict__.get("_mutation_meta")
+        meta: _ValidatedMutationMeta | None = cls.__dict__.get("_mutation_meta")
         serializer_class = meta.serializer_class if meta is not None else cls.Meta.serializer_class
         return _default_serializer_schema_fields(serializer_class)
 

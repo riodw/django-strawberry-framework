@@ -62,13 +62,13 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import AsyncIterable, Mapping
+from collections.abc import AsyncIterable, Iterable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
 from itertools import islice
-from typing import Any, TypeGuard
+from typing import Any, TypeGuard, TypeVar, overload
 
-from django.db.models import QuerySet
+from django.db.models import Model, QuerySet
 from graphql import GraphQLError
 from typing_extensions import override
 
@@ -389,7 +389,7 @@ class ResourcePolicy:
         one built from settings - one gate, not two that can drift.
         """
         for field in fields(self):
-            value = getattr(self, field.name)
+            value: object = getattr(self, field.name)
             if field.name == "execution_deadline_seconds":
                 if value is None or _is_valid_deadline(value):
                     continue
@@ -419,8 +419,8 @@ class ResourcePolicy:
                 )
         candidate = replace(self, **overrides)
         for name in overrides:
-            current = getattr(self, name)
-            value = getattr(candidate, name)
+            current: float | None = getattr(self, name)
+            value: float | None = getattr(candidate, name)
             if name == "execution_deadline_seconds":
                 widens = value is None and current is not None
                 widens = widens or (value is not None and current is not None and value > current)
@@ -1009,6 +1009,50 @@ def _raw_list_bound(info: object, declared: int | None, *, trusted: bool = False
     return effective_bound(policy_from_info(info).max_list_rows, declared, trusted=trusted)
 
 
+_RowT = TypeVar("_RowT")
+_ModelT = TypeVar("_ModelT", bound=Model)
+
+
+@overload
+def _windowed_rows(
+    result: None,
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> None: ...
+@overload
+def _windowed_rows(
+    result: QuerySet[_ModelT, _RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> QuerySet[_ModelT, _RowT] | list[_RowT]: ...
+@overload
+def _windowed_rows(
+    result: Iterable[_RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> Iterable[_RowT]: ...
+@overload
+def _windowed_rows(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> object: ...
 def _windowed_rows(
     result: Any,
     info: object,
@@ -1017,7 +1061,7 @@ def _windowed_rows(
     offset: int | None = None,
     requested_limit: int | None = None,
     trusted: bool = False,
-) -> Any:
+) -> object:
     """Bound a raw list and window it to coordinates the caller has already validated.
 
     The seam under ``bounded_rows``: the same ceiling, plus the ``offset`` /
@@ -1079,13 +1123,45 @@ def _windowed_rows(
     return result[start:stop] if by_slice else list(islice(result, start, stop))
 
 
+@overload
 def bounded_rows(
-    result: Any,
+    result: None,
     info: object,
     declared: int | None = None,
     *,
     trusted: bool = False,
-) -> Any:
+) -> None: ...
+@overload
+def bounded_rows(
+    result: QuerySet[_ModelT, _RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> QuerySet[_ModelT, _RowT] | list[_RowT]: ...
+@overload
+def bounded_rows(
+    result: Iterable[_RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> Iterable[_RowT]: ...
+@overload
+def bounded_rows(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> object: ...
+def bounded_rows(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> object:
     """Apply the request's raw-list row bound to whatever a collection resolver produced.
 
     The one place a raw (non-Relay) list is bounded, shared by the root
@@ -1232,15 +1308,55 @@ async def _cleanup_rejected_async_iterable(
     )
 
 
+@overload
 async def _windowed_rows_async(
-    result: Any,
+    result: None,
     info: object,
     declared: int | None = None,
     *,
     offset: int | None = None,
     requested_limit: int | None = None,
     trusted: bool = False,
-) -> Any:
+) -> None: ...
+@overload
+async def _windowed_rows_async(
+    result: QuerySet[_ModelT, _RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> QuerySet[_ModelT, _RowT] | list[_RowT]: ...
+@overload
+async def _windowed_rows_async(
+    result: Iterable[_RowT] | AsyncIterable[_RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> Iterable[_RowT]: ...
+@overload
+async def _windowed_rows_async(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> object: ...
+async def _windowed_rows_async(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    offset: int | None = None,
+    requested_limit: int | None = None,
+    trusted: bool = False,
+) -> object:
     """Bound a possibly async-iterable result and window it to validated coordinates.
 
     The async seam under ``bounded_rows_async``, carrying the same client page
@@ -1312,13 +1428,45 @@ async def _windowed_rows_async(
     return rows
 
 
+@overload
 async def bounded_rows_async(
-    result: Any,
+    result: None,
     info: object,
     declared: int | None = None,
     *,
     trusted: bool = False,
-) -> Any:
+) -> None: ...
+@overload
+async def bounded_rows_async(
+    result: QuerySet[_ModelT, _RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> QuerySet[_ModelT, _RowT] | list[_RowT]: ...
+@overload
+async def bounded_rows_async(
+    result: Iterable[_RowT] | AsyncIterable[_RowT],
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> Iterable[_RowT]: ...
+@overload
+async def bounded_rows_async(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> object: ...
+async def bounded_rows_async(
+    result: object,
+    info: object,
+    declared: int | None = None,
+    *,
+    trusted: bool = False,
+) -> object:
     """Apply a raw-list row bound to a result that may be async-iterable.
 
     ``graphql-core`` accepts ``AsyncIterable`` list results and materializes

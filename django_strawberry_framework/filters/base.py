@@ -86,6 +86,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
 
     from django.core.files.uploadedfile import UploadedFile
     from django.utils.datastructures import MultiValueDict
+    from django_filters.filterset import BaseFilterSet, FilterSetOptions
 
     from ..types.definition import DjangoTypeDefinition
     from ..utils.typing import ConcreteField
@@ -611,9 +612,11 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
             # Explicit empty (``in: []``): keep django-filter's skip (no
             # membership values were supplied, so there is no constraint to honor).
             return super().filter(qs, value)
-        parent = getattr(self, "parent", None)
-        meta = getattr(parent, "_meta", None)
-        model = getattr(meta, "model", None)
+        # django-filter's ``BaseFilterSet.__init__`` stamps ``filter_.parent = self`` and its
+        # metaclass stores ``_meta = FilterSetOptions(...)``.
+        parent: BaseFilterSet | None = getattr(self, "parent", None)
+        meta: FilterSetOptions | None = getattr(parent, "_meta", None)
+        model: type[models.Model] | None = getattr(meta, "model", None)
         model_field = (
             get_model_field(model, _bound_field_name(self)) if model is not None else None
         )
@@ -668,7 +671,7 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
             # (no bounds supplied).
             return qs
         try:
-            bounds = list(value)
+            bounds: list[object] = list(value)
         except Exception:
             return qs
         if len(bounds) != 2:
@@ -707,11 +710,15 @@ def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | No
     here so the strategy-aware acceptance check in ``_decode_and_validate_global_id``
     consumes a single definition (spec-031 Decision 13).
     """
-    parent = getattr(filter_instance, "parent", None)
-    owner = getattr(parent, "_owner_definition", None) if parent is not None else None
+    parent: BaseFilterSet | None = getattr(filter_instance, "parent", None)
+    # ``FilterSet._owner_definition`` is the finalizer-bound ``DjangoTypeDefinition`` slot.
+    owner: DjangoTypeDefinition | None = (
+        getattr(parent, "_owner_definition", None) if parent is not None else None
+    )
     if owner is None:
         return None
-    return resolve_globalid_target_definition(owner, getattr(filter_instance, "field_name", None))
+    field_name: str | None = getattr(filter_instance, "field_name", None)
+    return resolve_globalid_target_definition(owner, field_name)
 
 
 def resolve_globalid_target_definition(
@@ -1180,9 +1187,12 @@ def _relation_identity_column_for(filter_instance: Filter) -> ConcreteField | No
     under a ``RelatedFilter`` prefix resolves the terminal relation. An unbound filter
     (no parent filterset) has no model to walk and returns ``None``.
     """
-    parent = getattr(filter_instance, "parent", None)
-    model = getattr(getattr(parent, "_meta", None), "model", None)
-    field_name = getattr(filter_instance, "field_name", None)
+    # django-filter's ``BaseFilterSet.__init__`` stamps ``filter_.parent = self`` and its
+    # metaclass stores ``_meta = FilterSetOptions(...)``.
+    parent: BaseFilterSet | None = getattr(filter_instance, "parent", None)
+    meta: FilterSetOptions | None = getattr(parent, "_meta", None)
+    model: type[models.Model] | None = getattr(meta, "model", None)
+    field_name: str | None = getattr(filter_instance, "field_name", None)
     if model is None or not field_name:
         return None
     return relation_identity_column(get_model_field(model, field_name))
@@ -1432,7 +1442,8 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         ``orders/base.py::RelatedOrder._validate_target``.
         """
         if not (isinstance(resolved, type) and issubclass(resolved, _filter_set_class())):
-            owner = getattr(self, self._owner_attr, None)
+            # ``_bind_owner`` is the one writer of the owner slot, and it stores a set class.
+            owner: type[object] | None = getattr(self, self._owner_attr, None)
             owner_label = (
                 _safe_class_name(owner, qualified=True) if isinstance(owner, type) else "<unbound>"
             )

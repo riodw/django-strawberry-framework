@@ -53,7 +53,7 @@ import copy
 import inspect
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -75,11 +75,18 @@ from .utils.querysets import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from collections.abc import Sized
+
     from django.db import models
+    from typing_extensions import TypeIs
 
     from .types.base import DjangoType
     from .types.relay import _RelayDjangoType
     from .utils.typing import ModelField
+
+    class _SizedRows(Sized, Iterable[object], Protocol):
+        """A ``resolve_nodes`` row iterable that also answers ``len()``."""
+
 
 _NodeT = TypeVar("_NodeT")
 
@@ -155,7 +162,7 @@ def _node_id_slot(
         return id_attr, None
 
 
-def _coerce_pk_or_none(resolved_type: type[_RelayDjangoType], node_id: object) -> Any:
+def _coerce_pk_or_none(resolved_type: type[_RelayDjangoType], node_id: object) -> object:
     """Coerce ``node_id`` to the resolution field's Python type; ``None`` if uncoercible.
 
     ``decode_global_id`` validates payload SHAPE only, so a well-formed
@@ -382,9 +389,14 @@ def _interleave(
     ]
 
 
+def _has_len(rows: Iterable[object]) -> TypeIs[_SizedRows]:
+    """Return whether a ``resolve_nodes`` row iterable answers ``len()``."""
+    return hasattr(rows, "__len__")
+
+
 def _check_nodes_result(
     resolved_type: type[_RelayDjangoType],
-    result: Any,
+    result: Iterable[object],
     node_ids: Sequence[str],
 ) -> Iterable[object]:
     """Validate a ``resolve_nodes`` return is positionally 1:1 with ``node_ids``.
@@ -403,7 +415,7 @@ def _check_nodes_result(
     reaches the length check (and ``_interleave``'s positional indexing)
     instead of dying on a bare ``len()`` ``TypeError``.
     """
-    if not hasattr(result, "__len__"):
+    if not _has_len(result):
         result = list(result)
     if len(result) != len(node_ids):
         raise ConfigurationError(
@@ -412,8 +424,7 @@ def _check_nodes_result(
             "input-ordered and 1:1 with node_ids (None for missing) - the "
             "_resolve_nodes_default / _order_nodes shape.",
         )
-    # ``len()`` above measured it; the override contract makes it the row iterable.
-    return cast("Iterable[object]", result)
+    return result
 
 
 def _stamp_node_type(resolved_type: type[_RelayDjangoType], node: _NodeT) -> _NodeT:
@@ -634,7 +645,7 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
                 return _interleave(positions, per_type)
 
             return _gather()
-        per_type = {}
+        per_type: dict[type[_RelayDjangoType], list[object]] = {}
         for resolved_type, node_ids in groups.items():
             result = resolved_type.resolve_nodes(info=info, node_ids=node_ids, required=False)
             result = reject_async_in_sync_context(

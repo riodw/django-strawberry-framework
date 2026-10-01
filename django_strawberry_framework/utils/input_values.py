@@ -35,12 +35,26 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 
 from ..exceptions import ConfigurationError, _safe_type_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from typing import TypeAlias
+
+    from ..filters.sets import FilterSet
+    from ..orders.sets import OrderSet
     from .inputs import GeneratedInputFieldSpec
+
+    #: A set family's field-spec map, keyed by ``(set class, python attr)``. Mapping
+    #: keys are invariant, so each family's own map is its own member.
+    FieldSpecMap: TypeAlias = (
+        Mapping[tuple[type[FilterSet], str], GeneratedInputFieldSpec]
+        | Mapping[tuple[type[OrderSet], str], GeneratedInputFieldSpec]
+    )
+    #: One active related branch: ``(field_name, related_obj, child_input)``. The
+    #: declaration is read reflectively off the set class, so it is ``object`` here.
+    RelatedBranch: TypeAlias = tuple[str, object, object]
 
 # Default maximum traversal depth across set input graphs (logical operators and related branches).
 # Sets with custom depth requirements (e.g. FilterSet._MAX_LOGIC_DEPTH) can override the class-level
@@ -94,7 +108,7 @@ def iter_input_items(input_value: object) -> list[tuple[str, object]] | None:
         pairs = dict.items(input_value)
         return [(_field_name(name, input_value=input_value), value) for name, value in pairs]
     try:
-        dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
+        dataclass_fields: object = getattr(input_value, "__dataclass_fields__", None)
     except BaseException as exc:
         raise _walk_error(input_value, "its dataclass metadata could not be read") from exc
     if dataclass_fields is None:
@@ -112,7 +126,7 @@ def iter_input_items(input_value: object) -> list[tuple[str, object]] | None:
     for name in names:
         field_name = _field_name(name, input_value=input_value)
         try:
-            value = getattr(input_value, field_name)
+            value: object = getattr(input_value, field_name)
         except BaseException as exc:
             raise _walk_error(input_value, "a dataclass field value could not be read") from exc
         items.append((field_name, value))
@@ -176,7 +190,7 @@ class SetInputTraversal:
       shape; when set, a list ``input_value`` is flattened element-by-element.
     """
 
-    field_specs: Mapping[Any, GeneratedInputFieldSpec]
+    field_specs: FieldSpecMap
     related_attr: str
     logic_keys: frozenset[str] = frozenset()
     unset_sentinel: object = None
@@ -198,7 +212,7 @@ class ActiveField:
     raw_value: object
     spec: GeneratedInputFieldSpec | None
     kind: str
-    related_obj: Any = None
+    related_obj: object = None
 
 
 def set_traversal_depth_cap(set_cls: object) -> int:
@@ -311,7 +325,7 @@ def related_declaration_mapping(owner: object, related_attr: str) -> Mapping[obj
     Raises :class:`RelatedDeclarationError` for the caller to translate.
     """
     try:
-        related = getattr(owner, related_attr, None)
+        related: object = getattr(owner, related_attr, None)
     except BaseException as exc:
         raise RelatedDeclarationError("unreadable") from exc
     if related is None:
@@ -397,7 +411,12 @@ def iter_active_fields(
         if is_inactive_value(raw_value, unset_sentinel=unset_sentinel):
             continue
         try:
-            spec = config.field_specs.get((set_cls, python_attr))
+            # Every class is a valid probe: an identity lookup by a wider key is sound, so
+            # the family's map is read through its class-keyed view.
+            spec = cast(
+                "Mapping[tuple[type[object], str], GeneratedInputFieldSpec]",
+                config.field_specs,
+            ).get((set_cls, python_attr))
             is_logic = python_attr in config.logic_keys
         except BaseException as exc:
             raise _walk_error(input_value, "field provenance could not be resolved") from exc

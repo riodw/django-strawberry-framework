@@ -94,8 +94,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # A declarative form class - the only kind a form mutation's ``Meta.form_class``
     # validates to (``forms.Form`` / ``forms.ModelForm`` are siblings under
     # ``forms.BaseForm``, and only they carry the metaclass-built ``base_fields``).
-    # ``ModelForm``'s model parameter is invariant, so ``Any`` is its universal form.
-    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[Any]]
+    # ``ModelForm``'s model parameter is read-only here, so its ``Model`` bound covers
+    # every model form.
+    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[models.Model]]
 
 # Module path the ``strawberry.lazy(...)`` marker references for the FORM input
 # namespace; pinned as a single constant so any forward-ref and
@@ -245,7 +246,7 @@ def _form_field_basis(form_class: FormClass, form_fields: Any = None) -> dict[st
     # ``isidentifier`` (or ``__hash__`` under ``keyword.iskeyword``) raises cannot
     # be interrogated at all, so it is invalid by the same rule instead of
     # escaping this typed boundary as the raw exception.
-    invalid_names = []
+    invalid_names: list[object] = []
     for name in basis:
         try:
             invalid = (
@@ -272,7 +273,10 @@ def _form_field_basis(form_class: FormClass, form_fields: Any = None) -> dict[st
     return basis
 
 
-def normalize_form_field_basis(form_class: FormClass, form_fields: Any) -> dict[str, forms.Field]:
+def normalize_form_field_basis(
+    form_class: FormClass,
+    form_fields: object,
+) -> dict[str, forms.Field]:
     """Normalize a mutation hook's returned field basis with typed diagnostics."""
     if form_fields is None:
         raise ConfigurationError(
@@ -455,8 +459,11 @@ def _model_column_for(form_class: FormClass, name: str) -> ConcreteField | None:
     crash on missing related models.
     """
     try:
-        meta = getattr(form_class, "_meta", None)
-        model = getattr(meta, "model", None)
+        meta: object = getattr(form_class, "_meta", None)
+        # A ``ModelForm``'s ``_meta`` is its ``ModelFormOptions``, whose ``model`` is the
+        # ``Meta.model`` class ``ModelFormMetaclass`` already read ``_meta`` from
+        # (``fields_for_model``); a plain ``Form`` has no ``_meta``.
+        model: type[models.Model] | None = getattr(meta, "model", None)
     except BaseException as exc:
         # The corrupted-internals twin of the guarded ``base_fields`` read: a
         # ``_meta.model`` read that RAISES is a clobbered form class, so it fails
@@ -499,7 +506,7 @@ def _model_column_for(form_class: FormClass, name: str) -> ConcreteField | None:
 
 def _model_less_relation_annotation(
     name: str,
-    field: forms.ModelChoiceField[Any],
+    field: forms.ModelChoiceField[models.Model],
     form_class: FormClass,
 ) -> tuple[str, object, type[models.Model]]:
     """Map a column-LESS relation form field to its ``(python_attr, annotation, related_model)``.
@@ -615,7 +622,7 @@ def _field_triple_and_spec(
             # ``ModelChoiceField`` (the multi variant subclasses it).
             python_attr, annotation, related_model = _model_less_relation_annotation(
                 name,
-                cast("forms.ModelChoiceField[Any]", field),
+                cast("forms.ModelChoiceField[models.Model]", field),
                 form_class,
             )
             graphql_name = graphql_camel_name(python_attr)

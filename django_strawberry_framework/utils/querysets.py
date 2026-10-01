@@ -122,8 +122,11 @@ from .write_transaction import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from collections.abc import AsyncIterator, Callable, Mapping
-    from typing import TypeAlias
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+    from typing import Literal, Protocol, TypeAlias
+
+    from django.db.models.query import BaseIterable
+    from typing_extensions import TypeIs
 
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
@@ -132,6 +135,29 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     #: A ``Prefetch`` as the seal rebuilds it: a string lookup over a model-row child.
     _SealedPrefetch: TypeAlias = Prefetch[str, models.QuerySet[models.Model], str]
+    #: A resolver source after ``Manager`` coercion: a ``QuerySet`` flagged ``True``, or
+    #: any other value (a list, a generator) flagged ``False``. The flag discriminates
+    #: the union, so ``source[1] is True`` narrows ``source[0]`` to the queryset.
+    NormalizedSource: TypeAlias = (
+        tuple[models.QuerySet[models.Model, object], Literal[True]] | tuple[object, Literal[False]]
+    )
+    #: The exact builtin containers the graph walkers descend into member-wise
+    #: (``_PLAIN_CONTAINER_TYPES``), with members of unknown type.
+    _PlainContainer: TypeAlias = (
+        list[object] | tuple[object, ...] | set[object] | frozenset[object] | dict[object, object]
+    )
+
+    class _TableRef(Protocol):
+        """An ``alias_map`` entry as ``_base_table_defect`` reads it: its ``table_name``."""
+
+        @property
+        def table_name(self) -> object: ...
+
+    class _SourceExpressionNode(Protocol):
+        """A genuine Django node exposing the operand accessor the expression walk calls."""
+
+        def get_source_expressions(self) -> Iterable[object]: ...
+
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -183,7 +209,7 @@ def _safe_class_name(value: Any) -> str:
 
 
 def reject_async_in_sync_context(
-    value: _T,
+    value: Awaitable[object] | _T,
     *,
     owner: str,
     method: str,
@@ -328,7 +354,7 @@ def initial_queryset(type_cls: type[DjangoType]) -> models.QuerySet[models.Model
     return base_queryset(model_for(type_cls))
 
 
-def normalize_query_source(source: object) -> tuple[Any, bool]:
+def normalize_query_source(source: object) -> NormalizedSource:
     """Coerce a ``Manager`` to its ``QuerySet`` and report whether the result is one.
 
     The single Manager-to-QuerySet coercion shared by every resolver surface
@@ -354,7 +380,9 @@ def normalize_query_source(source: object) -> tuple[Any, bool]:
     """
     if isinstance(source, models.Manager):
         return _coerced_manager_queryset(source), True
-    return source, isinstance(source, models.QuerySet)
+    if isinstance(source, models.QuerySet):
+        return source, True
+    return source, False
 
 
 def coerce_field_value_or_none(field: ModelField | None, value: object) -> object:
@@ -388,7 +416,7 @@ def coerce_field_value_or_none(field: ModelField | None, value: object) -> objec
     if not isinstance(field, models.Field):
         return None
     try:
-        coerced = field.to_python(value)
+        coerced: object = field.to_python(value)
         field.run_validators(coerced)
     except Exception:
         return None
@@ -449,14 +477,14 @@ class _AsyncQuerySetRows:
 
     __slots__ = ("_queryset",)
 
-    def __init__(self, queryset: models.QuerySet[models.Model]) -> None:
+    def __init__(self, queryset: models.QuerySet[models.Model, object]) -> None:
         if not isinstance(queryset, models.QuerySet):
             raise TypeError(
                 f"_AsyncQuerySetRows requires a QuerySet; got {_safe_type_name(queryset)}",
             )
         self._queryset = queryset
 
-    def __aiter__(self) -> AsyncIterator[models.Model]:
+    def __aiter__(self) -> AsyncIterator[object]:
         return self._queryset.__aiter__()
 
 
@@ -472,7 +500,9 @@ def wrap_async_queryset_adapter(qs: _T) -> _T | _AsyncQuerySetRows:
     return qs
 
 
-def unwrap_async_queryset_adapter(val: _T) -> tuple[_T | models.QuerySet[models.Model], bool]:
+def unwrap_async_queryset_adapter(
+    val: _T,
+) -> tuple[_T | models.QuerySet[models.Model, object], bool]:
     """Unwrap an ``_AsyncQuerySetRows`` adapter to ``(inner_queryset, True)`` or ``(val, False)``."""
     if isinstance(val, _AsyncQuerySetRows):
         return val._queryset, True
@@ -558,12 +588,27 @@ def _concrete_or_none(candidate: object) -> type[models.Model] | None:
     try:
         if not isinstance(candidate, type) or not issubclass(candidate, models.Model):
             return None
-        meta = getattr(candidate, "_meta", None)
+        meta: object = getattr(candidate, "_meta", None)
         if meta is None:
             return None
-        return getattr(meta, "concrete_model", None)
+        # ``ModelBase.__new__`` sets ``_meta.concrete_model`` on every model class to a
+        # model class (the class itself, or its concrete ancestor for a proxy).
+        concrete: type[models.Model] | None = getattr(meta, "concrete_model", None)
+        return concrete
     except BaseException:
         return None
+
+
+def _is_model_of_concrete(
+    candidate: object,
+    concrete: type[models.Model],
+) -> TypeGuard[type[models.Model]]:
+    """Return whether ``candidate`` is a model class whose concrete model is ``concrete``.
+
+    ``_concrete_or_none(candidate) is concrete``, stated as a guard: ``_concrete_or_none``
+    answers a model only for a ``models.Model`` subclass, so a match proves the class.
+    """
+    return _concrete_or_none(candidate) is concrete
 
 
 def _base_table_defect(query: object, concrete: type[models.Model]) -> str | None:
@@ -597,7 +642,9 @@ def _base_table_defect(query: object, concrete: type[models.Model]) -> str | Non
     unshadowed) BEFORE this, so the ``.table_name`` read below dispatches no consumer
     code.
     """
-    alias_map = getattr(query, "alias_map", None)
+    # ``_query_container_defect`` proved ``alias_map`` an exact ``dict`` with exact-``str``
+    # keys (or absent) before this runs.
+    alias_map: dict[str, _TableRef] | None = getattr(query, "alias_map", None)
     if not alias_map:
         return None
     # The base table is the first alias (a ``BaseTable`` carrying ``table_name``) -- the
@@ -609,6 +656,15 @@ def _base_table_defect(query: object, concrete: type[models.Model]) -> str | Non
     if table != concrete._meta.db_table:
         return table
     return None
+
+
+def _is_class(value: object) -> TypeIs[type[object]]:
+    """Return whether ``value`` IS a class, asked of its real type.
+
+    ``issubclass(type(value), type)`` rather than ``isinstance(value, type)``: the real
+    type cannot be restated by a ``__class__`` property on the value.
+    """
+    return issubclass(type(value), type)
 
 
 def _type_is_genuinely_django(node_type: type[object]) -> bool:
@@ -637,8 +693,8 @@ def _type_is_genuinely_django(node_type: type[object]) -> bool:
     from the class's own namespace without dispatching a metaclass hook.
     """
     try:
-        module_name = type.__getattribute__(node_type, "__module__")
-        qualname = type.__getattribute__(node_type, "__qualname__")
+        module_name: object = type.__getattribute__(node_type, "__module__")
+        qualname: object = type.__getattribute__(node_type, "__qualname__")
     except (AttributeError, TypeError):
         return False
     if type(module_name) is not str or not module_name.startswith("django."):
@@ -737,7 +793,7 @@ def _shadow_defect(node: object, label: str) -> tuple[str, str] | None:
     ``__dict__`` -- so its presence in a compiler-reachable slot is untrusted state.
     """
     try:
-        node_dict = object.__getattribute__(node, "__dict__")
+        node_dict: dict[object, object] = object.__getattribute__(node, "__dict__")
     except AttributeError:
         return ("untrusted", f"{label} is a {_safe_type_name(node)} with no instance state")
     node_type = type(node)
@@ -806,7 +862,7 @@ def _template_params_defect(
     if "extra" not in node_dict:
         return None
     extra = node_dict["extra"]
-    if type(extra) is not dict:
+    if not _is_exact_dict(extra):
         return ("untrusted", f"{label} extra is a {_safe_type_name(extra)}")
     for key, value in extra.items():
         if type(key) is not str:
@@ -842,14 +898,14 @@ def _node_metadata_defect(node: object, label: str) -> tuple[str, str] | None:
     when the field itself is reached, and forcing it Django-owned would fail-close every
     query over a custom model field.
     """
-    node_dict = object.__getattribute__(node, "__dict__")
+    node_dict: dict[object, object] = object.__getattribute__(node, "__dict__")
     for attr in _SQL_TEMPLATE_ATTRS:
         if attr in node_dict and type(node_dict[attr]) is not str:
             return ("untrusted", f"{label} {attr} is a {_safe_type_name(node_dict[attr])}")
     return _template_params_defect(node_dict, label)
 
 
-def _raw_sql_params_defect(params: Any, label: str) -> tuple[str, str] | None:
+def _raw_sql_params_defect(params: object, label: str) -> tuple[str, str] | None:
     """Return a defect unless raw-SQL parameters are an exact inert sequence.
 
     Django passes ``RawSQL.params`` and ``ExtraWhere.params`` straight to the database
@@ -858,7 +914,7 @@ def _raw_sql_params_defect(params: Any, label: str) -> tuple[str, str] | None:
     exact builtin sequence shapes Django creates and the same exact inert leaf types the
     expression-graph proof accepts.
     """
-    if type(params) not in (list, tuple):
+    if not _is_exact_sequence(params):
         return ("untrusted", f"{label} params is a {_safe_type_name(params)}")
     for param in params:
         if not _is_inert_value(param):
@@ -992,7 +1048,7 @@ def _expression_state_defect(node: object, label: str) -> tuple[str, str] | None
     dispatches nothing. Genuine Django only ever stores exact builtin sequences in these
     slots, so the check costs no legitimate query.
     """
-    node_dict = object.__getattribute__(node, "__dict__")
+    node_dict: dict[object, object] = object.__getattribute__(node, "__dict__")
     for attr in _EXPRESSION_SEQUENCE_STATE_ATTRS:
         if attr in node_dict and type(node_dict[attr]) not in (list, tuple):
             return ("untrusted", f"{label} {attr} is a {_safe_type_name(node_dict[attr])}")
@@ -1061,6 +1117,44 @@ def _is_plain_container(value_type: type[object]) -> bool:
     return value_type in _PLAIN_CONTAINER_TYPES
 
 
+def _is_plain_container_value(value: object) -> TypeGuard[_PlainContainer]:
+    """Return whether ``value``'s exact type is one of the walked plain containers.
+
+    ``_is_plain_container`` over ``type(value)``, stated on the value itself so the
+    member-wise walk receives it as the container that check just proved it to be.
+    """
+    return _is_plain_container(type(value))
+
+
+def _is_exact_dict(value: object) -> TypeGuard[dict[object, object]]:
+    """Return whether ``value`` is EXACTLY a builtin ``dict`` (never a subclass)."""
+    return type(value) is dict
+
+
+def _is_exact_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
+    """Return whether ``value`` is EXACTLY a builtin ``tuple`` (never a subclass)."""
+    return type(value) is tuple
+
+
+def _is_exact_sequence(value: object) -> TypeGuard[list[object] | tuple[object, ...]]:
+    """Return whether ``value`` is EXACTLY a builtin ``list`` or ``tuple``."""
+    return type(value) in (list, tuple)
+
+
+def _is_exact_tuple_or_list(value: object) -> TypeGuard[list[object] | tuple[object, ...]]:
+    """``_is_exact_sequence`` comparing ``tuple`` first, for the sites that test in that order.
+
+    ``in`` compares by equality, so the order decides which class a metaclass ``__eq__``
+    is asked about first; each site keeps its own.
+    """
+    return type(value) in (tuple, list)
+
+
+def _is_exact_set(value: object) -> TypeGuard[set[object] | frozenset[object]]:
+    """Return whether ``value`` is EXACTLY a builtin ``set`` or ``frozenset``."""
+    return type(value) in (set, frozenset)
+
+
 def _expr_mapping_key_detail(label: str, key: object) -> str:  # noqa: ARG001 - shared detail signature
     """Non-string mapping-key detail for the expression-graph walk.
 
@@ -1076,7 +1170,7 @@ def _deferred_mapping_key_detail(label: str, key: object) -> str:
 
 
 def _container_defect(
-    value: Any,
+    value: _PlainContainer,
     walk: _GraphWalk,
     label: str,
     recurse: Callable[[object, _GraphWalk, str], tuple[str, str] | None],
@@ -1100,7 +1194,7 @@ def _container_defect(
     state = walk.begin(value_id)
     if state is not _WalkState.ENTERED:
         return _walk_short_circuit(state, f"{label} contains a reference cycle")
-    if type(value) is dict:
+    if _is_exact_dict(value):
         for key, item in value.items():
             if type(key) is not str:
                 return ("untrusted", key_detail(label, key))
@@ -1163,10 +1257,11 @@ def _rhs_hook_defect(value_type: type[object], label: str) -> tuple[str, str] | 
     code (or lie) during the very read meant to reject the type. Classes in
     ``_DIRECT_RHS_TRUSTED_MRO`` are skipped: their hooks are the interpreter's own.
     """
-    for klass in type.__getattribute__(value_type, "__mro__"):
+    mro: tuple[type[object], ...] = type.__getattribute__(value_type, "__mro__")
+    for klass in mro:
         if klass in _DIRECT_RHS_TRUSTED_MRO:
             continue
-        klass_dict = type.__getattribute__(klass, "__dict__")
+        klass_dict: Mapping[str, object] = type.__getattribute__(klass, "__dict__")
         for hook in _RHS_ATTRIBUTE_HOOKS:
             if hook in klass_dict:
                 return ("untrusted", f"{label} lookup rhs defines the {hook!r} attribute hook")
@@ -1201,7 +1296,7 @@ def _direct_rhs_defect(value: object, walk: _GraphWalk, label: str) -> tuple[str
     if _is_inert_value(value):
         return None
     value_type = type(value)
-    if _is_plain_container(value_type):
+    if _is_plain_container_value(value):
         return _container_defect(value, walk, label, _direct_rhs_defect, _expr_mapping_key_detail)
     hook_defect = _rhs_hook_defect(value_type, label)
     if hook_defect is not None:
@@ -1230,7 +1325,7 @@ def _lookup_operands_defect(node: object, walk: _GraphWalk, label: str) -> tuple
     own ``hasattr`` would find -- so a dispatched RHS recurses like any other node and a
     direct one must satisfy the inert-data rules.
     """
-    node_dict = object.__getattribute__(node, "__dict__")
+    node_dict: dict[object, object] = object.__getattribute__(node, "__dict__")
     lhs_defect = _expr_graph_defect(node_dict.get("lhs"), walk, label)
     if lhs_defect is not None:
         return lhs_defect
@@ -1240,7 +1335,7 @@ def _lookup_operands_defect(node: object, walk: _GraphWalk, label: str) -> tuple
     return _direct_rhs_defect(rhs, walk, label)
 
 
-def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+def _expr_graph_defect(node: object, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return the first non-genuine / shadowed node in an expression graph, or ``None``.
 
     The single recursive, identity-memoized traversal of every compiler-reachable
@@ -1259,7 +1354,7 @@ def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, st
     if _is_inert_value(node):
         return None
     node_type = type(node)
-    if _is_plain_container(node_type):
+    if _is_plain_container_value(node):
         return _container_defect(node, walk, label, _expr_graph_defect, _expr_mapping_key_detail)
     # ``WhereNode`` and ``sql.Query`` (a subquery's inner query, surfaced by
     # ``Subquery.get_source_expressions``) route to their dedicated walkers BEFORE this
@@ -1297,7 +1392,10 @@ def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, st
         if operands_defect is not None:
             return operands_defect
     elif getattr(node_type, "get_source_expressions", None) is not None:
-        for child in node.get_source_expressions():
+        # ``node_type`` is an exact genuine Django class (proven above) that defines
+        # ``get_source_expressions``, Django's own operand accessor.
+        holder = cast("_SourceExpressionNode", node)
+        for child in holder.get_source_expressions():
             defect = _expr_graph_defect(child, walk, label)
             if defect is not None:
                 return defect
@@ -1314,7 +1412,7 @@ def _expr_graph_defect(node: Any, walk: _GraphWalk, label: str) -> tuple[str, st
     return None
 
 
-def _expr_sequence_defect(holder: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+def _expr_sequence_defect(holder: object, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return a defect for an ``order_by`` / ``group_by`` / ``select`` sequence, or ``None``.
 
     These slots hold a mix of plain field-reference strings (safe) and expressions
@@ -1325,7 +1423,7 @@ def _expr_sequence_defect(holder: Any, walk: _GraphWalk, label: str) -> tuple[st
     """
     if holder is None or type(holder) is bool:
         return None
-    if type(holder) not in (list, tuple):
+    if not _is_exact_sequence(holder):
         return ("untrusted", f"query {label} is a {_safe_type_name(holder)}")
     for item in holder:
         if type(item) is str:
@@ -1336,7 +1434,7 @@ def _expr_sequence_defect(holder: Any, walk: _GraphWalk, label: str) -> tuple[st
     return None
 
 
-def _raw_sql_sequence_defect(holder: Any, label: str) -> tuple[str, str] | None:
+def _raw_sql_sequence_defect(holder: object, label: str) -> tuple[str, str] | None:
     """Return a defect for an ``extra_order_by`` / ``extra_tables`` sequence, or ``None``.
 
     The ``.extra()`` raw-SQL slots the compiler emits VERBATIM (never compiled through an
@@ -1349,7 +1447,7 @@ def _raw_sql_sequence_defect(holder: Any, label: str) -> tuple[str, str] | None:
     """
     if holder is None:
         return None
-    if type(holder) not in (tuple, list):
+    if not _is_exact_tuple_or_list(holder):
         return ("untrusted", f"query {label} is a {_safe_type_name(holder)}")
     for item in holder:
         if type(item) is not str:
@@ -1378,7 +1476,7 @@ def _join_defect(join: object, alias: str, walk: _GraphWalk) -> tuple[str, str] 
     join_defect = _genuine_node_defect(join, f"join for alias {alias!r}")
     if join_defect is not None:
         return join_defect
-    filtered = getattr(join, "filtered_relation", None)
+    filtered: object = getattr(join, "filtered_relation", None)
     if filtered is None:
         return None
     filtered_defect = _genuine_node_defect(
@@ -1387,7 +1485,7 @@ def _join_defect(join: object, alias: str, walk: _GraphWalk) -> tuple[str, str] 
     )
     if filtered_defect is not None:
         return filtered_defect
-    resolved = getattr(filtered, "resolved_condition", None)
+    resolved: object = getattr(filtered, "resolved_condition", None)
     if resolved is None:
         return None
     return _where_tree_defect(resolved, walk)
@@ -1416,7 +1514,7 @@ def _where_tree_defect(node: object, walk: _GraphWalk) -> tuple[str, str] | None
     shadow = _shadow_defect(node, "where node")
     if shadow is not None:
         return shadow
-    node_dict = object.__getattribute__(node, "__dict__")
+    node_dict: dict[object, object] = object.__getattribute__(node, "__dict__")
     # ``WhereNode.as_sql`` interpolates ``self.connector`` (``AND`` / ``OR``) straight
     # into the emitted SQL, so an instance override with a non-``str`` connector would
     # run its ``__str__`` at compile time (spec-045 Decision 2).
@@ -1424,7 +1522,7 @@ def _where_tree_defect(node: object, walk: _GraphWalk) -> tuple[str, str] | None
     if connector is not None and type(connector) is not str:
         return ("untrusted", f"where node connector is a {_safe_type_name(connector)}")
     children = node_dict.get("children")
-    if children is not None and type(children) not in (list, tuple):
+    if children is not None and not _is_exact_sequence(children):
         return ("untrusted", f"where node children is a {_safe_type_name(children)}")
     for child in children or ():
         child_defect = _where_tree_defect(child, walk)
@@ -1445,7 +1543,7 @@ def _select_related_defect(select_related: object) -> tuple[str, str] | None:
     """
     if isinstance(select_related, bool):
         return None
-    if type(select_related) is not dict:
+    if not _is_exact_dict(select_related):
         return ("untrusted", f"select_related is a {_safe_type_name(select_related)}")
     for key, value in select_related.items():
         if type(key) is not str:
@@ -1500,25 +1598,29 @@ def _query_payload_defect(query: object) -> tuple[str, str] | None:
       dispatches; it must be a genuine, unshadowed Django object like any other
       compiler-reachable node.
     """
-    refcount = getattr(query, "alias_refcount", None) or {}
+    # ``_query_container_defect`` proved each of these an exact ``dict`` with exact-``str``
+    # keys (or absent) before calling here.
+    refcount: dict[str, object] = getattr(query, "alias_refcount", None) or {}
     for alias, count in refcount.items():
         if type(count) is not int:
             return ("untrusted", f"query alias_refcount[{alias!r}] is a {_safe_type_name(count)}")
-    external = getattr(query, "external_aliases", None) or {}
+    external: dict[str, object] = getattr(query, "external_aliases", None) or {}
     for alias, flag in external.items():
         if type(flag) is not bool:
             return ("untrusted", f"query external_aliases[{alias!r}] is a {_safe_type_name(flag)}")
-    table_map = getattr(query, "table_map", None) or {}
+    table_map: dict[str, object] = getattr(query, "table_map", None) or {}
     for table, aliases in table_map.items():
         if type(aliases) is not list:
             return ("untrusted", f"query table_map[{table!r}] is a {_safe_type_name(aliases)}")
-        for alias in aliases:
-            if type(alias) is not str:
+        alias_list: list[object] = aliases
+        for table_alias in alias_list:
+            if type(table_alias) is not str:
                 return (
                     "untrusted",
-                    f"query table_map[{table!r}] carries a {_safe_type_name(alias)}",
+                    f"query table_map[{table!r}] carries a {_safe_type_name(table_alias)}",
                 )
-    for alias, relation in (getattr(query, "_filtered_relations", None) or {}).items():
+    filtered_relations: dict[str, object] = getattr(query, "_filtered_relations", None) or {}
+    for alias, relation in filtered_relations.items():
         relation_defect = _genuine_node_defect(relation, f"query _filtered_relations[{alias!r}]")
         if relation_defect is not None:
             return relation_defect
@@ -1811,14 +1913,14 @@ def _normalized_bound_value(value: object) -> object:
             return value
         if not issubclass(value_type, enum.Enum):
             raise _UntrustedBoundValueError(f"binds a {_safe_type_name(value)} bound value")
-        member_state = object.__getattribute__(value, "__dict__")
+        member_state: dict[str, object] = object.__getattribute__(value, "__dict__")
         normalized = _normalized_bound_value(member_state["_value_"])
     if not _is_inert_value(normalized):
         raise _UntrustedBoundValueError(f"binds a {_safe_type_name(value)} bound value")
     return normalized
 
 
-def _reconstructed_value(value: Any, memo: dict[int, Any]) -> object:
+def _reconstructed_value(value: object, memo: dict[int, object]) -> object:
     """Return a framework-owned reconstruction of one validated query-state value.
 
     The recursive half of canonical reconstruction. Mutable builtin containers are
@@ -1873,20 +1975,24 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> object:
     # strings, flags, marks), so every comprehension below tests ``_RETAINED_TYPES``
     # INLINE and recurses only for a member that can carry AST, keeping the traversal one
     # call per non-leaf rather than one call per element.
+    # Neither checker narrows ``value`` through the cached ``value_type``, so each branch
+    # below casts to the exact builtin its identity test just proved.
     if value_type is tuple or value_type is frozenset:
         # IMMUTABLE containers take no memo entry: nothing can rewrite one in place, so
         # only their members need reconstruction, an empty one is already a shared
         # singleton, and a traversal cycle can only close through a MUTABLE member, which
         # IS memoized. Skipping the bookkeeping keeps the commonest query-state shape (a
         # tuple of alias strings) at one call and one allocation.
-        if not value:
+        frozen = cast("tuple[object, ...] | frozenset[object]", value)
+        if not frozen:
             return value
-        return value_type(
+        frozen_type = cast("type[tuple[object, ...]] | type[frozenset[object]]", value_type)
+        return frozen_type(
             [
                 item
                 if item is None or type(item) in _RETAINED_TYPES
                 else _reconstructed_value(item, memo)
-                for item in value
+                for item in frozen
             ],
         )
     value_id = id(value)
@@ -1895,57 +2001,57 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> object:
         return rebuilt
     if value_type is bytearray:
         # The one MUTABLE member of the inert-parameter set: copied, never shared.
-        return bytearray(value)
+        return bytearray(cast("bytearray", value))
     # A MUTABLE container is memoized EMPTY before its members are reconstructed, so a
     # graph that reaches it again mid-traversal terminates on the memo entry instead of
     # recursing forever.
     if value_type is list:
-        rebuilt = []
-        memo[value_id] = rebuilt
-        rebuilt.extend(
+        rebuilt_list: list[object] = []
+        memo[value_id] = rebuilt_list
+        rebuilt_list.extend(
             [
                 item
                 if item is None or type(item) in _RETAINED_TYPES
                 else _reconstructed_value(item, memo)
-                for item in value
+                for item in cast("list[object]", value)
             ],
         )
-        return rebuilt
+        return rebuilt_list
     if value_type is dict:
-        rebuilt = {}
-        memo[value_id] = rebuilt
+        rebuilt_dict: dict[object, object] = {}
+        memo[value_id] = rebuilt_dict
         # Keys take the same retain-or-reconstruct rule as values: a rebuilt mapping that
         # kept a consumer-owned KEY by reference would still share a mutable object with
         # the candidate (and a JSON-bound payload dict may legitimately carry non-``str``
         # keys the graph proofs never constrain), so a key is retained only when it is a
         # retained leaf and otherwise reconstructed -- normalized, retained as schema, or
         # failed closed -- exactly like a value in the same slot.
-        for key, item in value.items():
+        for key, item in cast("dict[object, object]", value).items():
             if not (key is None or type(key) in _RETAINED_TYPES):
                 key = _reconstructed_value(key, memo)
             if not (item is None or type(item) in _RETAINED_TYPES):
                 item = _reconstructed_value(item, memo)
-            rebuilt[key] = item
-        return rebuilt
+            rebuilt_dict[key] = item
+        return rebuilt_dict
     if value_type is set:
-        rebuilt = set()
-        memo[value_id] = rebuilt
-        rebuilt.update(
+        rebuilt_set: set[object] = set()
+        memo[value_id] = rebuilt_set
+        rebuilt_set.update(
             [
                 item
                 if item is None or type(item) in _RETAINED_TYPES
                 else _reconstructed_value(item, memo)
-                for item in value
+                for item in cast("set[object]", value)
             ],
         )
-        return rebuilt
+        return rebuilt_set
     if not _is_reconstructable_node(value_type):
         # Not query AST: either trusted schema / a bound model instance (returned
         # unchanged) or a plain-data SUBCLASS bound value, which is replaced by an exact
         # inert equivalent so no consumer method stays on the compile path.
         return _normalized_bound_value(value)
     try:
-        source_state = object.__getattribute__(value, "__dict__")
+        source_state: dict[str, object] = object.__getattribute__(value, "__dict__")
     except AttributeError:
         # A genuine Django class whose instances are SLOTTED (the module-level namedtuple
         # and string-subclass exports) is not query AST: every clonable / compilable node
@@ -1962,7 +2068,7 @@ def _reconstructed_value(value: Any, memo: dict[int, Any]) -> object:
     # its validated state is transferred.
     rebuilt = object.__new__(value_type)
     memo[value_id] = rebuilt
-    rebuilt_state = object.__getattribute__(rebuilt, "__dict__")
+    rebuilt_state: dict[str, object] = object.__getattribute__(rebuilt, "__dict__")
     rebuilt_state.update(
         {
             key: item
@@ -2025,8 +2131,8 @@ def _rebuild_query_payloads(query: object) -> None:
     unshadowed and exact-builtin shaped, so every read comes from validated state and
     reconstruction dispatches no consumer ``__init__``, descriptor, or copy hook.
     """
-    memo: dict[int, Any] = {}
-    state = object.__getattribute__(query, "__dict__")
+    memo: dict[int, object] = {}
+    state: dict[str, object] = object.__getattribute__(query, "__dict__")
     for key in tuple(state):
         state[key] = _reconstructed_value(state[key], memo)
 
@@ -2093,10 +2199,10 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
     (``alias_map`` joins, ``annotations`` expressions) are validated there, not here.
     """
     for attr in _EXACT_DICT_QUERY_ATTRS:
-        value = getattr(query, attr, None)
+        value: object = getattr(query, attr, None)
         if value is None:
             continue
-        if type(value) is not dict:
+        if not _is_exact_dict(value):
             return ("untrusted", f"query {attr} is a {_safe_type_name(value)}")
         for key in value:
             if type(key) is not str:
@@ -2108,21 +2214,21 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
         value = getattr(query, attr, None)
         if value is None:
             continue
-        if type(value) not in (set, frozenset):
+        if not _is_exact_set(value):
             return ("untrusted", f"query {attr} is a {_safe_type_name(value)}")
         for member in value:
             if type(member) is not str:
                 return ("untrusted", f"query {attr} carries a {_safe_type_name(member)}")
     for attr in ("extra", "_extra_select_cache"):
-        extra = getattr(query, attr, None)
+        extra: object = getattr(query, attr, None)
         if extra is None:
             continue
-        if type(extra) is not dict:
+        if not _is_exact_dict(extra):
             return ("untrusted", f"query {attr} is a {_safe_type_name(extra)}")
         for alias, payload in extra.items():
             if type(alias) is not str:
                 return ("untrusted", f"query {attr} has a non-string key")
-            if type(payload) is not tuple or len(payload) != 2:
+            if not _is_exact_tuple(payload) or len(payload) != 2:
                 return ("untrusted", f"query {attr}[{alias!r}] has a malformed payload")
             statement, params = payload
             if type(statement) is not str:
@@ -2133,7 +2239,7 @@ def _query_container_defect(query: object) -> tuple[str, str] | None:
             params_defect = _raw_sql_params_defect(params, f"query {attr}[{alias!r}]")
             if params_defect is not None:
                 return params_defect
-    combined = getattr(query, "combined_queries", None)
+    combined: object = getattr(query, "combined_queries", None)
     if combined is not None and type(combined) is not tuple:
         return ("untrusted", f"query combined_queries is a {_safe_type_name(combined)}")
     return None
@@ -2160,12 +2266,15 @@ def _query_ast_defect(query: object, walk: _GraphWalk) -> tuple[str, str] | None
     where_defect = _where_tree_defect(getattr(query, "where", None), walk)
     if where_defect is not None:
         return where_defect
-    having = getattr(query, "having", None)
+    having: object = getattr(query, "having", None)
     if having is not None:
         having_defect = _where_tree_defect(having, walk)
         if having_defect is not None:
             return having_defect
-    for name, expr in (getattr(query, "annotations", None) or {}).items():
+    # ``_query_container_defect`` proved ``annotations`` and ``alias_map`` exact ``dict``s
+    # with exact-``str`` keys (or absent) before this walk runs.
+    annotations: dict[str, object] = getattr(query, "annotations", None) or {}
+    for name, expr in annotations.items():
         annotation_defect = _expr_graph_defect(expr, walk, f"annotation {name!r}")
         if annotation_defect is not None:
             return annotation_defect
@@ -2183,7 +2292,8 @@ def _query_ast_defect(query: object, walk: _GraphWalk) -> tuple[str, str] | None
         raw_defect = _raw_sql_sequence_defect(getattr(query, label, None), label)
         if raw_defect is not None:
             return raw_defect
-    for alias, join in (getattr(query, "alias_map", None) or {}).items():
+    alias_map: dict[str, object] = getattr(query, "alias_map", None) or {}
+    for alias, join in alias_map.items():
         join_defect = _join_defect(join, alias, walk)
         if join_defect is not None:
             return join_defect
@@ -2216,7 +2326,9 @@ def _query_genuineness_defect(query: object, walk: _GraphWalk) -> tuple[str, str
     ast_defect = _query_ast_defect(query, walk)
     if ast_defect is not None:
         return ast_defect
-    for branch in getattr(query, "combined_queries", ()) or ():
+    # ``_query_container_defect`` proved ``combined_queries`` an exact ``tuple`` or absent.
+    combined_branches: tuple[object, ...] = getattr(query, "combined_queries", ()) or ()
+    for branch in combined_branches:
         branch_defect = _query_genuineness_defect(branch, walk)
         if branch_defect is not None:
             return branch_defect
@@ -2286,7 +2398,7 @@ def _combined_query_table_defect(
     state = branches.begin(query_id)
     if state is not _WalkState.ENTERED:
         return _walk_short_circuit(state, "combined-query branches contain a reference cycle")
-    query_model = getattr(query, "model", None)
+    query_model: object = getattr(query, "model", None)
     if _concrete_or_none(query_model) is not concrete:
         return ("table", _safe_class_name(query_model))
     shadow_defect = _shadow_defect(query, "query instance")
@@ -2304,7 +2416,9 @@ def _combined_query_table_defect(
     base_defect = _base_table_defect(query, concrete)
     if base_defect is not None:
         return ("table", base_defect)
-    for branch in getattr(query, "combined_queries", ()) or ():
+    # ``_query_container_defect`` proved ``combined_queries`` an exact ``tuple`` or absent.
+    combined_branches: tuple[object, ...] = getattr(query, "combined_queries", ()) or ()
+    for branch in combined_branches:
         if type(branch) is not sql.Query:
             return ("untrusted", f"combined-query branch is {_safe_type_name(branch)}")
         defect = _combined_query_table_defect(branch, concrete, branches)
@@ -2331,8 +2445,17 @@ _DJANGO_ITERABLE_CLASSES: frozenset[type[object]] = frozenset(
 )
 
 
+def _is_django_iterable_class(value: object) -> TypeGuard[type[BaseIterable[object]]]:
+    """Return whether ``value`` IS one of Django's own row-iterable classes.
+
+    Identity membership, never ``in`` on the frozenset: set membership would hash the
+    candidate, dispatching a consumer metaclass ``__hash__`` / ``__eq__``.
+    """
+    return any(value is cls for cls in _DJANGO_ITERABLE_CLASSES)
+
+
 def _rebuilt_prefetch_or_defect(
-    entry: _SealedPrefetch,
+    entry: object,
     cls_name: str,
     sealed_inner: models.QuerySet[models.Model, object] | None,
 ) -> tuple[_SealedPrefetch | None, tuple[str, str] | None]:
@@ -2346,7 +2469,7 @@ def _rebuilt_prefetch_or_defect(
     ``prefetch_to``, ``to_attr``) is copied forward; a subclass-injected extra
     attribute or a non-``str`` path fails closed as ``untrusted``.
     """
-    entry_state = object.__getattribute__(entry, "__dict__")
+    entry_state: dict[str, object] = object.__getattribute__(entry, "__dict__")
     through = entry_state.get("prefetch_through")
     prefetch_to = entry_state.get("prefetch_to")
     to_attr = entry_state.get("to_attr")
@@ -2354,8 +2477,8 @@ def _rebuilt_prefetch_or_defect(
         return None, ("untrusted", f"{cls_name} prefetch path is not an exact str")
     if to_attr is not None and type(to_attr) is not str:
         return None, ("untrusted", f"{cls_name} prefetch to_attr is not an exact str or None")
-    rebuilt = Prefetch.__new__(Prefetch)
-    rebuilt_state = object.__getattribute__(rebuilt, "__dict__")
+    rebuilt: _SealedPrefetch = Prefetch.__new__(Prefetch)
+    rebuilt_state: dict[str, object] = object.__getattribute__(rebuilt, "__dict__")
     rebuilt_state["prefetch_through"] = through
     rebuilt_state["prefetch_to"] = prefetch_to
     rebuilt_state["to_attr"] = to_attr
@@ -2397,7 +2520,7 @@ def _prefetch_relation_target_or_none(
     current: type[models.Model] = parent_model
     for part in path.split(LOOKUP_SEP):
         try:
-            field: models.Field[Any, Any] | ForeignObjectRel | None = current._meta.get_field(part)
+            field: object = current._meta.get_field(part)
         except Exception:
             # Not in the field map: the default ``<model>_set`` / bare-name
             # reverse accessor spelling (a relation declared without a
@@ -2406,14 +2529,14 @@ def _prefetch_relation_target_or_none(
             field = _reverse_relation_by_accessor_or_none(current, part)
         if field is None or not getattr(field, "is_relation", False):
             return None
-        related = getattr(field, "related_model", None)
+        related: object = getattr(field, "related_model", None)
         if not isinstance(related, type) or not issubclass(related, models.Model):
             return None
         current = related
     return current
 
 
-def _reverse_relation_by_accessor_or_none(model: Any, part: str) -> Any:
+def _reverse_relation_by_accessor_or_none(model: type[models.Model], part: str) -> object:
     """Return the reverse relation whose accessor name is spelled ``part``.
 
     ``_meta.get_field`` registers a reverse relation under its declared name
@@ -2429,21 +2552,22 @@ def _reverse_relation_by_accessor_or_none(model: Any, part: str) -> Any:
     unresolvable paths (generic FKs, lazy ``related_model`` strings, plain
     columns, unknown segments).
     """
-    for candidate in model._meta.get_fields():
+    candidates: list[Any] = model._meta.get_fields()
+    for candidate in candidates:
         if not getattr(candidate, "is_relation", False):
             continue
         if getattr(candidate, "concrete", True):
             # Forward relations carry no accessor and are field-map names,
             # already resolved by ``_meta.get_field`` before this scan runs.
             continue
-        accessor = candidate.get_accessor_name()
+        accessor: object = candidate.get_accessor_name()
         if type(accessor) is str and accessor == part:
             return candidate
     return None
 
 
 def _sealed_prefetch_related_lookups(
-    lookups: Any,
+    lookups: object,
     cls_name: str,
     required_alias: str | None,
     parent_model: type[models.Model],
@@ -2520,7 +2644,7 @@ def _sealed_prefetch_related_lookups(
     # loop below (spec-045 Decision 1).
     if lookups is None:
         return (), None
-    if type(lookups) not in (tuple, list):
+    if not _is_exact_tuple_or_list(lookups):
         return None, ("untrusted", f"{cls_name} prefetch lookups is a {_safe_type_name(lookups)}")
     sealed_entries: list[str | _SealedPrefetch] = []
     for entry in lookups:
@@ -2535,11 +2659,11 @@ def _sealed_prefetch_related_lookups(
                 )
             sealed_entries.append(entry)
             continue
-        entry_state = object.__getattribute__(entry, "__dict__")
+        entry_state: dict[str, object] = object.__getattribute__(entry, "__dict__")
         inner = entry_state.get("queryset")
         sealed_inner: models.QuerySet[models.Model, object] | None = None
         if inner is not None:
-            inner_state = (
+            inner_state: dict[str, object] | None = (
                 object.__getattribute__(inner, "__dict__")
                 if isinstance(inner, models.QuerySet)
                 else None
@@ -2609,7 +2733,9 @@ def _sealed_prefetch_related_lookups(
             # Both facts are the two fields ``_PREFETCH_CHILD_POLICY`` sets.
             sealed_inner, defect = _seal_or_defect(
                 inner,
-                inner_state.get("model"),
+                # ``_concrete_or_none`` answered a model for this same slot above, which it
+                # does only for a ``models.Model`` subclass.
+                cast("type[models.Model]", inner_state.get("model")),
                 required_alias,
                 _PREFETCH_CHILD_POLICY,
             )
@@ -2628,7 +2754,7 @@ def _sealed_prefetch_related_lookups(
     return tuple(sealed_entries), None
 
 
-def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
+def _deferred_value_defect(value: object, walk: _GraphWalk, label: str) -> tuple[str, str] | None:
     """Return a defect if a deferred-filter value is neither inert nor genuine-Django.
 
     A pending ``_deferred_filter``'s ``args`` / ``kwargs`` are baked by ``add_q`` ->
@@ -2664,10 +2790,12 @@ def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[st
         state = walk.begin(value_id)
         if state is not _WalkState.ENTERED:
             return _walk_short_circuit(state, f"{label} contains a reference cycle")
-        for child in value.children:
+        # ``value_type is models.Q`` above; neither checker narrows through the cached type.
+        q_children: Sequence[object] = cast("models.Q", value).children
+        for child in q_children:
             if type(child) is models.Q:
                 child_defect = _deferred_value_defect(child, walk, label)
-            elif type(child) is tuple and len(child) == 2 and type(child[0]) is str:
+            elif _is_exact_tuple(child) and len(child) == 2 and type(child[0]) is str:
                 child_defect = _deferred_value_defect(child[1], walk, label)
             else:
                 return ("untrusted", f"{label} Q child is a {_safe_type_name(child)}")
@@ -2675,7 +2803,7 @@ def _deferred_value_defect(value: Any, walk: _GraphWalk, label: str) -> tuple[st
                 return child_defect
         walk.leave(value_id)
         return None
-    if _is_plain_container(value_type):
+    if _is_plain_container_value(value):
         return _container_defect(
             value,
             walk,
@@ -2719,7 +2847,7 @@ def _bake_deferred_filter_or_defect(
     """
     # Exact-shape gate BEFORE the unpack: tuple unpacking dispatches ``__iter__``,
     # so an arbitrary object planted in the slot must be rejected without iteration.
-    if type(deferred) is not tuple or len(deferred) != 3:
+    if not _is_exact_tuple(deferred) or len(deferred) != 3:
         return ("untrusted", f"{cls_name} deferred filter is malformed")
     negate, args, kwargs = deferred
     if type(negate) is not bool:
@@ -2729,9 +2857,9 @@ def _bake_deferred_filter_or_defect(
         # contract is that it runs genuine Django code over pre-proven arguments.
         # Django stores an exact ``bool`` here, so every other shape fails closed.
         return ("untrusted", f"{cls_name} deferred filter negate is a {_safe_type_name(negate)}")
-    if type(kwargs) is not dict:
+    if not _is_exact_dict(kwargs):
         return ("untrusted", f"{cls_name} deferred filter kwargs is a {_safe_type_name(kwargs)}")
-    if type(args) not in (tuple, list):
+    if not _is_exact_tuple_or_list(args):
         return ("untrusted", f"{cls_name} deferred filter args is a {_safe_type_name(args)}")
     if PROHIBITED_FILTER_KWARGS.intersection(kwargs):
         return ("untrusted", f"{cls_name} deferred filter carries prohibited kwargs")
@@ -2750,14 +2878,15 @@ def _bake_deferred_filter_or_defect(
         if kwarg_defect is not None:
             return kwarg_defect
     try:
-        predicate = models.Q(*args, **kwargs)
+        # Every kwarg key was proven an exact ``str`` by the loop above.
+        predicate = models.Q(*args, **cast("dict[str, object]", kwargs))
         sql.Query.add_q(rebuilt_query, ~predicate if negate else predicate)
     except Exception:
         return ("untrusted", f"{cls_name} carries malformed deferred-filter state")
     return None
 
 
-def _queryset_state_defect(state: dict[str, Any], cls_name: str) -> tuple[str, str] | None:
+def _queryset_state_defect(state: Mapping[str, object], cls_name: str) -> tuple[str, str] | None:
     """Return a defect if a RETAINED ``QuerySet`` state field is not its exact shape.
 
     Beyond the query graph, the seal carries a handful of ``QuerySet.__dict__`` fields
@@ -2779,14 +2908,14 @@ def _queryset_state_defect(state: dict[str, Any], cls_name: str) -> tuple[str, s
         return ("untrusted", f"{cls_name}._db is a {_safe_type_name(db)}")
     hints = state.get("_hints")
     if hints is not None:
-        if type(hints) is not dict:
+        if not _is_exact_dict(hints):
             return ("untrusted", f"{cls_name}._hints is a {_safe_type_name(hints)}")
         for key in hints:
             if type(key) is not str:
                 return ("untrusted", f"{cls_name}._hints has a non-string key")
     fields = state.get("_fields")
     if fields is not None:
-        if type(fields) not in (tuple, list):
+        if not _is_exact_tuple_or_list(fields):
             return ("untrusted", f"{cls_name}._fields is a {_safe_type_name(fields)}")
         for name in fields:
             if type(name) is not str:
@@ -2947,7 +3076,7 @@ def _routing_hints_equal(cand_hints: object, orig_hints: object) -> bool:
         return True
     if cand_hints is None or orig_hints is None:
         return False
-    if type(cand_hints) is not dict or type(orig_hints) is not dict:
+    if not _is_exact_dict(cand_hints) or not _is_exact_dict(orig_hints):
         return False
     if len(cand_hints) != len(orig_hints):
         return False
@@ -3009,9 +3138,12 @@ def _snapshot_routing_intent(queryset: object, method_name: str) -> _RoutingInte
     ``model`` the visibility boundary proved.
     """
     try:
-        state = object.__getattribute__(queryset, "__dict__")
-        db = state.get("_db")
-        hints = state.get("_hints")
+        state: dict[str, object] = object.__getattribute__(queryset, "__dict__")
+        # The source is a queryset this package built, so its routing slots are the ones
+        # Django's own ``QuerySet`` writes: ``_db`` an alias or ``None`` (``using``), and
+        # ``_hints`` a str-keyed dict.
+        db = cast("str | None", state.get("_db"))
+        hints = cast("dict[str, object] | None", state.get("_hints"))
         model = state.get("model")
         for_write = state.get("_for_write") is True
     except BaseException as exc:
@@ -3056,8 +3188,8 @@ def _safe_routing_repr(value: object) -> str:
         return "None"
     if type(value) is str:
         return repr(value)
-    if type(value) is dict:
-        items = []
+    if _is_exact_dict(value):
+        items: list[str] = []
         for k in sorted(value.keys(), key=str):
             k_repr = repr(k) if type(k) is str else _safe_arg_repr(k)
             v = value[k]
@@ -3400,12 +3532,16 @@ def _combined_lost_property(
         if query.is_sliced:
             return "it is sliced, and a LIMIT/OFFSET cannot ride inside the primary-key subquery"
         if query.values_select:
-            cols = ", ".join(repr(col) for col in query.values_select)
+            outer_values: tuple[object, ...] = query.values_select
+            cols = ", ".join(repr(col) for col in outer_values)
             return (
                 f"it projects .values({cols}) after the combinator, which computes the "
                 "combinator over those columns instead of the primary key"
             )
-    for branch in query.combined_queries:
+    # Django's ``_combinator_query`` builds ``combined_queries`` from each branch's
+    # ``QuerySet.query``, so every member is a ``sql.Query``.
+    branches: tuple[sql.Query, ...] = query.combined_queries
+    for branch in branches:
         if branch.combinator:
             nested = _combined_lost_property(branch, model, outer=False)
             if nested is not None:
@@ -3418,7 +3554,8 @@ def _combined_lost_property(
             names = ", ".join(repr(name) for name in branch.extra_select)
             return f"a branch selects extra(select=...) aliases ({names}) that would be dropped"
         if branch.values_select:
-            cols = ", ".join(repr(col) for col in branch.values_select)
+            branch_values: tuple[object, ...] = branch.values_select
+            cols = ", ".join(repr(col) for col in branch_values)
             return (
                 f"a branch projects .values({cols}), which the primary-key subquery "
                 "cannot re-project"
@@ -3611,18 +3748,20 @@ def _seal_or_defect(
     if not issubclass(type(candidate), models.QuerySet):
         return None, ("type", _safe_type_name(candidate))
     try:
-        state = object.__getattribute__(candidate, "__dict__")
+        state: dict[str, object] = object.__getattribute__(candidate, "__dict__")
     except BaseException:
         return None, ("untrusted", "the QuerySet instance state is unreadable")
     query = state.get("_query")
     qmodel = state.get("model")
-    db = state.get("_db")
+    # Read before, used only after, ``_queryset_state_defect`` pins ``_db`` to ``None`` or
+    # an exact ``str`` below.
+    db = cast("str | None", state.get("_db"))
     iterable = state.get("_iterable_class")
     # A model class always carries its concrete model (``ModelBase`` sets it); django-stubs
     # types the attribute by ``Options``' pre-class ``None`` default.
     concrete = cast("type[models.Model]", model._meta.concrete_model)
     cls_name = _safe_type_name(candidate)
-    if _concrete_or_none(qmodel) is not concrete:
+    if not _is_model_of_concrete(qmodel, concrete):
         return None, ("table", _safe_class_name(qmodel))
     # The outer exact-type check must precede the table walk AND the deferred-filter
     # resolution below: the walk reads ``query.model`` / ``query.alias_map`` /
@@ -3722,7 +3861,7 @@ def _seal_or_defect(
     # Identity membership, never ``in`` on the frozenset: set membership would hash the
     # candidate iterable, dispatching a consumer metaclass ``__hash__`` / ``__eq__``
     # (spec-045 Decision 5). ``is`` compares object identity only.
-    if not any(iterable is cls for cls in _DJANGO_ITERABLE_CLASSES):
+    if not _is_django_iterable_class(iterable):
         detail = _safe_class_name(iterable)
         return None, ("untrusted", f"{cls_name}._iterable_class is {detail}")
     # The outer effective alias is what this seal pins the queryset onto (a required
@@ -3790,8 +3929,10 @@ def _seal_or_defect(
     # A fresh dict, never the candidate's own ``_hints`` object: sharing it would leave
     # the sealed queryset holding a mutable dict the untrusted object can still write to
     # (a routing-control surface when a custom router consults hints on an unrouted read).
-    hints = state.get("_hints")
-    sealed: models.QuerySet[models.Model] = models.QuerySet(
+    # django-stubs types ``QuerySet`` hint values as model instances (the ``instance`` hint
+    # Django itself writes); the proof above covers the dict shape and its ``str`` keys.
+    hints = cast("dict[str, models.Model] | None", state.get("_hints"))
+    sealed: models.QuerySet[models.Model, object] = models.QuerySet(
         model=qmodel,
         query=rebuilt_query,
         using=using,
@@ -3822,12 +3963,13 @@ def _seal_or_defect(
         # hands its own cache out uncopied at every other read of it, and an O(n)
         # copy here would be a per-parent-row cost on the relation branch the carry
         # exists to make cheap. Every other policy leaves the ``None`` that
-        # ``models.QuerySet.__init__`` already set.
-        sealed._result_cache = result_cache
+        # ``models.QuerySet.__init__`` already set. Under this policy the check above
+        # refused every populated cache that is not an exact ``list``.
+        sealed._result_cache = cast("list[object] | None", result_cache)
     return sealed, None
 
 
-def _row_source_model(state: dict[str, Any], origin: str) -> type[models.Model]:
+def _row_source_model(state: Mapping[str, object], origin: str) -> type[models.Model]:
     """The model a candidate row source declares, proven to be a model class.
 
     ``_seal_or_defect`` reaches ``model._meta.concrete_model`` on its first line,
@@ -3841,15 +3983,14 @@ def _row_source_model(state: dict[str, Any], origin: str) -> type[models.Model]:
     type object whatever ``model`` is - which also makes the following
     ``issubclass`` call safe to reach.
     """
-    model: Any = state.get("model")
-    if not issubclass(type(model), type) or not issubclass(model, models.Model):
+    model = state.get("model")
+    if not _is_class(model) or not issubclass(model, models.Model):
         raise ConfigurationError(
             f"{_sentence_start(origin)} a QuerySet subclass whose model is "
             f"{_safe_type_name(model)}; the row bound rebuilds a framework-owned "
             "queryset from that state and cannot do so without a model class.",
         )
-    # ``issubclass(model, models.Model)`` held above.
-    return cast("type[models.Model]", model)
+    return model
 
 
 def normalized_row_source(
@@ -3936,7 +4077,7 @@ def materialized_rows(value: object) -> list[object] | None:
 def _readable_queryset_state(
     value: object,
     origin: str = "a collection resolver returned",
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """The instance dictionary of ``value``, read without dispatching consumer code.
 
     ``object.__getattribute__`` is the only read here for the reason the seal
@@ -3947,7 +4088,8 @@ def _readable_queryset_state(
     """
     try:
         # An instance dictionary, read through the base slot.
-        return cast("dict[str, Any]", object.__getattribute__(value, "__dict__"))
+        state: dict[str, object] = object.__getattribute__(value, "__dict__")
+        return state
     except BaseException:
         raise ConfigurationError(
             f"{_sentence_start(origin)} a {_safe_type_name(value)} whose "
@@ -4040,7 +4182,7 @@ def _coerced_manager_queryset(
     helper only closes the Manager-coercion-specific holes.
     """
     try:
-        manager_state = object.__getattribute__(manager, "__dict__")
+        manager_state: dict[str, object] = object.__getattribute__(manager, "__dict__")
         explicit = manager_state.get("_db")
     except BaseException as exc:
         raise ConfigurationError(
@@ -4718,7 +4860,7 @@ async def apply_type_visibility_async(
         model=model,
         policy=policy,
     )
-    result = type_cls.get_queryset(queryset, info)
+    result: object = type_cls.get_queryset(queryset, info)
     if inspect.isawaitable(result):
         result = await result
         if _disposed_awaitable(result):
@@ -4795,8 +4937,8 @@ def prepared_resolver_source(
     *,
     async_guard: Callable[[object, type[DjangoType]], None],
     non_queryset_guard: Callable[[object], None] | None = None,
-    queryset_guard: Callable[[models.QuerySet[models.Model]], None] | None = None,
-) -> tuple[Any, bool]:
+    queryset_guard: Callable[[models.QuerySet[models.Model, object]], None] | None = None,
+) -> NormalizedSource:
     """Refuse the wrong async shape, coerce a Manager, and report what the source IS.
 
     The head every consumer-resolver pipeline runs, in the one order that is
@@ -4821,14 +4963,14 @@ def prepared_resolver_source(
     behind a maybe-await abstraction.
     """
     async_guard(result, type_cls)
-    source, is_queryset = normalize_query_source(result)
-    if not is_queryset:
+    normalized = normalize_query_source(result)
+    if normalized[1] is False:
         if non_queryset_guard is not None:
-            non_queryset_guard(source)
-        return source, False
+            non_queryset_guard(normalized[0])
+        return normalized[0], False
     if queryset_guard is not None:
-        queryset_guard(source)
-    return source, True
+        queryset_guard(normalized[0])
+    return normalized[0], True
 
 
 def post_process_queryset_result_sync(
@@ -4848,14 +4990,14 @@ def post_process_queryset_result_sync(
     ``reject_awaitable_sync_source`` guard, which keeps the invariant that a
     consumer ``QuerySet`` return is never resolved without its visibility hook.
     """
-    source, is_queryset = prepared_resolver_source(
+    prepared = prepared_resolver_source(
         result,
         type_cls,
         async_guard=reject_awaitable_sync_source,
     )
-    if is_queryset:
-        return apply_type_visibility_sync(type_cls, source, info)
-    return source
+    if prepared[1] is True:
+        return apply_type_visibility_sync(type_cls, prepared[0], info)
+    return prepared[0]
 
 
 async def post_process_queryset_result_async(
@@ -4874,11 +5016,11 @@ async def post_process_queryset_result_async(
     and passing it through the non-queryset branch would skip the
     ``get_queryset`` visibility hook.
     """
-    source, is_queryset = prepared_resolver_source(
+    prepared = prepared_resolver_source(
         result,
         type_cls,
         async_guard=reject_residual_async_source,
     )
-    if is_queryset:
-        return await apply_type_visibility_async(type_cls, source, info)
-    return source
+    if prepared[1] is True:
+        return await apply_type_visibility_async(type_cls, prepared[0], info)
+    return prepared[0]

@@ -33,6 +33,7 @@ if os.environ.get("FAKESHOP_SHARDED") != "1":
 
 import strawberry
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import QuerySet
 from strawberry import relay
 
 from apps.library.models import Branch, TaggedItem
@@ -76,8 +77,8 @@ def _build_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def branches(self) -> list[BranchNode]:
+        @strawberry.field(graphql_type=list[BranchNode])
+        def branches(self) -> QuerySet[Branch]:
             return Branch.objects.using("shard_b").order_by("id")
 
     finalize_django_types()
@@ -145,6 +146,7 @@ def test_generic_connection_uses_shard_b_content_type_pk_not_default():
     )
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     conn = result.data["branches"][0]["tagsConnection"]
     # Non-empty rows prove the fetch used ``shard_b``'s ct pk, not the baked
     # default pk (which would have matched zero rows on ``shard_b``).

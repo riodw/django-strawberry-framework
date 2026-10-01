@@ -50,6 +50,12 @@ import pytest
 #: drain runs single-threaded at session teardown.
 _stray_postgres_connections: list = []
 
+#: Attribute of ``django.db.backends.postgresql.base`` that holds
+#: ``_stray_postgres_connections``: pg-tier tests read the registry there without
+#: importing this conftest by module path, and its presence marks the tracking
+#: wrapper as installed.
+_STRAY_REGISTRY_ATTR = "_dst_stray_connection_registry"
+
 
 def _opened_outside_main_thread_sync_context() -> bool:
     """True when the caller cannot be closed by main-thread teardown."""
@@ -64,8 +70,9 @@ def _opened_outside_main_thread_sync_context() -> bool:
 
 def _install_postgres_connection_tracking() -> None:
     """Wrap the Postgres backend's connection factory with stray tracking."""
+    from django.core.exceptions import ImproperlyConfigured
+
     try:
-        from django.core.exceptions import ImproperlyConfigured
         from django.db.backends.postgresql import base as postgres_base
     except ImportError:
         return
@@ -74,9 +81,9 @@ def _install_postgres_connection_tracking() -> None:
             raise
         # psycopg absent: the sqlite-only coverage tier.
         return
-    original = postgres_base.DatabaseWrapper.get_new_connection
-    if getattr(original, "_dst_tracks_stray_connections", False):
+    if getattr(postgres_base, _STRAY_REGISTRY_ATTR, None) is not None:
         return  # already installed (defensive against double import).
+    original = postgres_base.DatabaseWrapper.get_new_connection
 
     def _tracking_get_new_connection(self: Any, conn_params: Any) -> Any:
         connection = original(self, conn_params)
@@ -84,11 +91,10 @@ def _install_postgres_connection_tracking() -> None:
             _stray_postgres_connections.append(connection)
         return connection
 
-    _tracking_get_new_connection._dst_tracks_stray_connections = True
     postgres_base.DatabaseWrapper.get_new_connection = _tracking_get_new_connection
-    # Anchor the registry on the backend module so pg-tier tests can assert
-    # tracking without importing this conftest by module path.
-    postgres_base._dst_stray_connection_registry = _stray_postgres_connections
+    # The backend module declares no such attribute; it is the registry's shared
+    # anchor (see ``_STRAY_REGISTRY_ATTR``), so it is written by name.
+    setattr(postgres_base, _STRAY_REGISTRY_ATTR, _stray_postgres_connections)
 
 
 _install_postgres_connection_tracking()

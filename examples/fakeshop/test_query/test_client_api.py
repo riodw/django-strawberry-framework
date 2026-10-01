@@ -37,11 +37,12 @@ import io
 import pytest
 from apps.products.models import Category
 from apps.products.services import create_users, seed_data
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import include, path, resolve
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework.testing import (
     AsyncTestClient,
@@ -186,13 +187,12 @@ def permitted_writer(transactional_db):
     seed_data(1)
     from django.contrib.auth.models import Permission
 
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_item_1")
+    user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
     )
-    user = user_model.objects.get(pk=user.pk)  # drop the stale perm cache
-    category = Category.objects.order_by("pk").first()
+    user = User.objects.get(pk=user.pk)  # drop the stale perm cache
+    category = Category.objects.earliest("pk")
     category_gid = str(relay.GlobalID(type_name="products.category", node_id=str(category.pk)))
     return user, category_gid
 
@@ -208,6 +208,7 @@ async def test_async_query_happy_path_and_raise_direction(seeded_catalog):
     res = await client.query(_ITEMS_QUERY, variables={"first": 1})
 
     assert res.errors is None
+    assert res.data is not None
     assert len(res.data["allItems"]["edges"]) == 1
     assert res.response.status_code == 200
     assert res.response["Content-Type"].startswith("application/json")
@@ -238,15 +239,20 @@ async def test_async_login_brackets_the_write_authorized_mutation(permitted_writ
 
     denied = await client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
     assert denied.data is None
+    assert denied.errors is not None
+    assert "message" in denied.errors[0]
     assert "Not authorized" in denied.errors[0]["message"]
 
     async with client.login(user):
         granted = await client.query(_CREATE_ITEM, variables=variables)
+        assert granted.data is not None
         assert granted.data["createItem"]["errors"] == []
         assert granted.data["createItem"]["node"]["name"] == "AsyncBracketWidget"
 
     denied_again = await client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
     assert denied_again.data is None
+    assert denied_again.errors is not None
+    assert "message" in denied_again.errors[0]
     assert "Not authorized" in denied_again.errors[0]["message"]
 
 
@@ -263,13 +269,12 @@ def test_sync_login_bracket_logs_out_when_the_block_raises():
     seed_data(1)
     from django.contrib.auth.models import Permission
 
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_item_1")
+    user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
     )
-    user = user_model.objects.get(pk=user.pk)
-    category = Category.objects.order_by("pk").first()
+    user = User.objects.get(pk=user.pk)
+    category = Category.objects.earliest("pk")
     category_gid = str(relay.GlobalID(type_name="products.category", node_id=str(category.pk)))
     variables = {"d": {"name": "SyncRaiseLogoutWidget", "categoryId": category_gid}}
     client = TestClient()
@@ -277,6 +282,7 @@ def test_sync_login_bracket_logs_out_when_the_block_raises():
     with pytest.raises(RuntimeError, match="sync login error"):
         with client.login(user):
             granted = client.query(_CREATE_ITEM, variables=variables)
+            assert granted.data is not None
             assert granted.data["createItem"]["errors"] == []
             assert granted.data["createItem"]["node"]["name"] == "SyncRaiseLogoutWidget"
             raise RuntimeError("sync login error")
@@ -287,6 +293,8 @@ def test_sync_login_bracket_logs_out_when_the_block_raises():
         assert_no_errors=False,
     )
     assert denied.data is None
+    assert denied.errors is not None
+    assert "message" in denied.errors[0]
     assert "Not authorized" in denied.errors[0]["message"]
 
 
@@ -299,6 +307,7 @@ async def test_async_login_bracket_logs_out_when_the_block_raises(permitted_writ
     with pytest.raises(RuntimeError, match="async login error"):
         async with client.login(user):
             granted = await client.query(_CREATE_ITEM, variables=variables)
+            assert granted.data is not None
             assert granted.data["createItem"]["errors"] == []
             assert granted.data["createItem"]["node"]["name"] == "AsyncRaiseLogoutWidget"
             raise RuntimeError("async login error")
@@ -309,6 +318,8 @@ async def test_async_login_bracket_logs_out_when_the_block_raises(permitted_writ
         assert_no_errors=False,
     )
     assert denied.data is None
+    assert denied.errors is not None
+    assert "message" in denied.errors[0]
     assert "Not authorized" in denied.errors[0]["message"]
 
 
@@ -325,7 +336,7 @@ def upload_superuser(transactional_db):
     ``client.login(superuser)`` in
     ``test_uploads_api.py::test_multipart_create_uploads_real_files_over_http``.
     """
-    return get_user_model().objects.create_superuser(
+    return User.objects.create_superuser(
         "async_uploader",
         "async_uploader@example.com",
         "pw",
@@ -347,7 +358,7 @@ async def test_async_multipart_upload_creates_media_specimen(upload_superuser, t
     resolver) rather than the ORM, so no sync query runs in the event loop.
     """
     variables = {"data": {"label": "async-uploaded", "attachment": None, "image": None}}
-    files = {
+    files: dict[str, object] = {
         "data.attachment": SimpleUploadedFile(
             "async.txt",
             b"async multipart bytes",
@@ -367,6 +378,7 @@ async def test_async_multipart_upload_creates_media_specimen(upload_superuser, t
             )
 
     assert res.response.status_code == 200
+    assert res.data is not None
     payload = res.data["createMediaSpecimen"]
     assert payload["errors"] == []
     result = payload["result"]
@@ -387,6 +399,7 @@ async def test_async_multipart_upload_creates_media_specimen(upload_superuser, t
 class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
     """``self.query(...)`` + both helpers + the per-call rung, end to end."""
 
+    @override
     def setUp(self):
         super().setUp()
         seed_data(1)
@@ -397,6 +410,7 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
             operation_name="Items",
         )
         self.assertResponseNoErrors(res)
+        assert res.data is not None
         self.assertEqual(len(res.data["allItems"]["edges"]), 1)
 
     def test_invalid_query_returns_instead_of_raising_then_has_errors(self):
@@ -418,6 +432,7 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
             url="/alt/",
         )
         self.assertResponseNoErrors(res)
+        assert res.data is not None
         self.assertTrue(res.data["allItems"]["edges"])
         self.assertEqual(res.response[_PROBE_MARKER_HEADER], _PROBE_MARKER_VALUE)
 
@@ -426,8 +441,9 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
 class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
     """The ``GRAPHQL_URL`` rung: the subclass pins its endpoint by assignment."""
 
-    GRAPHQL_URL = "/alt/"
+    GRAPHQL_URL: str | None = "/alt/"
 
+    @override
     def setUp(self):
         super().setUp()
         seed_data(1)
@@ -438,6 +454,7 @@ class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
         # ``/alt/`` from a fall-back to ``/graphql/`` under the same URLconf.
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
         self.assertResponseNoErrors(res)
+        assert res.data is not None
         self.assertTrue(res.data["allItems"]["edges"])
         self.assertEqual(res.response[_PROBE_MARKER_HEADER], _PROBE_MARKER_VALUE)
 
@@ -445,6 +462,7 @@ class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
 class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
     """The ``(Mixin, TransactionTestCase)`` combination is wired end to end."""
 
+    @override
     def setUp(self):
         super().setUp()
         seed_data(1)
@@ -452,4 +470,5 @@ class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
     def test_one_clean_seeded_query_round_trips(self):
         res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
         self.assertResponseNoErrors(res)
+        assert res.data is not None
         self.assertTrue(res.data["allItems"]["edges"])

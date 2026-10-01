@@ -457,7 +457,8 @@ def test_move_card_number_rejects_non_integer():
     card = kf.make_card(number=1, title="Board card 1")
 
     with pytest.raises(services.KanbanServiceError, match="integer") as excinfo:
-        services.move_card_number(card, "not-a-number")
+        # basedpyright: deliberately ill-typed: proves the integer guard rejects it
+        services.move_card_number(card, "not-a-number")  # pyright: ignore[reportArgumentType]
     assert excinfo.value.code == "invalid_card_number"
 
 
@@ -521,7 +522,8 @@ def test_service_error_codes_are_stable():
     assert unknown_lookup.value.code == "unknown_lookup"
 
     with pytest.raises(services.KanbanServiceError) as missing_field:
-        services.create_card_from_spec({"title": "Codes card"})
+        # basedpyright: deliberately ill-typed: proves the required-field guard rejects it
+        services.create_card_from_spec({"title": "Codes card"})  # pyright: ignore[reportArgumentType]
     assert missing_field.value.code == "missing_required_field"
 
 

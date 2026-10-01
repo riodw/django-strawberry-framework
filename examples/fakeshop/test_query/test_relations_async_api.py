@@ -129,8 +129,8 @@ async def test_async_forward_fk_lazy_loads_over_http():
 
         @strawberry.type
         class Query:
-            @strawberry.field
-            async def loans(self) -> list[LoanType]:
+            @strawberry.field(graphql_type=list[LoanType])
+            async def loans(self) -> list[models.Loan]:
                 return await sync_to_async(list)(models.Loan.objects.order_by("note"))
 
         return strawberry.Schema(query=Query, config=strawberry_config())
@@ -162,8 +162,8 @@ async def test_async_many_side_lazy_loads_over_http():
 
         @strawberry.type
         class Query:
-            @strawberry.field
-            async def patrons(self) -> list[PatronType]:
+            @strawberry.field(graphql_type=list[PatronType])
+            async def patrons(self) -> list[models.Patron]:
                 return await sync_to_async(list)(models.Patron.objects.order_by("name"))
 
         return strawberry.Schema(query=Query, config=strawberry_config())
@@ -195,8 +195,8 @@ async def test_async_reverse_one_to_one_lazy_loads_over_http():
 
         @strawberry.type
         class Query:
-            @strawberry.field
-            async def patrons(self) -> list[PatronType]:
+            @strawberry.field(graphql_type=list[PatronType])
+            async def patrons(self) -> list[models.Patron]:
                 return await sync_to_async(list)(models.Patron.objects.order_by("pk"))
 
         return strawberry.Schema(query=Query, config=strawberry_config())
@@ -301,8 +301,8 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http():
 
         @strawberry.type
         class Query:
-            @strawberry.field
-            async def venues(self) -> list[VenueType]:
+            @strawberry.field(graphql_type=list[VenueType])
+            async def venues(self) -> list[models.Venue]:
                 return await sync_to_async(list)(
                     models.Venue.objects.prefetch_related(
                         "venuesponsor_set",
@@ -310,8 +310,8 @@ async def test_async_consumer_prefetched_many_side_resolves_over_http():
                     ).order_by("name"),
                 )
 
-            @strawberry.field
-            async def sponsors(self) -> list[VenueSponsorType]:
+            @strawberry.field(graphql_type=list[VenueSponsorType])
+            async def sponsors(self) -> list[models.VenueSponsor]:
                 return await sync_to_async(list)(
                     models.VenueSponsor.objects.prefetch_related("venues").order_by("name"),
                 )

@@ -34,7 +34,7 @@ import os
 import pytest
 from apps.scalars import models
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.core.exceptions import SuspiciousFileOperation
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
@@ -74,6 +74,7 @@ def _introspect_type(name: str, selection: str) -> dict:
     # hand-rolled "errors" not-in-body assertion.
     res = TestClient().query(f'query {{ __type(name: "{name}") {{ {selection} }} }}')
     assert res.response.status_code == 200
+    assert res.data is not None
     return res.data["__type"]
 
 
@@ -209,6 +210,7 @@ def test_opted_in_filesystem_path_resolves_over_http(tmp_path):
             """,
         )
         assert res.response.status_code == 200
+        assert res.data is not None
         row = res.data["allMediaSpecimensWithPath"][0]
         assert row["attachment"]["path"] == specimen.attachment.path
         assert row["attachment"]["path"].startswith(str(tmp_path))
@@ -219,7 +221,10 @@ def test_opted_in_filesystem_path_resolves_over_http(tmp_path):
             assert_no_errors=False,
         )
         assert refused.data is None
-        assert "path" in refused.errors[0]["message"]
+        assert refused.errors is not None
+        refused_error = refused.errors[0]
+        assert "message" in refused_error
+        assert "path" in refused_error["message"]
 
 
 @pytest.mark.django_db
@@ -244,6 +249,7 @@ def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
             """,
         )
         assert res.response.status_code == 200
+        assert res.data is not None
         rows = res.data["allMediaSpecimens"]
         assert len(rows) == 1, rows
         row = rows[0]
@@ -278,6 +284,7 @@ def test_empty_required_file_resolves_to_null_over_http(tmp_path):
         )
         assert res.response.status_code == 200
 
+    assert res.data is not None
     row = res.data["allMediaSpecimens"][0]
     assert row["label"] == "empty"
     assert row["attachment"] is None
@@ -303,6 +310,7 @@ def test_empty_image_beside_populated_file_resolves_only_the_image_to_null_over_
             "{ allMediaSpecimens { label attachment { name } image { name } } }",
         )
         assert res.response.status_code == 200
+        assert res.data is not None
         row = res.data["allMediaSpecimens"][0]
 
     assert row["label"] == "file-only"
@@ -338,6 +346,7 @@ def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
             "{ allMediaSpecimensWithPath { attachment { name path url } } }",
         )
         assert res.response.status_code == 200
+        assert res.data is not None
         attachment = res.data["allMediaSpecimensWithPath"][0]["attachment"]
 
     assert attachment["path"] is None
@@ -363,6 +372,7 @@ def test_vanished_file_resolves_size_to_null_over_http(tmp_path):
 
         res = TestClient().query("{ allMediaSpecimens { attachment { name size } } }")
         assert res.response.status_code == 200
+        assert res.data is not None
         attachment = res.data["allMediaSpecimens"][0]["attachment"]
 
     assert attachment["size"] is None
@@ -390,6 +400,7 @@ def test_corrupt_image_resolves_width_and_height_to_null_over_http(tmp_path):
 
         res = TestClient().query("{ allMediaSpecimens { image { name width height } } }")
         assert res.response.status_code == 200
+        assert res.data is not None
         image = res.data["allMediaSpecimens"][0]["image"]
 
     assert image["width"] is None
@@ -425,7 +436,9 @@ def test_suspicious_file_operation_is_reported_not_nulled_over_http(tmp_path, mo
         assert res.response.status_code == 200
 
     assert res.errors, res.data
-    assert "escaped media root" in res.errors[0]["message"], res.errors
+    error = res.errors[0]
+    assert "message" in error
+    assert "escaped media root" in error["message"], res.errors
 
 
 # ---------------------------------------------------------------------------
@@ -488,7 +501,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
     }
     """
     with override_settings(MEDIA_ROOT=str(tmp_path)):
-        user = get_user_model().objects.create_superuser("uploader", "uploader@example.com", "pw")
+        user = User.objects.create_superuser("uploader", "uploader@example.com", "pw")
         client = TestClient()
 
         with client.login(user):
@@ -510,6 +523,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
                 operation_name="Create",
             )
         assert res.response.status_code == 200
+        assert res.data is not None
         payload = res.data["createMediaSpecimen"]
         assert payload["errors"] == []
         result = payload["result"]
@@ -563,6 +577,7 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
             operation_name="Create",
         )
         assert res.response.status_code == 200
+        assert res.data is not None
         payload = res.data["createMediaSpecimenImageViaForm"]
         assert payload["errors"] == []
         result = payload["result"]
@@ -607,7 +622,7 @@ def _update_specimen(
     ``MediaSpecimenType`` is not a Relay node, so the ``id:`` is the raw pk
     string (``str(specimen.pk)`` unless ``lookup_id`` overrides it).
     """
-    user = get_user_model().objects.create_superuser("updater", "updater@example.com", "pw")
+    user = User.objects.create_superuser("updater", "updater@example.com", "pw")
     client = TestClient()
     with client.login(user):
         res = client.query(
@@ -617,6 +632,7 @@ def _update_specimen(
             operation_name="Update",
         )
     assert res.response.status_code == 200
+    assert res.data is not None
     return res.data["updateMediaSpecimen"]
 
 
@@ -673,6 +689,7 @@ def test_update_with_a_new_upload_replaces_the_stored_file_over_http(tmp_path):
         )
         assert payload["errors"] == [], payload
         specimen.refresh_from_db()
+        assert specimen.attachment.name is not None
         assert specimen.attachment.name.endswith("replacement.txt")
         with specimen.attachment.open("rb") as handle:
             assert handle.read() == b"replaced bytes"

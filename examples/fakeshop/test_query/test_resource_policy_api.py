@@ -85,10 +85,12 @@ from django.db.models import QuerySet
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
+from django.views.decorators.csrf import csrf_exempt
 from graphql_client import graphql_payload
 from strawberry.extensions import ValidationCache
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.validation_cache import _get_validate_cache
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DEFAULT_ERROR_POLICY,
@@ -152,11 +154,11 @@ def _probe_view(**overrides: float):
     """Mount the package view over a probe schema narrowing exactly ``overrides``."""
     frozen = tuple(sorted(overrides.items()))
 
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(schema=_probe_schema(frozen))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -164,6 +166,7 @@ def _probe_upload_view(**overrides: int):
     """The upload twin: same probe schema, with upstream's multipart handling on."""
     frozen = tuple(sorted(overrides.items()))
 
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(
             schema=_probe_schema(frozen),
@@ -171,7 +174,6 @@ def _probe_upload_view(**overrides: int):
         )
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -179,11 +181,11 @@ def _probe_async_view(**overrides: int):
     """The async twin of ``_probe_view``, so parity is proven on a real event loop."""
     frozen = tuple(sorted(overrides.items()))
 
+    @csrf_exempt
     async def view(request, *args, **kwargs):
         built = AsyncDjangoGraphQLView.as_view(schema=_probe_schema(frozen))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -203,7 +205,9 @@ class _EscapingQuerySet(QuerySet):
     an attack.
     """
 
-    def __getitem__(self, key):
+    @override
+    # basedpyright: deliberately answers a slice with a list, the shape the ceiling must not trust
+    def __getitem__(self, key):  # pyright: ignore[reportIncompatibleMethodOverride]
         return list(library_models.Loan.objects.all())
 
 
@@ -221,9 +225,12 @@ def _hostile_relation_manager():
 
     def escaping_all(self):
         source = original(self)
-        hostile = _EscapingQuerySet(model=library_models.Loan, query=source.query)
-        hostile._db = source._db
-        return hostile
+        return _EscapingQuerySet(
+            model=library_models.Loan,
+            query=source.query,
+            # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+            using=source._db,  # pyright: ignore[reportAttributeAccessIssue]
+        )
 
     manager_cls.all = escaping_all
     try:
@@ -270,23 +277,19 @@ def _hostile_relation_schema(patron_type: type) -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _hostile_relation_view(request, *args, **kwargs):
     """Mount the package view over the hostile-relation probe schema."""
     schema = _hostile_relation_schema(library_schema.PatronType)
     return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
 
-_hostile_relation_view.csrf_exempt = True
-
-
+@csrf_exempt
 async def _hostile_relation_async_view(request, *args, **kwargs):
     """The async twin, so the bound is proven on a real event loop too."""
     schema = _hostile_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
     return await built(request, *args, **kwargs)
-
-
-_hostile_relation_async_view.csrf_exempt = True
 
 
 #: The bound the carry mounts narrow to. Wide enough that no row in this group is
@@ -333,23 +336,19 @@ def _carry_relation_schema(patron_type: type) -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _carry_relation_view(request, *args, **kwargs):
     """Mount the public project-manager relation over the synchronous view."""
     schema = _carry_relation_schema(library_schema.PatronType)
     return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
 
-_carry_relation_view.csrf_exempt = True
-
-
+@csrf_exempt
 async def _carry_relation_async_view(request, *args, **kwargs):
     """The async twin, so the rebuilt relation is proven on a real event loop too."""
     schema = _carry_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
     return await built(request, *args, **kwargs)
-
-
-_carry_relation_async_view.csrf_exempt = True
 
 
 MAX_TOKENS = 40
@@ -477,9 +476,11 @@ class _AuthorityQuery:
     @strawberry.field
     def reconfigure(self, info: strawberry.Info) -> str:
         """Run the schema's own constructor again, with a wider policy."""
+        schema = info.schema
+        assert isinstance(schema, DjangoSchema)
         try:
-            type(info.schema).__init__(
-                info.schema,
+            type(schema).__init__(
+                schema,
                 query=_AuthorityQuery,
                 config=strawberry_config(extra_scalar_map={OpaqueValue: _OPAQUE_SCALAR}),
                 resource_policy={"max_list_rows": 999},
@@ -491,7 +492,9 @@ class _AuthorityQuery:
     @strawberry.field
     def nominate(self, info: strawberry.Info) -> int:
         """Replace the extension list with one carrying a wider policy of its own."""
-        info.schema.extensions = [
+        schema = info.schema
+        assert isinstance(schema, DjangoSchema)
+        schema.extensions = [
             lambda: DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=999)),
         ]
         return 1
@@ -511,7 +514,7 @@ class _AuthorityQuery:
         return list(bounded_rows(_UNCONFIGURED_SOURCE_ROWS, info, None))
 
     @strawberry.field
-    def take(self, payload: OpaqueValue = None) -> str:
+    def take(self, payload: OpaqueValue = OpaqueValue(None)) -> str:
         return "ok"
 
 
@@ -524,12 +527,10 @@ def _authority_schema() -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _authority_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_authority_schema())
     return built(request, *args, **kwargs)
-
-
-_authority_view.csrf_exempt = True
 
 
 @cache
@@ -542,12 +543,10 @@ def _entry_rows_schema() -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _entry_rows_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_entry_rows_schema())
     return built(request, *args, **kwargs)
-
-
-_entry_rows_view.csrf_exempt = True
 
 
 class _EqualSchema(DjangoSchema):
@@ -558,9 +557,11 @@ class _EqualSchema(DjangoSchema):
     decide which schema's bounds answer for which schema.
     """
 
+    @override
     def __hash__(self):
         return 1
 
+    @override
     def __eq__(self, other):
         return isinstance(other, _EqualSchema)
 
@@ -577,11 +578,11 @@ def _equal_schema(rows: int) -> DjangoSchema:
 def _equal_view(rows: int):
     """One mount per equal-but-distinct schema, so two live requests can differ."""
 
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(schema=_equal_schema(rows))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -596,7 +597,8 @@ class _AcceptedInstanceQuery:
         if entry is None:
             return "unreachable"
         try:
-            entry._policy = ResourcePolicy(max_list_rows=999)
+            # basedpyright: deliberately writes the read-only property: proves the write is refused
+            entry._policy = ResourcePolicy(max_list_rows=999)  # pyright: ignore[reportAttributeAccessIssue]
         except AttributeError as exc:
             return type(exc).__name__
         return "assigned"
@@ -694,12 +696,10 @@ def _accepted_instance_schema() -> DjangoSchema:
         )
 
 
+@csrf_exempt
 def _accepted_instance_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_accepted_instance_schema())
     return built(request, *args, **kwargs)
-
-
-_accepted_instance_view.csrf_exempt = True
 
 
 @cache
@@ -723,12 +723,10 @@ def _inherited_instance_schema() -> DjangoSchema:
         )
 
 
+@csrf_exempt
 def _inherited_instance_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_inherited_instance_schema())
     return built(request, *args, **kwargs)
-
-
-_inherited_instance_view.csrf_exempt = True
 
 
 def _widening_factory():
@@ -808,11 +806,11 @@ def _membership_schema(mount: str) -> DjangoSchema:
 
 
 def _membership_view(mount: str):
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(schema=_membership_schema(mount))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -854,12 +852,10 @@ def _factory_schema() -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _factory_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_factory_schema())
     return built(request, *args, **kwargs)
-
-
-_factory_view.csrf_exempt = True
 
 
 @strawberry.type
@@ -902,6 +898,7 @@ def _droppable_schema(mount: str) -> DjangoSchema:
 
 
 def _droppable_view(mount: str):
+    @csrf_exempt
     def view(request, *args, **kwargs):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -909,7 +906,6 @@ def _droppable_view(mount: str):
         built = DjangoGraphQLView.as_view(schema=schema)
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -923,12 +919,10 @@ def _census_schema() -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _census_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_census_schema())
     return built(request, *args, **kwargs)
-
-
-_census_view.csrf_exempt = True
 
 
 @strawberry.type
@@ -951,6 +945,7 @@ class _ExecutionWitness(SchemaExtension):
 
     entered: list[str] = []
 
+    @override
     def on_execute(self):
         """Record the query executing began for, as a generator hook like the package's."""
         _ExecutionWitness.entered.append(self.execution_context.query or "")
@@ -983,20 +978,20 @@ def _witness_schema(order: str) -> DjangoSchema:
 
 
 def _witness_view(order: str):
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(schema=_witness_schema(order))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
 def _witness_async_view(order: str):
+    @csrf_exempt
     async def view(request, *args, **kwargs):
         built = AsyncDjangoGraphQLView.as_view(schema=_witness_schema(order))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -1043,20 +1038,20 @@ def _cache_schema(order: str) -> DjangoSchema:
 
 
 def _cache_view(order: str):
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(schema=_cache_schema(order))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
 def _cache_async_view(order: str):
+    @csrf_exempt
     async def view(request, *args, **kwargs):
         built = AsyncDjangoGraphQLView.as_view(schema=_cache_schema(order))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -1073,14 +1068,13 @@ def _retained_schema() -> DjangoSchema:
     )
 
 
+@csrf_exempt
 def _retained_view(request, *args, **kwargs):
     built = DjangoGraphQLView.as_view(schema=_retained_schema())
     return built(request, *args, **kwargs)
 
 
-_retained_view.csrf_exempt = True
-
-
+@csrf_exempt
 def _unconfigured_view(request, *args, **kwargs):
     """Mount a schema that configures NO resource policy at all, built per request.
 
@@ -1096,9 +1090,6 @@ def _unconfigured_view(request, *args, **kwargs):
         ),
     )
     return built(request, *args, **kwargs)
-
-
-_unconfigured_view.csrf_exempt = True
 
 
 #: Aliases one operation may carry on the shared-entry mounts. An ordinary
@@ -1137,6 +1128,7 @@ class _OverlapCoordinator(SchemaExtension):
     released = threading.Event()
     armed = False
 
+    @override
     def on_parse(self):
         """Park the oversized document, once, while the overlap row is armed."""
         if _OverlapCoordinator.armed and "a: rows" in (self.execution_context.query or ""):
@@ -1193,22 +1185,22 @@ def _entry_schema(spelling: str) -> DjangoSchema:
 def _entry_view(spelling: str):
     """Mount the synchronous package view over one entry spelling."""
 
+    @csrf_exempt
     def view(request, *args, **kwargs):
         built = DjangoGraphQLView.as_view(schema=_entry_schema(spelling))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
 def _entry_async_view(spelling: str):
     """Mount the asynchronous package view over one entry spelling."""
 
+    @csrf_exempt
     async def view(request, *args, **kwargs):
         built = AsyncDjangoGraphQLView.as_view(schema=_entry_schema(spelling))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
     return view
 
 
@@ -1910,7 +1902,9 @@ def _data_input_type(field: str) -> str:
     Serializer hook-derived input names carry a descriptor digest, so the nested
     row's input type is read off the probe schema instead of being hard-coded.
     """
-    mutation_field = _probe_schema(())._schema.mutation_type.fields[field]
+    mutation_type = _probe_schema(())._schema.mutation_type
+    assert mutation_type is not None
+    mutation_field = mutation_type.fields[field]
     argument_type = mutation_field.args["data"].type
     while hasattr(argument_type, "of_type"):
         argument_type = argument_type.of_type
@@ -3130,7 +3124,8 @@ def _empty_validation_cache() -> None:
     any schema, so "cold" is a state of the process rather than of the mount and
     naming a row cold proves nothing unless the row puts the process in it.
     """
-    _get_validate_cache(None).cache_clear()
+    # basedpyright: upstream annotates the lru_cache wrapper it returns as a bare Callable
+    _get_validate_cache(None).cache_clear()  # pyright: ignore[reportFunctionMemberAccess]
 
 
 CACHE_MOUNTS = {

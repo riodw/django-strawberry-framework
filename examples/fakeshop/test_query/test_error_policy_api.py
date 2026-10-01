@@ -68,15 +68,16 @@ import strawberry
 from apps.products import models as product_models
 from apps.products.services import create_users, seed_data
 from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Permission, User
 from django.test import Client
 from django.test import override_settings as _override_settings
 from django.urls import include, path
+from django.views.decorators.csrf import csrf_exempt
 from graphql import GraphQLError
 from graphql_client import post_graphql
 from strawberry import relay
 from strawberry.extensions.base_extension import SchemaExtension
+from typing_extensions import override
 
 from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
@@ -168,6 +169,7 @@ def _probe_query_type():
         @strawberry.field
         def unmask(self, info: strawberry.Info) -> str:
             """Write ``enabled=False`` on the schema policy a resolver can reach."""
+            assert isinstance(info.schema, DjangoSchema)
             info.schema.error_policy.__dict__["enabled"] = False
             return "written"
 
@@ -211,8 +213,7 @@ def _probe_view(**schema_kwargs):
         built = DjangoGraphQLView.as_view(schema=_probe_schema(**schema_kwargs))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 def _probe_async_view(**schema_kwargs):
@@ -222,8 +223,7 @@ def _probe_async_view(**schema_kwargs):
         built = AsyncDjangoGraphQLView.as_view(schema=_probe_schema(**schema_kwargs))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 #: The document-token ceiling the ``RESOURCE_LIMIT_EXCEEDED`` row trips. Small
@@ -242,17 +242,20 @@ class _FactoryHookWitness(SchemaExtension):
 
     ran: list[str] = []
 
+    @override
     def on_operation(self):
         """Note the operation seam, on both sides of the request."""
         _FactoryHookWitness.ran.append("operation")
         yield
         _FactoryHookWitness.ran.append("operation-done")
 
+    @override
     def on_parse(self):
         """Note the parse seam, which a refused request still passes through."""
         _FactoryHookWitness.ran.append("parse")
         yield
 
+    @override
     def on_execute(self):
         """Note execution, which a refused request must never reach."""
         _FactoryHookWitness.ran.append("execute")
@@ -290,17 +293,20 @@ class _HookFailure(SchemaExtension):
     way consumer code fails.
     """
 
+    @override
     def on_operation(self):
         """Fail at the teardown half, which unwinds INSIDE the masking authority's."""
         yield
         _fail_hook("operation-teardown")
 
+    @override
     def on_validate(self):
         """Fail at either half of the validation stage."""
         _fail_hook("validate-setup")
         yield
         _fail_hook("validate-teardown")
 
+    @override
     def on_execute(self):
         """Fail as execution begins."""
         _fail_hook("execute-setup")
@@ -407,6 +413,7 @@ class _SharedEntryCoordinator(SchemaExtension):
     released = threading.Event()
     armed = False
 
+    @override
     def on_parse(self):
         """Park the failing document, once, while the overlap row is armed."""
         if _SharedEntryCoordinator.armed and "boom" in (self.execution_context.query or ""):
@@ -426,6 +433,7 @@ class _SharedEntryConsumer(SchemaExtension):
     anything.
     """
 
+    @override
     def on_operation(self):
         """Occupy the operation seam and change nothing about the result."""
         yield
@@ -495,8 +503,7 @@ def _shared_entry_view(spelling: str):
         built = DjangoGraphQLView.as_view(schema=_shared_entry_schema(spelling))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 def _shared_entry_async_view(spelling: str):
@@ -506,8 +513,7 @@ def _shared_entry_async_view(spelling: str):
         built = AsyncDjangoGraphQLView.as_view(schema=_shared_entry_schema(spelling))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 #: Where each entry spelling is mounted, per view color.
@@ -862,7 +868,7 @@ def test_a_permission_denial_keeps_its_not_authorized_message():
     """
     create_users(1)
     seed_data(1)
-    category = product_models.Category.objects.first()
+    category = product_models.Category.objects.earliest("pk")
     _, payload = _post(
         "/graphql/",
         "mutation($d: ItemInput!) { createItem(data: $d) { node { name } errors { field } } }",
@@ -891,15 +897,15 @@ def test_a_field_error_envelope_is_untouched_because_it_is_data_not_an_error():
     """
     create_users(1)
     seed_data(1)
-    category = product_models.Category.objects.first()
+    category = product_models.Category.objects.earliest("pk")
     existing = product_models.Item.objects.create(name="EnvelopeDup", category=category)
 
-    user = get_user_model().objects.get(username="view_item_1")
+    user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
     )
     client = Client()
-    client.force_login(get_user_model().objects.get(pk=user.pk))
+    client.force_login(User.objects.get(pk=user.pk))
 
     _, payload = _post(
         "/graphql/",

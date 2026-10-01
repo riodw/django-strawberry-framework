@@ -25,6 +25,7 @@ from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.db.models import QuerySet
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
@@ -32,6 +33,7 @@ from graphql_client import assert_graphql_success, post_graphql
 from strategy_schemas import make_django_type
 from strawberry import relay
 from strawberry.django.views import GraphQLView
+from typing_extensions import override
 
 from django_strawberry_framework import finalize_django_types, strawberry_config
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
@@ -70,8 +72,8 @@ def test_unoptimized_relation_hides_private_child_over_http(db):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> QuerySet[Category]:
             return Category.objects.filter(pk=category.pk)
 
     _CURRENT["schema"] = strawberry.Schema(query=Query)
@@ -102,8 +104,8 @@ def _build_async_visibility_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        async def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        async def categories(self) -> list[Category]:
             return await sync_to_async(list)(
                 Category.objects.filter(pk=category.pk),
             )
@@ -177,8 +179,8 @@ def test_consumer_prefetch_cache_is_rescoped_with_the_optimizer_installed(db):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk=category.pk).prefetch_related("items"))
 
     query = "{ categories { items { name isPrivate } } }"
@@ -210,8 +212,8 @@ def test_forward_fk_target_visibility_holds_with_the_optimizer_installed(db):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def items(self) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def items(self) -> list[Item]:
             return list(Item.objects.filter(pk=item.pk))
 
     query = "{ items { name category { name } } }"
@@ -244,8 +246,8 @@ def _build_async_forward_fk_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        async def items(self) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        async def items(self) -> list[Item]:
             return await sync_to_async(list)(
                 Item.objects.filter(pk=item.pk).select_related("category"),
             )
@@ -312,8 +314,8 @@ def _strictness_armed_loaded_fk_schema(item_pk):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def items(self) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def items(self) -> list[Item]:
             return list(Item.objects.filter(pk=item_pk).select_related("category"))
 
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -417,8 +419,8 @@ def _strictness_armed_nullable_fk_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def profiles(self) -> list[profile_type]:
+        @strawberry.field(graphql_type=list[profile_type])
+        def profiles(self) -> list[PatronProfile]:
             return list(
                 PatronProfile.objects.select_related("favorite_genre").order_by("postal_code"),
             )
@@ -486,8 +488,8 @@ def _nested_connection_item_queries(parent_count):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk__in=parent_pks).order_by("pk"))
 
     with CaptureQueriesContext(connection) as captured:
@@ -532,8 +534,8 @@ def _nested_connection_item_queries_with_optimizer_on_a_list(parent_count):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk__in=parent_pks).order_by("pk"))
 
     optimizer = DjangoOptimizerExtension()
@@ -595,8 +597,8 @@ def _list_relation_item_queries(parent_count):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> QuerySet[Category]:
             return Category.objects.filter(pk__in=parent_pks).order_by("pk")
 
     with CaptureQueriesContext(connection) as captured:
@@ -643,7 +645,12 @@ def _holder_patron_card_schema(*, optimizer):
             name = "HolderCardType"
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[MembershipCard],
+            info: strawberry.Info,
+        ) -> QuerySet[MembershipCard]:
             return queryset.exclude(barcode__startswith="HIDDEN")
 
     class HolderPatronType(DjangoType):
@@ -656,8 +663,8 @@ def _holder_patron_card_schema(*, optimizer):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def patrons(self) -> list[HolderPatronType]:
+        @strawberry.field(graphql_type=list[HolderPatronType])
+        def patrons(self) -> list[Patron]:
             return list(Patron.objects.filter(name__endswith="Holder").order_by("name"))
 
     extensions = []
@@ -729,7 +736,12 @@ async def test_async_reverse_one_to_one_custom_visibility_over_http():
             name = "AsyncHolderCardType"
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[MembershipCard],
+            info: strawberry.Info,
+        ) -> QuerySet[MembershipCard]:
             return queryset.exclude(barcode__startswith="HIDDEN")
 
     class HolderPatronType(DjangoType):
@@ -742,8 +754,8 @@ async def test_async_reverse_one_to_one_custom_visibility_over_http():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        async def patrons(self) -> list[HolderPatronType]:
+        @strawberry.field(graphql_type=list[HolderPatronType])
+        async def patrons(self) -> list[Patron]:
             return await sync_to_async(list)(
                 Patron.objects.filter(pk__in=[hidden.pk, visible.pk]).order_by("pk"),
             )
@@ -825,8 +837,8 @@ def test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http()
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> QuerySet[Category]:
             return Category.objects.order_by("pk")
 
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -1058,8 +1070,8 @@ def _child_routing_schema(child_hook):
 
     @strawberry.type
     class RoutingQuery:
-        @strawberry.field
-        def categories(self) -> list[category_type]:
+        @strawberry.field(graphql_type=list[category_type])
+        def categories(self) -> QuerySet[Category]:
             return Category.objects.all()
 
     optimizer = DjangoOptimizerExtension()

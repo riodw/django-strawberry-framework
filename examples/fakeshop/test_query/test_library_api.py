@@ -16,7 +16,7 @@ import strawberry
 from apps.library import models
 from apps.products.services import create_users
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.db import connection
 from django.db.models import QuerySet
 from django.test import Client, override_settings
@@ -25,6 +25,7 @@ from django.urls import path
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoNodesField, strawberry_config
 from django_strawberry_framework.permissions import apply_cascade_permissions
@@ -1178,8 +1179,7 @@ def _post_graphql_as_staff(query: str):
     the client kept on ``Response.response`` is returned so callers keep their
     ``.status_code`` / ``.json()`` assertions.
     """
-    user_model = get_user_model()
-    staff = user_model.objects.create_user(
+    staff = User.objects.create_user(
         username="staff",
         password="pw",
         is_staff=True,
@@ -4055,7 +4055,7 @@ def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
     from apps.library.filters_genre import GenreFilter
 
     def _passthrough(
-        cls,
+        cls: type[GenreFilter],
         input_value,
         queryset,
         info,
@@ -5412,7 +5412,7 @@ def _relay_relation_isnull_holder_schema():
     from strawberry.types import Info
 
     from django_strawberry_framework import DjangoType, finalize_django_types
-    from django_strawberry_framework.filters import FilterSet, filter_input_type
+    from django_strawberry_framework.filters import FilterInput, FilterSet
 
     class HolderRelayIsnullGenreType(DjangoType):
         class Meta:
@@ -5435,12 +5435,12 @@ def _relay_relation_isnull_holder_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
+        @strawberry.field(graphql_type=list[HolderRelayIsnullBookType])
         def books(
             self,
             info: Info,
-            filter: filter_input_type(HolderBookIsnullFilter) | None = None,  # noqa: A002
-        ) -> list[HolderRelayIsnullBookType]:
+            filter: FilterInput[HolderBookIsnullFilter] | None = None,  # noqa: A002
+        ) -> QuerySet[models.Book]:
             queryset = models.Book.objects.order_by("title")
             if filter is not None:
                 queryset = HolderBookIsnullFilter.apply_sync(filter, queryset, info)
@@ -5488,8 +5488,8 @@ def test_generic_relation_tags_resolve_over_http_with_optimizer():
 
         @strawberry.type
         class Query:
-            @strawberry.field
-            def branches(self) -> list[HolderTaggedBranchType]:
+            @strawberry.field(graphql_type=list[HolderTaggedBranchType])
+            def branches(self) -> QuerySet[models.Branch]:
                 return models.Branch.objects.filter(
                     pk__in=[branch.pk, other_branch.pk],
                 ).order_by("pk")
@@ -5531,21 +5531,27 @@ async def _post_async_shipped(query: str, *, variables=None) -> dict:
 class _HostileBookQuerySet(QuerySet):
     """Would leak if dispatched: ``filter`` drops the predicate; terminals synthesize rows."""
 
+    @override
     def filter(self, *args, **kwargs):
         return models.Book.objects.all()
 
+    @override
     def first(self):
         return models.Book(title="secret-from-first")
 
+    @override
     def get(self, *args, **kwargs):
         return models.Book(title="secret-from-get")
 
+    @override
     async def afirst(self):
         return models.Book(title="secret-from-afirst")
 
+    @override
     async def aget(self, *args, **kwargs):
         return models.Book(title="secret-from-aget")
 
+    @override
     async def __aiter__(self):
         yield models.Book(title="secret-from-aiter")
 
@@ -6570,7 +6576,7 @@ def test_genre_books_connection_divergent_aliases_batched_per_key():
 
     # 3 queries: root genres + ONE batched window per alias (never 1 + parents x aliases).
     assert len(captured) == 3
-    window_sqls = [entry["sql"] for entry in captured[1:]]
+    window_sqls = [entry["sql"] for entry in captured.captured_queries[1:]]
     for window_sql in window_sqls:
         assert "_dst_row_number" in window_sql
         # Both windows serve ``hasNextPage`` count-free via the probe.
@@ -7003,7 +7009,7 @@ def test_genre_books_connection_offset_alias_merge_composes_probe_and_marker():
     node = payload["data"]["allLibraryGenres"][0]
     assert [edge["node"]["title"] for edge in node["b"]["edges"]] == ["Binti", "Circe"]
     assert node["a"]["pageInfo"]["hasNextPage"] is True
-    for window_sql in (entry["sql"] for entry in captured[1:]):
+    for window_sql in (entry["sql"] for entry in captured.captured_queries[1:]):
         assert "_dst_total_count" not in window_sql
         assert "COUNT(" not in window_sql.upper()
 
@@ -10746,13 +10752,13 @@ def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
         ]
         assert membership_sql == [], membership_sql
 
-        user = get_user_model().objects.get(username="regular_1")
+        user = User.objects.get(username="regular_1")
         perm = Permission.objects.get(
             codename="change_book",
             content_type__app_label="library",
         )
         user.user_permissions.add(perm)
-        user = get_user_model().objects.get(pk=user.pk)
+        user = User.objects.get(pk=user.pk)
         client = Client()
         client.force_login(user)
         with CaptureQueriesContext(connection) as granted_captured:

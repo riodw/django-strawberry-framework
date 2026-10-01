@@ -43,6 +43,7 @@ from strategy_schemas import make_django_type
 from django_strawberry_framework import (
     DjangoListField,
     DjangoSchema,
+    DjangoType,
     OptimizerHint,
     apply_cascade_permissions,
     finalize_django_types,
@@ -217,7 +218,7 @@ _GENRE_NAMES = (
     "Baroque",
     "Quixotic",
 )
-_GENRE_FOR_WORD = dict(zip(_WORDS, _GENRE_NAMES, strict=True))
+_GENRE_FOR_WORD: dict[str, str] = dict(zip(_WORDS, _GENRE_NAMES, strict=True))
 
 
 def _visible_genres(shape: str) -> set[str]:
@@ -1247,22 +1248,20 @@ def _hinted_shelf_schema(books: QuerySet) -> DjangoSchema:
     """
     registry.clear()
     make_django_type("HintBookType", models.Book, ("id", "title"), node=False)
-    shelf_type = make_django_type(
-        "HintShelfType",
-        models.Shelf,
-        ("id", "code", "books"),
-        node=False,
-        meta_extra={
-            "optimizer_hints": {
+
+    class HintShelfType(DjangoType):
+        class Meta:
+            model = models.Shelf
+            fields = ("id", "code", "books")
+            optimizer_hints = {
                 "books": OptimizerHint.prefetch(Prefetch("books", queryset=books)),
-            },
-        },
-    )
+            }
+
     finalize_django_types()
 
     @strawberry.type
     class Query:
-        shelves: list[shelf_type] = DjangoListField(shelf_type)
+        shelves: list[HintShelfType] = DjangoListField(HintShelfType)
 
     optimizer = DjangoOptimizerExtension()
     return DjangoSchema(query=Query, config=strawberry_config(), extensions=[lambda: optimizer])

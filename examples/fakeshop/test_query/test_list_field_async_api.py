@@ -15,7 +15,8 @@ import asyncio
 import functools
 import json
 import time
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import strawberry
@@ -26,6 +27,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import EmptyResultSet
 from django.db import models
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.expressions import Func, OrderBy, RawSQL
 from django.db.models.functions import Lower, Random
 from django.db.models.lookups import Transform
@@ -33,6 +35,8 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.test import AsyncClient, override_settings
 from django.test.utils import register_lookup
 from django.urls import clear_url_caches, path
+from strawberry.django.context import StrawberryDjangoContext
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoConnection,
@@ -53,6 +57,9 @@ from django_strawberry_framework.resource_policy import (
 from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.utils.context import get_context_value, stash_on_context
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
+
+if TYPE_CHECKING:
+    from django.db.models.sql.compiler import _AsSqlType
 
 _CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
 
@@ -430,8 +437,7 @@ async def test_async_http_rejects_a_sync_resolver_that_returns_a_custom_awaitabl
 
     class _DeferredQueryset:
         def __await__(self):
-            if False:
-                yield None
+            yield from ()
             return library_models.Branch.objects.all()
 
     def _sync_returning_awaitable(root, info):
@@ -946,9 +952,11 @@ class _NarrowsThenNeverExpires(float):
     reached it.
     """
 
+    @override
     def __lt__(self, other):
         return True
 
+    @override
     def __le__(self, other):
         return False
 
@@ -1040,6 +1048,7 @@ async def test_async_a_failing_aclose_does_not_displace_the_argument_rejection()
     """The rejection the client can act on stays primary when cleanup also fails."""
 
     class _FailingAcloseIterator(_ClosableAsyncIterator):
+        @override
         async def aclose(self):
             await super().aclose()
             raise RuntimeError("simulated cleanup failure")
@@ -1177,7 +1186,7 @@ def _shelf_offset_schema(resolver=None):
     return DjangoSchema(query=_ShelfQuery, config=strawberry_config())
 
 
-def _coin_case_ordering(lookup="coin__gt", threshold=0.5):
+def _coin_case_ordering(lookup: str = "coin__gt", threshold: object = 0.5):
     """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
     return (
         models.Case(
@@ -1314,18 +1323,37 @@ class _ProjectFunc(Func):
 
     function = "RANDOM"
 
-    def as_sql(self, compiler, connection, **extra_context):
-        return "RANDOM()", []
+    @override
+    def as_sql(
+        self,
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+        function: str | None = None,
+        template: str | None = None,
+        arg_joiner: str | None = None,
+        **extra_context: object,
+    ) -> _AsSqlType:
+        return "RANDOM()", ()
 
 
 class _ProjectTransform(Transform):
     """A project transform registered on a built-in field, emitting its own SQL."""
 
     lookup_name = "jitter"
-    output_field = models.FloatField()
+    # basedpyright: django-stubs declares output_field a cached_property, not a class-level field
+    output_field = models.FloatField()  # pyright: ignore[reportAssignmentType]
 
-    def as_sql(self, compiler, connection, **extra_context):
-        return "RANDOM()", []
+    @override
+    def as_sql(
+        self,
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+        function: str | None = None,
+        template: str | None = None,
+        arg_joiner: str | None = None,
+        **extra_context: object,
+    ) -> _AsSqlType:
+        return "RANDOM()", ()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1365,6 +1393,7 @@ async def test_async_offset_reads_an_expression_by_its_approved_form(
 class _ProjectF(models.F):
     """A reference subclass that resolves to SQL of its own instead of to the name it holds."""
 
+    @override
     def resolve_expression(self, *args, **kwargs):
         return Random()
 
@@ -1372,7 +1401,9 @@ class _ProjectF(models.F):
 class _ProjectQ(models.Q):
     """A predicate subclass that resolves to SQL of its own instead of to its children."""
 
-    def resolve_expression(self, *args, **kwargs):
+    @override
+    # basedpyright: deliberately resolves to foreign SQL, the predicate subclass the guard refuses
+    def resolve_expression(self, *args, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]
         return Random()
 
 
@@ -1675,7 +1706,8 @@ async def _async_untrusted(cls, order_input, queryset, info, **kwargs):
     candidate = _AsyncDeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    candidate._deferred_filter = (1, (), {"name": "A"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
     return candidate
 
 
@@ -1847,7 +1879,7 @@ async def test_async_mutable_hint_cannot_reroute_the_completed_read(monkeypatch)
 
     def _hinted_get_queryset(cls, queryset, info, **kwargs):
         hinted = original_get_queryset(queryset, info, **kwargs)
-        hinted._hints = {"tenant": token}
+        monkeypatch.setattr(hinted, "_hints", {"tenant": token})
         return hinted
 
     monkeypatch.setattr(
@@ -1893,6 +1925,7 @@ async def test_async_rejection_reports_the_published_name_without_extra_converte
     class _CountingConverter(NameConverter):
         calls = 0
 
+        @override
         def from_argument(self, argument):
             type(self).calls += 1
             return super().from_argument(argument).upper()
@@ -1920,10 +1953,22 @@ async def test_async_rejection_reports_the_published_name_without_extra_converte
 _CONTEXT_CAPTURE: dict[str, Any] = {}
 
 
+@dataclass
+class _MarkedContext(StrawberryDjangoContext):
+    """The stock Django context carrying one attribute a consumer set before execution."""
+
+    consumer_marker: object = None
+
+
 class _CapturingAsyncContextView(AsyncDjangoGraphQLView):
-    async def get_context(self, request, response):
-        context = await super().get_context(request, response)
-        context.consumer_marker = _CONTEXT_CAPTURE["marker"]
+    @override
+    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
+    async def get_context(self, request, response):  # pyright: ignore[reportIncompatibleMethodOverride]
+        context = _MarkedContext(
+            request=request,
+            response=response,
+            consumer_marker=_CONTEXT_CAPTURE["marker"],
+        )
         _CONTEXT_CAPTURE["context"] = context
         return context
 
@@ -1935,15 +1980,19 @@ class _FrozenContext:
         object.__setattr__(self, "request", request)
         object.__setattr__(self, "response", response)
 
+    @override
     def __setattr__(self, name, value):
         raise AttributeError(f"frozen context refuses write to {name!r}")
 
+    @override
     def __delattr__(self, name):
         raise AttributeError(f"frozen context refuses delete of {name!r}")
 
 
 class _FrozenAsyncContextView(AsyncDjangoGraphQLView):
-    async def get_context(self, request, response):
+    @override
+    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
+    async def get_context(self, request, response):  # pyright: ignore[reportIncompatibleMethodOverride]
         return _FrozenContext(request, response)
 
 
@@ -2205,8 +2254,8 @@ async def test_async_iterable_with_awaitable_children_completes_over_http():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def children(self) -> list[_AwaitableChild]:
+        @strawberry.field(graphql_type=list[_AwaitableChild])
+        def children(self) -> _ClosableAsyncIterator:
             return _ClosableAsyncIterator([_AwaitableChild()])
 
     payload = await _post_async(strawberry.Schema(query=Query), "{ children { name } }")
@@ -2222,15 +2271,19 @@ class _HostileBranchQuerySet(models.QuerySet):
     kept separate and why a change to the adversary is a change to both files.
     """
 
+    @override
     def filter(self, *args, **kwargs):
         return library_models.Branch.objects.all()
 
+    @override
     def order_by(self, *args, **kwargs):
         return library_models.Branch.objects.all()
 
+    @override
     def __iter__(self):
         return iter(library_models.Branch.objects.all().order_by("pk"))
 
+    @override
     def __aiter__(self):
         return library_models.Branch.objects.all().order_by("pk").__aiter__()
 

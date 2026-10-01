@@ -1,14 +1,11 @@
 """Products admin tests for changelist query-param branches."""
 
 import pytest
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.test import Client
 
 from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
-
-User = get_user_model()
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

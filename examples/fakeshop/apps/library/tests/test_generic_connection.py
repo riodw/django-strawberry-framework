@@ -28,6 +28,7 @@ import strawberry
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import SynchronousOnlyOperation
 from django.db import connection as db_connection
+from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 
@@ -64,21 +65,14 @@ def _build_schema(*, strategy=None, total_count=False):
     (``None`` -> windowed default, ``"lateral"`` -> auto/lateral). ``total_count``
     opts the target connection into a ``totalCount`` field.
     """
-    if total_count:
 
-        class TaggedItemNode(DjangoType):
-            class Meta:
-                model = TaggedItem
-                fields = ("id", "tag")
-                interfaces = (relay.Node,)
+    class TaggedItemNode(DjangoType):
+        class Meta:
+            model = TaggedItem
+            fields = ("id", "tag")
+            interfaces = (relay.Node,)
+            if total_count:
                 connection = {"total_count": True}
-    else:
-
-        class TaggedItemNode(DjangoType):
-            class Meta:
-                model = TaggedItem
-                fields = ("id", "tag")
-                interfaces = (relay.Node,)
 
     class BranchNode(DjangoType):
         class Meta:
@@ -88,8 +82,8 @@ def _build_schema(*, strategy=None, total_count=False):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def branches(self) -> list[BranchNode]:
+        @strawberry.field(graphql_type=list[BranchNode])
+        def branches(self) -> QuerySet[Branch]:
             return Branch.objects.order_by("id")
 
     finalize_django_types()
@@ -148,6 +142,7 @@ def test_windowed_generic_connection_first_page_excludes_poison_row():
     )
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     central = result.data["branches"][0]
     conn = central["tagsConnection"]
     assert [edge["node"]["tag"] for edge in conn["edges"]] == ["a1", "a2"]
@@ -178,6 +173,7 @@ def test_generic_connection_has_next_page_probe_composes_with_ws_a():
             " edges { node { tag } } pageInfo { hasNextPage } } } }",
         )
     assert result.errors is None, result.errors
+    assert result.data is not None
     conn = result.data["branches"][0]["tagsConnection"]
     assert [edge["node"]["tag"] for edge in conn["edges"]] == ["t0", "t1"]
     assert conn["pageInfo"]["hasNextPage"] is True
@@ -190,6 +186,7 @@ def test_generic_connection_has_next_page_probe_composes_with_ws_a():
         "{ branches { tagsConnection(first: 3) { pageInfo { hasNextPage } } } }",
     )
     assert exact.errors is None, exact.errors
+    assert exact.data is not None
     assert exact.data["branches"][0]["tagsConnection"]["pageInfo"]["hasNextPage"] is False
 
 
@@ -243,6 +240,7 @@ def test_lateral_strategy_generic_connection_degrades_to_windowed():
     )
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     conn = result.data["branches"][0]["tagsConnection"]
     assert [edge["node"]["tag"] for edge in conn["edges"]] == ["t0", "t1"]
 
@@ -338,8 +336,8 @@ def _build_proxy_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def proxy_branches(self) -> list[ProxyBranchNode]:
+        @strawberry.field(graphql_type=list[ProxyBranchNode])
+        def proxy_branches(self) -> QuerySet[ProxyBranch]:
             return ProxyBranch.objects.order_by("id")
 
     finalize_django_types()
@@ -398,6 +396,7 @@ def test_generic_connection_honors_non_default_for_concrete_model():
     )
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     conn = result.data["proxyBranches"][0]["proxyTagsConnection"]
     # Only the proxy-content-type rows come back; the concrete decoy is excluded.
     assert [edge["node"]["tag"] for edge in conn["edges"]] == ["p1", "p2"]

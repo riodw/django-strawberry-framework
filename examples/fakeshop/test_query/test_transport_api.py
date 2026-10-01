@@ -77,7 +77,7 @@ from apps.products import models
 from apps.products.services import create_users, seed_data
 from cross_web import DjangoHTTPRequestAdapter
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.core.files.uploadhandler import MemoryFileUploadHandler
 from django.core.handlers.asgi import ASGIHandler
 from django.http import HttpResponseForbidden
@@ -89,6 +89,7 @@ from graphql_client import assert_graphql_data, post_graphql, post_graphql_raw
 from strawberry.django.views import GraphQLView as UpstreamGraphQLView
 from strawberry.extensions import AddValidationRules
 from strawberry.http.base import BaseView
+from typing_extensions import TypedDict, override
 
 from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
@@ -284,6 +285,7 @@ class _ParseSpyView(DjangoGraphQLView):
     the entire parse chain rather than merely ahead of the JSON decode.
     """
 
+    @override
     def parse_json(self, data):
         _PARSE_CALLS.append(data)
         return super().parse_json(data)
@@ -305,6 +307,7 @@ _SETUP_CALLS: list[str] = []
 class _SetupLimitedView(DjangoGraphQLView):
     """Derive the mount's request cap from Django's per-request setup lifecycle."""
 
+    @override
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         _SETUP_CALLS.append(request.path)
@@ -524,12 +527,11 @@ def _user_who_can_add_categories():
     from django.contrib.auth.models import Permission
 
     create_users(1)
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_category_1")
+    user = User.objects.get(username="view_category_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_category", content_type__app_label="products"),
     )
-    return user_model.objects.get(pk=user.pk)  # drop the stale per-request perm cache
+    return User.objects.get(pk=user.pk)  # drop the stale per-request perm cache
 
 
 def _assert_body_limit_response(response):
@@ -660,14 +662,17 @@ class _RecordingUploadHandler(MemoryFileUploadHandler):
     correct if a supported Django adds a hook argument.
     """
 
+    @override
     def handle_raw_input(self, *args, **kwargs):
         _UPLOAD_EVENTS.append("handle_raw_input")
         return super().handle_raw_input(*args, **kwargs)
 
+    @override
     def new_file(self, *args, **kwargs):
         _UPLOAD_EVENTS.append("new_file")
         return super().new_file(*args, **kwargs)
 
+    @override
     def receive_data_chunk(self, *args, **kwargs):
         _UPLOAD_EVENTS.append("receive_data_chunk")
         return super().receive_data_chunk(*args, **kwargs)
@@ -971,7 +976,7 @@ def test_an_authenticated_get_varies_on_cookie():
     """
     create_users(1)
     client = Client()
-    client.force_login(get_user_model().objects.get(username="staff_1"))
+    client.force_login(User.objects.get(username="staff_1"))
 
     response = client.get("/graphql/", {"query": _ME})
 
@@ -1512,7 +1517,9 @@ def test_an_over_cap_mutation_is_rejected_before_any_parse_or_schema_execution()
     assert payload["node"] == {"name": under_name}
     assert models.Category.objects.filter(name=under_name).exists()
     assert len(_PARSE_CALLS) == 1
-    assert under_name.encode() in bytes(_PARSE_CALLS[0])
+    recorded = _PARSE_CALLS[0]
+    assert isinstance(recorded, bytes)
+    assert under_name.encode() in recorded
     _PARSE_CALLS.clear()
 
 
@@ -1809,21 +1816,20 @@ def _strawberry_patch_opted_out():
     different finding (upstream's decode-inside-a-property ``500``) and would say
     nothing about who owns the wire contract.
     """
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
     override = override_settings(
         ROOT_URLCONF=__name__,
         DJANGO_STRAWBERRY_FRAMEWORK={"APPLY_UPSTREAM_PATCHES": {"strawberry": False}},
     )
-    try:
-        BaseView.parse_json = strawberry_patches._original_parse_json
-        BaseView.parse_query_params = strawberry_patches._original_parse_query_params
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(BaseView, "parse_json", strawberry_patches._original_parse_json)
+        patch.setattr(
+            BaseView,
+            "parse_query_params",
+            strawberry_patches._original_parse_query_params,
+        )
         assert strawberry_patches._patch_is_installed() is False
         with override:
             yield
-    finally:
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
 
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
@@ -1898,7 +1904,7 @@ def _every_upstream_patch_opted_out():
     package mount in every patch state, not only in the states where a patch
     happens to be routing the bytes.
 
-    All three replacements are restored by identity in a ``finally``, and both
+    All three replacements are restored by identity when the block exits, and both
     ``_patch_is_installed`` probes are asserted ``False`` inside the block, so the
     row cannot pass because a patch was quietly still installed.
 
@@ -1908,25 +1914,26 @@ def _every_upstream_patch_opted_out():
     the async transport's state is identical under either spelling of the switch
     and is covered by the ``{"strawberry": False}`` async row above.
     """
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    saved_body = DjangoHTTPRequestAdapter.__dict__["body"]
     override = override_settings(
         ROOT_URLCONF=__name__,
         DJANGO_STRAWBERRY_FRAMEWORK={"APPLY_UPSTREAM_PATCHES": False},
     )
-    try:
-        BaseView.parse_json = strawberry_patches._original_parse_json
-        BaseView.parse_query_params = strawberry_patches._original_parse_query_params
-        DjangoHTTPRequestAdapter.body = property(cross_web_patches._original_body_fget)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(BaseView, "parse_json", strawberry_patches._original_parse_json)
+        patch.setattr(
+            BaseView,
+            "parse_query_params",
+            strawberry_patches._original_parse_query_params,
+        )
+        patch.setattr(
+            DjangoHTTPRequestAdapter,
+            "body",
+            property(cross_web_patches._original_body_fget),
+        )
         assert strawberry_patches._patch_is_installed() is False
         assert cross_web_patches._patch_is_installed() is False
         with override:
             yield
-    finally:
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
-        DjangoHTTPRequestAdapter.body = saved_body
 
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
@@ -2031,19 +2038,20 @@ def _cross_web_patch_opted_out():
     inside the block - the half under test genuinely off, its companion genuinely
     on - so the row cannot pass for either wrong reason.
     """
-    saved_body = DjangoHTTPRequestAdapter.__dict__["body"]
     override = override_settings(
         ROOT_URLCONF=__name__,
         DJANGO_STRAWBERRY_FRAMEWORK={"APPLY_UPSTREAM_PATCHES": {"cross_web": False}},
     )
-    try:
-        DjangoHTTPRequestAdapter.body = property(cross_web_patches._original_body_fget)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            DjangoHTTPRequestAdapter,
+            "body",
+            property(cross_web_patches._original_body_fget),
+        )
         assert cross_web_patches._patch_is_installed() is False
         assert strawberry_patches._patch_is_installed() is True
         with override:
             yield
-    finally:
-        DjangoHTTPRequestAdapter.body = saved_body
 
 
 #: The two bodies that DISCRIMINATE: upstream's property decode rejects each (the
@@ -2834,8 +2842,19 @@ async def test_the_async_view_also_refuses_before_djangos_parser_runs():
     _UPLOAD_EVENTS.clear()
 
 
-def _csrf_matrix_paths(token):
-    """The six CSRF directions of the row below, as keyword sets for ``_post_multipart``.
+class _MultipartKeywords(TypedDict, total=False):
+    """One CSRF direction's keyword set for ``_post_multipart``, beside its fields."""
+
+    token: str
+    send_header: bool
+    headers: dict[str, str]
+    secure: bool
+
+
+def _csrf_matrix_paths(
+    token: str,
+) -> tuple[tuple[str, list[tuple[str, bytes]], _MultipartKeywords], ...]:
+    """The six CSRF directions of the row below, as fields and keywords for ``_post_multipart``.
 
     Named once so the sync and async rows run the *same* matrix rather than two
     hand-copied ones that could drift apart - which is the failure mode the two
@@ -2843,12 +2862,12 @@ def _csrf_matrix_paths(token):
     """
     fields = _multipart_fields("operations", _operations_bytes())
     return (
-        ("untokened", {"fields": fields}),
-        ("headered", {"fields": fields, "token": token}),
+        ("untokened", fields, {}),
+        ("headered", fields, {"token": token}),
         (
             "wrong_token",
+            fields,
             {
-                "fields": fields,
                 "token": token,
                 "send_header": False,
                 "headers": {"x-csrftoken": "n0tth3r1ghtt0k3n" * 4},
@@ -2856,17 +2875,15 @@ def _csrf_matrix_paths(token):
         ),
         (
             "formed",
-            {
-                "fields": [*fields, ("csrfmiddlewaretoken", token.encode())],
-                "token": token,
-                "send_header": False,
-            },
+            [*fields, ("csrfmiddlewaretoken", token.encode())],
+            {"token": token, "send_header": False},
         ),
         (
             "hostile_origin",
-            {"fields": fields, "token": token, "headers": {"origin": "https://evil.example"}},
+            fields,
+            {"token": token, "headers": {"origin": "https://evil.example"}},
         ),
-        ("insecure_referer", {"fields": fields, "token": token, "secure": True}),
+        ("insecure_referer", fields, {"token": token, "secure": True}),
     )
 
 
@@ -2919,10 +2936,10 @@ def test_a_within_cap_request_still_faces_djangos_complete_csrf_check():
         name: _post_multipart(
             Client(enforce_csrf_checks=True),
             "/graphql/",
-            keywords.pop("fields"),
+            fields,
             **keywords,
         )
-        for name, keywords in _csrf_matrix_paths(token)
+        for name, fields, keywords in _csrf_matrix_paths(token)
     }
     with override_settings(CSRF_FAILURE_VIEW=f"{__name__}._csrf_failure_probe"):
         custom_failure = _post_multipart(
@@ -2948,11 +2965,11 @@ async def test_the_async_view_faces_the_same_complete_csrf_check():
 
     with override_settings(ROOT_URLCONF=__name__):
         answers = {}
-        for name, keywords in _csrf_matrix_paths(token):
+        for name, fields, keywords in _csrf_matrix_paths(token):
             answers[name] = await _post_multipart(
                 AsyncClient(enforce_csrf_checks=True),
                 "/async-multipart/",
-                keywords.pop("fields"),
+                fields,
                 **keywords,
             )
         with override_settings(CSRF_FAILURE_VIEW=f"{__name__}._csrf_failure_probe"):
@@ -3000,14 +3017,15 @@ def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
 
     async def async_answers():
         answers = {}
-        for name, keywords in (
+        directions: tuple[tuple[str, _MultipartKeywords], ...] = (
             ("untokened", {}),
             (
                 "wrong_token",
                 {"token": token, "send_header": False, "headers": {"x-csrftoken": wrong}},
             ),
             ("headered", {"token": token}),
-        ):
+        )
+        for name, keywords in directions:
             answers[name] = await _post_multipart(
                 AsyncClient(enforce_csrf_checks=True),
                 "/async-multipart/",
@@ -3143,6 +3161,7 @@ class _RecordingCsrfMiddleware(CsrfViewMiddleware):
 
     calls: list[str] = []
 
+    @override
     def process_view(
         self,
         request,

@@ -4,14 +4,12 @@ import inspect
 from unittest.mock import patch
 
 import pytest
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.db import IntegrityError
 from faker import Faker
 
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
-
-User = get_user_model()
 
 
 @pytest.fixture(autouse=True)

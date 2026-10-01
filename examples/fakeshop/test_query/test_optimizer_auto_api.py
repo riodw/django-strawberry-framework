@@ -21,10 +21,12 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.django.views import GraphQLView
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoListField,
     DjangoOptimizerExtension,
+    DjangoType,
     OptimizerHint,
     finalize_django_types,
     strawberry_config,
@@ -130,17 +132,18 @@ def install_hashable_scalar_cache_schema(_reload_project_schema_for_acceptance_t
     from typing import NewType
 
     registry.clear()
-    category_type = make_django_type(
-        "CacheCategoryType",
-        Category,
-        ("id", "name"),
-        node=False,
-    )
+
+    class CacheCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
     class EqualityBomb:
+        @override
         def __hash__(self):
             return 1
 
+        @override
         def __eq__(self, _other):
             raise RuntimeError("custom scalar equality must not run in cache lookup")
 
@@ -159,7 +162,7 @@ def install_hashable_scalar_cache_schema(_reload_project_schema_for_acceptance_t
 
     @strawberry.type
     class Query:
-        objs: list[category_type] = DjangoListField(category_type)
+        objs: list[CacheCategoryType] = DjangoListField(CacheCategoryType)
 
         @strawberry.field
         def misc(self) -> Misc:
@@ -192,6 +195,8 @@ def test_repeated_live_query_survives_hashable_custom_scalar_equality(
     first = TestClient().query(query, variables={"value": "marker"})
     second = TestClient().query(query, variables={"value": "marker"})
 
+    assert first.data is not None
+    assert second.data is not None
     assert first.data["misc"]["logs"] == ["ok"]
     assert second.data["misc"]["logs"] == ["ok"]
     assert install_hashable_scalar_cache_schema.cache_info().misses == 2
@@ -204,14 +209,13 @@ def install_unhashable_set_scalar_cache_schema(_reload_project_schema_for_accept
     from typing import NewType
 
     registry.clear()
-    category_type = make_django_type(
-        "SetCacheCategoryType",
-        Category,
-        ("id", "name"),
-        node=False,
-    )
 
-    SetValue = NewType("SetValue", object)
+    class SetCacheCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    SetValue = NewType("SetValue", set[str])
     set_scalar = strawberry.scalar(
         name="SetValue",
         serialize=lambda value: sorted(value),
@@ -226,7 +230,7 @@ def install_unhashable_set_scalar_cache_schema(_reload_project_schema_for_accept
 
     @strawberry.type
     class Query:
-        objs: list[category_type] = DjangoListField(category_type)
+        objs: list[SetCacheCategoryType] = DjangoListField(SetCacheCategoryType)
 
         @strawberry.field
         def misc(self) -> Misc:
@@ -265,6 +269,8 @@ def test_repeated_live_query_shares_plan_cache_for_unhashable_set_scalar(
     first = TestClient().query(query, variables={"x": ["b", "a"]})
     second = TestClient().query(query, variables={"x": ["a", "b"]})
 
+    assert first.data is not None
+    assert second.data is not None
     assert first.data["misc"]["logs"] == ["a", "b"]
     assert second.data["misc"]["logs"] == ["a", "b"]
     assert install_unhashable_set_scalar_cache_schema.cache_info().misses == 1

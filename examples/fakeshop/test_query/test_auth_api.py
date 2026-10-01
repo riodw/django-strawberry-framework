@@ -28,9 +28,9 @@ import strawberry
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY, get_user_model
+from django.contrib.auth import BACKEND_SESSION_KEY, SESSION_KEY
 from django.contrib.auth import signals as auth_signals
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, User
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.test import AsyncClient, Client, override_settings
@@ -179,7 +179,7 @@ def test_relogin_same_user_mismatched_hash_flushes_and_replaces():
     client = Client()
     _login(client, "staff_1", TEST_USER_PASSWORD)
     key1 = client.session.session_key
-    user = get_user_model().objects.get(username="staff_1")
+    user = User.objects.get(username="staff_1")
     user.set_password(_STRONG_PASSWORD)  # changes get_session_auth_hash()
     user.save()
     _login(client, "staff_1", _STRONG_PASSWORD)  # same user, new hash
@@ -209,7 +209,7 @@ def test_wrong_password_and_unknown_username_return_identical_envelope():
 def test_inactive_user_gets_the_same_envelope():
     """``ModelBackend`` returns ``None`` for ``is_active=False`` - same envelope."""
     create_users(1)
-    user = get_user_model().objects.get(username="regular_1")
+    user = User.objects.get(username="regular_1")
     user.is_active = False
     user.save()
     payload = _login(Client(), "regular_1", TEST_USER_PASSWORD)
@@ -247,13 +247,13 @@ class AllowInactiveBackend:
     """
 
     def authenticate(self, request, username=None, password=None, **kwargs):
-        user = get_user_model().objects.filter(username=username).first()
+        user = User.objects.filter(username=username).first()
         if user is not None and user.check_password(password):
             return user
         return None
 
     def get_user(self, user_id):
-        return get_user_model().objects.filter(pk=user_id).first()
+        return User.objects.filter(pk=user_id).first()
 
 
 class CrashingBackend:
@@ -346,7 +346,7 @@ def test_custom_backend_authenticating_inactive_user_is_honored():
     ``test_inactive_user_gets_the_same_envelope``; this is the other verdict.
     """
     create_users(1)
-    user = get_user_model().objects.get(username="staff_1")
+    user = User.objects.get(username="staff_1")
     user.is_active = False
     user.save()
 
@@ -466,7 +466,7 @@ def test_register_login_me_logout_round_trip_and_hashed_storage():
     assert payload["errors"] == []
     assert payload["node"] == {"username": "fresh_reg_user", "email": "fresh@example.com"}
 
-    stored = get_user_model().objects.get(username="fresh_reg_user")
+    stored = User.objects.get(username="fresh_reg_user")
     assert stored.check_password(_STRONG_PASSWORD)
     assert _STRONG_PASSWORD not in stored.password  # hashed column, no plaintext residue
 
@@ -494,7 +494,7 @@ def test_register_hashes_before_full_clean_so_a_long_password_persists():
     )["register"]
     assert payload["errors"] == []
     assert payload["node"]["username"] == "long_pw_user"
-    stored = get_user_model().objects.get(username="long_pw_user")
+    stored = User.objects.get(username="long_pw_user")
     assert long_password not in stored.password
     assert stored.check_password(long_password)
 
@@ -511,7 +511,7 @@ def test_duplicate_username_register_envelope_keys_to_username():
     assert [error["field"] for error in payload["errors"]] == ["username"]
     assert payload["errors"][0]["messages"] == ["A user with that username already exists."]
     # The failed register wrote nothing (one seeded staff_1 remains).
-    assert get_user_model().objects.filter(username="staff_1").count() == 1
+    assert User.objects.filter(username="staff_1").count() == 1
 
 
 @pytest.mark.django_db
@@ -533,7 +533,7 @@ def test_weak_password_register_envelope_keys_to_password_not_all():
     messages = payload["errors"][0]["messages"]
     assert messages == ["This password is too common.", "This password is entirely numeric."]
     assert payload["errors"][0]["codes"] == ["password_too_common", "password_entirely_numeric"]
-    assert not get_user_model().objects.filter(username="weak_pw_user").exists()
+    assert not User.objects.filter(username="weak_pw_user").exists()
 
 
 # A consumer validator using Django's documented DICT error form
@@ -572,7 +572,7 @@ def test_dict_form_validator_error_still_keys_to_password_not_a_crash():
     assert [error["field"] for error in payload["errors"]] == ["password"]
     assert payload["errors"][0]["messages"] == ["Password policy violated."]
     assert payload["errors"][0]["codes"] == []
-    assert not get_user_model().objects.filter(username="dict_form_user").exists()
+    assert not User.objects.filter(username="dict_form_user").exists()
 
 
 @pytest.mark.django_db
@@ -674,7 +674,7 @@ def test_register_surrogate_password_keys_to_password_not_a_crash():
     assert payload["errors"][0]["messages"] == [
         "Text contains invalid Unicode (unpaired surrogate code points).",
     ]
-    assert not get_user_model().objects.filter(username="surrogate_reg_user").exists()
+    assert not User.objects.filter(username="surrogate_reg_user").exists()
 
 
 @pytest.mark.django_db
@@ -963,7 +963,7 @@ def test_login_payload_exposes_the_post_login_last_login(project_schema_override
     mutated by Django's ``user_logged_in`` receiver, not a pre-login snapshot.
     """
     create_users(1)
-    get_user_model().objects.filter(username="staff_1").update(last_login=None)
+    User.objects.filter(username="staff_1").update(last_login=None)
     with override_settings(FAKESHOP_TEST_USER_LAST_LOGIN=True):
         project_schema_override()
         client = Client()
@@ -1115,7 +1115,7 @@ async def test_async_register_stores_only_the_hashed_password():
     result = payload["data"]["register"]
     assert result["errors"] == []
     assert result["node"]["username"] == "async_reg_user"
-    stored = await get_user_model().objects.aget(username="async_reg_user")
+    stored = await User.objects.aget(username="async_reg_user")
     assert _STRONG_PASSWORD not in stored.password
     assert stored.check_password(_STRONG_PASSWORD)
 
@@ -1126,7 +1126,7 @@ async def test_async_login_payload_exposes_the_post_login_last_login(project_sch
     await sync_to_async(create_users)(1)
 
     def _clear_last_login():
-        get_user_model().objects.filter(username="staff_1").update(last_login=None)
+        User.objects.filter(username="staff_1").update(last_login=None)
 
     await sync_to_async(_clear_last_login)()
     with override_settings(FAKESHOP_TEST_USER_LAST_LOGIN=True):
@@ -1152,7 +1152,6 @@ def _unplanned_auth_holder_schema():
     pair; the acceptance autouse fixture rebuilds the project schema on exit.
     """
     registry.clear()
-    user_model = get_user_model()
     type(
         "AuthProbeUser",
         (DjangoType, relay.Node),
@@ -1160,7 +1159,7 @@ def _unplanned_auth_holder_schema():
             "Meta": type(
                 "Meta",
                 (),
-                {"model": user_model, "fields": ("id", "username", "groups"), "primary": True},
+                {"model": User, "fields": ("id", "username", "groups"), "primary": True},
             ),
         },
     )
@@ -1220,7 +1219,7 @@ def _post_auth_holder(
 def _seed_staff_in_group():
     """Seed users, put ``staff_1`` in one named group, and return that user."""
     create_users(1)
-    user = get_user_model().objects.get(username="staff_1")
+    user = User.objects.get(username="staff_1")
     user.groups.add(Group.objects.create(name="g1"))
     return user
 

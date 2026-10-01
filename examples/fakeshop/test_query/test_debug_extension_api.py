@@ -45,8 +45,7 @@ import strawberry
 from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
 from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Permission, User
 from django.db import DEFAULT_DB_ALIAS, connection
 from django.test.utils import override_settings
 from django.urls import path
@@ -152,11 +151,13 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
     class Query(ProductsQuery):
         @strawberry.field
         def boom(self) -> int:
-            return 1 / 0  # ZeroDivisionError("division by zero")
+            raise ZeroDivisionError("division by zero")
 
         @strawberry.field
         def broken_non_null(self) -> int:
-            return None  # a completion error: null for a non-nullable field
+            # basedpyright: deliberately ill-typed: proves a non-null completion error is an
+            # execution row.
+            return None  # pyright: ignore[reportReturnType]
 
         @strawberry.field
         def arm_debug_disclosure(self) -> bool:
@@ -227,13 +228,12 @@ def _atomic_requests_enabled():
 
 def _grant_add_item_and_visible_category_gid():
     """``view_item_1`` with ``add_item``, permission cache dropped, plus a visible category id."""
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_item_1")
+    user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
     )
-    user = user_model.objects.get(pk=user.pk)
-    visible_category = Category.objects.filter(is_private=False).order_by("pk").first()
+    user = User.objects.get(pk=user.pk)
+    visible_category = Category.objects.filter(is_private=False).earliest("pk")
     category_gid = str(
         relay.GlobalID(type_name="products.category", node_id=str(visible_category.pk)),
     )
@@ -292,6 +292,7 @@ def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(inst
 
     res = client.query("query { allItems(first: 1) { edges { node { name } } } }")
 
+    assert res.data is not None
     assert len(res.data["allItems"]["edges"]) == 1  # the data is intact
     payload = _debug(res)
     # Filter by row semantics - never positional indexing or raw counts,
@@ -346,6 +347,7 @@ def test_optimizer_composition_shows_the_two_query_prefetch_shape(install_probe_
 
     res = client.query("query { allItems { edges { node { name category { name } } } } }")
 
+    assert res.data is not None
     assert len(res.data["allItems"]["edges"]) == visible_count
     select_statements = [row["sql"].lower() for row in _debug(res)["sql"] if row["isSelect"]]
     # Exactly the two-query shape: one item slice + one category prefetch.
@@ -393,6 +395,7 @@ def test_mutation_capture_includes_the_insert_row(install_probe_schema):
             variables={"d": {"name": "DebugWidget", "categoryId": category_gid}},
         )
 
+    assert res.data is not None
     assert res.data["createItem"]["errors"] == []
     assert res.data["createItem"]["node"]["name"] == "DebugWidget"
     rows = _debug(res)["sql"]
@@ -437,6 +440,7 @@ def test_enclosing_atomic_requests_transaction_is_not_captured(install_probe_sch
                     },
                 )
 
+    assert res.data is not None
     assert res.data["createItem"]["errors"] == []
     assert res.data["createItem"]["node"]["name"] == "AtomicRequestsWidget"
     rows = _debug(res)["sql"]

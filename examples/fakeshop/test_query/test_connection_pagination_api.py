@@ -398,6 +398,10 @@ class _DeferredFilterQuerySet(models.QuerySet):
     exact shape Django writes, which is what this class is planted with.
     """
 
+    # The pending ``(negate, args, kwargs)`` slot ``QuerySet.__init__`` sets, which the
+    # stubs leave undeclared.
+    _deferred_filter: tuple[object, tuple[object, ...], dict[str, object]] | None
+
 
 async def _awaitable_queryset(queryset):
     return queryset
@@ -463,7 +467,7 @@ def _override_in_place_routing(
 
 
 def _override_passthrough(
-    cls,
+    cls: type[GenreOrder],
     order_input,
     queryset,
     info,
@@ -882,7 +886,7 @@ async def _override_async_residual_awaitable(
 
 
 async def _override_async_passthrough(
-    cls,
+    cls: type[GenreOrder],
     order_input,
     queryset,
     info,
@@ -1217,7 +1221,7 @@ async def _filter_override_async_residual_awaitable(
 
 
 async def _filter_override_async_passthrough(
-    cls,
+    cls: type[GenreFilter],
     filter_input,
     queryset,
     info,

@@ -32,8 +32,7 @@ from __future__ import annotations
 import pytest
 from apps.products.services import create_users
 from asgiref.sync import sync_to_async
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Permission
+from django.contrib.auth.models import Permission, User
 from django.db import connection
 from django.test import AsyncClient, Client, override_settings
 from django.urls import path
@@ -112,12 +111,12 @@ mutation($idA: ID!, $dA: ItemPartialInput!, $idB: ID!, $dB: ItemPartialInput!) {
 
 
 def _login_with_perm(username: str, *codenames: str) -> Client:
-    user = get_user_model().objects.get(username=username)
+    user = User.objects.get(username=username)
     for codename in codenames:
         permission = Permission.objects.get(codename=codename, content_type__app_label="products")
         user.user_permissions.add(permission)
     client = Client()
-    client.force_login(get_user_model().objects.get(pk=user.pk))
+    client.force_login(User.objects.get(pk=user.pk))
     return client
 
 
@@ -426,7 +425,7 @@ async def _async_client_with_perm(username, *codenames):
         return _login_with_perm(username, *codenames)
 
     await sync_to_async(_login)()
-    user = await sync_to_async(get_user_model().objects.get)(username=username)
+    user = await sync_to_async(User.objects.get)(username=username)
     client = AsyncClient()
     await sync_to_async(client.force_login)(user)
     return client

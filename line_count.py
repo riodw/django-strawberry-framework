@@ -30,8 +30,8 @@ def count_lines(filepath: Path) -> tuple[int, int, int]:
     total = 0
     blank = 0
     comments = 0
-    in_docstring = False
-    docstring_char = None
+    # The quote of the docstring the scan is inside, or None outside one.
+    docstring_char: str | None = None
 
     with open(filepath, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -39,10 +39,10 @@ def count_lines(filepath: Path) -> tuple[int, int, int]:
             stripped = line.strip()
 
             # Track multiline docstrings (triple-quoted strings)
-            if in_docstring:
+            if docstring_char is not None:
                 comments += 1
                 if docstring_char in stripped and stripped.count(docstring_char) % 2 == 1:
-                    in_docstring = False
+                    docstring_char = None
                 continue
 
             # Check for docstring start
@@ -54,7 +54,6 @@ def count_lines(filepath: Path) -> tuple[int, int, int]:
                 if quote in rest:
                     continue
                 # Multiline docstring starts
-                in_docstring = True
                 docstring_char = quote
                 continue
 

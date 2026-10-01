@@ -38,7 +38,9 @@ from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
 from django.test import AsyncClient, Client
 from django.urls import include, path
+from django.views.decorators.csrf import csrf_exempt
 from strawberry.extensions.base_extension import SchemaExtension
+from typing_extensions import override
 
 from django_strawberry_framework import (
     RESOURCE_LIMIT_ERROR_CODE,
@@ -100,7 +102,9 @@ class _ClaimsAnExtension:
     """Not an extension, answering ``__class__`` with an ordinary one."""
 
     @property
-    def __class__(self):
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Claim the ordinary consumer extension, which ``isinstance`` would believe."""
         return _ConsumerExtension
 
@@ -109,7 +113,9 @@ class _ClaimsAnAuthority:
     """Not an extension, answering ``__class__`` with the masking authority."""
 
     @property
-    def __class__(self):
+    @override
+    # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+    def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         """Claim the masking extension, which ``isinstance`` would believe."""
         return DjangoErrorPolicyExtension
 
@@ -301,6 +307,7 @@ class _Nester(SchemaExtension):
         self.ran = False
         self.published: list[dict] = []
 
+    @override
     def on_operation(self):
         """Run the inner operation once the outer operation's hooks are done."""
         yield
@@ -315,6 +322,7 @@ class _Nester(SchemaExtension):
         )
         self.published.append(_published(context))
 
+    @override
     def get_results(self) -> dict:
         """Report the comparison where a client can read it."""
         if len(self.published) != 2:
@@ -372,8 +380,7 @@ def _view(name, build):
         built = DjangoGraphQLView.as_view(schema=_held(name, build))
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 def _fresh_view(build):
@@ -388,8 +395,7 @@ def _fresh_view(build):
         built = DjangoGraphQLView.as_view(schema=build())
         return built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 def _nesting_schema():
@@ -505,8 +511,7 @@ def _async_view(build):
         built = AsyncDjangoGraphQLView.as_view(schema=build())
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 def _held_async_view(name, build):
@@ -516,8 +521,7 @@ def _held_async_view(name, build):
         built = AsyncDjangoGraphQLView.as_view(schema=_held(name, build))
         return await built(request, *args, **kwargs)
 
-    view.csrf_exempt = True
-    return view
+    return csrf_exempt(view)
 
 
 urlpatterns = [
@@ -569,10 +573,12 @@ def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_en
     client = TestClient(path="/iso-resource/")
 
     wrote = client.query("query($t: String!) { widen(tamper: $t) }", {"t": tamper})
+    assert wrote.data is not None
     assert wrote.data["widen"] == TAMPER_OUTCOMES[tamper]
 
     refused = client.query("{ a: hello b: hello }", assert_no_errors=False)
     assert refused.errors is not None
+    assert "extensions" in refused.errors[0]
     assert refused.errors[0]["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE
     assert client.query("{ hello }").data == {"hello": "hi"}
 
@@ -605,10 +611,13 @@ def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_
     client = TestClient(path="/iso-error/")
 
     wrote = client.query("query($t: String!) { unmask(tamper: $t) }", {"t": tamper})
+    assert wrote.data is not None
     assert wrote.data["unmask"] == TAMPER_OUTCOMES[tamper]
 
     masked = client.query("{ boom }", assert_no_errors=False)
     assert masked.errors is not None
+    assert "message" in masked.errors[0]
+    assert "extensions" in masked.errors[0]
     assert SENTINEL not in masked.errors[0]["message"]
     assert "correlationId" in masked.errors[0]["extensions"]
 
@@ -648,9 +657,11 @@ def test_an_operation_a_consumer_extension_starts_leaves_the_request_its_optimiz
         "{ allItems(first: 2) { edges { node { name category { name } } } } }",
     )
 
+    assert response.data is not None
     edges = response.data["allItems"]["edges"]
     assert edges, response.data
     assert all(edge["node"]["category"]["name"] for edge in edges)
+    assert response.extensions is not None
     nesting = response.extensions["nesting"]
     assert nesting["planPublished"] is True
     assert nesting["changed"] == []
@@ -676,6 +687,8 @@ def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(docume
 
     assert refused.data is None
     assert refused.errors is not None
+    assert "extensions" in refused.errors[0]
+    assert "message" in refused.errors[0]
     assert refused.errors[0]["extensions"] == {"code": SCHEMA_CONFIGURATION_ERROR_CODE}
     assert "ResourcePolicy" not in refused.errors[0]["message"]
     assert "max_aliases" not in refused.errors[0]["message"]
@@ -702,7 +715,8 @@ def test_a_factory_resolving_to_anything_but_an_ordinary_extension_refuses_every
         refused = client.query("{ hello }", assert_no_errors=False)
 
     assert refused.data is None
-    assert [error["extensions"] for error in refused.errors] == [
+    assert refused.errors is not None
+    assert [error.get("extensions") for error in refused.errors] == [
         {"code": SCHEMA_CONFIGURATION_ERROR_CODE},
     ]
     assert SENTINEL not in json.dumps(refused.errors)
@@ -727,6 +741,8 @@ def test_a_refused_schema_still_bounds_the_document_it_refuses(document):
     rejected = client.query(document, assert_no_errors=False)
 
     assert rejected.data is None
+    assert rejected.errors is not None
+    assert "extensions" in rejected.errors[0]
     assert rejected.errors[0]["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE
 
 

@@ -8,6 +8,7 @@ import datetime
 
 import pytest
 from django.db import IntegrityError, transaction
+from django.db.models import Field, ForeignObjectRel
 
 from apps.library.models import (
     Book,
@@ -141,7 +142,9 @@ def test_venue_reverse_relations_use_default_accessors_and_close_a_nullable_cycl
     assert venue.venuebadge == badge
     assert list(venue.venuesponsor_set.all()) == [sponsor]
     assert Venue.objects.get(pk=venue.pk).lead_ticket.venue == venue
-    assert Venue._meta.get_field("repairticket").get_accessor_name() == "repairticket_set"
+    repairticket_rel = Venue._meta.get_field("repairticket")
+    assert isinstance(repairticket_rel, ForeignObjectRel)
+    assert repairticket_rel.get_accessor_name() == "repairticket_set"
     assert Venue._meta.get_field("lead_ticket").null is True
     ticket.delete()
     assert Venue.objects.get(pk=venue.pk).lead_ticket is None
@@ -203,8 +206,12 @@ def test_distributor_mixed_case_names_are_its_django_names_and_columns():
     consignment = Consignment.objects.create(label="Spring list", distributorRef=distributor)
 
     assert (str(distributor), str(consignment)) == ("Northern Books", "Spring list")
-    assert Distributor._meta.get_field("displayName").column == "displayName"
-    assert Consignment._meta.get_field("distributorRef").column == "distributorRef_id"
+    display_name_field = Distributor._meta.get_field("displayName")
+    distributor_ref_field = Consignment._meta.get_field("distributorRef")
+    assert isinstance(display_name_field, Field)
+    assert isinstance(distributor_ref_field, Field)
+    assert display_name_field.column == "displayName"
+    assert distributor_ref_field.column == "distributorRef_id"
     assert list(distributor.consignmentItems.all()) == [consignment]
     assert Consignment.objects.get(pk=consignment.pk).distributorRef == distributor
 

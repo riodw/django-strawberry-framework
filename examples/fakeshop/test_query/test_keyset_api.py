@@ -43,7 +43,7 @@ import strawberry
 from apps.library import models
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -790,8 +790,7 @@ def test_keyset_cursor_decode_is_permission_aware():
         embargoed=True,
     )
 
-    user_model = get_user_model()
-    staff = user_model.objects.create_user(username="keyset-staff", password="pw", is_staff=True)
+    staff = User.objects.create_user(username="keyset-staff", password="pw", is_staff=True)
     client = TestClient()
     with client.login(staff):
         staff_result = client.query(ROOT_PAGE_QUERY, variables={"first": 2}).response
@@ -948,8 +947,7 @@ def test_nested_keyset_window_keeps_embargoed_rows_for_staff():
         title="Embargoed #6",
         embargoed=True,
     )
-    user_model = get_user_model()
-    staff = user_model.objects.create_user(username="nested-staff", password="pw", is_staff=True)
+    staff = User.objects.create_user(username="nested-staff", password="pw", is_staff=True)
     client = TestClient()
     with client.login(staff):
         with CaptureQueriesContext(connection) as ctx:

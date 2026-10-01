@@ -13,28 +13,28 @@ from apps.products.services import seed_data
 @pytest.mark.django_db
 def test_category_str_returns_name():
     seed_data(1)
-    cat = Category.objects.first()
+    cat = Category.objects.earliest("pk")
     assert str(cat) == cat.name
 
 
 @pytest.mark.django_db
 def test_item_str_returns_name():
     seed_data(1)
-    item = Item.objects.first()
+    item = Item.objects.earliest("pk")
     assert str(item) == item.name
 
 
 @pytest.mark.django_db
 def test_property_str_returns_name():
     seed_data(1)
-    prop = Property.objects.first()
+    prop = Property.objects.earliest("pk")
     assert str(prop) == prop.name
 
 
 @pytest.mark.django_db
 def test_entry_str_returns_value():
     seed_data(1)
-    entry = Entry.objects.first()
+    entry = Entry.objects.earliest("pk")
     assert str(entry) == entry.value
 
 

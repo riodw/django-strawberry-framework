@@ -10,7 +10,8 @@ instead of lazy-loading it.
 from __future__ import annotations
 
 import datetime
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import strawberry
@@ -22,16 +23,20 @@ from apps.library.orders import BranchOrder
 from apps.products import schema as products_schema
 from apps.products.services import seed_data
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.db import connection, models
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.expressions import Func, OrderBy, RawSQL
 from django.db.models.functions import Coalesce, Lower, Random
 from django.db.models.lookups import GreaterThan, Transform
+from django.db.models.sql.compiler import SQLCompiler
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext, register_lookup
 from django.urls import clear_url_caches, path
 from graphql_client import graphql_payload, post_graphql
+from strawberry.django.context import StrawberryDjangoContext
 from strawberry.schema.name_converter import NameConverter
+from typing_extensions import override
 
 import django_strawberry_framework.list_field as list_field_module
 from django_strawberry_framework import (
@@ -44,6 +49,7 @@ from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.orders import Ordering
 from django_strawberry_framework.resource_policy import (
     DST_RESOURCE_POLICY,
+    _windowed_rows,
     bounded_rows,
     policy_from_info,
 )
@@ -51,6 +57,9 @@ from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.utils.context import get_context_value
 from django_strawberry_framework.utils.querysets import apply_type_visibility_sync
 from django_strawberry_framework.views import DjangoGraphQLView
+
+if TYPE_CHECKING:
+    from django.db.models.sql.compiler import _AsSqlType
 
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
@@ -73,8 +82,7 @@ urlpatterns = [
 
 
 def _staff_client() -> Client:
-    user_model = get_user_model()
-    staff = user_model.objects.create_user(
+    staff = User.objects.create_user(
         username="staff_list_sync",
         password="pw",
         is_staff=True,
@@ -617,7 +625,7 @@ def test_holder_offset_accepts_an_expression_reference_to_a_relation(monkeypatch
     assert _RANDOM_ORDER_SQL not in statement, statement
 
 
-def _coin_case_ordering(lookup="coin__gt", threshold=0.5):
+def _coin_case_ordering(lookup: str = "coin__gt", threshold: object = 0.5):
     """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
     return (
         models.Case(
@@ -705,25 +713,53 @@ class _ProjectFunc(Func):
 
     function = "RANDOM"
 
-    def as_sql(self, compiler, connection, **extra_context):
-        return "RANDOM()", []
+    @override
+    def as_sql(
+        self,
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+        function: str | None = None,
+        template: str | None = None,
+        arg_joiner: str | None = None,
+        **extra_context: object,
+    ) -> _AsSqlType:
+        return "RANDOM()", ()
 
 
 class _ProjectLower(Lower):
     """A subclass of an approved function whose ``as_sql`` emits something else entirely."""
 
-    def as_sql(self, compiler, connection, **extra_context):
-        return "RANDOM()", []
+    @override
+    def as_sql(
+        self,
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+        function: str | None = None,
+        template: str | None = None,
+        arg_joiner: str | None = None,
+        **extra_context: object,
+    ) -> _AsSqlType:
+        return "RANDOM()", ()
 
 
 class _ProjectTransform(Transform):
     """A project transform registered on a built-in field, emitting its own SQL."""
 
     lookup_name = "jitter"
-    output_field = models.FloatField()
+    # basedpyright: django-stubs declares output_field a cached_property, not a class-level field
+    output_field = models.FloatField()  # pyright: ignore[reportAssignmentType]
 
-    def as_sql(self, compiler, connection, **extra_context):
-        return "RANDOM()", []
+    @override
+    def as_sql(
+        self,
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+        function: str | None = None,
+        template: str | None = None,
+        arg_joiner: str | None = None,
+        **extra_context: object,
+    ) -> _AsSqlType:
+        return "RANDOM()", ()
 
 
 class _ProjectLookup(GreaterThan):
@@ -731,8 +767,9 @@ class _ProjectLookup(GreaterThan):
 
     lookup_name = "jittergt"
 
-    def as_sql(self, compiler, connection):
-        return "RANDOM() > 0.5", []
+    @override
+    def as_sql(self, compiler: SQLCompiler, connection: BaseDatabaseWrapper) -> _AsSqlType:
+        return "RANDOM() > 0.5", ()
 
 
 @pytest.mark.django_db
@@ -775,6 +812,7 @@ def test_holder_offset_reads_an_expression_by_its_approved_form(monkeypatch, ord
 class _ProjectF(models.F):
     """A reference subclass that resolves to SQL of its own instead of to the name it holds."""
 
+    @override
     def resolve_expression(self, *args, **kwargs):
         return Random()
 
@@ -782,7 +820,9 @@ class _ProjectF(models.F):
 class _ProjectQ(models.Q):
     """A predicate subclass that resolves to SQL of its own instead of to its children."""
 
-    def resolve_expression(self, *args, **kwargs):
+    @override
+    # basedpyright: deliberately resolves to foreign SQL, the predicate subclass the guard refuses
+    def resolve_expression(self, *args, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]
         return Random()
 
 
@@ -1879,6 +1919,7 @@ def test_holder_materialized_sequence_subclass_is_still_row_bounded():
     """
 
     class _EscapingRows(list):
+        @override
         def __getitem__(self, key):
             if isinstance(key, slice):
                 return list(self)
@@ -2406,7 +2447,8 @@ def _override_untrusted(
     candidate = _DeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    candidate._deferred_filter = (1, (), {"name": "A"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
     return candidate
 
 
@@ -2548,11 +2590,13 @@ def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(m
     library_models.Branch.objects.create(name="A", city="Boston")
 
     class _HostileStr(str):
+        @override
         def __eq__(self, other):
             raise RuntimeError("hostile equality ran")
 
         __hash__ = str.__hash__
 
+        @override
         def __format__(self, spec):
             raise RuntimeError("hostile format ran")
 
@@ -2613,6 +2657,7 @@ def test_holder_naming_converters():
 
     # 2. Custom NameConverter
     class _UpperConverter(NameConverter):
+        @override
         def get_graphql_name(self, obj):
             name = super().get_graphql_name(obj)
             return name.upper()
@@ -2643,6 +2688,7 @@ def test_holder_naming_converters():
     class _CountingConverter(NameConverter):
         calls = 0
 
+        @override
         def from_argument(self, argument):
             type(self).calls += 1
             return super().from_argument(argument).upper()
@@ -2859,9 +2905,10 @@ def _legacy_reference_resolver(source_factory):
     implementation: it records the final queryset's SQL and marks before returning.
     """
 
-    def resolver(root, info: strawberry.Info) -> list[library_schema.BranchType]:
+    def resolver(root, info: strawberry.Info) -> models.QuerySet[models.Model]:
         queryset = apply_type_visibility_sync(library_schema.BranchType, source_factory(), info)
         bounded = bounded_rows(queryset, info, None)
+        assert isinstance(bounded, models.QuerySet)
         _PARITY_CAPTURE["legacy_marks"] = _query_marks(bounded)
         return bounded
 
@@ -2899,8 +2946,9 @@ def _build_legacy_parity_schema(source_factory) -> DjangoSchema:
 
     @strawberry.type
     class _LegacyParityQuery:
-        branches: list[library_schema.BranchType] = strawberry.field(
+        branches: models.QuerySet[models.Model] = strawberry.field(
             resolver=_legacy_reference_resolver(source_factory),
+            graphql_type=list[library_schema.BranchType],
         )
 
     optimizer = DjangoOptimizerExtension()
@@ -2925,7 +2973,7 @@ def _install_parity_probes(monkeypatch) -> dict[str, int]:
         "get_queryset",
         classmethod(_tracking_get_queryset),
     )
-    original_windowed_rows = list_field_module._windowed_rows
+    original_windowed_rows = _windowed_rows
 
     def _recording_windowed_rows(result, info, declared=None, **kwargs):
         bounded = original_windowed_rows(result, info, declared, **kwargs)
@@ -3294,7 +3342,8 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch):
         return _CustomBranchQuerySet(
             model=ordered.model,
             query=ordered.query.clone(),
-            using=ordered._db,
+            # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+            using=ordered._db,  # pyright: ignore[reportAttributeAccessIssue]
         )
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_subclass_apply_sync))
@@ -3322,12 +3371,24 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch):
 _CONTEXT_CAPTURE: dict[str, Any] = {}
 
 
+@dataclass
+class _MarkedContext(StrawberryDjangoContext):
+    """The stock Django context carrying one attribute a consumer set before execution."""
+
+    consumer_marker: object = None
+
+
 class _CapturingContextView(DjangoGraphQLView):
     """Pre-populates a consumer attribute on the context and hands the object to the test."""
 
-    def get_context(self, request, response):
-        context = super().get_context(request, response)
-        context.consumer_marker = _CONTEXT_CAPTURE["marker"]
+    @override
+    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
+    def get_context(self, request, response):  # pyright: ignore[reportIncompatibleMethodOverride]
+        context = _MarkedContext(
+            request=request,
+            response=response,
+            consumer_marker=_CONTEXT_CAPTURE["marker"],
+        )
         _CONTEXT_CAPTURE["context"] = context
         return context
 
@@ -3339,15 +3400,19 @@ class _FrozenContext:
         object.__setattr__(self, "request", request)
         object.__setattr__(self, "response", response)
 
+    @override
     def __setattr__(self, name, value):
         raise AttributeError(f"frozen context refuses write to {name!r}")
 
+    @override
     def __delattr__(self, name):
         raise AttributeError(f"frozen context refuses delete of {name!r}")
 
 
 class _FrozenContextView(DjangoGraphQLView):
-    def get_context(self, request, response):
+    @override
+    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
+    def get_context(self, request, response):  # pyright: ignore[reportIncompatibleMethodOverride]
         return _FrozenContext(request, response)
 
 
@@ -3681,8 +3746,7 @@ def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(monkeypatc
 
     class _DeferredQueryset:
         def __await__(self):
-            if False:
-                yield None
+            yield from ()
             return library_models.Branch.objects.all()
 
     monkeypatch.setattr(
@@ -3703,7 +3767,8 @@ def test_holder_sync_http_rejects_an_async_generator_resolver():
 
     async def _resolve(root, info):
         if False:
-            yield None
+            # basedpyright: the unreachable yield is what makes this resolver an async generator
+            yield None  # pyright: ignore[reportUnreachable]
 
     @strawberry.type
     class _GenQuery:
@@ -3733,15 +3798,19 @@ class _HostileBranchQuerySet(models.QuerySet):
     terminal hooked, another column erased - is a change to BOTH files.
     """
 
+    @override
     def filter(self, *args, **kwargs):
         return library_models.Branch.objects.all()
 
+    @override
     def order_by(self, *args, **kwargs):
         return library_models.Branch.objects.all()
 
+    @override
     def __iter__(self):
         return iter(library_models.Branch.objects.all().order_by("pk"))
 
+    @override
     def __aiter__(self):
         return library_models.Branch.objects.all().order_by("pk").__aiter__()
 
@@ -3763,6 +3832,7 @@ def _degrading_branch_manager():
 
 def _alias_drift_branch_manager():
     class _DriftManager(models.Manager):
+        @override
         def get_queryset(self):
             return library_models.Branch.objects.using("elsewhere")
 
@@ -3900,14 +3970,14 @@ def test_consumer_prefetched_many_to_many_stays_silent_under_strictness_raise():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def venues(self) -> list[library_schema.VenueType]:
+        @strawberry.field(graphql_type=list[library_schema.VenueType])
+        def venues(self) -> list[library_models.Venue]:
             return list(
                 library_models.Venue.objects.prefetch_related("venuesponsor_set").order_by("name"),
             )
 
-        @strawberry.field
-        def sponsors(self) -> list[library_schema.VenueSponsorType]:
+        @strawberry.field(graphql_type=list[library_schema.VenueSponsorType])
+        def sponsors(self) -> list[library_models.VenueSponsor]:
             return list(
                 library_models.VenueSponsor.objects.prefetch_related("venues").order_by("name"),
             )

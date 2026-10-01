@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from apps.kanban import factories as kf
 from apps.kanban import models
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.test import Client
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
@@ -42,7 +42,7 @@ def _lookups(db):
 
 
 def _staff_client() -> Client:
-    user = get_user_model().objects.create_user(
+    user = User.objects.create_user(
         username="staff_agent",
         password="pw",
         is_staff=True,
@@ -538,7 +538,7 @@ def _async_kanban_card(transactional_db):
     kf.make_relative_size("s", order=1)
     kf.make_actor("maintainer")
     card = kf.make_card(status=kf.make_status("todo"))
-    user = get_user_model().objects.create_user(
+    user = User.objects.create_user(
         username="async_staff_agent",
         password="pw",
         is_staff=True,
@@ -565,6 +565,7 @@ async def test_set_card_status_illegal_transition_async_envelope(_async_kanban_c
             },
         )
 
+    assert res.data is not None
     envelope = res.data["setCardStatus"]
     assert envelope["ok"] is False
     assert "Illegal kanban card status transition" in envelope["errors"][0]["messages"][0]

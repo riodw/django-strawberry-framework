@@ -1082,7 +1082,7 @@ def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
     # Child's ``parent { id }`` should equal the root row's id without a JOIN.
     # ``id`` resolves to ``Int`` (via ``BigAutoField -> int``), so JSON
     # serializes it as a number.
-    assert rows["child"]["parent"] == {"id": root.id}
+    assert rows["child"]["parent"] == {"id": root.pk}
     # 1 query: SELECT scalars_scalarspecimen ... (no JOIN). Without the
     # elision the ``parent { id }`` selection would either JOIN or issue
     # a follow-up SELECT per non-null child row.
@@ -1093,7 +1093,7 @@ def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
     # synthesize the stub the resolver returns).
     assert "parent_id" in sql, sql
     # Sanity: the row we asserted on is the one we created.
-    assert child.parent_id == root.id
+    assert child.parent_id == root.pk
 
 
 @pytest.mark.django_db
@@ -1140,8 +1140,8 @@ def test_scalars_optimizer_fk_id_elision_query_count_is_flat_across_row_counts()
     small_rows = small_body["data"]["allScalarSpecimens"]
     assert len(small_rows) == 3
     assert [row["parent"] for row in small_rows if row["label"] != "root"] == [
-        {"id": root.id},
-        {"id": root.id},
+        {"id": root.pk},
+        {"id": root.pk},
     ]
 
     # Four more elided rows: a per-row fallback would cost four more queries.
@@ -1157,7 +1157,7 @@ def test_scalars_optimizer_fk_id_elision_query_count_is_flat_across_row_counts()
     large_rows = large_body["data"]["allScalarSpecimens"]
     assert len(large_rows) == 7
     assert [row["parent"] for row in large_rows if row["label"] != "root"] == [
-        {"id": root.id},
+        {"id": root.pk},
     ] * 6
 
     # Absolute counts, taken from a real run: ONE SELECT at both
@@ -1189,7 +1189,7 @@ def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_q
     ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_shape``.
     """
     root = _seed_specimen(label="root")
-    child = _seed_specimen(label="child", parent=root)
+    _seed_specimen(label="child", parent=root)
 
     with CaptureQueriesContext(connection) as captured:
         response = _post_graphql(
@@ -1211,7 +1211,7 @@ def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_q
     # Both ``id`` AND ``label`` must populate from the JOINed row - proving
     # the optimizer did NOT elide and that the ``parent`` stub is the real
     # joined row, not the fk-id-only stub.
-    assert rows["child"]["parent"] == {"id": root.id, "label": "root"}
+    assert rows["child"]["parent"] == {"id": root.pk, "label": "root"}
     # Still 1 query - but via JOIN, not via the elision shortcut.
     assert len(captured) == 1, [q["sql"] for q in captured]
     sql = captured[0]["sql"]
@@ -1255,15 +1255,15 @@ def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
     assert rows["root"]["first"] is None
     assert rows["root"]["second"] is None
     # Child's two aliases must report the same id (==> the source FK column).
-    assert rows["child"]["first"] == {"id": root.id}
-    assert rows["child"]["second"] == {"id": root.id}
+    assert rows["child"]["first"] == {"id": root.pk}
+    assert rows["child"]["second"] == {"id": root.pk}
     # 1 query, no JOIN.
     assert len(captured) == 1, [q["sql"] for q in captured]
     sql = captured[0]["sql"]
     assert "JOIN" not in sql.upper(), sql
     assert "parent_id" in sql, sql
     # Sanity: the row we asserted on is the one we created.
-    assert child.parent_id == root.id
+    assert child.parent_id == root.pk
 
 
 @pytest.mark.django_db
@@ -1302,7 +1302,7 @@ def test_scalars_optimizer_fk_id_elision_does_not_leak_to_sibling_root_in_http_q
     specimens = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
     nullable = {row["label"]: row for row in body["data"]["allNullableScalarSpecimens"]}
     assert specimens["root"]["parent"] is None
-    assert specimens["child"]["parent"] == {"id": root.id}
+    assert specimens["child"]["parent"] == {"id": root.pk}
     assert nullable["linked"]["partner"] == {"label": "root"}
 
     assert len(captured) == 2, [q["sql"] for q in captured]

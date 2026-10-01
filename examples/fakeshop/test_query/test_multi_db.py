@@ -75,6 +75,7 @@ import strawberry
 from apps.library import models
 from django.conf import settings
 from django.db import connections
+from django.db.models import QuerySet
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
@@ -308,7 +309,7 @@ def _build_list_field_hints_mismatch_schema(
 
     def _hints_resolver(root, info):
         qs = models.Branch.objects.all()
-        qs._hints = {"tenant": 1}
+        monkeypatch.setattr(qs, "_hints", {"tenant": 1})
         return qs
 
     @strawberry.type
@@ -385,7 +386,7 @@ def _build_list_field_in_place_routing_mutation_schema(
 
     def _shard_b_tenant_resolver(root, info):
         qs = models.Branch.objects.using("shard_b")
-        qs._hints = {"tenant": 1}
+        monkeypatch.setattr(qs, "_hints", {"tenant": 1})
         return qs
 
     @strawberry.type
@@ -500,7 +501,7 @@ def _build_list_field_identity_token_schema(
 
     def _tenant_resolver(root, info):
         qs = models.Branch.objects.all()
-        qs._hints = {"tenant": _TENANT_TOKEN}
+        monkeypatch.setattr(qs, "_hints", {"tenant": _TENANT_TOKEN})
         return qs
 
     @strawberry.type
@@ -618,7 +619,7 @@ def _build_list_field_mutable_hint_schema(
 
     def _tenant_resolver(root, info):
         qs = models.Branch.objects.all()
-        qs._hints = {"tenant": token}
+        monkeypatch.setattr(qs, "_hints", {"tenant": token})
         return qs
 
     @strawberry.type
@@ -699,8 +700,8 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
 
     @strawberry.type
     class _MultiDbTestQuery:
-        @strawberry.field
-        def books_on_shard_b(self, info: Info) -> list[BookType]:
+        @strawberry.field(graphql_type=list[BookType])
+        def books_on_shard_b(self, info: Info) -> QuerySet[models.Book]:
             return models.Book.objects.using("shard_b").select_related(
                 "shelf__branch",
             )
@@ -736,8 +737,8 @@ def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests):
 
     @strawberry.type
     class _MultiDbDebugTestQuery:
-        @strawberry.field
-        def books_on_shard_b(self, info: Info) -> list[BookType]:
+        @strawberry.field(graphql_type=list[BookType])
+        def books_on_shard_b(self, info: Info) -> QuerySet[models.Book]:
             return models.Book.objects.using("shard_b").select_related(
                 "shelf__branch",
             )
@@ -768,16 +769,16 @@ def _build_loan_filter_test_schema(_reload_project_schema_for_acceptance_tests):
     from apps.library import filters as library_filters
     from apps.library.schema import LoanType
 
-    from django_strawberry_framework.filters import filter_input_type
+    from django_strawberry_framework.filters import FilterInput
 
     @strawberry.type
     class _LoanFilterShardQuery:
-        @strawberry.field
+        @strawberry.field(graphql_type=list[LoanType])
         def loans_on_shard_b(
             self,
             info: Info,
-            filter: filter_input_type(library_filters.LoanFilter) | None = None,  # noqa: A002
-        ) -> list[LoanType]:
+            filter: FilterInput[library_filters.LoanFilter] | None = None,  # noqa: A002
+        ) -> QuerySet[models.Loan]:
             queryset = models.Loan.objects.using("shard_b").order_by("id")
             if filter is not None:
                 queryset = library_filters.LoanFilter.apply_sync(filter, queryset, info)
@@ -921,6 +922,7 @@ def test_debug_extension_captures_shard_b_alias_rows(_build_debug_test_schema):
         finally:
             clear_url_caches()
 
+    assert res.data is not None
     assert [book["title"] for book in res.data["booksOnShardB"]] == ["DebugShard"]
     payload = (res.extensions or {})["debug"]
     shard_rows = [row for row in payload["sql"] if row["alias"] == "shard_b"]
@@ -1012,6 +1014,7 @@ def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias(
             clear_url_caches()
 
     # Row-preserving: exactly both shared-book loans, id-ordered, each once.
+    assert res.data is not None
     assert [loan["id"] for loan in res.data["loansOnShardB"]] == [
         pks["relation_a"],
         pks["relation_b"],
@@ -1110,17 +1113,16 @@ def _seed_same_pk_item_pair(pk_base: int) -> None:
 
 def _login_products_writer(*codenames: str) -> Client:
     from apps.products.services import create_users
-    from django.contrib.auth import get_user_model
-    from django.contrib.auth.models import Permission
+    from django.contrib.auth.models import Permission, User
 
     create_users(1)
-    user = get_user_model().objects.get(username="staff_1")
+    user = User.objects.get(username="staff_1")
     for codename in codenames:
         user.user_permissions.add(
             Permission.objects.get(codename=codename, content_type__app_label="products"),
         )
     client = Client()
-    client.force_login(get_user_model().objects.get(pk=user.pk))
+    client.force_login(User.objects.get(pk=user.pk))
     return client
 
 
@@ -1167,6 +1169,8 @@ def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias(_projec
             )
         finally:
             clear_url_caches()
+
+    assert res.data is not None
 
     payload = res.data["updateItem"]
     assert payload["errors"] == []
@@ -1261,6 +1265,7 @@ def test_custom_nodeid_mutation_resolves_real_pk_on_write_alias():
     finally:
         _current["schema"] = None
 
+    assert response.data is not None
     assert response.data["updateCategory"]["errors"] == []
     assert response.data["updateCategory"]["node"]["description"] == "write-alias-updated"
     assert (
@@ -1304,6 +1309,8 @@ def test_mutation_validation_envelope_rolls_back_on_the_write_alias(_project_sch
             )
         finally:
             clear_url_caches()
+
+    assert res.data is not None
 
     payload = res.data["updateItem"]
     assert payload["node"] is None
@@ -1424,6 +1431,8 @@ def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alia
         finally:
             clear_url_caches()
 
+    assert res.data is not None
+
     payload = res.data["updateBookGenresViaSerializer"]
     assert payload["errors"] == []
     assert payload["node"]["title"] == "ser-pinned-write"
@@ -1460,6 +1469,8 @@ def test_serializer_unique_validator_reads_write_alias(_project_schema):
             )
         finally:
             clear_url_caches()
+
+    assert res.data is not None
 
     payload = res.data["updateBookTitleWithAliasValidator"]
     assert payload["errors"] == []
@@ -1504,6 +1515,8 @@ def test_serializer_mutation_envelope_rolls_back_on_the_write_alias(_project_sch
         finally:
             clear_url_caches()
 
+    assert res.data is not None
+
     payload = res.data["updateBookGenresViaSerializer"]
     assert payload["node"] is None
     assert payload["errors"], payload
@@ -1545,8 +1558,8 @@ def _prefetch_alias_schema(child_hook, *, root_alias=None):
 
     @strawberry.type
     class _PrefetchAliasQuery:
-        @strawberry.field
-        def shelves(self, info: Info) -> list[shelf_type]:
+        @strawberry.field(graphql_type=list[shelf_type])
+        def shelves(self, info: Info) -> QuerySet[models.Shelf]:
             queryset = models.Shelf.objects.all()
             if root_alias is not None:
                 queryset = queryset.using(root_alias)

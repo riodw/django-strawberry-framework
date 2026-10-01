@@ -37,7 +37,7 @@ from apps.products.serializers import (
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import AsyncClient, Client, override_settings
@@ -72,7 +72,7 @@ def _staff_client() -> Client:
     """Log in the seeded ``staff_1`` user (``is_staff=True``) created by ``create_users``."""
     create_users(1)
     client = Client()
-    client.force_login(get_user_model().objects.get(username="staff_1"))
+    client.force_login(User.objects.get(username="staff_1"))
     return client
 
 
@@ -95,7 +95,6 @@ def _login_with_perm(username: str, *codenames: str) -> Client:
     """
     from django.contrib.auth.models import Permission
 
-    User = get_user_model()
     user = User.objects.get(username=username)
     for codename in codenames:
         perm = Permission.objects.get(codename=codename, content_type__app_label="products")
@@ -166,7 +165,7 @@ def test_create_item_happy_path():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     data = _graphql_data(
@@ -201,7 +200,7 @@ def test_create_item_private_row_is_refetched_for_its_author_but_stays_hidden_fr
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     data = _graphql_data(
@@ -245,7 +244,7 @@ def test_update_item_non_colliding_partial_update():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(
         name="Before",
         description="keep me",
@@ -324,11 +323,11 @@ def test_update_item_with_new_upload_replaces_attachment(tmp_path):
     assert item is not None
     from django.contrib.auth.models import Permission
 
-    user = get_user_model().objects.get(username="staff_1")
+    user = User.objects.get(username="staff_1")
     user.user_permissions.add(
         Permission.objects.get(codename="change_item", content_type__app_label="products"),
     )
-    user = get_user_model().objects.get(pk=user.pk)
+    user = User.objects.get(pk=user.pk)
 
     mutation = (
         "mutation($id: ID!, $d: ItemPartialInput!) { updateItem(id: $id, data: $d) { "
@@ -354,9 +353,11 @@ def test_update_item_with_new_upload_replaces_attachment(tmp_path):
                 },
             )
         assert res.response.status_code == 200
+        assert res.data is not None
         payload = res.data["updateItem"]
         assert payload["errors"] == []
         item.refresh_from_db()
+        assert item.attachment.name is not None
         assert item.attachment.name.endswith("replacement.txt")
         with item.attachment.open("rb") as handle:
             assert handle.read() == b"replaced bytes"
@@ -373,7 +374,7 @@ def test_delete_item_happy_path():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Doomed", category=category)
     gid = _global_id("products.item", item.pk)
     client = _login_with_perm("staff_1", "delete_item")
@@ -414,7 +415,7 @@ def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference)
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     held = models.Item.objects.create(name="Held", category=category)
     other = models.Item.objects.create(name="Other", category=category)
     if reference == "item":
@@ -491,7 +492,7 @@ def test_delete_item_snapshot_carries_connection_child_edges():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     properties = list(models.Property.objects.filter(category=category)[:2])
     item = models.Item.objects.create(name="DoomedWithEntries", category=category)
     entry_pks = [
@@ -591,8 +592,6 @@ def test_create_category_surrogate_in_nonunique_description_is_field_error_no_cr
     """
     create_users(1)
     client = _login_with_perm("view_category_1", "add_category")
-    before = models.Category.objects.count()
-
     response = _post_graphql(
         _CREATE_CATEGORY,
         client=client,
@@ -648,7 +647,7 @@ def test_create_item_unique_constraint_envelope_uses_all_sentinel():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     existing = models.Item.objects.create(name="Dup", category=category)
     client = _login_with_perm("view_item_1", "add_item")
 
@@ -683,7 +682,7 @@ def test_create_item_empty_name_is_field_error_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
 
@@ -755,7 +754,7 @@ def test_update_item_partial_collision_on_unique_constraint_changing_only_name()
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item_a = models.Item.objects.create(name="A", category=category)
     models.Item.objects.create(name="B", category=category)
     client = _login_with_perm("staff_1", "change_item")
@@ -787,7 +786,7 @@ def test_create_item_anonymous_is_denied_top_level_error_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     before = models.Item.objects.count()
 
     response = _post_graphql(
@@ -823,7 +822,7 @@ def test_create_item_missing_model_perm_is_denied_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login("view_item_1")  # only products.view_item, no add_item
     before = models.Item.objects.count()
 
@@ -862,7 +861,7 @@ def test_update_item_missing_change_perm_is_denied_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="KeepMyName", description="keep me", category=category)
     client = _login_with_perm("staff_1", "add_item")  # holds add, LACKS change
 
@@ -894,7 +893,7 @@ def test_delete_item_missing_delete_perm_is_denied_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Undoomed", category=category)
     client = _login_with_perm("staff_1", "add_item")  # holds add, LACKS delete
 
@@ -927,11 +926,10 @@ def test_create_item_login_bracket_via_test_client():
     seed_data(1)
     from django.contrib.auth.models import Permission
 
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     variables = {
         "d": {"name": "BracketWidget", "categoryId": _global_id("products.category", category.pk)},
     }
-    User = get_user_model()
     user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
@@ -943,18 +941,23 @@ def test_create_item_login_bracket_via_test_client():
     denied = client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
     assert denied.response.status_code == 200  # GraphQL denials still ride HTTP 200
     assert denied.data is None
+    assert denied.errors is not None
+    assert "message" in denied.errors[0]
     assert "Not authorized" in denied.errors[0]["message"]
     assert not models.Item.objects.filter(name="BracketWidget").exists()
 
     with client.login(user):
         granted = client.query(_CREATE_ITEM, variables=variables)
         assert granted.errors is None
+        assert granted.data is not None
         assert granted.data["createItem"]["errors"] == []
         assert granted.data["createItem"]["node"]["name"] == "BracketWidget"
     assert models.Item.objects.filter(name="BracketWidget", category=category).exists()
 
     denied_again = client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
     assert denied_again.data is None
+    assert denied_again.errors is not None
+    assert "message" in denied_again.errors[0]
     assert "Not authorized" in denied_again.errors[0]["message"]
 
 
@@ -983,10 +986,12 @@ def test_operation_name_dispatch_via_test_client():
     assert res.errors is None
     assert res.response.status_code == 200
     assert res.response["Content-Type"].startswith("application/json")
+    assert res.data is not None
     assert list(res.data.keys()) == ["allItems"]  # the named second op; the first never ran
     assert len(res.data["allItems"]["edges"]) == 1
 
     unnamed = client.query(document, variables={"first": 1})
+    assert unnamed.data is not None
     assert list(unnamed.data.keys()) == ["allCategories"]  # absent key -> first operation
 
 
@@ -1062,7 +1067,7 @@ def test_update_item_anonymous_on_hidden_private_row_is_not_found_before_any_aut
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     hidden = models.Item.objects.create(name="SecretRow", category=category, is_private=True)
 
     response = _post_graphql(
@@ -1091,7 +1096,7 @@ def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
     """
     create_users(1)
     seed_data(1)
-    some_item = models.Item.objects.first()
+    some_item = models.Item.objects.earliest("pk")
     wrong_gid = _global_id("products.item", some_item.pk)
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
@@ -1156,7 +1161,7 @@ def test_update_item_wrong_type_global_id_on_id_is_field_error():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Untouched", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -1203,7 +1208,7 @@ def test_delete_item_wrong_type_global_id_on_id_is_field_error():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Survivor", category=category)
     client = _login_with_perm("staff_1", "delete_item")
 
@@ -1259,7 +1264,7 @@ def test_create_item_relation_id_for_hidden_category_is_field_error():
     assert models.Item.objects.count() == before
     assert not models.Item.objects.filter(name="AttachHidden").exists()
 
-    missing_pk = (models.Category.objects.order_by("-pk").first().pk) + 10_000
+    missing_pk = (models.Category.objects.latest("pk").pk) + 10_000
     missing = _post_graphql(
         _CREATE_ITEM,
         client=client,
@@ -1309,7 +1314,7 @@ def test_update_item_explicit_null_category_id_is_field_error():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="HasCategory", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -1340,7 +1345,7 @@ def test_update_item_explicit_null_scalar_name_is_field_error():
     """
     create_users(1)
     seed_data(1)
-    item = models.Item.objects.first()
+    item = models.Item.objects.earliest("pk")
     orig_name = item.name
     client = _login_with_perm("staff_1", "change_item")
 
@@ -1372,7 +1377,7 @@ def test_update_item_malformed_id_is_field_error_no_coercion_crash():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Untouched", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -1435,7 +1440,7 @@ def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Untouched", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -1540,7 +1545,7 @@ def test_update_item_id_absurd_huge_pk_is_not_found_no_overflow():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="Untouched", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -1582,7 +1587,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     with CaptureQueriesContext(connection) as captured:
@@ -1657,7 +1662,7 @@ def test_emitted_globalid_is_model_anchored():
     """
     seed_data(1)
     client = _staff_client()
-    item = models.Item.objects.order_by("id").first()
+    item = models.Item.objects.earliest("id")
     response = _post_graphql(
         "query { allItems { edges { node { id name } } } }",
         client=client,
@@ -1688,7 +1693,7 @@ def test_globalid_filter_round_trip():
     """
     seed_data(1)
     client = _staff_client()
-    target = models.Item.objects.order_by("id").first()
+    target = models.Item.objects.earliest("id")
     emit_response = _post_graphql(
         "query { allItems { edges { node { id name } } } }",
         client=client,
@@ -1726,7 +1731,7 @@ def test_type_strategy_opt_out_reproduces_type_name(project_schema_override):
     """
     seed_data(1)
     client = _staff_client()
-    item = models.Item.objects.order_by("id").first()
+    item = models.Item.objects.earliest("id")
     with override_settings(
         DJANGO_STRAWBERRY_FRAMEWORK={"RELAY_GLOBALID_STRATEGY": "type"},
     ):
@@ -2001,7 +2006,7 @@ def test_all_items_dangling_forward_fk_is_the_non_null_completion_error_only():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.filter(category=category).first()
     assert item is not None
     client = _staff_client()
@@ -2037,7 +2042,7 @@ def test_all_items_dangling_forward_fk_is_the_non_null_completion_error_only():
 def test_products_categories_filter_by_name_exact_as_staff():
     """A staff user clears ``CategoryFilter.check_name_permission`` and filters by name."""
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.earliest("id")
     _assert_graphql_data(
         f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) "
         "{ edges { node { name } } } }",
@@ -2050,7 +2055,7 @@ def test_products_categories_filter_by_name_exact_as_staff():
 def test_products_categories_filter_by_name_denied_for_anonymous():
     """An anonymous user filtering by ``Category.name`` (exact) is rejected by the gate."""
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.earliest("id")
     response = _post_graphql(
         f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) "
         "{ edges { node { name } } } }",
@@ -2072,7 +2077,7 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
     is rejected exactly like the ``exact`` form.
     """
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.earliest("id")
     response = _post_graphql(
         f"query {{ allCategories(filter: {{ name: {{ iContains: {json.dumps(category.name[:2])} }} }}) "
         "{ edges { node { name } } } }",
@@ -2087,7 +2092,7 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
 def test_products_items_related_category_name_permission_fires_for_anonymous():
     """A child ``RelatedFilter`` permission gate fires through the live API."""
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.earliest("id")
     response = _post_graphql(
         f"query {{ allItems(filter: {{ category: {{ name: {{ exact: {json.dumps(category.name)} }} }} }}) "
         "{ edges { node { name } } } }",
@@ -2110,7 +2115,7 @@ def test_products_items_flat_category_name_permission_fires_for_anonymous():
     bypass); it is now denied identically to the nested form.
     """
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.earliest("id")
     response = _post_graphql(
         f"query {{ allItems(filter: {{ categoryName: {{ exact: {json.dumps(category.name)} }} }}) "
         "{ edges { node { name } } } }",
@@ -2134,7 +2139,7 @@ def test_products_items_deep_flat_category_name_permission_fires_for_anonymous()
     ``entries: { property: { category: { name: ... } } }``.
     """
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.earliest("id")
     response = _post_graphql(
         "query { allItems(filter: { entriesPropertyCategoryName: "
         f"{{ exact: {json.dumps(category.name)} }} }}) "
@@ -2155,7 +2160,7 @@ def test_products_items_flat_category_name_as_staff():
     under that category (the same rows the nested staff form would return).
     """
     seed_data(1)
-    item = models.Item.objects.select_related("category").order_by("id").first()
+    item = models.Item.objects.select_related("category").earliest("id")
     category_name = item.category.name
     expected_edges = [
         {"node": {"name": it.name, "category": {"name": it.category.name}}}
@@ -2239,7 +2244,7 @@ def test_products_categories_empty_relay_global_id_in_matches_nothing():
 def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents():
     """A generated reverse-FK leaf returns one parent even when two children match."""
     seed_data(1)
-    category = models.Category.objects.filter(is_private=False).order_by("pk").first()
+    category = models.Category.objects.filter(is_private=False).earliest("pk")
     models.Item.objects.create(
         name="duplicate-leaf-alpha",
         category=category,
@@ -2299,7 +2304,7 @@ def test_products_categories_filter_by_starts_with_via_all_lookups():
     assertion pins API == ORM rather than a Faker-specific name.
     """
     seed_data(1)
-    prefix = models.Category.objects.order_by("id").first().name[:2]
+    prefix = models.Category.objects.earliest("id").name[:2]
     expected = [
         {"node": {"name": name}}
         for name in models.Category.objects.filter(name__startswith=prefix)
@@ -2325,7 +2330,7 @@ def test_products_items_filter_by_related_category_global_id():
     subject composed with the cascade's row narrowing.
     """
     seed_data(1)
-    category = models.Category.objects.filter(is_private=False).order_by("id").first()
+    category = models.Category.objects.filter(is_private=False).earliest("id")
     gid = str(
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
@@ -2488,7 +2493,7 @@ def test_products_items_filter_and_order_compose():
     ``is_private=False`` items, on top of which the filter -> order chain runs.
     """
     seed_data(1)
-    category = models.Category.objects.filter(is_private=False).order_by("id").first()
+    category = models.Category.objects.filter(is_private=False).earliest("id")
     gid = str(
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
@@ -2648,7 +2653,7 @@ def test_products_items_connection_inverted_after_before_window_is_empty():
     window spans a deterministic partition without hand-rolling catalog rows.
     """
     seed_data(6)
-    category = models.Category.objects.filter(is_private=False).order_by("pk").first()
+    category = models.Category.objects.filter(is_private=False).earliest("pk")
     category.items.update(is_private=False)
     expected_names = list(category.items.order_by("pk").values_list("name", flat=True))
 
@@ -2710,7 +2715,7 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
     schema, whose construction this test does not own.
     """
     seed_data(1)
-    variables = {argument: relay.to_base64("arrayconnection", "-2")}
+    variables: dict[str, object] = {argument: relay.to_base64("arrayconnection", "-2")}
     if argument == "after":
         variables["first"] = 2
     response = _post_graphql(
@@ -2746,7 +2751,7 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
 def _login(username: str) -> Client:
     """Log in a seeded ``create_users(1)`` user by username."""
     client = Client()
-    client.force_login(get_user_model().objects.get(username=username))
+    client.force_login(User.objects.get(username=username))
     return client
 
 
@@ -3073,7 +3078,7 @@ def test_cascade_composes_with_filter_and_order_live():
     # (b) anonymous filter (no gate on `id`) + order (no gate on Item.name) on top
     # of the cascade-narrowed set: the public category's non-private items, ordered
     # by name. Derived from the equivalent post-cascade ORM query (API == ORM).
-    category = models.Category.objects.filter(is_private=False).order_by("id").first()
+    category = models.Category.objects.filter(is_private=False).earliest("id")
     gid = str(
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
@@ -3497,7 +3502,7 @@ def test_create_item_via_form_happy_path():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -3531,7 +3536,7 @@ def test_create_item_via_form_category_id_writes_through_form_category_field():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -3568,7 +3573,7 @@ def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_cra
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
 
@@ -3601,7 +3606,7 @@ def test_create_item_via_form_surrogate_in_description_is_field_error_no_crash()
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
 
@@ -3636,7 +3641,7 @@ def test_update_item_via_form_non_colliding_partial_update():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(
         name="BeforeForm",
         description="keep me",
@@ -3673,7 +3678,7 @@ def test_update_item_via_form_partial_update_preserves_category_and_description(
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(
         name="PreserveBefore",
         description="preserve this description",
@@ -3714,7 +3719,7 @@ def test_update_item_via_form_revalidates_an_untouched_stale_name():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(
         name=REJECTED_ITEM_NAME,
         description="Before",
@@ -3769,7 +3774,7 @@ def test_update_item_via_form_explicit_null_category_id_is_the_form_required_err
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="KeepsItsCategory", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -3804,7 +3809,7 @@ def test_update_item_via_form_partial_collision_fires_unique_constraint_on_name_
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item_a = models.Item.objects.create(name="FormA", category=category)
     models.Item.objects.create(name="FormB", category=category)
     client = _login_with_perm("staff_1", "change_item")
@@ -3835,7 +3840,7 @@ def test_create_item_via_form_clean_field_error_is_field_keyed():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
 
@@ -3871,7 +3876,7 @@ def test_create_item_via_form_omitted_required_name_is_a_coercion_error_no_write
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
 
@@ -3900,7 +3905,7 @@ def test_create_item_via_form_unique_constraint_envelope_uses_all_sentinel():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     existing = models.Item.objects.create(name="FormDup", category=category)
     client = _login_with_perm("view_item_1", "add_item")
 
@@ -3936,7 +3941,7 @@ def test_create_item_via_form_anonymous_is_denied_top_level_error_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     before = models.Item.objects.count()
 
     response = _post_graphql(
@@ -3968,7 +3973,7 @@ def test_create_item_via_form_missing_model_perm_is_denied_no_write():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login("view_item_1")  # only products.view_item, no add_item
     before = models.Item.objects.count()
 
@@ -4153,14 +4158,14 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     from django.contrib.auth.models import Permission
 
-    user = get_user_model().objects.get(username="view_item_1")
+    user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
     )
-    user = get_user_model().objects.get(pk=user.pk)  # drop the stale perm cache
+    user = User.objects.get(pk=user.pk)  # drop the stale perm cache
 
     mutation = (
         "mutation($d: ItemFileModelFormInput!) { createItemWithFileViaForm(data: $d) { "
@@ -4207,6 +4212,7 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
 
         # The row landed with the file routed into `files=` (the data=/files= split).
         created = models.Item.objects.get(name="UploadedFormWidget")
+        assert created.attachment.name is not None
         assert created.attachment.name.endswith("doc.txt")
         # Read + close the handle so the suite's `-W error` does not catch a leaked
         # file finalizer (the FieldFile leaves the underlying file open after read()).
@@ -4227,7 +4233,7 @@ def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path)
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item", "change_item")
 
     create_mutation = (
@@ -4268,6 +4274,7 @@ def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path)
         assert created_result["errors"] == []
         created = models.Item.objects.get(name="PreservedFormWidget")
         stored_name = created.attachment.name
+        assert stored_name is not None
         assert stored_name.endswith("keepme.txt")
 
         response = _post_graphql(
@@ -4321,7 +4328,7 @@ def test_create_default_category_item_via_form_injects_the_default_category():
     """
     create_users(1)
     seed_data(1)
-    default_category = models.Category.objects.order_by("pk").first()
+    default_category = models.Category.objects.earliest("pk")
     assert models.Category.objects.exclude(pk=default_category.pk).exists()
     client = _login_with_perm("view_item_1", "add_item")
 
@@ -4359,7 +4366,7 @@ def test_create_default_category_item_via_form_write_time_integrity_error_uses_e
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.order_by("pk").first()
+    category = models.Category.objects.earliest("pk")
     existing = models.Item.objects.create(name="RaceFormDup", category=category)
     client = _login_with_perm("view_item_1", "add_item")
 
@@ -4402,7 +4409,7 @@ def test_create_stamped_item_via_form_get_form_kwargs_injects_user():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -4501,7 +4508,7 @@ def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error
     """
     create_users(1)
     seed_data(1)
-    some_item = models.Item.objects.first()
+    some_item = models.Item.objects.earliest("pk")
     wrong_gid = _global_id("products.item", some_item.pk)
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
@@ -4534,7 +4541,7 @@ def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="FormUntouched", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -4585,11 +4592,11 @@ async def test_create_item_over_graphql_async():
     def _user_and_category():
         from django.contrib.auth.models import Permission
 
-        user = get_user_model().objects.get(username="view_item_1")
+        user = User.objects.get(username="view_item_1")
         perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
         user.user_permissions.add(perm)
-        user = get_user_model().objects.get(pk=user.pk)
-        return user, models.Category.objects.first()
+        user = User.objects.get(pk=user.pk)
+        return user, models.Category.objects.earliest("pk")
 
     user, category = await sync_to_async(_user_and_category)()
     client = AsyncClient()
@@ -4622,11 +4629,11 @@ async def test_create_item_via_form_over_graphql_async():
     def _user_and_category():
         from django.contrib.auth.models import Permission
 
-        user = get_user_model().objects.get(username="view_item_1")
+        user = User.objects.get(username="view_item_1")
         perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
         user.user_permissions.add(perm)
-        user = get_user_model().objects.get(pk=user.pk)
-        return user, models.Category.objects.first()
+        user = User.objects.get(pk=user.pk)
+        return user, models.Category.objects.earliest("pk")
 
     user, category = await sync_to_async(_user_and_category)()
     client = AsyncClient()
@@ -4659,11 +4666,11 @@ async def test_create_item_via_serializer_over_graphql_async():
     def _user_and_category():
         from django.contrib.auth.models import Permission
 
-        user = get_user_model().objects.get(username="view_item_1")
+        user = User.objects.get(username="view_item_1")
         perm = Permission.objects.get(codename="add_item", content_type__app_label="products")
         user.user_permissions.add(perm)
-        user = get_user_model().objects.get(pk=user.pk)
-        return user, models.Category.objects.first()
+        user = User.objects.get(pk=user.pk)
+        return user, models.Category.objects.earliest("pk")
 
     user, category = await sync_to_async(_user_and_category)()
     client = AsyncClient()
@@ -4723,7 +4730,7 @@ def test_create_item_via_serializer_happy_path():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -4751,7 +4758,7 @@ def test_update_item_via_serializer_happy_path():
     """`updateItemViaSerializer` changing only `name` persists via DRF `partial=True`."""
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(name="SerBefore", category=category)
     client = _login_with_perm("staff_1", "change_item")
 
@@ -4780,7 +4787,7 @@ def test_create_item_via_serializer_category_id_reverse_map_writes():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.order_by("pk").last()
+    category = models.Category.objects.latest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -4807,7 +4814,7 @@ def test_create_item_via_serializer_validate_field_error_is_field_keyed():
     """A `name` failing `validate_name` is a `FieldError(field="name")`, `node: null`, no top-level error."""
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -4836,7 +4843,7 @@ def test_create_item_via_serializer_unencodable_scalar_is_field_error_no_crash()
     """A lone-surrogate serializer scalar is rejected in-band before database validation."""
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
 
@@ -4871,7 +4878,7 @@ def test_create_item_via_serializer_object_validate_all_sentinel_and_request_con
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -4909,7 +4916,7 @@ def test_create_item_via_serializer_unique_together_error_uses_all_sentinel():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     models.Item.objects.create(name="SerDup", category=category)
     client = _login_with_perm("view_item_1", "add_item")
 
@@ -4934,7 +4941,7 @@ def test_update_item_via_serializer_partial_update_preserves_other_fields():
     """A `name`-only `updateItemViaSerializer` preserves `description` / `category` via `partial=True`."""
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     item = models.Item.objects.create(
         name="SerPreserveBefore",
         description="keep this",
@@ -4969,7 +4976,7 @@ def test_update_item_via_serializer_partial_unique_together_fires_on_name_only_c
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     models.Item.objects.create(name="SerTakenName", category=category)
     item = models.Item.objects.create(name="SerOriginal", category=category)
     client = _login_with_perm("staff_1", "change_item")
@@ -5030,7 +5037,7 @@ def test_create_item_via_serializer_anonymous_is_denied_top_level_error_no_write
     """An anonymous caller is denied with a top-level `GraphQLError`, no row written."""
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
 
     response = _post_graphql(
         _CREATE_ITEM_VIA_SERIALIZER,
@@ -5056,11 +5063,11 @@ def test_create_item_via_serializer_missing_model_perm_is_denied_no_write():
     """A logged-in caller missing `add_item` is denied; a permitted caller succeeds."""
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
 
     # `view_item_1` holds only `view_item`, not `add_item`.
     denied_client = Client()
-    denied_client.force_login(get_user_model().objects.get(username="view_item_1"))
+    denied_client.force_login(User.objects.get(username="view_item_1"))
     response = _post_graphql(
         _CREATE_ITEM_VIA_SERIALIZER,
         client=denied_client,
@@ -5150,7 +5157,7 @@ def test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_aut
 
     # `view_item_1` is logged in but lacks `add_item` (no write authorization).
     denied_client = Client()
-    denied_client.force_login(get_user_model().objects.get(username="view_item_1"))
+    denied_client.force_login(User.objects.get(username="view_item_1"))
     response = _post_graphql(
         _CREATE_ITEM_VIA_SERIALIZER,
         client=denied_client,
@@ -5182,14 +5189,14 @@ def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path):
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     from django.contrib.auth.models import Permission
 
-    user = get_user_model().objects.get(username="view_item_1")
+    user = User.objects.get(username="view_item_1")
     user.user_permissions.add(
         Permission.objects.get(codename="add_item", content_type__app_label="products"),
     )
-    user = get_user_model().objects.get(pk=user.pk)  # drop the stale perm cache
+    user = User.objects.get(pk=user.pk)  # drop the stale perm cache
 
     mutation = (
         "mutation($d: ItemSerializerInput!) { createItemViaSerializer(data: $d) { "
@@ -5235,6 +5242,7 @@ def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path):
         assert result["node"] == {"name": "SerUploadedWidget"}
 
         created = models.Item.objects.get(name="SerUploadedWidget")
+        assert created.attachment.name is not None
         assert created.attachment.name.endswith("serdoc.txt")
         with created.attachment.open("rb") as handle:
             assert handle.read() == b"serializer upload bytes"
@@ -5255,7 +5263,7 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     with CaptureQueriesContext(connection) as captured:
@@ -5370,7 +5378,7 @@ def test_create_item_via_renamed_serializer_happy_path():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(
@@ -5404,7 +5412,7 @@ def test_renamed_serializer_relation_error_keys_to_graphql_wire_name():
     """
     create_users(1)
     seed_data(1)
-    some_item = models.Item.objects.first()
+    some_item = models.Item.objects.earliest("pk")
     wrong_gid = _global_id("products.item", some_item.pk)  # an Item gid; a Category is expected
     client = _login_with_perm("view_item_1", "add_item")
     before = models.Item.objects.count()
@@ -5434,7 +5442,7 @@ def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name():
     """
     create_users(1)
     seed_data(1)
-    category = models.Category.objects.first()
+    category = models.Category.objects.earliest("pk")
     client = _login_with_perm("view_item_1", "add_item")
 
     response = _post_graphql(

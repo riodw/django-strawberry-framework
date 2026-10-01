@@ -5,7 +5,8 @@ Repo tooling: these rows pin what the census counts as a use of ``typing.Any``
 ``TypeVar`` arguments, runtime values) and what it does not (the import itself,
 a docstring, an unrelated name ``Any``); the site each use is attributed to; the
 verdict against an allowlist (exact match, a new site, a count above or below
-the entry, an entry whose site is gone); and the CLI on a scratch package. The
+the entry, an entry whose site is gone); the census scope (the package plus the
+example project outside its three test trees); and the CLI on a scratch package. The
 shipped ``ALLOWED_ANY`` is checked for well-formed, unique, reasoned entries,
 never for its verdict on the live tree: the gate's own run owns that. A CLI that
 reads source files has no ``/graphql/`` wire shape, so there is no live sibling
@@ -233,12 +234,30 @@ def test_list_prints_every_site_and_never_fails(tmp_path, capsys):
     assert captured.err == "2 uses at 2 sites\n"
 
 
+def test_the_census_reads_the_package_and_the_example_outside_its_test_trees(tmp_path):
+    """The example's source counts; ``tests/``, ``test_query/`` and ``apps/<app>/tests/`` do not."""
+    root = _package(tmp_path, "from typing import Any\n\nx: Any\n")
+    example = tmp_path / check_any.EXAMPLE
+    counted = ("graphql_client.py", "apps/shop/schema.py", "apps/shop/management/commands/seed.py")
+    skipped = ("tests/test_urls.py", "test_query/test_api.py", "apps/shop/tests/test_models.py")
+    for relative in counted + skipped:
+        (example / relative).parent.mkdir(parents=True, exist_ok=True)
+        (example / relative).write_text("from typing import Any\n\ny: Any\n", encoding="utf-8")
+
+    assert sorted(check_any.census(root)) == sorted(
+        [_mod_site("x")] + [f"{check_any.EXAMPLE}/{relative}::y" for relative in counted],
+    )
+
+
 def test_the_shipped_allowlist_is_well_formed():
     """Each entry cites one ``path::Symbol`` once, allows at least one use, and says why."""
     sites = [entry.site for entry in check_any.ALLOWED_ANY]
 
     assert len(sites) == len(set(sites))
     for entry in check_any.ALLOWED_ANY:
-        assert re.fullmatch(rf"{check_any.PACKAGE}/[\w/]+\.py::[\w.]+", entry.site), entry
+        assert re.fullmatch(
+            rf"({check_any.PACKAGE}|{check_any.EXAMPLE})/[\w/]+\.py::[\w.]+",
+            entry.site,
+        ), entry
         assert entry.limit >= 1, entry
         assert entry.reason.strip(), entry

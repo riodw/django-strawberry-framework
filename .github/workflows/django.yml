@@ -43,8 +43,8 @@ jobs:
       - name: Ruff Format Check
         run: uv run ruff format --check .
       - name: Type check (basedpyright)
-        # `[tool.basedpyright]` in pyproject.toml owns the scope (the package and
-        # scripts/), the Python it checks against (the lowest its stubs support; the
+        # `[tool.basedpyright]` in pyproject.toml owns the scope (the package,
+        # scripts/ and the fakeshop source outside its test trees), the Python it checks against (the lowest its stubs support; the
         # floor cells prove the package's own floor) and the strictness rules, with
         # warnings failing the run; it never imports the fakeshop settings.
         run: uv run basedpyright
@@ -54,8 +54,9 @@ jobs:
         # allowlist (scripts/check_public_types.py).
         run: uv run python scripts/check_public_types.py
       - name: Explicit Any only at allowlisted sites
-        # Every `typing.Any` left in the package is forced from outside it; the
-        # script's exact-count allowlist names each site and why (scripts/check_any.py).
+        # Every `typing.Any` left in the package and the fakeshop source is forced from
+        # outside it; the script's exact-count allowlist names each site and why
+        # (scripts/check_any.py).
         run: uv run python scripts/check_any.py
       - name: Trailing-comma layout (>=4 elements; models.py >=2)
         run: uv run python scripts/check_trailing_commas.py --check

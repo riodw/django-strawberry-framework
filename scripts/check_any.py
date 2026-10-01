@@ -1,4 +1,4 @@
-"""Gate every explicit ``typing.Any`` in the package against an exact allowlist.
+"""Gate every explicit ``typing.Any`` in the package and the example against an exact allowlist.
 
 ``Any`` switches the type checker off for every value it touches, and it
 spreads: a helper returning ``Any`` makes each caller's result ``Any`` too.
@@ -9,8 +9,12 @@ a stub generic with no truthful narrower argument, an override or wrapper that
 forwards ``*args`` / ``**kwargs`` verbatim to an upstream signature, a PEP 562
 module ``__getattr__``. ``ALLOWED_ANY`` names each of them with the reason.
 
+The census covers the package and the example project's source
+(``examples/fakeshop`` minus its three test trees, the scope basedpyright checks
+there), since the example is the typed consumer code the package documents.
+
 What counts: every reference to ``typing.Any`` / ``typing_extensions.Any`` in a
-package module, under whatever name the module imported it (``Any``, an ``as``
+censused module, under whatever name the module imported it (``Any``, an ``as``
 alias, or ``typing.Any`` through a module alias), wherever it appears, plus the
 ones inside string annotations: parameter and return annotations, annotated
 assignments, ``cast`` targets, ``TypeVar`` bounds, constraints and defaults.
@@ -32,7 +36,7 @@ Usage::
     uv run python scripts/check_any.py            # the gate
     uv run python scripts/check_any.py --list     # every site and its count
 
-Exit code ``0`` when the package's uses match ``ALLOWED_ANY`` exactly, ``1``
+Exit code ``0`` when the censused uses match ``ALLOWED_ANY`` exactly, ``1``
 otherwise.
 """
 
@@ -48,6 +52,10 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "django_strawberry_framework"
+#: The example project, censused outside its test trees.
+EXAMPLE = "examples/fakeshop"
+#: The example's test trees, relative to ``EXAMPLE``: excluded as in ``[tool.basedpyright]``.
+_EXAMPLE_TEST_TREES = ("tests", "test_query")
 #: Modules whose ``Any`` is the typing special form.
 TYPING_MODULES = frozenset({"typing", "typing_extensions"})
 #: Calls whose leading arguments are type expressions, possibly strings.
@@ -605,6 +613,18 @@ ALLOWED_ANY: tuple[AllowedAny, ...] = (
         "The prepared view instance's dispatch is sync on one view and a coroutine on the "
         "other, which the shared mixin cannot spell.",
     ),
+    AllowedAny(
+        "examples/fakeshop/graphql_client.py::assert_graphql_success",
+        1,
+        "The decoded JSON response's data member: django-stubs types HttpResponse.json() as Any "
+        "and each live test indexes it by its own query's shape, which no static type spells.",
+    ),
+    AllowedAny(
+        "examples/fakeshop/graphql_client.py::graphql_payload",
+        1,
+        "The decoded JSON response body: django-stubs types HttpResponse.json() as Any and each "
+        "live test indexes it by its own query's shape, which no static type spells.",
+    ),
 )
 
 
@@ -739,10 +759,25 @@ def module_uses(source: str) -> list[tuple[str, int]]:
     return sorted((_site(node, parents), getattr(node, "lineno", 0)) for node in uses)
 
 
+def _is_example_test(path: Path, example: Path) -> bool:
+    """Whether ``path`` lies in one of the example's test trees (``apps/<app>/tests`` too)."""
+    parts = path.relative_to(example).parts
+    return parts[0] in _EXAMPLE_TEST_TREES or (parts[:1] == ("apps",) and parts[2:3] == ("tests",))
+
+
+def censused_paths(root: Path) -> list[Path]:
+    """Every module the census reads: the package's, then the example's outside its tests."""
+    example = root / EXAMPLE
+    return [
+        *sorted((root / PACKAGE).rglob("*.py")),
+        *(path for path in sorted(example.rglob("*.py")) if not _is_example_test(path, example)),
+    ]
+
+
 def census(root: Path) -> dict[str, list[int]]:
-    """Map every ``<path>::<site>`` under ``root``'s package to the lines of its uses."""
+    """Map every ``<path>::<site>`` under ``root``'s censused modules to the lines of its uses."""
     found: dict[str, list[int]] = {}
-    for path in sorted((root / PACKAGE).rglob("*.py")):
+    for path in censused_paths(root):
         relative = path.relative_to(root).as_posix()
         for site, line in module_uses(path.read_text(encoding="utf-8")):
             found.setdefault(f"{relative}::{site}", []).append(line)

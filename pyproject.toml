@@ -265,7 +265,6 @@ exclude = [
     "**/node_modules",
     "**/__pycache__",
     "**/.*",
-    "examples/fakeshop/tests",
     "examples/fakeshop/test_query",
     "examples/fakeshop/apps/*/tests",
 ]

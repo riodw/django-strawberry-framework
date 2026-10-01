@@ -10,8 +10,8 @@ forwards ``*args`` / ``**kwargs`` verbatim to an upstream signature, a PEP 562
 module ``__getattr__``. ``ALLOWED_ANY`` names each of them with the reason.
 
 The census covers the package and the example project's source
-(``examples/fakeshop`` minus its three test trees, the scope basedpyright checks
-there), since the example is the typed consumer code the package documents.
+(``examples/fakeshop`` minus ``test_query/`` and ``apps/<app>/tests/``, the scope
+basedpyright checks there), since the example is the typed consumer code the package documents.
 
 What counts: every reference to ``typing.Any`` / ``typing_extensions.Any`` in a
 censused module, under whatever name the module imported it (``Any``, an ``as``
@@ -52,10 +52,10 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "django_strawberry_framework"
-#: The example project, censused outside its test trees.
+#: The example project, censused outside its excluded test trees.
 EXAMPLE = "examples/fakeshop"
-#: The example's test trees, relative to ``EXAMPLE``: excluded as in ``[tool.basedpyright]``.
-_EXAMPLE_TEST_TREES = ("tests", "test_query")
+#: The example's top-level test tree excluded as in ``[tool.basedpyright]`` (``apps/<app>/tests`` too).
+_EXAMPLE_TEST_TREES = ("test_query",)
 #: Modules whose ``Any`` is the typing special form.
 TYPING_MODULES = frozenset({"typing", "typing_extensions"})
 #: Calls whose leading arguments are type expressions, possibly strings.
@@ -760,13 +760,13 @@ def module_uses(source: str) -> list[tuple[str, int]]:
 
 
 def _is_example_test(path: Path, example: Path) -> bool:
-    """Whether ``path`` lies in one of the example's test trees (``apps/<app>/tests`` too)."""
+    """Whether ``path`` lies in an excluded example test tree (``test_query/``, ``apps/<app>/tests/``)."""
     parts = path.relative_to(example).parts
     return parts[0] in _EXAMPLE_TEST_TREES or (parts[:1] == ("apps",) and parts[2:3] == ("tests",))
 
 
 def censused_paths(root: Path) -> list[Path]:
-    """Every module the census reads: the package's, then the example's outside its tests."""
+    """Every module the census reads: the package's, then the example's outside its excluded tests."""
     example = root / EXAMPLE
     return [
         *sorted((root / PACKAGE).rglob("*.py")),

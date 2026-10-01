@@ -144,11 +144,10 @@ Local hooks, `.pre-commit-config.yaml`, run order. All via `uv run` (shared ruff
 3. **ruff-check --fix**, 4. **ruff-format**.
 5. **basedpyright** (`uv run basedpyright`, whole scope, `pass_filenames: false`) — fires on a staged package, `scripts/` or fakeshop `.py`, `pyproject.toml` or `uv.lock` (a lock-only stubs bump moves the verdict); a signature change reddens callers in files you aren't committing.
 6. **check-public-types** (`scripts/check_public_types.py`) — basedpyright's trigger + its own source (allowlist edit); installs the package NON-editable in a temp env and requires `basedpyright --verifytypes` at 100% with zero diagnostics (warnings included: a public symbol's missing docstring or `...` default fails it) outside its exact-match `ALLOWED_DIAGNOSTICS`, each entry w/ its reason; an entry no longer reported fails as stale.
-7. **check-any** (`scripts/check_any.py`) — every `typing.Any` reference in the package and fakeshop minus `test_query/` and `apps/*/tests/` (import aliases, string annotations, runtime values) counted per `path::Symbol` site against its exact-count `ALLOWED_ANY`, each entry w/ its reason; a new site, a higher count, or an entry whose site now holds fewer uses (stale) fails. Whole-scope census, `pass_filenames: false`.
-8. **check-kanban-anchors** (`scripts/check_kanban_anchors.py`) — card↔card slug, card↔glossary anchor, render-id collisions. Reads DB → fires on a retitle no staged file names.
-9. **check-citations** (`scripts/check_citations.py`) — every `path::Symbol` in first-party source + board must resolve. Runs last, whole tree (a rename rots citations in files you aren't committing). `path::Symbol` ONLY: `path #"substring"` + `docs/` prose out of scope; citation wrapped across two lines invisible.
+7. **check-kanban-anchors** (`scripts/check_kanban_anchors.py`) — card↔card slug, card↔glossary anchor, render-id collisions. Reads DB → fires on a retitle no staged file names.
+8. **check-citations** (`scripts/check_citations.py`) — every `path::Symbol` in first-party source + board must resolve. Runs last, whole tree (a rename rots citations in files you aren't committing). `path::Symbol` ONLY: `path #"substring"` + `docs/` prose out of scope; citation wrapped across two lines invisible.
 
-CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruff format --check`, `basedpyright`, `check_public_types.py`, `check_any.py`, source-layout `--check`, citations `--check`, tracked-path constants `--check`, then `--check` on every generator (`build_kanban_md`, `build_kanban_html`, `build_glossary_md`, `build_tree_md`). Hand-edit to a rendered doc goes red THERE, not locally.
+CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruff format --check`, `basedpyright`, `check_public_types.py`, source-layout `--check`, citations `--check`, tracked-path constants `--check`, then `--check` on every generator (`build_kanban_md`, `build_kanban_html`, `build_glossary_md`, `build_tree_md`). Hand-edit to a rendered doc goes red THERE, not locally.
 
 `--check` measures WORKING TREE. Passes in a dirty tree w/ stale HEAD → CI red, local green. Measure HEAD: `git archive HEAD | tar -x -C <scratch>/head` and run the generator's `--check` inside that copy (`uv run --project <scratch>/head ...`). Swapping only `DJANGO_STRAWBERRY_KANBAN_DB` to a HEAD database still executes dirty renderer code, settings, migrations and, for `TREE.md`, dirty module docstrings, so it cannot say what HEAD renders.
 
@@ -164,9 +163,8 @@ CI `lint` job (`django.yml` is authoritative for the order): `ruff check` / `ruf
 | `build_kanban_tracked_path_constants.py` | hook 1; run after adding/removing any tracked package/test file |
 | `check_trailing_commas.py` | hook 2; `--check` CI, `--fix` local; owns `EXEMPT_MD_SCAFFOLD_NAMES`, `LINK_DEF_CATEGORIES`. Default = repo-wide AUTO-FIX → always pass explicit paths (else rewrites other session's untracked files) |
 | `check_public_types.py` | hook 6; CI lint. Builds its own non-editable env (`--verifytypes` can't see the editable `.venv`); a fresh env w/o `--reinstall-package` gets uv's cached build of OLDER source |
-| `check_any.py` | hook 7; CI lint. Exact-count allowlist of the package's and fakeshop's remaining `Any` sites; `--list` prints every site + count (allowlist-authoring view) |
-| `check_citations.py` | hook 9; `--check` CI |
-| `check_kanban_anchors.py` | hook 8 |
+| `check_citations.py` | hook 8; `--check` CI |
+| `check_kanban_anchors.py` | hook 7 |
 | `check_spec_glossary.py --spec <path>` | spec's `-terms.csv` → real glossary anchors; `--auto-link` rewrites inline mentions (NEXT.md) |
 | `check_alpha_parity.py` | every non-internal Alpha card carries parity link + justification |
 | `prove_failability.py <manifest.json>` | mutate boundary, run, restore, prove by byte compare. THE way to prove a test can fail |

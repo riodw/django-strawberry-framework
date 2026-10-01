@@ -45,27 +45,25 @@ permission-gate proof), Slice 5 (**card-local docs + card wrap — version
 and release marketing deferred, GLOSSARY moves to a precise intermediate
 status**).
 
-This card consumes — and is gated on — the pre-card row-preserving
-predicate groundwork landing on `main` ahead of it: the structured
-path-classification walker plus lookup validator in `utils/relations.py`
-and the shared correlated-`EXISTS` predicate compiler in
-`optimizer/predicates.py`
-(which also reroutes the generated to-many leaf filters off their
-`distinct=True` stamping). Search wires the `search:` surface onto that
-finished engine; it does not design a compilation strategy of its own.
+This card consumes the row-preserving predicate groundwork already on
+`main`: the structured path-classification walker plus lookup validator in
+`utils/relations.py` (`classify_path`, `validate_lookup_expr`) and the
+shared correlated-`EXISTS` predicate compiler in `optimizer/predicates.py`,
+through which the generated to-many leaf filters already route. Search
+wires the `search:` surface onto that engine; it does not design a
+compilation strategy of its own.
 
-That groundwork is formally **this spec's pre-card slice ("Slice 0")**,
-planned in [`docs/row-preserving-predicates-part1-plan.md`][part1-plan]
-(Rev 6), and **this card owns its completion bookkeeping**: the
-`docs/GLOSSARY.md` / `docs/TREE.md` / `KANBAN.md` fold-in for the shipped
-`FilterSet` multiset-contract change, the new `optimizer/predicates.py`
-module, and the `OptimizerError` predicate-attachment raise-site
-documentation all wrap under this card (second Part 1 review, findings
-9–10). The groundwork ships no release-state artifacts of its own.
+That groundwork is **this spec's pre-card slice ("Slice 0")**, planned in
+[`docs/row-preserving-predicates-part1-plan.md`][part1-plan], and **this
+card owns its completion bookkeeping**: the `docs/GLOSSARY.md` /
+`docs/TREE.md` / `KANBAN.md` fold-in for the `FilterSet` multiset-contract
+change, the `optimizer/predicates.py` module, and the `OptimizerError`
+predicate-attachment raise-site documentation all wrap under this card.
+The groundwork ships no release-state artifacts of its own.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission. This card does not touch `CHANGELOG.md`; card
-060's joint-cut slice must carry the maintainer's explicit grant.
+061's joint-cut slice must carry the maintainer's explicit grant.
 
 ---
 
@@ -158,7 +156,7 @@ is the audit ledger. Load-bearing entries:
   `docs/GLOSSARY.md`, **audit the four Slice-0 fold-in obligations named
   in the opener** (below), flip card 060 + regenerate the board. Leave
   README/docs README shipped-surface wording, GOAL/TODAY release status,
-  `CHANGELOG.md`, and the version quintet untouched — all are owned by the
+  `CHANGELOG.md`, and the version triplet untouched — all are owned by the
   `TODO-BETA-061-0.1.2` joint cut
   ([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-061)).
 
@@ -175,8 +173,8 @@ with a typed [`ConfigurationError`][glossary-configurationerror], so the
 declaration — flat names AND relation-traversal paths in one tuple —
 cannot be written — the fakeshop products schema stages four commented
 `search_fields` tuples that this card's Slice 4 activates (card
-`TODO-BETA-066-0.1.5`, recut to the `node` / `nodes` entry points plus
-`totalCount`, no longer gates them). The consumer-facing promise is small and sharp: one
+`TODO-BETA-066-0.1.5`, the `node` / `nodes` entry points plus
+`totalCount`, does not gate them). The consumer-facing promise is small and sharp: one
 declarative tuple, one generated `search: String` argument, OR'd
 case-insensitive containment across every declared path, composed with
 every other read-side layer without leaking rows — root or related — the
@@ -192,9 +190,9 @@ viewer cannot see.
 - `filters/inputs.py::LOOKUP_PREFIXES` (`^` → `istartswith`, `=` → `iexact`,
   `@` → `search`, `$` → `iregex`) and `filters/inputs.py::construct_search`
   landed with spec-027 Decision 2 under a broad future-search
-  reservation. Canonical card 060 subsequently narrowed this card to basic
-  OR'd `icontains`; card 061 owns the shortcut parity decision and its
-  Postgres guard. Slice 1 retargets the stale reservation wording.
+  reservation. Card 060 is basic OR'd `icontains`; card 061 owns the
+  shortcut parity decision and its Postgres guard. Slice 1 retargets the
+  stale reservation wording.
 - `filters/sets.py::FilterSet.get_filters` carries a
   `TODO(spec-060 Slice 1)` comment directing prefix translation to wire in
   there. This spec supersedes that placement
@@ -206,41 +204,40 @@ viewer cannot see.
   `_pipeline_sync` / `_pipeline_async` run visibility → filter → orderBy →
   `_finalize_queryset` (deterministic total order + optimizer plan).
 - `utils/connections.py` pins `CONNECTION_FILTER_KWARG = "filter"` /
-  `CONNECTION_ORDER_KWARG = "order_by"` and the
-  `CONNECTION_SIDECAR_KWARGS` tuple. Note the tuple is currently
-  **inert documentation**: the guard chain does not iterate it —
-  `connection_sidecar_inputs_from_kwargs` hardcodes `.get("filter")` /
-  `.get("order_by")` and `has_connection_sidecar_input` takes two
-  hardcoded keyword params (`filter_input`, `order_by_input`) compared
-  with `is not None`; the tuple's only other reference is an exact-value
-  assertion in `tests/utils/test_connections.py`. A naive third
-  `is not None` slot would classify whitespace-only search as an active
-  sidecar — the presence predicate for search must be the shared
-  `active_search` gate ([Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal)).
+  `CONNECTION_ORDER_KWARG = "order_by"` (plus the GraphQL spelling
+  `CONNECTION_ORDER_KWARG_GRAPHQL = "orderBy"`). The guard chain names
+  each sidecar explicitly: `connection_sidecar_inputs_from_kwargs` reads
+  exactly those two kwargs, and `has_connection_sidecar_input` takes two
+  keyword params (`filter_input`, `order_by_input`) tested with
+  `is_supplied` (not `None`, not `UNSET`). A naive third `is_supplied`
+  slot would classify whitespace-only search as an active sidecar — the
+  presence predicate for search must be the shared `active_search` gate
+  ([Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal)).
 - `utils/relations.py::path_traverses_to_many` answers "does this
   `__`-separated path cross a to-many hop" from model metadata with a
-  process-lifetime cache; filter generation and order resolution already
-  share it. The pre-card predicate groundwork widens it into the structured
-  path-classification walker (hops + terminal + a separate
-  `validate_lookup_expr` lookup validator + first-many index) that this
-  card's frozen search path plan is built from — the walker is the ONLY
-  path-acceptance oracle
+  cache; filter generation and order resolution share it. Beside it,
+  `utils/relations.py::classify_path` is the structured
+  path-classification walker (hops + terminal + first-many index), with
+  the separate `utils/relations.py::validate_lookup_expr` lookup
+  validator; this card's frozen search path plan is built from them — the
+  walker is the ONLY path-acceptance oracle
   ([Decision 2](#decision-2--declaration-time-shape-validation-finalize-time-path-validation)).
-- `optimizer/predicates.py` (pre-card groundwork, landing ahead of this
-  card) owns the row-preserving predicate compiler: correlated `EXISTS`
-  branches rooted at the outer model's `_base_manager` on the queryset's
-  own database alias, `_dst_`-reserved collision-checked aliases, no
-  `.distinct()`. The generated to-many leaf filters route through it in
-  the same groundwork, so search and filters share one compilation story.
+- `optimizer/predicates.py` owns the row-preserving predicate compiler:
+  correlated `EXISTS` branches rooted at the outer model's `_base_manager`
+  on the queryset's own database alias, `_dst_`-reserved collision-checked
+  aliases, no `.distinct()`. The generated to-many leaf filters route
+  through it, so search and filters share one compilation story.
 - `filters/sets.py` already owns the related-visibility derivation and
   permission machinery this card composes with:
   `FilterSet._derive_related_visibility_querysets_sync` / `_async` run each
   active branch's target-type `get_queryset` via
   `utils/querysets.py::apply_type_visibility_sync` / `_async` (a sync/async
-  derivation split, pre-collected for async), and
-  `FilterSet._run_permission_checks` fires `check_<field>_permission`
-  gates for active input fields through the shared `utils/permissions.py`
-  helpers (single-sited with the order side).
+  derivation split, pre-collected for async), and the
+  `_run_permission_checks` `FilterSet` inherits from
+  `sets_mixins.py::ActiveInputPermissionMixin` fires
+  `check_<field>_permission` gates for active input fields through the
+  shared `utils/permissions.py` helpers (single-sited with the order
+  side).
 - `types/definition.py::DjangoTypeDefinition` carries `filterset_class` /
   `orderset_class` / `fields_class` slots; there is **no** `search_fields`
   slot yet.
@@ -462,8 +459,8 @@ queryset. It returns the original queryset **by identity** for inactive
 input, builds direct `Q` branches via `build_direct_search_q`, builds and
 attaches the to-many `EXISTS` branches through `optimizer/predicates.py`,
 applies the final OR once, and contains no Strawberry or connection logic.
-A `Q`-only signature (`build_search_q(search_fields, value)`, an earlier
-revision of this spec) is rejected as the public contract: it cannot carry
+A `Q`-only signature (`build_search_q(search_fields, value)`) is rejected
+as the public contract: it cannot carry
 the queryset/database alias the correlated inner root needs, cannot host
 alias allocation, and if it emitted raw `Q(genres__name__icontains=v)`
 traversals it would reintroduce the exact outer fan-out the card removes.
@@ -512,8 +509,8 @@ waits for [`finalize_django_types`][glossary-finalize_django_types] phase
 structured classifier in `utils/relations.py` exactly once per unique
 path — classifying the model path, rejecting a relation-terminal path
 (search needs a concrete field to apply `icontains` to), and validating
-`icontains` against the classified terminal via the groundwork's
-`validate_lookup_expr` (existence of a model field does not prove
+`icontains` against the classified terminal via
+`utils/relations.py::validate_lookup_expr` (existence of a model field does not prove
 `<field>__icontains` is portable; accepted terminal families are pinned
 in Edge cases). Any failure raises
 [`ConfigurationError`][glossary-configurationerror] naming the type, the
@@ -534,8 +531,8 @@ guarantee the filter converter already relies on.
 
 ### Decision 3 — The argument is synthesized, nullable, and gated on the declaration
 
-`utils/connections.py` gains `CONNECTION_SEARCH_KWARG = "search"` and adds
-it to `CONNECTION_SIDECAR_KWARGS`. `connection.py::_synthesized_signature`
+`utils/connections.py` gains `CONNECTION_SEARCH_KWARG = "search"`.
+`connection.py::_synthesized_signature`
 appends a keyword-only `search: str | None = None` parameter exactly when
 `definition.search_fields` is non-`None` — the same
 declared-sidecar-only discipline `filter:` / `orderBy:` follow (spec-030
@@ -544,13 +541,12 @@ declaration → no argument in SDL, matching upstream's `search_args`
 property gate. The stale "`search:` is NOT generated (search is `0.1.2`)"
 docstring sentence is replaced by the real wiring.
 
-The non-queryset-source guard does NOT extend automatically —
-`CONNECTION_SIDECAR_KWARGS` is inert today (the guard chain hardcodes
-`filter` / `order_by`; see Current state). Covering `search:` requires
-real code changes in `utils/connections.py`: thread the search input
-through `connection_sidecar_inputs_from_kwargs` (a third extracted
-value) and `has_connection_sidecar_input` (a third keyword param), add
-`CONNECTION_SEARCH_KWARG` to the tuple, and widen the hardcoded
+The non-queryset-source guard does NOT extend automatically — the guard
+chain names `filter` / `order_by` explicitly (see Current state).
+Covering `search:` requires real code changes in `utils/connections.py`:
+thread the search input through `connection_sidecar_inputs_from_kwargs` (a
+third extracted value) and `has_connection_sidecar_input` (a third keyword
+param), and widen the hardcoded
 "`filter:` / `orderBy:`" wording in
 `connection.py::_guard_sidecar_input_against_non_queryset`'s error
 message to include `search:`. **The search presence test is the shared
@@ -559,7 +555,7 @@ non-queryset consumer resolver only for an ACTIVE search
 (`search_input is not None and bool(search_input.strip())`), because
 [Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal)
 pins empty/whitespace input as an unconditional no-op; a naive
-`is not None` slot would turn `search: "  "` into an observable error.
+`is_supplied` slot would turn `search: "  "` into an observable error.
 The predicate's canonical definition CANNOT live in `filters/search.py`:
 `utils/connections.py` is imported at package-root load through
 `connection.py`, and importing any `filters.*` submodule first executes
@@ -574,8 +570,7 @@ in the cycle-safe `utils/connections.py` (already root-imported, no
 filters dependency) and `filters/search.py` re-exports it — one predicate
 object shared by planner and resolver so whitespace-only search is
 inactive on both sides, and classifying `None` never imports the filter
-subsystem. The exact-value assertion in `tests/utils/test_connections.py`
-(`== ("filter", "order_by")`) updates in the same slice. The outcome is
+subsystem. The outcome is
 the same fail-loud posture `filter:` / `orderBy:` get — a consumer
 resolver returning a plain iterable rejects an active `search:` loudly
 rather than silently ignoring it.
@@ -600,7 +595,7 @@ Term-splitting as the default is therefore rejected for `0.1.2`; the
 open question is recorded in Risks with the fallback named.
 
 Phrase semantics also enable a row-boundary oracle that makes aggregate
-implementations observably wrong (cross-spec review): one parent with two
+implementations observably wrong: one parent with two
 related rows valued `"red"` and `"dwarf"`, another parent with a single
 related row valued `"red dwarf"` — `search: "red dwarf"` must match only
 the second parent. A `StringAgg(..., delimiter=" ")` implementation can
@@ -620,7 +615,7 @@ the deliberate upstream divergence stays unmistakable.
 Every entry is a model-field path and always becomes `<path>__icontains`.
 The `^` / `=` / `@` / `$` vocabulary is not silently accepted: those leading
 characters raise [`ConfigurationError`][glossary-configurationerror] during
-declaration validation. Canonical card 060 pins the basic OR-of-`icontains`
+declaration validation. Card 060 pins the basic OR-of-`icontains`
 contract, while card 061 explicitly owns the shortcut parity watch-item and
 already requires a clear non-Postgres posture for its full-text surface.
 
@@ -673,12 +668,12 @@ async-only, so the search step ships as sync/async twins —
 existing `_derive_related_visibility_querysets_sync` / `_async` split.
 Plan reading, `Q` construction, and `EXISTS` attachment remain shared,
 un-awaited helper code so the twins stay thin. **The permission-gate
-pass is NOT colorless-by-sharing** (implementation-gate review,
-P1-3): it ships as one synchronous, path-driven
-gate runner that `apply_search_sync` calls directly, while
+pass is NOT colorless-by-sharing**: it ships as one synchronous,
+path-driven gate runner that `apply_search_sync` calls directly, while
 `apply_search_async` awaits `run_in_one_sync_boundary(<gate runner>, ...)`
-— exactly the boundary `FilterSet.apply_async` and `OrderSet.apply_async`
-already put around their permission checks in `utils/querysets.py`. That
+— exactly the boundary (`utils/querysets.py::run_in_one_sync_boundary`)
+`FilterSet.apply_async` and `OrderSet.apply_async` put around their
+permission checks. That
 lets a synchronous consumer gate perform a blocking ORM read without
 raising Django's async-safety error and without blocking the event loop,
 while `invoke_permission_method` keeps rejecting an
@@ -687,10 +682,9 @@ Calling the synchronous runner bare from the async twin is rejected: it
 would either raise the async-safety error on the first gate ORM read or
 block the loop on any synchronous I/O. Both colors preserve the ordered
 runtime sequence above verbatim: inactive gate, length cap, permission
-pass, visibility derivation, compilation. An earlier revision of this spec claimed one
-colorless helper; that claim was only true under visibility-blind
-relational traversal, which [Decision 12](#decision-12--visibility-aware-relational-search)
-rejects.
+pass, visibility derivation, compilation. One colorless helper would be
+possible only under visibility-blind relational traversal, which
+[Decision 12](#decision-12--visibility-aware-relational-search) rejects.
 
 Alternative rejected: **apply search inside `FilterSet.apply_*`**
 (upstream's shape, where the filterset `qs` property reads
@@ -702,24 +696,24 @@ form machinery search does not need.
 
 An OR'd predicate across a row-multiplying join (reverse FK, M2M, generic)
 duplicates parent rows, which corrupts `totalCount`, page sizes, and
-cursor math. Upstream fixes this with a blanket `.distinct()`; the earlier
-revision of this spec fixed it with a *conditional* `.distinct()`. Both
-are rejected: correct rows do not imply an acceptable query. JOIN plus
+cursor math. Upstream fixes this with a blanket `.distinct()`; a
+*conditional* `.distinct()` is the other obvious fix. Both are rejected:
+correct rows do not imply an acceptable query. JOIN plus
 DISTINCT keeps the membership fan-out in the root query, forces `LEFT
 OUTER JOIN` promotion (the to-many arm is one arm of an OR), and turns
 `totalCount` into `COUNT(*)` over a `SELECT DISTINCT` subquery wrapper.
 
 This card instead compiles row-preserving through the shared predicate
-compiler (`optimizer/predicates.py`, pre-card groundwork):
+compiler (`optimizer/predicates.py`):
 
 - At finalize time, the structured path walker classifies every declared
   path; the frozen search path plan on `DjangoTypeDefinition` records the
   direct paths and the to-many path groups (grouped by identical complete
   relation chain — for a same-value OR this grouping is a cost choice,
   never a correctness one, since `EXISTS` distributes over OR; when in
-  doubt, one `EXISTS` per path is always correct). The plan replaces the
-  earlier `search_requires_distinct` boolean and carries **no request
-  data, no queryset, no database alias, and no router answer** — those
+  doubt, one `EXISTS` per path is always correct). The plan carries **no
+  request data, no queryset, no database alias, and no router answer** —
+  those
   bind at resolve time from the live queryset
   ([Decision 12](#decision-12--visibility-aware-relational-search) pins
   the same rule for visibility querysets).
@@ -748,12 +742,12 @@ relation existence for an already-qualified outer pk (against the
 composed hop-visibility constraints), so a filtered default manager could
 only introduce false negatives.
 
-Two to-many search-path categories are proven independently (cross-spec
-review — neither test subsumes the other):
+Two to-many search-path categories are proven independently (neither test
+subsumes the other):
 
 - **a reverse FK after a to-one prefix**, matching the Medtrics
   production topology — earned through the shared reproduction fixture
-  the pre-card groundwork defines
+  the Part 1 plan defines
   ([part1-plan][part1-plan] C.4: `Loan.book -> Book.loans ->
   Loan.patron -> Patron.email` with its four named loans and
   ordered-sequence oracle). This card's integration use: declare
@@ -766,10 +760,12 @@ review — neither test subsumes the other):
   that declaration is permanent, type-definition-wide public surface —
   NOT test-scoped — and attaches to every current and future connection
   serving `LoanType`. What is acceptance-only is the **connection
-  exposure**: no loan connection exists today (the existing loan surface
-  is a list field, which correctly gains nothing — `search:` is
-  connection-only), so Slice 4 adds a `DjangoConnectionField(LoanType)`
-  for the test schema. Issue the real `/graphql/` search request and
+  exposure**: the shipped loan surface is the list field `allLibraryLoans`
+  (which correctly gains nothing — `search:` is connection-only), and the
+  only loan connection is `allLibraryLoansConnection`, a
+  `DjangoConnectionField(LoanType)` defined only under the default-off
+  `FAKESHOP_TEST_LOAN_CONNECTION` acceptance flag; Slice 4 searches through
+  it. Issue the real `/graphql/` search request and
   assert the exact ordered IDs
   (`[relation_and_direct, relation_only, direct_only]`), `totalCount`
   of three, both two-edge page boundaries, and the mixed
@@ -781,8 +777,8 @@ review — neither test subsumes the other):
 - **a direct or nested M2M path**, matching the library
   `GenreType.books__title` fixture.
 
-Why the reverse-FK fixture exists (follow-up review, finding 4): NOT
-because Django cannot detect reverse-FK fan-out — at the compatibility
+Why the reverse-FK fixture exists: NOT because Django cannot detect
+reverse-FK fan-out — at the compatibility
 floor Django's own `PathInfo.m2m` flags an ordinary non-unique reverse FK
 as multiplying, and admin's `lookup_spawns_duplicates()` returns `True`
 for the complete Medtrics path. Detecting possible fan-out is
@@ -799,7 +795,7 @@ correlated `EXISTS` branches under reserved aliases, and preserve the
 incoming queryset rather than normalizing it with `.distinct()`.
 
 Alternatives rejected: **blanket `.distinct()`** (upstream) and
-**conditional `.distinct()`** (this spec's own earlier revision) — both
+**conditional `.distinct()`** — both
 retain the fan-out and the distinct-wrapper count; **post-processing
 `queryset.query`** to strip joins — a late private-API rewrite with
 insufficient semantic information; **`StringAgg`-style aggregation** —
@@ -813,12 +809,8 @@ ordering constraints, and still retains the fan-out.
 Slice 2, because this card ships the key applied end-to-end (declaration →
 definition slot → SDL argument → queryset mutation → live fakeshop
 coverage) — the exact promotion criterion the DoD states ("only when the
-pipeline applies it end-to-end"). An earlier DoD wording carried a
-"(per …)" parenthetical naming a separate Layer-3 Meta key promotion card,
-readable as deferring this key's promotion away from this card; that card
-was retired into the aggregation card (`TODO-BETA-062-0.1.3`) at the
-2026-08-29 board review and the DoD was reworded. This card owns the
-promotion outright, and the aggregation card owns only the later
+pipeline applies it end-to-end"). This card owns the promotion outright,
+and the aggregation card (`TODO-BETA-062-0.1.3`) owns only the later
 table-driven binder generalization for the remaining deferred key
 (`aggregate_class`) — the same resolution spec-059 Decision 8 records for
 `fields_class`. `aggregate_class`
@@ -846,7 +838,7 @@ Two non-Done cards share the `0.1.2` patch version: this card and
 `TODO-BETA-061-0.1.2` (Postgres full-text primitives), and 061 explicitly
 depends on 060 ("basic search lands first"). The
 [Joint version cut][glossary-joint-version-cut] rule therefore assigns card
-061 the release-cut artifacts: the version quintet, README/docs README
+061 the release-cut artifacts: the version triplet, README/docs README
 shipped-surface moves, GOAL/TODAY release wording, and the cumulative
 `0.1.2` CHANGELOG entry covering both cards. Card 060 ships its
 implementation, card-local spec/TREE updates, and card flip.
@@ -992,8 +984,9 @@ consumes, never a parallel implementation:
   target `Loan` again), the exact owning type's visibility — the
   definition recorded in the frozen plan, primary or secondary, never
   re-resolved through the registry — composes into the inner rows of the
-  `EXISTS` body exactly like any other registered-type hop. This is a deliberate divergence from the pre-card groundwork's
-  `filter:` adapter, which preserves the original filter invocation's
+  `EXISTS` body exactly like any other registered-type hop. This is a
+  deliberate divergence from the generated `filter:` leaf's row-preserving
+  rewrite, which preserves the original filter invocation's
   raw traversal (no hop visibility) — the same path yields different
   inner constraints under `filter:` vs `search:`, by design, and the
   test plan pins the recursion case.
@@ -1103,8 +1096,8 @@ ship-it-today-defer-the-real-fix shape [`AGENTS.md`][agents] forbids.
 
 ### Decision 14 — Search scope is type-definition-wide and immutable
 
-The Medtrics production reproduction (cross-spec review recorded in the
-[Part 1 plan][part1-plan], Rev 5) surfaces a second application concern beyond
+The Medtrics production reproduction (recorded in the
+[Part 1 plan][part1-plan]) surfaces a second application concern beyond
 cardinality: the same DRF viewset intentionally exposes group-name search
 on one action and withholds it from three others, via
 `SearchFilter.get_search_fields(view, request)` action/request dynamism.
@@ -1153,18 +1146,18 @@ implement the original per-action policy.
 | --- | --- | --- |
 | 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 061; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
 | 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call with the exact owning definition, permission-dispatch plan built after `_bind_filtersets` (assign only after both succeed, retry-safe) |
-| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; guard coverage |
+| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-guard extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; guard coverage |
 | 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")` and the acceptance-only `LoanType` reverse-FK search surface (Decision 7); live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
-| 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version quintet / README marketing / CHANGELOG defer to card 061 (Decision 10) |
+| 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version triplet / README marketing / CHANGELOG defer to card 061 (Decision 10) |
 
 ## Helper-reuse obligations (DRY)
 
 - `filters/inputs.py::LOOKUP_PREFIXES` is the single prefix vocabulary;
   declaration validation reads it to reject reserved shortcut syntax,
   never redeclares it.
-- The structured path-classification walker + `validate_lookup_expr` in
-  `utils/relations.py` (the widened `path_traverses_to_many` machinery)
-  are the ONLY path/lookup acceptance oracle — no
+- The structured path-classification walker (`classify_path`) +
+  `validate_lookup_expr` in `utils/relations.py` are the ONLY path/lookup
+  acceptance oracle — no
   `django_filters.utils.get_model_field` second oracle, no hand-rolled
   `_meta.get_field` walk, no third reimplementation of to-many detection.
 - `optimizer/predicates.py` for the runtime `EXISTS` construction — search
@@ -1176,7 +1169,7 @@ implement the original per-action policy.
 - `utils/permissions.py` for the gate pass (Decision 13) — one new named
   path-driven helper beside the input-driven core, dispatching through
   the same `invoke_permission_method` primitive and per-class fired sets
-  as `FilterSet._run_permission_checks`; never a synthesized filter
+  as the FilterSet's `_run_permission_checks`; never a synthesized filter
   input, never a reimplementation.
 - `utils/querysets.py::run_in_one_sync_boundary` for the async twin's
   permission pass (Decision 6) — the same sync-worker boundary
@@ -1185,9 +1178,8 @@ implement the original per-action policy.
 - `utils/connections.py::connection_sidecar_inputs_from_kwargs` /
   `has_connection_sidecar_input` for the non-queryset guard — extend the
   existing extraction/guard pair with a third search slot using the
-  shared `active_search` predicate (and keep `CONNECTION_SIDECAR_KWARGS`
-  in sync), do not add a parallel guard (Decision 3 details the required
-  threading; the tuple alone is inert).
+  shared `active_search` predicate, do not add a parallel guard
+  (Decision 3 details the required threading).
 - The `active_search` predicate is defined once — canonically in
   `utils/connections.py` (Decision 3's import-cycle constraint),
   re-exported by `filters/search.py` — and imported everywhere a
@@ -1243,7 +1235,7 @@ implement the original per-action policy.
 - **Nested connection fields** — `search` joins the sidecar family, so a
   search-bearing nested connection is unwindowable under the current
   optimizer and falls back per parent exactly as `filter:` / `orderBy:`
-  sidecars do today; the walker recognizes `search` as a sidecar, creates
+  sidecars do; the walker recognizes `search` as a sidecar, creates
   no dead cached window, and strictness can report the per-parent access.
   This is a documented performance consequence, not a correctness one.
 - **Shortcut prefix** — declaration-time `ConfigurationError` assigning the
@@ -1398,9 +1390,9 @@ library cases in `test_library_api.py`, inline creates):
   reject); `%`, `_`, and quotes as literals; the over-cap abuse case and
   its typed error shape.
 - **The reverse-FK Medtrics reproduction** (library, the shared
-  groundwork fixture — Decision 7):
+  Part 1 fixture — Decision 7):
   `LoanType.Meta.search_fields = ("note", "book__loans__patron__email")`
-  over an acceptance-only `DjangoConnectionField(LoanType)` — exact
+  over the acceptance-only `allLibraryLoansConnection` — exact
   ordered edge IDs `[relation_and_direct, relation_only, direct_only]`,
   `totalCount == 3`, both two-edge page boundaries, mixed
   direct/relational OR behavior (a row matching both branches appears
@@ -1456,16 +1448,15 @@ library cases in `test_library_api.py`, inline creates):
   in the example schema.
 - Nested-connection search: correct results under the per-parent
   fallback, no dead cached window, strictness reporting behavior.
-- Compatibility floor (follow-up review, finding 5): the live
-  Medtrics-shaped search reproduction runs under **Python 3.10 with an
-  exact `Django==5.2.0` pin** (isolated `/tmp` venv per the
-  matrix-testing rule — `Django>=5.2` resolves to the newest compatible
-  release and proves nothing about 5.2.0), through the real `/graphql/`
-  path rather than import-only coverage, with the current-version
-  (Django 6.0.x) job retained as the other end of the supported range.
-  New code relies on no API added after 5.2.0, Django 6.0, or
-  Python 3.11+ (including convenience typing APIs without an existing
-  project compatibility import).
+- Compatibility floor: the live Medtrics-shaped search reproduction runs
+  under **Python 3.10 with an exact `Django==5.2.16` pin** (isolated venv
+  per the matrix-testing rule — `Django>=5.2.16` resolves to the newest
+  compatible release and proves nothing about the floor), through the real
+  `/graphql/` path rather than import-only coverage, with the
+  latest-Django CI job retained as the other end of the supported range.
+  New code relies on no API added after Django 5.2.16 or in Python 3.11+
+  (including convenience typing APIs without an existing project
+  compatibility import).
 
 Performance evidence (non-gating artifact, Slice 4): a PostgreSQL
 before/after comparison of the `EXISTS` shape vs JOIN-plus-DISTINCT on
@@ -1516,26 +1507,24 @@ compiler shape.
 - `KANBAN.md` / `KANBAN.html`: card flip via DB + regen only.
 - **Slice-0 fold-in audit (the opener's card-owned bookkeeping,
   enumerated so no item can be silently dropped OR silently redone).**
-  The Part 1 landing already discharged four of them itself; Slice 5
-  re-verifies each is present and still accurate, and does not rewrite
-  what is already correct:
+  Four of them are already in the tree; Slice 5 re-verifies each is
+  present and still accurate, and does not rewrite what is already
+  correct:
   1. `django_strawberry_framework/exceptions.py::OptimizerError`'s
      docstring carries the row-preserving predicate-attachment raise site
-     (the three `attach_exists` caller-contract guards) — **landed with
-     Part 1**; verify only.
+     (the three `attach_exists` caller-contract guards); verify only.
   2. `docs/TREE.md` carries `optimizer/predicates.py` and
-     `tests/optimizer/test_predicates.py` — **landed with Part 1**; the
-     Slice 5 regen for `filters/search.py` re-renders them from the tree,
-     so the check is that their one-line descriptions still read true.
+     `tests/optimizer/test_predicates.py`; the Slice 5 regen for
+     `filters/search.py` re-renders them from the tree, so the check is
+     that their one-line descriptions still read true.
   3. `examples/fakeshop/test_query/README.md` describes the Part 1 live
-     coverage (the loan reverse-FK surface, the flat-leaf regressions) —
-     **landed with Part 1**; Slice 5 appends the search coverage rather
-     than replacing those paragraphs.
+     coverage (the loan reverse-FK surface, the flat-leaf regressions);
+     Slice 5 appends the search coverage rather than replacing those
+     paragraphs.
   4. `docs/GLOSSARY.md#filterset` carries the row-preserving
-     multiset-contract paragraph — **landed with Part 1** through the
-     glossary DB + `scripts/build_glossary_md.py` re-render; Slice 5's
-     only glossary write is the [`Meta.search_fields`][glossary-metasearch_fields]
-     status move above.
+     multiset-contract paragraph; Slice 5's only glossary write is the
+     [`Meta.search_fields`][glossary-metasearch_fields] status move
+     above.
   What Slice 5 still owes on top of the four: the `KANBAN.md` fold-in for
   the shipped multiset-contract change (card flip + regen, above).
 
@@ -1551,12 +1540,6 @@ compiler shape.
 - **Prefix ownership (Decision 5).** Card 060 rejects shortcut-prefixed
   declarations. Card 061 must decide which shortcuts ship, pin the migration
   contract, and define the `@` backend guard before accepting any of them.
-- **Promotion ownership (Decision 8) — RESOLVED 2026-08-29.** The DoD once
-  carried a "(per …)" parenthetical naming a separate Layer-3 Meta key
-  promotion card, ambiguous exactly as it was for `fields_class` in
-  spec-059. The board review retired that card into the aggregation card
-  (`TODO-BETA-062-0.1.3`) and reworded the DoD: this card owns the
-  promotion, so Slice 4's fakeshop activation is unblocked.
 - **Joint-cut re-sequencing (Decision 10).** If `TODO-BETA-061-0.1.2` is
   descoped/retargeted after this card ships, the `0.1.2` cut ownership
   returns to this card as a post-ship follow-up; the maintainer owns that
@@ -1578,18 +1561,18 @@ compiler shape.
   nested connections fall back per parent under the current optimizer,
   inheriting the documented sidecar N+1. If strictness=`raise` makes
   nested search effectively unusable for a consumer, that is by design
-  until the sidecar-window card (unowned) lands; documented explicitly.
+  until nested sidecar batching (`TODO-BETA-068-0.1.6`) lands; documented
+  explicitly.
 - **List-field / node-field search.** The card scopes `search:` to
   connection fields. Whether [`DjangoListField`][glossary-djangolistfield]
   should grow the same argument is left open; nothing in this design
   precludes it (the step is field-agnostic), but it is not
   `0.1.2` work and no card currently owns it.
 - **Stale card IDs in fakeshop comments.** The commented-out declarations
-  in `examples/fakeshop/apps/products/schema.py` cite `TODO-BETA-047-0.1.2`
-  (a pre-renumber ID that no longer denotes this card; seat 047 is now the
-  shipped `DONE-047-0.0.14` resource-policy card). Slice 4 corrects
-  the comments as part of activation — noted here per the card-vs-tree
-  conflict rule rather than silently reconciled.
+  in `examples/fakeshop/apps/products/schema.py` cite `TODO-BETA-047-0.1.2`,
+  an ID that does not denote this card (047 is the shipped
+  `DONE-047-0.0.14` resource-policy card). Slice 4 corrects the comments
+  as part of activation.
 
 ## Out of scope (explicitly tracked elsewhere)
 
@@ -1599,7 +1582,7 @@ compiler shape.
 - The generalized deferred-key promotion sweep and
   [`Meta.aggregate_class`][glossary-metaaggregate_class] /
   [`AggregateSet`][glossary-aggregateset] — the aggregation card
-  `TODO-BETA-062-0.1.3`, which absorbed the retired promotion card.
+  `TODO-BETA-062-0.1.3`.
 - [`FieldSet`][glossary-fieldset] /
   [`Meta.fields_class`][glossary-metafields_class] composition — spec-059
   (`TODO-BETA-059-0.1.1`; ships before this card).
@@ -1607,9 +1590,10 @@ compiler shape.
   `totalCount` opt-in — `TODO-BETA-066-0.1.5` (the product-catalog root
   schema is already live; this card's Slice 4 owns only the
   `search_fields` activations).
-- A dedicated search permission hook and any nested-connection search
-  windowing — no owning cards; Decisions 13 and 6 pin the shipped
-  contracts.
+- Nested-connection search batching — `TODO-BETA-068-0.1.6` (nested
+  sidecar batching, [`spec-068`][spec-068]).
+- A dedicated search permission hook — no owning card; Decision 13 pins
+  the contract.
 - [`Meta.choice_enum_names`][glossary-metachoice_enum_names] and the
   `0.1.4` line — untouched.
 
@@ -1634,7 +1618,7 @@ compiler shape.
 - [ ] Relational search is visibility-aware (Decision 12) and honors
   FilterSet permission gates (Decision 13), with live anonymous/staff and
   hidden-related-row proofs.
-- [ ] The five implementation-gate findings are closed in code and tests:
+- [ ] Five load-bearing mechanisms are in code and tests:
   one-`filter()`-call same-related-row compilation (shared inner alias
   asserted, leak counterexample live), exact-owner visibility for
   root-model re-entry (secondary-type regression), the
@@ -1643,7 +1627,7 @@ compiler shape.
   `_bind_filtersets`, and the cycle-safe `utils/connections.py` home for
   `active_search` (lazy-subpackage import pin extended).
 - [ ] Search scope is immutable and type-definition-wide (Decision 14);
-  the reverse-FK Medtrics reproduction (shared groundwork fixture) and
+  the reverse-FK Medtrics reproduction (shared Part 1 fixture) and
   the row-boundary phrase oracle pass live with exact ordered IDs,
   `totalCount`, and page boundaries; the borrowing docs state both DRF
   `SearchFilter` divergences together.
@@ -1664,15 +1648,15 @@ compiler shape.
   `.alias()`).
 - [ ] The non-gating PostgreSQL plan-evidence artifact is retained.
 - [ ] The exact compatibility floor is proven: the live Medtrics-shaped
-  search reproduction passes under Python 3.10 + `Django==5.2.0`, and
-  the current-version job stays green (follow-up review, finding 5).
+  search reproduction passes under Python 3.10 + `Django==5.2.16`, and
+  the latest-Django job stays green.
 - [ ] Slice 5 card-local docs updated; GLOSSARY moves to the precise
   intermediate status; the four Slice-0 fold-in obligations are audited
   present and accurate (`OptimizerError` raise site, `docs/TREE.md`
   predicate modules, `test_query/README.md` Part 1 paragraphs,
   `GLOSSARY.md#filterset` multiset contract) rather than dropped or
   rewritten; no release-cut artifact is changed.
-- [ ] **No release-cut edit** — the `0.1.2` quintet, README shipped-surface
+- [ ] **No release-cut edit** — the `0.1.2` triplet, README shipped-surface
   moves, and CHANGELOG entry belong to the
   `TODO-BETA-061-0.1.2` joint cut (Decision 10).
 
@@ -1713,9 +1697,7 @@ compiler shape.
 
 <!-- docs/SPECS/ -->
 [search-terms]: appx/spec-060-search_fields-0_1_2-terms.csv
-[spec-027]: spec-027-filters-0_0_8.md
-[spec-030]: spec-030-connection_field-0_0_9.md
-[spec-043]: spec-043-test_client-0_0_14.md
+[spec-068]: spec-068-structural_templates-0_1_6.md
 
 <!-- docs/builder/ -->
 

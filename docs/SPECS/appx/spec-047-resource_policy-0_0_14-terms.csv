@@ -2,12 +2,12 @@ term,anchor,notes
 Execution resource policy,execution-resource-policy,the capability this spec ships
 ResourcePolicy,resourcepolicy,the immutable budget object
 DjangoResourcePolicyExtension,djangoresourcepolicyextension,the enforcement extension
-Value-budget walker,value-budget-walker,the S4 input-cardinality pass
+Value-budget walker,value-budget-walker,the input-cardinality pass
 DjangoListField,djangolistfield,gains the required effective row bound
 DjangoConnectionField,djangoconnectionfield,the policy becomes a ceiling over its cap
 Meta.relation_shapes,metarelation_shapes,its default flips to connection
 Relation handling,relation-handling,the many-side default this card changes
-DjangoNodesField,djangonodesfield,the ids: list S4 names
+DjangoNodesField,djangonodesfield,the ids: list the node-refetch bound charges
 Upload scalar,upload-scalar,upload bytes are budgeted here
 Request-body cap,request-body-cap,the complementary transport ceiling
 FilterSet,filterset,the generated and/or/in surface the walker charges
@@ -22,12 +22,12 @@ DjangoMutation,djangomutation,relation ids per mutation field
 DjangoModelFormMutation,djangomodelformmutation,form-flavored relation id payloads
 strawberry_config,strawberry_config,schema construction surface
 Strawberry extension lifecycle,strawberry-extension-lifecycle,the hooks enforcement uses
-Per-operation extension isolation,per-operation-extension-isolation,why the extension is installed as a class
+Per-operation extension isolation,per-operation-extension-isolation,why each operation gets a fresh extension instance
 TestClient,testclient,the live tier's client
 Probe URLconf,probe-urlconf,the probe mounts the live rows use
 seed_data,seed_data,the live rows' fixture helper
 Live-first coverage mandate,live-first-coverage-mandate,why the boundaries live in test_query
-Joint version cut,joint-version-cut,the rule this card is NOT subject to
+Joint version cut,joint-version-cut,the 0.0.14 release rule this card shipped under
 get_queryset visibility hook,get_queryset-visibility-hook,dictates where the row bound may be applied
 Relay Node integration,relay-node-integration,the bounded collection surface
 Connection-aware optimizer planning,connection-aware-optimizer-planning,nested connection pages share the clamp

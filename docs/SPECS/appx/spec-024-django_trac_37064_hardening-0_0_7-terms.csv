@@ -1,3 +1,3 @@
 term,anchor,notes
-safe_wrap_connection_method,safe_wrap_connection_method,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Django Trac #37064 hardening,django-trac-37064-hardening,Backfilled for DONE-card glossary linkage from the shipped spec body.
+safe_wrap_connection_method,safe_wrap_connection_method,The wrap-time half: the consumer helper that declines to clobber Django's `_DatabaseFailure` wrapper.
+Django Trac #37064 hardening,django-trac-37064-hardening,The unwrap-time half: the package's `SimpleTestCase._remove_databases_failures` replacement installed at app load.

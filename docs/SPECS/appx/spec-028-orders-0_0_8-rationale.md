@@ -642,7 +642,7 @@ Slice 3 rewrote the spec so it reads as the current contract, discharging build-
 [spec-023]: ../spec-023-multi_db-0_0_7.md
 [spec-025]: ../spec-025-scalar_map_helper-0_0_7.md
 [spec-027]: ../spec-027-filters-0_0_8.md
-[spec-028-baseline]: ../spec-028-orders-0_0_8.md#pre-implementation-baseline-captured-before-slice-1
+[spec-028-baseline]: ../spec-028-orders-0_0_8.md#current-state
 [spec-028-d10]: ../spec-028-orders-0_0_8.md#decision-10--version-bumps-are-maintainer-commanded
 [spec-028-d11]: ../spec-028-orders-0_0_8.md#decision-11--order_input_typeorderset-consumer-helper
 [spec-028-d12]: ../spec-028-orders-0_0_8.md#decision-12--no-layer-6-auto-generation-and-no-distinct-on-surface

@@ -1,10 +1,10 @@
 # Spec: 0.0.4 version and release alignment
 
 Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-012-0.0.4`).
-Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
+Status: shipped. A card-snapshot spec: the file is the card's `SpecDoc` target.
 Owner: package maintainer.
 
-Deliberation and this spec's change record live in its companion [rationale file][spec-012-rationale]: what the release commit actually touched, why four of the five version surfaces were already aligned before it ran, and every claim this spec once made and may no longer make.
+Why the version has one source, and why the spec states the release obligation rather than a version, lives in its companion [rationale file][spec-012-rationale].
 
 ## Card snapshot
 
@@ -13,22 +13,18 @@ Deliberation and this spec's change record live in its companion [rationale file
 
 ## Scope
 
-A release cut of this package aligns **five** surfaces on one version string. The `0.0.4` cut carries `0.0.4` on every one of them:
+A release cut sets the package version in **one** place, and two hand-maintained surfaces move with it:
 
-- [`pyproject.toml`][pyproject] `#"version = "` — the distribution version.
-- [`django_strawberry_framework/__init__.py`][init] `#"__version__ = "` — the runtime version the [`DjangoType`][glossary-djangotype] surface ships under.
-- [`uv.lock`][uv-lock], on its `django-strawberry-framework` root entry.
-- [`tests/base/test_init.py`][test-init] `::test_version`, which pins the runtime version as a literal string.
-- [`CHANGELOG.md`][changelog], whose `## [0.0.4]` entry is dated 2026-05-08 and covers the commit range through that date.
+- [`django_strawberry_framework/__init__.py`][init] `#"__version__ = "` — the single version source: the runtime version the [`DjangoType`][glossary-djangotype] surface ships under.
+- [`pyproject.toml`][pyproject] `#"dynamic = ["version"]"` — the distribution version is derived, not declared: `[tool.hatch.version]` points hatchling at the package init, so sdist and wheel metadata cannot disagree with `__version__`. The editable root entry in [`uv.lock`][uv-lock] carries no version.
+- [`tests/base/test_init.py`][test-init] `::test_version` pins the runtime version as a literal string, so a bump updates it in the same change.
+- [`CHANGELOG.md`][changelog] gains the release's entry. The `0.0.4` entry is dated 2026-05-08 and is the condensed alpha-release form — five `### Added` bullets, six `### Changed`, four `### Fixed`, one `### Removed`.
 
-Alignment is a **per-release obligation, not a standing property of these five files**: every later release moves all five together, so at any commit the five agree on whatever version the package is then at — never on `0.0.4` in perpetuity. `AGENTS.md` rule 31 carries the `pyproject.toml` / `__init__.py` half of that pairing as standing **prose** policy; `::test_version` pins the runtime literal alone and no test compares the two files.
-
-The `0.0.4` changelog entry is the condensed alpha-release form — five `### Added` bullets, six `### Changed`, four `### Fixed`, one `### Removed` — and it is the entry of record for the release: no later commit rewrites it.
+Alignment is a **per-release obligation, not a fixed value**: at any commit the init literal, the test literal, and the newest changelog entry agree on whatever version the package is then at.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[backlog]: ../../BACKLOG.md
 [changelog]: ../../CHANGELOG.md
 [kanban]: ../../KANBAN.md
 [pyproject]: ../../pyproject.toml

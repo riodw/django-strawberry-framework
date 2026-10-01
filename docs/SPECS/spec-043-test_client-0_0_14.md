@@ -1,362 +1,220 @@
 # Spec: Test client helper — `TestClient` / `AsyncTestClient` + the `GraphQLTestMixin` test-case family in `testing/client.py`, the package's live-HTTP test ergonomics
 
-Built for `0.0.14` (card [`DONE-043-0.0.14`][kanban]); the `0.0.14` version
-release rides the joint cut with 044 (see `Status:` below). This card adds the
-package's **consumer-facing GraphQL test client**: a new
-`django_strawberry_framework/testing/client.py` module exposing `TestClient` /
+Built for `0.0.14` (card [`DONE-043-0.0.14`][kanban]). The package's
+**consumer-facing GraphQL test client**:
+`django_strawberry_framework/testing/client.py` exposes `TestClient` /
 `AsyncTestClient` (thin wrappers over Django's `django.test.Client` /
 `AsyncClient` that post GraphQL operations with the right content type, decode
 the response, and return a typed `Response`) plus the unittest-flavored
-`GraphQLTestMixin` and its two concrete two-line combinations
-`GraphQLTestCase` (`(Mixin, TestCase)`) and `GraphQLTransactionTestCase`
+`GraphQLTestMixin` and its two concrete combinations `GraphQLTestCase`
+(`(Mixin, TestCase)`) and `GraphQLTransactionTestCase`
 (`(Mixin, TransactionTestCase)`), and a project-wide endpoint settings key
-(`TESTING_ENDPOINT` under `DJANGO_STRAWBERRY_FRAMEWORK`,
-[Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
-It is a Required **dual-upstream** parity item (the card's own tags — the first
-`0.0.14` card whose surface both reference libraries ship):
-🍓 [`strawberry_django/test/client.py`][upstream-client] ships `TestClient` /
+(`TESTING_ENDPOINT` under `DJANGO_STRAWBERRY_FRAMEWORK`, Decision 7). It is a
+Required **dual-upstream** parity item: 🍓
+[`strawberry_django/test/client.py`][upstream-client] ships `TestClient` /
 `AsyncTestClient` over Strawberry's
-[`strawberry.test.BaseGraphQLTestClient`][venv-strawberry-test-client], and
-⚛️ [`graphene_django/utils/testing.py`][upstream-testing] ships the
+[`strawberry.test.BaseGraphQLTestClient`][venv-strawberry-test-client], and ⚛️
+[`graphene_django/utils/testing.py`][upstream-testing] ships the
 `graphql_query` function, `GraphQLTestMixin`, `GraphQLTestCase`, and
 `GraphQLTransactionTestCase` with a `TESTING_ENDPOINT` settings knob
 ([`graphene_django/settings.py`][upstream-settings] `#"TESTING_ENDPOINT"`,
-default `/graphql`). The package's own live acceptance suites prove the need:
-every file under [`examples/fakeshop/test_query/`][test-query-readme] hand-rolls
-the same POST-decode-assert pattern today (per-file helpers like
-[`test_kanban_api.py`][test-kanban-api] `::_graphql_data` and
-[`test_library_api.py`][test-library-api] `::_post_graphql_as_staff`, plus raw
-multipart `operations` / `map` blocks in
-[`test_uploads_api.py`][test-uploads-api]) — centralizing the pattern is a small
-win for consumers and keeps the package's own HTTP tests crisp (the card's "Why
-it matters", verbatim).
+default `/graphql`). The package's own live acceptance tier
+([`examples/fakeshop/test_query/`][test-query-readme]) is its largest consumer:
+the shared JSON helpers in [`graphql_client.py`][graphql-client]
+(`examples/fakeshop/graphql_client.py::post_graphql`) route through
+`TestClient`, and live rows call the clients directly for typed results,
+`login()` brackets, and multipart uploads.
 
-The helper is deliberately **thin and engine-riding**: Strawberry's
-`BaseGraphQLTestClient` (part of the package's **hard** `strawberry-graphql`
+The helper is deliberately **thin and engine-riding**. Strawberry's
+`BaseGraphQLTestClient` (inside the package's **hard** `strawberry-graphql`
 dependency — no [soft dependency][glossary-soft-dependency], no guard, no
-install hint; the first `0.0.14` card that adds **zero** new dependencies) is
-the engine-owned base the package subclasses for its response decode
-(`_decode`), its typed-result base (the `Response` field schema), and the
-abstract `request()` seam; the package **owns** the `.query()` orchestration
-itself — both colors, since the signature and return type both change
-([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)
-ground 2) — plus a small body/multipart builder (the base's cannot
-express this repo's nested input-object uploads,
-[Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)),
-the Django-shaped `request()` (JSON POST,
-multipart when `files=` is provided; a keyword-only `url=` routes one call), the endpoint resolution
-(`TESTING_ENDPOINT` → constructor override), the `login()` context managers,
-the typed [`Response`](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported)
-carrying the raw `HttpResponse` beside `data` / `errors` / `extensions`, and
-the graphene-shaped unittest family. `Upload`-scalar multipart mutations
+install hint) is the engine-owned base for the response decode (`_decode`),
+the typed-result field schema (`Response`), and the abstract `request()` seam.
+The package subclasses it once, in the private generic base
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase`, which
+owns everything both colors share: endpoint resolution, the Django-shaped
+`request()` (JSON POST, multipart when `files=` is provided, a keyword-only
+`url=` routing one call), the body/multipart builder (the base's cannot express
+nested input-object uploads, Decision 9), and the decode-to-`Response` tail.
+`TestClient` and `AsyncTestClient` are siblings over that base (Decision 8),
+each owning its own `query()` (the signature and return type both differ from
+the base's, Decision 5) and its `login()` context manager. The typed
+`Response` carries the raw `HttpResponse` beside `data` / `errors` /
+`extensions` (Decision 6), and the graphene-shaped unittest family delegates
+to `TestClient` (Decision 10). `Upload`-scalar multipart mutations
 ([`DONE-037-0.0.11`][kanban], the card's declared dependency) drive through the
-same `query(..., files=...)` call instead of dropping back to raw
-`client.post(...)`.
+same `query(..., files=...)` call.
 
-**Version boundary** (see
-[Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)):
-this card **shares the `0.0.14` patch line** with one open sibling —
-[`TODO-ALPHA-044-0.0.14`][kanban] ([Response-extensions debug
-middleware][glossary-response-extensions-debug-middleware]) — and follows two
-landed predecessors, [`DONE-041-0.0.14`][kanban]
-([`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter]) and
-[`DONE-042-0.0.14`][kanban] ([Debug-toolbar
-middleware][glossary-debug-toolbar-middleware]), each of which already deferred
-its own cut to the same [joint `0.0.14`
-cut][glossary-joint-version-cut]. So the `pyproject.toml` / `__version__` /
-[`tests/base/test_init.py::test_version`][test-base-init] bump from `0.0.13` to
-`0.0.14` is owned by the **joint cut** (the last `0.0.14` card to land), not by
-this card — the same shared-cut posture [`spec-042`][spec-042] Decision 10 and
-[`spec-041`][spec-041] Decision 10 took. No slice below bumps the version.
+**Version boundary** (Decision 12): no slice of this card bumps the version;
+the `0.0.14` release belonged to the [joint `0.0.14`
+cut][glossary-joint-version-cut].
 
-Status: **COMPLETE (card `DONE-043-0.0.14`) — all three slices built and the card-wrap landed; the `0.0.14` version release rode the joint cut.**
-Three slices (the card is an M with one module, one settings key, one unit-test
-file, and a mechanically-wide but semantically-shallow live-suite switchover):
-Slice 1 (**the `TESTING_ENDPOINT` settings key + `testing/client.py` + the
-`testing` root re-exports + the targeted live coverage + `tests/testing/test_client.py`**
-— the whole public surface lands in one commit; the sync request-shape
-behaviours reachable as ordinary GraphQL calls (JSON, `assert_no_errors`,
-`operation_name`, `login`, multipart) are earned **live** by converting the
-matching `examples/fakeshop/test_query/` cases onto the helper in this slice,
-and `tests/testing/test_client.py` covers only what a live request cannot pin,
-so the slice is independently green under the
-[live-first mandate][glossary-live-first-coverage-mandate] and the
-`fail_under = 100` gate), Slice 2 (**the remaining live-suite switchover** —
-the rest of `examples/fakeshop/test_query/` moves onto the helper, per-file
-hand-rolled post helpers deleted where the helper's contract covers them; a
-cleanup/dedup pass that adds no new package coverage), and Slice 3 (**docs +
-card wrap** — the implemented-contract GLOSSARY updates, the regenerated
-[`docs/TREE.md`][tree], and the kanban card flip; the release-status wording
-and the version bump stay deferred to the joint cut).
+Status: **COMPLETE (card `DONE-043-0.0.14`) — all three slices built; the `0.0.14` version release rode the joint cut.**
+Three slices: Slice 1 (the `TESTING_ENDPOINT` settings key,
+`testing/client.py`, the `testing` root re-exports, the request-driving live
+coverage, and the DB-free `tests/testing/test_client.py`), Slice 2 (the live
+tier's ordinary GraphQL posts moved onto the client), and Slice 3 (docs + card
+wrap).
 
 Owner: package maintainer.
 
-Predecessors: [`spec-042-debug_toolbar-0_0_14.md`][spec-042] (the most recent
-spec and the canonical voice / depth / section-layout reference; its Risks
-section hands this card the async-verification note its Decision 2 deferred —
-resolved below as **not adopted**,
-[Decision 2](#decision-2--card-scope-boundary-the-test-client-family-ships-channels-session-auth-verification-the-toolbars-async-smoke-and-fakeshop-runtime-changes-stay-out));
-[`spec-041-channels_router-0_0_14.md`][spec-041] (whose Decision 11 left
-Channels session-**mutating** auth execution unverified, "scoped to the
-`TestClient` card or a dedicated follow-on card" — resolved below to the
-follow-on, because this card's helpers wrap Django's HTTP test clients, not
-Channels communicators); [`spec-037-upload_file_image_mapping-0_0_11.md`][spec-037] (the
-card's declared dependency — the [`Upload` scalar][glossary-upload-scalar]
-inputs the multipart path exists to drive). [`docs/GLOSSARY.md`][glossary]
-carries [`TestClient`][glossary-testclient] and
-[`GraphQLTestCase`][glossary-graphqltestcase] as `planned for 0.0.14`; Slice 3
-updates both entry bodies to the implemented contract while the `shipped
-(0.0.14)` status flips ride the joint cut.
+Predecessors: [`spec-042-debug_toolbar-0_0_14.md`][spec-042] (whose Risks named
+`AsyncTestClient` the natural vehicle for the toolbar's async verification —
+not adopted here, Decision 2);
+[`spec-041-channels_router-0_0_14.md`][spec-041] (the Channels router; this
+card's clients are not its transport); and
+[`spec-037-upload_file_image_mapping-0_0_11.md`][spec-037] (the
+[`Upload` scalar][glossary-upload-scalar] inputs the multipart path drives).
+[`docs/GLOSSARY.md`][glossary] carries the shipped contract under
+[`TestClient`][glossary-testclient] and
+[`GraphQLTestCase`][glossary-graphqltestcase].
 
-Deliberation for every decision below — the alternatives it rejected and why each lost, the
-derivations that do not change how it is built, every change it has undergone, and every claim it
-once made and may no longer make — lives in the companion
-[`spec-043-test_client-0_0_14-rationale.md`][rationale]. This spec is the contract and states only
-what is currently true. The numbered revisions this spec's drafting passed through are named there
-too, under `## Revision vocabulary`, and nowhere here: a citation of the form
-`spec-043 Revision N` — sibling specs' companions carry some — resolves to the companion, which is
-why the names were kept rather than discarded.
+Rejected alternatives and the derivations behind each decision live in the
+companion [`spec-043-test_client-0_0_14-rationale.md`][rationale]; this spec is
+the contract.
 
 ## Key glossary references
 
-Skim these [`docs/GLOSSARY.md`][glossary] entries first — they anchor the
-vocabulary used throughout the spec:
+Skim these [`docs/GLOSSARY.md`][glossary] entries first:
 
-- [`TestClient`][glossary-testclient] — the subject. The glossary already pins
-  the planned contract: `TestClient` and `AsyncTestClient` helpers for live
-  HTTP-level testing patterns, mirroring `strawberry-django`'s
-  `test/client.py` shape. Slice 3 updates the entry body to the implemented
-  contract (the status flip to `shipped (0.0.14)` rides the joint cut).
-- [`GraphQLTestCase`][glossary-graphqltestcase] — the companion entry: the
-  `unittest.TestCase` subclass family whose name and mixin-first shape come
-  from `graphene-django`'s `utils/testing.py` and whose underlying HTTP client
-  mirrors `strawberry-django`'s. Slice 3 updates this body too.
-- [`Upload` scalar][glossary-upload-scalar] — the card's declared dependency
-  ([`DONE-037-0.0.11`][kanban], shipped): the multipart `files=` path exists so
-  `Upload`-scalar mutations drive through the helper instead of raw
-  `client.post(...)` multipart blocks
-  ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+- [`TestClient`][glossary-testclient] — the subject: `TestClient` /
+  `AsyncTestClient` and the typed `Response`, mirroring `strawberry-django`'s
+  `test/client.py` shape.
+- [`GraphQLTestCase`][glossary-graphqltestcase] — the unittest family whose
+  name and mixin-first shape come from `graphene-django`'s `utils/testing.py`
+  and whose HTTP client is the package `TestClient`.
+- [`Upload` scalar][glossary-upload-scalar] — the multipart `files=` path
+  exists so `Upload`-scalar mutations drive through the helper (Decision 9).
 - [Live-first coverage mandate][glossary-live-first-coverage-mandate] — the
-  test-placement rule
-  [Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)
-  answers: the helper's primary coverage IS the switched live acceptance
-  suites (the card's own DoD names the switchover); `tests/testing/test_client.py`
-  covers only what a switched suite cannot reach (endpoint-resolution
-  precedence, the assertion-failure directions, the unittest family's
-  mechanics, the async client).
-- [Schema reload discipline][glossary-schema-reload-discipline] — the fixture
-  obligation any package test that executes real GraphQL through the aggregate
-  fakeshop schema inherits: `tests/testing/test_client.py`'s request-driving
-  tests call the single-sited
-  [`schema_reload.reload_all_project_schemas()`][schema-reload] on setup, the
-  same order-independence-by-reconstruction the acceptance suites use.
-- [`seed_data`][glossary-seed-data] — the repo's seed-helper rule applied to
-  the [Test plan](#test-plan): every product-query test's first executable
-  line is `seed_data(1)` (or an explicit `seed_data(N)`) from
-  `apps.products.services`.
+  rule Decision 11 applies: the request-driving coverage lives in the live
+  tier; `tests/testing/test_client.py` covers only what a live request cannot
+  pin (endpoint-resolution precedence against recording transports, the
+  assertion helpers' failure directions, the owned builder's guards, the
+  surface guards).
+- [Schema reload discipline][glossary-schema-reload-discipline] — the live
+  request-driving tests inherit [`test_query/conftest.py`][test-query-conftest]'s
+  autouse reload through
+  [`schema_reload.reload_all_project_schemas()`][schema-reload].
+- [`seed_data`][glossary-seed-data] — every catalog test's first executable
+  line is `seed_data(N)` / `create_users(N)` from `apps.products.services`.
 - [Joint version cut][glossary-joint-version-cut] — why no slice here bumps
-  the version: the `0.0.14` line has one open sibling and two landed
-  predecessors that already deferred; the last card to land owns the version
-  quintet and the release-status flips
-  ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
-- [Soft dependency][glossary-soft-dependency] — cited as the **contrast**:
-  this card needs none of it. `strawberry.test` ships inside the package's
-  hard `strawberry-graphql` dependency (the lower bound is the
-  `strawberry-graphql>=` pin in [`pyproject.toml`][pyproject]) and
-  `django.test` inside Django itself, so there is no guard, no install hint, no
-  [eviction-simulated absence][glossary-eviction-simulated-absence] fixture,
-  and no dependency gate — the first `0.0.14` card with a zero-dependency
-  Slice 1
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)).
-- [Auth mutations][glossary-auth-mutations] — the entry whose Channels
-  caveat names this card: session-mutating auth over Channels consumers is
-  "scoped to the `TestClient` card (`TODO-ALPHA-043-0.0.14`) or a dedicated
-  follow-on card". This spec resolves that disjunction to the **follow-on**
-  ([Decision 2](#decision-2--card-scope-boundary-the-test-client-family-ships-channels-session-auth-verification-the-toolbars-async-smoke-and-fakeshop-runtime-changes-stay-out));
-  Slice 3 updates the entry's wording accordingly.
-- [Debug-toolbar middleware][glossary-debug-toolbar-middleware] — the landed
-  `0.0.14` sibling ([`DONE-042-0.0.14`][kanban]) whose spec's Risks named
-  this card's `AsyncTestClient` "the natural owner" of its async-path
-  verification. This card ships the **vehicle** (an async client) but does not
-  adopt the toolbar's async smoke test as its own DoD; with 042 shipped
-  without it, that smoke is a follow-on (the joint cut or a dedicated card)
-  reusing 042's now-landed fixture — recorded in
-  [Risks](#risks-and-open-questions), not silently absorbed.
-- [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] — the
-  landed `0.0.14` predecessor. Its Channels transport is **not** what this
-  card's clients drive: `TestClient` wraps `django.test.Client` (WSGI-shaped),
-  `AsyncTestClient` wraps `django.test.AsyncClient` (Django's own ASGI
-  handler) — neither is a Channels communicator, which is why the Channels
-  session-auth verification stays a follow-on.
-- [`FieldError` envelope][glossary-fielderror-envelope] — untouched here, but
-  the reason the typed `Response` composes well: mutation tests read
+  the version (Decision 12).
+- [Soft dependency][glossary-soft-dependency] — the **contrast**:
+  `strawberry.test` ships inside the hard `strawberry-graphql` dependency and
+  `django.test` inside Django, so there is no guard, no install hint, no
+  [eviction-simulated absence][glossary-eviction-simulated-absence] fixture
+  (Decision 5).
+- [Auth mutations][glossary-auth-mutations] — session-mutating auth over
+  Channels consumers is the auth / router surface's own, tested with Channels
+  communicators; this card's clients wrap Django's HTTP test clients and do
+  not drive it (Decision 2).
+- [Debug-toolbar middleware][glossary-debug-toolbar-middleware] — its live
+  suite posts through `TestClient`; its async-path smoke is not this card's
+  (Decision 2).
+- [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter] — not
+  this card's transport: `TestClient` wraps `django.test.Client`,
+  `AsyncTestClient` wraps `django.test.AsyncClient` (Django's own in-process
+  ASGI handler); neither is a Channels communicator.
+- [`FieldError` envelope][glossary-fielderror-envelope] — mutation tests read
   `res.data["createItem"]["errors"]` through the same decoded `data` mapping,
   so the helper needs no envelope-specific surface.
-- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — untouched;
-  noted because several live tests assert query *counts* via
-  `CaptureQueriesContext` around the HTTP call, and the switchover must not
-  change how many queries a request emits (the helper adds no queries — it is
-  transport only).
-- [`ConfigurationError`][glossary-configurationerror] — NOT used by this card
-  (worth saying explicitly): a malformed `DJANGO_STRAWBERRY_FRAMEWORK` dict
-  already raises it through [`conf.py`][conf]'s shared reader; the endpoint
-  key itself needs no new validation beyond that existing seam, and a wrong
-  endpoint value surfaces at request time as whatever the URLconf serves at
-  that path — ordinarily a 404 ([Error shapes](#error-shapes)).
+- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — live tests
+  assert query counts via `CaptureQueriesContext` around the HTTP call; the
+  helper is transport only and adds no queries.
+- [`ConfigurationError`][glossary-configurationerror] — not raised by this
+  card: a malformed `DJANGO_STRAWBERRY_FRAMEWORK` dict already raises it
+  through [`conf.py`][conf]'s shared reader, and the endpoint key adds no
+  validation of its own ([Error shapes](#error-shapes)).
 
 ## Slice checklist
 
-Each top-level item maps to one commit / PR. **Three slices: the settings key +
-module + targeted live coverage + unit tests (Slice 1), the remaining
-live-suite switchover (Slice 2), and docs + card wrap (Slice 3).** The card is
-an M — the client module is ~120 lines
-riding an engine-owned base, and the weight is in the switchover's breadth and
-the decision hygiene around the two upstream flavors.
+Each top-level item maps to one commit / PR.
 
 - [ ] **Slice 1 — `TESTING_ENDPOINT` + `testing/client.py` + re-exports +
-  `tests/testing/test_client.py`**
-  - [ ] **The Strawberry test-module gate rides the first commit**: confirm
-        `strawberry.test.BaseGraphQLTestClient` (and its `Response` dataclass)
-        is importable at the package's Strawberry floor in an isolated
-        throwaway venv (never the shared `.venv` — the
-        [`spec-041`][spec-041] / [`spec-042`][spec-042] gate discipline; per
-        the repo rule, `uv pip install --python <isolated-venv-python>`). The
-        floor is not restated here, because it moves: the lower bound is the
-        `strawberry-graphql>=` pin in [`pyproject.toml`][pyproject] and the
-        exact point a floor run installs is the policy recorded in
-        [`docs/builder/BUILD.md`][build] `## Floor verification`, the single
-        canonical statement. Presence is verified against the installed
-        engine ([`strawberry/test/client.py`][venv-strawberry-test-client]
-        defines `BaseGraphQLTestClient`, `Response`, `Body`); the
-        floor-presence check is upstream history re-confirmed at the gate. If
-        it is missing at the
-        floor, bump the project's Strawberry floor instead. The command and
-        outcome are recorded in the build artifact
-        ([Definition of done](#definition-of-done)). **No dependency gate
-        otherwise** — this card adds nothing to `[project].dependencies` or
-        `[dependency-groups].dev`, and `uv.lock` is untouched
-        ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)).
-  - [ ] [`django_strawberry_framework/conf.py`][conf] — the `TESTING_ENDPOINT`
-        key constant (`TESTING_ENDPOINT_KEY = "TESTING_ENDPOINT"`) and the
-        `testing_endpoint_setting()` accessor defaulting to `"/graphql/"`,
-        following the existing
-        `conf.py::nested_connection_strategy_setting` precedent (key constant +
-        thin accessor; validation stays at the consumer)
-        ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
-  - [ ] `django_strawberry_framework/testing/client.py` (new) — the package
-        [`Response`](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported)
-        dataclass (subclassing `strawberry.test.client.Response`, adding the
-        raw `response`); `TestClient(BaseGraphQLTestClient)` with `__test__ =
-        False`, the endpoint-resolving constructor
-        (`TestClient(path=None, client=None)`), the **owned** `_build_body` +
-        path-keyed file-map builder (the base's cannot express nested
-        input-object uploads,
-        [Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)),
-        the Django-shaped `request(body, headers=None, files=None, *,
-        url=None)` (JSON POST via `content_type="application/json"`; multipart
-        when `files=` is provided; `url` defaults to `self.path`), the **owned**
-        `query()` orchestration (adds `operation_name=` and a per-call `url=`
-        override routed through `request(..., url=...)`, returns the package
-        `Response`), and the
-        `login(user)` context manager (`force_login` / `logout`);
-        `AsyncTestClient(TestClient)` with the `AsyncClient` default, the
-        `async query()` override, and the async `login()`; `GraphQLTestMixin`
-        (class-attr `GRAPHQL_URL = None`, `.query(...)` delegating to a
-        `TestClient` over the test case's own `self.client`, and the
-        `assertResponseNoErrors` / `assertResponseHasErrors` helpers);
+  live coverage + `tests/testing/test_client.py`**
+  - [ ] No dependency change: `strawberry.test.BaseGraphQLTestClient` (and its
+        `Response` dataclass) ships in the hard `strawberry-graphql`
+        dependency at the floor the `strawberry-graphql>=` pin in
+        [`pyproject.toml`][pyproject] declares (floor-run policy:
+        [`docs/builder/BUILD.md`][build] `## Floor verification`).
+  - [ ] [`django_strawberry_framework/conf.py`][conf] — the
+        `TESTING_ENDPOINT_KEY = "TESTING_ENDPOINT"` constant and the
+        `django_strawberry_framework/conf.py::testing_endpoint_setting`
+        accessor defaulting to `"/graphql/"`, following the
+        `django_strawberry_framework/conf.py::nested_connection_strategy_setting`
+        precedent (key constant + thin accessor), with its own
+        `__test__ = False` collection guard (Decision 7).
+  - [ ] `django_strawberry_framework/testing/client.py` — the package
+        `Response` dataclass (subclassing `strawberry.test.client.Response`,
+        adding the raw `response`); the private
+        `_GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT])`
+        with `__test__ = False`, the endpoint-resolving constructor, the
+        `client` property, the Django-shaped `request(body, headers=None,
+        files=None, *, url=None)`, the owned `_build_body` + path-keyed
+        file-map builder + placeholder walker, and the shared
+        `_finish_response` tail; `TestClient(_GraphQLTestClientBase[Client])`
+        and `AsyncTestClient(_GraphQLTestClientBase[AsyncClient])`, each with
+        `__init__(path=None, client=None)`, its own `query()` (adds
+        `operation_name=` and a per-call `url=`, returns the package
+        `Response`), and its own `login(user)` context manager;
+        `GraphQLTestMixin` (class-attr `GRAPHQL_URL = None`, `.query(...)`
+        delegating to a `TestClient` over the test case's own `self.client`,
+        and the `assertResponseNoErrors` / `assertResponseHasErrors` helpers);
         `GraphQLTestCase(GraphQLTestMixin, TestCase)` and
         `GraphQLTransactionTestCase(GraphQLTestMixin, TransactionTestCase)`
-        ([Decisions 3](#decision-3--the-symbols-are-upstreams-own-names--testclient--asynctestclient--graphqltestmixin--graphqltestcase--graphqltransactiontestcase-distinctly-ours-import-path)–[10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)).
+        (Decisions 3–10).
   - [ ] [`django_strawberry_framework/testing/__init__.py`][testing-init] —
         re-export `TestClient`, `AsyncTestClient`, `Response`,
-        `GraphQLTestMixin`, `GraphQLTestCase`, `GraphQLTransactionTestCase`
-        (extending `__all__`), discharging the docstring's own "Future
-        exports" promise; the `relay` submodule stays submodule-only, and
-        nothing is re-exported from the **package root**
-        ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)).
-  - [ ] Targeted live coverage in [`examples/fakeshop/test_query/`][test-query-readme]
-        — the sync request-shape behaviours reachable as ordinary GraphQL calls
-        (JSON happy path + typed `Response`, the `assert_no_errors=False` errors
-        outcome, `operation_name` dispatch, `login()` scoping, and the nested
-        multipart upload) are earned **live** by converting the matching
-        `test_query/` cases onto `TestClient` in this slice — not restated as
-        package-tier tests, per the
-        [live-first mandate][glossary-live-first-coverage-mandate]
-        ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
-  - [ ] `tests/testing/test_client.py` (new) — the package-tier tests per the
-        [Test plan](#test-plan) for **only what a live request cannot pin**,
-        and **entirely DB-free**: endpoint-resolution precedence,
-        both mixin assertion-helper FAILURE directions against canned responses,
-        the owned builder's map rule and its guards (`files=`-with-`variables=None`,
-        the per-path placeholder walker, the reserved-envelope-key guard, and the
-        `operation_name=""`-is-sent contract), and the `__test__ = False`
-        collection guard + export surface. The `AsyncTestClient` real-request
-        paths, the unittest family end to end, and the `assert_no_errors=True`
-        raising direction proved live-reachable and are earned **live** in
-        [`test_client_api.py`][test-client-api] instead (under the
-        [schema-reload][glossary-schema-reload-discipline] +
-        [`seed_data`][glossary-seed-data] disciplines), so no package-tier test
-        here drives a request
-        ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
+        `GraphQLTestMixin`, `GraphQLTestCase`, `GraphQLTransactionTestCase` in
+        `__all__`; the `relay` submodule stays submodule-only, and nothing is
+        re-exported from the **package root** (Decision 4).
+  - [ ] Request-driving live coverage in
+        [`examples/fakeshop/test_query/`][test-query-readme] — JSON happy path
+        + typed `Response`, the errors outcome both directions,
+        `operation_name` dispatch, `login()` scoping, the nested multipart
+        upload, the async client, and the unittest family end to end
+        (Decision 11, [Test plan](#test-plan)).
+  - [ ] `tests/testing/test_client.py` — the **DB-free** package-tier tests
+        for only what a live request cannot pin: endpoint-resolution
+        precedence, both mixin assertion-helper FAILURE directions against
+        canned responses, the owned builder's map rule and guards, the
+        transport-selection contracts, and the collection guard + export
+        surface (Decision 11).
   - [ ] Every new symbol carries its docstring (the [`docs/TREE.md`][tree]
-        render fails on missing module docstrings) and any
-        staged-but-not-implemented seam carries a `TODO(spec-043 Slice N)`
-        source anchor per [`AGENTS.md`][agents].
-- [ ] **Slice 2 — the remaining live-suite switchover** (Slice 1 already
-      converted the subset that earns the helper's package coverage; this is
-      the wide cleanup/dedup pass over the rest and adds no new package
-      coverage)
-  - [ ] Every **remaining** file under `examples/fakeshop/test_query/` whose
-        hand-rolled POST-decode helper is covered by the client's contract
-        switches to `TestClient` (or the mixin where a file is already
-        TestCase-shaped): the per-file `_graphql_data` /
-        `_post_graphql_as_staff`-style helpers are **deleted**, JSON posts go
-        through `.query(...)`, multipart uploads through
-        `.query(..., files=...)`, and authenticated flows through `.login(...)`
-        or the underlying `client` (the raw Django client stays reachable as
-        `TestClient(...).client` for session-cookie assertions).
+        render fails on a missing module docstring).
+- [ ] **Slice 2 — the live tier on the client**
+  - [ ] Ordinary JSON posts under `examples/fakeshop/test_query/` go through
+        `TestClient` — directly, or through
+        [`graphql_client.py`][graphql-client]'s helpers, which route through
+        it; file-local post wrappers that remain are thin wrappers over the
+        client. Multipart uploads use `.query(..., files=...)`; authenticated
+        flows use `.login(...)` or the wrapped `client`.
   - [ ] The documented exemption: a test whose **subject is the raw HTTP
-        envelope itself** (a hand-built multipart `operations` / `map`
-        envelope whose arbitrary field labels or map targets are themselves
-        the assertion, malformed-body negatives, content-type negotiation,
-        queries via GET) keeps its
-        raw `client.post(...)` with a one-line comment naming this exemption —
-        the helper exists to remove boilerplate, not to launder tests whose
-        point is the wire shape
-        ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
-  - [ ] Query-count assertions (`CaptureQueriesContext` blocks) re-verified
-        unchanged — the helper is transport-only and must not move any query
-        boundary.
-- [ ] **Slice 3 — docs + card wrap (no version bump)**
+        envelope** (an arbitrary-label multipart `operations` / `map`
+        envelope, malformed bodies, content-type negotiation, GET) keeps its
+        raw post with a comment naming the exemption;
+        `examples/fakeshop/graphql_client.py::post_graphql_raw` is the shared
+        raw-envelope helper (Decision 11).
+  - [ ] Query-count assertions (`CaptureQueriesContext` blocks) unchanged —
+        the helper is transport-only.
+- [ ] **Slice 3 — docs + card wrap**
   - [ ] [`docs/GLOSSARY.md`][glossary] [`TestClient`][glossary-testclient] and
-        [`GraphQLTestCase`][glossary-graphqltestcase] entry bodies updated to
-        the implemented contract (import path, constructor / endpoint
-        resolution, the typed `Response` + raw-response field, multipart,
-        login, async, the mixin family, the no-new-dependency posture); the
-        [Auth mutations][glossary-auth-mutations] entry's "scoped to the
-        `TestClient` card or a dedicated follow-on card" sentence resolved to
-        the follow-on; the **statuses stay `planned for 0.0.14`** until the
-        joint cut flips them
-        ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
+        [`GraphQLTestCase`][glossary-graphqltestcase] entry bodies describe the
+        implemented contract (import path, endpoint resolution, the typed
+        `Response` + raw-response field, multipart, login, async, the mixin
+        family, the no-new-dependency posture) — DB edit + render, never a
+        hand-edit.
   - [ ] [`docs/TREE.md`][tree] regenerated via
-        [`scripts/build_tree_md.py`][build-tree-md] (never hand-edited): the
-        `testing/client.py` row moves from `planned by WIP-ALPHA-043-0.0.14`
-        to the real docstring-derived row, and `tests/testing/test_client.py`
-        appears in the test tree.
-  - [ ] [`KANBAN.md`][kanban] card wrap: `043` → Done with the next
-        `DONE-043-0.0.14` id and its `SpecDoc` pointing at this spec (kanban
-        DB edit + [`scripts/build_kanban_md.py`][build-kanban-md] /
-        `build_kanban_html.py` re-render, never a hand-edit).
-  - [ ] **Deferred to the joint `0.0.14` cut** (not this slice): the version
-        quintet (`pyproject.toml`, `__version__`,
-        [`tests/base/test_init.py::test_version`][test-base-init], the
-        GLOSSARY package-version line, the `django-strawberry-framework`
-        `version` entry in `uv.lock`), the GLOSSARY status flips to `shipped
-        (0.0.14)`, the [`README.md`][readme] / [`docs/README.md`][docs-readme]
-        "Coming next" → "Shipped today" moves, and the `CHANGELOG.md` bullets.
-        Per [`AGENTS.md`][agents] #"No CHANGELOG.md updates unless told", the `CHANGELOG.md` edit additionally requires
-        the joint-cut slice's maintainer prompt to grant it explicitly; this
-        spec describes the edit but cannot grant the permission.
+        [`scripts/build_tree_md.py`][build-tree-md]: the `testing/client.py`
+        and `tests/testing/test_client.py` rows come from their module
+        docstrings.
+  - [ ] [`KANBAN.md`][kanban] card wrap: `043` → Done (kanban DB edit +
+        [`scripts/build_kanban_md.py`][build-kanban-md] /
+        `build_kanban_html.py` re-render).
+  - [ ] The version bump, the GLOSSARY status flips to `shipped (0.0.14)`,
+        the [`README.md`][readme] / [`docs/README.md`][docs-readme] moves, and
+        `CHANGELOG.md` belong to the joint `0.0.14` cut, not this card
+        (Decision 12).
 
 ## Problem statement
 
@@ -366,337 +224,227 @@ it, POST it with `content_type="application/json"`, assert 200, decode the
 body, and split `data` from `errors` — remembering that GraphQL returns **200
 with an `errors` key** for most failures, so a status assertion alone proves
 nothing. Multipart uploads are worse: the GraphQL multipart request spec's
-`operations` / `map` envelope is fiddly enough that
-[`test_uploads_api.py`][test-uploads-api] and
-[`test_products_api.py`][test-products-api] each hand-build it inline today.
-Both reference libraries ship exactly this helper — 🍓 `strawberry-graphql-django`
-as `strawberry_django.test.client.TestClient` / `AsyncTestClient` (a thin
-wrapper over `django.test.Client` returning a typed `Response`), ⚛️
-`graphene-django` as `graphene_django.utils.testing`'s `graphql_query` /
-`GraphQLTestMixin` / `GraphQLTestCase` / `GraphQLTransactionTestCase` family
-(raw `HttpResponse` + parsing assertion helpers, endpoint from a
-`TESTING_ENDPOINT` settings knob) — so a consumer migrating from either
-upstream currently loses their test ergonomics at the door, against
-[`GOAL.md`][goal] success criterion 7 (migrate "without bringing the source
-package along").
-
-The package's own repo is the loudest consumer: ten-plus live acceptance files
-under [`examples/fakeshop/test_query/`][test-query-readme] re-spell the
-pattern per file, each with its own slightly-different helper
-(`_graphql_data(query, *, client=None)` in the kanban suite,
-`_post_graphql_as_staff(query)` in the library suite, raw posts elsewhere).
-The card's "Why it matters" names this directly: the fakeshop live tests
-already do this by hand; centralizing the pattern is a small win for consumers
-and keeps our HTTP tests crisp. Unlike the other three `0.0.14` cards, this
-surface needs **no new dependency and no soft-dependency machinery** — the
-Strawberry engine already ships the base client — so the design weight is in
-the two API decisions the card flags as "decide before writing the spec" (the
-`.query()` return type; base-class reuse vs. from-scratch), the endpoint
-settings key, and doing the switchover without changing what any live test
-proves.
+`operations` / `map` envelope is fiddly to hand-build. Both reference
+libraries ship exactly this helper — 🍓 `strawberry-graphql-django` as
+`strawberry_django.test.client.TestClient` / `AsyncTestClient` (a thin wrapper
+over `django.test.Client` returning a typed `Response`), ⚛️ `graphene-django`
+as `graphene_django.utils.testing`'s `graphql_query` / `GraphQLTestMixin` /
+`GraphQLTestCase` / `GraphQLTransactionTestCase` family (raw `HttpResponse` +
+parsing assertion helpers, endpoint from a `TESTING_ENDPOINT` settings knob) —
+so without it a consumer migrating from either upstream loses their test
+ergonomics at the door, against [`GOAL.md`][goal] success criterion 7 (migrate
+"without bringing the source package along"). The surface needs **no new
+dependency** — the Strawberry engine already ships the base client — so the
+design weight is in the two API decisions (the `.query()` return type;
+base-class reuse vs. from-scratch), the endpoint settings key, and moving the
+package's own live suites onto it without changing what any of them proves.
 
 ## Current state
 
-A true description of the repo as this spec is authored:
+The repo facts the design rests on:
 
-- **The `testing/` subpackage exists and already promises these exports.**
-  [`django_strawberry_framework/testing/__init__.py`][testing-init] ships
-  [`safe_wrap_connection_method`][glossary-safe-wrap-connection-method] (in
-  `__all__`) and the `relay` submodule (deliberately not re-exported), and its
-  docstring's "Future exports" block names `TestClient`, `AsyncTestClient`,
-  and `GraphQLTestCase` for `0.0.14` — "The subpackage exists now so consumers
-  have a stable import path". This card discharges that promise
-  ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)).
-- **[`docs/TREE.md`][tree] reserves the module.** The target package layout
-  carries `testing/client.py # planned by WIP-ALPHA-043-0.0.14 - Test client
-  helper`; the target test tree carries no `tests/testing/test_client.py` row
-  yet (the current `tests/testing/` holds `test_relay.py` and `test_wrap.py`).
-  Slice 3's regenerate added both rows.
 - **The engine base is present, at a hard dependency.**
-  [`strawberry/test/client.py`][venv-strawberry-test-client] (installed
-  strawberry 0.316.0) defines `BaseGraphQLTestClient` — `query()` building the
-  body, calling the abstract `request()`, decoding, and returning the
-  `Response(errors, data, extensions)` dataclass with an `assert_no_errors`
-  gate — plus the static `_build_multipart_file_map(variables, files)` and
-  `_decode` (multipart → `json.loads(response.content)`, json →
-  `response.json()`). **The base's `_build_body` / `_build_multipart_file_map`
-  are insufficient for this repo:** the map builder treats any dict-valued
-  variable as a single "folder" (keying off `next(iter(values.keys()))`) and
-  drops any map entry whose key is not itself a `files` key, so it returns an
-  **empty map** for fakeshop's nested `variables.data.attachment` /
-  `variables.data.image` shape, and `_build_body` sends no `operationName` at
-  all — the two reasons the package owns its body/map builder
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)
-  ground 2,
-  [Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
-  `_decode` and the `Response` base are reused; the base's `query()` is **not**
-  — it takes no `operation_name`/`url` and builds the base `Response` directly,
-  so the package owns its own sync and async `query()` (Decision 5 ground 2).
-  The package's
-  floor is the `strawberry-graphql>=` pin in [`pyproject.toml`][pyproject];
-  the Slice-1 gate re-confirms the module at that floor.
-- **Async test infrastructure exists.** [`pytest.ini`][pytest-ini] sets
-  `asyncio_mode = auto` and the dev group carries `pytest-asyncio>=1.0.0`, so
-  `async def` tests run today (the auth, connection, and mutation suites
-  already use them). `django.test.AsyncClient` needs no `asgi.py` in fakeshop —
-  it drives Django's own `AsyncClientHandler` in-process — so `AsyncTestClient` is
-  testable against the existing WSGI-only example.
-- **The endpoint is `/graphql/` everywhere the repo touches it.** Fakeshop's
-  [`config/urls.py`][config-urls] mounts `graphql/`; Strawberry's own base
-  defaults its (unused-by-upstream) `url` to `"/graphql/"`; graphene defaults
-  `TESTING_ENDPOINT` to `"/graphql"` (no trailing slash — against a
-  slash-mounted endpoint a body-bearing POST never cleanly reaches the view
-  under `APPEND_SLASH`: `RuntimeError` in `DEBUG`, a body-dropping 301
-  otherwise; the package default keeps the trailing slash that matches both
-  fakeshop and the Strawberry ecosystem).
-- **[`conf.py`][conf] has the accessor precedent.** Settings keys live as
-  module constants with thin accessor functions
-  (`conf.py::nested_connection_strategy_setting`,
-  `conf.py::upstream_patches_enabled`); the reader already fails loud on a
-  malformed non-mapping settings dict via `conf.py::_normalize_user_settings`.
-  The `TESTING_ENDPOINT` key follows the same shape — and per the
-  [`START.md`][start] rule ("add a settings key only when the feature that
-  needs it lands"), it lands in this card's Slice 1, not before.
-- **The live suites hand-roll the pattern.** Per-file helpers:
-  [`test_kanban_api.py`][test-kanban-api] `::_graphql_data`,
-  [`test_library_api.py`][test-library-api] `::_post_graphql_as_staff` and
-  `::_post_node`, [`test_mutation_atomicity.py`][test-mutation-atomicity]'s
-  `_post_update` / `_post_create` / `_post_delete` family, and raw multipart
-  `operations` / `map` blocks in [`test_uploads_api.py`][test-uploads-api] and
-  [`test_products_api.py`][test-products-api]. The acceptance suites share the
-  [schema-reload][glossary-schema-reload-discipline] autouse fixture through
-  [`test_query/conftest.py`][test-query-conftest].
-- **The version line reads `0.0.13`, and the `0.0.14` joint cut is already in
-  motion.** [`DONE-041-0.0.14`][kanban] and [`DONE-042-0.0.14`][kanban] both
-  landed with their version bumps deferred; `TODO-ALPHA-044` is still non-Done
-  at this card's patch version, so the [joint-cut rule][glossary-joint-version-cut]
-  applies
-  ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
-
-This section's header dates it, so its observations stand even where later
-work overtook them; the clauses that were predictions rather than observations,
-and what became of each, are in the
-[rationale][rationale-current-state].
+  [`strawberry/test/client.py`][venv-strawberry-test-client] defines
+  `BaseGraphQLTestClient` — an ABC whose `__init__(client, url="/graphql/")`
+  stores `self._client` / `self.url`, whose `query()` builds the body, calls
+  the abstract `request()`, decodes, and returns the
+  `Response(errors, data, extensions)` dataclass behind a bare-`assert`
+  `assert_no_errors` gate — plus `_build_body`, the static
+  `_build_multipart_file_map(variables, files)`, and `_decode` (multipart →
+  `json.loads(response.content.decode())`, json → `response.json()`). **The
+  base's `_build_body` / `_build_multipart_file_map` are insufficient for this
+  repo:** the map builder treats any dict-valued variable as a single "folder"
+  (keying off `next(iter(values.keys()))`) and drops any map entry whose key is
+  not itself a `files` key, so it returns an **empty map** for fakeshop's
+  nested `variables.data.attachment` / `variables.data.image` shape, and
+  `_build_body` sends no `operationName` at all. The base's `query()` takes no
+  `operation_name` / `url` and builds the base `Response` directly. `_decode`,
+  the `Response` field schema, and the `request()` seam are what the package
+  reuses (Decisions 5 and 9).
+- **Async test infrastructure.** [`pytest.ini`][pytest-ini] sets
+  `asyncio_mode = auto` and the dev group carries `pytest-asyncio`.
+  `django.test.AsyncClient` drives Django's own `AsyncClientHandler`
+  in-process, so `AsyncTestClient` runs against the WSGI-only fakeshop example
+  (no `asgi.py`).
+- **The endpoint is `/graphql/`.** Fakeshop's [`config/urls.py`][config-urls]
+  mounts `graphql/`; Strawberry's base defaults its `url` to `"/graphql/"`;
+  graphene defaults `TESTING_ENDPOINT` to `"/graphql"` (no trailing slash —
+  against a slash-mounted endpoint a body-bearing POST never cleanly reaches
+  the view under `APPEND_SLASH`: `RuntimeError` in `DEBUG`, a body-dropping 301
+  otherwise).
+- **[`conf.py`][conf]'s accessor shape.** Settings keys are module constants
+  with thin accessor functions
+  (`django_strawberry_framework/conf.py::nested_connection_strategy_setting`,
+  `django_strawberry_framework/conf.py::upstream_patches_enabled`); the reader
+  fails loud on a malformed non-mapping settings dict via
+  `django_strawberry_framework/conf.py::_normalize_user_settings`, and a
+  `setting_changed` receiver keeps reads fresh under `override_settings`.
+- **The `testing/` subpackage holds three export postures.**
+  [`testing/__init__.py`][testing-init] root-re-exports
+  [`safe_wrap_connection_method`][glossary-safe-wrap-connection-method] and this
+  card's family; the `relay` helpers are submodule-only.
+- **The live tier shares one request module.**
+  [`graphql_client.py`][graphql-client] single-sites the live JSON posts
+  (through `TestClient`) and the raw-envelope post; the acceptance suites
+  share the [schema-reload][glossary-schema-reload-discipline] autouse fixture
+  through [`test_query/conftest.py`][test-query-conftest].
 
 ## Goals
 
-1. **One import replaces the boilerplate.** A consumer (and the package's own
-   live suites) posts a GraphQL operation, gets back a typed
-   `Response(errors, data, extensions, response)`, and asserts on it — no
-   `json.dumps`, no content-type string, no manual envelope split
-   ([Decision 6](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported)).
+1. **One import replaces the boilerplate.** A consumer posts a GraphQL
+   operation, gets back a typed `Response(errors, data, extensions, response)`,
+   and asserts on it — no `json.dumps`, no content-type string, no manual
+   envelope split (Decision 6).
 2. **Both upstream migration paths keep their shape.** A
    `strawberry-graphql-django` migrant's `TestClient("/graphql/")` /
    `client.query(...)` / `client.login(user)` calls work with the import line
    changed; a `graphene-django` migrant's `GraphQLTestCase` subclass keeps
    `self.query(...)`, `self.assertResponseNoErrors(...)`,
    `self.assertResponseHasErrors(...)`, and the `GRAPHQL_URL` /
-   `TESTING_ENDPOINT` knobs — with three documented deltas (recorded for the
-   migration guide, [Out of scope](#out-of-scope-explicitly-tracked-elsewhere)):
-   `query()` returns the typed `Response` rather than a raw `HttpResponse`,
-   graphene's `input_data=` convenience is not carried, and everything after
-   `query` is keyword-only (graphene's positional `operation_name` becomes
-   `operation_name=`)
-   ([Decision 3](#decision-3--the-symbols-are-upstreams-own-names--testclient--asynctestclient--graphqltestmixin--graphqltestcase--graphqltransactiontestcase-distinctly-ours-import-path)
-   / [Decision 10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)).
+   `TESTING_ENDPOINT` knobs — with three documented deltas
+   ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)): `query()`
+   returns the typed `Response` rather than a raw `HttpResponse`, graphene's
+   `input_data=` convenience is not carried, and everything after `query` is
+   keyword-only (graphene's positional `operation_name` becomes
+   `operation_name=`) (Decisions 3 and 10).
 3. **Multipart uploads ride the same call, including nested input objects.**
    `query(..., variables={"file": None}, files={"file": f})` for a top-level
    file, and `query(..., variables={"data": {"attachment": None, "image":
    None}}, files={"data.attachment": f1, "data.image": f2})` for a nested
    two-file input object — the path-keyed `files=` contract the owned builder
-   makes possible (the base's builder cannot), so [`Upload`-scalar][glossary-upload-scalar]
-   mutations are one call — the card's `DONE-037-0.0.11` coupling, discharged
-   ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+   makes possible, so [`Upload`-scalar][glossary-upload-scalar] mutations are
+   one call (Decision 9).
 4. **The endpoint is configurable once, project-wide, with overrides at every
-   layer.** `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]` with per-instance
-   (constructor `path=`), per-class (`GRAPHQL_URL`), and per-call (`url=`)
-   overrides — graphene's knob, package-namespaced; the per-call override is the
-   card's explicitly-named constraint
-   ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
-5. **The package's own live suites get crisper.** The Slice-2 switchover
-   deletes the per-file helpers and raw multipart blocks where the client's
-   contract covers them, with every suite still proving exactly what it proved
-   before (query counts included)
-   ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
-6. **Zero new dependencies.** No `[project].dependencies` change, no dev-group
-   change, no lockfile change, no guard, no install hint
-   ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)).
+   layer.** `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]` with
+   per-instance (constructor `path=`), per-class (`GRAPHQL_URL`), and per-call
+   (`url=`) overrides (Decision 7).
+5. **The package's own live suites post through it**, each still proving
+   exactly what it proves (query counts included) (Decision 11).
+6. **Zero new dependencies.** The family imports only the package's hard
+   dependencies (Decision 5).
 
 ## Non-goals
 
 - **Channels / WebSocket test transport.** `TestClient` wraps
-  `django.test.Client`; `AsyncTestClient` wraps `django.test.AsyncClient`
-  (Django's in-process ASGI handler). Neither drives a Channels communicator,
-  so the [`spec-041`][spec-041] deferral — session-mutating
-  [auth mutations][glossary-auth-mutations] executed through Channels
-  consumers — is **not** discharged here; it resolves to the dedicated
-  follow-on card
-  ([Decision 2](#decision-2--card-scope-boundary-the-test-client-family-ships-channels-session-auth-verification-the-toolbars-async-smoke-and-fakeshop-runtime-changes-stay-out)).
-- **The debug-toolbar async smoke test.** [`spec-042`][spec-042]'s Risks named
-  this card's `AsyncTestClient` the "natural owner" of the toolbar's async
-  verification. The vehicle ships here; the toolbar smoke itself is that
-  card's (or the joint cut's) to add — adopting it would couple this card's
-  DoD to a soft-dependency middleware it otherwise never imports
-  ([Risks](#risks-and-open-questions)).
-- **A `mutate()` method.** Neither upstream base actually ships one (the
-  card's contrary claim is a recorded conflict —
-  [Risks](#risks-and-open-questions)); a GraphQL mutation posts through
-  `query()` like any operation, and the docstring says so plainly.
+  `django.test.Client`; `AsyncTestClient` wraps `django.test.AsyncClient`.
+  Neither drives a Channels communicator, so session-mutating
+  [auth mutations][glossary-auth-mutations] through Channels consumers are not
+  exercised by this family (Decision 2).
+- **The debug-toolbar async smoke test.** The vehicle ships here; a toolbar
+  async smoke would couple this card to a soft-dependency middleware it never
+  imports (Decision 2).
+- **A `mutate()` method.** Neither upstream ships one; a GraphQL mutation posts
+  through `query()` like any operation, and the docstring says so.
 - **graphene's `input_data=` convenience.** `graphql_query`'s `input_data`
-  kwarg injects `variables["input"]` — a convention from graphene's Relay
-  mutation shape (`$input`). The package's mutations take `data:` (and
-  `id:`), so the convenience would encode a foreign convention; a migrant
-  writes `variables={"input": ...}` explicitly. Documented as a deliberate
-  non-borrow ([Borrowing posture](#borrowing-posture)).
-- **Fakeshop runtime changes.** No URLs, settings, or app changes in the
-  example project; Slice 2 touches only `test_query/` files.
+  kwarg injects `variables["input"]` — graphene's Relay mutation convention
+  (`$input`). The package's mutations take `data:` (and `id:`), so a migrant
+  writes `variables={"input": ...}` explicitly
+  ([Borrowing posture](#borrowing-posture)).
+- **Fakeshop runtime changes.** The family needs no URLs, settings, or app
+  changes in the example project.
 - **Response-shape helpers beyond the envelope.** No assertion DSL, no
   snapshot helpers, no `FieldError`-envelope-specific accessors — `res.data`
-  is a plain decoded mapping and test code indexes into it.
+  is a plain decoded mapping.
 - **A package-root export.** The family stays under
-  `django_strawberry_framework.testing`; the package root's public surface is
-  schema-building API, and test utilities do not belong in `__all__` at the
-  root ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)).
+  `django_strawberry_framework.testing` (Decision 4).
 
 ## Borrowing posture
 
 Per the [`START.md`][start] "do both libraries provide it?" test this card is
-**dual-upstream, foundational**: both reference libraries ship the surface, so
-the package needs it, and the borrow splits cleanly — the **client** shape
-comes from `strawberry-graphql-django`, the **unittest family and settings
-knob** from `graphene-django`. The card's `Verified in upstream` section names
-three sources and all three were read in full for this spec (plus the
-Strawberry core base class both this card and upstream ride); every behavior
-below is taken from the source directly, not from memory.
+**dual-upstream, foundational**: both reference libraries ship the surface,
+and the borrow splits cleanly — the **client** shape comes from
+`strawberry-graphql-django`, the **unittest family and settings knob** from
+`graphene-django`.
 
-### From `strawberry-graphql-django` — the client pair, near-verbatim
+### From `strawberry-graphql-django` — the client pair
 
-[`strawberry_django/test/client.py`][upstream-client] is, in full (90 lines):
+[`strawberry_django/test/client.py`][upstream-client]:
 
 - **`TestClient(BaseGraphQLTestClient)`** with `__test__ = False` (the pytest
-  collection guard — the class name starts with `Test`, so without it pytest
-  tries to collect the class as a test suite and warns), a
+  collection guard — the class name starts with `Test`), a
   `__init__(path, client=None)` storing `self.path` and defaulting the wrapped
   client to `django.test.Client()`, a `client` property over the base's
   `self._client`, and `request(body, headers=None, files=None)`: multipart
-  kwargs when `files` is provided, else
-  `content_type="application/json"`, posted to `self.path`.
+  kwargs when `files` is provided, else `content_type="application/json"`,
+  posted to `self.path`.
 - **`login(user)`** — a `contextlib.contextmanager` that `force_login`s the
   wrapped Django client, yields, and `logout()`s.
 - **`AsyncTestClient(TestClient)`** — defaults the wrapped client to
-  `django.test.AsyncClient` and **fully re-implements** `query()` as
-  `async def` (it does **not** call the base `query()`; the flow is re-declared
-  with the request awaited — the sync `request()` is reused via
-  `cast("Awaitable", ...)`), and `login()` as an `asynccontextmanager` wrapping
-  `force_login` / `logout` in `sync_to_async`.
-- The base **ships** a `query()` orchestration on Strawberry core's
-  [`BaseGraphQLTestClient`][venv-strawberry-test-client] — the build →
-  `request()` → `_decode` → construct `Response` → `assert_no_errors` flow — but
-  its signature is fixed (`query(query, variables=None, headers=None,
-  files=None, assert_no_errors=True)`: no `operation_name`, no `url`), it calls
-  `request(body, headers, files)` with no target argument, and it constructs the
-  base `Response(errors, data, extensions)` directly. A client that needs
-  `operation_name=`, a per-call `url=`, and the package `Response` (carrying the
-  raw `HttpResponse`) therefore **cannot ride that method** — it must own its
-  own `query()`. This is not a new posture: upstream's own
-  `AsyncTestClient.query()` already fully re-implements the flow rather than
-  calling `super().query()`, so owning the **sync** `query()` here is the same
-  move applied to both colors. What the package genuinely reuses from the base
-  is narrower and load-bearing: `_decode` (the JSON / multipart response split),
-  the `Response` **field schema** (the package `Response` subclasses
-  `strawberry.test.client.Response`, inheriting `errors` / `data` /
-  `extensions`), and the `request()` **ABC seam** (the one abstract method). The
-  base also ships `_build_body` / `_build_multipart_file_map`, which the package
-  **does not** reuse either — the map builder returns an empty
-  map for nested input-object uploads and there is no `operationName` support,
-  so the package owns an equivalent path-keyed builder
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)
-  ground 2,
-  [Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+  `django.test.AsyncClient`, **fully re-implements** `query()` as an
+  `@override`-decorated `async def` (it does not call the base `query()`; the
+  sync `request()` is reused via `cast("Awaitable", ...)`), and re-implements
+  `login()` as an `asynccontextmanager` wrapping `force_login` / `logout` in
+  `sync_to_async`.
 
-Borrowed as-is: the class names, the inheritance shape (async subclasses
-sync), `__test__ = False`, the `login` context managers, `_decode`, the
-`Response` field schema, and the `request()` ABC seam. Owned outright: the
-sync **and** async `query()` orchestration (the signature and return type both
-change) and the body/multipart-map build (above). The deltas from upstream's
-concrete client: the constructor's `path` becomes optional (endpoint
-resolution,
-[Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name));
-the concrete `request()` gains a keyword-only `url=` (default `self.path`) so
-the package-owned `query()` can route a single call without mutating stored
-state
-([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name));
-`query()` gains `operation_name=` and the per-call `url=` and returns the package
-`Response` carrying the raw `HttpResponse`
-([Decision 6](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported));
-the `files=` contract becomes path-keyed for nested uploads; and upstream's
-no-op `format="multipart"` extra is dropped
-([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+Borrowed: the class names, `__test__ = False`, the `login` context managers,
+`_decode`, the `Response` field schema, the `request()` ABC seam, and
+`typing_extensions.override` on every overriding method (`typing-extensions`
+is a hard dependency of the package). Owned outright: the sync **and** async
+`query()` orchestration (the signature and return type both change, Decision
+5) and the body/multipart-map build (Decision 9). The deltas from upstream's
+concrete client: the two clients are **siblings over one private base**
+rather than async-subclasses-sync (Decision 8); the constructor's `path`
+becomes optional (endpoint resolution, Decision 7); the concrete `request()`
+gains a keyword-only `url=` (default `self.path`) so `query()` can route a
+single call without mutating stored state (Decision 7); `query()` gains
+`operation_name=` and the per-call `url=` and returns the package `Response`
+carrying the raw `HttpResponse` (Decision 6); the `files=` contract becomes
+path-keyed for nested uploads; and upstream's inert `format="multipart"` extra
+is dropped (Decision 9).
 
 ### From `graphene-django` — the unittest family and the settings knob
 
-[`graphene_django/utils/testing.py`][upstream-testing] (162 lines):
+[`graphene_django/utils/testing.py`][upstream-testing]:
 
 - **`graphql_query(...)`** — module-level function building the JSON envelope
   (`query`, optional `operationName`, optional `variables`, the `input_data`
   convenience) and posting it with `content_type="application/json"` to
   `graphql_url or graphene_settings.TESTING_ENDPOINT`.
-- **`GraphQLTestMixin`** — the reusable piece: class attribute `GRAPHQL_URL =
+- **`GraphQLTestMixin`** — class attribute `GRAPHQL_URL =
   graphene_settings.TESTING_ENDPOINT`, a `query(...)` method delegating to
   `graphql_query` with `client=self.client`, the deprecated `_client`
   property shim, and the two assertion helpers — `assertResponseNoErrors`
   (status 200 **and** no `errors` key) and `assertResponseHasErrors` (an
-  `errors` key present; the docstring warns "Even with errors, GraphQL
-  returns status 200!").
+  `errors` key present; GraphQL returns status 200 even with errors).
 - **`GraphQLTestCase(GraphQLTestMixin, TestCase)`** and
-  **`GraphQLTransactionTestCase(GraphQLTestMixin, TransactionTestCase)`** —
-  the two-line concrete combinations.
+  **`GraphQLTransactionTestCase(GraphQLTestMixin, TransactionTestCase)`**.
 - [`graphene_django/settings.py`][upstream-settings] `#"TESTING_ENDPOINT"` —
-  the project-wide endpoint default (`"/graphql"`) read from graphene's own
-  settings dict.
+  the project-wide endpoint default (`"/graphql"`).
 
 Borrowed: the mixin-first shape and all three class names, the assertion
 helper names and their **semantics** (no-errors asserts HTTP 200 too; both
 raise with the decoded content as the failure message), `operation_name`
 support, and the settings-knob idea under the package's own dict. The mixin's
 `query()` delegates to the package `TestClient` rather than a module-level
-function, so the body-building logic exists once
-([Decision 10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)).
+function, so the body-building logic exists once (Decision 10).
 
 ### Explicitly do not borrow
 
-- **graphene's raw-`HttpResponse` return.** The card's architectural posture
-  asks for one flavor, pinned; the typed dataclass wins (the card's own
-  recommendation), with the raw response carried as a field so nothing the
-  raw flavor could do is lost
-  ([Decision 6](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported)).
-- **graphene's `input_data=` kwarg** — the `$input` Relay-mutation
-  convention is not this package's mutation shape ([Non-goals](#non-goals)).
+- **graphene's raw-`HttpResponse` return.** The typed dataclass wins, with the
+  raw response carried as a field so nothing the raw flavor could do is lost
+  (Decision 6).
+- **graphene's `input_data=` kwarg** — the `$input` Relay-mutation convention
+  is not this package's mutation shape ([Non-goals](#non-goals)).
 - **graphene's `_client` deprecation shim** — legacy compatibility for
-  graphene's own history; the package has no such history to shim.
-- **graphene's module-level `graphql_query` function** — the free-function
-  flavor duplicates the client's body building; consumers who want a bare
-  function instantiate `TestClient()` in a fixture. Rejected to keep one
-  body-builder ([Decision 10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)).
-- **upstream strawberry-django's `format="multipart"` kwarg** — a no-op
-  against Django's test client (the multipart behavior actually comes from
-  omitting `content_type`); dropped, with the real mechanism documented
-  ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
-- **`typing_extensions.override`** — upstream decorates `AsyncTestClient.query`
-  with `@override`; the package does not depend on `typing_extensions`
-  directly (the [`spec-042`][spec-042] precedent), so the override intent is
-  carried by docstrings and tests.
+  graphene's own history.
+- **graphene's module-level `graphql_query` function** — it would duplicate
+  the client's body building; consumers who want a bare function instantiate
+  `TestClient()` in a fixture (Decision 10).
+- **upstream strawberry-django's `AsyncTestClient(TestClient)` inheritance** —
+  the async client's `query()` / `login()` are coroutine-colored, so it is not
+  substitutable for the sync client (Decision 8).
+- **upstream strawberry-django's `format="multipart"` kwarg** — inert against
+  Django's test client (the multipart behavior comes from omitting
+  `content_type`); dropped, with the real mechanism documented (Decision 9).
 - **graphene's `"/graphql"` default** — the package default is `"/graphql/"`
-  (trailing slash), matching fakeshop's URLconf, Strawberry core's own base
-  default, and Django's `APPEND_SLASH` convention
-  ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
+  (Decision 7).
 
-The full upstream source inventories these borrow decisions rest on, and the
-derivations behind them, are in the [rationale][rationale-borrowing].
+The upstream source readings behind these choices are in the
+[rationale][rationale-borrowing].
 
 ## User-facing API
 
-The pytest-flavored client (the shape the package's own suites use):
+The pytest-flavored client:
 
 ```python
 from django_strawberry_framework.testing import TestClient
@@ -772,7 +520,7 @@ class ProductsTests(GraphQLTestCase):
         self.assertResponseHasErrors(res)
 ```
 
-The project-wide endpoint knob, the per-call override, and both migration diffs:
+The project-wide endpoint knob, the overrides, and both migration diffs:
 
 ```python
 # settings.py (only needed when the endpoint is not /graphql/)
@@ -802,100 +550,86 @@ class MyTests(GraphQLTestCase):
 Consumer-visible behavior:
 
 - **`query()` posts and decodes.** The body is `{"query": ...}` plus
-  `variables` and `operationName` when provided; the POST carries
-  `content_type="application/json"`; the return is the typed
-  `Response(errors, data, extensions, response)`. With `assert_no_errors=True`
-  (the default) a response carrying `errors` raises `AssertionError`
-  immediately, so the un-asserted happy path stays one line.
+  `variables` when non-empty and `operationName` when `operation_name` is not
+  `None`; the POST carries `content_type="application/json"`; the return is
+  the typed `Response(errors, data, extensions, response)`. With
+  `assert_no_errors=True` (the default) a response carrying `errors` raises
+  `AssertionError` immediately.
 - **The mixin's `query()` is the same call routed through the test case's own
   `self.client`** (so `self.client.force_login(...)`, cookie state, and
   per-test-case client configuration all apply), returning the same typed
   `Response`; the graphene-named assertion helpers take that `Response`.
 - **`files=` switches to multipart.** Each `files=` key is the variable path
   the file binds to (`"file"`, `"data.image"`, `"tags.0"`); `variables` holds a
-  matching `None` placeholder at each path; the client's owned builder emits the
-  GraphQL multipart spec's `operations` / `map` fields, one uniform
-  `map[key] = ["variables." + key]` rule
-  ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+  matching `None` placeholder at each path; the owned builder emits the
+  `operations` / `map` fields by one uniform `map[key] = ["variables." + key]`
+  rule (Decision 9).
 - **`login(user)`** wraps the block in `force_login` / `logout` (sync context
-  manager on `TestClient`, async on `AsyncTestClient`).
+  manager on `TestClient`, async on `AsyncTestClient`); the logout runs even
+  when the block raises.
 - **The raw Django client stays reachable** as `.client` for anything the
   helper does not wrap (session-cookie inspection, `enforce_csrf_checks`
-  clients passed into the constructor, custom headers per POST via
-  `headers=`).
+  clients passed into the constructor); per-POST headers go through
+  `headers=`.
 
 ### Error shapes
 
 - **GraphQL errors under the default `assert_no_errors=True`** —
   `AssertionError` carrying the errors list. The engine base uses a bare
-  `assert response.errors is None`, and strawberry-django's async override uses
-  the message form `assert response.errors is None, response.errors`; because
-  this package **owns** both `query()` overrides
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)),
-  it does not inherit that gate — it raises explicitly,
-  `raise AssertionError(response.errors)`, **not** a bare `assert` statement, so
-  the documented failure survives `python -O` (which strips `assert`s). The
-  `AssertionError` type and the errors-in-the-message form match both upstreams;
-  only the optimizer-fragile statement form is dropped. Tests that *expect*
-  errors pass `assert_no_errors=False` and assert on `res.errors`.
+  `assert response.errors is None` and strawberry-django's async override
+  `assert response.errors is None, response.errors`; the package owns both
+  `query()` overrides (Decision 5) and raises explicitly in
+  `django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._finish_response`
+  — `raise AssertionError(response.errors)` — so the failure survives
+  `python -O`. Tests that *expect* errors pass `assert_no_errors=False` and
+  assert on `res.errors`.
 - **A non-JSON response body** (wrong endpoint → 404 HTML page, a
-  misconfigured middleware returning HTML) — for the JSON path (the default),
-  `_decode` calls Django's `response.json()`, which checks the `Content-Type`
-  header **first** and raises **`ValueError`**
-  (`'Content-Type header is "text/html", not "application/json"'`) when it is
-  not JSON — **not** `json.JSONDecodeError` (verified against
-  [`django/test/client.py`][django-client] `::ClientMixin._parse_json`).
-  `json.JSONDecodeError` (a `ValueError` subclass) surfaces only when the header
-  *is* `application/json` but the body is malformed, or on the multipart decode
-  path (`json.loads(response.content.decode())`, which does not sniff the
-  header). Deliberately **not** wrapped either way: the raise happens before the
-  `Response` is built (so `res` never exists), so the failing `HttpResponse`
-  is still a local of Django's `_parse_json` frame and the runner's traceback
-  renders it with its status while the captured `django.request` log names the
-  path — the exception message itself names only the `Content-Type`. The
-  consumer's first debugging question ("what did the server actually return?")
-  is answered directly — the honest failure for a
-  transport-level misconfiguration. The docstring names the two usual causes
-  (endpoint typo; `TESTING_ENDPOINT` not matching the project's URLconf) and the
-  `ValueError`/`JSONDecodeError` split.
+  misconfigured middleware returning HTML) — on the JSON path `_decode` calls
+  Django's `response.json()`, which checks the `Content-Type` header **first**
+  and raises **`ValueError`**
+  (`'Content-Type header is "text/html", not "application/json"'`) — not
+  `json.JSONDecodeError` ([`django/test/client.py`][django-client]
+  `::ClientMixin._parse_json`). `json.JSONDecodeError` (a `ValueError`
+  subclass) surfaces only when the header *is* JSON but the body is malformed,
+  or on the multipart decode path (`json.loads(response.content.decode())`,
+  which does not sniff the header). Deliberately **not** wrapped: the raise
+  happens before the `Response` is built, the failing `HttpResponse` is a
+  local of Django's `_parse_json` frame (the runner's traceback renders it
+  with its status), and the captured `django.request` log names the path; the
+  exception message itself names only the `Content-Type`. The `query()`
+  docstring names the two usual causes (endpoint typo; `TESTING_ENDPOINT` not
+  matching the project's URLconf). Pinned live on both colors
+  ([Test plan](#test-plan) scenario 11).
 - **A malformed `DJANGO_STRAWBERRY_FRAMEWORK` settings value** (non-mapping) —
   [`ConfigurationError`][glossary-configurationerror] from
-  [`conf.py`][conf]'s existing `_normalize_user_settings` seam, unchanged by
-  this card; the endpoint accessor adds no validation of its own, and a wrong
-  endpoint value of **any** type behaves alike — Django's test client coerces
-  the path with `str()`, so a `None` posts to `/None` — surfacing as whatever
-  the URLconf serves at that path, ordinarily a 404, which the previous bullet
-  covers.
+  `django_strawberry_framework/conf.py::_normalize_user_settings`; the
+  endpoint accessor adds no validation of its own. A wrong endpoint value of
+  **any** type behaves alike — Django's test client coerces the path with
+  `str()`, so a `None` posts to `/None` — surfacing as whatever the URLconf
+  serves at that path, ordinarily a 404 (the previous bullet).
 - **`files=` without usable `variables`** — the owned `_build_body` enters the
-  multipart envelope on **truthiness** (`if not files: return body`, so
-  `files={}` posts plain JSON rather than an empty-map multipart envelope) and
-  then raises when the envelope it just built carries **no `variables` member**
-  for the `map` to point into (`if "variables" not in body`). The guard reads
-  the answer off the body rather than re-testing the argument, so the emission
-  line above stays the single owner of when that member exists; because that
-  emission is itself truthiness, `variables={}` is refused exactly as
-  `variables=None` is, and so is any falsy mapping whatever it contains. An
-  explicit raise rather than the base's bare
-  `assert variables is not None`, so it holds under `python -O`. Documented:
-  every file's path must appear as a `None` placeholder in `variables`, and
-  the placeholder contract itself is enforced by the recursive walker
-  `TestClient._assert_file_placeholders`, not by this one guard
-  ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+  multipart envelope on **truthiness** (`files={}` posts plain JSON) and then
+  raises `AssertionError` when the envelope it just built carries **no
+  `variables` member** for the `map` to point into
+  (`if "variables" not in body`). Because the `variables` emission is itself
+  truthiness, `variables={}` and `variables=None` are refused alike, as is any
+  falsy mapping whatever it contains. The per-path placeholder contract is
+  enforced separately by
+  `django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._assert_file_placeholders`
+  (Decision 9).
 - **Async misuse** — calling `AsyncTestClient.query(...)` without awaiting is
-  the standard un-awaited-coroutine failure; pytest-asyncio's `asyncio_mode =
-  auto` plus the suite's `-W error` posture turns the `RuntimeWarning` into a
-  loud failure. No package-specific guard is added (nothing package-specific
-  is wrong).
+  the standard un-awaited-coroutine failure; the suite's `-W error` posture
+  turns the `RuntimeWarning` into a loud failure. No package-specific guard.
 
 ## Architectural decisions
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/spec-043-test_client-0_0_14.md`: card NNN `043`, topic
-slug `test_client` (the card's subject), version segment `0_0_14` from the
-card's trailing `-0.0.14`. Follows the [`docs/SPECS/NEXT.md`][next] convention.
+The stem is `spec-043-test_client-0_0_14`: card NNN `043`, topic slug
+`test_client` (the card's subject), version segment `0_0_14` from the card's
+trailing `-0.0.14`, per the [`docs/SPECS/NEXT.md`][next] convention.
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d1].
+Alternatives rejected: [rationale][rationale-d1].
 
 ### Decision 2 — Card-scope boundary: the test-client family ships; Channels session-auth verification, the toolbar's async smoke, and fakeshop runtime changes stay out
 
@@ -903,38 +637,27 @@ Alternatives rejected, and the record of every change this decision has undergon
 `Response` / `GraphQLTestMixin` / `GraphQLTestCase` /
 `GraphQLTransactionTestCase` surface), the `TESTING_ENDPOINT` settings key +
 [`conf.py`][conf] accessor, the `testing` root re-exports,
-`tests/testing/test_client.py`, and the Slice-2 live-suite switchover.
+`tests/testing/test_client.py`, and the live tier's move onto the client.
 
-**Out of scope, with owners:**
+**Out of scope:**
 
-- **Channels session-auth verification.** The [Auth
-  mutations][glossary-auth-mutations] glossary entry and [`spec-041`][spec-041]
-  Decision 11 left session-mutating auth over Channels consumers unverified,
-  "scoped to the `TestClient` card (`TODO-ALPHA-043-0.0.14`) or a dedicated
-  follow-on card". This spec resolves the disjunction to the **follow-on**:
-  the card's own DoD, predicted files, and both upstream references are
-  HTTP-client-shaped (`django.test.Client` / `AsyncClient`); a Channels
-  verification needs a communicator-based vehicle
-  (`channels.testing.HttpCommunicator` / `WebsocketCommunicator`, the
-  [`tests/test_routers.py`][test-routers] machinery), which is a different
-  helper with a different soft-dependency posture (`channels` is soft; this
-  card's dependencies are all hard). Bolting a communicator wrapper onto this
-  card would smuggle a soft-dependency surface into a zero-dependency card.
-  Slice 3 updates the glossary sentence to name the follow-on plainly.
-- **The debug-toolbar async smoke.** [`spec-042`][spec-042]'s Risks named
-  `AsyncTestClient` the natural owner of the toolbar's async verification.
-  This card ships the vehicle and stops there: the toolbar is a soft
-  dependency this card's modules never import, and — with 042 now shipped
-  without the smoke — its async claim belongs to a follow-on (the joint cut
-  or a dedicated card), not this zero-dependency card
-  ([Risks](#risks-and-open-questions)).
-- **Fakeshop runtime surface.** No settings, URL, or app changes; Slice 2
-  edits `test_query/` only.
-- **Migration-guide prose.** The two import-diff rows and the
-  `query()`-return-type delta are recorded for [`TODO-BETA-068-0.1.8`][kanban]
+- **Channels session-auth verification.** Session-mutating
+  [auth mutations][glossary-auth-mutations] over Channels consumers need a
+  communicator-based vehicle (`channels.testing.HttpCommunicator` /
+  `WebsocketCommunicator`) with a soft-dependency posture (`channels` is soft;
+  this family's dependencies are all hard). That verification belongs to the
+  auth / router surface and lives with its communicator machinery in
+  [`tests/test_routers.py`][test-routers] and
+  [`tests/auth/test_mutations.py`][tests-auth-mutations].
+- **The debug-toolbar async smoke.** The toolbar is a soft dependency this
+  card's modules never import; an async smoke belongs in the toolbar's own
+  test module, where its soft-dependency fixture lives.
+- **Fakeshop runtime surface.** No settings, URL, or app changes.
+- **Migration-guide prose.** The two import-diff rows and the three graphene
+  deltas are handed to [`TODO-BETA-071-0.1.8`][kanban]
   ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d2].
+Alternatives rejected: [rationale][rationale-d2].
 
 ### Decision 3 — The symbols are upstream's own names — `TestClient` / `AsyncTestClient` / `GraphQLTestMixin` / `GraphQLTestCase` / `GraphQLTransactionTestCase`, distinctly-ours import path
 
@@ -942,179 +665,135 @@ All five public class names are taken verbatim from the upstream that ships
 them: `TestClient` / `AsyncTestClient` from `strawberry_django.test.client`,
 `GraphQLTestMixin` / `GraphQLTestCase` / `GraphQLTransactionTestCase` from
 `graphene_django.utils.testing`. The distinguishing identity is the import
-path — `django_strawberry_framework.testing` — exactly the
-[`spec-042`][spec-042] Decision 3 argument (a symbol whose public identity is
-"the thing you import from the package" needs no invented name): a migrant
-swaps only the import line — the symbol names carry over verbatim. For a
-`strawberry-graphql-django` client migrant that is the entire change,
-[`GOAL.md`][goal] success criterion 7 in its most literal form; a
-`graphene-django` mixin migrant swaps the same one import line and inherits
+path — `django_strawberry_framework.testing` — so a migrant swaps only the
+import line. For a `strawberry-graphql-django` client migrant that is the
+entire change, [`GOAL.md`][goal] success criterion 7 in its most literal form;
+a `graphene-django` mixin migrant swaps the same one import line and inherits
 only the three documented behavioral deltas ([Goal 2](#goals)). `Response` is
 likewise kept as the typed-result name (Strawberry core's own), re-exported so
 consumers can annotate helpers.
 
-None of the five carries the package's `Django*` prefix, and that is the rule
-rather than an omission: the prefix marks **schema-side** public API
+None of the five carries the package's `Django*` prefix, and that is the rule:
+the prefix marks **schema-side** public API
 ([`DjangoType`][glossary-djangotype],
 [`DjangoConnectionField`][glossary-djangoconnectionfield]), while test
-utilities are namespaced by their import path. A `DjangoTestClient` spelling
-is therefore out of contract here.
+utilities are namespaced by their import path. A `DjangoTestClient` spelling is
+out of contract.
 
-The concrete test-case pair keeps graphene's exact split — `TestCase` vs.
-`TransactionTestCase` — because that split is Django's own testing vocabulary,
-not a graphene-ism: consumers reach for the transaction flavor when the code
-under test uses `transaction.on_commit` or needs real commits (the package's
-own [`test_mutation_atomicity.py`][test-mutation-atomicity] concern).
+The concrete test-case pair keeps graphene's `TestCase` /
+`TransactionTestCase` split because that split is Django's own testing
+vocabulary: consumers reach for the transaction flavor when the code under
+test uses `transaction.on_commit` or needs real commits (the package's own
+[`test_mutation_atomicity.py`][test-mutation-atomicity] concern).
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d3].
+Alternatives rejected: [rationale][rationale-d3].
 
 ### Decision 4 — Module, export, and test locations: `testing/client.py`, re-exported from the `testing` root, `tests/testing/test_client.py`
 
-The module lands at `django_strawberry_framework/testing/client.py` — the
-card's predicted file, [`docs/TREE.md`][tree]'s reserved row, and the exact
-mirror of upstream's `test/client.py` under the package's existing `testing/`
-subpackage (the subpackage is named `testing/`, not `test/`, because a
-top-level `test/` would shadow the Python stdlib `test` package — the reason
-recorded for the package's own earlier `test/` → `testing/` rename). The
-public import
-path is the `testing` **root**: [`testing/__init__.py`][testing-init]
-re-exports `TestClient`, `AsyncTestClient`, `Response`, `GraphQLTestMixin`,
-`GraphQLTestCase`, and `GraphQLTransactionTestCase`, extending `__all__` —
-discharging the docstring's own "Future exports" promise, which names three of
-these six (`TestClient`, `AsyncTestClient`, `GraphQLTestCase`) against this
-path ("so consumers have a stable import path
-`from django_strawberry_framework.testing import ...`"); this card lands all
-six there.
+The module is `django_strawberry_framework/testing/client.py` — the mirror of
+upstream's `test/client.py` under the package's `testing/` subpackage (named
+`testing/`, not `test/`, because a top-level `test/` would shadow the Python
+stdlib `test` package). The public import path is the `testing` **root**:
+[`testing/__init__.py`][testing-init] re-exports `TestClient`,
+`AsyncTestClient`, `Response`, `GraphQLTestMixin`, `GraphQLTestCase`, and
+`GraphQLTransactionTestCase` in `__all__`.
 
-Two locality contrasts worth pinning, because the subpackage now holds all
-three postures at once: `safe_wrap_connection_method` is root-re-exported (it
-predates this card), the `relay` helpers are deliberately submodule-only
-(their docstring: keeping them out of `__init__` keeps the import light —
-their `types`-package imports are paid only by suites that use them), and
-this card's family is root-re-exported **by prior written commitment**. The
-import-weight argument that kept `relay` out does not bite here: the client
-module imports `django.test` and `strawberry.test` — both already imported by
-any process running Django tests, which is the only process that imports
-`testing` at all.
+The subpackage holds three locality postures:
+`safe_wrap_connection_method` is root-re-exported, the `relay` helpers are
+deliberately submodule-only (keeping their `types`-package imports out of
+`import django_strawberry_framework.testing`), and this family is
+root-re-exported. The import-weight argument that keeps `relay` out does not
+bite here: the client module imports `django.test` and `strawberry.test`, both
+already imported by any process running Django tests — the only process that
+imports `testing` at all.
 
-Tests land at `tests/testing/test_client.py` (the card's DoD row) beside the
-subpackage's existing `test_relay.py` / `test_wrap.py`.
+Tests are `tests/testing/test_client.py`, beside the subpackage's
+`test_relay.py` / `test_wrap.py`.
 
 Nothing is exported from the **package root**:
 `getattr(django_strawberry_framework, "TestClient")` raises `AttributeError`
 (the root's [`__getattr__`][init] PEP 562 seam), and the
-`from django_strawberry_framework import TestClient` **statement form** surfaces
-that as `ImportError` — Python's import machinery converts a module
+`from django_strawberry_framework import TestClient` **statement form**
+surfaces that as `ImportError` — Python's import machinery converts a module
 `__getattr__`'s `AttributeError` into `ImportError` for `from ... import ...`.
-The [Test plan](#test-plan) (Test 14) pins the accurate shapes, not a single
-`AttributeError` around the import statement. The root's `__all__` is the
-schema-building surface; test utilities live where consumers' test code
-imports from, and both upstreams make the same separation (`strawberry_django.test`,
+The [Test plan](#test-plan) (scenario 14) pins both shapes. Both upstreams
+make the same separation (`strawberry_django.test`,
 `graphene_django.utils.testing`).
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d4].
+Alternatives rejected: [rationale][rationale-d4].
 
 ### Decision 5 — Subclass Strawberry's `BaseGraphQLTestClient` — engine-owned base over a hard dependency; no soft-dependency machinery
 
-This resolves the card's second "decide before writing the spec" item —
-"subclass `strawberry.test.BaseGraphQLTestClient` (less code, couples our
-`.query()` / `.mutate()` shape to upstream Strawberry's choices) vs. roll our
-own base (more code, full control over the public surface)" — **for
-subclassing**, upstream strawberry-django's own choice.
+The card's second open item — subclass `strawberry.test.BaseGraphQLTestClient`
+vs. roll an own base — resolves **for subclassing**, upstream
+strawberry-django's own choice. The package subclasses it exactly once, in
+the private generic base
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase`
+(`BaseGraphQLTestClient, Generic[_ClientT]`, `_ClientT` bound to `Client` /
+`AsyncClient`), which both public clients extend (Decision 8).
 
 Three grounds:
 
 1. **The base is engine-owned over a hard dependency.** `strawberry.test`
-   ships inside `strawberry-graphql` — the package's first-listed hard
-   dependency, whose lower bound lives in [`pyproject.toml`][pyproject] and
-   whose floor-run point is recorded in [`docs/builder/BUILD.md`][build]
-   `## Floor verification` — so riding it costs no guard, no install hint, no
+   ships inside `strawberry-graphql`, whose lower bound lives in
+   [`pyproject.toml`][pyproject] and whose floor-run point is recorded in
+   [`docs/builder/BUILD.md`][build] `## Floor verification` — so riding it
+   costs no guard, no install hint, no
    [eviction-simulated absence][glossary-eviction-simulated-absence] fixture,
-   and no lockfile change. This is the same posture [`spec-041`][spec-041]
-   Decision 7 took for `strawberry.channels`'s consumers ("engine-owned,
-   never subclassed" there; here the base is *designed* for subclassing — it
-   is an ABC whose one abstract method is `request()`).
+   and no lockfile change. The base is *designed* for subclassing: an ABC whose
+   one abstract method is `request()`.
 2. **The package owns the `query()` orchestration and the body/map build; the
    base owns the decode, the `Response` field schema, and the `request()`
-   seam.** What subclassing genuinely reuses is `_decode` (the JSON/multipart
-   split), the `Response` **field schema** (`errors` / `data` / `extensions`,
-   which the package `Response` subclasses), and the `request()` ABC seam — all
-   worth pinning to the engine. What it does **not** reuse is the base's
-   `query()`: that method takes no `operation_name` and no `url`, calls
+   seam.** The base's `query()` takes no `operation_name` and no `url`, calls
    `request(body, headers, files)` with no target, and constructs the base
    `Response` directly, so a client that adds those keywords and returns the
-   raw-response-carrying package `Response` must own its own `query()` (sync and
-   async alike — upstream already re-implements the async one). Nor does it
-   reuse the body builder: the base's
-   `_build_multipart_file_map` cannot express this repo's own upload shapes.
-   Read for this spec (`strawberry/test/client.py`), it treats any dict-valued
-   variable as a single-list "folder", takes `next(iter(values.keys()))` as
-   the folder key, and finally drops any map entry whose key is not itself a
-   `files` key — so fakeshop's nested input object
-   `variables={"data": {"attachment": None, "image": None}}` yields an **empty
-   map**, not `variables.data.attachment` / `variables.data.image` (proven
-   against [`test_uploads_api.py`][test-uploads-api] and
-   [`test_products_api.py`][test-products-api]). The base also has **no
-   `operationName` support at all**, and its `_build_body` JSON-encodes
-   `operations` before the package could inject one. So the package owns a
-   small `_build_body` + path-keyed file-map builder
-   ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)) —
-   ~15 lines, simpler than the base's because the public `files=` contract
-   carries the variable path explicitly. This is still a narrower own-surface
-   than a from-scratch base: the package owns its `query()` and body build
-   either way, but subclassing lets it ride the engine's `_decode` and
-   `Response` field schema rather than re-declaring those wire-format seams too.
-3. **Migration parity.** Subclassing keeps `.query()`'s signature and
-   `Response`'s field names byte-compatible with what a strawberry-django
+   raw-response-carrying package `Response` owns its own `query()` in both
+   colors (upstream already re-implements the async one). The base's
+   `_build_multipart_file_map` returns an empty map for this repo's nested
+   input-object uploads and its `_build_body` sends no `operationName`
+   ([Current state](#current-state)), so the package owns `_build_body` and
+   the path-keyed file map too (Decision 9). Subclassing still lets the package
+   ride the engine's `_decode` and `Response` field schema rather than
+   re-declaring those wire-format seams.
+3. **Migration parity.** `.query()`'s first five positional parameters and
+   `Response`'s field names stay byte-compatible with what a strawberry-django
    migrant's test suite already calls.
 
-Consequences, stated plainly: a future Strawberry release reshaping
-`BaseGraphQLTestClient` (signature or `Response` fields) breaks the subclass —
-the same upstream-coupling class of risk as every engine seam the package
-rides, contained the same way (the Slice-1 floor gate, the suite failing
-loudly under a refreshed lock, [Risks](#risks-and-open-questions)). Because the
-package **owns** `query()` (it does not inherit the base's), the
-`assert_no_errors` gate is package code: it is implemented as an explicit
-`raise AssertionError(response.errors)`, not a bare `assert` statement, so the
-documented failure survives `python -O` (which strips `assert`s). The
-`AssertionError` type and the errors-in-the-message form match both upstreams;
-only the optimizer-fragile statement form is dropped.
+The `assert_no_errors` gate is package code, an explicit
+`raise AssertionError(response.errors)` rather than a bare `assert`, so it
+survives `python -O`; the `AssertionError` type and the errors-in-the-message
+form match both upstreams.
 
-Owning `query()` in both colors does **not** mean writing the whole flow
-twice. Only the `request()` call is sync/async-colored, so the shared tail —
-`_decode` → package `Response` construction → the `assert_no_errors` raise —
-is one un-colored helper,
+Owning `query()` in both colors does **not** mean writing the flow twice. Only
+the `request()` call is sync/async-colored, so the shared tail — `_decode` →
+package `Response` construction → the `assert_no_errors` raise — is one
+un-colored helper,
 `django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._finish_response`,
-that both `query()` overrides call. The factoring sits **below** the
-not-calling-`super().query()` decision rather than around it: the async color
-still owns its own `await self.request(...)`.
+that both `query()` overrides call; the async color still owns its own
+`await self.request(...)`.
 
-The constructor's `client=` seam is honored by identity, never by truthiness:
-both clients select `client if client is not None else Client()` /
+The base constructor resolves the endpoint (Decision 7), stores it as
+`self.path`, and forwards the same value to the engine base as its `url`, so
+the inherited attribute never reads the base's default while `path` reads the
+real endpoint. The `client=` seam is honored by identity, never by
+truthiness: both clients select `client if client is not None else Client()` /
 `AsyncClient()`, so a caller-supplied client whose `__bool__` / `__len__`
-reports false is used as given rather than silently discarded onto a fresh
-client with a different session (`client or Client()` is the fail-open shape
-this contract forbids).
+reports false is used as given rather than silently replaced by a fresh client
+with a different session.
 
-**No soft-dependency machinery, stated as a contract:** no `require_*()`
-guard, no install-hint constant, no [PEP 562 export][glossary-pep-562-lazy-export],
-no absence tests. The
-[Test plan](#test-plan) has no absence matrix — a deliberate first for the
-`0.0.14` line, and the reason Slice 1 has no dependency gate beyond the floor
-re-confirmation.
+**No soft-dependency machinery:** no `require_*()` guard, no install-hint
+constant, no [PEP 562 export][glossary-pep-562-lazy-export], no absence
+tests — the [Test plan](#test-plan) has no absence matrix.
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d5].
+Alternatives rejected: [rationale][rationale-d5].
 
 ### Decision 6 — `.query()` returns the typed `Response` dataclass, extended with the raw `HttpResponse`; `operation_name=` is supported
 
-This resolves the card's first "decide before writing the spec" item — the
-typed `Response` dataclass (strawberry-django) vs. the raw Django
-`HttpResponse` + parsing assertion helpers (graphene-django); "the two flavors
-are not interchangeable — pick one and pin it (the typed-dataclass shape is
-the more DRF-shaped choice and composes better with future typed-error
-work)". **Pinned: the typed dataclass**, per the card's own recommendation —
-preserved here as the Decision, not re-litigated — with one extension that
-makes the pick total instead of partial:
+The card's first open item — the typed `Response` dataclass
+(strawberry-django) vs. the raw Django `HttpResponse` + parsing assertion
+helpers (graphene-django), "pick one and pin it" — is **pinned to the typed
+dataclass**, per the card's own recommendation, with one extension that makes
+the pick total:
 
 ```python
 @dataclass
@@ -1122,1020 +801,720 @@ class Response(strawberry.test.client.Response):   # errors / data / extensions
     response: Any = None   # the raw django.http.HttpResponse the operation rode
 ```
 
-The `response` field is what lets **every** consumer of the raw flavor move
-over: the graphene mixin's `assertResponseNoErrors` asserts HTTP 200 (needs
-`status_code`); the package's own live suites assert session cookies, response
-headers, and status codes around GraphQL calls. Without the field, the Slice-2
-switchover would strand exactly those tests on raw `client.post(...)` and the
-card's "live HTTP tests switch to the helper" DoD would quietly shrink. With
-it, the typed shape is a strict superset of both upstream flavors: `res.data`
-/ `res.errors` / `res.extensions` for the strawberry-django migrant,
-`res.response.<anything>` for the graphene migrant and the package's own
-suites.
+The `response` field is what lets every consumer of the raw flavor use the
+typed one: the graphene mixin's `assertResponseNoErrors` asserts HTTP 200
+(needs `status_code`); the package's own live suites assert session cookies,
+response headers, and status codes around GraphQL calls (the
+[`graphql_client.py`][graphql-client] helpers return `Response.response` for
+exactly that). The typed shape is a strict superset of both upstream flavors:
+`res.data` / `res.errors` / `res.extensions` for the strawberry-django
+migrant, `res.response.<anything>` for the graphene migrant. The clients
+always populate `response`; assert on fields, never on whole `Response`
+objects.
 
-Because the subclassed `Response` must be constructed by the client, `query()`
-is overridden in `TestClient` (sync) and `AsyncTestClient` (async — upstream
-already overrides it there). The override adds two keyword-only signature
-extensions, both **appended after** the base's positional parameters
-(`query, variables, headers, files, assert_no_errors`) so strawberry-django
+`query()` is defined on `TestClient` (sync) and `AsyncTestClient` (async) with
+two keyword-only extensions **after** the base's positional parameters
+(`query, variables, headers, files, assert_no_errors`), so strawberry-django
 migrants' positional calls keep working: **`operation_name=`** and a per-call
-**`url=`** endpoint override
-([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
-The Strawberry base cannot send `operationName` at all; graphene can; multi-
-operation documents (and the [Debug-toolbar
-middleware][glossary-debug-toolbar-middleware]'s named-operation tests, per
-its spec's Test 3) need it. The body gains `operationName` only when the
-argument is provided — an absent key, never an explicit `null` — matching
-graphene's `if operation_name:` behavior.
+**`url=`** endpoint override (Decision 7). The Strawberry base cannot send
+`operationName` at all; multi-operation documents need it. The body carries
+`operationName` whenever `operation_name` is not `None` — the default `None`
+omits the key (never an explicit `null`, a validation error against a
+multi-operation document), and an explicit `""` is a *provided* value and is
+sent, for the server to reject as malformed.
 
-**No `mutate()`.** Neither upstream base ships one. A mutation is an
-operation; it posts through `query()` (the docstring says so, and every
-mutation example in [User-facing API](#user-facing-api) does so).
+**No `mutate()`.** Neither upstream ships one. A mutation is an operation; it
+posts through `query()`.
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d6].
+Alternatives rejected: [rationale][rationale-d6].
 
 ### Decision 7 — Endpoint resolution: the settings key is `TESTING_ENDPOINT`, default `"/graphql/"` — resolving the card's `GRAPHQL_TESTING_ENDPOINT` working name
 
 The project-wide endpoint knob is
-`DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]`, read through a new
-[`conf.py`][conf] accessor `testing_endpoint_setting()` (key constant
-`TESTING_ENDPOINT_KEY`, default `"/graphql/"`) — the exact shape of the
-existing `conf.py::nested_connection_strategy_setting` precedent. The name
-carries no `GRAPHQL_` prefix: inside a settings dict named
+`DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]`, read through
+`django_strawberry_framework/conf.py::testing_endpoint_setting` (key constant
+`TESTING_ENDPOINT_KEY`, default `"/graphql/"`) — the shape of
+`django_strawberry_framework/conf.py::nested_connection_strategy_setting`. The
+name carries no `GRAPHQL_` prefix: inside a settings dict named
 `DJANGO_STRAWBERRY_FRAMEWORK` the prefix is redundant, and the unprefixed name
-is byte-identical to graphene's own `TESTING_ENDPOINT` key, which is the
-knob's lineage.
+is byte-identical to graphene's own `TESTING_ENDPOINT` key.
 
 The accessor carries the same pytest collection guard the client classes do:
-[`conf.py`][conf] `#"testing_endpoint_setting.__test__ = False"`. The hazard is
-the module-level twin of `TestClient.__test__` — the function's name matches
-pytest's default `test*` **function** pattern, so a test module importing it
-unaliased gets it collected, and it returns a `str`, which fails the run via
-`PytestReturnNotNoneWarning` under the repo's `filterwarnings = error` posture.
+[`conf.py`][conf] `#"testing_endpoint_setting.__test__ = False"`. Its name
+matches pytest's default `test*` **function** pattern, so a test module
+importing it unaliased gets it collected, and it returns a `str`, which fails
+the run via `PytestReturnNotNoneWarning` under the repo's
+`filterwarnings = error` posture.
 
 Resolution precedence, highest first, uniform across the family:
 
-1. **Per-call:** `query(..., url=...)` (on both the pytest client and the
-   mixin) — the card's explicitly-named per-call override, honored for that one
-   request only and never persisted on the client; `url=None` (default) falls
-   through.
+1. **Per-call:** `query(..., url=...)` (on both clients and the mixin) —
+   honored for that one request only and never persisted; `url=None`
+   (default) falls through.
 2. **Per-instance:** `TestClient(path=...)` / `AsyncTestClient(path=...)` —
-   the constructor override, strawberry-django's `path` argument kept
-   positional-first so migrant calls work unchanged; `path=None` (the new
-   default) falls through.
-3. **Per-class (mixin family):** the `GRAPHQL_URL` class attribute
-   (graphene's name), default `None` → falls through. A subclass pins its own
-   endpoint by assignment, exactly as graphene consumers do today.
+   strawberry-django's `path` argument kept positional-first; `path=None`
+   (default) falls through.
+3. **Per-class (mixin family):** the `GRAPHQL_URL` class attribute (graphene's
+   name), default `None` → falls through.
 4. **Project-wide:** `testing_endpoint_setting()` →
    `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]`.
 5. **Default:** `"/graphql/"` — fakeshop's real path, Strawberry core's own
-   base default, trailing slash per Django convention (graphene's
-   slash-less `"/graphql"` is a documented non-borrow).
+   base default, trailing slash per Django convention.
 
-The construction-time default (rungs 2–5) is resolved **once** and stored on
-the client as `self.path`, matching upstream's constructor-time `path`. The
-transport contract is explicit: the concrete `request()` is widened to
-`request(body, headers=None, files=None, *, url=None)`, where `url` defaults to
-`self.path`; the package-owned `query()` resolves the per-call `url=` (rung 1)
-and threads it through as `request(..., url=<resolved>)` for that single call,
-without re-reading settings. `self.path` is **never mutated**, so the per-call
-override never persists and concurrent or async calls cannot race on shared
-state (the reason a `self.path`-mutation shim was rejected). The mixin resolves
-rungs 3–5 per `query()` call (it constructs its delegate client lazily against
-`self.client`), so a test that overrides settings mid-class still behaves
-predictably; [`conf.py`][conf]'s `setting_changed` receiver keeps the accessor
-fresh under `override_settings` either way.
+The construction-time endpoint (rungs 2, 4, 5) is resolved **once** and stored
+as `self.path`. The transport is explicit: the base's `request(body,
+headers=None, files=None, *, url=None)` posts to `url` when given, else
+`self.path`, and `query()` threads its per-call `url=` through for that single
+call. `self.path` is **never mutated**, so a per-call override never persists
+and concurrent or async calls cannot race on shared state. The mixin builds a
+fresh delegate `TestClient(self.GRAPHQL_URL, client=self.client)` per
+`query()` call, so rungs 3–5 resolve per call and a settings override observed
+mid-class applies; [`conf.py`][conf]'s `setting_changed` receiver keeps the
+accessor fresh under `override_settings`.
 
-No validation beyond [`conf.py`][conf]'s existing malformed-dict guard. The
-value is handed to Django's test client unchanged, which coerces the path with
-`str()` — so a `reverse_lazy()` endpoint works and a `None` posts to `/None` —
-and a wrong endpoint value of any type surfaces at request time as whatever the
-URLconf serves at that path, ordinarily a 404
-([Error shapes](#error-shapes)). Validating URL shapes in a test helper is
-ceremony, and a type gate would reject the lazy spelling Django accepts by
-design.
+No validation beyond [`conf.py`][conf]'s malformed-dict guard. The value is
+handed to Django's test client unchanged, which coerces the path with `str()`
+— so a `reverse_lazy()` endpoint works and a `None` posts to `/None` — and a
+wrong value of any type surfaces at request time as whatever the URLconf
+serves at that path, ordinarily a 404 ([Error shapes](#error-shapes)). A type
+gate would reject the lazy spelling Django accepts by design.
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d7].
+Alternatives rejected: [rationale][rationale-d7].
 
-### Decision 8 — Async shape: `AsyncTestClient` subclasses `TestClient`, ported as-is
+### Decision 8 — Async shape: `AsyncTestClient` is a sibling of `TestClient` over one shared base
 
-The card asks the spec to either port upstream's inheritance shape —
-`AsyncTestClient(TestClient)`, taking a `django.test.AsyncClient`, overriding
-only `query()` and `login()` — or pick a flatter alternative explicitly.
-**Pinned: the port.** The shape is small and honest: `request()` is
-sync-*shaped* but returns whatever the wrapped client's `post()` returns — an
-awaitable when the wrapped client is `AsyncClient` — so the async `query()`
-awaits it (upstream's `cast("Awaitable", ...)` becomes a plain `await` with
-the same comment); the package's owned `_build_body`, file-map builder, and the
-widened `request(body, headers=None, files=None, *, url=None)` transport hook
-are shared with the sync client (the async override re-colors only the awaiting
-of the transport, not the body build or the per-call `url=` routing,
-[Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name));
-the async `login()` wraps `force_login` / `logout` in
-`sync_to_async` (session writes are ORM work). The package's async `query()`
-override is where the [Decision
-6](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported)
-`Response` and `operation_name=` land, mirroring the sync override.
+`TestClient(_GraphQLTestClientBase[Client])` and
+`AsyncTestClient(_GraphQLTestClientBase[AsyncClient])` are **siblings**, not
+parent and child. The async `query()` and `login()` are coroutine-colored, so
+an `AsyncTestClient` standing in for a `TestClient` would hand back an
+un-awaited coroutine from `query()`; the is-a relationship upstream's
+`AsyncTestClient(TestClient)` declares is false for the methods that matter,
+and `isinstance(AsyncTestClient(), TestClient)` is `False` here.
 
-`AsyncClient` drives Django's `AsyncClientHandler` in-process, so the async client
-works against the WSGI-only fakeshop example without an `asgi.py` — which is
-what makes the [Test plan](#test-plan)'s async tests real requests rather
-than mocks. It is **not** a Channels transport
-([Decision 2](#decision-2--card-scope-boundary-the-test-client-family-ships-channels-session-auth-verification-the-toolbars-async-smoke-and-fakeshop-runtime-changes-stay-out)).
+Only the transport is colored. `request()` is written once on the base and
+returns whatever the wrapped client's `post()` returns — an awaitable over
+`AsyncClient` — typed per color by its two overloads, so the async `query()`
+awaits it (upstream's `cast("Awaitable", ...)` becomes a plain `await`). The
+endpoint resolution, `_build_body`, the file-map builder and placeholder
+walker, the per-call `url=` routing, and `_finish_response` are the base's;
+each client owns its `__init__` default transport (`Client()` /
+`AsyncClient()`), its `query()`, and its `login()`. The async `login()` wraps
+`force_login` / `logout` in `sync_to_async` (session writes are ORM work).
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d8].
+`AsyncClient` drives Django's `AsyncClientHandler` in-process, so the async
+client works against the WSGI-only fakeshop example without an `asgi.py` —
+which is what makes the [Test plan](#test-plan)'s async tests real requests.
+It is **not** a Channels transport (Decision 2).
+
+Alternatives rejected: [rationale][rationale-d8].
 
 ### Decision 9 — Multipart uploads: `files=` maps variable paths to file parts; the package owns the body/multipart builder; upstream's no-op `format` kwarg is dropped
 
-When `files=` is provided, the package's **owned** `_build_body` produces the
-GraphQL multipart request spec envelope — `operations` (the JSON-encoded
-`{query, operationName?, variables}` body), `map` (the file-part → variable-path
-mapping), plus the file parts — and the package's `request()` posts it
+When `files=` is provided, the owned `_build_body` produces the GraphQL
+multipart request spec envelope — `operations` (the JSON-encoded
+`{query, operationName?, variables}` body), `map` (the file-part →
+variable-path mapping), plus the file parts — and `request()` posts it
 **without** a `content_type` argument, so `django.test.Client.post` falls back
-to its default `MULTIPART_CONTENT` encoding, which is what actually turns the
-dict into a multipart body.
+to its default `MULTIPART_CONTENT` encoding, which is what turns the dict into
+a multipart body.
 
-**The public `files=` contract (pinned here): each key is the variable path
-the file binds to.** A key `"data.attachment"` means "the file at
+**The public `files=` contract: each key is the variable path the file binds
+to.** A key `"data.attachment"` means "the file at
 `variables.data.attachment`"; the builder emits a multipart part named
 `"data.attachment"` and a `map` entry `{"data.attachment":
 ["variables.data.attachment"]}`. Every path is one uniform rule —
-`map[key] = ["variables." + key]` — so the same builder covers a top-level file
-(`"file"` → `variables.file`), a nested input-object field
-(`"data.image"` → `variables.data.image`), and a list index
-(`"data.files.0"` → `variables.data.files.0`). The caller carries a matching
-`None` placeholder at each path inside `variables`
-(`variables={"data": {"attachment": None, "image": None}}`).
+`map[key] = ["variables." + key]` — covering a top-level file (`"file"`), a
+nested input-object field (`"data.image"`), and a list index (`"tags.0"`). The
+caller carries a matching `None` placeholder at each path inside `variables`.
 
 **The multipart envelope is entered on truthiness, and the placeholder
-contract is enforced by a recursive walker, not by one guard.**
-`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._build_body` returns
-the plain JSON body when `files` is falsy — so `files={}` posts JSON rather
-than an empty-map multipart envelope — and then raises when the built body
-carries no `variables` member for the `map` to point into. The guard's subject
-is the envelope, not the argument: the emission above is the one owner of when
-that member exists, so a later change to the emission rule carries the guard
-with it. Under truthiness emission that is every falsy `variables` —
-`variables={}` is refused just as `variables=None` is, and so is a falsy
+contract is enforced by a recursive walker.**
+`django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._build_body`
+returns the plain JSON body when `files` is falsy — so `files={}` posts JSON —
+and then raises when the built body carries no `variables` member for the
+`map` to point into. The guard's subject is the envelope, not the argument:
+the emission above it is the one owner of when that member exists. Under
+truthiness emission that is every falsy `variables` — including a falsy
 mapping carrying real placeholders, which the per-path walker alone would
-accept while the `map` pointed into a member the envelope never wrote. Every
-guard in
-this family is an explicit `raise AssertionError` rather than the base's bare
-`assert variables is not None`, so all of them hold under `python -O`, and they
-share the one type so `pytest.raises(AssertionError)` catches every bad shape.
-Beyond the empty-`variables` guard, `_build_body` refuses a `files` key named
-`operations` or `map` — those are the envelope's own multipart field names and
-the trailing `**files` spread would silently clobber them — and then hands the
-call to
+accept while the `map` pointed into a member the envelope never wrote. Next,
+`_build_body` refuses a `files` key named `operations` or `map` — the
+envelope's own field names, which the trailing `**files` spread would
+silently clobber — and then hands the call to
 `django_strawberry_framework/testing/client.py::_GraphQLTestClientBase._assert_file_placeholders`,
-which walks every dotted path and rejects five distinct shapes at the source
-rather than emitting a spec-invalid envelope only the server could diagnose:
+which walks every dotted path and rejects at the source:
 
 - an **empty dotted segment** (the `""` key's `variables.` path, or
   `variables.data.` for a `""` field) — such a map entry could never name a
-  GraphQL variable, so it is refused before it is built;
-- an **array index that is not its canonical non-negative decimal rendering**,
-  checked by a guarded `int()` conversion plus `index >= 0 and
-  str(index) == segment`. The conversion itself is guarded because digit-like
+  GraphQL variable;
+- an **array index that is not its canonical non-negative decimal rendering**
+  or is out of range, checked by a guarded `int()` conversion plus
+  `index >= 0`, `str(index) == segment`, and `index < len(array)` — digit-like
   Unicode and very long decimal strings do not share `int()`'s acceptance
-  domain, and `str.isdigit()` accepts superscripts `int()` rejects — an index
-  the emitted `object-path` segment could not name must not be accepted here;
-- an **array whose length cannot be read**, raised with the family's uniform
-  type so a hostile `__len__` cannot replace the guard with a raw exception
-  escape;
-- a **value that cannot be descended into** (neither array nor mapping at that
-  level);
+  domain, so an index the emitted `object-path` segment could not name is
+  refused;
+- an **array whose length cannot be read**, so a hostile `__len__` cannot
+  replace the guard with a raw exception escape;
+- a **missing key** at a mapping level;
+- a **value that cannot be descended into** (neither array nor mapping);
 - a **non-`None` value at the resolved path**.
 
-The walk models the POST-serialization shape the map points into rather than
-the Python type: `json.dumps` renders dicts as JSON objects and **both lists
-and tuples** as JSON arrays, so both array flavors carry indexed placeholders
-alike. Every diagnostic in this family renders consumer-supplied paths and
-values through
-[`exceptions.py`][exceptions] `::_safe_arg_repr` rather than `{x!r}`, so a
-hostile `__repr__` cannot escape a guard as a raw exception
-(`## Helper-reuse obligations (DRY)` D5).
+The walk models the POST-serialization shape the map points into:
+`json.dumps` renders dicts as JSON objects and **both lists and tuples** as
+JSON arrays, so both array flavors carry indexed placeholders alike. Every
+guard is an explicit `raise AssertionError` (not the base's bare
+`assert variables is not None`), so all of them hold under `python -O` and
+share one type for `pytest.raises(AssertionError)`. Every diagnostic renders
+consumer-supplied paths and values through [`exceptions.py`][exceptions]
+`::_safe_arg_repr` rather than `{x!r}`, so a hostile `__repr__` cannot escape a
+guard as a raw exception (D5).
 
-This builder is **owned, not inherited**, for the reasons pinned in
-[Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)
-ground 2: the base's `_build_multipart_file_map` treats a dict-valued variable
-as a single "folder", keys off `next(iter(values.keys()))`, and finally drops
-any map entry whose key is not itself a `files` key — so it returns an **empty
-map** for fakeshop's nested `variables.data.attachment` / `variables.data.image`
-shape, and it has **no `operationName` support** (the base's `_build_body`
-JSON-encodes `operations` with only `query` / `variables`). Because the public
-contract carries the path explicitly, the owned builder is ~15 lines and needs
-none of the base's folder-key guessing. `operationName` is injected into the
-`operations` body **before** JSON-encoding, so a named upload operation lands
-in the right field (the failure mode the base's shape would produce if the name
-were appended after wrapping).
+The builder is **owned, not inherited** (Decision 5 ground 2): with the path
+explicit in the public contract it needs none of the base's folder-key
+guessing. `operationName` is injected into the `operations` body **before**
+JSON-encoding, so a named upload operation lands in the right field.
 
-The `content_type` omission is a deliberate, documented divergence from
-upstream's letter while keeping its behavior: strawberry-django's `request()`
-sets `kwargs["format"] = "multipart"` — a **DRF-`APIClient`-shaped kwarg that
-Django's own test client does not accept**; it lands in `Client.post(...)`'s
-`**extra` and becomes an inert WSGI-environ entry, while the real multipart
-switch is (and always was) the *omission* of `content_type`. The package's
-`request()` keeps the real mechanism and drops the inert kwarg, with a comment
-naming this divergence so a future diff against upstream doesn't "fix" it back
-in. (Verified against [`strawberry_django/test/client.py`][upstream-client]
-`::TestClient.request` and Django's `Client.post` signature.)
+The `content_type` omission is a deliberate divergence from upstream's letter
+while keeping its behavior: strawberry-django's `request()` sets
+`kwargs["format"] = "multipart"` — a DRF-`APIClient`-shaped kwarg Django's test
+client does not accept; it lands in `Client.post(...)`'s `**extra` as an inert
+WSGI-environ entry, while the real multipart switch is the *omission* of
+`content_type`. The package's `request()` keeps the real mechanism and drops
+the inert kwarg, with a docstring note so a future diff against upstream does
+not "fix" it back in (verified against
+[`strawberry_django/test/client.py`][upstream-client] `::TestClient.request`
+and Django's `Client.post` signature).
 
-The multipart path is the card's [`DONE-037-0.0.11`][kanban] coupling: live
-`Upload`-scalar mutations (fakeshop's `createMediaSpecimen` /
-`createItemWithFileViaForm`, the `scalars` app's upload surface) drive through
-`query(..., files=...)`, and Slice 2 replaces the hand-built `operations` /
-`map` blocks in [`test_uploads_api.py`][test-uploads-api] /
-[`test_products_api.py`][test-products-api] accordingly — **including** the
-nested two-file (`attachment` + `image`) shape, which the owned builder now
-expresses, so it converts rather than staying a wire-shape exemption. The
-wire-shape exemption ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest))
-is reserved for tests whose subject IS a *malformed* or hand-crafted envelope,
-not for well-formed nested uploads the contract covers.
+The live `Upload`-scalar mutations (fakeshop's `createMediaSpecimen`,
+`updateMediaSpecimen`, `createMediaSpecimenImageViaForm`, the products
+`updateItem` attachment path) drive through `query(..., files=...)` in
+[`test_uploads_api.py`][test-uploads-api] and
+[`test_products_api.py`][test-products-api], including the nested two-file
+(`attachment` + `image`) shape. The wire-shape exemption (Decision 11) is
+reserved for tests whose subject IS a hand-crafted envelope: the raw multipart
+posts in [`test_products_api.py`][test-products-api] assert an arbitrary file
+label, a wire shape the path-keyed builder never emits.
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d9].
+Alternatives rejected: [rationale][rationale-d9].
 
 ### Decision 10 — Mixin-first: `GraphQLTestMixin` composes over `TestClient`; the graphene assertion helpers keep their names, typed-Response-shaped
 
-The reusable unittest piece is `GraphQLTestMixin` (graphene's convention, the
-card's own architectural posture: "consumers with their own custom TestCase
-base can compose the mixin in directly"); `GraphQLTestCase` and
-`GraphQLTransactionTestCase` are the two-line concrete combinations. The
-mixin's surface:
+The reusable unittest piece is `GraphQLTestMixin` (graphene's convention:
+consumers with their own custom TestCase base compose the mixin in directly);
+`GraphQLTestCase` and `GraphQLTransactionTestCase` are the two-line concrete
+combinations. The mixin's surface:
 
-- **`GRAPHQL_URL = None`** — the per-class endpoint override
-  ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
+- **`GRAPHQL_URL = None`** — the per-class endpoint override (Decision 7).
 - **`query(query, *, variables=None, operation_name=None, headers=None,
-  files=None, url=None, assert_no_errors=False)`** — delegates to a `TestClient`
-  constructed over the test case's **own `self.client`** (so `force_login`,
-  cookies, and `enforce_csrf_checks` state on the case's client all apply) at
-  the resolved class/settings endpoint (rungs 3–5), and forwards the per-call
-  `url=` (rung 1) to that client's `query()`, which routes it through the
-  widened `request(..., url=...)` hook so it wins over `GRAPHQL_URL` and the
-  settings key for that one call without persisting
-  ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)),
-  and returns the typed
-  [`Response`](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported).
-  The signature is keyword-only after `query`, so graphene's positional
-  `operation_name` (its 2nd positional arg) becomes `operation_name=` — the
-  third documented graphene-migration delta ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)),
-  a deliberate trade of graphene positional-call fidelity for one uniform
-  keyword signature across the pytest client and the mixin (graphene's own
-  positional order `(query, operation_name, input_data, variables, headers)`
-  cannot survive dropping `input_data` intact anyway).
-  Note the flipped default: **`assert_no_errors=False` on the mixin** —
-  graphene's mixin never auto-asserted, and its documented flow is "call
-  `self.query(...)`, then `assertResponseNoErrors` / `assertResponseHasErrors`";
-  auto-raising `AssertionError` from inside `query()` would break every
-  ported `assertResponseHasErrors` test at the call site, before the
-  assertion helper runs. The pytest-flavored `TestClient` keeps the base's
-  `True` default (strawberry-django parity). The asymmetry is deliberate and
-  documented in both docstrings: each flavor defaults to its own upstream's
-  behavior.
+  files=None, url=None, assert_no_errors=False)`** — delegates to a
+  `TestClient(self.GRAPHQL_URL, client=self.client)` built per call over the
+  test case's **own `self.client`** (so `force_login`, cookies, and
+  `enforce_csrf_checks` state on the case's client all apply), forwards the
+  per-call `url=` to that client's `query()`, and returns the typed
+  `Response`. The signature is keyword-only after `query`, so graphene's
+  positional `operation_name` (its 2nd positional arg) becomes
+  `operation_name=` — one uniform keyword signature across the pytest client
+  and the mixin (graphene's positional order
+  `(query, operation_name, input_data, variables, headers)` cannot survive
+  dropping `input_data` intact anyway). The default is
+  **`assert_no_errors=False` on the mixin** — graphene's mixin never
+  auto-asserted, and its documented flow is "call `self.query(...)`, then
+  `assertResponseNoErrors` / `assertResponseHasErrors`"; auto-raising inside
+  `query()` would break every ported `assertResponseHasErrors` test at the
+  call site. The pytest-flavored `TestClient` keeps the base's `True` default
+  (strawberry-django parity); each flavor defaults to its own upstream's
+  behavior, and both docstrings say so.
 - **`assertResponseNoErrors(resp, msg=None)`** — asserts
-  `resp.response.status_code == 200` **and** `resp.errors is None` (graphene's
-  two checks, against the typed shape), failing with the decoded content.
+  `resp.response.status_code == 200` **and** `resp.errors is None`, failing
+  with `msg` or the decoded `{"errors": ..., "data": ...}` content, so a
+  non-200 whose body has no `errors` key still fails readably.
 - **`assertResponseHasErrors(resp, msg=None)`** — asserts `resp.errors` is
-  non-empty; deliberately no status assertion (graphene's comment kept:
-  GraphQL returns 200 with errors).
+  non-empty, failing with `msg` or the decoded `data`; deliberately no status
+  assertion (GraphQL returns 200 with errors).
 
-The mixin owns **no** body-building, decoding, or endpoint logic — that is
-the delegate client's, so the logic exists once (the reason graphene's
-module-level `graphql_query` free function is a non-borrow).
+The mixin is state-free beyond `GRAPHQL_URL` and reads only `self.client`; it
+owns **no** body-building, decoding, or endpoint logic — that is the delegate
+client's, so the logic exists once.
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d10].
+Alternatives rejected: [rationale][rationale-d10].
 
 ### Decision 11 — Test strategy: the live switchover is the primary coverage; `tests/testing/test_client.py` owns the rest
 
 Per the [live-first mandate][glossary-live-first-coverage-mandate], the
-helper's happy paths are covered **by being used**: the switchover moves the
-live acceptance suites onto it — the coverage-earning subset in Slice 1, the
-remainder in Slice 2 — after which every `test_query/` run exercises
-`TestClient.query()` (JSON, variables, operation names, login flows,
-multipart uploads) against real fakeshop `/graphql/` requests — the strongest
-possible form of "the covering test lives in the live tier", since the
-covering tests are the package's actual acceptance suites. `tests/testing/test_client.py`
-(the card's DoD row) then owns only what a live request cannot (or need not)
-pin. **The shipped split puts more live than a package-tier-first reading would**:
-the `AsyncTestClient` real-request paths,
-the unittest family end to end, and the `assert_no_errors=True` raising
-direction all proved live-reachable and shipped in
-[`test_client_api.py`][test-client-api], leaving the package tier **entirely
-DB-free**. What stays package-tier:
+helper's request-driving behaviour is covered **by being used** against real
+fakeshop `/graphql/` requests: the live tier posts its ordinary operations
+through `TestClient` (directly or via [`graphql_client.py`][graphql-client]),
+and [`test_client_api.py`][test-client-api], [`test_products_api.py`][test-products-api],
+and [`test_uploads_api.py`][test-uploads-api] carry the targeted rows — the
+JSON happy path, both errors directions, `operation_name` dispatch, `login()`
+in both colors, multipart in both colors, the non-JSON transport error in both
+colors, and the unittest family end to end. The async request tests seed
+through sync `transactional_db` fixtures (the executor-thread SQLite
+visibility constraint) so no ORM work runs in the event loop.
+
+`tests/testing/test_client.py` owns only what a live request cannot (or need
+not) pin, and is **entirely DB-free** — no schema reload, no `seed_data`, no
+real request:
 
 - **Endpoint-resolution precedence** (per-call > constructor > class attr >
-  settings key > default) — the live suites all use the default, so the
-  override ladder needs targeted tests, proven against recording transports (a
-  mis-resolved target cannot pass on a 404 body); the live tier proves the
-  rungs end-to-end against a probe URLconf besides.
-- **Both mixin assertion helpers' FAILURE directions** — a live suite asserts
-  *outcomes*, so the helpers' own raising behaviour is pinned here against
-  canned `Response` objects (their PASSING directions ride the live unittest
-  tests).
-- **The owned builder's map rule and its guards** — the uniform path-keyed map
-  rule (the top-level and list-index shapes fakeshop carries no live vehicle
-  for), the empty-`variables` guard, the per-path placeholder walker, the
-  reserved-envelope-key guard, and the `operation_name=""`-is-sent contract, all
-  pinned against the builder directly (raising before any request, or asserting
-  the built body).
-- **The `__test__ = False` collection guard and the export surface.**
+  settings key > default), proven against recording transports so a
+  mis-resolved target cannot pass on a 404 body; the live tier proves the
+  mixin rungs end-to-end against a probe URLconf besides.
+- **Both mixin assertion helpers' FAILURE directions** against canned
+  `Response` objects (their PASSING directions ride the live unittest tests).
+- **The owned builder's map rule and its guards** — the uniform path-keyed
+  rule (the top-level and list-index shapes no fakeshop mutation takes), the
+  empty-`variables` guard, the placeholder walker's rejections, the
+  reserved-envelope-key guard, `files={}` as a JSON post, and the
+  `operation_name=""`-is-sent contract.
+- **The transport-selection contracts and the surface guards** — an explicit
+  falsy transport is kept, the async default is a `django.test.AsyncClient`,
+  `__test__ = False`, and the export surface.
 
-The `AsyncTestClient`, the unittest family, and the raising direction ship
-**live** instead: `django.test.AsyncClient` drives Django's in-process
-`AsyncClientHandler` against the real fakeshop schema (the async request tests
-seed through sync `transactional_db` fixtures — the executor-thread SQLite
-visibility constraint — so no ORM work runs in the event loop), and the
-`GraphQLTestCase` / `GraphQLTransactionTestCase` family runs end-to-end against
-real `/graphql/` requests. Every test in `tests/testing/test_client.py` is
-therefore DB-free — no schema reload, no `seed_data`, no real request — while
-the request-driving coverage lives live per the
-[live-first mandate][glossary-live-first-coverage-mandate], the strongest form
-of "the covering test lives in the live tier".
-
-**The switchover's own discipline** (Slices 1–2): each file converts
-mechanically — helper deleted, calls rewritten, assertions unchanged — and
-the exemption is narrow and commented: a test keeps raw `client.post(...)`
-only when the raw envelope is the test's subject (hand-built multipart
-negatives, an arbitrary-label `operations` / `map` envelope the path-keyed
-builder never emits, malformed-body tests, content-type probes, queries via
-GET). A test whose only reason for posting raw was per-file plumbing does not
-meet the exemption and converts. Query-count
-assertions (`CaptureQueriesContext`) are re-verified unchanged — the helper
-adds no queries. No live test's *assertion* weakens in the conversion; if a
-conversion would weaken one, that test takes the exemption instead.
+**The live-tier conversion rule.** A live test posts raw only when the raw
+envelope is its subject (an arbitrary-label multipart `operations` / `map`
+envelope, malformed bodies, content-type probes, GET); such a post carries a
+comment naming the exemption, and a call that meets no exemption class goes
+through the client. A conversion never weakens an assertion — the raw
+`response` field exists so none needs to — and `CaptureQueriesContext` counts
+are unchanged because the helper adds no queries.
 
 No absence matrix, no eviction fixture, no hint tests — there is no optional
-dependency ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)).
+dependency (Decision 5).
 
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d11].
+Alternatives rejected: [rationale][rationale-d11].
 
 ### Decision 12 — Version bumps are owned by the joint `0.0.14` cut
 
-No slice in this card edits the package-version state: `[project].version` in
-[`pyproject.toml`][pyproject], `__version__` in [`__init__.py`][init], or
-[`tests/base/test_init.py::test_version`][test-base-init]. This card **shares
-the `0.0.14` patch line** with one open sibling —
-[`TODO-ALPHA-044-0.0.14`][kanban] — and two landed predecessors,
-[`DONE-041-0.0.14`][kanban] and [`DONE-042-0.0.14`][kanban], whose specs'
-Decision 10 already deferred the bump to the **[joint `0.0.14`
-cut][glossary-joint-version-cut]** (the last `0.0.14` card to land). The
-release-status wording splits the same way: Slice 3 updates
-**implemented-on-main** docs (the GLOSSARY entry bodies, the regenerated
-[`docs/TREE.md`][tree]) but the public `shipped (0.0.14)` status flips, the
-[`README.md`][readme] / [`docs/README.md`][docs-readme] "Coming next" →
-"Shipped today" moves, and the `CHANGELOG.md` bullets defer to the joint cut.
+No slice in this card edits the package-version state (`__version__` in
+[`__init__.py`][init] and [`tests/base/test_init.py::test_version`][test-base-init]).
+The card shared the `0.0.14` patch line with `DONE-041-0.0.14`,
+`DONE-042-0.0.14`, and `DONE-044-0.0.14`; per [`docs/SPECS/NEXT.md`][next]
+Step 3 / Step 6, when several cards target one patch version the bump, the
+public `shipped (0.0.14)` status flips, the [`README.md`][readme] /
+[`docs/README.md`][docs-readme] moves, and the `CHANGELOG.md` bullets belong
+to the **[joint `0.0.14` cut][glossary-joint-version-cut]** (the last `0.0.14`
+card to land), not any individual card. This card touches no lockfile either:
+there is no dependency to add (Decision 5).
 
-Unlike [`spec-041`][spec-041] / [`spec-042`][spec-042], this card does not
-touch `uv.lock` at all — there is no dependency to add
-([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery))
-— so the lockfile-vs-version reconciliation those specs pinned has no
-instance here.
-
-Justification: per [`docs/SPECS/NEXT.md`][next] Step 3 / Step 6, when multiple
-cards target one patch version the bump belongs to the joint cut, not any
-individual card's spec. At authoring time one other non-Done card
-([`TODO-ALPHA-044-0.0.14`][kanban]) sits at `0.0.14` beside this one; whichever
-`0.0.14` card lands last owns the version quintet.
-
-Alternatives rejected, and the record of every change this decision has undergone: [rationale][rationale-d12].
+Alternatives rejected: [rationale][rationale-d12].
 
 ## Implementation plan
 
-The file-level delta map for the build handoff (each row's contract is
-specified in the decisions cited; **no slice bumps the version** — the joint
-`0.0.14` cut owns it,
-[Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)):
+The file-level delta map (no slice bumps the version, Decision 12):
 
 | File | Change | Slice |
 | --- | --- | --- |
-| [`django_strawberry_framework/conf.py`][conf] | `TESTING_ENDPOINT_KEY` constant + `testing_endpoint_setting()` accessor, default `"/graphql/"` ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)) | 1 |
-| `django_strawberry_framework/testing/client.py` (new) | `Response` (typed + raw response); `TestClient(BaseGraphQLTestClient)` with `__test__ = False`, endpoint resolution, owned `_build_body` + path-keyed file-map builder, `request(..., *, url=None)` (JSON / multipart), owned `query()` (`operation_name=`, per-call `url=` via `request(url=)`, package `Response`), `login()`; `AsyncTestClient(TestClient)`; `GraphQLTestMixin` + `GraphQLTestCase` + `GraphQLTransactionTestCase` ([Decisions 3](#decision-3--the-symbols-are-upstreams-own-names--testclient--asynctestclient--graphqltestmixin--graphqltestcase--graphqltransactiontestcase-distinctly-ours-import-path)–[10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)) | 1 |
-| [`django_strawberry_framework/testing/__init__.py`][testing-init] | Re-export the six public names; extend `__all__`; docstring's "Future exports" block resolved to current exports ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)) | 1 |
-| `tests/testing/test_client.py` (new) | The DB-free package-tier scenarios per the [Test plan](#test-plan) — the owned builder's guards (the empty-`variables` guard, the placeholder walker, the reserved-envelope-key guard, the `operation_name=""`-is-sent contract), endpoint precedence, both mixin assertion-helper FAILURE directions, and the surface guards (scenarios 1–5, the raising direction, the async client, and the unittest family are earned live in [`test_client_api.py`][test-client-api], not here) | 1 |
-| `examples/fakeshop/test_query/*.py` (targeted subset) | Slice-1 live coverage: convert the cases that earn the sync request-shape lines (JSON, errors outcome, `operation_name`, `login`, multipart) onto `TestClient`; assertions unchanged, query-counts re-verified | 1 |
-| `examples/fakeshop/test_query/*.py` (remainder) | Slice-2 switchover: remaining per-file post helpers deleted, calls moved to `TestClient` / the mixin; wire-shape exemptions commented; query-count assertions re-verified ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)) | 2 |
-| [`docs/GLOSSARY.md`][glossary] | [`TestClient`][glossary-testclient] + [`GraphQLTestCase`][glossary-graphqltestcase] entry bodies to implemented contract; [Auth mutations][glossary-auth-mutations] Channels sentence resolved to the follow-on; status flips deferred | 3 |
-| [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the card flips Done | 3 |
+| [`django_strawberry_framework/conf.py`][conf] | `TESTING_ENDPOINT_KEY` constant + `testing_endpoint_setting()` accessor (default `"/graphql/"`, `__test__ = False`) (Decision 7) | 1 |
+| `django_strawberry_framework/testing/client.py` | `Response` (typed + raw response); `_GraphQLTestClientBase` (endpoint resolution, `client` property, `request(..., *, url=None)`, owned `_build_body` + path-keyed map + placeholder walker, `_finish_response`); sibling `TestClient` / `AsyncTestClient` (own `__init__`, `query()`, `login()`); `GraphQLTestMixin` + `GraphQLTestCase` + `GraphQLTransactionTestCase` (Decisions 3–10) | 1 |
+| [`django_strawberry_framework/testing/__init__.py`][testing-init] | Re-export the six public names in `__all__` (Decision 4) | 1 |
+| `tests/testing/test_client.py` | The DB-free package-tier scenarios per the [Test plan](#test-plan) | 1 |
+| `examples/fakeshop/test_query/` (targeted rows) | The request-driving live rows: [`test_client_api.py`][test-client-api] plus the `TestClient` rows in [`test_products_api.py`][test-products-api] and [`test_uploads_api.py`][test-uploads-api] | 1 |
+| `examples/fakeshop/test_query/` (the rest) + [`graphql_client.py`][graphql-client] | Ordinary posts through the client; raw-envelope exemptions commented; query counts unchanged (Decision 11) | 2 |
+| [`docs/GLOSSARY.md`][glossary] | [`TestClient`][glossary-testclient] + [`GraphQLTestCase`][glossary-graphqltestcase] entry bodies (DB edit + render) | 3 |
+| [`docs/TREE.md`][tree] | Regenerated (script-rendered) | 3 |
 | [`KANBAN.md`][kanban] / `KANBAN.html` | Card wrap via DB edit + re-render | 3 |
 
 ## Helper-reuse obligations (DRY)
 
-Reuse is named per item, and deliberate *non*-reuse carries its reason (the
-[`spec-041`][spec-041] / [`spec-042`][spec-042] discipline).
+Reuse is named per item, and deliberate *non*-reuse carries its reason.
 
 - [ ] **D1** — the response decode, the `Response` field schema, and the
-  `request()` ABC seam ride Strawberry's `BaseGraphQLTestClient`
-  (`_decode`, the `Response` base, the abstract `request()`) — never
-  re-implemented
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)).
-  The sync **and** async `query()` orchestration (its signature and return type
-  both change) and the body/file-map build are the **owned** exceptions
-  (D-N4 below covers the builder).
-- [ ] **D2** — the settings accessor follows the
-  [`conf.py`][conf] key-constant + thin-accessor precedent
-  (`conf.py::nested_connection_strategy_setting`); no new settings-reading
-  pattern
-  ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
-- [ ] **D3** — the mixin delegates to `TestClient`; there is exactly one
-  body-builder and one decoder in the package
-  ([Decision 10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)).
-- [ ] **D4** — the request-driving package tests reuse the single-sited
-  [`schema_reload.reload_all_project_schemas()`][schema-reload] and
-  [`seed_data`][glossary-seed-data] helpers — never private reload or
-  hand-built catalog rows
-  ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
+  `request()` ABC seam ride Strawberry's `BaseGraphQLTestClient` (`_decode`,
+  the `Response` base, the abstract `request()`) — never re-implemented
+  (Decision 5). The sync **and** async `query()` orchestration and the
+  body/file-map build are the **owned** exceptions (D-N4).
+- [ ] **D2** — the settings accessor follows the [`conf.py`][conf] key-constant
+  + thin-accessor precedent
+  (`django_strawberry_framework/conf.py::nested_connection_strategy_setting`)
+  (Decision 7).
+- [ ] **D3** — one body-builder, one decoder, one response tail: the two
+  clients share them through `_GraphQLTestClientBase`, and the mixin delegates
+  to `TestClient` (Decisions 8 and 10).
+- [ ] **D4** — the live request-driving tests reuse the single-sited
+  [`schema_reload.reload_all_project_schemas()`][schema-reload] (through the
+  live tier's autouse fixture) and the [`seed_data`][glossary-seed-data] /
+  `create_users` helpers — never private reloads or hand-built catalog rows
+  (Decision 11).
 - [ ] **D5** — every guard diagnostic in the owned builder and the placeholder
   walker renders consumer-supplied paths and values through
   [`exceptions.py`][exceptions] `::_safe_arg_repr`, never `{x!r}` — the
-  package's existing hostile-metadata containment helper, so a consumer
-  `__repr__` cannot escape a guard as a raw exception. A package-internal
-  reuse, not an upstream borrow: neither reference library contributes it
-  ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+  package's hostile-metadata containment helper (Decision 9).
 - [ ] **D-N1** (non-reuse) — the client does **not** route through
   [`request_from_info`][glossary-request-from-info]: that helper decodes
-  resolver-context shapes server-side; this module never sees a resolver
-  context — it *originates* HTTP requests from the test process.
+  resolver-context shapes server-side; this module *originates* HTTP requests
+  from the test process.
 - [ ] **D-N2** (non-reuse) — no shared "GraphQL post" helper is factored into
-  `utils/`: the surface is consumer-facing test API under `testing/`, not a
-  cross-subsystem substrate, and no package runtime module may import test
-  utilities.
+  `utils/`: the surface is consumer-facing test API under `testing/`, and no
+  package runtime module may import test utilities.
 - [ ] **D-N3** (non-reuse) — the async client does not reuse the
   `is_async_callable` construction-time detection from
-  [`DjangoListField`][glossary-djangolistfield]: the caller picks the color
-  by class here; detection machinery exists for consumer-supplied callables
-  whose color the package cannot know
-  ([Decision 8](#decision-8--async-shape-asynctestclient-subclasses-testclient-ported-as-is)).
+  [`DjangoListField`][glossary-djangolistfield]: the caller picks the color by
+  class here; detection exists for consumer-supplied callables whose color the
+  package cannot know
+  ([Decision 8](#decision-8--async-shape-asynctestclient-is-a-sibling-of-testclient-over-one-shared-base)).
 - [ ] **D-N4** (non-reuse) — the body build and multipart file map do **not**
   reuse the base's `_build_body` / `_build_multipart_file_map`: the base's
   builder returns an empty map for nested input-object uploads and carries no
-  `operationName`, so the package owns a ~15-line path-keyed builder instead.
-  This is a *deliberate* non-reuse of an engine internal (unlike D1's reuse of
-  `_decode` / `Response`), justified by the base's insufficiency, not by
-  preference
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)
-  ground 2,
-  [Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+  `operationName` (Decisions 5 and 9).
 
 ## Edge cases and constraints
 
-- **`__test__ = False` on `TestClient` / `AsyncTestClient`.** Without it,
-  pytest collects any imported name matching `Test*` as a suite and emits
-  `PytestCollectionWarning` — which the repo's `-W error` posture turns into
-  a hard failure the moment a test module imports the class. Upstream carries
-  the same guard; the package must not drop it, and the [Test plan](#test-plan)
-  pins it (Test 13). The mixin family needs no guard (`GraphQL*` names do not
-  match pytest's collection patterns).
-- **`__test__ = False` on the settings accessor too.** The module-level
-  [`conf.py`][conf] `#"testing_endpoint_setting.__test__ = False"` is the
-  same idiom one level down: the accessor's name matches pytest's default
-  `test*` **function** pattern, so a test module importing it unaliased gets
-  it collected, and it returns a `str` — which fails the run via
-  `PytestReturnNotNoneWarning` under the repo's `filterwarnings = error`
-  posture
-  ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
+- **`__test__ = False` on the clients.** Without it, pytest collects any
+  imported name matching `Test*` as a suite and emits
+  `PytestCollectionWarning` — a hard failure under the repo's `-W error`
+  posture. The guard sits on `_GraphQLTestClientBase`, so both `TestClient` and
+  `AsyncTestClient` inherit it; the [Test plan](#test-plan) pins it (scenario
+  13). The mixin family needs no guard (`GraphQL*` names do not match pytest's
+  collection patterns).
+- **`__test__ = False` on the settings accessor too** — the same hazard at
+  function level ([`conf.py`][conf]
+  `#"testing_endpoint_setting.__test__ = False"`, Decision 7).
 - **CSRF.** `django.test.Client(enforce_csrf_checks=False)` is Django's
-  default, so the helper posts without a token even though fakeshop's
-  `/graphql/` view is `ensure_csrf_cookie`-wrapped. A consumer testing CSRF
-  enforcement passes their own `TestClient(client=Client(enforce_csrf_checks=True))`
-  — the constructor's `client=` seam exists for exactly this.
-- **Session state and cookies.** `login()` covers the force-login block; for
-  cookie/session assertions the raw client rides along
-  (`test_client.client.cookies`, and `res.response.cookies` per response) —
-  the live auth suite ([`test_auth_api.py`][test-auth-api]) asserts session
-  cookies across a login round trip and switches over using these seams.
-- **`files=` requires placeholder variables.** The owned `_build_body` guards
-  this with an explicit `raise AssertionError` when a truthy `files` arrives
-  and the envelope it built carries no `variables` member — which, with
-  truthiness emission, is every falsy `variables`, `variables={}` and
-  `variables=None` alike (not the
-  base's bare `assert`, so it holds under `python -O`) — and the path-keyed
-  `files=` contract requires a `None`
-  placeholder at each file's variable path, which
-  `TestClient._assert_file_placeholders` walks and enforces per path.
-  Documented in the `query()` docstring with the canonical
-  single-file and nested-input-object examples
-  ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
+  default, so the helper posts without a token. A consumer testing CSRF
+  enforcement passes `TestClient(client=Client(enforce_csrf_checks=True))` —
+  the constructor's `client=` seam exists for exactly this.
+- **Session state and cookies.** `login()` covers the force-login block and
+  logs out even when the block raises, so a failing assertion inside it cannot
+  leak session state; for cookie/session assertions the raw client rides
+  along (`test_client.client.cookies`, and `res.response.cookies` per
+  response).
+- **`files=` requires placeholder variables.** `_build_body` raises when a
+  truthy `files` arrives and the envelope carries no `variables` member, and
+  `_GraphQLTestClientBase._assert_file_placeholders` enforces a `None`
+  placeholder at each file's path (Decision 9). The `query()` docstring carries
+  the single-file and nested-input-object examples.
 - **Multi-file, nested-input-object, and list uploads** are handled by the
   owned path-keyed builder — `files={"data.attachment": f1, "data.image": f2}`
   for a nested input object, `files={"tags.0": f1, "tags.1": f2}` for a list —
-  one uniform `map[key] = ["variables." + key]` rule. This is the surface the
-  base could **not** express (its folder heuristic returns an empty map for
-  nested objects), which is why the package owns the builder
-  ([Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)
-  ground 2).
+  one uniform rule.
 - **GET is not supported.** Both upstreams' helpers POST unconditionally;
-  queries-via-GET (persisted-query CDNs, the debug-toolbar spec's
-  `Accept: application/json` GET test) stay on the raw client — one of the
-  named wire-shape exemptions in the switchover.
-- **`headers=` passes through** to Django's `Client.post(headers=...)`
-  (Django ≥ 4.2 shape; the package floor is `Django>=5.2`, so no
-  `HTTP_`-prefixed-extra fallback is carried — graphene's version shim is a
-  non-borrow by obsolescence).
+  queries-via-GET stay on the raw client — one of the wire-shape exemptions.
+- **`headers=` passes through** to Django's `Client.post(headers=...)`; the
+  package's `Django>=` floor in [`pyproject.toml`][pyproject] has that
+  parameter, so no `HTTP_`-prefixed-extra fallback is carried.
 - **The raw-response field under multipart decode.** `_decode` reads
-  `response.content` directly for multipart posts (upstream behavior); the
-  package `Response.response` carries the same `HttpResponse` either way, so
-  status/header assertions are uniform across JSON and multipart calls.
-- **`AsyncTestClient` + the ORM.** Async tests touching the database mark
-  `django_db` and run through Django's async-safety machinery
-  (`sync_to_async` inside the ORM); the suite's existing async-connection
-  hygiene ([`tests/conftest.py`][tests-conftest]'s leaked-async-connection
-  handling) applies to these tests as to every other async DB test — no new
-  mechanism, but the [Test plan](#test-plan) notes the marking so the
-  known order-dependence class never enters through this file.
-- **`operationName` is omitted, never `null`.** The body carries the key only
-  when `operation_name` is provided — a `null` `operationName` against a
-  multi-operation document is a GraphQL validation error, and an absent key
-  against a single anonymous operation is the spec-correct shape (the
-  [`spec-042`][spec-042] Test-3 lesson, encoded in the builder).
-- **`Response` equality/reprs.** The dataclass carries a live `HttpResponse`;
-  reprs stay readable (dataclass default) and no test should compare whole
-  `Response` objects — the [Test plan](#test-plan) asserts fields, and the
-  docstring says to.
-- **Mixin on a custom TestCase base.** The mixin reads only `self.client`
-  (Django's `TestCase` provides it) and its own class attributes; composing
-  it over a consumer's custom base works exactly as graphene documents —
-  the mixin is deliberately state-free beyond `GRAPHQL_URL`.
+  `response.content` directly for multipart posts; `Response.response` carries
+  the same `HttpResponse` either way, so status/header assertions are uniform
+  across JSON and multipart calls.
+- **`AsyncTestClient` + the ORM.** Async tests reaching the view mark
+  `django_db(transaction=True)` (or seed through a `transactional_db` sync
+  fixture) and rely on [`tests/conftest.py`][tests-conftest]'s async-connection
+  hygiene, as every async DB test does.
+- **`operationName` is omitted when `None`, never `null`** — a `null`
+  `operationName` against a multi-operation document is a GraphQL validation
+  error, and an absent key against a single anonymous operation is the
+  spec-correct shape. An explicit `""` is sent (Decision 6).
+- **`Response` equality / reprs.** The dataclass carries a live
+  `HttpResponse`; reprs stay readable (dataclass default) and tests assert
+  fields, never whole `Response` objects.
+- **Mixin on a custom TestCase base.** The mixin reads only `self.client` and
+  its own class attribute; composing it over a consumer's custom base works
+  exactly as graphene documents.
 
 ## Test plan
 
-The numbered scenarios below are the behaviours this card must prove; they
-split across two tiers per
-[Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest).
-The **sync request-shape scenarios (1–5)** are reachable as ordinary GraphQL
-calls, so — per the [live-first mandate][glossary-live-first-coverage-mandate] —
-they are earned **live**, by converting the matching
-[`examples/fakeshop/test_query/`][test-query-readme] cases onto `TestClient` in
-Slice 1 (the Slice-2 switchover then converts the rest); they are **not**
-restated as package-tier tests. **More rides live than a package-tier-first
-split would put there:** the `assert_no_errors=True` raising direction
-(scenario 2), the async client (scenarios 9–10), and the unittest family
-(scenarios 11–12's PASSING legs, plus the `GraphQLTransactionTestCase` smoke)
-all proved live-reachable and are earned **live** in
-[`test_client_api.py`][test-client-api]. What stays in
-`tests/testing/test_client.py` is the guard directions the owned builder raises
-(the empty-`variables` guard, the placeholder walker, the
-reserved-envelope-key guard, and the `operation_name=""`-is-sent contract that
-scenarios 2 and 5 also carry), the endpoint-precedence ladder (scenarios 6–8),
-both assertion helpers' FAILURE directions (scenario 12), and the surface guards
-(scenarios 13–14) — **all DB-free**. Because the request-driving tests now all
-live in the live tier, they call
-[`schema_reload.reload_all_project_schemas()`][schema-reload] on setup (the
-acceptance suites' autouse fixture) and seed with
-[`seed_data(1)`][glossary-seed-data]; every test in `tests/testing/test_client.py`
-is DB-free and unmarked (no schema reload, no `seed_data`, no real request).
+The numbered scenarios split across two tiers per Decision 11. The live rows
+run under the live tier's autouse schema reload and seed with `seed_data` /
+`create_users`; every row in `tests/testing/test_client.py` is DB-free.
 
-**Sync request shapes (scenarios 1–5) — earned live in Slice 1 (converted
-`test_query/` cases), not package-tier tests:**
+**Sync request shapes (live):**
 
-1. **Happy path.** `seed_data(1)`, `TestClient().query(<named allItems
-   query>, variables={"first": 1})` → `res.errors is None`, `res.data`
-   carries edges, `res.extensions` is the decoded value (or `None`),
-   `res.response.status_code == 200` and
-   `res.response["Content-Type"].startswith("application/json")` — the typed
-   shape and the raw ride-along in one assertion set.
-2. **Errors, both directions.** An invalid selection with
-   `assert_no_errors=False` returns `res.errors` non-empty with `res.data`
-   `None`. The raising direction (the same call under the default
-   `assert_no_errors=True` raises `AssertionError`, via `pytest.raises`, its
-   message carrying the errors list) proved live-reachable — an invalid
-   selection is a validation error that touches no DB — and is **earned live**
-   too, in
-   [`test_client_api.py`][test-client-api]
-   `::test_assert_no_errors_default_raises_with_the_errors_list`, not restated
-   package-tier.
-3. **`operation_name` dispatch.** A two-operation document
-   (`query A { ... } query B { ... }`) with `operation_name="B"` executes B
-   (assert on a B-only field). The same document with **no** `operation_name`
-   does **not** error: Strawberry's HTTP layer defaults an absent `operationName` to the
-   document's *first* operation, so it executes A — the real behaviour the
-   shipped [`test_products_api.py`][test-products-api]
-   `::test_operation_name_dispatch_via_test_client` pins. This proves the key is
-   sent when given and *absent* when not (never `operationName: null`, which
-   against a multi-operation document is the actual validation error the
-   omission avoids). Earned live.
-4. **`login()` scoping.** `seed_data(1)`, a write-auth-gated products
-   mutation: denied anonymous (top-level error), succeeds inside
-   `with client.login(user_with_perm):`, denied again after the block —
-   the force-login/logout bracket proven on the same client instance.
+1. **Happy path + typed `Response`.**
+   `examples/fakeshop/test_query/test_products_api.py::test_operation_name_dispatch_via_test_client`'s
+   named call doubles as the JSON happy path: `res.errors is None`, `res.data`
+   carries edges, `res.response.status_code == 200` and
+   `res.response["Content-Type"].startswith("application/json")`. The
+   `extensions` leg (decoded value when present, `None` when absent) is
+   package-tier, `::test_response_extensions_surface_decoded_or_none`, since
+   fakeshop's live responses carry none.
+2. **Errors, both directions.** The `assert_no_errors=False` outcome
+   (`res.errors` non-empty, `res.data` `None`) rides the denied legs of
+   `examples/fakeshop/test_query/test_products_api.py::test_create_item_login_bracket_via_test_client`;
+   the raising direction (the default `assert_no_errors=True` raises
+   `AssertionError` carrying the errors list on a real invalid selection) is
+   `examples/fakeshop/test_query/test_client_api.py::test_assert_no_errors_default_raises_with_the_errors_list`.
+3. **`operation_name` dispatch.** A two-operation document with
+   `operation_name="ItemNames"` executes only the named second operation; the
+   same document with **no** `operation_name` executes the *first* operation
+   (Strawberry's HTTP layer defaults an absent `operationName` to it) —
+   `::test_operation_name_dispatch_via_test_client`, proving the key is sent
+   when given and absent when not. The explicit-`""`-is-sent contract is
+   package-tier, `::test_build_body_sends_empty_operation_name_instead_of_dropping_it`.
+4. **`login()` scoping.** A write-auth-gated `createItem`: denied anonymous,
+   succeeds inside `with client.login(user_with_perm):`, denied again after the
+   block, on one client instance —
+   `::test_create_item_login_bracket_via_test_client`. The logout-on-raise leg
+   is `examples/fakeshop/test_query/test_client_api.py::test_sync_login_bracket_logs_out_when_the_block_raises`.
 5. **Multipart upload — nested input object, two files, with
-   `operation_name`.** The live `createMediaSpecimen` mutation through
+   `operation_name`.** `createMediaSpecimen` through
    `query(mutation, variables={"data": {"label": ..., "attachment": None,
-   "image": None}}, files={"data.attachment": SimpleUploadedFile(...),
-   "data.image": SimpleUploadedFile(...)}, operation_name="Create")` → success
-   payload, both files persisted — the exact nested two-field shape the base's
-   `_build_multipart_file_map` **cannot** produce (it returns an empty map),
-   proving the owned path-keyed builder and that `operationName` rides inside
-   `operations` under multipart wrapping
-   ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped)).
-   This is the [`DONE-037`][kanban] coupling discharged through the helper — a
-   live fakeshop nested upload with two file fields combined with a named
-   operation, the case that proves the owned builder is load-bearing. Plus the
-   guard direction — `files=` without usable `variables` raises
-   `AssertionError` from the owned `_build_body`'s empty-`variables` guard,
-   for every falsy `variables` alike — is the helper's own
-   behaviour, pinned package-tier in `tests/testing/test_client.py`. A top-level
-   single-file upload (`files={"file": f}`) rounds out the shape coverage.
+   "image": None}}, files={"data.attachment": ..., "data.image": ...},
+   operation_name="Create")` → success payload, both files persisted —
+   `examples/fakeshop/test_query/test_uploads_api.py::test_multipart_create_uploads_real_files_over_http`,
+   the shape the base's map builder cannot produce, with `operationName` riding
+   inside `operations`. The top-level and list-index shapes and the walker's
+   success path are package-tier,
+   `::test_build_body_map_rule_is_uniform_across_path_shapes`; `files={}` as a
+   plain JSON post is `::test_empty_files_dict_is_a_plain_json_post`.
 
-**Endpoint resolution (mechanics, DB-free):**
+**Endpoint resolution (package-tier, DB-free):**
 
-6. **Default.** `TestClient().path == "/graphql/"` with no settings key.
-7. **Settings key.** Under the `pytest-django` `settings` fixture setting
-   `DJANGO_STRAWBERRY_FRAMEWORK = {"TESTING_ENDPOINT": "/alt/"}`, a fresh
-   `TestClient().path == "/alt/"` — and the [`conf.py`][conf]
-   `setting_changed` receiver restores the default after the fixture exits
-   (assert in a follow-up test or via a second client post-override).
-8. **Precedence ladder.** `TestClient("/explicit/").path == "/explicit/"`
-   even with the settings key set (constructor > settings > default), and a
-   per-call `query(..., url="/percall/")` routes to `/percall/` even on a client
-   constructed with a different `path` — the per-call rung (rung 1) pinned as
-   overriding the constructor. Because this is a **DB-free mechanics** test of
-   *target selection* (not of a live view), the per-call routing is proven
-   without a request: the client is constructed with a recording stand-in for
-   the wrapped Django client (`client=`), which records the path each `post`
-   receives and returns a canned JSON `HttpResponse`, and the test asserts the
-   recorded target is `/percall/` for the overridden call, `/constructor/` for
-   the next un-overridden one, and that `self.path` is **unchanged**
-   afterward (the non-persistence guarantee, [Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)).
-   The stand-in replaces the **transport**, never `request()` itself, so the
-   real `TestClient.request` selects the target the row reads — a subclass
-   overriding `request()` would re-implement the line under test. Recording the
-   transport target directly also means the test cannot accidentally
-   pass on a `/percall/` 404 or non-JSON body. The mixin's own rungs are pinned
-   one row per rung in `tests/testing/test_client.py`
-   (`::test_mixin_class_attr_rung_beats_the_settings_key_and_the_default`,
+6. **Default.** `::test_default_endpoint_is_graphql_with_trailing_slash` —
+   `TestClient().path == "/graphql/"` with no settings key.
+7. **Settings key.**
+   `::test_settings_key_sets_the_endpoint_and_the_default_restores_after_override`
+   — under `override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT":
+   "/alt/"})` a fresh `TestClient` and `AsyncTestClient` both read `/alt/`, and
+   after the override exits a fresh client is back on the default (the
+   `setting_changed` receiver).
+8. **Precedence ladder.** `::test_constructor_path_outranks_the_settings_key`
+   (constructor > settings; the base's inherited `url` mirrors `path`) and
+   `::test_per_call_url_outranks_the_constructor_and_never_persists` (a
+   recording stand-in for the wrapped Django client records each `post`
+   target: `/percall/` for the overridden call, `/constructor/` for the next,
+   `self.path` unchanged). The stand-in replaces the **transport**, never
+   `request()`, so the real `request()` selects the target the row reads. The
+   mixin: `::test_mixin_query_delegates_to_the_test_cases_own_client` (posts
+   through `self.client`, default rung) and one row per rung —
+   `::test_mixin_class_attr_rung_beats_the_settings_key_and_the_default`,
    `::test_mixin_per_call_url_rung_beats_the_class_attr`,
-   `::test_mixin_settings_rung_applies_when_the_class_attr_is_unset`) — one
-   node id each, so a single rung regressing is distinguishable from the other
-   two — and are proven end-to-end besides in Test 11's probe URLconf.
+   `::test_mixin_settings_rung_applies_when_the_class_attr_is_unset`.
 
-**The async client (earned live in [`test_client_api.py`][test-client-api] —
-real requests through `AsyncClientHandler`, sync `transactional_db` seeding,
-`pytest-asyncio` auto mode):**
+**The async client (live, in [`test_client_api.py`][test-client-api]):**
 
-9. **Async happy path.** `seed_data(1)` (sync fixture), then
-   `await AsyncTestClient().query(...)` → same typed-shape assertions as
-   Test 1 — proving the awaited `request()`, the async decode, and the
-   package `Response` construction.
-10. **Async `login()`.** The Test-4 bracket through
-    `async with client.login(user):` — `sync_to_async`-wrapped session
-    round trip.
-10b. **Async multipart upload.** The
-    scenario-5 nested two-file `createMediaSpecimen` upload driven through
-    `AsyncTestClient` (superuser seeded in a sync `transactional_db` fixture,
-    `MEDIA_ROOT=tmp_path`, assertions on the returned `result` payload so no ORM
-    work runs in the event loop), so the DoD's "multipart ... on both clients"
-    is earned live on **both** — the async request round trip (ASGI-scope
-    multipart parse through `AsyncClientHandler`) the sync path cannot exercise.
+9. **Async happy path + raise direction.**
+   `::test_async_query_happy_path_and_raise_direction` — the scenario-1 typed
+   assertions through the awaited transport, plus the async
+   `assert_no_errors=True` raise.
+10. **Async `login()`.** `::test_async_login_brackets_the_write_authorized_mutation`
+    (the scenario-4 bracket through `async with client.login(user):`) and
+    `::test_async_login_bracket_logs_out_when_the_block_raises`.
 
-**The unittest family (earned live in [`test_client_api.py`][test-client-api] —
-TestCase-shaped, in-file subclasses driving real `/graphql/` requests):**
+10b. **Async multipart upload.**
+    `::test_async_multipart_upload_creates_media_specimen` — the scenario-5
+    nested two-file upload through `AsyncTestClient` (superuser seeded in a
+    sync `transactional_db` fixture, `MEDIA_ROOT=tmp_path`), the ASGI-scope
+    multipart parse the sync path cannot exercise.
 
-11. **`GraphQLTestCase` end-to-end.** An in-file subclass runs a seeded query
-    via `self.query(...)`, `assertResponseNoErrors` passes; an invalid query
-    via `self.query(...)` (no raise — the mixin's `assert_no_errors=False`
-    default) then `assertResponseHasErrors` passes; and the two remaining
-    precedence rungs (Test 8's deferral) — a `GRAPHQL_URL = "/alt/"` subclass
-    and a per-call `self.query(..., url="/alt/")` — both route to the alternate
-    endpoint, verified against a **probe URLconf** that maps `"/alt/"` to the
-    same schema view (a positive hit on the real view, not an exception shape).
-    The probe mount stamps a distinctive response header the real `/graphql/`
-    mount does not set, and both rows assert it beside the positive hit:
-    the probe URLconf also mounts the project's own URLs, so without a
-    discriminator a request that fell back to `/graphql/` would satisfy every
-    other assertion. If a *miss* is asserted anywhere in the endpoint tests instead, it is
-    Django's `ValueError` from `response.json()` on the non-JSON 404 body — not
-    `json.JSONDecodeError` ([Error shapes](#error-shapes)).
+**The unittest family (live, in [`test_client_api.py`][test-client-api]) and
+the transport error:**
+
+11. **`GraphQLTestCase` end-to-end.** `GraphQLTestCaseEndToEndTests` — a seeded
+    `self.query(...)` passes `assertResponseNoErrors`
+    (`::test_seeded_query_via_self_client_passes_no_errors`); an invalid query
+    returns rather than raising, then passes `assertResponseHasErrors`
+    (`::test_invalid_query_returns_instead_of_raising_then_has_errors`); a
+    per-call `self.query(..., url="/alt/")` reaches the alternate endpoint
+    (`::test_per_call_url_routes_to_the_probe_endpoint`) — and
+    `GraphQLTestCaseClassAttrEndpointTests::test_class_attr_endpoint_hits_the_real_view`
+    pins the `GRAPHQL_URL = "/alt/"` rung. Both endpoint rows run against a
+    **probe URLconf** that maps `"/alt/"` to the same schema view and stamps a
+    marker response header the real `/graphql/` mount does not set, so a
+    request that fell back to `/graphql/` cannot pass. The wrong-endpoint shape
+    is pinned on both colors —
+    `::test_wrong_configured_endpoint_surfaces_django_non_json_decode_error`
+    and `::test_async_wrong_endpoint_surfaces_the_same_non_json_decode_error`
+    — as Django's `ValueError` naming the non-JSON `Content-Type`
+    ([Error shapes](#error-shapes)).
 12. **Assertion-helper failure directions (package-tier) + the transaction
-    smoke (live).** `assertResponseNoErrors` fails (with the decoded content in
-    the message) on an errors response and `assertResponseHasErrors` fails on a
-    clean one — pure functions over a canned `Response`, so pinned **DB-free** in
-    `tests/testing/test_client.py` (the helpers' PASSING directions ride
-    scenario 11 live). The `GraphQLTransactionTestCase` smoke (one clean seeded
-    query) proving the second concrete combination is wired is **earned live**
-    with the rest of the unittest family.
+    smoke (live).** `tests/testing/test_client.py::AssertionHelperFailureDirectionTests`
+    — `assertResponseNoErrors` fails on an errors response, fails readably on
+    a non-200 without errors, and carries a custom `msg`;
+    `assertResponseHasErrors` fails on a clean response and carries a custom
+    `msg` — composed over `unittest.TestCase` against canned `Response`
+    objects so the file stays DB-free.
+    `GraphQLTransactionTestCaseSmokeTests::test_one_clean_seeded_query_round_trips`
+    proves the second concrete combination is wired.
 
-**Surface guards (DB-free):**
+**Surface guards (package-tier, DB-free):**
 
-13. **Collection guard.** `TestClient.__test__ is False` and
-    `AsyncTestClient.__test__ is False` — the pytest-collection contract
-    ([Edge cases](#edge-cases-and-constraints)) pinned mechanically.
-14. **Export surface.** The six names import from
-    `django_strawberry_framework.testing` and appear in its `__all__`; the
-    no-package-root-export contract is pinned by its **two accurate shapes** —
-    `not hasattr(django_strawberry_framework, "TestClient")` (and
-    `pytest.raises(AttributeError)` around `getattr(...)`), plus
-    `pytest.raises(ImportError)` around `from django_strawberry_framework import
-    TestClient` (the statement form, which the import machinery raises as
-    `ImportError`, not `AttributeError`)
-    ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)).
+13. **Collection guard.** `::test_clients_carry_the_pytest_collection_guard` —
+    `TestClient.__test__ is False` and `AsyncTestClient.__test__ is False`.
+14. **Export surface.**
+    `::test_export_surface_is_the_testing_root_not_the_package_root` — the six
+    names are in `django_strawberry_framework.testing.__all__`; the package
+    root has none (`not hasattr(...)`, `pytest.raises(AttributeError)` around
+    `getattr(...)`, and `pytest.raises(ImportError)` around the
+    `from django_strawberry_framework import TestClient` statement)
+    (Decision 4).
 
-**The hardened builder and the transport selection (DB-free):**
+**The hardened builder and the transport selection (package-tier, DB-free):**
 
-15. **Every rejection branch of the placeholder walker, plus the two
-    selection contracts, carries its own named owner** in
-    `tests/testing/test_client.py`
-    ([Decision 9](#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts-the-package-owns-the-bodymultipart-builder-upstreams-no-op-format-kwarg-is-dropped),
-    [Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)).
-    The walker's five rejections, each pinned separately so one relaxation
-    cannot hide behind another:
+15. **Every rejection branch of the placeholder walker, plus the call-level
+    guards and the selection contracts, carries its own named owner** in
+    `tests/testing/test_client.py` (Decisions 5 and 9). The walker:
 
-    - the **array walk covers tuples as well as lists** —
-      `::test_files_placeholder_tuple_arrays_walk_and_map_like_lists` builds a
-      tuple-of-placeholders map and a mixed tuple/dict path and asserts the
-      `map[key] = ["variables." + key]` rule is unchanged for both;
-    - the **empty dotted segment** rejection —
+    - tuples walk like lists —
+      `::test_files_placeholder_tuple_arrays_walk_and_map_like_lists`;
+    - the empty dotted segment —
       `::test_files_placeholder_empty_segment_raises_instead_of_emitting`,
       parametrized over the `""`-key and trailing-dot shapes;
-    - the **non-canonical array index** rejection —
+    - the non-canonical array index —
       `::test_files_placeholder_noncanonical_list_index_raises`, parametrized
       over the digit-like spellings `int()` and `str.isdigit()` disagree on,
       with `::test_files_placeholder_out_of_range_list_index_raises` for the
       range leg;
-    - the **unreadable array length** rejection —
+    - the unreadable array length —
       `::test_files_placeholder_hostile_len_container_fails_closed`,
-      parametrized over `list` and `tuple`, asserting the raised type is the
-      family's uniform `AssertionError` and that the hostile exception's own
-      text does not escape through it;
-    - the **non-descendable value** and **non-`None` value** rejections —
+      parametrized over `list` and `tuple`, asserting the uniform
+      `AssertionError` and that the hostile exception's text does not escape;
+    - the non-descendable value —
       `::test_files_placeholder_cannot_descend_into_a_scalar_raises`,
-      parametrized over the scalar shapes a path can hit and including one
-      case where the non-descendable value sits **past** the first segment, so
-      the rejection is pinned inside the walk and not only on its first
-      iteration, and
-      `::test_files_placeholder_present_but_not_none_raises`, with
-      `::test_files_placeholder_missing_top_level_path_raises` /
-      `::test_files_placeholder_missing_nested_key_raises` for the absent-key
-      leg.
+      including a case past the first segment;
+    - the non-`None` value — `::test_files_placeholder_present_but_not_none_raises`;
+    - the missing key — `::test_files_placeholder_missing_top_level_path_raises`
+      / `::test_files_placeholder_missing_nested_key_raises`.
 
-    And the call-level guards, the diagnostics, and the two selection
-    contracts:
+    The call-level guards, the diagnostics, and the selection contracts:
 
-    - **the empty-`variables` guard** (the envelope-coherence check) —
+    - the empty-`variables` guard —
       `::test_files_without_variables_raises_the_placeholder_guard`,
-      parametrized over `variables=None`, `variables={}`, and a **falsy
-      `dict` subclass carrying real placeholders** (the one input class the
-      per-path walker accepts, so it is the case that makes this a boundary
-      rather than a redundant pre-check), plus
-      `::test_async_files_without_variables_raises_the_same_guard` for the
-      async color since `_build_body` is shared. Each matches on the guard's
-      own distinctive phrase rather than on a word every walker message also
-      carries;
-    - **the reserved-envelope-key guard** —
+      parametrized over `variables=None`, `variables={}`, and a **falsy `dict`
+      subclass carrying real placeholders** (the input the walker alone would
+      accept), plus `::test_async_files_without_variables_raises_the_same_guard`
+      for the async color; each matches the guard's own phrase rather than a
+      word every walker message carries;
+    - the reserved-envelope-key guard —
       `::test_files_key_shadowing_a_reserved_envelope_field_raises`,
-      parametrized over `operations`, `map`, and both at once, the last of
-      which also pins the message's sorted rendering of the offending names;
-    - **`_safe_arg_repr` containment** of a hostile consumer `__repr__`, on
-      both argument positions the diagnostics render — the placeholder value
+      parametrized over `operations`, `map`, and both (which also pins the
+      sorted rendering of the offending names);
+    - `_safe_arg_repr` containment of a hostile consumer `__repr__` on the
+      placeholder value
       (`::test_files_placeholder_hostile_repr_keeps_assertion_error_boundary`)
-      and the `files=` key itself
-      (`::test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary`,
-      which also asserts the hostile exception's own text does not ride the
-      message);
-    - **`files={}` is a plain JSON post** —
-      `::test_empty_files_dict_is_a_plain_json_post`, the truthiness half of
-      the multipart switch that the empty-`variables` guard pins from the
-      other side;
-    - **the transport is selected by presence, not truthiness** —
-      `::test_clients_preserve_an_explicit_falsy_transport`, parametrized over
-      both colors, with
-      `::test_async_client_defaults_to_djangos_async_transport` pinning the
-      async default arm (a `django.test.AsyncClient`, never the sync client)
-      and `::test_async_client_posts_a_real_query_through_a_falsy_transport`
-      driving one awaited request through an explicitly supplied falsy async
-      transport, parametrized over both spellings of falsiness a truthiness
-      fallback would discard alike.
+      and on the `files=` key
+      (`::test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary`);
+    - the transport is selected by presence, not truthiness —
+      `::test_clients_preserve_an_explicit_falsy_transport` (both colors),
+      `::test_async_client_defaults_to_djangos_async_transport` (the async
+      default arm is a `django.test.AsyncClient`, never the sync client), and
+      `::test_async_client_posts_a_real_query_through_a_falsy_transport`
+      (one awaited request through a `__bool__`-falsy and an empty-`__len__`
+      transport).
 
-    The shared response tail `TestClient._finish_response` has no row of its
-    own by design: it sits on the only path either color's `query()` takes, so
-    every live request-driving scenario above exercises it in both colors, and
-    a row asserting merely that it is *called* would pin observability rather
-    than behaviour.
-
-**The remaining live switchover (Slice 2) — verification, not new tests:** every
-converted file passes with assertions unchanged; `CaptureQueriesContext`
-counts unchanged; and each raw `client.post(...)` a converted file retains
-carries the wire-shape-exemption comment naming **which** class it claims — a
-call that meets no class converts rather than acquiring a declaration, and a
-class whose last exemplar converts leaves the list. The implementation worker **records the exact
-pytest commands** (e.g. `uv run pytest tests/testing/test_client.py` and the
-converted `test_query/` files) for the maintainer to run, and does not run
-the suite itself unless the maintainer explicitly authorizes pytest for the
-slice — the [`AGENTS.md`][agents] #"No pytest after edits" workflow rule; this
-spec describes the verification but does not override it.
+    `_GraphQLTestClientBase._finish_response` has no row of its own: it sits on
+    the only path either color's `query()` takes, so every request-driving row
+    above exercises it in both colors.
 
 Coverage: the package gate is `fail_under = 100` and `testing/client.py` is
-package code — every branch has a named owner. Reached by the **live**
-request-driving tests (scenarios 1–5, 9–11, the async multipart 10b, and
-scenario 12's transaction smoke — all in [`test_client_api.py`][test-client-api]
-/ the converted suites): the JSON and multipart `request()` branches, both
-`query()` overrides, `login()` both colors, the mixin delegate, and the
-assertion helpers' passing directions. Reached by the **DB-free** package tests
-(`tests/testing/test_client.py`): the owned builder's map rule and its guards
-(empty-`variables`, the reserved-envelope-key guard, and the
-`operation_name=""`-is-sent contract), the placeholder walker's five rejection
-branches and the two selection contracts (scenario 15, one named owner per
-branch), both assertion helpers' failure directions, the endpoint ladder (6–8),
-and the export/guard surface (13–14). If
-implementation finds a branch unreachable through these (e.g. a defensive
-re-raise), it gets its own targeted unit the same way — named owner, never a
-blanket claim.
+package code. The live rows reach the JSON and multipart `request()`
+branches, both `query()` overrides, `login()` in both colors, the mixin
+delegate, and the assertion helpers' passing directions; the DB-free package
+rows reach the builder's map rule and guards, the walker's rejection branches,
+the selection contracts, both helpers' failure directions, the endpoint
+ladder, and the export / guard surface.
 
 ## Doc updates
 
-Slice 3 — implemented-on-main docs update here; release-status wording defers
-to the joint `0.0.14` cut
-([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)):
-
 - [`docs/GLOSSARY.md`][glossary] — the [`TestClient`][glossary-testclient]
-  entry body grows the implemented contract: the
+  entry body carries the implemented contract (the
   `django_strawberry_framework.testing` import path, the
-  `BaseGraphQLTestClient` inheritance and zero-dependency posture, the typed
-  `Response` (+ raw `response` field), endpoint resolution
-  (`TESTING_ENDPOINT`, constructor, default `"/graphql/"`), `operation_name=`,
-  multipart `files=`, `login()`, and the async twin's `AsyncClientHandler` (not
-  Channels) transport. The [`GraphQLTestCase`][glossary-graphqltestcase]
-  entry body grows the mixin-first family shape, the flipped
-  `assert_no_errors` default, the assertion helpers' typed-Response
-  signatures, and the `GRAPHQL_URL` rung. The
-  [Auth mutations][glossary-auth-mutations] entry's "scoped to the
-  `TestClient` card (`TODO-ALPHA-043-0.0.14`) or a dedicated follow-on card"
-  sentence is resolved to the follow-on (this card shipped HTTP-client
-  helpers only). Statuses **stay `planned for 0.0.14`** until the joint cut.
+  `BaseGraphQLTestClient` subclassing and zero-dependency posture, the typed
+  `Response` + raw `response` field, endpoint resolution, `operation_name=`,
+  multipart `files=`, `login()`, the async twin); the
+  [`GraphQLTestCase`][glossary-graphqltestcase] entry body carries the
+  mixin-first family, the flipped `assert_no_errors` default, the assertion
+  helpers, and the `GRAPHQL_URL` rung. Both render from the glossary DB.
 - [`docs/TREE.md`][tree] — regenerated via
-  [`scripts/build_tree_md.py`][build-tree-md] after the card flips Done (the
-  file is script-rendered; missing module docstrings fail the render): the
-  package tree's planned `testing/client.py` annotation resolves to the real
-  docstring-derived row; the test tree gains `tests/testing/test_client.py`.
-- [`KANBAN.md`][kanban] / `KANBAN.html` — card wrap via the DB + re-render
-  (Slice 3 checklist).
-- **Deferred to the joint cut:** [`README.md`][readme] /
-  [`docs/README.md`][docs-readme] "Coming next — remaining alpha (`0.0.14`)" →
-  "Shipped today" moves, the GLOSSARY status flips + package-version line,
-  [`TODAY.md`][today]'s coming-next wording, and `CHANGELOG.md` (which
-  additionally requires the explicit maintainer grant per
-  [`AGENTS.md`][agents]).
+  [`scripts/build_tree_md.py`][build-tree-md] from the module docstrings.
+- [`KANBAN.md`][kanban] / `KANBAN.html` — card wrap via the DB + re-render.
+- The release-status wording ([`README.md`][readme] /
+  [`docs/README.md`][docs-readme], the GLOSSARY status lines, `CHANGELOG.md`)
+  belongs to the joint `0.0.14` cut (Decision 12).
 
 ## Risks and open questions
 
-The constraints below are the ones still live against the shipped contract.
-The preferred-answer / fallback weighing each was decided under, and the
-record of the risks this card closed (the card's `.mutate()` claim, the
-engine base's floor presence, and the switchover's breadth), live in the
-companion [rationale][rationale-risks].
+The live constraints against the shipped contract; the preferred-answer /
+fallback weighing is in the [rationale][rationale-risks].
 
-- **Upstream reshapes the base later.** The subclass couples to `_decode` and
-  the `Response` field names — private-ish machinery upstream could reshape in a
-  future release (the [`spec-042`][spec-042] `_postprocess` risk class, milder:
-  `query()` and `Response` are documented public test API upstream). The body
-  build the package already **owns**, so a reshape of `_build_body` /
-  `_build_multipart_file_map` upstream cannot break the package (a narrower
-  coupling surface than a full inherit). The coupling is accepted, not
-  designed around; the request-driving tests fail loudly under a refreshed
-  lock and the fix tracks upstream's change.
-- **Async DB tests joining a suite with known async-connection hazards.**
-  The repo has history with lingering executor-thread sqlite connections
-  under async tests. The `AsyncTestClient` tests mark `django_db` and follow
-  [`tests/conftest.py`][tests-conftest]'s existing hygiene; a flake that
-  surfaces is fixed at source in the shared conftest, never by weakening
-  `-W error`.
-- **The debug-toolbar async handoff.** [`spec-042`][spec-042]'s Risks point
-  at `AsyncTestClient` as the natural owner of the toolbar's async smoke.
-  This card ships the vehicle and not the smoke: the smoke belongs in the
-  toolbar card's own test module, where its soft-dependency fixture already
-  lives
-  ([Decision 2](#decision-2--card-scope-boundary-the-test-client-family-ships-channels-session-auth-verification-the-toolbars-async-smoke-and-fakeshop-runtime-changes-stay-out),
-  and [Out of scope](#out-of-scope-explicitly-tracked-elsewhere) carries the
-  handoff).
-- **The mixin's flipped `assert_no_errors=False` default.** Two defaults in
-  one family is a documented asymmetry
-  ([Decision 10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped))
-  and a foreseeable confusion source; each flavor matches its own upstream's
-  behavior, which is the property that makes both migrations work unchanged,
-  and both docstrings state the other's default.
+- **Upstream reshapes the base later.** The subclass couples to `_decode`, the
+  `Response` field names, and the `request()` seam — the same upstream-coupling
+  class as every engine seam the package rides, milder here because `query()`
+  and `Response` are documented public test API upstream. The body build is
+  owned, so a reshape of `_build_body` / `_build_multipart_file_map` upstream
+  cannot break the package. The request-driving tests fail loudly under a
+  refreshed lock.
+- **Async DB tests and async-connection hazards.** The `AsyncTestClient` rows
+  follow [`tests/conftest.py`][tests-conftest]'s hygiene; a flake that surfaces
+  is fixed at source in the shared conftest, never by weakening `-W error`.
+- **The mixin's flipped `assert_no_errors=False` default.** Two defaults in one
+  family is a documented asymmetry (Decision 10) and a foreseeable confusion
+  source; each flavor matches its own upstream, which is what makes both
+  migrations work unchanged, and both docstrings state the other's default.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- **Channels session-auth verification** (session-mutating
-  [auth mutations][glossary-auth-mutations] through Channels consumers) — a
-  dedicated follow-on card, per
-  [Decision 2](#decision-2--card-scope-boundary-the-test-client-family-ships-channels-session-auth-verification-the-toolbars-async-smoke-and-fakeshop-runtime-changes-stay-out);
-  Slice 3 resolves the glossary's disjunction wording.
-- **The debug-toolbar async smoke test** — a follow-on to
-  [`DONE-042-0.0.14`][kanban] (its now-landed test module) or the joint cut;
-  this card ships the vehicle only.
-- **Response-extensions debug middleware** — the sibling
-  [`TODO-ALPHA-044-0.0.14`][kanban]; when its tests want HTTP ergonomics,
-  the helper is available to them like any other suite.
-- **The migration guide itself** — [`TODO-BETA-068-0.1.8`][kanban]; this card
-  hands it two import-diff rows
-  (`strawberry_django.test.client.TestClient` →
+- **Channels session-auth verification** — the auth / router surface's own,
+  with its communicator tests (Decision 2).
+- **The debug-toolbar async smoke test** — the toolbar's own test module
+  (Decision 2); this card ships the vehicle only.
+- **The migration guide itself** — [`TODO-BETA-071-0.1.8`][kanban]; this card
+  hands it two import-diff rows (`strawberry_django.test.client.TestClient` →
   `django_strawberry_framework.testing.TestClient`;
   `graphene_django.utils.testing.GraphQLTestCase` →
   `django_strawberry_framework.testing.GraphQLTestCase`) plus the three
-  documented deltas: (1) the mixin's `query()` returns the typed `Response`,
-  not a raw `HttpResponse`; (2) graphene's `input_data=` kwarg is not carried —
+  graphene deltas: (1) the mixin's `query()` returns the typed `Response`, not
+  a raw `HttpResponse`; (2) graphene's `input_data=` kwarg is not carried —
   write `variables={"input": ...}`; (3) the mixin's `query()` is keyword-only
-  after the query string, so graphene's positional `operation_name` (its 2nd
-  positional arg) becomes `operation_name=`.
-- **The `0.0.14` version bump and release-status flips** — the joint
-  `0.0.14` cut
-  ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
+  after the query string, so graphene's positional `operation_name` becomes
+  `operation_name=`.
+- **The `0.0.14` version bump and release-status flips** — the joint `0.0.14`
+  cut (Decision 12).
 
 ## Definition of done
 
 - [ ] `django_strawberry_framework/testing/client.py` exists, with module +
-      symbol docstrings, exposing `TestClient` / `AsyncTestClient` (both
-      `__test__ = False`, subclassing `strawberry.test.BaseGraphQLTestClient`
-      per
-      [Decision 5](#decision-5--subclass-strawberrys-basegraphqltestclient--engine-owned-base-over-a-hard-dependency-no-soft-dependency-machinery)),
-      the package `Response` carrying the raw `HttpResponse`, `login()` both
-      colors, `GraphQLTestMixin`, and the two concrete `(Mixin, TestCase)` /
-      `(Mixin, TransactionTestCase)` combinations — the card's DoD rows 1–2,
-      sharpened by
-      [Decisions 6](#decision-6--query-returns-the-typed-response-dataclass-extended-with-the-raw-httpresponse-operation_name-is-supported)
-      and [10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped).
+      symbol docstrings, exposing `TestClient` / `AsyncTestClient` (siblings
+      over `_GraphQLTestClientBase`, which subclasses
+      `strawberry.test.BaseGraphQLTestClient` and carries `__test__ = False`,
+      Decisions 5 and 8), the package `Response` carrying the raw
+      `HttpResponse`, `login()` in both colors, `GraphQLTestMixin`, and the two
+      concrete `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)`
+      combinations (Decisions 6 and 10).
 - [ ] The mixin carries `assertResponseNoErrors` / `assertResponseHasErrors`
-      named for the typed `Response` (the card's "or the equivalent named for
-      the chosen `.query()` return type" — the names kept, the parameter
-      typed).
+      typed for the `Response`.
 - [ ] The endpoint settings key is live:
-      `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]` (the card's
-      `GRAPHQL_TESTING_ENDPOINT` working name resolved per
-      [Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)),
-      default `"/graphql/"`, with the constructor (`path=`), class-attribute
-      (`GRAPHQL_URL`), and per-call (`url=`, the card's named per-call override)
-      rungs and the full precedence ladder tested.
+      `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]` (Decision 7), default
+      `"/graphql/"`, with the constructor (`path=`), class-attribute
+      (`GRAPHQL_URL`), and per-call (`url=`) rungs and the full precedence
+      ladder tested.
 - [ ] Multipart file upload works through `query(..., files=...)` on both
-      clients — a live `Upload`-scalar mutation drives through the helper on the
-      **sync** client ([`test_uploads_api.py`][test-uploads-api]) and the
-      **async** client ([`test_client_api.py`][test-client-api]),
-      the card's `DONE-037-0.0.11` coupling; the `variables`-placeholder contract
-      is documented, and a `files=` key may not shadow the reserved
-      `operations` / `map` envelope fields.
+      clients — a live `Upload`-scalar mutation drives through the helper on
+      the **sync** client ([`test_uploads_api.py`][test-uploads-api]) and the
+      **async** client ([`test_client_api.py`][test-client-api]); the
+      `variables`-placeholder contract is documented and enforced, and a
+      `files=` key may not shadow the reserved `operations` / `map` fields.
 - [ ] `from django_strawberry_framework.testing import TestClient,
       AsyncTestClient, Response, GraphQLTestMixin, GraphQLTestCase,
-      GraphQLTransactionTestCase` all resolve; nothing is added to the
-      package root
-      ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)).
-- [ ] **No new dependencies**: `[project].dependencies`,
-      `[dependency-groups].dev`, and `uv.lock` are untouched; the Strawberry
-      test-module gate ran (`strawberry.test.BaseGraphQLTestClient`
-      importable at the Strawberry floor — the `strawberry-graphql>=` pin in
-      [`pyproject.toml`][pyproject], installed at the point
-      [`docs/builder/BUILD.md`][build] `## Floor verification` records — in an
-      isolated throwaway venv, never the shared `.venv`), or the project's
-      Strawberry floor was bumped instead; the command and outcome are
-      recorded in the build artifact.
+      GraphQLTransactionTestCase` all resolve; nothing is added to the package
+      root (Decision 4).
+- [ ] **No new dependencies**: the family imports only the package's hard
+      dependencies; `strawberry.test.BaseGraphQLTestClient` is importable at
+      the Strawberry floor the `strawberry-graphql>=` pin in
+      [`pyproject.toml`][pyproject] declares.
 - [ ] `tests/testing/test_client.py` covers the package-tier scenarios per the
-      [Test plan](#test-plan), **entirely DB-free**: the owned
-      builder's guard directions (empty-`variables`, the placeholder walker, the
-      reserved-envelope-key guard, the `operation_name=""`-is-sent contract), the
-      endpoint precedence ladder, both assertion helpers' FAILURE directions, and
-      the surface guards. Scenarios 1–5, the `assert_no_errors=True` raising
-      direction, the async client, and the unittest family are earned **live**
-      in [`test_client_api.py`][test-client-api] / the converted suites (under
-      the schema-reload + `seed_data` disciplines), not here — no package-tier
-      test drives a request. The package coverage gate (`fail_under = 100`) holds
-      with `testing/client.py` included, each branch mapped to a named owner.
-- [ ] The Slice-1 targeted live conversions landed: the
-      `examples/fakeshop/test_query/` cases that earn the sync request-shape
-      lines (JSON, errors outcome, `operation_name`, `login`, multipart) run
-      through `TestClient` with assertions and `CaptureQueriesContext` counts
-      unchanged.
-- [ ] The Slice-2 remaining switchover landed: the rest of
-      `examples/fakeshop/test_query/` uses the helper; per-file post helpers
-      are deleted; every raw `client.post(...)` a converted file retains
-      carries the wire-shape-exemption comment naming the class it claims, and
-      a call that meets no class is converted rather than declared; all
-      assertions and `CaptureQueriesContext`
-      counts unchanged (the card's "live HTTP tests switch to the helper" DoD,
-      scoped per
-      [Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
+      [Test plan](#test-plan), **entirely DB-free**; the request-driving
+      scenarios are earned live; the package coverage gate
+      (`fail_under = 100`) holds with `testing/client.py` included.
+- [ ] The live tier posts its ordinary operations through the client; every
+      raw post a live file retains carries the wire-shape-exemption comment
+      naming the class it claims; assertions and `CaptureQueriesContext`
+      counts are unchanged by the move (Decision 11).
 - [ ] The migration-guide handoff rows are recorded for
-      [`TODO-BETA-068-0.1.8`][kanban] (the two import diffs + the three
-      documented deltas) ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
-- [ ] Slice 3 doc updates land per [Doc updates](#doc-updates): both GLOSSARY
-      entry bodies (status flips deferred), the auth entry's Channels
-      sentence resolved, the regenerated [`docs/TREE.md`][tree], and the
-      kanban card wrap (DB edit + re-render).
-- [ ] **No slice bumps the version** — `pyproject.toml` / `__version__` /
-      [`tests/base/test_init.py`][test-base-init] still read `0.0.13` when
-      this card flips Done; the joint `0.0.14` cut owns the bump
-      ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
-- [ ] `uv run ruff format .` / `ruff check --fix .` clean; no `pytest` unless
-      the maintainer asks (the [`START.md`][start] workflow rule).
+      [`TODO-BETA-071-0.1.8`][kanban]
+      ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
+- [ ] Slice 3 doc updates land per [Doc updates](#doc-updates).
+- [ ] **No slice bumps the version** — the joint `0.0.14` cut owns it
+      (Decision 12).
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../../AGENTS.md
 [goal]: ../../GOAL.md
 [kanban]: ../../KANBAN.md
 [pyproject]: ../../pyproject.toml
 [pytest-ini]: ../../pytest.ini
 [readme]: ../../README.md
 [start]: ../../START.md
-[today]: ../../TODAY.md
 
 <!-- docs/ -->
 [docs-readme]: ../README.md
@@ -2155,7 +1534,6 @@ companion [rationale][rationale-risks].
 [glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
 [glossary-pep-562-lazy-export]: ../GLOSSARY.md#pep-562-lazy-export
 [glossary-request-from-info]: ../GLOSSARY.md#request_from_info
-[glossary-response-extensions-debug-middleware]: ../GLOSSARY.md#response-extensions-debug-middleware
 [glossary-safe-wrap-connection-method]: ../GLOSSARY.md#safe_wrap_connection_method
 [glossary-schema-reload-discipline]: ../GLOSSARY.md#schema-reload-discipline
 [glossary-seed-data]: ../GLOSSARY.md#seed_data
@@ -2167,7 +1545,6 @@ companion [rationale][rationale-risks].
 <!-- docs/SPECS/ -->
 [next]: NEXT.md
 [rationale-borrowing]: appx/spec-043-test_client-0_0_14-rationale.md#borrowing-posture--the-two-upstream-split
-[rationale-current-state]: appx/spec-043-test_client-0_0_14-rationale.md#current-state--the-prediction-clauses
 [rationale-d10]: appx/spec-043-test_client-0_0_14-rationale.md#decision-10--mixin-first-graphqltestmixin-composes-over-testclient
 [rationale-d11]: appx/spec-043-test_client-0_0_14-rationale.md#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage
 [rationale-d12]: appx/spec-043-test_client-0_0_14-rationale.md#decision-12--version-bumps-are-owned-by-the-joint-0014-cut
@@ -2178,7 +1555,7 @@ companion [rationale][rationale-risks].
 [rationale-d5]: appx/spec-043-test_client-0_0_14-rationale.md#decision-5--subclass-strawberrys-basegraphqltestclient
 [rationale-d6]: appx/spec-043-test_client-0_0_14-rationale.md#decision-6--query-returns-the-typed-response
 [rationale-d7]: appx/spec-043-test_client-0_0_14-rationale.md#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint
-[rationale-d8]: appx/spec-043-test_client-0_0_14-rationale.md#decision-8--async-shape-asynctestclient-subclasses-testclient
+[rationale-d8]: appx/spec-043-test_client-0_0_14-rationale.md#decision-8--async-shape-sibling-clients-over-one-shared-base
 [rationale-d9]: appx/spec-043-test_client-0_0_14-rationale.md#decision-9--multipart-uploads-files-maps-variable-paths-to-file-parts
 [rationale-risks]: appx/spec-043-test_client-0_0_14-rationale.md#risks-and-open-questions--the-preferred-answer--fallback-weighing
 [rationale]: appx/spec-043-test_client-0_0_14-rationale.md
@@ -2198,15 +1575,14 @@ companion [rationale][rationale-risks].
 <!-- tests/ -->
 [test-base-init]: ../../tests/base/test_init.py
 [test-routers]: ../../tests/test_routers.py
+[tests-auth-mutations]: ../../tests/auth/test_mutations.py
 [tests-conftest]: ../../tests/conftest.py
 
 <!-- examples/ -->
 [config-urls]: ../../examples/fakeshop/config/urls.py
+[graphql-client]: ../../examples/fakeshop/graphql_client.py
 [schema-reload]: ../../examples/fakeshop/schema_reload.py
-[test-auth-api]: ../../examples/fakeshop/test_query/test_auth_api.py
 [test-client-api]: ../../examples/fakeshop/test_query/test_client_api.py
-[test-kanban-api]: ../../examples/fakeshop/test_query/test_kanban_api.py
-[test-library-api]: ../../examples/fakeshop/test_query/test_library_api.py
 [test-mutation-atomicity]: ../../examples/fakeshop/test_query/test_mutation_atomicity.py
 [test-products-api]: ../../examples/fakeshop/test_query/test_products_api.py
 [test-query-conftest]: ../../examples/fakeshop/test_query/conftest.py

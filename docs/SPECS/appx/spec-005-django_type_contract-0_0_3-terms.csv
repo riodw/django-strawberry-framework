@@ -1,8 +1,8 @@
 term,anchor,notes
-ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.exclude,metaexclude,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.interfaces,metainterfaces,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.model,metamodel,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Carried by the unknown-name topic: the error names the model and the unknowns and lists the available fields.
+DjangoType,djangotype,Carried by the Problem statement: the spec bounds what the DjangoType pipeline accepts and refuses.
+Meta.exclude,metaexclude,Carried by failure class 3 of the Problem statement: an unknown Meta.exclude name raises rather than dropping silently.
+Meta.fields,metafields,Carried by failure class 3 of the Problem statement: an unknown Meta.fields name raises rather than dropping silently.
+Meta.interfaces,metainterfaces,Carried by the Meta-key partition topic as the promoted key pinned as not deferred.
+Meta.model,metamodel,Carried by the unknown-name topic: every Meta.fields and Meta.exclude name must exist on Meta.model.
+Meta.primary,metaprimary,Carried by the one-model-many-types topic: the mechanism that answers model-to-type lookup without import order.

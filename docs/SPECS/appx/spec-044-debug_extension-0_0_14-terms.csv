@@ -1,11 +1,11 @@
 term,anchor,notes
-Response-extensions debug middleware,response-extensions-debug-middleware,the subject entry; planned for 0.0.14 -> shipped at the Slice-3 cut
+Response-extensions debug middleware,response-extensions-debug-middleware,the subject entry
 DjangoDebugExtension,djangodebugextension,the public opt-in SchemaExtension symbol and extensions-subpackage import path
 Strawberry extension lifecycle,strawberry-extension-lifecycle,on_operation teardown + get_results response-metadata contract across sync and async execution colors
-Per-operation extension isolation,per-operation-extension-isolation,class-form opt-in and the strawberry-graphql 0.316.0 floor that prevents shared execution_context state
+Per-operation extension isolation,per-operation-extension-isolation,class-form opt-in; per-operation state bound through _OperationBoundExtension; the strawberry-graphql floor (>=0.322.2) includes 0.316.0's per-operation construction
 Debug payload availability,debug-payload-availability,when extensions.debug exists; executed operations versus parse/validation failures and coerced recovery
 Response-extension merge semantics,response-extension-merge-semantics,extensions-map list-order merge and the later-writer-wins debug-key collision rule
-Django debug-cursor capture,django-debug-cursor-capture,force_debug_cursor + queries_log fidelity mechanism independent of settings.DEBUG
+Django debug-cursor capture,django-debug-cursor-capture,force_debug_cursor + queries_log fidelity mechanism; the mechanism is independent of settings.DEBUG while publication is gated by spec-048's fail-closed gate
 Reference-counted cursor coordinator,reference-counted-cursor-coordinator,lock-protected overlap-safe saved-value restore and ExitStack unwind ownership
 Bounded query-log rollover,bounded-query-log-rollover,best-effort length-snapshot behavior for reset or full queries_log deque rollover
 Async SQL-capture boundary,async-sql-capture-boundary,exception fidelity across execution colors but normally-empty async SQL due thread-local connections
@@ -16,15 +16,15 @@ Developer-only debug posture,developer-only-debug-posture,off-by-default securit
 Graphene debug migration,graphene-debug-migration,remove _debug + DjangoDebugMiddleware; add DjangoDebugExtension; read response.extensions.debug
 Cookbook parity,cookbook-parity,working-reference rule that separates domain declarations from project-level engine configuration
 Probe URLconf,probe-urlconf,test-local URL configuration for real HTTP coverage of an opt-in schema without global fakeshop wiring
-Hard dependency,hard-dependency,required-package contrast explaining why this card needs no optional import guard or new dependency
+Hard dependency,hard-dependency,required-package contrast explaining why the extension needs no optional import guard or new dependency
 Debug-toolbar middleware,debug-toolbar-middleware,the 0.0.14 sibling mechanism; documented as complements both directions
 DjangoOptimizerExtension,djangooptimizerextension,extension precedent (engine base) + the composition test scenario
-DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,status flip carried by this card's Slice-3 cut
-Channels request adapter,channels-request-adapter,router-companion entry whose status flip rides the cut
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,0.0.14 transport whose graphql-transport-ws consumer serves operations through Schema.stream; status flip carried by the Slice-3 cut
+Channels request adapter,channels-request-adapter,router-companion entry whose status flip rides the Slice-3 cut
 require_optional_module,require_optional_module,router-companion status flip + D-N2 deliberate non-reuse
 TestClient,testclient,HTTP ergonomics the request-driving tests post through
 GraphQLTestCase,graphqltestcase,test-client family status flip carried by the cut
-Joint version cut,joint-version-cut,Decision 12 - this card completes the 0.0.14 cut
+Joint version cut,joint-version-cut,Decision 12 - this card carried the 0.0.14 cut
 Live-first coverage mandate,live-first-coverage-mandate,Decision 11 - the recorded package-tier justification
 Schema reload discipline,schema-reload-discipline,fixture obligation for the request-driving tests
 seed_data,seed_data,the repo seed-helper rule in the Test plan
@@ -36,7 +36,7 @@ Strictness mode,strictness-mode,adjacent diagnostic; composes with the debug pay
 Plan cache,plan-cache,why the optimizer is a singleton and this extension is not
 Multi-database cooperation,multi-database-cooperation,per-alias capture makes the alias visible (Decision 10)
 only() projection,only-projection,visible in the captured sql strings (scenario 2)
-ConfigurationError,configurationerror,explicitly NOT used by this card - stated in Key glossary references
+ConfigurationError,configurationerror,raised by the constructor for a non-bool allow_unsafe_production (spec-048 Decision 5)
 get_queryset visibility hook,get_queryset-visibility-hook,the payload is a read-only window over what visibility hooks emitted
 Django Trac #37064 hardening,django-trac-37064-hardening,the cursor-wrapping hazard precedent in Decision 4's rejection
 finalize_django_types,finalize_django_types,appears in the User-facing API code example

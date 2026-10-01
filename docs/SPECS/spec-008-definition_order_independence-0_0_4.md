@@ -1,18 +1,18 @@
 # [Definition-order independence][glossary-definition-order-independence]
 
-Deliberation, rejected alternatives, and this spec's change record live in the companion file [`spec-008-definition_order_independence-0_0_4-rationale.md`][spec-008-rationale]: the per-line tours of the two upstream implementations, the Pros and Cons weighed for each, the criteria the design was judged against, the four candidate designs and why three lost, the four candidate finalization triggers and the leading one the implementation rejected, and the four sets of open questions this spec once asked with the answers each received.
+Deliberation and rejected alternatives live in the companion file [`spec-008-definition_order_independence-0_0_4-rationale.md`][spec-008-rationale]: the Pros and Cons of the two upstream approaches, the criteria the design is judged against, the four candidate designs and why three lost, and why the finalization trigger is an explicit call.
 
 ## Problem
 Eager relation resolution at class-definition time cannot represent a bidirectional Django model graph.
 
-The eager pipeline this design had to replace resolved relation targets during `DjangoType` subclass creation:
+An eager pipeline resolves relation targets during `DjangoType` subclass creation:
 
 1. `DjangoType.__init_subclass__` selects Django fields.
 2. Annotation building dispatches relation fields through a relation converter.
 3. The converter immediately asks the registry for `field.related_model`.
 4. If the related model has no registered [`DjangoType`][glossary-djangotype], [`ConfigurationError`][glossary-configurationerror] is raised.
 
-Under that pipeline a bidirectional model graph cannot be represented as one rich `DjangoType` per model without careful ordering or field omission. For example:
+Under such a pipeline a bidirectional model graph cannot be represented as one rich `DjangoType` per model without careful ordering or field omission. For example:
 
 - `ItemType.category` requires `CategoryType` to already exist.
 - `CategoryType.items` requires `ItemType` to already exist.
@@ -48,20 +48,8 @@ The design question is therefore broader than "how do we avoid one import-order 
 - how do we keep optimizer, filters, orders, aggregates, permissions, and connection fields aligned with the finalized graph?
 - how do we fail loudly when the schema is incomplete?
 
-## Package behavior before this decision
-The eager pipeline lived across:
-
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/registry.py`
-
-Its behavior is intentionally fail-loud:
-
-- relation target types must be declared first
-- one `DjangoType` may register per Django model
-- unresolved relation targets raise during type creation
-
-That is simple and safe, and it blocks fully automatic bidirectional schemas for normal Django model graphs.
+## What eager resolution gets right
+Eager resolution is simple and fail-loud: an unresolved relation target raises during type creation. It blocks fully automatic bidirectional schemas for normal Django model graphs.
 
 Fail-loud is not the part to give up. The goal is not to replace fail-loud errors with silent degradation; it is to move the failure point from "too early, during class creation" to "late enough to allow imports to complete, but still before schema construction or serving."
 
@@ -141,10 +129,10 @@ Definition-order independence is the shared foundation for later systems, and ev
 - cascade permissions need a predictable graph of relation fields.
 - the optimizer needs to know when a selected field is a forward relation, reverse relation, many-to-many relation, or scalar.
 
-Six of the eight are built on this foundation and shipped in the alpha line; related aggregates and fieldsets are Beta cards and make the same demand when they land. If this layer is weak, every later rich-schema subsystem needs its own workaround.
+Six of the eight are shipped on this foundation; related aggregates and fieldsets are unshipped Beta cards that make the same demand. If this layer is weak, every later rich-schema subsystem needs its own workaround.
 
 ### Option 1: Keep eager resolution
-Keep the eager pipeline unchanged.
+Resolve relation targets during subclass creation.
 
 ### Option 2: Strawberry-Django-style explicit relation annotations
 Allow or require consumers to provide explicit relation annotations when they want rich cyclic relations.
@@ -172,27 +160,27 @@ The behavior this decision fixes:
 ### The finalization trigger
 An explicit consumer call to [`finalize_django_types()`][glossary-finalize-django-types] is the trigger this decision chose. The alternative — finalizing implicitly, inside the rich-schema field and schema constructors — was weighed and not adopted, so the explicit call is the ordinary path rather than a hatch beside a set of implicit triggers. Which constructors do not finalize, and the package-wide guarantee that none of them does, are [`spec-010`][spec-010-trigger]'s.
 
-The pass itself — its phases, its idempotency, its single-threaded setup window, and its earliest safe call point — is [`spec-010`][spec-010-finalization]'s. The primary-type selection question this decision leaves open is answered by [`Meta.primary`][glossary-metaprimary] at `0.0.6`, in [`spec-018-meta_primary-0_0_6.md`][spec-018].
+The pass itself — its phases, its idempotency, its single-threaded setup window, and its earliest safe call point — is [`spec-010`][spec-010-finalization]'s. Primary-type selection is [`Meta.primary`][glossary-metaprimary], owned by [`spec-018-meta_primary-0_0_6.md`][spec-018].
 
-The four candidate triggers weighed here, the tradeoff recorded for each, and the four sets of questions this record asked about the registry, user annotations, generic fallback, and the rich-schema subsystems — each with the answer it eventually received — are recorded in [the rationale][spec-008-rationale].
+The four candidate triggers, the tradeoff of each, and how the registry, user annotations, generic fallback, and the rich-schema subsystems sit on the decision are recorded in [the rationale][spec-008-rationale].
 
 ### Hard invariants
-The invariants any acceptable design must preserve are carried, with enforcement teeth and acceptance tests, by [`spec-010`][spec-010-invariants]: "Any change that violates one of them is a rejected change." The list this record set, the failure criteria that were its negation, and how each fared are in [the rationale][spec-008-rationale]. A second copy here would be a list to keep in sync, not a second guarantee.
+The invariants any acceptable design must preserve are carried, with enforcement teeth and acceptance tests, by [`spec-010`][spec-010-invariants]: "Any change that violates one of them is a rejected change." A second copy here would be a list to keep in sync, not a second guarantee.
 
 ### The shape that shipped
-The collection-then-finalization split this record proposes — pending relation records written at class creation, resolved against the registry before schema construction, concrete annotations computed per relation shape and merged with user-authored ones, Django relation metadata attached for the optimizer, and a fail-loud raise naming the source model, source field, and related model — shipped whole. Its step-by-step form is in [the rationale][spec-008-rationale]; the finalization contract is [`spec-010`][spec-010-finalization]'s and what subclass creation collects is [`spec-001-django_types-0_0_1.md`][spec-001]'s.
+The collection-then-finalization split — pending relation records written at class creation, resolved against the registry before schema construction, concrete annotations computed per relation shape and merged with user-authored ones, Django relation metadata attached for the optimizer, and a fail-loud raise naming the source model, source field, and related model — is the shipped shape. The finalization contract is [`spec-010`][spec-010-finalization]'s and what subclass creation collects is [`spec-001-django_types-0_0_1.md`][spec-001]'s.
 
 Those three elements are the one part of the shape this record still states as a requirement: any implementation must name the source model, the source field, and the target model when it raises. That is a design constraint, not a message — the canonical wording, the message format, and the substring assertions that pin them are [`spec-010`][spec-010-error]'s, which is why spec-010 cites this section as the requirement's source rather than restating the constraint as its own. The split is deliberate and is stated in both documents.
 
 ## Acceptance criteria
 The checkable acceptance inventory — the cyclic fixtures declared in either order, all six relation shapes, `Meta.fields = "__all__"` over a bidirectional graph, the unresolved-target `ConfigurationError`, optimizer plans that still see concrete targets, [schema audit][glossary-schema-audit] distinguishing unresolved targets from intentionally skipped fields, and the idempotency and isolation tests — is [`spec-010`][spec-010-acceptance]'s.
 
-The design-gating criteria this record judged the four options against are in [the rationale][spec-008-rationale], including the one criterion the implementation deliberately made unmeetable by choosing an explicit trigger over an implicit one.
+The design criteria the four options are judged against are in [the rationale][spec-008-rationale].
 
 ## Fakeshop implication
-The fakeshop product graph is this record's chosen acceptance fixture: eight relations across four models, which eager resolution cannot represent as one rich primary type per model without omitting fields. The deferred model can, and the fixture inventory is [`spec-010`][spec-010-acceptance]'s.
+The fakeshop `Category` / `Item` / `Property` / `Entry` graph is this record's chosen acceptance fixture: eight relations across four models, which eager resolution cannot represent as one rich primary type per model without omitting fields. The deferred model can, and the fixture inventory is [`spec-010`][spec-010-acceptance]'s.
 
-The wire shape each many-side relation exposes is not this record's to state, and it has two owners rather than one. Per-field declarability through `Meta.relation_shapes` is [`spec-032-full_relay-0_0_9.md`][spec-032]'s. The default a many-side relation falls back to when no such declaration is made is [`spec-047-resource_policy-0_0_14.md`][spec-047]'s, which narrowed it as part of the bounded-output work.
+The wire shape each many-side relation exposes is not this record's to state, and it has two owners rather than one. Per-field declarability through `Meta.relation_shapes` is [`spec-032-full_relay-0_0_9.md`][spec-032]'s. The default a many-side relation falls back to when no such declaration is made is [`spec-047-resource_policy-0_0_14.md`][spec-047]'s.
 
 ## Cookbook implication
 The `django-graphene-filters` cookbook recipes schema is the higher-level target outcome, and it is [`spec-009-rich_schema_architecture-0_0_4.md`][spec-009]'s: that spec names the node surface a Strawberry equivalent needs, several members of which are still unshipped Beta work.

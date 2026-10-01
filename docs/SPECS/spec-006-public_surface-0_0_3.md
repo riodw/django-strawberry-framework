@@ -1,6 +1,6 @@
 # Spec: Public Surface & Documentation Discipline
 
-Deliberation and this spec's change record live in its companion [rationale file][spec-006-rationale]: where the alignment problem came from, the three-section README shape this spec declined, and the release-gating judgement an `Open questions` section once recorded.
+Deliberation lives in its companion [rationale file][spec-006-rationale]: why the four conditions are necessary but not sufficient, why status is published per entry from generated documents, and why the obligations a subsystem spec owes are discharged against artifacts.
 
 ## Problem statement
 

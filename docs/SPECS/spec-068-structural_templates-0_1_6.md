@@ -1,9 +1,7 @@
 # Spec: Structural optimization templates and nested sidecar batching
 
-Planned for `0.1.6` (card `TODO-BETA-068-0.1.6`, created 2026-08-08 seated
-immediately ahead of the optimizer-explain card `TODO-BETA-069-0.1.6`; every
-card from that seat onward shifted up by one, and so did the post-`0.1.5`
-patch versions). **The explain card shares this patch version, lands
+Planned for `0.1.6` (card `TODO-BETA-068-0.1.6`, seated immediately ahead of
+the optimizer-explain card `TODO-BETA-069-0.1.6`). **The explain card shares this patch version, lands
 last, and owns the `0.1.6` version cut, so this spec defers every
 release-state artifact to it**
 ([Decision 1](#decision-1--seat-this-card-before-explain-joint-cut-at-016)).
@@ -45,7 +43,7 @@ fakeshop recreation: [`docs/multi-root-graph-recreation.md`][recreation]):
    by construction
    ([Decision 8](#decision-8--row-identity-proof-enforcement-never-an-automatic-distinct)).
 
-Status: **PLANNED — no slice built yet; card created (`TODO-BETA-068-0.1.6`).**
+Status: **PLANNED — no slice built yet.**
 Five slices: Slice 1 (**template/bound core** — the frozen dataclasses, the
 subtree fingerprint builder, the binding pipeline, package tests proving
 bind-equivalence with today's plans), Slice 2 (**cache rekey + rebasing +
@@ -201,8 +199,8 @@ stable audit are allowed to build on today's internals:
   unplanned; `connection.py::_build_relation_connection_resolver` then runs
   the ordinary connection pipeline against each parent's relation manager
   (`parents × page` queries, plus `parents × count` when `totalCount` is
-  selected). [`spec-058`][spec-058] deliberately pinned this arm as
-  *characterized, not required equal* and assigned closing it here.
+  selected). [`spec-058`][spec-058] pins this arm as *characterized, not
+  required equal* and assigns closing it here.
 - `optimizer/extension.py::DjangoOptimizerExtension._publish_plan_to_context`
   unions correctness sentinel sets so nested plans coexist, but stores
   `DST_OPTIMIZER_PLAN` (`optimizer/_context.py`) as last-wins introspection
@@ -255,20 +253,16 @@ The hard constraints are a floor and a ceiling: after card `058` (this card
 consumes its vocabulary) and before the explain card (whose design assumes
 the single context plan this card deletes and which must render the plan
 map). Within that window the card seats at `068`, immediately ahead of
-explain — the tightest satisfying seat, matching the audit's proposed order,
-and the smallest renumber (every card from that seat onward shifted up by
-one).
-The three independent `0.1.4`/`0.1.5` cards (enums, fakeshop activation,
-product HTTP) neither feed nor consume this work and ship ahead of it
-unchanged.
+explain — the tightest satisfying seat.
+The `0.1.4`/`0.1.5` cards neither feed nor consume this work and ship ahead
+of it unchanged.
 
 Two non-Done cards then share `0.1.6`: this card and explain
 (`TODO-BETA-069-0.1.6`). Explain renders what this card publishes — natural
 joint-cut partners. Explain lands last, so per the
 [joint version cut][glossary-joint-version-cut] rule the explain card's
 final slice owns the version quintet, `CHANGELOG.md`, and all release-state
-prose; this spec's Slice 5 ships none of it. The former `0.1.6`/`0.1.7`
-patches shift to `0.1.7`/`0.1.8`.
+prose; this spec's Slice 5 ships none of it.
 
 ### Decision 2 — Structural/bound split; no request value in any structural object
 
@@ -360,7 +354,7 @@ appear once with redacted keys and hit/miss counts. The map is complete and
 deterministic under any async completion order.
 
 The legacy `DST_OPTIMIZER_PLAN` last-wins key is **retained unchanged**
-through this card — consumers exist in `types/resolvers.py` and tests — and
+through this card — its readers are the package and live test suites — and
 retiring it is the explain card's recorded amendment. This card changes the
 data, not the readers.
 
@@ -485,8 +479,7 @@ unchanged.
 - The explain card's amendment (consume the plan map; retire
   `DST_OPTIMIZER_PLAN`) and the adversarial card's amendment (attack the
   template store, the binding boundary, and the proof gate) are recorded on
-  those cards at this card's creation, mirroring card `058`'s
-  amendment-at-creation rule.
+  those cards.
 
 ## Risks and open questions
 

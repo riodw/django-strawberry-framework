@@ -4,23 +4,23 @@ DjangoFilePathType,djangofilepathtype,the opt-in file output type this spec ship
 DjangoImagePathType,djangoimagepathtype,the opt-in image output type this spec ships (Decision 1)
 ErrorPolicy,errorpolicy,the production error-policy object this spec ships (Decision 7)
 DjangoErrorPolicyExtension,djangoerrorpolicyextension,the masking extension this spec ships (Decisions 7-10)
-DjangoFileType,djangofiletype,S5 subject - loses the path field from its default set
-DjangoImageType,djangoimagetype,S5 subject - inherits the removal
+DjangoFileType,djangofiletype,the default file output - carries no path field
+DjangoImageType,djangoimagetype,the default image output - carries no path field
 DjangoType,djangotype,the type declaration Meta.filesystem_path_fields joins
 Meta.model,metamodel,named in the User-facing API Meta block
 Meta.fields,metafields,selection gate the opt-in validates against
 Meta.exclude,metaexclude,selection gate the opt-in validates against
-Meta.nullable_overrides,metanullable_overrides,the exact validation precedent the new key copies
-Meta.required_overrides,metarequired_overrides,the exact validation precedent the new key copies
+Meta.nullable_overrides,metanullable_overrides,the exact validation precedent the opt-in key copies
+Meta.required_overrides,metarequired_overrides,the exact validation precedent the opt-in key copies
 ConfigurationError,configurationerror,build-time rejection for an invalid opt-in target
-Relation handling,relation-handling,relation targets are one of the four rejected opt-in shapes
+Relation handling,relation-handling,a relation target is refused by the non-file opt-in check
 Definition-order independence,definition-order-independence,build pipeline the opt-in frozenset threads through
 finalize_django_types,finalize_django_types,build pipeline the opt-in frozenset threads through
 Scalar field conversion,scalar-field-conversion,the conversion surface picking the file output type
 Specialized scalar conversions,specialized-scalar-conversions,the conversion surface picking the file output type
-Upload scalar,upload-scalar,the write-side counterpart - unchanged here
-Schema audit,schema-audit,failure vocabulary the new Meta key's rejections match
-DjangoDebugExtension,djangodebugextension,S8 subject - gains the fail-closed gate and the caps
+Upload scalar,upload-scalar,the write-side counterpart - not part of this surface
+Schema audit,schema-audit,failure vocabulary the opt-in Meta key's rejections match
+DjangoDebugExtension,djangodebugextension,carries the fail-closed gate and the caps
 Developer-only debug posture,developer-only-debug-posture,the posture the gate makes structural
 Debug payload availability,debug-payload-availability,the get_results contract inertness must preserve
 Debug SQL row,debug-sql-row,capped by _MAX_SQL_ROWS / _MAX_SQL_TEXT_CHARS
@@ -29,26 +29,26 @@ Django debug-cursor capture,django-debug-cursor-capture,not acquired at all when
 Reference-counted cursor coordinator,reference-counted-cursor-coordinator,not acquired at all when the extension is inert
 Bounded query-log rollover,bounded-query-log-rollover,the pre-existing log bound the payload caps sit above
 Async SQL-capture boundary,async-sql-capture-boundary,the async half of the debug capture the gate also covers
-Masking-extension ordering,masking-extension-ordering,the LIFO rule Decision 10 satisfies by prepending
+Masking-extension ordering,masking-extension-ordering,the LIFO rule Decision 10 satisfies by listing the error policy first
 Response-extension merge semantics,response-extension-merge-semantics,wire contract the caps must not break
 Response-extensions debug middleware,response-extensions-debug-middleware,downstream consumer of the capped payload
 Debug-toolbar middleware,debug-toolbar-middleware,downstream consumer of the capped payload
 Graphene debug migration,graphene-debug-migration,downstream mapping that must survive the caps
-Strawberry extension lifecycle,strawberry-extension-lifecycle,construction semantics both new gates depend on
+Strawberry extension lifecycle,strawberry-extension-lifecycle,construction semantics both gates depend on
 Per-operation extension isolation,per-operation-extension-isolation,the fresh-per-operation contract the factory ack preserves
 Execution resource policy,execution-resource-policy,the policy-object precedent ErrorPolicy mirrors
 ResourcePolicy,resourcepolicy,the frozen-dataclass precedent ErrorPolicy mirrors
-DjangoResourcePolicyExtension,djangoresourcepolicyextension,the auto-install seam the error policy inverts
+DjangoResourcePolicyExtension,djangoresourcepolicyextension,the other schema-built authority - set up last where the error policy tears down last
 FieldError envelope,fielderror-envelope,data not errors - untouched by masking by construction
 Per-field permission hooks,per-field-permission-hooks,rejected alternative for the path opt-in
 SerializerMutation,serializermutation,write surface whose deliberate rejections survive the mask
 DjangoMutation,djangomutation,write surface whose deliberate rejections survive the mask
 DjangoModelFormMutation,djangomodelformmutation,write surface whose deliberate rejections survive the mask
-SyncMisuseError,syncmisuseerror,the GraphQLError multiple-inheritance precedent
+SyncMisuseError,syncmisuseerror,the multiple-inheritance precedent ResourceLimitExceeded follows
 request_from_info,request_from_info,the only info-to-request seam - DRY obligation
 TestClient,testclient,live test tier
 Probe URLconf,probe-urlconf,narrow probe schemas for the opt-in and gate rows
 seed_data,seed_data,mandatory first line of every catalog test
 Live-first coverage mandate,live-first-coverage-mandate,decides where each regression lives
-Joint version cut,joint-version-cut,the rule this card IS subject to; the shared 0.0.14 line's last card owns the wording
+Joint version cut,joint-version-cut,the rule that owns the version bump and release wording (Decision 12)
 Single-upstream parity,single-upstream-parity,makes the file path field optional rather than foundational

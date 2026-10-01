@@ -1,11 +1,11 @@
 term,anchor,notes
-Relay Node integration,relay-node-integration,Shipped 0.0.5 foundation this card extends; the type-anchored id: GlobalID! re-rooted onto the model label
-DjangoType,djangotype,The type whose rows emit the GlobalID; carries the net-new Meta.globalid_strategy key
+Relay Node integration,relay-node-integration,Shipped 0.0.5 foundation this card extends; its id: GlobalID! payload is model-label-anchored by default
+DjangoType,djangotype,The type whose rows emit the GlobalID; carries the Meta.globalid_strategy key
 Meta.interfaces,metainterfaces,Declares relay.Node; gates Meta.globalid_strategy to Relay-Node-shaped types
 Meta.model,metamodel,model._meta.label_lower is the model-strategy payload (products.item)
 Meta.name,metaname,GraphQL type-name override; the type strategy payload tracks it (the fragility model avoids)
 Meta.primary,metaprimary,Multi-type-per-model rule; a decoded model-label routes to the primary type
-Meta.connection,metaconnection,spec-030 net-new-key-stored-on-definition precedent reused for Meta.globalid_strategy
+Meta.connection,metaconnection,spec-030 key-stored-on-definition pattern Meta.globalid_strategy follows
 ConfigurationError,configurationerror,Raised for unknown/malformed strategy values and unresolvable decode labels
 finalize_django_types,finalize_django_types,Phase 2.5 injects the strategy-parameterized resolve_typename default
 Definition-order independence,definition-order-independence,Collection-then-finalize split the resolve_typename injection rides on
@@ -13,20 +13,20 @@ get_queryset visibility hook,get_queryset-visibility-hook,Decode dispatch routes
 SyncMisuseError,syncmisuseerror,Sync-branch async-get_queryset marker inherited by the decode dispatch unchanged
 DjangoConnectionField,djangoconnectionfield,DONE-030 connection field; edges{node{id}} pick up the model-label payload via the same seam
 DjangoConnection,djangoconnection,Connection return alias; nodes emit GlobalIDs through the shared resolve_typename seam
-DjangoNodeField,djangonodefield,Planned root single-node lookup (WIP-ALPHA-032); first consumer of decode_global_id
-Connection-aware optimizer planning,connection-aware-optimizer-planning,Sibling WIP-ALPHA-033 card; orthogonal to the GlobalID payload
+DjangoNodeField,djangonodefield,Root single-node lookup (DONE-032-0.0.9); first consumer of decode_global_id
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Sibling DONE-033-0.0.9 card; orthogonal to the GlobalID payload
 DjangoListField,djangolistfield,Non-Relay list sibling; list{id} picks up the model-label payload
 Meta.fields_class,metafields_class,planned for 0.1.1; named in Non-goals / Out-of-scope as a later-version surface unrelated to identity encoding
-DjangoOptimizerExtension,djangooptimizerextension,Projects the pk as connector column for resolve_id; unchanged by the payload change
+DjangoOptimizerExtension,djangooptimizerextension,Projects the pk as connector column for resolve_id; independent of the strategy
 FK-id elision,fk-id-elision,Reads the FK id off the parent into the node_id slot; type-name slot untouched
 Relation handling,relation-handling,Relation id round-trip; the two-attempt fail-loud message shape reused by decode
 RelatedFilter,relatedfilter,Cross-relation filter traversal; its expanded child filters share the GlobalID type_name validation that Decision 13 makes strategy-aware
 Scalar field conversion,scalar-field-conversion,Maps an auto-pk to GlobalID when relay.Node is declared; this card changes the payload not the converter row
 Multi-database cooperation,multi-database-cooperation,FK-id elision router.db_for_read stub-routing is the multi-DB analogue of model-label-to-model routing
 BigInt scalar,bigint-scalar,A BigAutoField pk stringifies into the node_id slot; PositiveBigIntegerField 0.0.6 breaking-wire-format precedent
-apply_cascade_permissions,apply_cascade_permissions,0.0.10 permissions; decode dispatch respects get_queryset immediately
+apply_cascade_permissions,apply_cascade_permissions,0.0.10 permissions; a decoded id resolves through resolve_node which honors get_queryset
 Schema introspection management command,schema-introspection-management-command,inspect_django_type reports the GlobalID! row; unaffected by the payload change
-Cross-subsystem invariants,cross-subsystem-invariants,1.0.0 freeze rule; the breaking default flip is timed before the freeze
+Cross-subsystem invariants,cross-subsystem-invariants,1.0.0 freeze rule; the breaking model default lands before the freeze
 strawberry_config,strawberry_config,Scalar-map factory every example schema passes to strawberry.Schema(...)
-Meta.globalid_strategy,metaglobalid_strategy,Net-new Relay-Node-gated Meta key selecting the per-type encode strategy (model/type/type+model/callable)
+Meta.globalid_strategy,metaglobalid_strategy,Relay-Node-gated Meta key selecting the per-type encode strategy (model/type/type+model/callable)
 RELAY_GLOBALID_STRATEGY,relay_globalid_strategy,Schema-wide default GlobalID strategy setting; Meta.globalid_strategy then setting then model precedence

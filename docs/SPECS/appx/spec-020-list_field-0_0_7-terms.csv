@@ -1,6 +1,5 @@
 term,anchor,notes
 apply_cascade_permissions,apply_cascade_permissions,Backfilled for DONE-card glossary linkage from the shipped spec body.
-BigInt,bigint-scalar,Backfilled for DONE-card glossary linkage from the shipped spec body.
 ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Backfilled for DONE-card glossary linkage from the shipped spec body.
 DjangoConnection,djangoconnection,Backfilled for DONE-card glossary linkage from the shipped spec body.

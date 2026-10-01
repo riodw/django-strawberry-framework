@@ -1,8 +1,8 @@
 term,anchor,notes
-choice enum,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
-OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Strictness mode,strictness-mode,Backfilled for DONE-card glossary linkage from the shipped spec body.
+choice enum,choice-enum-generation,Carried by the Live HTTP coverage list: choice enum wire values and schema introspection are asserted over HTTP.
+DjangoConnectionField,djangoconnectionfield,Carried by the closing sentence routing Layer-3 features to their own spec or card.
+DjangoOptimizerExtension,djangooptimizerextension,Carried by Shipped outcome: the served project schema carries exactly one optimizer extension instance.
+DjangoType,djangotype,Carried by Shipped outcome and Settled decisions: example types finalize once and library types declare out of dependency order.
+finalize_django_types,finalize_django_types,Carried by Shipped outcome: config/schema.py calls it once after every example type is imported.
+OptimizerHint,optimizerhint,Carried by the Live HTTP coverage list: OptimizerHint.prefetch_related() and OptimizerHint.SKIP are observed over HTTP.
+Strictness mode,strictness-mode,Carried by the tier section: strictness is asserted over HTTP by test-local holders armed with the raise mode.

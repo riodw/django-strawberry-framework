@@ -1,59 +1,35 @@
 # Spec: Execution resource policy — one immutable budget, one value-cardinality walker, bounded collections
 
-Targeted at `0.0.14` (card [`DONE-047-0.0.14`][kanban]). This is **card 2 of the
-four-card security-remediation program** derived from the hardening audit in
-[`docs/feedback2.md`][feedback2]; it closes that audit's **S3** (no coherent resource
-budget for query and response work) and **S4** (unbounded variable-driven input
-cardinality). It depends on [`spec-046`][spec-046], which corrected the transports every
-bound here is consumed by; cards [`DONE-048-0.0.14`][kanban] (secure output and
-error defaults) and [`DONE-049-0.0.14`][kanban] (dependency / CI hygiene) follow.
+Card [`DONE-047-0.0.14`][kanban], shipped in `0.0.14`. It bounds the query and response
+work a request may drive and the input cardinality its values may carry. It builds on
+[`spec-046`][spec-046], whose transports render every rejection here; cards
+[`DONE-048-0.0.14`][kanban] (secure output and error defaults) and
+[`DONE-049-0.0.14`][kanban] (dependency / CI hygiene) share its release.
 
-Deliberation, rejected alternatives, and this spec's change record live in its companion
+Rejected alternatives and derivations live in the companion
 [`spec-047-resource_policy-0_0_14-rationale.md`][rationale].
 
-**`docs/feedback2.md` is review evidence this spec references, not a substitute for it.**
-The audit established the facts; every decision, default number, public-API shape,
-compatibility promise, and test row below is this spec's own.
+**[Decision 5](#decision-5--default_relation_shape-becomes-connection-a-clean-alpha-break)
+is an intentional alpha break:** the package default for a many-side relation on a
+Relay-Node-shaped type is `"connection"`, so a schema that wants the generated raw list
+sibling asks for it. The documented API freeze begins at `1.0.0`.
 
-**This card contains an intentional, documented alpha breaking change**
-([Decision 5](#decision-5--default_relation_shape-becomes-connection-a-clean-alpha-break)):
-the package default for a many-side relation on a Relay-Node-shaped type moves from
-`"both"` to `"connection"`, so a schema that relied on the generated raw list sibling must
-now ask for it. The package's documented API freeze begins at `1.0.0`, and card 046
-already set the precedent that correcting a confirmed security-boundary default during
-alpha outranks migration convenience.
-
-Status: **SHIPPED — all five slices are built and released.** The `Status:` line is the
-completion source of truth (the shipped-spec convention); the Slice checklist below
-records the same state.
-
-**Version boundary** (see
-[Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)):
-this card targets `0.0.14`, the patch its three program siblings and cards 041-045 also
-target. The version quintet reached `0.0.14` ahead of this card's first slice, so there is
-no bump for this card to take; the [joint version cut][glossary-joint-version-cut] rule
-assigns the release wording to the last card of that shared line to land. Slice 5 folds
-documentation in only.
-
-Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without explicit
-permission. This card's Slice 5 does **not** claim that permission — the release entry is
-the maintainer's.
+Status: **SHIPPED — all five slices are built and released.**
 
 ## Key glossary references
 
 Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 
-- [`DjangoListField`][glossary-djangolistfield] — the raw-list field whose unbounded
-  queryset evaluation is half of S3's evidence; it gains a required effective bound.
+- [`DjangoListField`][glossary-djangolistfield] — the raw-list field that carries a
+  required effective row bound.
 - [`DjangoConnectionField`][glossary-djangoconnectionfield],
   [Relay Node integration][glossary-relay-node-integration],
   [Connection-aware optimizer planning][glossary-connection-aware-optimizer-planning] —
   the bounded collection surface the policy becomes a ceiling over.
 - [`Meta.relation_shapes`][glossary-metarelation_shapes],
   [Relation handling][glossary-relation-handling] — the vocabulary whose default flips.
-- [`DjangoNodesField`][glossary-djangonodesfield] — ships the `ids:` list S4 names, and
-  the standing note that request-size limiting belongs to the transport layer; this card
-  is what makes cardinality limiting belong to the package.
+- [`DjangoNodesField`][glossary-djangonodesfield] — the `ids:` list the node-refetch
+  bound charges.
 - [`Upload` scalar][glossary-upload-scalar],
   [Request-body cap][glossary-request-body-cap] — the body ceiling that deliberately does
   **not** measure a multipart body, which is why upload count and bytes are budgeted here.
@@ -73,13 +49,13 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 - [`strawberry_config`][glossary-strawberry_config],
   [Strawberry extension lifecycle][glossary-strawberry-extension-lifecycle],
   [Per-operation extension isolation][glossary-per-operation-extension-isolation] — the
-  schema-construction and per-request surfaces the enforcement extension plugs into.
+  schema-construction and per-request surfaces the enforcement extension runs on.
 - [`TestClient`][glossary-testclient], [Probe URLconf][glossary-probe-urlconf],
   [`seed_data`][glossary-seed_data],
   [Live-first coverage mandate][glossary-live-first-coverage-mandate] — the test tiers and
   disciplines that decide where each regression lives.
-- [Joint version cut][glossary-joint-version-cut] — the release rule this card is subject
-  to, sharing the `0.0.14` line with cards 041-046, 048 and 049.
+- [Joint version cut][glossary-joint-version-cut] — the release rule this card shipped
+  under, sharing the `0.0.14` line with cards 041-046, 048 and 049.
 - [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] — the hook whose
   refuse-a-sliced-source contract dictates where the row bound may be applied.
 
@@ -87,7 +63,7 @@ Terms this spec ADDS to the glossary in Slice 5:
 [Execution resource policy][glossary-execution-resource-policy] (the capability),
 [`ResourcePolicy`][glossary-resourcepolicy] (the budget object),
 [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension] (the enforcement
-extension), and [Value-budget walker][glossary-value-budget-walker] (the S4 pass).
+extension), and [Value-budget walker][glossary-value-budget-walker] (the input pass).
 
 ## Slice checklist
 
@@ -101,7 +77,8 @@ Each top-level item maps to one commit / PR.
 - [x] **Slice 2 — the enforcement extension**
       `extensions/resource_policy.py`: the pre-parse text scan, the iterative
       fragment-expanding document walk, and the iterative cycle-safe value walker.
-      `DjangoSchema` resolves the policy once and installs the extension.
+      `DjangoSchema` resolves the policy once and builds the extension into every
+      operation's chain.
 - [x] **Slice 3 — bounded collections**
       `DjangoListField`'s `max_rows` / `trusted_max_rows`, the generated many-side relation
       resolver's row bound, and the policy ceiling over `relay_max_results`.
@@ -109,28 +86,24 @@ Each top-level item maps to one commit / PR.
       `DEFAULT_RELATION_SHAPE` becomes `"connection"`; the example project's explicit
       `"both"` opt-ins; every re-pinned test.
 - [x] **Slice 5 — docs fold-in**
-      `docs/GLOSSARY.md`, `docs/TREE.md`, and `KANBAN.md`. The version quintet is the
-      joint cut's, not this slice's.
+      `docs/GLOSSARY.md`, `docs/TREE.md`, and `KANBAN.md`.
 
 ## Problem statement
 
-A GraphQL endpoint's cost is not bounded by its schema. Two independent gaps made that
-concrete in this package.
+A GraphQL endpoint's cost is not bounded by its schema. Two independent gaps make that
+concrete.
 
-**S3 — no coherent budget for query and response work.** Neither the package nor the
-example project installed a token, depth, complexity, or selection-count limiter. There
-was no page-size ceiling beyond Strawberry's own `relay_max_results`, no raw-list row
-bound at all, and no aggregate budget across a request.
-[`DjangoListField`][glossary-djangolistfield] evaluated an unrestricted queryset, and
-`DEFAULT_RELATION_SHAPE = "both"` emitted a raw many-side list *beside* the bounded
-connection — so a client that found the connection capped simply selected the list
-sibling. A generated-SDL probe confirmed both shapes present across the example schema,
-alongside three root `DjangoListField` surfaces. The optimizer reduces query *count*; it
-bounds neither database work, serialized rows, Python memory, nor response bytes. A deeply
-nested document can additionally drive graphql-core's recursive parser and the package's
-own walkers toward the interpreter's recursion limit.
+**Query and response work.** Without a token, depth, complexity, or selection-count
+limiter, a page-size ceiling, a raw-list row bound, and an aggregate budget across a
+request, a small document can ask for unbounded work. An unbounded
+[`DjangoListField`][glossary-djangolistfield] evaluates an unrestricted queryset, and a
+raw many-side list emitted *beside* a bounded connection lets a client that finds the
+connection capped select the list sibling instead. The optimizer reduces query *count*;
+it bounds neither database work, serialized rows, Python memory, nor response bytes. A
+deeply nested document can additionally drive graphql-core's recursive parser and the
+package's own walkers toward the interpreter's recursion limit.
 
-**S4 — unbounded variable-driven input cardinality.** Document limits do not constrain
+**Variable-driven input cardinality.** Document limits do not constrain
 values supplied through variables, and a tiny document can carry an enormous payload: an
 unlimited `ids:` list through [`DjangoNodesField`][glossary-djangonodesfield] (which
 preserves duplicates positionally, so the framework decodes, stores, reassembles and
@@ -141,28 +114,13 @@ nested serializer lists, and multipart uploads with no package-owned count, per-
 aggregate byte cap. Such inputs exceed database parameter limits, build very large SQL
 statements, hold write locks, and consume memory before the ORM is reached.
 
-The two gaps share one root cause and therefore one correction: **there was no object that
-knew what a request was allowed to spend.**
+The two gaps share one root cause and therefore one correction: **one object that knows
+what a request is allowed to spend.**
 
-## Current state
-
-Shipped before this card:
-
-- `DjangoConnectionField` respects Strawberry's `relay_max_results` (default 100) and the
-  package's window planner honors the same cap on nested connections.
-- `views.py` enforces a cumulative request-**body** ceiling
-  ([Request-body cap][glossary-request-body-cap], spec-046 Decision 7), with a deliberate
-  multipart carve-out: a multipart body is never materialized there, so per-file count,
-  per-file size, and aggregate upload size are explicitly out of that cap's scope.
-- `optimizer/_context.py` threads plan / elision / strictness state through the request
-  context under `DST_OPTIMIZER_*` keys.
-- `conf.py` reads a small set of namespaced settings and validates none of their domains —
-  each consumer validates its own.
-
-Not shipped, and what this card adds: any notion of a per-request budget; any bound on
-document tokens, depth, expanded selections, aliases, or aggregate collection cost; any
-bound on raw-list rows; any bound on input cardinality of any kind; any typed rejection
-for exceeding one.
+The transport's cumulative request-**body** ceiling
+([Request-body cap][glossary-request-body-cap]) is complementary and deliberately
+narrower: a multipart body is never materialized there, so per-file count, per-file size,
+and aggregate upload size are outside that cap and are budgeted here.
 
 ## Goals
 
@@ -194,13 +152,14 @@ for exceeding one.
   ([Decision 9](#decision-9--the-execution-deadline-is-cooperative-and-says-so)); nothing
   in-process can interrupt a query already handed to a database driver.
 - **A cost model per field or per resolver.** Field-level cost annotation
-  (`@cost(complexity: …)`) is a larger surface with its own directive vocabulary; this card
-  charges structure and cardinality, which is what the audit's evidence names.
+  (`@cost(complexity: …)`) is a larger surface with its own directive vocabulary; this policy
+  charges structure and cardinality.
 - **Response-byte accounting.** Bounding serialized output requires a serialization-time
   hook and a partial-response policy; it is out of scope and recorded in
   [Risks and open questions](#risks-and-open-questions).
 - **Replacing the transport body cap.** The two are complementary: the JSON body is
-  allocated and parsed before GraphQL-coerced values exist, so S2's cap remains necessary.
+  allocated and parsed before GraphQL-coerced values exist, so the body cap remains
+  necessary.
 - **Persisted-query allow-lists**, which are the other way to bound documents and a
   different feature.
 
@@ -209,8 +168,8 @@ for exceeding one.
 Strawberry ships `MaxTokensLimiter`, `MaxAliasesLimiter`, and `QueryDepthLimiter`;
 graphene-django ships none of the three. Under the package's
 [Single-upstream parity][glossary-single-upstream-parity] rule that makes document limiting
-an optional capability — and the audit's finding is precisely that "optional, consumer-
-installed, three separate extensions, none installed by default" is the same as absent.
+an optional capability — and "optional, consumer-installed, three separate extensions,
+none installed by default" is the same as absent.
 
 What is borrowed:
 
@@ -221,8 +180,8 @@ What is borrowed:
   fragment map built once, is upstream's approach and the correct one.
 
 What is deliberately **not** borrowed: upstream's three-extension shape, its
-`parse_options["max_tokens"]` routing, and its AST-measured depth. This package installs
-**one** extension from `DjangoSchema` itself, counts tokens itself so the rejection carries
+`parse_options["max_tokens"]` routing, and its AST-measured depth. `DjangoSchema` builds
+**one** extension into every operation itself, counts tokens itself so the rejection carries
 the same typed code as every other bound, and charges depth before the parse
 ([Decision 3](#decision-3--the-document-text-scan-runs-before-the-parse)). Why each was
 declined is in the [rationale][rationale].
@@ -245,7 +204,8 @@ schema = DjangoSchema(
 ```
 
 `resource_policy=` also accepts a plain mapping of bound names to values, applied over the
-package defaults, so a deployment overrides only what it cares about.
+package defaults, so a deployment overrides only what it cares about. `schema.resource_policy`
+answers every read with a copy of the resolved policy.
 
 ### The setting
 
@@ -340,8 +300,8 @@ class CategoryType(DjangoType):
 
 ### Decision 1 — One immutable frozen dataclass, validated at construction
 
-`ResourcePolicy` is a frozen dataclass whose `__post_init__` validates every field. Three
-properties follow, and each is load-bearing:
+`ResourcePolicy` is a frozen dataclass whose `__post_init__` validates every field. Each of
+these properties is load-bearing:
 
 - **Validated once.** An invalid deployment fails at schema construction with a
   [`ConfigurationError`][glossary-configurationerror] naming the offending bound, not on
@@ -353,7 +313,7 @@ properties follow, and each is load-bearing:
   its own budget by mutating it, and cannot widen it by replacing the published context
   value either ([Decision 2](#decision-2--armed-for-the-operation-published-on-the-request-context)).
 - **Built-in values only.** Every bound a policy stores is an exact `int` (or, for the
-  deadline, an exact `float`), so nothing the policy later does with a bound can dispatch
+  deadline, an exact `int` or `float`), so nothing the policy later does with a bound can dispatch
   consumer code. The same domain holds for every other number that crosses into the budget
   machinery from outside it — a consumer-written deadline mirror, an uploaded file's reported
   `size`, a `first` / `last` page bound supplied through a variable — stated once as
@@ -391,84 +351,51 @@ properties follow, and each is load-bearing:
   that was supposed to permit everything. What this cannot bound is a single arbitrary
   advance that neither returns nor raises, and it does not claim to.
 
-Frozen is what makes the first two of those true, and it is not what makes the third true.
-A frozen dataclass rejects `setattr`; it admits `policy.__dict__[bound] = wider` and
-`object.__setattr__`, so freezing is an accident guard and never an authority boundary. What
-holds the bound is that no consumer-visible name reaches the object a bound is read from:
-the resolved policy is held in the enforcement record `schema.py::_SCHEMA_ENFORCEMENT`
-accepted for that schema, and `schema.py::DjangoSchema.resource_policy` answers every read
-from it with a copy; the operation's own budget is a private snapshot taken at the arm point;
-the published mirror is a third object; and `policy_from_info` returns a copy of the snapshot
-rather than the snapshot. A resolver may write any of those freely, and writes its own
-duplicate every time. Holding the authority OFF the schema object is what makes that
-complete: the schema is process-lived and `info.schema` is handed to every resolver in every
-operation, so a policy kept in an ordinary instance attribute is reachable both by assignment
-and through `schema.__dict__` past a property that has no setter, and one such write would
-widen every later request the process served rather than the one that made it.
-`error_policy.py::ErrorPolicy` is held in the same record on exactly the same terms - the
-same shape, the same process-lived object, and a write to it would put raw exception text on
-the wire rather than widen a row count. Enforcement does not depend on what the schema's
-`extensions` attribute says at request time either. That attribute would otherwise be the
-widest reach of all — a replacement list carrying a resource-policy extension with a wider
-policy of its own passes every presence and deduplication check there is, and an empty one
-leaves a bounded schema running with no budget and no masking at all — so it is not an
-instance attribute: `schema.py::DjangoSchema.extensions` is settled by the constructor, which
-is the moment the deployment chose it, and a later assignment is refused rather than
-reconciled. Each operation's extensions are resolved from what was settled, so an accepted
-factory still runs once per request, and a configuration that can no longer be answered for
-refuses the operation rather than letting the empty answer — or the list that replaced it —
-be what enforces it.
+Freezing is an accident guard, never an authority boundary: a frozen dataclass rejects
+`setattr` and admits `policy.__dict__[bound] = wider` and `object.__setattr__`. What holds
+the bound is that no consumer-visible name reaches the object a bound is read from. The
+schema is process-lived and `info.schema` is handed to every resolver in every operation,
+so a policy kept in an instance attribute would be reachable by assignment and through
+`schema.__dict__`, and one write would widen every later request the process served.
 
-An accepted extension INSTANCE carries the last piece of that authority, and it is the piece
-a container cannot protect. Strawberry hands such an entry back unchanged, so it stays
-reachable through `info.schema.extensions` for the life of the schema, and the policy it
-holds is what the NEXT operation arms — an ordinary attribute there is a seam a resolver
-rebinds once to widen every later request. The explicitly configured policy is therefore held
-as private state too (`extensions/resource_policy.py::_EXPLICIT_POLICY`), read back as a copy,
-and unreachable by assignment.
+- **The schema's record.** `schema.py::DjangoSchema` resolves both of its policies at
+  construction into one frozen `schema.py::_SchemaEnforcement` record, held in
+  `schema.py::_SCHEMA_ENFORCEMENT` (a `utils/private_state.py::PrivateAuthority`) and
+  answered by no attribute. `schema.py::DjangoSchema.resource_policy` and `error_policy`
+  answer every read with a copy (`utils/policies.py::copy_policy`). Re-running `__init__`
+  on a constructed schema is refused. `error_policy.py::ErrorPolicy` is held on exactly the
+  same terms, because a write to it would turn masking off and put raw exception text on
+  the wire.
+- **The operation's copies.** The operation's own budget is a private snapshot taken at
+  the arm point; the published context mirror is a second copy; and `policy_from_info`
+  returns a copy of the snapshot. A resolver may write any of them and writes only its own
+  duplicate.
+- **The enforcement extensions are not entries.** `schema.py::DjangoSchema.get_extensions`
+  builds both enforcement extensions fresh for every operation from the record
+  ([Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation)), so
+  nothing reachable through `schema.extensions` decides what bounds or masks a request.
+  `schema.py::DjangoSchema.extensions` answers with the consumer entries construction
+  accepted, which `utils/private_state.py::PrivateMembership` holds as one piece of weak
+  evidence per ENTRY (the schema keeps the entries themselves, because they point back at
+  it and a module-global holding them strongly would keep every schema alive). Writing new
+  entries into the attribute does not make them configuration: each operation resolves
+  the entries the evidence points at. A later assignment to `schema.extensions` is
+  refused. A write that drops the last hold on an accepted entry leaves a configuration
+  that cannot be reconstructed, and `get_extensions` refuses the operation with
+  `SCHEMA_CONFIGURATION_UNAVAILABLE` rather than resolving a list it cannot vouch for or
+  falling back to a policy that may be wider. The refusal chain still runs the resource
+  extension, so the pre-parse scan still stands between the request and the parser.
+- **An extension instance on a plain `strawberry.Schema`.** Strawberry hands an instance
+  entry back unchanged, so it stays reachable through `info.schema.extensions` and its
+  policy is what the next operation arms. Its explicit policy is therefore held in
+  `extensions/resource_policy.py::_EXPLICIT_POLICY`, read back as a copy, and the record
+  is of the CONSTRUCTION rather than the policy: an extension built with no override is
+  configured too (it enforces its schema's policy per operation), so re-running its
+  `__init__` to hand it a wider ceiling is refused.
 
-How that state is HELD is a second question from who may read it, and the answer splits by
-what the state IS. The policies are primitives — ints, a float, bools and strings — so they
-point at nothing, and `utils/private_state.py::PrivateAuthority` holds the enforcement record
-for its schema without holding the schema: no attribute on the owner answers with it, so
-there is no name to rebind, delete, or reach the stored object through for an in-place write,
-and the weak reference filed beside the record drops the entry when its schema dies. Detecting
-a forged record and then continuing under a fallback would not have been enough — the fallback
-selects package defaults, which may be WIDER than the policy the deployment accepted, so
-losing the record has to be impossible rather than recoverable. The accepted extension
-INSTANCE's configuration (`extensions/resource_policy.py::_EXPLICIT_POLICY`) is held on the
-same terms and for the same reason, and it records the CONSTRUCTION rather than the policy:
-an extension built with no override of its own is configured — it enforces the policy its
-schema resolves, per operation — so reading the absence of a policy as an object that was
-never constructed would leave exactly that configuration open to a second constructor call
-handing it a wider ceiling after the deployment accepted it.
-
-The extension configuration cannot be held that way, and the reason has nothing to do with
-resolvers: those entries reach the schema back — an extension instance through the execution
-context it acquires when the operation runs, and `extensions=[self.make_extension]` directly —
-so a module-global holding them strongly keeps every such schema, and its last request's
-context and variables, alive for the life of the process, which no weak KEY can help with
-when the chain back to the referent runs through the value. The schema therefore holds them,
-and `utils/private_state.py::PrivateMembership` holds one weak reference per accepted ENTRY.
-
-The granularity is the point. What decides whether an operation is bounded and masked at all
-is not which object the schema's attribute answers with but which extensions are inside it, so
-evidence about a carrier certifies nothing: writing new entries into one leaves its identity
-exactly as accepted, and a schema that authenticated the holder would hand that membership to
-the next operation. Each operation therefore resolves the entries the evidence points at, and
-an entry written where the accepted ones are held is one no construction accepted and one no
-operation runs. What the attribute still does is keep those entries ALIVE, and that is the one
-thing a write to it can take away: an entry the deployment named nowhere else — an instance,
-or a factory — is collected, and the accepted configuration cannot be reconstructed, because
-those entries are the only record of what a consumer extension declared and a factory's policy
-was never seen by this package at all. `DjangoSchema.get_extensions` REFUSES the operation
-there, rather than resolving a list it cannot vouch for or falling back to a schema policy
-that may be wider.
-
-Both are filed under `id()`, not the owner itself — a mapping that found its entries by hash
-and equality would be finding them by methods a schema subclass may define, letting one
-schema's record answer for another that merely compares equal to it, and refusing a subclass
-that declares `__eq__` without a hash outright.
+Both private stores file entries under `id()`, never the owner itself: a mapping that found
+entries by hash and equality would be finding them by methods a schema subclass may define,
+letting one schema's record answer for another that merely compares equal to it.
 
 The policy object a schema stores is also held to the EXACT class. `isinstance` admits a
 subclass, and a subclass's field reads are consumer code that `__post_init__` cannot speak
@@ -512,8 +439,7 @@ The resolved policy — and the monotonic deadline derived from it — is armed 
 by `resource_policy.py::begin_resource_budget` and read back by
 `resource_policy.py::policy_from_info` and `resource_policy.py::check_deadline`. The same call
 publishes both under `DST_RESOURCE_POLICY` and `DST_RESOURCE_DEADLINE`; those keys and their
-dispatch mirror `optimizer/_context.py`'s `DST_OPTIMIZER_*` seam, which the card's
-architectural posture names directly.
+dispatch mirror `optimizer/_context.py`'s `DST_OPTIMIZER_*` seam.
 
 **The published keys are a mirror, not the authority.** They live on the CONSUMER's
 `info.context`, which every resolver in the request can write. If an enforcement seam read the
@@ -528,6 +454,9 @@ can reach, is scoped per task under asyncio and per thread otherwise, and propag
 `sync_to_async` / `async_to_sync` so it is armed wherever the package's own collection seams
 run. It is the same `ContextVar`-over-stash shape `optimizer/_context.py::active_strictness`
 reads, for the same reason: a per-execution answer a context stash cannot be trusted to give.
+A streamed operation's later frames run in other tasks, so the runner binds the same budget
+again around each of them (`extensions/operation_state.py::OperationState.rebind_on_resume`),
+and a budget whose operation has ended answers nothing.
 
 **The mirror may narrow, never widen.** A resolver stashing an EARLIER instant under
 `DST_RESOURCE_DEADLINE` is shortening its own request, which it is always entitled to do, and
@@ -564,11 +493,12 @@ both subsystems: it handles the four context shapes (`None`, object, `dict`, fro
 the single place a new shape lands. *Why it is shared rather than copied is in the
 [rationale][rationale].*
 
-**The miss path is fail-closed.** `policy_from_info` returns a copy of the package's own
-baseline - the bounds `DEFAULT_RESOURCE_POLICY` declares, held in an object no export names -
-never `None`. A frozen context that refused the stash, a plain `strawberry.Schema` that never
-installed the extension, and a resolver invoked outside an operation all read back a
-*bounded* policy. Returning `None` would have forced every caller to write its own
+**The miss path is fail-closed.** With nothing armed and no exact `ResourcePolicy` published,
+`policy_from_info` returns a copy of the package's own baseline - the bounds
+`DEFAULT_RESOURCE_POLICY` declares, held in an object no export names - never `None`. A plain
+`strawberry.Schema` that never installed the extension and a resolver invoked outside an
+operation both read back a *bounded* policy; a frozen context that refused the stash changes
+nothing, because the armed budget never depended on it. Returning `None` would have forced every caller to write its own
 "no policy means no bound" branch, which is the fail-open shape spelled out in six places.
 
 *Alternatives rejected: see the [rationale][rationale] (a context stash as the sole
@@ -581,7 +511,7 @@ document string in `on_operation`, before graphql-core parses it.
 
 This is not an optimization. graphql-core's parser is recursive-descent, and so are the
 GraphQL validators; a depth bound applied to the parsed AST cannot stop the parse from
-exhausting the interpreter's stack, which is exactly the failure S3's evidence names. A
+exhausting the interpreter's stack, which is exactly the failure a deep document drives. A
 bound that only fires after the thing it protects has already run is not a bound.
 
 Two consequences are contractual and are documented rather than hidden:
@@ -620,10 +550,9 @@ Expanded selections, aliases, collection cost, and every value bound are charged
 single iterative walk over the parsed AST in `on_parse`, once the document exists and
 before anything validates it.
 
-- **Iterative, with an explicit stack.** The card requires it, and the reason is the same
-  one that puts the text scan before the parse: a recursive walker whose job is to bound a
-  hostile document must not itself be a recursion target. Python 3.10 compatibility is
-  incidental to that, not the reason for it.
+- **Iterative, with an explicit stack**, for the reason that puts the text scan before the
+  parse: a recursive walker whose job is to bound a hostile document must not itself be a
+  recursion target.
 - **Fragments expand at every spread site**, with a fragment map built once and the spread
   path carried on the stack. Spreading one fragment ten times therefore costs ten times —
   the evasion of "move the selection set into a fragment" is closed by construction. The
@@ -688,8 +617,8 @@ under it for values only, untyped, and it charges a value that resolves to nothi
 it resolves to. The
 degenerate inputs an invalid document presents — unknown fragment, unknown field, unknown
 argument, a selection under a leaf, an undefined variable, an operation kind the schema
-lacks — are each handled and tested, which was already required because a schema may disable
-validation and is now the ordinary path. Reporting them stays validation's job, which runs
+lacks — are each handled and tested: a schema may disable validation, and this ordering makes
+them the ordinary path. Reporting them stays validation's job, which runs
 next and is unchanged.
 
 **Value families are classified by the write's own BIND SPEC first, by TYPE second, and
@@ -729,8 +658,8 @@ coercer, the walkers and the ORM.
 
 A cycle guard needs ancestor-scoped lifetime and owning references; a charge-once cache
 needs neither. They are therefore two separate mechanisms — a path for termination, and no
-cache at all for charging. *The identity-keyed cache this replaced, and the two measured
-bypasses that forced the change, are in the [rationale][rationale].*
+cache at all for charging. *Why an `id()`-keyed charge-once cache is rejected is in the
+[rationale][rationale].*
 
 **Value depth is its own bound.** `max_depth` counts brackets in the document TEXT, and a
 value arriving through a variable has none: the document `query($p: JSON!) { blob(payload:
@@ -746,8 +675,7 @@ ancestors, which is what keeps that scan from being a cost of its own.
 `TypeNameMetaFieldDef`, resolved exactly as that library's executor resolves them
 (`__schema` / `__type` only on the query root). This matters because the walk ends a branch
 whose field cannot be resolved, and `__schema` opens a subtree over every type, field,
-argument and enum value in the schema. *The blind spot this closed is in the
-[rationale][rationale].*
+argument and enum value in the schema.
 
 *Alternatives rejected: see the [rationale][rationale] (a `ValidationRule`, charging
 variables but not literals, recursion with a depth guard).*
@@ -811,19 +739,20 @@ coordinates are checked against.
   with no further query, and any other value that is already materialized (a consumer
   resolver's list return) is truncated in Python. Neither can un-fetch those rows; both stop
   the response from serializing them.
-- **A non-subscriptable iterable is bounded through `islice`, not waved through.** The
-  alternative to slicing an unsliceable value is not "return it whole"; that would be a
-  bound that silently stops applying to exactly the shapes nobody anticipated. The fallback
-  is entered on `KeyError` as well as `TypeError`, because a mapping-shaped result answers a
-  slice subscript with `KeyError` — and a bound seam must never let that escape a resolver as
-  itself.
+- **What truncates follows from what the value IS**, never from whether a subscript
+  happened to answer. An exact `list`, `tuple`, `str`, `bytes`, `bytearray` or `QuerySet`
+  is sliced; every other shape (a subclass of one of the sequence types, a mapping, a bare
+  iterable) is counted through `islice` into a list the package built, so neither an
+  unsliceable value nor a sequence whose own `__getitem__` is consumer code escapes the
+  bound. A `QuerySet` subclass is rebuilt into a plain framework-owned queryset first
+  (`utils/querysets.py::normalized_row_source`) and sliced there, keeping its SQL `LIMIT`;
+  a state that cannot be rebuilt fails closed with a `ConfigurationError`.
 - **Ordering against the visibility hook is a correctness constraint, not a preference.**
   The bound is applied AFTER
   [`get_queryset`][glossary-get_queryset-visibility-hook] and after the consumer-resolver
   post-processing, because a sliced queryset cannot be refiltered or reordered and both the
-  hook and the surface compose onto the source. Slicing first turns the bound into a crash
-  on every type that declares a hook — which is how the implementation discovered the
-  constraint. The generated many-side relation resolver applies it at each of its own
+  hook and the surface compose onto the source; slicing first turns the bound into a crash
+  on every type that declares a hook. The generated many-side relation resolver applies it at each of its own
   branches — the prefetched path and the manager path, in both colors — and each of them
   after that relation's visibility step, never before.
 
@@ -929,12 +858,13 @@ deadline is a seam the deadline does not cover:
 `utils/connections.py` was audited and needs none: every helper there is pure window
 arithmetic with no database access.
 
-**The stashed deadline is a fail-closed read.** `resource_policy.py::check_deadline` arms
-only on a stash that is a real number, so an absent, cleared, or non-numeric stash leaves the
-request running rather than rejecting it — the guard is on the answer, not on one spelling of
-a missing input. But a stashed value whose own comparison raises is a hostile shape the seam
-cannot certify as inside budget, so it takes the rejection path rather than leaking a raw
-arithmetic error out of a collection resolver.
+**The deadline read guards the answer.** `resource_policy.py::check_deadline` reads the
+armed deadline, narrowed by the published mirror only where that mirror is an earlier exact
+built-in number ([Decision 2](#decision-2--armed-for-the-operation-published-on-the-request-context));
+with nothing armed, the mirror answers alone. Of the value that answers, an absent, cleared,
+`bool` or non-numeric one is not a deadline and leaves the request running; a non-finite
+number, or an `int` / `float` SUBCLASS whose comparisons are consumer code, is a deadline the
+seam cannot place on the clock, and it rejects rather than being asked.
 
 **The rejection reports the CONFIGURED budget, never the clock.** `limit` is the policy's
 own `execution_deadline_seconds` and `charged` is one second past it. The monotonic deadline
@@ -979,7 +909,7 @@ factories check the same thing at their own construction line —
 silently widening every request the field serves — and the primitive repeats the rule because
 it must stay safe for an internal caller with no factory in front of it.
 
-The schema-construction policy IS the trusted declaration S3 asks for — it is the only place
+The schema-construction policy IS the trusted declaration — it is the only place
 that may widen a package default, and it is the deployment's own deliberate statement.
 `ResourcePolicy.narrowed()` enforces the same rule between policies and refuses any override
 that loosens a bound, naming both values so the message is actionable. It builds the
@@ -1028,8 +958,9 @@ conversion for an exception out of that hook, so a WebSocket **subscription** ov
 structural-depth bound is refused just as hard — nothing parses, nothing executes — but its
 client observes the operation completing without data rather than an error entry. That is
 upstream's shape, not this package's choice, and building a package-owned subscription error
-envelope to paper over it is not in this card's scope; the claim is narrowed to what is true
-instead.
+envelope to paper over it is outside this policy
+([Decision 13](#decision-13--what-this-policy-does-not-bound-and-why-each-boundary-is-deliberate));
+the claim is narrowed to what is true instead.
 
 `extensions.code` is the single constant `RESOURCE_LIMIT_EXCEEDED`; `bound`, `limit`, and
 `charged` ride alongside so a client can act on the rejection without parsing prose. The
@@ -1037,41 +968,51 @@ payload is built by `utils/errors.py::coded_error_extensions`, which is the one 
 coded framework error's `extensions` mapping takes — so this rejection cannot drift into a
 different envelope from the package's other typed failures.
 
-**`DjangoSchema` installs the extension automatically**, as a class rather than an instance,
-because Strawberry constructs one instance per request and a shared instance would share
-one set of charge counters across every concurrent request. A consumer-supplied entry —
-class or instance — suppresses the automatic append, so a consumer who installed the
-extension with their own policy does not get a second copy double-charging the same bounds.
-The already-installed test is `schema.py::_extension_entry_matches`, one spelling for both
-the class and the instance form, and the consumer's `extensions` container is **never
-consulted through truthiness**: a container whose `__bool__` answers `False` still has its
-entries read, because Strawberry will read them, and a check that skipped them would install
-a second copy on exactly the container that lied about being empty.
-*Why installation is automatic rather than documented is in the [rationale][rationale].*
+**`DjangoSchema` builds the extension; a consumer does not install it.**
+`schema.py::DjangoSchema.get_extensions` answers every operation with
+`schema.py::_admitted_chain`: a fresh `DjangoErrorPolicyExtension` first, the consumer's
+resolved extensions, a fresh `DjangoResourcePolicyExtension` reading the schema's private
+record (`schema.py::_SchemaEnforcement`), the package's admission guard, and the operation's
+executor-mode marker. The extension is fresh per operation because a shared instance would
+share one set of charge counters across concurrent requests, and it is last so it sets up
+last, with its budget armed around every consumer hook.
+
+An extension entry cannot claim either enforcement role:
+
+- An exact `DjangoResourcePolicyExtension` in `extensions=` is read once at construction as
+  a declaration (`schema.py::_consumer_extension_entries`) and never travels into the chain:
+  a bare class declares nothing and is dropped, and an instance's `policy=` is folded into
+  the record as the schema's policy. So exactly one budget is armed per operation.
+- Declaring the policy twice — the `resource_policy=` argument and an entry, or two entries —
+  is a `ConfigurationError`, because two declarations do not compose into one ceiling.
+- A subclass of either enforcement extension, as a class or an instance, is a
+  `ConfigurationError` at construction (`schema.py::_declared_authority`): a subclass can
+  override the hook that enforces while answering every check for it.
+- A factory cannot be identified without calling it, so a resolved member that is not a
+  `SchemaExtension` instance, or that claims either role (`schema.py::_claimed_authority`),
+  refuses the operation with `SCHEMA_CONFIGURATION_UNAVAILABLE`, as does a factory that
+  raises.
+
+The consumer's `extensions` iterable is **never consulted through truthiness**: a container
+whose `__bool__` answers `False` still has its entries read, because Strawberry reads them.
+A plain `strawberry.Schema` builds none of this, so its consumer installs the exported
+extension, as the bare class or a factory returning a fresh instance.
+*Why enforcement is built by the schema rather than left to the consumer is in the
+[rationale][rationale].*
 
 ### Decision 12 — The version bump belongs to the `0.0.14` joint cut
 
-This card does **not** move the version quintet. It targets `0.0.14`, sharing that patch
-with the three other cards of this security program (046, 048, 049) and with cards 041-045
-before them. The quintet — `pyproject.toml [project].version`,
-`django_strawberry_framework/__init__.py::__version__`, the `tests/base/test_init.py`
-assertion that pins them together, the glossary's package-version line, and the package's
-own `uv.lock` entry — reached `0.0.14` ahead of this card's first slice, so there is no bump
-for this card to take. Later cards move the quintet past `0.0.14` on their own lines; that
-is their release wording to own, and it is not a fact about this one.
-
-Under the [joint version cut][glossary-joint-version-cut] rule the release wording belongs
-to the **last** card of a shared line to land, never to an individual card's slices. Slice 5
-therefore owns the documentation fold-in only.
-
-*This decision originally claimed a `0.0.16` cut of its own. What it claimed, and why an
-authoring-time board scan could not have known better, is in the [rationale][rationale].*
+This card moves no version. It shipped in `0.0.14`, sharing that patch with cards 041-046,
+048 and 049, and under the [joint version cut][glossary-joint-version-cut] rule the release
+wording belongs to the **last** card of a shared line to land, never to an individual card's
+slices. Slice 5 therefore owns the documentation fold-in only. The release is single-sourced
+in `__version__` in `django_strawberry_framework/__init__.py`.
 
 ### Decision 13 — What this policy does not bound, and why each boundary is deliberate
 
 **Decision.** The six boundaries below are not oversights and must not be re-derived. Three are
 transport-adjacent bounds this walker is the wrong layer to carry, and they are carried as scope
-on card `TODO-ALPHA-051-0.0.15`; one is the STAGE this walk runs at; two are audited exclusions
+on card `TODO-ALPHA-053-0.0.15`; one is the STAGE this walk runs at; two are audited exclusions
 that a later pass must not "fix". Each is a boundary of the shipped contract rather than a gap in
 it.
 
@@ -1090,11 +1031,12 @@ structural depth closes with `complete` instead. *The `except`-clause asymmetry 
 
 **State the behaviour, never the private method name.** A fix here must be written against that
 broad-versus-narrow `except` asymmetry and must pin no private upstream symbol: the declared floor
-is `strawberry-graphql>=0.316.0` with no ceiling, and the seam moves inside that range. Because
-the floor is open-ended, whether the asymmetry still holds has to be **re-measured across the
-whole range** rather than read off the installed wheel. [`spec-046`][spec-046]'s stop-aware result
-source already answers the same instability by wrapping both public names unconditionally rather
-than testing a version. *The measured version drift is in the [rationale][rationale].*
+is `strawberry-graphql>=0.322.2` with no ceiling, and upstream has moved this seam between
+releases. Because the floor is open-ended, whether the asymmetry still holds has to be
+**re-measured across the whole range** rather than read off the installed wheel.
+[`spec-046`][spec-046]'s stop-aware result source likewise wraps both public names
+(`schema.subscribe`, `schema.stream`) rather than testing a version. *The measured version
+drift is in the [rationale][rationale].*
 
 Closing this means owning an error envelope for a transport whose lifecycle is upstream's, which
 is why [Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation) states
@@ -1129,9 +1071,8 @@ builds is bounded where a resolver's own output is, at the collection seams of
 [Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam).
 
 **Audited exclusion — `utils/connections.py` gets no `check_deadline` call.** Every function in
-it was read: `connection_sidecar_inputs_from_kwargs`, `window_range_plan`, `split_window_rows`,
-`derive_connection_window_bounds`, `resolve_relay_max_results`, `derive_keyset_window_bounds` and
-the assert helpers are all pure window arithmetic with no database access.
+it - the window planners and splitters, `page_arguments`, the cap resolution and the assert
+helpers - is pure window arithmetic with no database access.
 `resolve_relay_max_results` is additionally called at **plan** time, where a deadline check would
 fire outside a resolve and against a plan-time `info`, so it is explicitly the wrong seam rather
 than a missing one.
@@ -1146,8 +1087,8 @@ out of node budget first.
 **Why the cycle guard and the charge counter are two mechanisms and cannot be one.** They have
 different lifetime requirements — ancestor-scoped and owning, versus request-scoped — and only
 one of them is a contract, so one object cannot correctly be both. A path tuple terminates the
-walk; **no cache at all** charges it. *The single object that once did both duties, and the two
-bypasses it produced, are in the [rationale][rationale].*
+walk; **no cache at all** charges it. *Why one object doing both is rejected is in the
+[rationale][rationale].*
 
 **Three constants whose values are decisions, not defaults.** `max_value_depth` is `20`, matching
 `max_depth`, because the two bound the same idea on the two sides of the text/variable divide and
@@ -1173,13 +1114,13 @@ check runs rather than about how long anything takes.
 
 | Slice | Files | Delta |
 |---|---|---|
-| 1 | `resource_policy.py` (new) | `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ResourceLimitExceeded`, `RESOURCE_LIMIT_ERROR_CODE`, `DST_RESOURCE_POLICY` / `DST_RESOURCE_DEADLINE`, `resolve_resource_policy`, `begin_resource_budget` / `end_resource_budget` / `policy_from_info`, `effective_bound`, `validate_collection_bound`, `bounded_rows`, `check_deadline`. |
+| 1 | `resource_policy.py` (new) | `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ResourceLimitExceeded`, `RESOURCE_LIMIT_ERROR_CODE`, `DST_RESOURCE_POLICY` / `DST_RESOURCE_DEADLINE`, `resolve_resource_policy`, `begin_resource_budget` / `end_resource_budget` / `policy_from_info`, `effective_bound`, `validate_collection_bound`, `validate_trusted_flag`, `bounded_rows` / `bounded_rows_async`, `check_deadline`, `MAX_RESOURCE_BOUND`. |
 | 1 | `utils/context.py` (new), `optimizer/_context.py` | The shape-agnostic dispatch lifted out and shared; the optimizer module keeps its keys and its reset and re-exports the helpers. |
 | 1 | `conf.py` | `RESOURCE_POLICY_KEY` and `resource_policy_setting()`, a thin reader that validates nothing. |
-| 2 | `extensions/resource_policy.py` (new) | `scan_document_text`, `charge_document`, `_DocumentBudget`, `_ValueBudget` (per-reference charging, `_closes_a_cycle` ancestor-path guard), `_field_definition` (introspection meta-fields), `_is_connection_type` (full edge shape), [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension]. |
-| 2 | `extensions/__init__.py`, `__init__.py` | Exports; the extension is root-exported because it is part of the default recipe. |
-| 2 | `schema.py` | `DjangoSchema(resource_policy=…)`, `schema.resource_policy`, `_with_resource_policy_extension`. |
-| 3 | `list_field.py` | `max_rows` / `trusted_max_rows`, constructor-site validation, the bound applied after visibility on all three resolver shapes. |
+| 2 | `extensions/resource_policy.py` (new) | `scan_document_text`, `charge_document`, `_DocumentBudget`, `_ValueBudget` (per-reference charging, `_closes_a_cycle` ancestor-path guard), `_field_definition` (introspection meta-fields), `_is_connection_type` (full edge shape), [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension], `_AdmissionGuard`. |
+| 2 | `extensions/__init__.py`, `__init__.py` | Exports; the extension is root-exported for a plain `strawberry.Schema`, whose consumer installs it. |
+| 2 | `schema.py` | `DjangoSchema(resource_policy=…)`, `schema.resource_policy` (a copy per read), the private `_SchemaEnforcement` record, and the per-operation chain `get_extensions` / `_admitted_chain` build from it. |
+| 3 | `list_field.py` | `max_rows` / `trusted_max_rows`, constructor-site validation, the bound applied after visibility. |
 | 3 | `types/resolvers.py` | The generated many-side relation resolver bounds both the prefetched and the manager path. |
 | 3 | `utils/connections.py`, `connection.py` | The policy ceiling over `relay_max_results`, resolved once per connection resolve. |
 | 3 | `connection.py`, `relay.py`, `mutations/resolvers.py` | The `check_deadline` seams: the shared connection resolve head, both Relay refetch fields, and the write pipelines before their transaction opens ([Decision 9](#decision-9--the-execution-deadline-is-cooperative-and-says-so)). |
@@ -1188,9 +1129,7 @@ check runs rather than about how long anything takes.
 | 4 | `tests/test_relay_connection.py`, `tests/test_connection.py`, `tests/optimizer/test_extension.py` | Re-pinned to the new default, with the `"both"` shape pinned separately. |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/TREE.md`, `KANBAN.md` (DB) | Fold-in. |
 
-**Shared modules this surface consumes rather than owns.** Three package modules carry
-contracts this policy depends on and no slice above created; a reader tracing the shipped
-behavior needs them named:
+**Shared modules this surface consumes rather than owns:**
 
 - `utils/policies.py::resolve_policy` — the precedence ladder
   ([Decision 1](#decision-1--one-immutable-frozen-dataclass-validated-at-construction)),
@@ -1203,16 +1142,11 @@ behavior needs them named:
 - `utils/inputs.py::RELATION_MULTI` — the bind-spec kind that classifies a relation list
   ahead of the `ID`-scalar test
   ([Decision 4](#decision-4--the-document-and-value-budgets-are-one-iterative-walk)).
-
-**Three names on this module's surface that no slice row above carries.** Each `Delta` cell
-names what its slice landed, and `resource_policy.py`'s `__all__` is wider than the Slice 1
-row: it also exports `bounded_rows_async`, the async color of the raw-list seam
-([Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam)),
-`validate_trusted_flag`, the constructor-site half of the widening rule
-([Decision 10](#decision-10--per-field-overrides-narrow-the-schema-policy-is-the-trusted-declaration)),
-and `MAX_RESOURCE_BOUND`, the ceiling every positive bound is validated against. All three
-belong to the surface rather than to a slice; none is a root package export, so
-`__init__.py`'s `__all__` is unaffected.
+- `utils/policies.py::canonical_policy` / `utils/policies.py::copy_policy` and
+  `utils/private_state.py::PrivateAuthority` / `utils/private_state.py::PrivateMembership` —
+  the exact-class rebuild, the per-read copy, and the private stores the schema and the
+  extension hold their configuration in
+  ([Decision 1](#decision-1--one-immutable-frozen-dataclass-validated-at-construction)).
 
 ## Helper-reuse obligations (DRY)
 
@@ -1232,8 +1166,8 @@ belong to the surface rather than to a slice; none is a root package export, so
 - **`effective_bound` is the only narrowing rule between a request policy and a field's own
   declaration**, so no field-side call site may open-code `min(...)` against a policy value.
   The pre-execution document walk narrows under a different rule and keeps its own site:
-  `extensions/resource_policy.py::_page_bound` clamps a document's literal `first:` / `last:`
-  to `max_page_size` while charging collection cost, where there is no field, no declared
+  `extensions/resource_policy.py::_page_bound` clamps a document's `first:` / `last:` (a
+  literal, or a variable holding an exact `int`) to `max_page_size` while charging collection cost, where there is no field, no declared
   field maximum, and no trusted opt-in for `effective_bound` to weigh. Two rules, one site
   each — not one rule with an exception.
 - **`resolve_relay_max_results` is the only connection-cap resolution**, and remains shared
@@ -1241,9 +1175,10 @@ belong to the surface rather than to a slice; none is a root package export, so
 - **`_ValueBudget._reject` is the only THRESHOLD rejection in the value walker**, so every
   bound that rejects because a charge passed its limit has one message, code, and extension
   shape. The rejections that sit beside it are a different rule rather than a second copy of
-  this one: `extensions/resource_policy.py::_ValueBudget._charge_upload`'s two
-  unmeasurable-size branches have no charge to compare — they synthesize `limit + 1` to say
-  "exceeded a budget integers cannot express" — and `::_DocumentBudget` keeps its own
+  this one: `extensions/resource_policy.py::_ValueBudget._bounded_members` and
+  `::_ValueBudget._charge_upload`'s two unmeasurable-size branches have no charge to
+  compare — they synthesize `limit + 1` to say "exceeded a budget integers cannot
+  express" — and `::_DocumentBudget` keeps its own
   comparisons because a document charge is a running total held on the budget object, not a
   value the walker is carrying. A new bound charged against a limit goes through `_reject`;
   nothing else may.
@@ -1257,8 +1192,8 @@ belong to the surface rather than to a slice; none is a root package export, so
 
 ## Edge cases and constraints
 
-- **A frozen or read-only context** cannot hold the stash; the request runs under the
-  package baseline `DEFAULT_RESOURCE_POLICY` declares rather than unbounded.
+- **A frozen or read-only context** cannot hold the published mirror; the request still runs
+  under its armed budget, which never depended on the stash.
 - **A consumer key collision** — some other value stashed under `dst_resource_policy` — is
   ignored while a budget is armed, and type-checked by `policy_from_info` on the fallback
   path where nothing is.
@@ -1273,13 +1208,12 @@ belong to the surface rather than to a slice; none is a root package export, so
 - **A `ResourcePolicy` or `ErrorPolicy` SUBCLASS** supplied to a schema is read out once and
   replaced by an exact instance built from those values. A read that raises during that pass
   is a `ConfigurationError` at schema construction, not a raw error out of a resolver.
-- **A consumer-installed resource extension leaves exactly one armed.** A class or an
-  instance in `extensions=` suppresses the automatic entry at construction; a zero-argument
-  FACTORY cannot be identified without calling it, so the automatic entry is added and
-  `schema.py::DjangoSchema.get_extensions` drops it once a resolved instance can be seen.
-  Two armed budgets would not be a cosmetic duplicate: the automatic entry is appended after
-  the consumer's, arms last, and would answer every resolve-time bound with the package
-  defaults while the consumer's own policy went on charging the document.
+- **A resource extension supplied in `DjangoSchema(extensions=...)` never runs as an
+  entry.** The exact class is dropped and an exact instance's `policy=` becomes the schema's
+  policy, so exactly one budget is armed; a subclass is refused at construction, and a
+  zero-argument FACTORY resolving to either enforcement extension refuses the operation
+  (`schema.py::DjangoSchema.get_extensions`), because what a factory returns is decided after
+  the schema accepted it.
 - **An upload that cannot report its size** is *rejected*, not charged as zero bytes. Six
   spellings of unmeasurable, all answered the same way: the attribute is absent, it is
   `None`, it is non-integral, it is negative, it is `True`, or **reading it raises**.
@@ -1339,14 +1273,7 @@ belong to the surface rather than to a slice; none is a root package export, so
 
 ## Test plan
 
-**A "row" here is one test function**, and each count names its node-id expansion beside it.
-The two are not the same number — a parametrized function is one row and several node ids —
-and a count published without saying which it is gets replaced by a third figure the next
-time somebody measures. Both counts are floors rather than fixed totals: later cards add
-rows to these files, so a larger number means the file grew, not that this plan is wrong.
-
-The live tier (`examples/fakeshop/test_query/test_resource_policy_api.py`, 56 rows / 56 node
-ids) drives mounts of the package view over probe schemas that each narrow ONE family of
+The live tier (`examples/fakeshop/test_query/test_resource_policy_api.py`) drives mounts of the package view over probe schemas that each narrow ONE family of
 bounds and leave every other bound at its default — so a row that rejects can only have
 rejected on the bound it is about.
 
@@ -1390,13 +1317,15 @@ rejected on the bound it is about.
 - **Uploads**: a multipart request rejected by the policy, with the row stating why the
   transport body cap cannot be what rejected it.
 - **Collections**: a raw root list stopping at the maximum; the list sibling bounded so it
-  cannot bypass the connection cap; a connection page wider than the policy refused; a
-  `before` cursor with no page argument served one capped page, root and nested; `last: 0`
-  served as the `first: 0` page, root, nested and keyset; the
-  connection-only default leaving no raw sibling in the SDL to select.
+  cannot bypass the connection cap; a connection page wider than the policy refused; the
+  connection-only default leaving no raw sibling in the SDL to select. The page-shape rows
+  live beside the connections they page: a `before` cursor with no page argument served one
+  capped page, root and nested, and `last: 0` served as the `first: 0` page, root and nested
+  (`examples/fakeshop/test_query/test_library_api.py`) and keyset
+  (`examples/fakeshop/test_query/test_keyset_api.py`).
 - **Parity**: the sync and async mounts returning byte-identical rejection extensions.
 
-The package tier (`tests/test_resource_policy.py`, 120 rows / 191 node ids) covers what a
+The package tier (`tests/test_resource_policy.py`) covers what a
 request cannot express: per-bound validation including the `bool` trap and the deadline's
 separate finite-positive domain; the precedence ladder and the settings-shape rejections;
 the narrowing rule including the deadline's asymmetry; context threading across object /
@@ -1431,8 +1360,15 @@ both sides — a type whose `edges` is a list of non-edges, asserting the exact 
 exemption would have removed, and one whose `edges` is not a list at all, asserting that a
 budget a real connection would exceed goes unrejected. The exemption's whole effect is a
 charge that does not happen, so one side pins the charge and the other pins its absence.
-`tests/test_list_field.py` adds the constructor-site `max_rows` rejection, the
-`trusted_max_rows` flag rejection, and the narrowing row.
+`tests/test_list_field.py` adds the constructor-site `max_rows` rejection and the
+`trusted_max_rows` flag rejection; the field-level narrowing and trusted widening are live
+rows in `examples/fakeshop/test_query/test_list_field_api.py`
+(`::test_holder_untrusted_max_rows_caps_an_omitted_limit`,
+`::test_holder_trusted_max_rows_rejects_a_limit_above_the_field_bound`). `tests/test_schema.py`
+pins the schema-owned enforcement: a policy declared by an entry and by the argument, or by
+two entries, refused; an entry's policy becoming the schema's own; a subclass of either
+enforcement extension refused at construction; and a factory producing an enforcement
+authority refusing the operation.
 
 ## Doc updates
 
@@ -1445,7 +1381,6 @@ charge that does not happen, so one side pins the charge and the other pins its 
   [Relation handling][glossary-relation-handling].
 - `docs/TREE.md`: regenerated for the three new modules.
 - `KANBAN.md` (DB-backed): card 047 to Done.
-- `CHANGELOG.md`: **not** touched — see the permission caveat at the top.
 
 ## Risks and open questions
 
@@ -1469,7 +1404,7 @@ is in the [rationale][rationale].*
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Secure output and error defaults — [`DONE-048-0.0.14`][kanban] (S5-S8).
+- Secure output and error defaults — [`DONE-048-0.0.14`][kanban].
 - Dependency and CI hardening — [`DONE-049-0.0.14`][kanban].
 - Persisted queries / document allow-listing — not carded.
 - Rate limiting per client or per IP — a deployment concern, not a schema one.
@@ -1502,8 +1437,12 @@ is in the [rationale][rationale].*
 - [x] Full suite green at `fail_under = 100` for `django_strawberry_framework`; `ruff
       format --check`, `ruff check`, `scripts/check_trailing_commas.py --check`,
       `manage.py check` and `makemigrations --check --dry-run` all clean.
-- [x] Docs folded in; the version quintet rides the joint cut with cards 048 and 049
+- [x] Docs folded in; the release rides the `0.0.14` joint cut
       ([Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)).
+- [x] `DjangoSchema` builds the enforcement extension into every operation from its private
+      record; an extension entry can declare the policy once and can never be an
+      enforcement authority
+      ([Decision 11](#decision-11--one-typed-rejection-and-no-per-transport-translation)).
 - [x] [`max_value_depth`][glossary-max_value_depth] has a glossary entry, and the
       [`ResourcePolicy`][glossary-resourcepolicy] glossary body enumerates it alongside the
       other bounds.
@@ -1512,18 +1451,15 @@ is in the [rationale][rationale].*
       its own default), `DjangoResourcePolicyExtension`, `ResourceLimitExceeded` and
       `RESOURCE_LIMIT_ERROR_CODE` — and no glossary row points at a `#djangoschema` anchor
       that resolves to nothing.
-- [x] The deliberative layer is extracted to
-      [`spec-047-resource_policy-0_0_14-rationale.md`][rationale], and every decision the
-      release falsified states the corrected contract directly rather than its own history.
+- [x] The deliberative layer lives in
+      [`spec-047-resource_policy-0_0_14-rationale.md`][rationale].
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../../AGENTS.md
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[feedback2]: ../feedback2.md
 [glossary]: ../GLOSSARY.md
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
 [glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning

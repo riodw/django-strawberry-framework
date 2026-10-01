@@ -1,38 +1,38 @@
 term,anchor,notes
-`DjangoGraphQLProtocolRouter`,djangographqlprotocolrouter,the shipped transport helper this card redesigns; its HTTP branch is the S1 defect site (Decisions 2-4)
-Soft dependency,soft-dependency,`channels` stays soft; unchanged from spec-041 Decision 5
-Hard dependency,hard-dependency,the new Django view rides the existing `strawberry-graphql` requirement and needs no guard (Decision 6)
-PEP 562 lazy export,pep-562-lazy-export,the router's lazy-export shape survives the breaking change (Decision 5)
-`require_optional_module`,require_optional_module,`require_channels()` is unchanged; no new guard (DRY)
-Eviction-simulated absence,eviction-simulated-absence,the absence-test block preserved verbatim (Decision 13)
-Channels request adapter,channels-request-adapter,narrowed to WebSocket-only by Decision 2; reads the actor S11 refreshes
-`request_from_info`,request_from_info,the single request-decoding site the S11 write-back preserves rather than extends
-Auth mutations,auth-mutations,the session surface whose HTTP transport row this card corrects and whose WS rejections model the S11 error family
-`get_queryset` visibility hook,get_queryset-visibility-hook,consumes the actor S11 keeps fresh (Decision 11 + test 26)
+`DjangoGraphQLProtocolRouter`,djangographqlprotocolrouter,the transport helper whose `http` value is the consumer's Django application and whose WebSocket branch this spec composes (Decisions 2-4)
+Soft dependency,soft-dependency,`channels` stays soft per spec-041 Decision 5
+Hard dependency,hard-dependency,the Django view rides the existing `strawberry-graphql` requirement and needs no guard (Decision 6)
+PEP 562 lazy export,pep-562-lazy-export,the router's lazy-export shape is spec-041's and stable (Decision 5)
+`require_optional_module`,require_optional_module,`require_channels()` is the one guard; no second guard (DRY)
+Eviction-simulated absence,eviction-simulated-absence,the absence-test block constructs no router (Decision 13)
+Channels request adapter,channels-request-adapter,WebSocket-only in the package's own composition (Decision 2); reads the actor the revalidation refreshes
+`request_from_info`,request_from_info,the single request-decoding site the revalidation write-back preserves rather than extends
+Auth mutations,auth-mutations,the session surface whose HTTP transport is the Django view and whose WebSocket transport the revalidation guards
+`get_queryset` visibility hook,get_queryset-visibility-hook,consumes the actor the revalidation keeps fresh (Decision 11 + test 26)
 `DjangoModelPermission`,djangomodelpermission,same; the write-auth gate that must see a revalidated actor
 `ConfigurationError`,configurationerror,the typed construction-time failure for a missing/unusable `django_application` (Decision 3)
 `Upload` scalar,upload-scalar,the multipart write path the body cap must not materialize (Decision 7 step 3)
 `DjangoMutation`,djangomutation,the write flavor behind that multipart path
-`FieldError` envelope,fielderror-envelope,the mutation error contract untouched by the transport change
-`DjangoNodesField`,djangonodesfield,ships the standing "request-size limiting belongs to the consumer's transport layer" note S2 makes true
-`TestClient`,testclient,drives the live S1/S2/S9 acceptance rows
+`FieldError` envelope,fielderror-envelope,the mutation error contract the transport leaves untouched
+`DjangoNodesField`,djangonodesfield,"ships the standing ""request-size limiting belongs to the consumer's transport layer"" note; the body cap is that layer's limit"
+`TestClient`,testclient,drives the live HTTP-boundary and body-cap acceptance rows
 `GraphQLTestCase`,graphqltestcase,the unittest family available to the same tier
 Probe URLconf,probe-urlconf,the harness for a view configured differently from fakeshop's mount (test 7)
-Schema reload discipline,schema-reload-discipline,required of every new live suite
+Schema reload discipline,schema-reload-discipline,required of every live suite
 `seed_data`,seed_data,first line of every live catalog test
-Live-first coverage mandate,live-first-coverage-mandate,decides S1/S2 placement (live) vs the router matrix (package tier)
-Single-upstream parity,single-upstream-parity,the honest-parity rule this card deliberately diverges from (Borrowing posture)
-Joint version cut,joint-version-cut,the 0.0.14 line is shared so the quintet defers (Decision 15)
+Live-first coverage mandate,live-first-coverage-mandate,decides HTTP-side placement (live) vs the router matrix (package tier)
+Single-upstream parity,single-upstream-parity,the honest-parity rule this spec deliberately diverges from (Borrowing posture)
+Joint version cut,joint-version-cut,the 0.0.14 line is shared so the version literals defer to the cut (Decision 15)
 `DjangoOptimizerExtension`,djangooptimizerextension,must survive the schema pass-through on both protocols and in the view
 `strawberry_config`,strawberry_config,same schema-construction surface
-Developer-only debug posture,developer-only-debug-posture,named in the transport guidance; the S8 change itself is card 048
+Developer-only debug posture,developer-only-debug-posture,named in the transport guidance; the debug-disclosure change is card 048
 Debug-toolbar middleware,debug-toolbar-middleware,production-exposure guidance + the MIDDLEWARE-edit precedent rejected in Decision 6
-`DjangoDebugExtension`,djangodebugextension,the S8/S10 disclosure symbol pointed out of scope to card 048
-Multi-database cooperation,multi-database-cooperation,"the rule the S11 revalidation satisfies by letting the session and user reads follow Django's own database routers"
+`DjangoDebugExtension`,djangodebugextension,the disclosure symbol pointed out of scope to card 048
+Multi-database cooperation,multi-database-cooperation,"the rule the revalidation satisfies by letting the session and user reads follow Django's own database routers"
 Cookbook parity,cookbook-parity,"project-level engine configuration migrates by recipe, not by the import-only promise"
 `DjangoType`,djangotype,no new `Meta` key; transport config is not type config (Non-goals)
-`DjangoFileType`,djangofiletype,audit S5 pointed out of scope; output shape untouched here
+`DjangoFileType`,djangofiletype,out of scope here; output shape untouched
 `DjangoImageType`,djangoimagetype,same
 `FilterSet`,filterset,its `check_<field>_permission` input gate reads the refreshed actor for free
 `OrderSet`,orderset,same
-Django `AppConfig`,django-appconfig,"where both upstream patches install; that gate covers upstream defects only, never the S9 wire contract (Decision 9)"
+Django `AppConfig`,django-appconfig,"where both upstream patches install; that gate covers upstream defects only, never the wire contract (Decision 9)"

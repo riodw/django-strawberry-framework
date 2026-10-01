@@ -1,11 +1,11 @@
 term,anchor,notes
-ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Definition-order independence,definition-order-independence,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Relay node,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.
-schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Carried by the Problem: an eager pipeline raises it when a related model has no registered type.
+Definition-order independence,definition-order-independence,Carried by the spec title: the capability this design record decides.
+DjangoConnectionField,djangoconnectionfield,Carried by Features that depend on this decision: the connection field needs concrete targets before its types are built.
+DjangoNodeField,djangonodefield,Carried by Features that depend on this decision: Relay lookup needs a finalized primary type per model.
+DjangoType,djangotype,Carried by the Problem: one rich DjangoType per model across a bidirectional graph.
+finalize_django_types,finalize_django_types,Carried by The finalization trigger: the explicit call is the trigger this decision chose.
+Meta.fields,metafields,Carried by the Strawberry-Django relevance section: explicit annotations are not required on the Meta.fields = __all__ path.
+Meta.primary,metaprimary,"Carried by The finalization trigger: primary-type selection is Meta.primary, owned by spec-018."
+Relay node,relay-node-integration,Carried by Why this matters for the goal: Relay node lookup is among the features this foundation supports.
+schema audit,schema-audit,Carried by Acceptance criteria: the audit distinguishes unresolved targets from intentionally skipped fields.

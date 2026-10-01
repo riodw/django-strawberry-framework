@@ -1,9 +1,7 @@
 # Spec: graph substrate — shared graph policy and dependency planning
 
-Planned for `0.1.1` (card `TODO-BETA-058-0.1.1`, created 2026-08-07 as the
-first Beta card on [`KANBAN.md`][kanban], sequenced ahead of
-`TODO-BETA-059-0.1.1`; every card from that seat onward shifted up by one, and this
-spec's filename follows the card,
+Planned for `0.1.1` (card `TODO-BETA-058-0.1.1`, the first Beta card on
+[`KANBAN.md`][kanban], sequenced ahead of `TODO-BETA-059-0.1.1`,
 see [Decision 1](#decision-1--one-substrate-card-created-and-sequenced-before-layer-3-freezes)).
 `TODO-BETA-059-0.1.1` shares this patch version and lands after this card, so
 the `0.1.1` version bump belongs to the joint cut and this spec defers every
@@ -28,9 +26,8 @@ classes consistent with [`Meta.filterset_class`][glossary-metafilterset_class]
 never a parallel imperative registration API. The plan objects themselves are
 internal vocabulary, not shipped API.
 
-Status: **PLANNED — no slice built yet; card created
-(`TODO-BETA-058-0.1.1`) and the consumer-card amendments recorded on cards
-059 / 060 / 062 / 069 / 072.**
+Status: **PLANNED — no slice built yet; the consumer-card amendments are
+recorded on cards 059 / 060 / 062 / 069 / 072.**
 Five slices: Slice 1 (**`graph/` package + operation dependency memo**),
 Slice 2 (**`GraphPathPlan` + path/lookup splitter + `RowIdentityProof`
 vocabulary**), Slice 3 (**`PredicatePlan` compiler** — sequential-fold
@@ -41,7 +38,7 @@ tracked-path constants + card wrap**).
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission. This spec grants none — the `0.1.1` entry, the
-version quintet, and all release-state prose are owned by the card-055 joint
+version triplet, and all release-state prose are owned by the card-059 joint
 cut ([Decision 10](#decision-10--joint-cut-at-011-release-state-defers-to-card-059)).
 
 ---
@@ -113,12 +110,14 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   [`request_from_info`][glossary-request_from_info] (pre-baking viewer
   identity and `queryset.db`). Installers: a two-line delegation in
   `optimizer/extension.py::DjangoOptimizerExtension.on_execute`
-  (install `.set({})` once in the caller's context, `.reset(token)` in
-  `finally`, mutate the dict — never `.set()` per entry, per the
-  `_cache_key_parts_cache` precedent; the reset is ordered so the graph
-  store outlives the optimizer's own per-execution memos — a consumer
-  `get_queryset` hook reached through `resolve` reads the memo, and no
-  optimizer memo reads the graph store) **and** a new shipped
+  (install once in the caller's context and close in `finally`, mutate the
+  dict — never `.set()` per entry, per the optimizer's own per-execution
+  frame, `optimizer/_context.py::begin_execution_frame`, which sits behind a
+  `utils/operation_lease.py::OperationLease` so a copied context observes
+  the close; the close is ordered so the graph store outlives the
+  optimizer's own frame — a consumer `get_queryset` hook reached through
+  `resolve` reads the memo, and no optimizer memo reads the graph store)
+  **and** a new shipped
   `django_strawberry_framework/extensions/graph.py::GraphSubstrateExtension`
   for schemas without the optimizer (precedent: `extensions/debug.py` for
   the class-in-`extensions=` install form only; the hook contract is
@@ -201,9 +200,9 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   `graph.apply` at `optimizer/walker.py::_build_child_queryset` — after
   target visibility, narrow-only **by construction** — keeping the
   accessor-keyed prefetch cache the generated resolver already reads (no
-  reserved `to_attr` for plain relations; the cache carries a provenance
-  marker so consumer-populated caches are never trusted on scoped edges;
-  Decision 7). The same composed child queryset seeds the nested-connection
+  reserved `to_attr` for plain relations; the resolver trusts that cache
+  only for a relation the optimizer planned, so consumer-populated caches
+  are never trusted on scoped edges; Decision 7). The same composed child queryset seeds the nested-connection
   window and every per-parent fallback path. Strictness resolver keys
   publish only after successful attachment. `graph/dependencies.py`: frozen
   `FieldDependencyPlan(columns=...)` plus the column-tuple shorthand
@@ -239,11 +238,11 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   `PredicatePlan`, `EdgeScope`, `FieldDependencyPlan`, `RowIdentityProof`,
   and the operation dependency memo, then regenerate `docs/GLOSSARY.md`;
   update `examples/fakeshop/test_query/README.md` suite descriptions; audit
-  that the card-055/060/062/069/072 amendment obligations are still recorded
-  on those cards (they landed at card creation per Decision 1, not here);
+  that the card-059/060/062/069/072 amendment obligations are still recorded
+  on those cards (Decision 1);
   flip card 058. Leave README / GOAL /
-  TODAY release prose, `CHANGELOG.md`, and the version quintet untouched —
-  all owned by the card-055 joint cut.
+  TODAY release prose, `CHANGELOG.md`, and the version triplet untouched —
+  all owned by the card-059 joint cut.
 
 ## Problem statement
 
@@ -288,19 +287,21 @@ of the first foundation card.
 
 ## Current state
 
-All claims below verified against source at authoring time.
-
 - **No operation memo.** No public execution-scoped dependency cache exists;
-  the closest machinery is private and single-purpose
-  (`optimizer/extension.py` `_cache_key_parts_cache`, a per-execution
-  `ContextVar` installed with `.set({})` in `on_execute` and `.reset(token)`
-  in its `finally` — a sync generator hook, so the install lands in the
-  caller's context and reaches resolvers on both execution colors). The
-  optimizer extension is **optional**: `_active_optimizer` defaults to
-  `None`, and most package-test schemas build without it.
+  the closest machinery is private and single-purpose: the optimizer's
+  per-execution frame (`optimizer/_context.py::begin_execution_frame` /
+  `end_execution_frame`), opened in `on_execute` — a sync generator hook, so
+  the install lands in the caller's context and reaches resolvers on both
+  execution colors — and closed in its `finally`. The frame sits behind a
+  `utils/operation_lease.py::OperationLease`, because resetting a
+  `ContextVar` token rewrites only the context that set it, while a task
+  copied from it would keep reading the completed operation's state. The
+  optimizer extension is **optional**: `optimizer/_context.py::active_optimizer`
+  answers `None` outside an optimizer-run execution, and most package-test
+  schemas build without it.
 - **Context stashes are silently lossy.**
   `utils/context.py::stash_on_context` (shared with `resource_policy.py`;
-  `optimizer/_context.py` only re-exports it) deliberately swallows write
+  `optimizer/_context.py` re-exports it) deliberately swallows write
   failures on frozen/`__slots__` contexts — an `info.context` stash is not a
   reliable store, which independently justifies the `ContextVar` design. Its
   own docstring states the condition that makes a lossy stash tolerable there
@@ -338,12 +339,20 @@ All claims below verified against source at authoring time.
   generic relations); a visible parent exposes every child of a selected
   to-many edge unless the consumer hand-builds a scoped `Prefetch`.
 - **The generated relation resolver reads the accessor-keyed prefetch
-  cache.** `types/resolvers.py::_make_relation_resolver` probes
-  `root._prefetched_objects_cache[accessor_name]` and falls back to
-  `getattr(root, accessor_name).all()`; it never probes a `to_attr`, and
-  `optimizer/walker.py::_apply_hint` rejects hinted `to_attr` prefetches on
-  generated relations for exactly that reason. Any edge-scoping design must
-  keep the accessor-keyed cache (Decision 7).
+  cache.** `types/resolvers.py::_make_relation_resolver`'s many-side
+  resolver probes `root._prefetched_objects_cache` under the relation's
+  prefetch-cache name and falls back to `getattr(root, accessor_name).all()`;
+  it never probes a `to_attr`, and `optimizer/walker.py::_apply_hint` rejects
+  hinted `to_attr` prefetches on generated relations for exactly that
+  reason. When the target declares a custom `get_queryset`, the resolver
+  serves the cache only for a relation the optimizer planned
+  (`types/resolvers.py::_optimizer_scoped_relation`, answered from the
+  execution frame's scoped-relation set,
+  `optimizer/_context.py::relation_is_optimizer_scoped`); any other cache,
+  and every cache miss, is re-read through target visibility and then
+  row-bounded (`types/resolvers.py::_visible_many_rows`, color-matched by
+  `async_execution()`). Any edge-scoping design must keep the
+  accessor-keyed cache (Decision 7).
 - **Request-bound visibility poisons plan cacheability.**
   `optimizer/walker.py::_plan_prefetch_relation` sets
   `plan.cacheable = False` whenever the target type has a custom
@@ -495,16 +504,14 @@ surface and normalizes into `FieldDependencyPlan`; this card ships the
 ### Decision 1 — one substrate card, created and sequenced before Layer 3 freezes
 
 The root-cause fix for the divergences catalogued above is a shared substrate, not five
-per-subsystem implementations. The card was created 2026-08-07 as
-`TODO-BETA-058-0.1.1` — sequenced after `TODO-ALPHA-057-0.1.0` and before
-`TODO-BETA-059-0.1.1`, shifting every card from that seat onward up by one; this
-spec's filename follows the card. Cards 059, 060, 062, 069, and 072 must be
-amended to consume it. **The amendment obligations must land on those cards
-at this card's creation, not at its Slice 5** — if card 060 starts first,
-the private path-plan twin this substrate exists to prevent gets built
-anyway; they were recorded on all five cards on 2026-08-08, each as a
-`Scope` item plus a `related` reference edge back to this card (and, on 069
-and 072, to the sibling card `TODO-BETA-068-0.1.6`). **Rejected:** letting each Layer 3
+per-subsystem implementations. The card is `TODO-BETA-058-0.1.1`, sequenced
+after `TODO-ALPHA-057-0.1.0` and before `TODO-BETA-059-0.1.1`. Cards 059,
+060, 062, 069, and 072 consume it. **The amendment obligations live on those
+cards, not in this card's Slice 5** — if card 060 starts first, the private
+path-plan twin this substrate exists to prevent gets built anyway; each of
+the five carries a `Scope` item plus a `related` reference edge back to this
+card (and, on 069 and 072, to the sibling card `TODO-BETA-068-0.1.6`).
+**Rejected:** letting each Layer 3
 card ship private path/visibility/identity machinery (the divergence this
 spec catalogues); deferring the substrate past the `1.0.0` API freeze
 (incompatible public concepts become un-unifiable).
@@ -529,10 +536,10 @@ Slice 1 makes the extension a `graph/` consumer); and because
 than eagerly re-entering a partially initialized package. Type references
 inside plan objects are **injected by the caller** (the finalizer, the
 walker, the search builder) as opaque `DjangoTypeDefinition` handles —
-`graph/` never resolves a model to a type itself. The card-056 amendment scope this boundary implies:
+`graph/` never resolves a model to a type itself. The card-060 amendment scope this boundary implies:
 `GraphPathPlan` + `GraphPathPlanSet` (chain-keyed grouping) subsume 060's
 path classification and arm grouping, while 060's `LOOKUP_PREFIXES` prefix
-rejection and its permission-dispatch plan **stay 056-local** — they are
+rejection and its permission-dispatch plan **stay 060-local** — they are
 search policy, not substrate. **Rejected:** folding into `optimizer/` — the
 optimizer is one *consumer* of the vocabulary, and card 053 is about to
 freeze optimizer subsystem boundaries; a substrate both layers import must
@@ -551,14 +558,16 @@ brackets `on_execute` as a **sync generator**, matching
 `DjangoOptimizerExtension.on_execute` — the install must land in the
 caller's context to reach resolvers on both execution colors, and an
 `async def` hook or an `on_operation` bracket does not. The container is
-installed `.set({})`-once in the caller's context and dict-mutated
-thereafter — never `.set()` per entry, which would race across the
-`sync_to_async` thread-sensitive bridge. Entering `operation_scope()`
-allocates a dict and sets a `ContextVar` — no request access, no `info`
-read, no I/O — so it cannot raise, and installers may enter it outside
-their `try`. The memo is never instance state on an extension:
-the documented singleton-factory install form shares one extension instance
-across concurrent operations, and only a `ContextVar` isolates them.
+installed once in the caller's context and dict-mutated thereafter — never
+`.set()` per entry, which would race across the `sync_to_async`
+thread-sensitive bridge — and, like the optimizer's execution frame, its
+close must be observable from contexts copied before it (an
+`OperationLease`), so a resolver's background task never reads a completed
+operation's audience. Entering `operation_scope()` allocates a dict and
+binds it — no request access, no `info` read, no I/O — so it cannot raise,
+and installers may enter it outside their `try`. The memo is never instance
+state on an extension: the documented singleton-factory install form shares
+one extension instance across concurrent operations.
 
 Contract lines, each pinned and tested:
 
@@ -772,44 +781,45 @@ No path may fail open:
   with the optimizer off, under `OptimizerHint.SKIP`, after consumer-wins
   prefetch stripping, or via the `relation_shapes` list recourse), the
   resolver applies target visibility **and then** the edge scope — and both
-  compose **before** the shipped raw-list row bound:
+  compose **before** the raw-list row bound:
   `resource_policy.py::bounded_rows` bounds by *slicing* (a `QuerySet`
   carries the bound into SQL as a `LIMIT`, and Django refuses `.filter()`
   on a sliced queryset), so the branch hands the already-composed queryset
   to `bounded_rows`, keeping the bound a `LIMIT` over scoped rows and the
   bound's internal `resource_policy.py::check_deadline` at the last
-  pre-database seam. The cache-hit branch is untouched by that ordering: a
-  provenance-marked cache is already scoped, and `bounded_rows` keeps
-  truncating those materialized rows in Python. The list
-  resolver applies *no* visibility today, so composing the visibility
-  helpers there is part of this slice, not a presupposition — and it is
-  composed **color-matched**: when the target's `get_queryset` is async
-  (`is_async_callable`, the same check Meta validation already uses), the
-  finalizer generates an **async** list resolver awaiting
-  `apply_type_visibility_async` before composing the (sync) edge-scope
-  predicate; the sync case keeps `apply_type_visibility_sync`.
-  `relation_shapes = "list"` is the *documented recourse* for
-  async-visibility targets locked out of nested connections — a
-  sync-only fallback resolver would raise `SyncMisuseError` on exactly the
-  types sent there and delete the escape hatch;
+  pre-database seam. The cache-hit branch is untouched by that ordering: an
+  optimizer-planned cache is already scoped, and `bounded_rows` keeps
+  truncating those materialized rows in Python. The list resolver already
+  applies target visibility there, color-matched
+  (`types/resolvers.py::_visible_many_rows` awaits
+  `apply_type_visibility_async` under `async_execution()` and calls
+  `apply_type_visibility_sync` otherwise); this slice composes the (sync)
+  edge-scope predicate between that visibility and the bound, on both
+  colors, and extends the path to an edge-scoped relation whose target
+  declares no `get_queryset`. `relation_shapes = "list"` is the *documented
+  recourse* for async-visibility targets locked out of nested connections —
+  a sync-only scoped path would raise `SyncMisuseError` on exactly the types
+  sent there and delete the escape hatch;
 - the **accessor-keyed prefetch cache is untrusted on a scoped edge.**
   The optimizer's consumer-wins reconciliation refuses a consumer
   `prefetch_related` over an edge-scoped accessor with a typed error at
   diff time, but that guard only exists when the optimizer runs — with the
   optimizer off or under `OptimizerHint.SKIP`, a consumer returning
   `Book.objects.prefetch_related("loans")` populates the cache with
-  unscoped rows and the resolver's cache-hit branch would serve them
-  silently (the N+1 guard treats a populated cache as satisfied). Scoped
-  edges therefore require **provenance**: when the walker emits the scoped
-  `Prefetch`, it records a marker for the accessor under the `_dst_`
-  reserved namespace on each parent row; the generated resolver for an
-  edge-scoped relation serves `_prefetched_objects_cache[accessor_name]`
-  **only when the marker is present** and otherwise ignores the cache and
-  falls through to the scoped query path (target visibility + edge scope).
-  Ordinary (unscoped) relations keep today's cache probe untouched — no
+  unscoped rows (the N+1 guard treats a populated cache as satisfied).
+  Scoped edges therefore require **provenance**, and the resolver already
+  reads it for custom-visibility targets: the execution frame's
+  scoped-relation set records each relation the walker planned
+  (`optimizer/_context.py::publish_scoped_relations`), and
+  `types/resolvers.py::_optimizer_scoped_relation` serves the cache only
+  for such a relation, re-reading any other through the boundary. The
+  generated resolver for an edge-scoped relation takes that gate whatever
+  its target declares, so an unplanned cache falls through to the scoped
+  query path (target visibility + edge scope). Ordinary (unscoped)
+  relations to hook-less targets keep their cache probe untouched — no
   hot-path cost where no scope is declared. Live tests pin the
   optimizer-off and `SKIP` arms with consumer-prefetched hidden children
-  (rejected alternative: documenting the unmarked cache as an accepted
+  (rejected alternative: documenting the unplanned cache as an accepted
   hole — a permission-shaped declaration must not have a
   consumer-triggerable bypass);
 - a factory **raising at bind time** fails the operation per the existing
@@ -895,12 +905,12 @@ gives non-strict mode a correct fallback.
 ### Decision 10 — joint cut at `0.1.1`: release state defers to card 059
 
 `TODO-BETA-059-0.1.1` shares the patch version and lands after this card, so
-059 owns the `pyproject.toml` / `__init__.py` / `tests/base/test_init.py`
-bump, `CHANGELOG.md`, and all release-state prose
-([Joint version cut][glossary-joint-version-cut]). Card 059's existing
-lone-card version-bump decision (its Decision 10) must be amended at card
-creation: it keeps bump ownership, but as the joint cut's last lander rather
-than as the lone `0.1.1` card. **Rejected:** this card owning the bump
+059 owns the version triplet (`__init__.py::__version__`,
+`tests/base/test_init.py`, the GLOSSARY package-version row), `CHANGELOG.md`,
+and all release-state prose
+([Joint version cut][glossary-joint-version-cut]); card 059's version-cut
+decision (its Decision 10) holds bump ownership as the joint cut's last
+lander. **Rejected:** this card owning the bump
 (would ship a release whose headline feature, `FieldSet`, is absent).
 
 ### Decision 11 — public declaration surface
@@ -1027,8 +1037,9 @@ ownership partition applies.
   time fails the operation; a non-predicate return (including a queryset)
   is refused with a typed error at bind time; the optimizer-off,
   `OptimizerHint.SKIP`, and per-parent-fallback paths apply the scope
-  rather than silently skipping it, and an unmarked prefetch cache on a
-  scoped accessor is ignored, never served (Decision 7).
+  rather than silently skipping it, and a prefetch cache the optimizer did
+  not plan on a scoped accessor is re-read through the scoped path, never
+  served (Decision 7).
 - **Predicate bound values pass the seal's admitted-bound-value rule.**
   Every `graph.apply` output crossing the sealed boundary is canonically
   reconstructed, and each bound `Q` value reaches
@@ -1090,8 +1101,8 @@ raise paths, and interleavings a real query cannot produce.
   visible, the hidden Loan is absent from the selected edge **including**
   when a `filter:` argument forces the per-parent fallback, staff policy
   sees both; also pinned: the optimizer-off and `OptimizerHint.SKIP` arms
-  with a consumer `prefetch_related` of hidden children (the unmarked
-  cache is ignored — Decision 7). Query count identical for 1 and 100
+  with a consumer `prefetch_related` of hidden children (the unplanned
+  cache is re-read — Decision 7). Query count identical for 1 and 100
   Books **on the windowed (unfiltered) path** (exact per-backend integers
   pinned from a measured baseline — the query-count matrix is asserted as
   equalities, never inequalities); the `filter:` fallback arm is
@@ -1142,21 +1153,19 @@ Slice 5 owns: `docs/TREE.md` regenerate (new `graph/` package + new
 pre-commit hook otherwise rolls back commits that add tracked files),
 `docs/GLOSSARY.md` via glossary DB entries for the five plan objects and the
 memo, `examples/fakeshop/test_query/README.md`. The kanban card
-amendments (059, 060, 062, 069, 072 gained explicit consume-the-substrate
-scope lines; 060/062 additionally record the deferred R3 arms) landed
-2026-08-08 at card creation per Decision 1, so Slice 5 only audits them.
+amendments (059, 060, 062, 069, 072 carry explicit consume-the-substrate
+scope lines; 060/062 additionally record the deferred R3 arms) are already
+on the board (Decision 1), so Slice 5 only audits them.
 `README.md`, `GOAL.md`, `TODAY.md`, `CHANGELOG.md`, and the
-version quintet stay untouched (Decision 10).
+version triplet stay untouched (Decision 10).
 
 ## Risks and open questions
 
-- **The consumer-card amendments are recorded** (2026-08-08), discharging
-  Decision 1's at-creation obligation. The card was created 2026-08-07 as
-  `TODO-BETA-058-0.1.1` (the spec's preferred number and sequencing; every
-  card from that seat onward shifted up by one), and cards
-  059 / 060 / 062 / 069 / 072 now each carry a consume-the-substrate `Scope`
-  item; 060 and 062 additionally record their deferred R3 arms (search
-  qualification and count/aggregate contribution). What remains open is
+- **The consumer-card amendments are recorded**, discharging Decision 1's
+  obligation: cards 059 / 060 / 062 / 069 / 072 each carry a
+  consume-the-substrate `Scope` item; 060 and 062 additionally record their
+  deferred R3 arms (search qualification and count/aggregate contribution).
+  What remains open is
   ordinary execution risk: the amendments are prose obligations, so a card
   that starts without re-reading its own scope can still build a private
   twin.
@@ -1179,19 +1188,12 @@ version quintet stay untouched (Decision 10).
   (cache-scope keys, per-edge strictness), the mapping outgrows a dict. The
   sidecar-class fallback in Decision 11 is the escape hatch; adding it later
   is compatible.
-- **Pre-existing list-relation visibility gap.** The generated list
-  resolver applies no target visibility on its cache-miss branch today; the
-  gap is inert only because no fakeshop list-relation target declares a
-  hook. Adding `LoanType.get_queryset` without the Decision 7 resolver work
-  would ship a live leak on `Book.loans` (pinned list-only by an existing
-  test), so the resolver visibility composition is on Slice 4's critical
-  path, not optional hardening.
 - **Fixture collision with card 060.** Card 060's spec plans
   `LoanType.Meta.search_fields` and a `DjangoConnectionField(LoanType)`
   acceptance surface over the same library schema this card extends; 060
   already assumes a `LoanType` visibility hook exists, which this card
   creates. One card must own each shared fixture — this spec claims the
-  visibility hook and the R9 secondary-type surface, and the card-056
+  visibility hook and the R9 secondary-type surface, and the card-060
   amendment records the dependency.
 - **Open product decisions in the originating consumer application**
   (unauthorized target-user
@@ -1212,7 +1214,7 @@ version quintet stay untouched (Decision 10).
 - **Search** — card 060 ([spec][spec-060]), amended to consume
   `GraphPathPlan` / `GraphPathPlanSet` / `PredicatePlan`;
   `LOOKUP_PREFIXES` rejection and the permission-dispatch plan stay
-  056-local (Decision 2).
+  060-local (Decision 2).
 - **Aggregation child scoping** — card 062, amended to consume `EdgeScope`.
 - **Optimizer explain over an operation plan map** — card 069.
 - **Adversarial graph suite** — card 072.
@@ -1244,12 +1246,12 @@ version quintet stay untouched (Decision 10).
 - [ ] `Meta.edge_scopes` validates two-stage at type creation (net-new
   ALLOWED key), factories return predicates compiled narrow-only via
   `graph.apply` after target visibility at `_build_child_queryset` with the
-  owner threaded as `type_cls`, covers the provenance-marked prefetched,
+  owner threaded as `type_cls`, covers the optimizer-planned prefetched,
   per-parent-fallback (second application in `connection.py`), and
   color-matched list-resolver cache-miss paths (composed ahead of the
   raw-list row-bound slice), refuses non-predicate
   factory returns and consumer prefetches over scoped accessors loudly
-  (unmarked caches ignored optimizer-off/`SKIP`), publishes strictness
+  (unplanned caches re-read optimizer-off/`SKIP`), publishes strictness
   keys only after attachment, and the live R3 edge-selection fixture holds
   with parent-count-independent query counts on the windowed path.
 - [ ] `FieldDependencyPlan(columns=...)` + shorthand normalizer shipped;
@@ -1264,7 +1266,7 @@ version quintet stay untouched (Decision 10).
 - [ ] 100% package coverage; live-first placement respected; ruff +
   trailing-comma + pre-commit clean; tracked-path constants regenerated.
 - [ ] TREE/GLOSSARY/test_query README updated; card amendments recorded;
-  card 058 flipped; version quintet and CHANGELOG untouched (Decision 10).
+  card 058 flipped; version triplet and CHANGELOG untouched (Decision 10).
 
 <!-- LINK DEFINITIONS -->
 

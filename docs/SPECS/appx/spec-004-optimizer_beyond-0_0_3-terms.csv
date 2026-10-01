@@ -1,11 +1,11 @@
 term,anchor,notes
-ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.exclude,metaexclude,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.optimizer_hints,metaoptimizer_hints,Backfilled for DONE-card glossary linkage from the shipped spec body.
-only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
-OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
-queryset diffing,queryset-diffing,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Carried by B4 validation: every Meta.optimizer_hints rejection raises it at schema-build time.
+DjangoOptimizerExtension,djangooptimizerextension,Carried by B1 cache storage: the plan cache is bound to the extension instance.
+DjangoType,djangotype,Carried by B4: a DjangoType accepts an optional Meta.optimizer_hints dict.
+FK-id elision,fk-id-elision,Carried by Foundation: B2 elides the join for id-only forward FK selections.
+Meta.exclude,metaexclude,Carried by B6: relations hidden by Meta.exclude are not flagged by the audit.
+Meta.fields,metafields,Carried by B6: the audit walks only relations that passed Meta.fields filtering.
+Meta.optimizer_hints,metaoptimizer_hints,Carried by the B4 heading: per-field overrides of the walker's dispatch.
+only(),only-projection,Carried by Foundation: O5 column projection is one of the slices B1-B8 extend.
+OptimizerHint,optimizerhint,Carried by B4: the typed wrapper every hint value must be.
+queryset diffing,queryset-diffing,Carried by the B8 heading: reconciling the plan against the consumer's queryset.

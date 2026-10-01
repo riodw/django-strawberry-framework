@@ -1,7 +1,7 @@
 # Spec: Stale placeholder cleanup
 
 Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-011-0.0.4`).
-Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
+Status: shipped. A card-snapshot spec: the file is the card's `SpecDoc` target.
 Owner: package maintainer.
 
 Deliberation lives in its companion [rationale file][spec-011-rationale].
@@ -25,7 +25,6 @@ No unconditional `skip` or `xfail` marker stands in for a test anywhere under `t
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[backlog]: ../../BACKLOG.md
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->

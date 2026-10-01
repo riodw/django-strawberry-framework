@@ -1,9 +1,9 @@
 term,anchor,notes
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.optimizer_hints,metaoptimizer_hints,Backfilled for DONE-card glossary linkage from the shipped spec body.
-only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
-OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
-plan cache,plan-cache,Backfilled for DONE-card glossary linkage from the shipped spec body.
-queryset diffing,queryset-diffing,Backfilled for DONE-card glossary linkage from the shipped spec body.
-schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,"Carried by Lookup paths vs resolver sentinel keys: a Prefetch does not retain the parent DjangoType, so the walker records resolver keys while planning."
+FK-id elision,fk-id-elision,Carried by End-goal context: B2 elisions must use branch-sensitive resolver keys at nested depth.
+Meta.optimizer_hints,metaoptimizer_hints,"Carried by End-goal context: B4 hints apply at nested levels, not only root fields."
+only(),only-projection,"Carried by Prefetch-boundary recursion: child only() paths stay on the child queryset, never the root."
+OptimizerHint,optimizerhint,Carried by Hints are leaf operations: a hint-supplied Prefetch is a leaf.
+plan cache,plan-cache,Carried by Plan shape: cacheable says whether the plan can be stored in the extension plan cache.
+queryset diffing,queryset-diffing,"Carried by End-goal context: B8 normalizes select_related and prefetch_to paths, so lookup identities stay stable."
+schema audit,schema-audit,Carried by End-goal context among the B slices that build on the planning surface.

@@ -1,10 +1,10 @@
 # Spec: Real M2M coverage
 
 Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-013-0.0.4`).
-Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
+Status: shipped. A card-snapshot spec: the file is the card's `SpecDoc` target.
 Owner: package maintainer.
 
-Deliberation and this spec's change record live in its companion [rationale file][spec-013-rationale]: what the card's three commits actually did, why unmanaged fixtures could not carry the contract, where the card's schema-shape test went and what replaced it, how the `library` app grew afterwards, and every claim this spec once made and may no longer make.
+Why the coverage runs against real managed models, and why each edge is pinned at both tiers, lives in its companion [rationale file][spec-013-rationale].
 
 ## Card snapshot
 
@@ -15,9 +15,9 @@ Deliberation and this spec's change record live in its companion [rationale file
 
 Relation-cardinality coverage runs against real managed models in a real example app, never against a test-only fixture app.
 
-**The retired fixtures.** `tests/fixtures/` held an unmanaged `tests_cardinality` app — five `managed = False` models (`User`, `Profile`, `Author`, `Tag`, `Book`) carrying six relation edges. Because the app was unmanaged it had no table, so those edges could only ever be asserted as annotation shape and never resolved through a query. The directory does not exist, no source file or test references `tests_cardinality` or `cardinality_models`, and no substitute fixture app replaces it.
+An unmanaged fixture model has no table, so its relation edges can be asserted only as annotation shape and never resolved through a query. No test-only fixture app carries these edges: there is no `tests/fixtures/` package.
 
-**The six edges, on real models.** Each cardinality the fixtures carried is carried by a managed model in the [`library`][library-models] example app, and the six together are the [M2M traversal][glossary-relation-handling] and adjacent-cardinality surface this card owns:
+**The six edges, on real models.** Each cardinality is carried by a managed model in the [`library`][library-models] example app, and the six together are the [M2M traversal][glossary-relation-handling] and adjacent-cardinality surface this card owns:
 
 | Cardinality | `library` edge |
 |---|---|
@@ -41,14 +41,13 @@ Relation-cardinality coverage runs against real managed models in a real example
 - `::test_library_optimizer_selects_book_shelf_in_http_query` — the forward FK is planned as `select_related` in a served query and, because `ShelfType` declares a `get_queryset` visibility hook, that plan is downgraded to a visibility-scoped `Prefetch`: two queries, the first over `library_book` and the second over `library_shelf`.
 - `::test_book_genres_m2m_renders_as_list_shape_live` — `BookType.genres` renders as `[GenreType!]!`, read from the served schema by introspection rather than from a locally constructed one.
 
-**Example-app schema coverage** lives with the app, in [`examples/fakeshop/apps/library/tests/test_schema.py`][test-library-schema] `::test_project_schema_includes_library_types` (the project schema exposes `BookType` with `title`, `shelf`, and `genres`) and `::test_library_djangotype_declaration_order_stays_awkward`.
+**Schema coverage.** That the composed project schema exposes `BookType` with `title`, `shelf`, and `genres` is read over live HTTP by [`examples/fakeshop/test_query/test_schema_composition_api.py`][test-schema-composition] `::test_the_composed_schema_publishes_each_apps_types`; the library schema module's out-of-dependency declaration order is pinned with the app, in [`examples/fakeshop/apps/library/tests/test_schema.py`][test-library-schema] `::test_library_djangotype_declaration_order_stays_awkward`.
 
-The `library` app carries more than these six edges — a generic relation and its proxy-model variant, a second `ManyToManyField` (`Shelf.alt_branches`) for write-side raw-pk input, a `BigIntegerField`, and the keyset-cursor models. Those belong to the cards that added them. This card's many-to-many edge is `Book.genres` / `Genre.books`.
+The `library` app carries many more models and edges than these six; they belong to the cards that added them. This card's many-to-many edge is `Book.genres` / `Genre.books`.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[backlog]: ../../BACKLOG.md
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
@@ -69,6 +68,7 @@ The `library` app carries more than these six edges — a generic relation and i
 [library-models]: ../../examples/fakeshop/apps/library/models.py
 [test-library-api]: ../../examples/fakeshop/test_query/test_library_api.py
 [test-library-schema]: ../../examples/fakeshop/apps/library/tests/test_schema.py
+[test-schema-composition]: ../../examples/fakeshop/test_query/test_schema_composition_api.py
 
 <!-- scripts/ -->
 

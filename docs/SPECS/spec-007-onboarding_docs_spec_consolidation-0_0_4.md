@@ -1,10 +1,10 @@
 # Spec: 0.0.4 onboarding docs and spec consolidation
 
 Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-007-0.0.4`).
-Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
+Status: shipped. A card-snapshot spec: the file is the card's `SpecDoc` target.
 Owner: package maintainer.
 
-Deliberation and this spec's change record live in its companion [rationale file][spec-007-rationale]: why a card snapshot is the right shape for this card, the fold-in-by-deletion policy this card's scope described and the repository reversed, and every claim about the `0.0.4` documentation set that this spec once made and may no longer make.
+Why the spec is a card snapshot, and why its scope states each file's role rather than its contents, lives in its companion [rationale file][spec-007-rationale].
 
 ## Card snapshot
 
@@ -21,16 +21,18 @@ The onboarding documentation is divided by the question each file answers, so th
 - [`docs/GLOSSARY.md`][glossary] is the capability catalog — every catalogued capability gets one entry, and every entry a stable anchor, so the rest of the documentation links to it rather than re-explaining it.
 - [`docs/TREE.md`][tree] is the detailed layout and test-tree reference.
 - [`CHANGELOG.md`][changelog] is the release record.
-- Completed design-doc content folds into the durable docs, and the spec files themselves are retained as the design-history record. The lifecycle around them — filename pattern, fold-in targets, and archival — is owned by `AGENTS.md` rule 26 and [`docs/builder/BUILD.md`][build] `## Spec and build-plan filename pattern`.
+- A completed spec's shipped behavior folds into [`docs/GLOSSARY.md`][glossary], [`docs/TREE.md`][tree], and [KANBAN.md][kanban]; the spec file itself is retained under `docs/SPECS/` and describes the current code ([`START.md`][start] "Reconciling a spec with the tree"). The lifecycle around it — filename pattern, fold-in targets, and archival — is owned by the [`AGENTS.md`][agents] design-docs rule and [`docs/builder/BUILD.md`][build] `## Spec and build-plan filename pattern`.
 - The card shipped documentation only: no package surface and no upstream-parity change.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[agents]: ../../AGENTS.md
 [changelog]: ../../CHANGELOG.md
 [contributing]: ../../CONTRIBUTING.md
 [kanban]: ../../KANBAN.md
 [root-readme]: ../../README.md
+[start]: ../../START.md
 
 <!-- docs/ -->
 [glossary]: ../GLOSSARY.md

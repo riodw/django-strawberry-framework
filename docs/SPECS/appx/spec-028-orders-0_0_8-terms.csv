@@ -30,7 +30,6 @@ DjangoNodeField,djangonodefield,0.0.9 root single-node field; out of scope.
 DjangoConnection,djangoconnection,0.0.9 return-type alias; out of scope.
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Future 0.0.9 optimizer feature; out of scope.
 DjangoListField,djangolistfield,Shipped 0.0.7 surface; argument injection deferred to 0.0.9 per Non-goals.
-Schema export management command,schema-export-management-command,Shipped 0.0.7 surface cited in Problem statement.
 AggregateSet,aggregateset,Future 0.1.3 Layer-3 sidecar; cited as forward composition surface.
 RelatedAggregate,relatedaggregate,Future 0.1.3 aggregate-relation symbol; out of scope.
 Meta.aggregate_class,metaaggregate_class,Future 0.1.3 Meta key; out of scope.

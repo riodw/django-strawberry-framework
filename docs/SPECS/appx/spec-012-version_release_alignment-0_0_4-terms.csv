@@ -1,2 +1,2 @@
 term,anchor,notes
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped release-alignment stub.
+DjangoType,djangotype,Carried by the Scope bullet naming __version__ as the runtime version the DjangoType surface ships under.

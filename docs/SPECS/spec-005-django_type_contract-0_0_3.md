@@ -1,6 +1,6 @@
 # Spec: DjangoType Contract & Boundary
 
-Deliberation, rejected alternatives, and this spec's change record live in the companion file [`spec-005-django_type_contract-0_0_3-rationale.md`][spec-005-rationale]: the two mechanisms predicted here and how each prediction fared, the alternatives weighed and dropped behind each decision below, the release-gating judgement an `Open questions` section once recorded, and the retracted claims of every section that has been reconciled against the shipped package.
+Deliberation and rejected alternatives live in the companion file [`spec-005-django_type_contract-0_0_3-rationale.md`][spec-005-rationale]: why ambiguity is detected where it is, why the override boundary is drawn on the consumer-authored set, and why this spec holds rules rather than key rosters.
 
 ## Problem statement
 
@@ -35,7 +35,7 @@ Reverse lookup in the model-to-type direction needs exactly one answer per model
 
 **Contract.** Ambiguity is an error, never a default. Two types claiming primary for one model is rejected; several types claiming none is rejected; no path through registration or finalization breaks a tie by declaration order. A single type over a model still registers without declaring `Meta.primary` at all, so the narrow case costs a consumer nothing.
 
-The friction argument for lifting the original one-model-one-type constraint, the `Meta.primary` design this spec predicted, the rejection of first-registered-wins, and why the two rejections above fire at different points are recorded in [the rationale][spec-005-rationale].
+Why multiple types per model are allowed, why first-registered-wins is rejected, and why the two rejections above fire at different points are recorded in [the rationale][spec-005-rationale].
 
 ### Consumer override semantics
 
@@ -45,7 +45,7 @@ The mechanism is owned by its own specs — relation fields by `docs/SPECS/spec-
 
 **Contract.** The package documents the override surface it actually delivers, and no more. A docstring or `docs/README.md` line describing override behavior is corrected or removed in the same change that shows the behavior does not hold, and a test that exists only to pin an unfulfilled promise is not left standing as if it pinned a contract.
 
-The three candidate implementations this spec weighed before the mechanism shipped, the diagnosis they were aimed at, and the fate of the placeholder test are recorded in [the rationale][spec-005-rationale].
+Why the boundary is the consumer-authored set rather than the merge order is recorded in [the rationale][spec-005-rationale].
 
 ### Invalid `Meta.fields` and `Meta.exclude` names
 
@@ -72,7 +72,7 @@ A key that is validated but never applied is a bug — failure class 4 of `## Pr
 
 A key may also enter as accepted **without ever having been deferred**, when its feature ships in the same change that adds the key. There is no promotion to make in that case, and the rule is satisfied trivially rather than waived; the distinction is worth keeping visible so a net-new accepted key is never mistaken for a promotion whose end-to-end check was skipped.
 
-[`Meta.interfaces`][glossary-metainterfaces] is the key this partition is checked against most often, because it has occupied two of the three buckets. It is accepted today and applied end-to-end — validated by `types/base.py::_validate_interfaces` and injected into the generated type's bases by the finalizer's `apply_interfaces` step — and `tests/types/test_base.py::test_interfaces_is_shipped_not_deferred` pins that it is not also in `DEFERRED_META_KEYS`.
+[`Meta.interfaces`][glossary-metainterfaces] is a promoted key: it is accepted and applied end-to-end — validated by `types/base.py::_validate_interfaces` and injected into the generated type's bases by the finalizer's `apply_interfaces` step — and `tests/types/test_base.py::test_interfaces_is_shipped_not_deferred` pins that it is not also in `DEFERRED_META_KEYS`.
 
 ## Coordination with `spec-001-django_types-0_0_1.md` and `spec-002-optimizer-0_0_2.md`
 

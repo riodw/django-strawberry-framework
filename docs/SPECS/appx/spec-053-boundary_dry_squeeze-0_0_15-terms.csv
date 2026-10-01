@@ -2,7 +2,7 @@ term,anchor,notes
 `FilterSet`,filterset,query-side set family; delegate absorption B1
 `OrderSet`,orderset,query-side set family; delegate absorption B1
 `DjangoMutation`,djangomutation,write-side set family; PermissionClassesMixin B2
-`DjangoFormMutation`,djangoformmutation,plain-form flavor; alias-guard gap C2
+`DjangoFormMutation`,djangoformmutation,plain-form flavor; rides the skeleton inside the alias guard (C2)
 `DjangoModelFormMutation`,djangomodelformmutation,ModelForm flavor riding shared skeleton
 `SerializerMutation`,serializermutation,serializer flavor; conversion spine stays separate (C10)
 `DjangoType`,djangotype,type system whose definitions feed the optimizer
@@ -31,7 +31,7 @@ Relation handling,relation-handling,relation decoder D3
 Relay Node integration,relay-node-integration,relation_id_scalar B3
 `Ordering`,ordering,orders input leaf
 `ConfigurationError`,configurationerror,raise type for hoisted validators
-Joint version cut,joint-version-cut,shares 0.0.15 with card 050; this card lands last and owns the bump
+Joint version cut,joint-version-cut,shares 0.0.15 with cards 050-052; this card lands last and owns the release cut
 Live-first coverage mandate,live-first-coverage-mandate,test plan discipline
 Cookbook parity,cookbook-parity,dead-delegate deletion gate (Risks)
-`DjangoDebugExtension`,djangodebugextension,spec-044 ships it; spec-050 extracts it - both sequencing dependencies
+`DjangoDebugExtension`,djangodebugextension,spec-044 ships it; spec-052 extracts it - both sequencing dependencies

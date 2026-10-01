@@ -3,7 +3,7 @@ DjangoOptimizerExtension,djangooptimizerextension,the subject; G1 lands in its _
 only() projection,only-projection,the surface G2 gates by operation type
 Plan cache,plan-cache,key neither G2 nor G3 perturbs (printed-AST + (model, origin))
 Queryset diffing,queryset-diffing,B8 consumer-state precedent G1 extends to execution state
-Strictness mode,strictness-mode,G3 interaction; no false-fire for narrowed sibling fragments
+Strictness mode,strictness-mode,deferred G3 interaction; no false-fire for narrowed sibling fragments
 FK-id elision,fk-id-elision,the G2 elision-under-non-QUERY open decision (Decision 5)
 Schema audit,schema-audit,registry/interface descent G3 narrowing mirrors at walk time
 Relation handling,relation-handling,relation-planning contract G3 must not regress

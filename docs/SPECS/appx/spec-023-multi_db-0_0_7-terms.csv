@@ -1,13 +1,13 @@
 term,anchor,notes
 Multi-database cooperation,multi-database-cooperation,The shipped four-axis statement of the contract this spec pins; the spec's Decision 3 is its long form.
 DjangoOptimizerExtension,djangooptimizerextension,Optimizer extension that participates in the cooperation contract via queryset `_db` preservation.
-get_queryset visibility hook,get_queryset-visibility-hook,Visibility hook whose `Prefetch` downgrade preserves consumer-provided `Prefetch(queryset=…)` aliases — cooperation axis 3; a generated child queryset carries no alias in the plan and is routed alias-late at fetch time.
+get_queryset visibility hook,get_queryset-visibility-hook,Visibility hook run on a generated `Prefetch` child — the child is built unrouted; a hook that pins an alias there fails closed; the child follows the parent rows' connection at fetch time.
 Strictness mode,strictness-mode,Strictness check is connection-agnostic — cooperation axis 4; the same `OptimizerError` shape surfaces under any alias.
 Queryset diffing,queryset-diffing,Cooperation rule that respects consumer-applied work including `.using(alias)`; grounds the contract in shipped behavior.
 FK-id elision,fk-id-elision,Cooperation axis 1 — the elision stub's `_state.db` is set via `router.db_for_read`.
 DjangoType,djangotype,Consumer-facing type used in fixtures; framing only.
-finalize_django_types,finalize_django_types,Synchronization point; tests finalize once per fixture exactly like existing optimizer tests.
-ConfigurationError,configurationerror,Not raised by this card; cited so future-spec authors see the cooperation surface is intentionally validation-free.
+finalize_django_types,finalize_django_types,Synchronization point; the multi-db tests finalize exactly like the other optimizer tests.
+ConfigurationError,configurationerror,Raised by the visibility boundary when a `get_queryset` hook re-routes a pinned resolution or pins a generated `Prefetch` child; this contract adds no raise of its own.
 DjangoListField,djangolistfield,Sibling `0.0.7` card (`DONE-020-0.0.7`); cited in joint-cut framing.
 Django AppConfig,django-appconfig,Sibling `0.0.7` card (`DONE-021-0.0.7`); cited in joint-cut framing.
 Schema export management command,schema-export-management-command,Sibling `0.0.7` card (`DONE-022-0.0.7`); cited in joint-cut framing.

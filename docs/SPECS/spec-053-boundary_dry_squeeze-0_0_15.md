@@ -39,34 +39,35 @@ doing two things in sequence:
    ([Decision 9](#decision-9--phase-sequencing-and-hot-path-exclusions)).
 
 Two deliberate behavior changes ride the squeeze, both maintainer-approved in
-advance: the plain-form mutation pipeline gains the transactional
-auth-alias isolation every other flavor already has — **this one has since
-landed ahead of the card**
+advance: the plain-form mutation pipeline runs inside the transactional
+auth-alias isolation every other flavor has — **this one is built**
 ([Decision 6](#decision-6--close-the-plain-form-alias-guard-gap)) — and
 `editable_input_fields` inherits the shared field-name normalization
-strictness ([Decision 10](#decision-10--editable_input_fields-rides-the-shared-spine-strictness-tightening-accepted)).
+strictness, also built ([Decision 10](#decision-10--editable_input_fields-rides-the-shared-spine-strictness-tightening-accepted)).
 Every other consolidation is behavior-preserving by construction, with
 test-pinned error strings preserved **byte-identical**
 ([Decision 7](#decision-7--error-string-byte-preservation-policy)).
 
-Status: **PARTIALLY BUILT** (re-derived against the tree 2026-08-29 — the
-checklist boxes stay unticked; this line is the truth). Landed ahead of the
-card, largely via the shared-write-skeleton fold (`6013cda6`) and later DRY
-commits: C1 (`_run_delete` via the `tail_step` seam), C2 (the plain-form
-flavor rides the skeleton through
-`forms/resolvers.py::_run_form_pipeline_sync` — Decision 6's alias-guard
-gap is closed; its live-coverage obligation remains to verify), C5
-(`bind_write_declarations`), C6 (`_consume_fallback`), B1 (shipped as
-`ActiveInputPermissionMixin` + `SetInputTraversal`), B3
-(`relation_id_scalar`, `name_set_input_type_name`), B4's
-`open_write_pipeline`, B5's `require_subclass` / `_target_pk_name` /
+Status: **PARTIALLY BUILT** (the checklist boxes stay unticked; this line is
+the truth). Built: C1 (`_run_delete` via the `tail_step` seam), C2 (the
+plain-form flavor rides the skeleton through
+`forms/resolvers.py::_run_form_pipeline_sync`, so Decision 6's alias guard
+applies; its live-coverage obligation remains to verify), C3 (the filter
+convert/normalize pair walks one `convert_with_mro` table in
+`filters/inputs.py`), C5 (`bind_write_declarations`), C6
+(`_consume_fallback`), C11 (the orphan formatter's family words passed per
+`types/finalizer.py::_SidecarBindingSpec`), C13 (`editable_input_fields` on
+`resolve_effective_fields`), B1 (as `ActiveInputPermissionMixin` +
+`SetInputTraversal`), B3 (`relation_id_scalar`, `name_set_input_type_name`),
+B4's `open_write_pipeline`, B5's `require_subclass` / `_target_pk_name` /
 `resolve_unvisited_fragment` / `_validate_set_sidecar`, and D1–D3.
-Grep-verified still outstanding: all of Slice 1 (no `import-linter`, no
+Outstanding (absent from the tree): all of Slice 1 (no `import-linter`, no
 extras block), `PermissionClassesMixin`, `coerce_pks`,
 `strawberry_schema_config`, `validate_relay_page_bound`,
 `keyset_context_for`, `slot_child_selections`, `iter_relation_path`,
 `install_input_namespace`, `_graphql_surface_names`, `_relay_node_gate`,
-`_attach_generated_resolvers`. Slice 1 A0's re-baseline covers the
+`_attach_generated_resolvers`, and C12 (`optimizer/extension.py` still
+re-exports `_stash_on_context`). Slice 1 A0's re-baseline covers the
 checklist itself, not only the line totals.
 Five slices: Slice 1 (**boundary hardening**: optimizer surface promotion,
 `import-linter` contracts wired into CI/pre-commit, packaging extras),
@@ -144,28 +145,23 @@ XL: four work packages spanning ~30 files, but each candidate is small and
 independently verifiable; the weight is breadth, not depth.
 
 - [ ] **Slice 1 — Boundary hardening (WP-A)**
-  - [ ] **A0 re-baseline** (before any DRY slice acts): commit `60998b17`
-        ("seal get_queryset hook results into framework-owned querysets",
-        2026-07-20, net +1,337 lines to `utils/querysets.py` — 1,507
-        insertions / 170 deletions) and the later skeleton-fold commits
-        (`6013cda6` and kin) landed AFTER the
-        four DRY audits collected their figures, and several candidates
-        have since shipped (see Status). Re-derive the outstanding
-        candidate set from the tree, and re-measure the audit totals
-        (the ~1,100–1,300 / 32-candidate estimate, the package
-        sizes — already grown to ~68.8k physical lines — and Decision 1's
-        import-closure figure) against the
-        current tree, refreshing any candidate touching
+  - [ ] **A0 re-baseline** (before any DRY slice acts): several candidates
+        are built (see Status) and the audit figures predate the tree.
+        Re-derive the outstanding candidate set from the tree, and
+        re-measure the audit totals (the ~1,100–1,300 / 32-candidate
+        estimate, the package size, and Decision 1's import closure)
+        against the current tree, refreshing any candidate touching
         `utils/querysets.py` before Slices 2–4 act on it.
   - [ ] **A2 first** (it makes A1's contracts satisfiable): promote the
         optimizer's inward-facing API. `optimizer/__init__.py` re-exports the
         deliberate cross-boundary surface (the `_context` names consumed by
         `types/resolvers.py`; the `extension` symbols consumed by
         `mutations/resolvers.py` and `connection.py`; `plans.resolver_key`
-        / `plans.runtime_path_from_info`; the `nested_planner` /
-        `selections` symbols `connection.py` consumes; `FieldMeta`;
-        `OptimizerHint`) with a docstring naming it the package-internal
-        contract. Retarget the three consumer files; no behavior change.
+        / `plans.runtime_path_from_info`; the `nested_planner` / `plans` /
+        `selections` symbols `connection.py` consumes; the `predicates`
+        symbols `filters/sets.py` consumes; `FieldMeta`; `OptimizerHint`)
+        with a docstring naming it the package-internal contract. Retarget
+        the consumer files; no behavior change.
   - [ ] **A1**: add `import-linter` to `[dependency-groups].dev`; configure
         `[tool.importlinter]` contracts (optimizer inward surface; no
         `optimizer._*` imports from outside; soft-dep subpackages are leaves;
@@ -176,9 +172,9 @@ independently verifiable; the weight is breadth, not depth.
         updated in the same commit (implemented-contract doc, not a
         release-status doc).
 - [ ] **Slice 2 — Mechanical DRY batch (WP-B, ~450–550 lines)**
-  - [ ] B1 query-side delegate absorption (shipped as
-        `ActiveInputPermissionMixin` + the `SetInputTraversal` descriptor
-        in `sets_mixins.py`; dead-delegate
+  - [ ] B1 query-side delegate absorption (built as
+        `ActiveInputPermissionMixin` in `sets_mixins.py` + the
+        `SetInputTraversal` descriptor in `utils/input_values.py`; dead-delegate
         deletion pending the cookbook-parity check in
         [Risks](#risks-and-open-questions)).
   - [ ] B2 write-side sets (`PermissionClassesMixin`, metaclass merge,
@@ -196,10 +192,9 @@ independently verifiable; the weight is breadth, not depth.
         `require_subclass`).
 - [ ] **Slice 3 — Structural DRY batch (WP-C, ~500–600 lines)**
   - [ ] C1 `_run_delete` folded onto the write skeleton (`tail_step` seam).
-  - [ ] C2 the plain-form pipeline folded onto the skeleton (landed as
-        `forms/resolvers.py::_run_form_pipeline_sync` — the former
-        `_run_plain_form_pipeline_sync` no longer exists) —
-        **the alias-guard gap is closed** ([Decision 6](#decision-6--close-the-plain-form-alias-guard-gap));
+  - [ ] C2 the plain-form pipeline folded onto the skeleton
+        (`forms/resolvers.py::_run_form_pipeline_sync`) —
+        **the alias guard applies** ([Decision 6](#decision-6--close-the-plain-form-alias-guard-gap));
         remaining: verify/add live-tier coverage for the guarded path.
   - [ ] C3 filter converter/normalizer dispatch table (kills the two-ladder
         drift hazard).
@@ -232,20 +227,22 @@ independently verifiable; the weight is breadth, not depth.
         `django_strawberry_framework/__init__.py::__version__` (the single
         version literal — `pyproject.toml` is `dynamic = ["version"]` and
         `uv.lock` records no version for the editable root package),
-        `tests/base/test_init.py`, and the GLOSSARY package-version row.
-  - [ ] `CHANGELOG.md` `0.0.15` entry covering every card on the line
+        `tests/base/test_init.py`, and the GLOSSARY package-version row,
+        all of which already read `0.0.15` for the open development line;
+        Slice 5 verifies them and moves none.
+  - [ ] `CHANGELOG.md` `0.0.15` release notes under the existing
+        `## [0.0.15] - Unreleased` heading, covering every card on the line
         (permission granted by this slice).
   - [ ] Card flip to Done + `KANBAN.md`/`KANBAN.html` regeneration from the
         DB; `import_spec_terms` run.
 
 ## Problem statement
 
-The package works — ~6,000 tests green under a `fail_under = 100` gate — but
-the maintainer reports alignment fatigue: ~68.8k physical lines (~54.6k
-non-blank) across
-13 subpackages plus 22 root modules, with several families (sets, inputs,
-resolvers) that grew in parallel and re-spell shared shapes. A package split
-was considered and rejected on evidence. What remains is the real work the
+The package works under a `fail_under = 100` gate, but the maintainer
+reports alignment fatigue: 13 subpackages plus the root modules, with
+several families (sets, inputs, resolvers) that grew in parallel and
+re-spell shared shapes. A package split was considered and rejected on
+evidence. What remains is the real work the
 split instinct was pointing at: the optimizer/core boundary exists only by
 convention (private `optimizer._context` is imported from two subsystems;
 nothing enforces the seam), and four subsystem axes carry verified
@@ -253,26 +250,29 @@ duplication that makes every cross-cutting change cost more than it should.
 
 ## Current state
 
-- The optimizer imports `registry`, `keyset`, `exceptions`, and seven
-  `utils` modules (`conf` only via function-local deferred imports in
-  `nested_fetch.py` / `single_parent_fetch.py`); in the other direction
-  `types/resolvers.py` imports the
-  private `_context` module, while `mutations/resolvers.py` and
-  `connection.py` import optimizer internals through `extension` (and
-  `connection.py` also `nested_planner` / `plans` / `selections`). No
-  mechanical check guards any of this.
+- The optimizer imports `registry`, `keyset`, `exceptions`,
+  `extensions/operation_state.py` (the per-operation binding base its
+  extension derives from), and nine `utils` modules (`conf` only via
+  function-local deferred imports in `nested_fetch.py` /
+  `single_parent_fetch.py`; `types/` only under `TYPE_CHECKING` plus one
+  function-local import of `types/definition.py::origin_has_custom_id_resolver`
+  in `walker.py`); in the other direction `types/resolvers.py` imports the
+  private `_context` module, `mutations/resolvers.py` and `connection.py`
+  import optimizer internals through `extension` (and `connection.py` also
+  `nested_planner` / `plans` / `selections`), and `filters/sets.py` imports
+  `predicates`. No mechanical check guards any of this.
 - Soft dependencies (DRF, channels, cryptography, debug-toolbar) are guarded
   at runtime by `require_optional_module` but not advertised as pip extras.
 - Prior DRY work already landed the big shared spines: the write pipeline
-  skeleton (`mutations/resolvers.py::run_write_pipeline_sync`, spec-039
-  P-series), the input-assembly substrate (`utils/inputs.py`), the query-side
+  skeleton (`mutations/resolvers.py::run_write_pipeline_sync`), the input-assembly substrate (`utils/inputs.py`), the query-side
   permission core (`utils/permissions.py` + `sets_mixins.py`), and the
   selection-walking home (`optimizer/selections.py`). The 32 candidates in
   this spec are what four fresh audits found still duplicated **after** those
   passes — plus the audits' verified-and-rejected ledger.
-- The per-file DRY review cycle (`docs/dry/dry-0_0_14.md`, workflow
-  `docs/dry/DRY.md`) is mid-flight and independent: it reviews one file at a
-  time; this card is the cross-file strategic pass. Neither blocks the other.
+- The per-file DRY review cycle (workflow `docs/dry/DRY.md`, one
+  `docs/dry/dry-<ver>.md` record per release) is independent: it reviews one
+  file at a time; this card is the cross-file strategic pass. Neither blocks
+  the other.
 - Card `DONE-044-0.0.14`
   ([`DjangoDebugExtension`][glossary-djangodebugextension]) shipped in the
   `0.0.14` joint cut; card `TODO-ALPHA-052-0.0.15`
@@ -281,8 +281,8 @@ duplication that makes every cross-cutting change cost more than it should.
   This card is sequenced behind BOTH: by the time its slices run,
   `extensions/debug.py` is gone, `extensions.debug` is the directory's
   soft-dependency member
-  (guarded re-export + `[debug]` extra; the two `0.0.14` security
-  extensions remain hard root dependencies), and
+  (guarded re-export + `[debug]` extra; the two security extensions and
+  `extensions/operation_state.py` remain hard dependencies), and
   the extras pattern of Decision 5 already has its first member
   ([Risks](#risks-and-open-questions)).
 
@@ -295,9 +295,9 @@ duplication that makes every cross-cutting change cost more than it should.
 - ~1,100–1,300 duplicated source lines removed across the four audited axes,
   with every consolidation either provably behavior-preserving or explicitly
   decision-pinned as a behavior change.
-- Two invariants strengthened as side effects (both have since landed with
-  the skeleton folds): the delete and plain-form
-  mutation paths inherit all future write-skeleton hardening automatically,
+- Two invariants strengthened as side effects (both built with the
+  skeleton folds): the delete and plain-form
+  mutation paths inherit all write-skeleton hardening automatically,
   and the auth-alias guard is uniform across all mutation flavors — the
   remaining obligation is coverage verification, not code.
 - One live drift hazard eliminated (the filter dispatch ladder pair).
@@ -358,10 +358,9 @@ Everything else in this card is package-internal.
 **Decision**: the package stays one distribution. The considered split
 (standalone optimizer package, core depending on it) is rejected.
 
-**Evidence**: (a) the optimizer's minimal import closure was ~12k lines at
-audit time (the package has since grown to ~68.8k physical lines, so the
-audit's ~25% ratio is stale — re-measure at Slice 1 A0) including
-`registry`, `keyset`, and — via
+**Evidence**: (a) the optimizer's minimal import closure (re-measured at
+Slice 1 A0) includes `registry`, `keyset`, `extensions/operation_state.py`,
+and — via
 `utils/querysets.py` — the mutation write pipeline
 (`utils/write_transaction.py`); (b) the optimizer's input contract IS the
 type system (`optimizer/walker.py` plans via `registry.get_definition`,
@@ -405,7 +404,11 @@ Contracts (initial set):
    `types`, `mutations`, `forms`, `filters`, `orders`, `rest_framework`,
    `connection`, `auth`, `extensions`, `middleware`, `testing`. (Allowed by
    omission: `registry`, `keyset`, `exceptions`, `conf`, `utils`, the root
-   logger.)
+   logger.) Two existing edges collide with this list and must be
+   sanctioned or removed before the contract is green:
+   `optimizer/extension.py`'s module-level import of
+   `extensions/operation_state.py`, and `optimizer/walker.py`'s
+   function-local import of `types/definition.py::origin_has_custom_id_resolver`.
 2. **Private-module protection** (`forbidden`): no module outside
    `django_strawberry_framework.optimizer` imports
    `django_strawberry_framework.optimizer._context` (generalize to
@@ -439,8 +442,11 @@ Contracts (initial set):
    (iii) `utils/errors.py::field_error` does
    `from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError` at
    runtime (the same names its TYPE_CHECKING block imports).
-   TYPE_CHECKING-only upward imports (`utils/write_values.py`,
-   `utils/errors.py` -> `mutations.inputs`) are covered by the
+   TYPE_CHECKING-only upward imports (`utils/errors.py`,
+   `utils/write_values.py`, `utils/write_transaction.py` -> `mutations`;
+   `utils/input_values.py`, `utils/querysets.py` -> `filters` / `orders`;
+   `utils/querysets.py`, `utils/inputs.py` -> `types`; `utils/inputs.py`,
+   `utils/permissions.py` -> `sets_mixins`) are covered by the
    type-checking-import exclusion (see Risks).
 
 **Alternative rejected**: `scripts/check_import_boundaries.py` in the
@@ -455,14 +461,15 @@ optimizer's declared package-internal contract, re-exported from
 `optimizer/__init__.py` with a docstring naming them as such. Verified
 consumer inventory to cover: the `_context` names
 (`DST_OPTIMIZER_FK_ID_ELISIONS`, `DST_OPTIMIZER_PLANNED`,
-`DST_OPTIMIZER_STRICTNESS`, `get_context_value`) used by
-`types/resolvers.py`;
+`DST_OPTIMIZER_STRICTNESS`, `active_strictness`, `optimizer_value`,
+`relation_is_optimizer_scoped`) used by `types/resolvers.py`;
 `plans.resolver_key` / `plans.runtime_path_from_info`;
 `extension.apply_connection_optimization` (used by `mutations/resolvers.py`
 and `connection.py`) and `extension.mutation_payload_child_selections`
-(used by `mutations/resolvers.py`); the `nested_planner` /
-`selections` symbols `connection.py` uses; `field_meta.FieldMeta`;
-`hints.OptimizerHint`; the optimizer `logger`. Pure re-export + retarget; no
+(used by `mutations/resolvers.py`); the `nested_planner` / `plans` /
+`selections` symbols `connection.py` uses; `predicates.attach_exists` /
+`predicates.correlated_inner_root` (used by `filters/sets.py`);
+`field_meta.FieldMeta`; `hints.OptimizerHint`; the optimizer `logger`. Pure re-export + retarget; no
 symbol moves, no behavior change. After this, contract 2 of Decision 3 is
 enforceable.
 
@@ -484,24 +491,22 @@ behavior.
 
 ### Decision 6 — Close the plain-form alias-guard gap
 
-**Decision** (maintainer-approved) — **LANDED ahead of this card**: the
-plain-form pipeline folded onto the shared
-skeleton (C2) and **gained** `pipeline_alias_guard` + `authorization_phase`
-wrapping like every other flavor, rather than parameterizing the guard off.
-The former `_run_plain_form_pipeline_sync` no longer exists;
-`forms/resolvers.py::_run_form_pipeline_sync` serves both form bases and
-routes every flavor through `run_write_pipeline_sync`, which opens the
-guard and the authorization phase unconditionally.
-Plain-form mutations' permission classes now run inside the same
+**Decision** (maintainer-approved, built): the plain-form pipeline rides the
+shared skeleton (C2) and runs inside `pipeline_alias_guard` +
+`authorization_phase` like every other flavor, rather than parameterizing
+the guard off. `forms/resolvers.py::_run_form_pipeline_sync` serves both
+form bases and routes every flavor through `run_write_pipeline_sync`, which
+opens the guard and the authorization phase unconditionally.
+Plain-form mutations' permission classes run inside the same
 transactional auth-alias isolation
 ([Multi-database cooperation][glossary-multi-database-cooperation]) as
 model / ModelForm / serializer mutations. What remains of C2 is the
 coverage obligation: verify (or add) live-tier coverage for the
-newly-guarded path.
+guarded path.
 
-**Rationale**: the exemption was an artifact of the fork, not a decision —
-no docstring defends it. A uniform invariant is worth the small behavior
-change (auth-alias statements in plain-form permission checks become
+**Rationale**: an exemption would be a non-uniform security posture with
+nothing to defend it. A uniform invariant is worth the small behavior
+change (auth-alias statements in plain-form permission checks are
 force-rolled-back, exactly as elsewhere).
 
 **Alternative rejected**: preserving the exemption via a guard flag —
@@ -539,23 +544,22 @@ sweeps (and future maintainer-agents) do not re-flag them:
   `serializers.Field` key spaces) — three key spaces is the architecture.
 - Per-flavor required/optional predicates — DRF's orthogonal `allow_null`
   semantics are load-bearing; do not unify predicates.
-- The four per-flavor `_ALLOWED_*_META_KEYS` frozensets (spec-039
-  Decision 13's
-  named over-DRY trap) — each is now a union over the shared
+- The four per-flavor `_ALLOWED_*_META_KEYS` frozensets — each is a union
+  over the shared
   `COMMON_WRITE_META_KEYS` / `MODEL_BACKED_WRITE_META_KEYS` bases; the
   per-flavor tails stay separate.
 - `rest_framework/sets.py::SerializerMutation.build_input`'s partial reuse of
-  `cached_build_input` (documented at `#"P1.7 reuse is partial here"`).
+  `cached_build_input` (documented at `#"build/stash seam is reused only partly here"`).
 - `keyset.py::split_order_ref` vs `plans.py::order_entry_name_and_direction`
   (loud config error vs soft fallback — documented).
 - `filters/sets.py::FilterSet._evaluate_logic_tree`'s three branches (the
   combinators genuinely differ: `&=`, grouped `|=`, `~`).
 - The `initial_queryset(target_type)` visibility-seed non-candidate
-  (defined in `utils/querysets.py`, consumed by `connection.py` /
-  `list_field.py` / `types/resolvers.py` / `types/relay.py`; `FilterSet`'s
-  own seed runs through `apply_type_visibility_sync/_async` — owner model
-  may be a subclass —
-  verified-and-rejected in a prior cycle).
+  (defined in `utils/querysets.py`, consumed by `forms/resolvers.py` /
+  `mutations/resolvers.py` / `optimizer/walker.py` / `types/resolvers.py` /
+  `types/relay.py`; `FilterSet`'s own seed runs through
+  `apply_type_visibility_sync/_async` — the owner model may be a
+  subclass).
 - The `meta.__dict__` vs MRO-`getattr` asymmetry in `_validate_meta`
   (docstring: do not unify).
 - `sets_mixins.py::collect_related_declarations`'s bespoke diamond-tombstone
@@ -588,15 +592,15 @@ the Slice 4 bench runs ([Test plan](#test-plan)).
 
 ### Decision 10 — `editable_input_fields` rides the shared spine; strictness tightening accepted
 
-**Decision** (maintainer-approved): C13 rebases
+**Decision** (maintainer-approved, built): C13 rebases
 `mutations/inputs.py::editable_input_fields` on
 `utils/inputs.py::resolve_effective_fields`, which brings
 `normalize_field_name_sequence`'s bare-string/duplicate rejection to the
-mutation flavor — inputs that previously slipped through now raise
-[`ConfigurationError`][glossary-configurationerror] at class creation. This
-is a fail-loud improvement, pinned here as an accepted behavior change. The
-shared spine gains an `allow_empty` knob because the mutation flavor
-legitimately defers its empty-set raise to `build_mutation_input` (a
+mutation flavor — such declarations raise
+[`ConfigurationError`][glossary-configurationerror]. This is a fail-loud
+improvement, pinned here as an accepted behavior change. The spine's
+`empty_message` knob is optional, and the mutation flavor passes none
+because it defers its empty-set raise to `build_mutation_input` (a
 consumer-`overrides` merge can empty the generated remainder).
 
 ### Decision 11 — Joint `0.0.15` cut — Slice 5 owns the version bump
@@ -607,27 +611,22 @@ This card shares `0.0.15` with cards `050` (list-field arguments), `051`
 [joint version cut][glossary-joint-version-cut] and the **last** card to land
 owns the bump. That is this card, and not by accident: it declares
 dependencies on all three (the `052` edge because it writes its
-`extensions.debug` contract against the
-post-extraction tree; the `050` / `051` edges landed at the 2026-08-29
-board review — `051` touches every file in this card's WP list except
-`types/converters.py`), so it cannot precede them. Slice 5 therefore
-carries the
-version triplet (`django_strawberry_framework/__init__.py::__version__`,
-`tests/base/test_init.py`, the GLOSSARY package-version row), the
-release-status doc moves, the glossary
-status flips **for every card on the line**, and the `CHANGELOG.md` entry.
-No
-earlier slice moves any of the triplet, and no other card on the line moves
-any of it either (`spec-052` Decision 7).
+`extensions.debug` contract against the post-extraction tree; the `051`
+edge because `051` touches every file in this card's WP list except
+`types/converters.py`), so it cannot precede them. The version triplet
+(`django_strawberry_framework/__init__.py::__version__`,
+`tests/base/test_init.py`, the GLOSSARY package-version row) already reads
+`0.0.15` for the open development line; Slice 5 carries the release-status
+doc moves, the glossary status flips **for every card on the line**, and the
+`CHANGELOG.md` release notes. No other card on the line moves any of it
+(`spec-052` Decision 7).
 
 ### Decision 12 — TODO anchors stage the unbuilt slices
 
 Per the repo's staging discipline, staged-but-unbuilt slices carry
 `TODO(spec-053 Slice N)` source anchors at the sites they will change,
-removed in the change that ships the slice. The version-triplet sites are
-clear: spec-044's `0.0.14` cut landed and took its own
-`TODO(spec-044 Slice 3)` anchors with it, so this card's Slice 5 anchors have
-no prior claim to wait on ([Risks](#risks-and-open-questions)).
+removed in the change that ships the slice. None are placed; the
+version-triplet sites need none, since they already read `0.0.15`.
 
 ## Implementation plan
 
@@ -662,11 +661,11 @@ referenced symbols. Key parameterize-don't-average obligations, restated:
   `[resp_key] if resp_key is not None else _response_keys(sel)` — a naive
   `[None]` logs the literal. The helper takes the payload map as a
   parameter; the shared-window caller passes `{None: arguments}` because
-  unmerged selections never grew `_optimizer_response_key_arguments`. One
-  accepted debug-log delta: the outer single-window sidecar gate used to
-  run before `hint_is_skip`, so sidecar + SKIP logged "sidecar arguments";
-  post-fold it returns silently at SKIP (plan output identical, matching
-  today's divergent order).
+  unmerged selections never carry `_optimizer_response_key_arguments`. One
+  accepted debug-log behavior: on the shared-window path the sidecar gate
+  runs after `hint_is_skip`, so sidecar + SKIP returns silently at SKIP
+  rather than logging "sidecar arguments" (plan output identical, matching
+  the divergent order).
 - D3: model decode rides `decode_provided_fields`. Bind stashes total-coverage
   `InputFieldSpec`s (merged dataclass included) plus a Django-field index for
   `extra(spec)` (`relation_field.null`) and `_provided_attr_names` reversal.
@@ -676,15 +675,17 @@ referenced symbols. Key parameterize-don't-average obligations, restated:
   is composed directly from the `*_into` primitives (`decode_field_handlers`
   stays form + serializer: the model replaces every default but
   `RELATION_SINGLE`, so the factory adds nothing). `_relation_field_index`
-  survives as the bind-time helper in `mutations/inputs.py`; request-time
-  rediscovery dies. Non-column override attrs fail loud at spec synthesis.
+  is the bind-time helper in `mutations/inputs.py`
+  (`mutation_input_field_specs` calls it). Non-column override attrs fail
+  loud at spec synthesis.
 
 ## Helper-reuse obligations (DRY)
 
 New helpers this card introduces become the canonical owners; the executing
 slices must retarget ALL call sites, not just the audited ones (sweep by
-symbol before closing each item): `ActiveInputSetMixin` + the traversal
-descriptor (`sets_mixins.py`), `PermissionClassesMixin`
+symbol before closing each item): `ActiveInputPermissionMixin`
+(`sets_mixins.py`) + the `SetInputTraversal` descriptor
+(`utils/input_values.py`), `PermissionClassesMixin`
 (`mutations/permissions.py`), `relation_id_scalar` (`mutations/inputs.py`),
 `name_set_input_type_name` (`utils/inputs.py`), `coerce_pks` +
 `open_write_pipeline` + the substituted-row helper
@@ -694,8 +695,7 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 `slot_child_selections` (`optimizer/selections.py`), `iter_relation_path`
 (`utils/relations.py`), the budgeted-walk primitive (`utils/`),
 `install_input_namespace` (`utils/inputs.py`), `bind_write_declarations`
-(`mutations/sets.py`), `require_subclass` (`utils/inputs.py` or
-`exceptions.py` — executor's choice, documented at the definition).
+(`mutations/sets.py`), `require_subclass` (`mutations/sets.py`).
 
 ## Edge cases and constraints
 
@@ -713,19 +713,17 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   (`SimpleNamespace` fields) — the FieldMeta-ized fallback map needs those
   doubles updated in the same change, and
   `nested_planner._raw_relation_field`'s re-fetch path re-verified.
-- **D1 sidecar + SKIP log delta**: folding the single-window arm through
-  `_divergent_key_windows` moves the sidecar gate after `hint_is_skip` /
+- **D1 sidecar + SKIP log behavior**: the single-window arm runs through
+  `_divergent_key_windows`, so the sidecar gate runs after `hint_is_skip` /
   `resolver_identities_for` / `related_model is None`. Sidecar + SKIP on
-  the shared-window path now returns silently at SKIP instead of logging
+  the shared-window path returns silently at SKIP rather than logging
   "sidecar arguments". Plan output is identical (fully unplanned); the
-  order now matches the divergent scheme. Documented, not preserved.
+  order matches the divergent scheme.
 - **D3 merged-input coverage**: bind must produce a spec for every field on
   the merged dataclass (`decode_provided_fields` KeyErrors on a miss). A
-  non-column override attr is a bind-time `ConfigurationError`, converting
-  the previous request-time `FieldDoesNotExist` from
-  `_explicit_null_error`'s live `get_field`. `_provided_attr_names` reverses
-  FK attrs via the bind-time Django-field index (spec-036 M3-1), not a
-  request-time `_relation_field_index`.
+  non-column override attr is a bind-time `ConfigurationError`.
+  `_provided_attr_names` reverses FK attrs via the bind-time Django-field
+  index.
 - **B1 dead-delegate deletion** is gated on the cookbook-parity check (see
   Risks): if the delegates are documented consumer surface, they are
   absorbed (single implementation, kept methods) instead of deleted.
@@ -736,15 +734,12 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 ## Test plan
 
 - **Gate**: the full suite green under `fail_under = 100` at every slice
-  boundary (run only at maintainer-invoked gates per `AGENTS.md`). Baseline
-  note: the 49-failure + 1-collection-error baseline observed at authoring
-  time has since resolved — the suite returned to green (4,371 passed, 100%
-  coverage) at the `0.0.14` / `DONE-045` close on 2026-07-20; still reconcile
+  boundary (run only at maintainer-invoked gates per `AGENTS.md`); reconcile
   the working-tree state with the maintainer before using the suite as this
-  card's gate (concurrent sessions remain active).
+  card's gate (concurrent sessions).
 - **Behavior changes get NEW coverage first** (the
   [live-first coverage mandate][glossary-live-first-coverage-mandate]):
-  C2's newly-guarded plain-form path and C13's strictness rejections each
+  C2's guarded plain-form path and C13's strictness rejections each
   get live-tier tests in `examples/fakeshop/test_query/` where reachable,
   package-tier otherwise.
 - **Deleted delegates** ⇒ their package tests retarget to
@@ -764,25 +759,20 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 
 - Slice 1: `README.md` install section (extras); `docs/TREE.md` regen if
   module docstrings change.
-- Slice 5 (the release-status set): `docs/GLOSSARY.md` (status flips + the
-  package-version row via the glossary DB + re-render), `docs/README.md`,
+- Slice 5 (the release-status set): `docs/GLOSSARY.md` (status flips via
+  the glossary DB + re-render), `docs/README.md`,
   `docs/TREE.md`, `README.md`, `TODAY.md`, `KANBAN.md`/`KANBAN.html` (DB +
   regen), `CHANGELOG.md` (permission granted by this slice), `GOAL.md` only
   if its maintainability framing warrants it.
 
 ## Risks and open questions
 
-- **Sequencing behind spec-044 AND the rest of the `0.0.15` line**: card
-  044 owns the `0.0.14`
-  cut (its TODO anchors sat on the version-bump sites), and cards 050 /
-  051 / 052 all land first on this card's own `0.0.15` line (the board
-  records dependency edges on each; card 052's
-  debug extraction is the one this
-  card's Slice 1 contract wording and Slice 5 cut both assume). This card
-  must not start Slice 5 (nor place its own
-  triplet anchors) until the `0.0.14` cut has landed and the other three
-  cards have
-  wrapped. Preferred answer: begin Slices 1–2 only after card 052 wraps
+- **Sequencing behind the rest of the `0.0.15` line**: cards 051 and 052
+  land first on this card's `0.0.15` line (the board records dependency
+  edges on each, and on the Done card 050; card 052's debug extraction is
+  the one this card's Slice 1 contract wording and Slice 5 cut both
+  assume). This card must not start Slice 5 until both have wrapped.
+  Preferred answer: begin Slices 1–2 only after card 052 wraps
   (they are cheap to hold and the contract wording depends on it); Slice 5
   is then the joint `0.0.15` cut for the line
   ([Decision 11](#decision-11--joint-0015-cut--slice-5-owns-the-version-bump)).
@@ -796,29 +786,29 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
   (they are underscore-prefixed and internal-shaped); fallback: absorb into
   the mixin and keep the methods as thin documented wrappers. Resolve with
   the maintainer at Slice 2 execution.
-- **C2 blast radius — now historical**: the alias-guard gap is already
-  closed in the tree (Decision 6); the plain-form
-  permission-check transaction semantics changed with the landed fold. The
-  open item is coverage: verify the guarded path has live-tier coverage,
-  adding it per Decision 6 if not.
+- **C2 coverage**: the plain-form path runs inside the alias guard
+  (Decision 6); the open item is coverage: verify the guarded path has
+  live-tier coverage, adding it per Decision 6 if not.
 - **Estimate confidence**: line-savings totals are audit estimates;
   individual items may shrink on contact with pinned tests. The card's
   success metric is the seam quality and the candidate disposition (done /
   rejected-with-reason), not hitting a lines number.
 - **import-linter vs TYPE_CHECKING imports**: `registry.py` imports
-  `DjangoTypeDefinition` under `TYPE_CHECKING` from `types/` — contracts
+  `DjangoTypeDefinition` under `TYPE_CHECKING` from `types/`, and `utils/`
+  carries the TYPE_CHECKING-only upward imports listed under Decision 3
+  contract 4 — contracts
   must be configured to ignore type-checking-only imports (import-linter
   supports this) or the `utils`/optimizer contracts will false-positive.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- The per-file DRY review cycle (`docs/dry/dry-0_0_14.md`) — continues
+- The per-file DRY review cycle (`docs/dry/DRY.md`) — continues
   independently.
 - Any package split or new distribution — rejected, Decision 1.
 - Test-tree DRY, docstring-volume reduction, and process/ceremony changes —
   raised in the maintainer conversation, not carded here.
-- The beta-release cleanup card (now `TODO-ALPHA-057-0.1.0` after the
-  renumbers — it ushers in the beta and closes the Alpha column) — this
+- The beta-release cleanup card (`TODO-ALPHA-057-0.1.0` — it ushers in the
+  beta and closes the Alpha column) — this
   card's squeeze does not absorb its verification scope.
 - The `DjangoDebugExtension` extraction — card `052`
   ([`docs/SPECS/spec-052-debug_extraction-0_0_15.md`][spec-052]), which this card
@@ -829,27 +819,24 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 - [ ] `lint-imports` runs green in CI and pre-commit with the four contracts
       of Decision 3; no `optimizer._*` import exists outside `optimizer/`.
 - [ ] `optimizer/__init__.py` declares the package-internal contract;
-      `types/resolvers.py`, `mutations/resolvers.py`, `connection.py` import
-      only through it.
+      `types/resolvers.py`, `mutations/resolvers.py`, `connection.py` and
+      `filters/sets.py` import only through it.
 - [ ] The four extras install and resolve in isolated venvs.
 - [ ] Every Slice 2–4 candidate is either landed or recorded
       rejected-with-reason in this spec; the Decision 8 ledger is preserved.
 - [ ] Plain-form mutations run inside `pipeline_alias_guard` +
-      `authorization_phase` (already true in the tree) with live coverage
+      `authorization_phase` (true in the tree) with live coverage
       verified or added (Decision 6).
 - [ ] Full suite green under `fail_under = 100`; zero error-string assertion
       edits outside Decisions 6/10; bench deltas at noise level.
 - [ ] Slice 5 shipped: version triplet at `0.0.15`, GLOSSARY flips for
-      every
-      card on the line, `CHANGELOG.md` entry, card flipped Done,
+      every card on the line, `CHANGELOG.md` release notes, card flipped Done,
       `KANBAN.md`/`KANBAN.html` regenerated from the DB, `import_spec_terms`
       green.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../../AGENTS.md
-[kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
 [glossary]: ../GLOSSARY.md
@@ -891,9 +878,6 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 [glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->
-[spec-038]: spec-038-form_mutations-0_0_12.md
-[spec-039]: spec-039-serializer_mutations-0_0_13.md
-[spec-043]: spec-043-test_client-0_0_14.md
 [spec-052]: spec-052-debug_extraction-0_0_15.md
 
 <!-- docs/builder/ -->
@@ -909,4 +893,3 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 <!-- .venv/ -->
 
 <!-- External -->
-[import-linter]: https://import-linter.readthedocs.io/

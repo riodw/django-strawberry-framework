@@ -1,41 +1,29 @@
 # Spec: Secure output and error defaults — drop the filesystem path, fail the debug extension closed, mask production errors
 
-Targeted at `0.0.14` (card [`DONE-048-0.0.14`][kanban]). This is **card 3 of the
-four-card security-remediation program** derived from the hardening audit in
-[`docs/feedback2.md`][feedback2]; it closes that audit's **S5** (generated file output
-exposes absolute server paths), **S8** (the debug extension does not fail closed under
-`DEBUG=False`), and **S10** (production exception masking remains opt-in). It follows
-[`spec-046`][spec-046] (transport security) and [`spec-047`][spec-047] (the execution
-resource policy); card [`WIP-ALPHA-049-0.0.14`][kanban] (dependency / CI hygiene) closes
-the program.
+Targeted at `0.0.14` (card [`DONE-048-0.0.14`][kanban]), one of four security cards on
+that line beside [`spec-046`][spec-046] (transport security), [`spec-047`][spec-047] (the
+execution resource policy), and [`spec-049`][spec-049] (dependency and CI hardening). It
+makes three defaults safe: generated file output publishes no absolute server path, the
+debug extension fails closed under `DEBUG=False`, and `DjangoSchema` masks unexpected
+exceptions in production.
 
-Deliberation, rejected alternatives, and this spec's change record live in its companion
+Rejected alternatives live in the companion
 [`spec-048-secure_output_defaults-0_0_14-rationale.md`][rationale].
-
-**`docs/feedback2.md` is review evidence this spec references, not a substitute for it.**
-The audit established the facts; every decision, default, public-API shape, compatibility
-promise, and test row below is this spec's own.
 
 **This card contains an intentional, documented alpha breaking change**
 ([Decision 4](#decision-4--the-break-is-justified-and-carries-a-one-line-migration)): the
-`path` field disappears from every generated file and image output in the default schema.
-The package's documented API freeze begins at `1.0.0`, and cards 046 and 047 both set the
-precedent that correcting a confirmed security-boundary default during alpha outranks
-migration convenience.
+`path` field is absent from every generated file and image output in the default schema.
+The package's documented API freeze begins at `1.0.0`, and correcting a confirmed
+security-boundary default during alpha outranks migration convenience, as it did for
+cards 046 and 047.
 
 Status: **SHIPPED — all five slices are built and released.** The `Status:` line is the
 completion source of truth (the shipped-spec convention); the Slice checklist boxes below
-stay unticked. `CHANGELOG.md` carries no `0.0.14` entry — [`AGENTS.md`][agents] reserves
-that entry for the maintainer.
+stay unticked.
 
 **Version boundary** (see
-[Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)):
-this card targets `0.0.14`, which the version quintet already reads, so its Slice 5 owns
-the documentation fold-in and no part of the quintet.
-
-Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits without explicit
-permission. This card's Slice 5 does **not** claim that permission — the release entry is
-the maintainer's.
+[Decision 12](#decision-12--the-version-bump-belongs-to-the-joint-cut)): this card owns no
+version state.
 
 ## Key glossary references
 
@@ -50,10 +38,10 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   named so the two halves of the file surface are not confused.
 - [`DjangoType`][glossary-djangotype], [`Meta.model`][glossary-metamodel],
   [`Meta.fields`][glossary-metafields], [`Meta.exclude`][glossary-metaexclude] — the type
-  declaration the new opt-in key joins.
+  declaration the opt-in key joins.
 - [`Meta.nullable_overrides`][glossary-metanullable_overrides],
   [`Meta.required_overrides`][glossary-metarequired_overrides] — the exact validation
-  precedent the new `Meta` key copies, field for field.
+  precedent the opt-in `Meta` key copies, field for field.
 - [`ConfigurationError`][glossary-configurationerror] — the typed build-time failure for an
   invalid opt-in target.
 - [Relation handling][glossary-relation-handling],
@@ -69,9 +57,9 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   [Reference-counted cursor coordinator][glossary-reference-counted-cursor-coordinator],
   [Bounded query-log rollover][glossary-bounded-query-log-rollover],
   [Async SQL-capture boundary][glossary-async-sql-capture-boundary] — the diagnostic
-  subsystem that gains a gate and a set of caps.
-- [Masking-extension ordering][glossary-masking-extension-ordering] — the existing rule
-  that the debug extension must tear down before any masking extension; the new error
+  subsystem that carries a gate and a set of caps.
+- [Masking-extension ordering][glossary-masking-extension-ordering] — the rule
+  that the debug extension must tear down before any masking extension; the error
   policy has to obey it from the other side.
 - [Response-extension merge semantics][glossary-response-extension-merge-semantics],
   [Response-extensions debug middleware][glossary-response-extensions-debug-middleware],
@@ -80,7 +68,7 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   debug payload whose contract the caps must not break.
 - [Strawberry extension lifecycle][glossary-strawberry-extension-lifecycle],
   [Per-operation extension isolation][glossary-per-operation-extension-isolation] — the
-  construction and per-request semantics both new gates depend on.
+  construction and per-request semantics both gates depend on.
 - [Execution resource policy][glossary-execution-resource-policy],
   [`ResourcePolicy`][glossary-resourcepolicy],
   [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension] — the
@@ -93,20 +81,21 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   [`DjangoMutation`][glossary-djangomutation],
   [`DjangoModelFormMutation`][glossary-djangomodelformmutation] — the write surfaces whose
   deliberate rejections must survive the mask.
-- [`SyncMisuseError`][glossary-syncmisuseerror] — the multiple-inheritance precedent for a
-  package error that is also a `GraphQLError`.
+- [`SyncMisuseError`][glossary-syncmisuseerror] — the multiple-inheritance precedent (a
+  package error that is also a built-in exception type) `ResourceLimitExceeded` follows to be
+  both a package error and a `GraphQLError`.
 - [`request_from_info`][glossary-request_from_info] — the info-to-request seam the
   extension reuses rather than re-deriving.
 - [`TestClient`][glossary-testclient], [Probe URLconf][glossary-probe-urlconf],
   [`seed_data`][glossary-seed_data],
   [Live-first coverage mandate][glossary-live-first-coverage-mandate] — the test tiers and
   disciplines that decide where each regression lives.
-- [Joint version cut][glossary-joint-version-cut] — the release rule this card is
-  explicitly NOT subject to.
+- [Joint version cut][glossary-joint-version-cut] — the release rule that owns the version
+  bump, never this card's slices.
 - [Schema audit][glossary-schema-audit] — the build-time surface audit whose failure
-  vocabulary the new `Meta` key's rejections match.
+  vocabulary the opt-in `Meta` key's rejections match.
 
-Terms this spec ADDED to the glossary in Slice 5:
+Terms this spec adds to the glossary:
 [`Meta.filesystem_path_fields`][glossary-metafilesystem_path_fields] (the opt-in key),
 [`DjangoFilePathType`][glossary-djangofilepathtype] and
 [`DjangoImagePathType`][glossary-djangoimagepathtype] (the two opt-in output types),
@@ -123,32 +112,33 @@ Each top-level item maps to one commit / PR.
 - [ ] **Slice 1 — the safe file default and its opt-in**
       `types/converters.py`: `path` leaves [`DjangoFileType`][glossary-djangofiletype] /
       [`DjangoImageType`][glossary-djangoimagetype] for a private
-      `_FileSystemPathFields` mixin, composed into two new public
-      `DjangoFilePathType` / `DjangoImagePathType`; `convert_field_output` grows
+      `_FileSystemPathFields` mixin, composed into two public
+      `DjangoFilePathType` / `DjangoImagePathType`; `convert_field_output` takes
       `expose_filesystem_path=`. `types/base.py`: the `Meta.filesystem_path_fields`
       snapshot, its validation, and the frozenset threaded into `_build_annotations`.
 - [ ] **Slice 2 — the debug extension fails closed and bounds its payload**
-      `extensions/debug.py`: the `__init__` it lacks, the `allow_unsafe_production`
-      acknowledgement, the `settings.DEBUG` gate that makes the extension inert, the one
-      warning, and the six module-level payload caps behind one shared truncation helper.
+      `extensions/debug.py`: the keyword-only `allow_unsafe_production` acknowledgement,
+      the `settings.DEBUG` gate that makes the extension inert, the one warning, and the six
+      module-level payload caps behind one shared truncation helper.
 - [ ] **Slice 3 — the production error policy**
-      `error_policy.py` (new: `ErrorPolicy`, `DEFAULT_ERROR_POLICY`,
-      `resolve_error_policy`), `conf.py::error_policy_setting()` and `ERROR_POLICY_KEY`,
+      `error_policy.py` (`ErrorPolicy`, `DEFAULT_ERROR_POLICY`, `resolve_error_policy`),
+      `conf.py::error_policy_setting()` and `ERROR_POLICY_KEY`,
       `extensions/error_policy.py::DjangoErrorPolicyExtension`, and the
-      `DjangoSchema(error_policy=…)` resolution plus the prepend install.
+      `DjangoSchema(error_policy=…)` resolution with the extension first in every
+      operation's chain.
 - [ ] **Slice 4 — tests across the three trees**
       Live rows in `examples/fakeshop/test_query/`, package rows in `tests/`, and the
       per-app rows the SDL and settings-override probes need.
 - [ ] **Slice 5 — docs fold-in**
       `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`,
-      and `KANBAN.md`. The version quintet is the joint cut's, not this slice's.
+      and `KANBAN.md`.
 
 ## Problem statement
 
 Three independent defaults each hand a client information the client was never meant to
 have, and each of the three is safe only because someone remembered something.
 
-**S5 — a generated file output must not publish an absolute server path by default.**
+**A generated file output must not publish an absolute server path by default.**
 `FieldFile.path` is the absolute filesystem path. A `path` subfield on the default file
 output would hand it, on every `FileField` and `ImageField` column of every
 [`DjangoType`][glossary-djangotype] in every schema this package generates, to any client
@@ -164,28 +154,23 @@ or logging defect into an exploitable one. The stored `name` can also expose a s
 but `name` is frequently application data a client legitimately renders, so it does not
 justify the same unconditional removal — its sensitivity is documented instead.
 
-**S8 — the diagnostic extension is armed in production by a single list entry.**
+**A diagnostic extension must not be armed in production by a single list entry.**
 `extensions/debug.py::DjangoDebugExtension` publishes interpolated SQL parameter values,
-exception types, exception messages, and tracebacks carrying server paths. Its docstring
-warns, correctly and at length, never to enable it on an internet-facing schema. The
-implementation, deliberately, does not consult `settings.DEBUG` at all — and it has no
-`__init__`, so there is no place a deployment could state an intent. One entry in a
-production schema's `extensions=[…]` list silently turns the disclosure on, and the
-response containing it is routinely copied into logs, tickets, and error trackers.
-Documentation is not a sufficient guard for a response feature whose entire purpose is to
-publish secrets. Separately, the payload is unbounded: a large operation's query log and
-exception chain amplify into an enormous response with no ceiling of any kind.
+exception types, exception messages, and tracebacks carrying server paths, and the
+response containing them is routinely copied into logs, tickets, and error trackers. A
+docstring warning never to enable it on an internet-facing schema is not a sufficient
+guard for a response feature whose entire purpose is to publish secrets: the extension
+itself has to consult `settings.DEBUG` and give a deployment one explicit place to state
+intent. Its payload also has to be bounded, or a large operation's query log and exception
+chain amplify into an enormous response.
 
-**S10 — an unexpected exception's literal message reaches the client.** This is
-graphql-core's documented behavior and `SECURITY.md` says so: unhandled resolver and hook
-exceptions are returned verbatim unless the consumer installs Strawberry's `MaskErrors` or
-overrides `Schema.process_errors`. A focused probe confirmed that
+**An unexpected exception's literal message must not reach the client.** graphql-core
+returns unhandled resolver and hook exceptions verbatim unless something masks them, so
 `ValueError("internal tenant secret /srv/private")` raised inside a resolver arrives at the
-client with that message intact. It is not an undisclosed vulnerability; it is a weak
-default for the package's *required* schema class.
-[`DjangoSchema`][glossary-execution-resource-policy] already centralizes mutation
-integrity and — since the resource-policy card ([`spec-047`][spec-047]) — the execution
-resource policy, so it is precisely the
+client with that message intact. On a plain Strawberry schema the remedy is opt-in
+(`MaskErrors`, or a `Schema.process_errors` override). The package's *required* schema
+class, [`DjangoSchema`][glossary-execution-resource-policy], already centralizes mutation
+integrity and the execution resource policy ([`spec-047`][spec-047]), so it is precisely the
 place a production error policy belongs. A production deployment should not become unsafe
 by forgetting one Strawberry extension.
 
@@ -195,34 +180,24 @@ the default and make the unsafe behavior an explicit, auditable, per-schema decl
 
 ## Current state
 
-Shipped before this card:
+What this card builds on:
 
-- `types/converters.py` ships [`DjangoFileType`][glossary-djangofiletype] with
-  `name` / `size` / `url` / `path` and [`DjangoImageType`][glossary-djangoimagetype] adding
-  `width` / `height`. `_safe_file_attr` guards every storage-backed attribute with a narrow
-  `(ValueError, OSError, NotImplementedError)` catch, deliberately letting
+- `types/converters.py::_safe_file_attr` guards every storage-backed file attribute with a
+  narrow `(ValueError, OSError, NotImplementedError)` catch, deliberately letting
   `SuspiciousFileOperation` propagate; `name` is read directly.
 - `types/base.py` validates [`Meta.nullable_overrides`][glossary-metanullable_overrides]
   and [`Meta.required_overrides`][glossary-metarequired_overrides] in the `_ValidatedMeta`
   snapshot and threads both as frozensets into `_build_annotations`.
-- `extensions/debug.py` ships [`DjangoDebugExtension`][glossary-djangodebugextension] with
-  no `__init__`, one synchronous `on_operation` generator serving both execution colors, a
-  [reference-counted cursor coordinator][glossary-reference-counted-cursor-coordinator],
-  and an idempotent `get_results`.
-- `schema.py::DjangoSchema` resolves the [`ResourcePolicy`][glossary-resourcepolicy] once at
-  construction and installs
-  [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension] by APPENDING it
-  through `_with_resource_policy_extension`.
-- `resource_policy.py` + `conf.py::resource_policy_setting()` are the shipped shape for
-  "one frozen policy dataclass, one thin settings reader, one resolve function with a
-  three-level precedence ladder".
-- Every framework-owned client rejection is already raised as a `graphql.GraphQLError` —
-  the GlobalID rejections, `ResourceLimitExceeded`, the connection / keyset / filter
+- `resource_policy.py` + `conf.py::resource_policy_setting()` are the shape for "one frozen
+  policy dataclass, one thin settings reader, one resolve function with a three-level
+  precedence ladder"; both policies delegate that contract to
+  `utils/policies.py::resolve_policy`.
+- `schema.py::DjangoSchema` resolves both policies once at construction into a private
+  enforcement record (`schema.py::_SchemaEnforcement`) and builds the enforcement
+  extensions around the consumer's own on every operation (`DjangoSchema.get_extensions`).
+- Every framework-owned client rejection is raised as a `graphql.GraphQLError` — the
+  GlobalID rejections, `ResourceLimitExceeded`, the connection / keyset / filter
   rejections, and `mutations/resolvers.py`'s permission denial.
-
-Not shipped, and what this card adds: any way to keep a filesystem path out of a generated
-schema; any way to ask for one deliberately; any `settings.DEBUG` awareness in the debug
-extension; any bound on the debug payload; and any package-owned production error policy.
 
 ## Goals
 
@@ -261,7 +236,7 @@ extension; any bound on the debug payload; and any package-owned production erro
   deployment concern, tracked in
   [Risks and open questions](#risks-and-open-questions).
 - **Bounding the debug payload by wall-clock or query time.** The caps here are structural
-  (rows and characters), which is what the audit's evidence names.
+  (rows and characters).
 
 ## Borrowing posture
 
@@ -279,7 +254,7 @@ production error policy; Strawberry ships `MaskErrors` as an optional extension.
 
 What is borrowed:
 
-- **The mechanism.** Both new behaviors are `SchemaExtension` hooks, and the error policy's
+- **The mechanism.** Both behaviors are `SchemaExtension` hooks, and the error policy's
   replacement error is an ordinary `GraphQLError`. That is what buys transport parity for
   free — every transport already renders a `GraphQLError`.
 - **`MaskErrors`' idea** that masking belongs in an `on_operation` teardown that rewrites
@@ -309,8 +284,9 @@ class DocumentType(DjangoType):
         filesystem_path_fields = ("attachment",)
 ```
 
-Accepted values are a `tuple`, `list`, `set`, or `frozenset` of column names selected by
-[`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude]. Anything else
+Accepted values are any non-string sequence or set (a `tuple`, `list`, `set`, or
+`frozenset`) of column names selected by [`Meta.fields`][glossary-metafields] /
+[`Meta.exclude`][glossary-metaexclude]. Anything else
 — an unknown name, a name the type does not select, a column whose annotation or
 `strawberry.field` the consumer already owns, or a non-file column (a relation target
 included) — raises [`ConfigurationError`][glossary-configurationerror] naming the offending
@@ -330,8 +306,7 @@ type DjangoFilePathType {
   size: Int
   url: String
   """
-  SECURITY: the absolute filesystem path on the server. Opted into by
-  Meta.filesystem_path_fields. Do not expose to untrusted clients.
+  SECURITY: the file's absolute path on the server filesystem. Opted in per column via Meta.filesystem_path_fields; it is deployment metadata, not client data. Null when the storage backend cannot produce one.
   """
   path: String
 }
@@ -425,11 +400,12 @@ logger, carries the correlation id in its message text and the original exceptio
 
 ### Decision 1 — `path` leaves the safe default for two composed opt-in types
 
-`types/converters.py` keeps [`DjangoFileType`][glossary-djangofiletype] with `name`
+`types/converters.py` defines [`DjangoFileType`][glossary-djangofiletype] with `name`
 (non-null) / `size` / `url`, and [`DjangoImageType`][glossary-djangoimagetype] subclassing
-it with `width` / `height`. The single `path` resolver moves to a private
-`@strawberry.type`-decorated mixin, `_FileSystemPathFields`, and two new **public** output
-types compose it:
+it with `width` / `height`. The single `path` resolver lives on a private
+`@strawberry.type`-decorated mixin, `_FileSystemPathFields` (decorated because Strawberry
+collects inherited fields only from bases carrying a type definition), and two **public**
+output types compose it:
 
 ```python
 class DjangoFilePathType(DjangoFileType, _FileSystemPathFields): ...
@@ -465,10 +441,9 @@ nullable always-`None` `path`, a global settings flag, a permission class on the
 ### Decision 2 — The opt-in is a per-field `Meta` key, validated exactly like the override sets
 
 `Meta.filesystem_path_fields` is a `tuple` / `list` / `set` / `frozenset` of column names on a
-[`DjangoType`][glossary-djangotype]. The card leaves the opt-in shape open ("Meta key vs
-server-only field"); the spec picks the `Meta` key, because the `Meta` class is this
-package's entire consumer surface and a security decision belongs where a reviewer already
-looks.
+[`DjangoType`][glossary-djangotype]. The opt-in is a `Meta` key rather than a server-only
+field, because the `Meta` class is this package's entire consumer surface and a security
+decision belongs where a reviewer already looks.
 
 Threading mirrors [`Meta.nullable_overrides`][glossary-metanullable_overrides] and
 [`Meta.required_overrides`][glossary-metarequired_overrides] field for field:
@@ -482,8 +457,9 @@ Threading mirrors [`Meta.nullable_overrides`][glossary-metanullable_overrides] a
    as a sequence of single-character names). The helper takes the key's NAME and puts it in
    the rejection message, so a mistyped `filesystem_path_fields` is not reported against
    `Meta.exclude`.
-2. The same validation pass that rejects an illegal override target rejects an illegal
-   path target, with four named failures, each raising
+2. A validation pass that is the structural sibling of the override sets' own
+   (`types/base.py::_validate_filesystem_path_targets`, run at type creation after field
+   selection) rejects an illegal path target, with four named failures, each raising
    [`ConfigurationError`][glossary-configurationerror] naming the offending field: **unknown
    name** (no such model field), **non-selected name** (excluded by
    [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude]),
@@ -514,15 +490,13 @@ negative `Meta.hide_filesystem_path` key).*
 
 ### Decision 3 — Path failures stay narrow, and are never masked
 
-`_safe_file_attr`'s narrow `(ValueError, OSError, NotImplementedError)` catch is unchanged,
-and `SuspiciousFileOperation` continues to propagate. Nothing about the guard widens.
+`_safe_file_attr`'s catch is narrow — `(ValueError, OSError, NotImplementedError)` — and
+`SuspiciousFileOperation` propagates. Nothing about the guard widens.
 
-The audit's instruction — "do not mask path failures while continuing to expose successful
-absolute paths" — describes a specific incoherence: a guard that swallows the *failure* to
-compute a path is only defensible if the *success* is also withheld, otherwise the package
-is treating the value as dangerous only when it cannot produce it. This card resolves that
-incoherence by **removing the successful path from the default**, not by widening the guard
-to swallow more.
+A guard that swallows the *failure* to compute a path is only defensible if the *success*
+is also withheld; otherwise the package would treat the value as dangerous only when it
+cannot produce it. The default therefore **withholds the successful path**, rather than
+widening the guard to swallow more.
 
 Widening the catch would be a strict regression. A broader `except Exception` around a
 storage call hides a misconfigured backend, a credential failure, and a real bug behind a
@@ -533,14 +507,14 @@ plan re-pins.
 
 ### Decision 4 — The break is justified, and carries a one-line migration
 
-`path` disappears from every generated file and image output in the default schema. This is
+`path` is absent from every generated file and image output in the default schema. This is
 a compatibility break for any client selecting it.
 
 It is justified on the same terms cards 046 and 047 used: the API freeze begins at `1.0.0`;
-the current default is a confirmed security-boundary defect; the correction is discovered at
-schema build or at query time as a clear "field does not exist" rather than as silent
-behavior drift; and every shim that preserves the old behavior for one more release
-preserves the disclosure for one more release on schemas that never asked for it.
+an absolute server path in the default output is a security-boundary defect; the break is
+discovered at schema build or at query time as a clear "field does not exist" rather than as
+silent behavior drift; and every shim that preserves a disclosure for one more release
+preserves it on schemas that never asked for it.
 
 The migration note is one line of `Meta` and one SDL type rename:
 
@@ -555,8 +529,8 @@ class DocumentType(DjangoType):
 with the consequence that `attachment`'s type name in the SDL becomes
 `DjangoFilePathType` (or `DjangoImagePathType`). A client whose query names the type in a
 fragment condition or an inline fragment updates that name; a client that only selects
-fields does not change at all. The note lands in `docs/README.md` and in `README.md` prose,
-where a migrating reader is already looking.
+fields does not change at all. The note lives in `docs/README.md`, where a migrating reader
+is already looking.
 
 *Alternatives rejected: see the [rationale][rationale] (a warning deprecation release, a
 settings flag restoring the old default, narrower path-less siblings beside an unsafe
@@ -564,7 +538,7 @@ default).*
 
 ### Decision 5 — The debug extension fails CLOSED under `DEBUG=False`, by going inert
 
-[`DjangoDebugExtension`][glossary-djangodebugextension] gains the `__init__` it lacks:
+[`DjangoDebugExtension`][glossary-djangodebugextension] takes one keyword-only argument:
 
 ```python
 def __init__(self, *, allow_unsafe_production: bool = False) -> None: ...
@@ -574,7 +548,7 @@ Keyword-only, defaulted to the safe value. Strawberry constructs a bare class en
 **zero arguments**, so the ubiquitous spelling `extensions=[DjangoDebugExtension]` gets the
 safe default for free — the safe path requires no consumer action, which is the property
 that makes it a default rather than a suggestion. The documented acknowledgement spelling is
-the factory the audit itself names:
+a factory:
 
 ```python
 extensions=[lambda: DjangoDebugExtension(allow_unsafe_production=True)]
@@ -593,8 +567,11 @@ operation with the disclosure.
 
 A factory, not a pre-built instance, so the fresh-per-operation contract
 ([Per-operation extension isolation][glossary-per-operation-extension-isolation]) still
-holds. A shared instance is refused / warned by the engine exactly as today; this card adds
-no new instance handling and removes none.
+holds. The acknowledgement is held in a private record keyed by the instance
+(`extensions/debug.py #"_ACKNOWLEDGEMENT: PrivateAuthority[_AcceptedDisclosure]"`), not
+an attribute, so a resolver reaching the extension through `info.schema.extensions` cannot
+arm the disclosure for a later request, and re-running `__init__` on a constructed instance
+is refused.
 
 At operation start the extension reads `django.conf.settings.DEBUG`. When it is false and
 `allow_unsafe_production` is absent, the extension is **INERT**: it acquires no debug
@@ -618,7 +595,7 @@ a package-owned production flag instead of `DEBUG`).*
 
 ### Decision 6 — Deterministic, marked payload caps as module constants
 
-`extensions/debug.py` grows six module-level constants, and no settings key:
+`extensions/debug.py` carries six module-level constants, and no settings key:
 
 | Constant | Value | Bounds |
 |---|---|---|
@@ -671,9 +648,9 @@ two paths cannot drift on marker text, cut position, or the running total.
 
 ### Decision 7 — `DjangoSchema` gets a first-class production error policy, shaped like the resource policy
 
-Four new surfaces, each mirroring an existing one:
+Four surfaces, each mirroring a resource-policy one:
 
-- **`django_strawberry_framework/error_policy.py`** (new) owns a frozen dataclass:
+- **`django_strawberry_framework/error_policy.py`** owns a frozen dataclass:
 
   ```python
   @dataclass(frozen=True)
@@ -683,28 +660,33 @@ Four new surfaces, each mirroring an existing one:
       correlation_extension_key: str = "correlationId"
   ```
 
-  plus `DEFAULT_ERROR_POLICY` and `resolve_error_policy(explicit)`, which mirrors
-  `resource_policy.py::resolve_resource_policy` field for field: explicit instance >
-  explicit mapping applied over the defaults > `DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]`
-  mapping > package defaults, with an unknown key raising
-  [`ConfigurationError`][glossary-configurationerror] naming it.
+  whose `__post_init__` refuses a non-`bool` `enabled` and an empty or non-`str` `message` /
+  `correlation_extension_key` (exact type tests), plus `DEFAULT_ERROR_POLICY` (an exported,
+  inspectable template no seam reads) and `resolve_error_policy(explicit)`, which shares
+  `resource_policy.py::resolve_resource_policy`'s contract through
+  `utils/policies.py::resolve_policy`: the `DjangoSchema(error_policy=…)` argument >
+  `DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]` > package defaults, an instance from either
+  slot re-validated into a private copy and a mapping applied over the defaults, with an
+  unknown key raising [`ConfigurationError`][glossary-configurationerror] naming it.
 - **`conf.py::error_policy_setting()`** with `ERROR_POLICY_KEY = "ERROR_POLICY"` — a thin
   reader that validates nothing, exactly like `resource_policy_setting()`. `conf.py` stays a
   reader; the policy object owns every domain check.
 - **`extensions/error_policy.py::DjangoErrorPolicyExtension`** performing the masking, plus
-  the two module-level seams the transport layer shares: `mask_execution_result` (classify,
-  replace, degrade closed) and `schema_error_policy` (read the schema's policy). The policy
-  read is **`isinstance`-guarded**, exactly as
+  the module-level helpers every seam shares: `mask_execution_result` (classify, replace,
+  degrade closed), `masking_is_active` (the `enabled` / `DEBUG` gate), `is_maskable_result`
+  (the shape gate), `degraded_result` (the whole-response floor), and `schema_error_policy`
+  (read a schema's policy). The policy read is **`isinstance`-guarded**, as
   `extensions/resource_policy.py::DjangoResourcePolicyExtension._resolved_policy` guards its
-  own: a bare `getattr(schema, "error_policy", DEFAULT_ERROR_POLICY)` answers the default
-  only when the attribute is ABSENT, so a schema carrying something that is not an
-  `ErrorPolicy` — a mapping, a string, a stray assignment on a consumer subclass — would be
-  asked `policy.enabled` and either raise or be read for truthiness, silently disabling
-  masking. Any wrong shape falls back to the package's own masking policy - the values
-  `DEFAULT_ERROR_POLICY` declares, held in an object no export names.
-- **`schema.py::DjangoSchema.__init__`** grows
-  `error_policy: ErrorPolicy | Mapping[str, Any] | None = None`, resolves it once at
-  construction, exposes `schema.error_policy`, and installs the extension.
+  own: a schema carrying something that is not an `ErrorPolicy` — or none, as a plain
+  `strawberry.Schema` a consumer wired the extension into by hand — falls back to the
+  package's own masking policy (`error_policy.py #"_PACKAGE_ERROR_POLICY = canonical_policy("`,
+  the values `DEFAULT_ERROR_POLICY` declares, held in an object no export names) rather than
+  being read for truthiness, which could silently disable masking.
+- **`schema.py::DjangoSchema.__init__`** takes
+  `error_policy: ErrorPolicy | Mapping[str, object] | None = None`, resolves it once at
+  construction into the schema's private enforcement record (`schema.py::_SchemaEnforcement`),
+  and exposes it as `schema.error_policy` — a per-read copy, so a resolver writing to it
+  changes only its own copy.
 
 **Resolved once at construction** so an invalid deployment fails at startup rather than on
 the first request that happens to raise. **Frozen** so a resolver holding the policy cannot
@@ -712,14 +694,18 @@ loosen it. **Mirroring the resource policy exactly** so the package has one poli
 idiom rather than two similar ones — a future third policy has an obvious shape, and a
 reader who has understood one has understood all of them.
 
-Opt-out is explicit and has two spellings, both deliberate:
-`DjangoSchema(error_policy={"enabled": False})` disables the masking while keeping the
-extension installed (so the shape is auditable), and supplying a
-`DjangoErrorPolicyExtension` entry of your own suppresses the automatic install entirely —
-exactly as a consumer-supplied
-[`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension] suppresses
-`_with_resource_policy_extension`'s append. Consumer code remains trusted; it simply has to
-say so.
+**The masking authority is the schema's, never an `extensions=` entry.** `DjangoSchema`
+builds a fresh `DjangoErrorPolicyExtension` for every operation from its record
+(`DjangoSchema.get_extensions`), so the opt-out has exactly one spelling,
+`DjangoSchema(error_policy={"enabled": False})`, which keeps the extension in the chain and
+makes its teardown a no-op. A `DjangoErrorPolicyExtension` class or instance supplied in
+`extensions=` declares the extension the schema installs anyway and is dropped, so there is
+still exactly one masker (a second would mint a second correlation id for an already-masked
+error); a subclass is refused at construction, and a factory that resolves to the masker
+refuses the operation with `SCHEMA_CONFIGURATION_UNAVAILABLE`, because a subclass or a
+factory can override or swap the hook that does the masking while answering every check
+for it. The same rule governs
+[`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension] ([`spec-047`][spec-047]).
 
 *Alternatives rejected: see the [rationale][rationale] (a boolean `mask_errors=True`, a
 settings-key-only configuration, validating in the settings reader instead of the
@@ -835,34 +821,35 @@ channel wearing a template's clothes, and the whole card is about not having one
 overriding `Schema.process_errors`, a per-operation single id, omitting
 `path` / `locations`, a counter or derived hash as the id).*
 
-### Decision 10 — Extension ORDER is load-bearing, and the install PREPENDS
+### Decision 10 — Extension ORDER is load-bearing, and the error policy is FIRST
 
-`DjangoErrorPolicyExtension` is inserted at **index 0** of the extensions list, not appended.
+Every operation's chain is `[DjangoErrorPolicyExtension, *consumer extensions,
+DjangoResourcePolicyExtension, …]` (`schema.py::_admitted_chain`): the error policy at
+**index 0**, the consumer's extensions in their own order behind it.
 
 `on_operation` teardowns unwind **LIFO**, so the FIRST-listed extension tears down **LAST**.
-Prepending therefore guarantees the policy masks *after* everything else has had its turn —
+Listing it first therefore guarantees the policy masks *after* everything else has had its turn —
 critically, after [`DjangoDebugExtension`][glossary-djangodebugextension], which must read
 `original_error` to build its exception rows and whose docstring already documents
 "list after any masking extension"
 ([Masking-extension ordering][glossary-masking-extension-ordering]). It also runs after any
 consumer masking extension, so a consumer's own policy sees the originals it expects.
 
-**This is the exact inverse of `_with_resource_policy_extension`'s append, and the inversion
-is principled rather than incidental.** The resource policy does its work in the **setup**
-half — it gates a request before execution, and setup runs in list order, so appending
-places it after every consumer extension has established whatever context it needs. The
+**The resource policy sits behind the consumer's extensions for the mirror-image reason.**
+It does its work in the **setup** half — it gates a request before execution, and setup
+runs in list order, so placing it after the consumer's extensions sets it up last. The
 error policy does its work entirely in the **teardown** half, and teardown runs in reverse
-list order, so prepending places it after every other extension's teardown. **One rule
-states both: put the extension where its own half of the lifecycle runs LAST**, because
-both policies are the final word on their side of the operation. Slice 3 pins this with a test asserting the resolved extension order
-on a `DjangoSchema` that also carries the debug extension, so a future refactor that
-"tidies" the install into a symmetric append fails loudly rather than silently un-masking
-the debug payload's exception rows.
+list order, so placing it first tears it down last. **One rule states both: put the
+extension where its own half of the lifecycle runs LAST**, because both policies are the
+final word on their side of the operation.
+`tests/test_error_policy.py::test_the_error_policy_extension_runs_first_in_every_chain`
+pins both positions, so a future refactor that "tidies" them into a symmetric shape fails
+loudly rather than silently un-masking the debug payload's exception rows.
 
 *Alternatives rejected: see the [rationale][rationale] (appending for symmetry, documenting
 the order for the consumer, masking in `get_results` or in the view).*
 
-### Decision 11 — Sync/async parity comes from the hook; a STREAMED operation needs a second seam
+### Decision 11 — Sync/async parity comes from the hook; a STREAMED operation and a HOOK failure need their own seams
 
 The teardown is **one synchronous generator** serving both execution colors — the engine
 enters sync generator hooks on the async path too. This is the precedent
@@ -913,7 +900,7 @@ the wire at all. Two further properties are pinned:
   assigned to `execution_context.result` keeps its originals, so
   [`DjangoDebugExtension`][glossary-djangodebugextension] — and any consumer extension that
   reads `GraphQLError.original_error` — still reads what was raised. That is what keeps
-  [Decision 10](#decision-10--extension-order-is-load-bearing-and-the-install-prepends)'s
+  [Decision 10](#decision-10--extension-order-is-load-bearing-and-the-error-policy-is-first)'s
   LIFO ordering promise true on the subscription path as well as the query path.
 - **The policy object is resolved once per subscription; the `DEBUG` pass-through is read
   per event**, which is the same granularity the teardown reads it at.
@@ -922,28 +909,27 @@ A pre-execution error on a subscription (`PreExecutionError`, the operation-scop
 frame) travels through the same seam and passes the classifier untouched, because a
 validation error carries no `original_error`.
 
+**A third seam covers an exception escaping a HOOK.** Upstream converts such an exception
+into a result inside the `except` behind its operation lifecycle, after every teardown has
+unwound over an execution context whose `result` was still `None`, so no extension can reach
+it. `DjangoSchema.execute` / `execute_sync` therefore mask the value they RETURN
+(`schema.py::DjangoSchema._masked_return`) through the same helpers and gates, failing
+closed to `degraded_result` when the policy cannot be applied. Masking twice is a no-op by
+construction: an already-masked error carries no `original_error`, so the classifier leaves
+it alone and no second id is minted. A plain `strawberry.Schema` carrying the exported
+extension has no such seam, so a hook failure is unmasked there.
+
 *Alternatives rejected: see the [rationale][rationale] (the transport's frame writer, a
 schema subclass, accepting the gap for subscriptions, an upper strawberry version bound
-instead of wrapping the renamed upstream seam). The two rewrites this decision underwent —
-the remediation round's seam addition and the post-release `stream` coverage, including the
-audited `{subscribe, stream, execute}` upstream read set across `0.316.0`-`0.323.2` — are
-in the change record there.*
+instead of wrapping the renamed upstream seam).*
 
-### Decision 12 — The version bump belongs to the `0.0.14` joint cut
+### Decision 12 — The version bump belongs to the joint cut
 
-This card does **not** move the version quintet. It targets `0.0.14`, sharing that patch
-with cards 041-045 and with its three program siblings (046, 047, 049). The quintet —
-`pyproject.toml [project].version`, `django_strawberry_framework/__init__.py::__version__`,
-the `tests/base/test_init.py` assertion that pins them together, the glossary's
-package-version line, and the package's own `uv.lock` entry — already reads `0.0.14`, so
-there is no bump for this card to take.
-
-Under the [joint version cut][glossary-joint-version-cut] rule the release wording belongs
-to the **last** card of a shared line to land, never to an individual card's slices.
-Slice 5 therefore owns the documentation fold-in only.
-
-*This card was authored and built against a `0.0.17` cut of its own. What it claimed, and
-the program-wide retarget that withdrew it, is in the [rationale][rationale].*
+This card moves no version state. The release is single-sourced in
+`django_strawberry_framework/__init__.py` `__version__`, which hatchling reads, and under the
+[joint version cut][glossary-joint-version-cut] rule the bump and the release wording
+belong to the cut, never to an individual card's slices. Slice 5 owns the documentation
+fold-in only.
 
 ### Decision 13 — What the masking rule does not reach
 
@@ -962,7 +948,8 @@ rejections under the untouched branch it already has would mean the package rais
 not license.
 
 **A consumer-built plain `GraphQLWSConsumer` gets no per-event masking.** The seam is
-installed by `consumers.py::build_revalidating_consumer_class`, which the package router builds.
+installed by the consumer class `consumers.py::build_revalidating_consumer_class` builds for
+the package router.
 A consumer who constructs `strawberry.channels.GraphQLWSConsumer` directly therefore keeps
 upstream's unmasked per-event delivery. This is the **same** boundary the operation-stop protocol
 already has, and it is the documented reason the package router is the supported mount rather than
@@ -970,7 +957,7 @@ one option among several.
 
 **Non-WebSocket subscription transports have no seam here.** The package's own
 subscription seam is the Channels consumer result source, and nothing in the package serves
-subscriptions over HTTP today. A transport that later serves subscriptions over multipart or SSE
+subscriptions over HTTP. A transport that later serves subscriptions over multipart or SSE
 through a package-owned view needs the same `mask_execution_result` call at its own per-event
 delivery point; the requirement travels with the transport that creates it.
 
@@ -988,14 +975,14 @@ constants look like they want a setting.
 |---|---|---|
 | 1 | `types/converters.py` | `path` moves to `_FileSystemPathFields`; `DjangoFilePathType` / `DjangoImagePathType`; the safe-to-path type mapping; `convert_field_output(..., expose_filesystem_path=…)`. |
 | 1 | `types/base.py` | `filesystem_path_fields` in the `_ValidatedMeta` snapshot and the `Meta`-key allowlist; the four-failure validation pass; the frozenset threaded into `_build_annotations`. |
-| 1 | `__init__.py`, `types/__init__.py` | Exports for the two new public output types. |
+| 1 | `__init__.py`, `types/__init__.py` | Exports for the two public opt-in output types. |
 | 2 | `extensions/debug.py` | `__init__(*, allow_unsafe_production=False)`; the operation-start `settings.DEBUG` gate and its single warning; the six caps, `_TRUNCATION_MARKER`, and the one shared truncation/admission helper called by `_serialize_sql_row` and `_serialize_exception` before `_build_payload` stashes. |
-| 3 | `error_policy.py` (new) | `ErrorPolicy`, `DEFAULT_ERROR_POLICY`, `resolve_error_policy`. |
+| 3 | `error_policy.py` | `ErrorPolicy`, `DEFAULT_ERROR_POLICY`, `_PACKAGE_ERROR_POLICY`, `resolve_error_policy`, `new_correlation_id`. |
 | 3 | `conf.py` | `ERROR_POLICY_KEY` and `error_policy_setting()`, a thin reader that validates nothing. |
-| 3 | `extensions/error_policy.py` (new) | `DjangoErrorPolicyExtension`: the teardown, the structural classifier, the replacement builder, the correlation id, the log call, the two fail-closed degrades, and the `isinstance`-guarded `schema_error_policy` read. |
+| 3 | `extensions/error_policy.py` | `DjangoErrorPolicyExtension`: the teardown, the structural classifier, the replacement builder, the log call, the fail-closed degrades, and the shared `mask_execution_result` / `masking_is_active` / `is_maskable_result` / `degraded_result` / `schema_error_policy` helpers. |
 | 3 | `consumers.py` | `_stop_aware_results` masks each streamed result through `mask_execution_result` (under the shared `is_maskable_result` gate) before the transport renders it; the stop-aware schema wrapper defines `subscribe` AND `stream` through one shared wrapping step and hands the real schema through so the policy is the executing schema's (Decision 11). |
 | 3 | `extensions/__init__.py`, `__init__.py` | Exports; the extension is root-exported because it is part of the default recipe. |
-| 3 | `schema.py` | `DjangoSchema(error_policy=…)`, `schema.error_policy`, `_with_error_policy_extension` (prepending). |
+| 3 | `schema.py` | `DjangoSchema(error_policy=…)` into `_SchemaEnforcement`, `schema.error_policy` (a per-read copy), `_admitted_chain` (the error policy first), `_consumer_extension_entries` (a supplied masker dropped, a subclass refused), and `_masked_return` on `execute` / `execute_sync`. |
 | 4 | `examples/fakeshop/test_query/`, `examples/fakeshop/apps/*/tests/`, `tests/` | The rows in [Test plan](#test-plan). |
 | 5 | `docs/GLOSSARY.md` (DB), `docs/README.md`, `docs/TREE.md`, `README.md`, `TODAY.md`, `KANBAN.md` (DB) | Fold-in and the migration note. |
 
@@ -1003,23 +990,24 @@ constants look like they want a setting.
 
 - **`_FileSystemPathFields` is the only `path` resolver.** No second definition, in the
   package or in the example project.
-- **`_safe_file_attr` remains the only storage-attribute guard**, and the new mixin uses it
+- **`_safe_file_attr` remains the only storage-attribute guard**, and the mixin uses it
   unchanged. A new file attribute does not get its own `try`.
 - **The `_ValidatedMeta` normalization helper is the only `Meta`-sequence normalizer.**
   `filesystem_path_fields` uses the same `_normalize_sequence_spec` the override sets use.
 - **One truncation helper** in `extensions/debug.py` owns the marker, the cut, and the
   running payload total. Neither serializer may open-code a `[:N]`.
-- **`resolve_error_policy` mirrors `resolve_resource_policy`'s ladder**; neither grows a
+- **`resolve_error_policy` mirrors `resolve_resource_policy`'s ladder**; neither carries a
   second precedence rule, and a future third policy copies the same shape.
 - **`ErrorPolicy.__post_init__` is the only validation gate** for the error policy;
   `conf.py` validates nothing.
 - **`DjangoErrorPolicyExtension`'s classifier is one function**, and the replacement builder
   is one function, so the sync and async result shapes cannot diverge on either.
 - **`mask_execution_result` is the ONLY application of the policy**, called by the operation
-  teardown and by `consumers.py::_stop_aware_results`. The transport seam re-states no
-  classification, no replacement shape, no correlation id, no `DEBUG` gate, and no shape
-  gate — it calls `masking_is_active` for the gate, `schema_error_policy` for the policy,
-  and `is_maskable_result` for the shape, like the extension does.
+  teardown, by `consumers.py::_stop_aware_results`, and by
+  `schema.py::DjangoSchema._masked_return`. No seam re-states the classification, the
+  replacement shape, the correlation id, the `DEBUG` gate, or the shape gate — each calls
+  `masking_is_active` for the gate and `is_maskable_result` for the shape, and falls back to
+  `degraded_result` when it cannot answer.
 - **[`request_from_info`][glossary-request_from_info] is the only info-to-request seam** if
   the extension ever needs the request; it does not re-derive one.
 
@@ -1048,7 +1036,7 @@ constants look like they want a setting.
   `DjangoFilePathType` and resolves a real absolute path, `image` stays `DjangoImageType`,
   and the same request cannot even ask `MediaSpecimenType` for a path).
 - **The debug extension under `DEBUG=False` with the acknowledgement** behaves exactly as
-  today, caps included. The acknowledgement suppresses the gate, not the caps.
+  under `DEBUG=True`, caps included. The acknowledgement suppresses the gate, not the caps.
 - **The debug warning fires once per operation**, on the operation that was gated — not once
   per process. A per-process warning is invisible in a long-lived worker that started before
   the misconfiguration mattered.
@@ -1071,8 +1059,8 @@ constants look like they want a setting.
   with a traceback, so the failure is diagnosable without being publishable. The per-entry
   degrade is what keeps the common case faithful in order and arity; the outer one is the
   floor.
-- **`policy.enabled = False`** leaves the extension installed and the teardown a no-op, so
-  the opt-out is visible in the schema's extension list.
+- **`policy.enabled = False`** leaves the extension in every operation's chain and its
+  teardown a no-op, so the opt-out is a recorded decision rather than a missing extension.
 - **A schema constructed with `DEBUG=True` and executed with `DEBUG=False`** masks, because
   the gate is read at operation time; a settings override in a test therefore takes effect
   without rebuilding the schema.
@@ -1096,11 +1084,10 @@ the case; `tests/` covers only what no request can reach. Every catalog row open
 [`seed_data(N)`][glossary-seed_data].
 
 **Live tier — `examples/fakeshop/test_query/test_uploads_api.py`.** The file/image output
-surface already has a live home, so the rows land there rather than in a new file:
+surface has one live home, so the rows live there:
 
-- The aggregate fakeshop SDL contains **no** `path` field and no `DjangoFilePathType` /
-  `DjangoImagePathType`; a query selecting `path` on a file field is a validation error
-  naming the unknown field.
+- Introspection over the live schema finds **no** `path` field on `DjangoFileType` or
+  `DjangoImageType`, and `DjangoFileType`'s fields are exactly `name` / `size` / `url`.
 - The retained fields still answer: `name`, `size`, `url` on a real file-bearing row, and
   the same three degrading to `null` (not erroring) when the storage backend cannot report,
   proving Decision 3's narrow guard is intact.
@@ -1118,14 +1105,14 @@ surface already has a live home, so the rows land there rather than in a new fil
   key, and one warning is captured on the `django_strawberry_framework` logger.
 - Under `DEBUG=False` with `lambda: DjangoDebugExtension(allow_unsafe_production=True)`, the
   payload is present and complete.
-- Under `DEBUG=True`, the bare class publishes as today (the regression guard for the gate).
+- Under `DEBUG=True`, the bare class publishes the payload (the regression guard for the gate).
 - The aggregate fakeshop schema publishes no `debug` key at all under either `DEBUG` value —
   the "stays debug-free" row.
-- Payload caps truncate deterministically over a probe query driving many queries and a long
-  statement: the row count stops at `_MAX_SQL_ROWS`, the retained rows are the **earliest**,
-  each over-long string ends with `_TRUNCATION_MARKER`, and both lists are present.
-- Fresh-instance isolation: two sequential operations on the same schema publish
-  independent payloads, with the second not carrying the first's rows.
+- An over-cap exception message is truncated in the published payload and ends with
+  `_TRUNCATION_MARKER`.
+- Fresh-instance isolation: the acknowledged factory keeps one instance per operation, and a
+  parse failure never republishes the previous operation's payload.
+- A resolver cannot arm the production disclosure for a later request.
 
 **Live tier — `examples/fakeshop/test_query/test_error_policy_api.py`.**
 
@@ -1148,9 +1135,11 @@ surface already has a live home, so the rows land there rather than in a new fil
 - A custom `message` and a custom `correlation_extension_key` both reach the wire.
 - Sync/async parity: the sync and async mounts return byte-identical error entries apart
   from the id itself.
-- Ordering: a schema carrying both `DjangoDebugExtension` and the auto-installed policy
-  publishes a debug payload whose exception rows carry the **original** exception type and
-  message while the client-facing error is masked — the direct proof of Decision 10.
+- A factory entry resolving to the masker refuses the operation with
+  `SCHEMA_CONFIGURATION_UNAVAILABLE` rather than masking, minting no correlation id.
+- An exception escaping a consumer HOOK is masked like a resolver exception, on both
+  execution colors, with exactly one masked entry and one log record (Decision 11's third
+  seam); a hook raising its own `GraphQLError` is untouched.
 
 **Consumer tier — `tests/test_routers.py`.** The subscription seam, which only the transport
 can observe (Decision 11): a subscription emitting TWO events whose payload field raises
@@ -1177,11 +1166,15 @@ instance; the classifier over each of the three structural cases directly; the r
 builder's field-for-field preservation and its `original_error=None`; the `None`-result and
 empty-errors no-ops; both `ExecutionResult` shapes; the `isinstance`-guarded policy read over
 every wrong attribute shape; both fail-closed degrades (an error object whose
-`original_error` raises, a result whose `errors` cannot be read); and
+`original_error` raises, a result whose `errors` cannot be read);
 `mask_execution_result`'s copy contract — same object when nothing was masked, a copy that
-leaves the original holding its originals otherwise. The `original_error is None` row runs a
-real ASYNC operation that fails validation, because that is the path which actually reaches
-the branch.
+leaves the original holding its originals otherwise; and the chain contract
+(`test_the_error_policy_extension_runs_first_in_every_chain`, a consumer extension kept in
+order behind the policy, a supplied masker declaring rather than duplicating the automatic
+one, and a debug factory beside a declared masker still capturing the original exception —
+the direct proof of Decision 10). The `original_error is None` row runs a real ASYNC
+operation that fails validation, because that is the path which actually reaches the
+branch.
 
 **Package tier — `tests/types/test_base.py` / `tests/types/test_converters.py` additions.** The
 `filesystem_path_fields` `ConfigurationError` rows (unknown, non-selected, consumer-authored,
@@ -1193,18 +1186,20 @@ the key the consumer wrote, and the safe-to-path type mapping over an `ImageFiel
 keyword-only default, its refusal of every non-bool acknowledgement (`"false"` above all, the
 truthy literal that would otherwise arm the disclosure) and the consequence that a schema
 carrying one fails when the engine builds the per-operation instance, the gate's
-operation-time read, and the truncation helper's exact cut position and marker over a
-synthetic string — the pure-function rows a live query cannot pin precisely.
+operation-time read and its inert path (no bracket, no snapshot), and the caps over
+synthetic rows: each string cut at its own limit and marked, the row-count caps keeping
+exactly the earliest rows, the shared budget admitting exceptions first and stopping at the
+first over-budget row, and both lists present when empty — the pure-function rows a live
+query cannot pin precisely.
 
-**Base tier.** `tests/base/test_init.py` gains the `ErrorPolicy` /
-`DjangoErrorPolicyExtension` / `DjangoFilePathType` / `DjangoImagePathType` export rows and
-its version pin stays at `0.0.14`. `tests/base/test_conf.py` gains the
-`error_policy_setting()` rows.
+**Base tier.** `tests/base/test_init.py` pins the `ErrorPolicy` /
+`DjangoErrorPolicyExtension` / `DjangoFilePathType` / `DjangoImagePathType` exports;
+`tests/base/test_conf.py` pins the `error_policy_setting()` rows.
 
 ## Doc updates
 
 - `docs/GLOSSARY.md` (DB-backed, rendered by `scripts/build_glossary_md.py` — edit the
-  fakeshop glossary app's DB and re-render, never hand-edit): new entries for
+  fakeshop glossary app's DB and re-render, never hand-edit): entries for
   **`Meta.filesystem_path_fields`**, **`DjangoFilePathType`**, **`DjangoImagePathType`**,
   **`ErrorPolicy`**, and **`DjangoErrorPolicyExtension`**; a fail-closed-gate paragraph and
   the payload caps folded into [`DjangoDebugExtension`][glossary-djangodebugextension],
@@ -1215,19 +1210,15 @@ its version pin stays at `0.0.14`. `tests/base/test_conf.py` gains the
   [`DjangoImageType`][glossary-djangoimagetype] recording the removal, the divergence from
   `strawberry-graphql-django`, and the documented sensitivity of `name`; a note in
   [Masking-extension ordering][glossary-masking-extension-ordering] that the package's own
-  policy now prepends.
+  policy is first in every chain.
 - `docs/README.md`: the migration note for the `path` removal, and the production-error-
   policy section under the security guidance.
 - `docs/TREE.md`: regenerated (`scripts/build_tree_md.py`) for `error_policy.py` and
   `extensions/error_policy.py`; both need module docstrings or the render fails.
 - `README.md`: the migration note in prose, and the secure-defaults line in the positioning
   section.
-- `TODAY.md`: move the three audit items out of "what products is still waiting for" and
-  into the shipped snapshot.
-- `KANBAN.md` (DB-backed): card 048 to Done.
-- `CHANGELOG.md`: **not** touched. [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
-  without explicit permission, and this card's Slice 5 does **not** claim that permission —
-  the release entry is the maintainer's.
+- `TODAY.md`: the three secure defaults in the shipped snapshot.
+- `KANBAN.md` (DB-backed): card 048 in Done.
 
 ## Risks and open questions
 
@@ -1240,8 +1231,8 @@ Each risk's pre-planned fallback position, should a real consumer need appear, i
   beats a warning nobody reads.
 - **The opt-in changes the SDL type NAME, not just the field set.** A client using a
   fragment type condition on `DjangoFileType` against an opted-in field must update it.
-  Accepted for `0.0.14`, because the alternative — one type whose fields vary — is not
-  expressible in GraphQL.
+  Accepted, because the alternative — one type whose fields vary — is not expressible in
+  GraphQL.
 - **The debug caps are not configurable.** Module constants, per [`AGENTS.md`][agents]'s
   "add a settings key only when the feature needs it".
 - **Masked errors log one record each, so an error storm is a log storm.** Accepted — a
@@ -1251,25 +1242,18 @@ Each risk's pre-planned fallback position, should a real consumer need appear, i
   (`correlation_extension_key`), and the default matches the common convention.
 - **The structural classifier trusts consumer `GraphQLError`s.** A consumer who raises
   `GraphQLError(str(exc))` from a bare `except` re-opens the disclosure in their own code.
-  Documented — consumer code is trusted, which is the package's standing posture and the
-  audit's own framing.
+  Documented — consumer code is trusted, which is the package's standing posture.
 - **`settings.DEBUG` is the gate for two unrelated behaviors** (the debug extension and the
   masking policy), so a deployment that runs `DEBUG=True` in a staging environment reachable
   by untrusted clients gets neither protection. Accepted: that deployment is already outside
   Django's own security model, and inventing a package-specific production flag would create
   a second source of truth that can disagree with Django's.
 
-## Non-goals
-
-Restated for the checklist reader; the reasoning is in
-[Non-goals](#non-goals) above — no PII framework, no structured logging, no error-reporting
-vendor seam, no `name` removal, no error-path rate limiting, and no time-based debug caps.
-
 ## Out of scope (explicitly tracked elsewhere)
 
-- Dependency and CI hardening (S6, S7) — [`WIP-ALPHA-049-0.0.14`][kanban].
-- The execution resource policy (S3, S4) — shipped in [`spec-047`][spec-047].
-- Transport security (S1, S2, S9, S11) — shipped in [`spec-046`][spec-046].
+- Dependency and CI hardening — [`spec-049`][spec-049].
+- The execution resource policy — [`spec-047`][spec-047].
+- Transport security — [`spec-046`][spec-046].
 - Field-level cost annotation — deferred by [`spec-047`][spec-047]'s risks section.
 - A declarative sensitive-field / redaction vocabulary — not carded.
 - Response-byte accounting — deferred by [`spec-047`][spec-047]; the debug caps here bound
@@ -1293,13 +1277,14 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
 - [ ] [`DjangoDebugExtension`][glossary-djangodebugextension] has a keyword-only
       `allow_unsafe_production` defaulting to `False`, is fully inert under `DEBUG=False`
       without it (no cursor, no snapshot, no payload, `{}` from `get_results`, one warning),
-      and behaves exactly as before with it.
+      and publishes the capped payload with it.
 - [ ] The debug payload is bounded by six module constants through one shared helper applied
       after serialization and before the stash; truncation is marked with one shared literal,
       rows drop from the tail, and both lists are always present.
 - [ ] `ErrorPolicy`, `resolve_error_policy`, `conf.py::error_policy_setting()`, and
       `DjangoErrorPolicyExtension` exist; `DjangoSchema` resolves the policy once at
-      construction, exposes `schema.error_policy`, and PREPENDS the extension.
+      construction, exposes `schema.error_policy` as a copy, and puts the extension FIRST in
+      every operation's chain.
 - [ ] Under `DEBUG=False` with the policy enabled, an unexpected exception reaches the
       client as `policy.message` plus a `uuid4().hex` correlation id with its
       nodes / source / positions / path retained and `original_error` cleared, and reaches
@@ -1307,7 +1292,8 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
       the message text; parse errors, validation errors, every framework `GraphQLError`
       code, permission denials, and [`FieldError` envelopes][glossary-fielderror-envelope]
       are untouched.
-- [ ] Sync and async transports return identical masked entries from one synchronous hook.
+- [ ] Sync and async transports return identical masked entries from one synchronous hook,
+      and an exception escaping a hook is masked at `DjangoSchema`'s returned result.
 - [ ] Per-event subscription masking is installed by the consumer the package router builds,
       and `docs/README.md`'s production-error-policy section states the boundary for
       consumers — a hand-rolled Channels consumer masks only at the operation's end
@@ -1315,8 +1301,8 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
 - [ ] Full suite green at `fail_under = 100` for `django_strawberry_framework`; `ruff
       format --check`, `ruff check`, `scripts/check_trailing_commas.py --check`,
       `manage.py check` and `makemigrations --check --dry-run` all clean.
-- [ ] Docs folded in with the migration note; the version quintet rides the joint `0.0.14`
-      cut ([Decision 12](#decision-12--the-version-bump-belongs-to-the-0014-joint-cut)).
+- [ ] Docs folded in with the migration note; the version bump is the joint cut's
+      ([Decision 12](#decision-12--the-version-bump-belongs-to-the-joint-cut)).
 
 <!-- LINK DEFINITIONS -->
 
@@ -1325,7 +1311,6 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[feedback2]: ../feedback2.md
 [glossary-async-sql-capture-boundary]: ../GLOSSARY.md#async-sql-capture-boundary
 [glossary-bounded-query-log-rollover]: ../GLOSSARY.md#bounded-query-log-rollover
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
@@ -1385,6 +1370,7 @@ vendor seam, no `name` removal, no error-path rate limiting, and no time-based d
 [rationale]: appx/spec-048-secure_output_defaults-0_0_14-rationale.md
 [spec-046]: spec-046-transport_security-0_0_14.md
 [spec-047]: spec-047-resource_policy-0_0_14.md
+[spec-049]: spec-049-dependency_ci_hardening-0_0_14.md
 
 <!-- docs/builder/ -->
 

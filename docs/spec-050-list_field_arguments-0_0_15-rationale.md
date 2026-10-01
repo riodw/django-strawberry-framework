@@ -1,87 +1,23 @@
-# Rationale: spec-050 — DjangoListField argument surface (deliberation, rejected alternatives, change record)
+# Rationale: spec-050 — DjangoListField argument surface (deliberation and rejected alternatives)
 
 Deliberative companion to [`spec-050-list_field_arguments-0_0_15.md`][spec-050]. The spec is the
-contract and states only what is currently true; everything that explains **how it got there**
-lives here: the alternatives each decision rejected and why each lost, the derivations that do
-not change how a decision is implemented, every change a decision has undergone with the review
-round that caused it, and every claim a decision once made and may no longer make.
-
-Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The text below was
-**moved** out of the spec, not copied: it exists here and nowhere else.
+contract; this file holds the alternatives each decision rejected and why each lost, and the
+derivations that do not change how a decision is implemented.
 
 ## How to read this file
 
 - **One entry per spec decision**, with the decision's own heading and anchor, so a citation
   such as "Decision 1's rejected alternatives" resolves to exactly one place.
-- **Worker-3 reads this during review** — it stops a reviewer re-raising a settled alternative,
-  and is the reasoning the finished implementation is checked against. **Worker-1 owns it** as
-  spec custodian and audits it at final verification. **Worker-2 never reads it**: that is the
-  point of the move.
-- **Append-only during the build.** A new review round's decisions land in the spec; their
-  rejected alternatives, derivations, and retractions append here in the same custodian pass.
-- Round attribution: Authored for `0.0.15` (card [`DONE-050-0.0.15`][kanban]). Initial
-  specification, independent upstream review, audit reconciliation, implementation-contract
-  corrections, live-tier compliance review, and blocking architectural review were reconciled
-  in place before pre-flight extraction.
-- **Load-bearing carve-outs.** Two things deliberately **stayed** in the spec even though they
+- **Load-bearing carve-outs.** Two things deliberately stay in the spec even though they
   read like deliberation: the parallel builder module cycle guard in [Decision 1][spec-050-d1]
   (reversing the import edge would close a module cycle between `list_field.py` and `connection.py`),
   and the strict pipeline ordering with mechanical validation in [Decision 5][spec-050-d5]
   (visibility must precede ordering, which must precede slicing). When it is unclear whether a
-  sentence is deliberation or instruction, it stays.
-
-## Change record
-
-### Specification revision history
-
-*Moved from spec header.*
-
-- **2026-09-01**: Specification, independent upstream review, audit reconciliation,
-  implementation-contract corrections, live-tier compliance review against
-  [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme], and a blocking
-  architectural review answered in place. That pass named the order contract ordered offset
-  rather than stable pagination, chose and recorded the universal-`offset` capability rule, split
-  the single argument-activity bit into four independent fields, made `ListArgumentError` a root
-  export, defined same-route as routing INTENT, replaced an impossible zero-advance
-  async-generator finalization assertion, declined the sync cleanup contract explicitly, split
-  the sync live suite out of the library application suite, and queued two amendments to the
-  parent card. The joint-cut ruling moved from Decision 7 to Decision 12 during the earlier review.
-- **2026-09-17**: The completion contract. Decisions 20-22 draw the trust boundary (application
-  Python trusted, its documented result contracts validated; the wire and configuration bounded),
-  adopt Django's own reachability rule as the admission criterion for a finding against this
-  card, align the extension contract with upstream's class-or-factory spelling while stating
-  per-operation isolation as the guarantee this package adds, and close the card on one recorded
-  gate. Decision 8 gains the evaluation-state carry so a project queryset class costs what
-  Django's manager costs and resolves under async at all. The measurements behind the contract: `utils/querysets.py` at 3,380
-  lines when this spec was written and 4,294 at this revision; the package at +4,413/-647 lines
-  since the recorded gate, concentrated in four new modules
-  (`extensions/operation_state.py`, `utils/private_state.py`, `utils/execution_mode.py`,
-  `utils/operation_lease.py`) and in `schema.py` and `resource_policy.py`; the suite from 7,868
-  to 8,318 rows; the spec's uses of "refuse" from 9 to 30 and of "hostile" from 2 to 9 while the
-  public surface of the feature did not move. Those numbers are why the line is drawn where it is.
-
-### Parent card amendments
-
-*Moved from Decisions 2 and 9.*
-
-- **Universal three-argument Scope sentence:** The card body originally specified three optional
-  arguments on every `DjangoListField`. However, ordering comes from the target's
-  `orderset_class`, which cannot hold for a type without that sidecar. Slice 5 amends that Scope
-  bullet in the KANBAN database to state that `offset` and `limit` are universal, `orderBy` is
-  sidecar-conditional, and a published `offset` is a runtime-precondition coordinate
-  ([Decision 2][spec-050-d2]).
-- **Card Definition of done `LIMIT/OFFSET` row:** The card's original phrasing "LIMIT/OFFSET
-  present exactly when supplied" is false against shipped behavior: no-argument raw lists already
-  carry a policy LIMIT through `bounded_rows` and have since [`spec-047`][spec-047]. Slice 5 amends
-  that card DoD row in the KANBAN database to the shipped contract: omission preserves the
-  existing policy LIMIT unchanged, a smaller client limit lowers the high mark, and a positive
-  offset raises the low mark ([Decision 9][spec-050-d9]).
+  sentence is deliberation or instruction, it stays in the spec.
 
 ## Deliberation that belonged to no single decision
 
 ### Borrowing posture — what was deliberately not borrowed and why
-
-*Moved from Borrowing posture.*
 
 - **From `graphene-django` connection semantics:** Refuses Relay cursor conversion, `before`
   composition, and connection-wide publication. Graphene pops `offset`, combines it with `after`,
@@ -101,8 +37,8 @@ Created by the `docs/builder/BUILD.md` `## Spec rationale extraction` pass. The 
 
 ### Risks and open questions — the fallback positions
 
-*Moved from Risks and open questions.* The spec keeps each risk and its preferred answer; the
-pre-planned fallbacks, should a real consumer need appear, are:
+The spec keeps each risk and its preferred answer; the fallbacks, should a real consumer need
+appear, are:
 
 - **The card's universal-three-argument sentence conflicts with its Meta-derived-order requirement:**
   Fallback if the maintainer insists on literal universal publication: explicitly choose and card
@@ -145,7 +81,7 @@ pre-planned fallbacks, should a real consumer need appear, are:
 
 Spec: [Decision 1][spec-050-d1].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **Forwarding arguments to consumer resolvers:** Rejected because it would break every existing
   two-parameter resolver (`resolver(root, info)`) and would split the package contract between
@@ -158,7 +94,7 @@ Spec: [Decision 1][spec-050-d1].
 
 Spec: [Decision 2][spec-050-d2].
 
-*Moved — alternatives rejected for `orderBy`:*
+*Alternatives rejected for `orderBy`:*
 
 - **Auto-generating an `OrderSet` from every model:** Would reverse a standing public decision,
   expose relation and column choices the consumer never approved, and create different ordering
@@ -169,7 +105,7 @@ Spec: [Decision 2][spec-050-d2].
 - **Requiring every `DjangoListField` target to declare `Meta.orderset_class`:** Would be a
   breaking change to the existing pagination-independent field.
 
-*Moved — capability rules rejected for `offset`:*
+*Capability rules rejected for `offset`:*
 
 - **Publishing `offset` only where a declared order source exists:** Rejected because that source
   may be a model `Meta.ordering` that a consumer resolver clears at runtime, so the argument's
@@ -186,7 +122,7 @@ Spec: [Decision 2][spec-050-d2].
 
 Spec: [Decision 4][spec-050-d4].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **A dedicated `max_list_offset` setting:** The two limits protect the same raw-list operation,
   the card explicitly prefers deriving the ceiling, and a new setting would add deployment
@@ -199,7 +135,7 @@ Spec: [Decision 4][spec-050-d4].
   validated `limit` from an unrelated consumer argument of the same name; inferring semantics from
   spelling would undercharge arbitrary lists.
 
-*Moved — derivation of coordinate ceilings vs scan budgets and collection-cost fixed estimate:*
+*Derivation of coordinate ceilings vs scan budgets and collection-cost fixed estimate:*
 
 - `max_list_rows` retains a returned/materialized-row meaning on the return dimension and is
   reused as a separate accepted-skip ceiling. Both are accepted coordinate ceilings, not scan
@@ -219,7 +155,7 @@ Spec: [Decision 4][spec-050-d4].
 
 Spec: [Decision 5][spec-050-d5].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **Resolved-alias equality as the routing invariant:** Rejected because computing it calls a
   consumer router mid-validation; intent equality (`_db` plus `_hints`) is stricter,
@@ -237,7 +173,7 @@ Spec: [Decision 5][spec-050-d5].
   list with no queryset left to plan, silently dropping root-list optimization on every async
   request while every assertion about rows and SQL still passed.
 
-*Moved — derivation on the cost of the third seal:*
+*Derivation on the cost of the third seal:*
 
 - Deep recursive query-graph validation and canonical reconstruction occurs twice in the
   visibility boundary (source and hook result), and a supplied `orderBy` adds a third full walk
@@ -249,7 +185,7 @@ Spec: [Decision 5][spec-050-d5].
 
 Spec: [Decision 6][spec-050-d6].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **Silently accepting unordered offset (Graphene-Django):** Database default order can change
   between requests, query plans, or backends. Graphene-Django's connection accepts offset without
@@ -309,7 +245,7 @@ Spec: [Decision 6][spec-050-d6].
 
 Spec: [Decision 7][spec-050-d7].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **Requiring a provably total order and rejecting unprovable ties:** Infeasible over arbitrary
   Django expressions and backend-dependent even where possible.
@@ -322,7 +258,7 @@ Spec: [Decision 7][spec-050-d7].
 
 Spec: [Decision 8][spec-050-d8].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **Short-circuiting `None` after numeric-domain validation:** Capability check outranks null
   propagation; an unsupported argument must not succeed merely because the underlying field
@@ -359,27 +295,21 @@ Spec: [Decision 8][spec-050-d8].
   exact queryset this package owns, never through an attribute lookup a subclass answers; a
   subclass source reaches that slot by being rebuilt, and the rebuild brings its rows with it.
 
-*Measured fact behind the pending-predicate admission:* Django's
+*Fact behind the pending-predicate admission:* Django's
 `RelatedManager._apply_rel_filters` sets `_defer_next_filter` and then calls
 `.filter(**core_filters)`, whose `_filter_or_exclude` stores the `(negate, args, kwargs)` tuple on
 `self._chain()` — an object of the CANDIDATE's class. So **every** relation queryset carries a
-pending `_deferred_filter`, on an exact `QuerySet` and on a `Manager.from_queryset` class alike.
-Measured directly (the same relation built both ways carries the identical tuple), and measured
-at the seal: with the exact-`QuerySet` gate in place, the five `_SealPolicy` values the probe
-exercised (`_DEFAULT_SEAL_POLICY`, `_LIST_ARGUMENT_VISIBILITY_POLICY`, `_SIDECAR_RESULT_POLICY`,
-`_PREFETCH_CHILD_POLICY` and `_RAW_LIST_SOURCE_POLICY`) each refused the subclass relation
-queryset with `("untrusted", "<class> carries an unresolved deferred filter")` while admitting
-the exact one, so a `Manager.from_queryset` relation was refused at the raw-list row source AND
-at the visibility boundary. The gate read the candidate's class and no field of the policy at
-all, which is why those arms answer for every arm. The gate's own stated premise — that a
-subclass carrying the artifact "is not that reverse-relation artifact" — was therefore false,
-and Decision 8's promise that a sealable project queryset class keeps its `LIMIT` was
-unreachable for the relation case.
+pending `_deferred_filter`, on an exact `QuerySet` and on a `Manager.from_queryset` class alike
+(the same relation built both ways carries the identical tuple). A seal that refused a subclass
+carrying that state would refuse a `Manager.from_queryset` relation at the raw-list row source
+and at the visibility boundary, and Decision 8's promise that a sealable project queryset class
+keeps its `LIMIT` would be unreachable for the relation case. The seal therefore proves the
+tuple's values and bakes it onto the detached clone
+(`django_strawberry_framework/utils/querysets.py::_bake_deferred_filter_or_defect`).
 
 *Rejected — refusing `Manager.from_queryset` relations as unsupported:* It is the documented way
-to give a model its own queryset class, so this refuses ordinary Django on the strength of a
-premise about Django that measurement disproved. Decision 20 names that shape as standard
-application code the package answers for.
+to give a model its own queryset class, so this refuses ordinary Django on a false premise about
+Django. Decision 20 names that shape as standard application code the package answers for.
 
 *Rejected — re-querying the relation instead of carrying its rows:* The cached rows are already
 in memory. Re-fetching them costs one query per parent row, and on the prefetched branch of the
@@ -387,7 +317,7 @@ generated many-side resolver it returns an unevaluated rebuilt source that graph
 on the event loop under async, where Django raises `SynchronousOnlyOperation`. The alternative is
 therefore not only a cost: it breaks the async relation outright.
 
-*Measured fact:* with the carry removed,
+*Failability:* with the carry removed,
 `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_costs_two_prefetch_queries`
 counts 4 queries where it pins 2, and
 `examples/fakeshop/test_query/test_resource_policy_api.py::test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited`
@@ -408,31 +338,29 @@ same things whichever surface calls it, whereas every existing axis names a real
 the rows are, whether the surface recomposes, which connection, whether the surface demanded the
 result). Sealability is one rule, defined once.
 
-*Why the `negate` slot gained an exact-`bool` check with the admission:* the bake's contract is
-that it runs only genuine Django machinery over pre-proven arguments, and `negate` was the one
-slot in the tuple still reaching consumer code — `~predicate if negate else predicate` truth-tests
-it, so a planted object's `__bool__` would decide whether the predicate is negated. Pinning it
-completes a proof the `tuple` / `dict` / `list` checks beside it already perform, rather than
-opening a new threat model.
+*Why the `negate` slot takes an exact-`bool` check:* the bake's contract is that it runs only
+genuine Django machinery over pre-proven arguments, and `negate` is the one slot in the tuple that
+would otherwise reach consumer code — `~predicate if negate else predicate` truth-tests it, so a
+planted object's `__bool__` would decide whether the predicate is negated. Pinning it completes a
+proof the `tuple` / `dict` / `list` checks beside it already perform, rather than opening a new
+threat model.
 
 ### Decision 9 — no-argument sync behavior takes the old branch; async only adapts completion
 
 Spec: [Decision 9][spec-050-d9].
 
-*Moved — derivation of card DoD amendment:*
+*Derivation of the LIMIT/OFFSET contract:*
 
-- The card's original Scope and Definition of done phrasing ("LIMIT/OFFSET present exactly when
-  supplied") was false against shipped behavior: no-argument raw lists already carry a policy
-  LIMIT through `bounded_rows` since [`spec-047`][spec-047]. Slice 5 amends the card DoD row in
-  the KANBAN database to state the shipped contract: omission preserves the existing policy
-  LIMIT unchanged, a smaller client limit lowers the high mark, and a positive offset raises the
-  low mark.
+- "LIMIT/OFFSET present exactly when supplied" does not describe a raw list: no-argument raw lists
+  carry a policy LIMIT through `bounded_rows` ([`spec-047`][spec-047]). The contract is: omission
+  preserves the existing policy LIMIT unchanged, a smaller client limit lowers the high mark, and a
+  positive offset raises the low mark.
 
 ### Decision 10 — coercion errors stay GraphQL-owned; runtime domain errors are package-owned
 
 Spec: [Decision 10][spec-050-d10].
 
-*Moved — alternatives rejected:*
+*Alternatives rejected:*
 
 - **A custom stricter integer scalar:** The card explicitly asks for `Int` SDL, and over-ceiling
   validation still needs request context unavailable to scalar coercion.
@@ -443,11 +371,12 @@ Spec: [Decision 10][spec-050-d10].
 
 Spec: [Decision 12][spec-050-d12].
 
-*Moved — derivation:*
+*Derivation:*
 
 - Card 050 targets `0.0.15` alongside 051, 052, and 053. Card 053 ([`spec-053`][spec-053]) owns
-  the [joint version cut][glossary-joint-version-cut], release documentation, and `__version__`
-  edit. Touching version literals in card 050 would violate the joint-cut protocol.
+  the [joint version cut][glossary-joint-version-cut] and its release documentation; `__version__`
+  already reads `0.0.15` for the open development line. Touching version literals in card 050
+  would violate the joint-cut protocol.
 
 ### Decision 13 — graphql-core workarounds have a dependency-owned lifecycle
 
@@ -616,7 +545,7 @@ promise more than Django does about code inside the same process.
 import, monkeypatch and rebind any package name - so every check it motivates is a check the
 adversary it imagines steps around, and each one costs a real consumer a refusal path to learn.
 
-*Rejected:* An architectural rewrite before DONE - one `ContextVar`, fresh adapters per
+*Rejected:* An architectural rewrite - one `ContextVar`, fresh adapters per
 operation, a separately shared optimizer cache, deletion of the membership and refusal
 machinery - judged by how much it deletes. The four new modules each carry a guarantee ordinary
 code needs (nesting, concurrency, streaming resumption, masking the right operation), the
@@ -624,8 +553,8 @@ regression suite holds those guarantees, and a rewrite would spend the suite to 
 that is smaller by assertion rather than by evidence. Consolidation follows the DRY flow where
 duplication is demonstrated; it is not mandated by line count.
 
-*Rejected:* Dropping the shipped hardening back to the feature as first implemented. The
-original was simpler partly because it missed failure modes the suite now pins.
+*Rejected:* Dropping the shipped hardening back to a simpler first implementation. It is
+simpler partly because it misses failure modes the suite pins.
 
 *Separated, not absorbed — the connection field's sidecar seam.*
 The rule this decision's trust table states for application code is that the package validates
@@ -635,24 +564,19 @@ differently is that rule broken. The row at stake is [`spec-030`][spec-030] Deci
 steps can only narrow" upper bound on the connection pipeline, which an override that widens,
 re-routes, pre-evaluates, slices or combines its return would otherwise defeat.
 
-The `OrderSet.apply_*` half of that seam is closed. The one post-`OrderSet` seal is
+Both sidecar returns run one seal.
 [`django_strawberry_framework/utils/querysets.py::apply_orderset_sync`][utils-querysets] /
 [`::apply_orderset_async`][utils-querysets], called from both
 [`django_strawberry_framework/list_field.py`][list-field] and
 [`django_strawberry_framework/connection.py::_pipeline_sync`][connection] /
-[`::_pipeline_async`][connection]. Both fields therefore freeze the same routing intent before
-the consumer override receives the queryset and validate what it hands back on the same result
+[`::_pipeline_async`][connection], and `utils/querysets.py::apply_filterset_sync` /
+`::apply_filterset_async`, called from both `connection.py` pipelines, all run
+`django_strawberry_framework/utils/querysets.py::_apply_sidecar_sync` or its async twin under the
+one `_SIDECAR_RESULT_POLICY`. Both fields therefore freeze the same routing intent before the
+consumer override receives the queryset and validate what it hands back on the same result
 axes - lazy, model rows of the captured model, unsliced, uncombined, same routing - before any
-later step, including the Relay window, sees it.
-
-The remaining deferral was the `FilterSet.apply_*` return. Decision 22 closes this card on the
-work the card named, so it went to a card owned by the connection field rather than reopening
-050: card `TODO-ALPHA-053-0.0.15` carries the row, discharged. Both sidecar returns now run one
-seal, `django_strawberry_framework/utils/querysets.py::_apply_sidecar_sync` and its async
-twin, under the same frozen routing intent and the one `_SIDECAR_RESULT_POLICY`, from both
-`connection.py` pipelines; the adjacent seal-policy asymmetry is closed with it, a connection
-request carrying a sidecar input sealing `get_queryset` under
-`_LIST_ARGUMENT_VISIBILITY_POLICY` as the list field's argument path does.
+later step, including the Relay window, sees it. The visibility seal runs under the one default
+policy on both fields, whether or not a sidecar input is supplied.
 
 ### Decision 21 — the extension contract is upstream's; per-operation isolation is the guarantee this package adds
 
@@ -716,7 +640,6 @@ criterion; this decision supplies the stop.
 
 <!-- Root -->
 [goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
 
 <!-- docs/ -->
 [glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
@@ -743,8 +666,6 @@ criterion; this decision supplies the stop.
 [spec-050-d22]: spec-050-list_field_arguments-0_0_15.md#decision-22--the-card-closes-on-one-recorded-gate-a-closed-contract-reopens-only-for-a-broken-row
 
 <!-- docs/SPECS/ -->
-[spec-020]: SPECS/spec-020-list_field-0_0_7.md
-[spec-028]: SPECS/spec-028-orders-0_0_8.md
 [spec-030]: SPECS/spec-030-connection_field-0_0_9.md
 [spec-047]: SPECS/spec-047-resource_policy-0_0_14.md
 [spec-053]: SPECS/spec-053-boundary_dry_squeeze-0_0_15.md
@@ -759,7 +680,6 @@ criterion; this decision supplies the stop.
 <!-- tests/ -->
 
 <!-- examples/ -->
-[fakeshop-test-query-readme]: ../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 

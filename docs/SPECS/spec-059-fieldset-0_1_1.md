@@ -125,13 +125,14 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   FieldSet + OrderSet, FieldSet + `apply_cascade_permissions`. This slice
   activates the already-staged FieldSet classes in
   `examples/fakeshop/apps/products/fields.py` and owns the stale-comment sweep
-  that activation implies: retarget every pre-renumber `TODO-BETA-046-0.1.1`
-  fieldset comment in `apps/products/schema.py` (7 occurrences) to the shipped
-  `059` id; the sibling search / aggregate comment IDs stay for cards 060 / 062.
+  that activation implies: retire every pre-renumber `TODO-BETA-046-0.1.1`
+  fieldset comment in `apps/products/schema.py` (7 occurrences); the sibling
+  search / aggregate comments (`TODO-BETA-047-0.1.2` / `TODO-BETA-049-0.1.3`,
+  the pre-renumber ids of cards 060 / 062) stay for those cards.
 - [ ] **Slice 5 — docs + version cut + card wrap.** GLOSSARY status flips
   (DB + regen), `docs/README.md` / `README.md` / `GOAL.md` / `TODAY.md`
   touch-ups where the surface change is reflected, `docs/TREE.md` regen,
-  `CHANGELOG.md` `0.1.1` entry, the version quintet, KANBAN card flip
+  `CHANGELOG.md` `0.1.1` entry, the version triplet, KANBAN card flip
   (DB + regen).
 
 ---
@@ -168,7 +169,7 @@ example and `django-graphene-filters`'
 ## Current state
 
 - `DjangoTypeDefinition.fields_class` exists as an inert forward-reserved
-  sidecar slot (`types/definition.py #"fields_class: type | None = None"`,
+  sidecar slot (`types/definition.py #"fields_class: type[object] | None = None"`,
   declared by [`spec-034`][spec-034] Decision 2 as the structural mirror of
   the shipped `filterset_class` / `orderset_class` slots). It has no
   populator and stays `None`.
@@ -193,7 +194,7 @@ example and `django-graphene-filters`'
   (`DjangoTypeDefinition.consumer_authored_fields`) so consumer-authored
   fields are not clobbered by generated resolvers.
 - The optimizer's per-type plan carries `only_fields`
-  (`optimizer/plans.py #"only_fields: Sequence[str]"`) applied as
+  (`optimizer/plans.py #"only_fields: Sequence[str] = field("`) applied as
   `queryset.only(*names)`; `Meta.optimizer_hints` is the shipped
   consumer-side projection-widening surface.
 - Upstream, the full surface exists and is verified readable at
@@ -253,8 +254,7 @@ example and `django-graphene-filters`'
   Layer-3 keys stay deferred (`TODO-BETA-060-0.1.2` /
   `TODO-BETA-062-0.1.3`-line cards own them).
 - **The generalized Meta-key promotion machinery.** The aggregation card
-  `TODO-BETA-062-0.1.3`, which absorbed the retired Layer-3 Meta key
-  promotion card, owns the dispatched binding form; this card
+  `TODO-BETA-062-0.1.3` owns the dispatched binding form; this card
   ships the direct `_bind_fieldsets` and promotes only its own key
   ([Decision 8](#decision-8--metafields_class-promotes-in-this-card)).
 
@@ -470,8 +470,8 @@ and has **no helper-reference ledger** (there is no `fieldset_input_type`
 helper for a consumer to orphan against); forcing it through the spec
 object would mean null-object `expand` / `materialize` / `factory_cls`
 stubs — machinery pretending to be shared. The aggregation card
-`TODO-BETA-062-0.1.3`, which absorbed the retired Layer-3 Meta key promotion
-card, owns whatever dispatched generalization later absorbs all three families; this card keeps the direct form and shares only the
+`TODO-BETA-062-0.1.3` owns whatever dispatched generalization later absorbs
+all three families; this card keeps the direct form and shares only the
 genuinely-common owner skeleton.
 
 Idempotence: like the shipped binders, `_bind_fieldsets` skips
@@ -548,7 +548,7 @@ preserved verbatim). At bind time the declarations are normalized to a map
 from managed field name to its concrete-column tuple. The optimizer merges
 only the dependencies for managed fields present in the current selection
 into the type's plan `only_fields`
-(`optimizer/plans.py #"only_fields: Sequence[str]"`), so an override reading
+(`optimizer/plans.py #"only_fields: Sequence[str] = field("`), so an override reading
 `root.name` never triggers a deferred-field fetch and selecting an unrelated
 managed field does not over-project columns. This mirrors the shipped
 [`Meta.optimizer_hints`][glossary-metaoptimizer-hints] /
@@ -579,16 +579,10 @@ definition slot `DjangoTypeDefinition.fields_class` gets its populator.
 `aggregate_class` and `search_fields` stay in `DEFERRED_META_KEYS`.
 
 The card's DoD line reads "…only when the resolver-binding pipeline applies
-end-to-end; this card owns the promotion (Decision 8), and the table-driven
-binder generalization is owned by the aggregation card". An earlier wording
-carried a "(per …)" parenthetical naming a separate Layer-3 Meta key
-promotion card, which could be read as deferring this key's promotion away
-from this card; that card was retired into the aggregation card
-(`TODO-BETA-062-0.1.3`) at the 2026-08-29 board review and the DoD was
-reworded to match. This card's own Foundation-slice seam agrees: "This
-card's `_bind_fieldsets` is what populates the slot and promotes the key
-end-to-end", and a shipped `FieldSet` whose Meta key still raises would be
-unusable.
+end-to-end; this card owns the promotion (spec-059 Decision 8), and the
+table-driven binder generalization is owned by the aggregation card"
+(`TODO-BETA-062-0.1.3`). A shipped `FieldSet` whose Meta key still raises
+would be unusable.
 
 ### Decision 9 — Cascade-first composition — field gates never see hidden rows
 
@@ -619,10 +613,10 @@ Two non-Done cards share `0.1.1`: this card and the graph-substrate card
 release-state artifact here (its spec's Decision 10). This card lands last
 at `0.1.1`, so per the
 [joint version cut][glossary-joint-version-cut] rule this spec's Slice 5
-owns the version quintet: `pyproject.toml` `version`, the package
-`__version__`, `tests/base/test_init.py`, the GLOSSARY package-version row,
-and the root entry in `uv.lock` — mirroring the version-quintet Decision shape of
-[`spec-038`][spec-038] Decision 14 / [`spec-053`][spec-053] Decision 11.
+owns the version triplet: the package `__version__` (the single version
+literal — `pyproject.toml` is `dynamic = ["version"]` and `uv.lock` records
+no version for the editable root package), `tests/base/test_init.py`, and
+the GLOSSARY package-version row.
 `0.1.1` is a routine patch on the beta line, **not** a milestone `.0` cut —
 none of the milestone-cut extras from [`spec-057`][spec-057] apply.
 
@@ -650,7 +644,7 @@ coroutine and bypassed.
 | 2 | `fieldset/factories.py`, `types/finalizer.py` (`_bind_fieldsets`, phase-2.5 call), `types/base.py` (key promotion + `fields_class` value validation), `types/definition.py` (slot populator docs), `tests/fieldset/test_factories.py`, `tests/types/…` | Owner binding via `_bind_set_owner_common`, wrapper cascade construction, `skip_field_names` extension, promotion out of `DEFERRED_META_KEYS`, idempotent rerun marking |
 | 3 | `fieldset/factories.py`, `types/finalizer.py`, `optimizer/plans.py` (or the plan-construction seam that merges per-type extra columns), `tests/fieldset/test_depends_on.py`, `tests/optimizer/…` | Computed-field transplant + fail-closed audits (Decision 5), selection-sensitive `depends_on` map → `only_fields` merge (Decision 7) |
 | 4 | `examples/fakeshop/apps/products/fields.py` (activate the already-staged FieldSet classes — repoint the `AdvancedFieldSet` base to `FieldSet`; not a new file), fakeshop schema wiring, `examples/fakeshop/test_query/test_fieldset*.py`, `tests/fieldset/test_composability.py` | Live HTTP: tiered visibility / redaction / denial / computed field across the four user tiers; composability with `FilterSet` / `OrderSet` / cascade |
-| 5 | `docs/GLOSSARY.md` (DB + regen), `docs/README.md`, `docs/TREE.md` (regen), `README.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md`, `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock` | Status flips, new `Meta.depends_on` glossary entry, `0.1.1` entry + version quintet, card wrap |
+| 5 | `docs/GLOSSARY.md` (DB + regen), `docs/README.md`, `docs/TREE.md` (regen), `README.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py` | Status flips, new `Meta.depends_on` glossary entry, `0.1.1` entry + version triplet, card wrap |
 
 ## Helper-reuse obligations (DRY)
 
@@ -780,45 +774,29 @@ cannot reach.
   `planned for 0.1.1` to `shipped (0.1.1)` with the as-built contract; add a
   new `Meta.depends_on` entry (new heading — fold-in is this shipping
   slice's job, not authoring-time).
-- `docs/README.md`: capability snapshot gains the field-level behavior row.
+- `docs/README.md`: the field-level behavior how-to beside the filtering /
+  ordering sections.
 - `docs/TREE.md`: regen (new `fieldset/` package; module docstrings
   required by the renderer).
-- `README.md` / `GOAL.md` / `TODAY.md`: `GOAL.md`'s "the shipped surface
-  already does all but three" paragraph loses the fieldset item;
-  `TODAY.md`'s "What products is still waiting for" drops field-level
-  redaction/denial; README feature list gains `FieldSet`.
+- `README.md` / `TODAY.md`: `TODAY.md`'s capability table stops listing
+  `Meta.fields_class` as not accepted, and its `fields.py` row and
+  unshipped-sidecar list drop `FieldSet`; README feature list gains
+  `FieldSet`.
 - `KANBAN.md` / `KANBAN.html`: card flip + spec link (DB + regen at wrap).
 - `CHANGELOG.md`: `0.1.1` entry (Slice 5 permission grant).
 
 ## Risks and open questions
 
-- **Promotion-owner ambiguity (card-text conflict) — RESOLVED 2026-08-29.**
-  The DoD once carried a "(per …)" parenthetical naming a separate Layer-3
-  Meta key promotion card, readable as deferring the `Meta.fields_class`
-  promotion away from this card, while the same card's Foundation-slice seam
-  said this card "populates the slot and promotes the key end-to-end". The
-  board review retired the promotion card into the aggregation card
-  (`TODO-BETA-062-0.1.3`) and reworded the DoD: this card owns the promotion
-  (Decision 8), and the aggregation card owns only the later table-driven
-  binder generalization.
-- **Stale card reference — `BACKLOG.md` item 38 (retired).** The card's
-  Foundation-slice seam used to cite "BACKLOG.md item 38 for the
-  `DjangoModelField` custom Strawberry field class", but item 38 in
-  `BACKLOG.md` is the layered manual-relation-override *test policy*; no
-  `DjangoModelField` entry exists anywhere in the file. That citation has
-  since been dropped from the card, which now records the answer directly
-  ([`KANBAN.md`][kanban], `TODO-BETA-059-0.1.1`). The open question it
-  anchored — custom field class vs
-  `strawberry.field(permission_classes=...)` vs resolver wrapping — is
-  answered by this spec without it: **resolver
+- **Custom field class vs `permission_classes` vs resolver wrapping.**
+  Answered here and recorded on the card ([`KANBAN.md`][kanban],
+  `TODO-BETA-059-0.1.1`): **resolver
   wrapping** (upstream-parity, zero-config, zero-overhead on unmanaged
   fields). Mapping onto Strawberry's `permission_classes` is rejected —
   `BasePermission.has_permission(source, info, **kwargs)` is
   class-per-policy with a fixed message contract, cannot host the
   gate→override cascade ordering, and would synthesize a permission class
   per managed field for zero consumer benefit; a custom `DjangoModelField`
-  field class is unnecessary machinery for the same reason. Recorded here
-  per the conflict rule rather than silently reconciled.
+  field class is unnecessary machinery for the same reason.
 - **`check_permissions` naming disambiguation (inherited from card 034's
   open question).** The `(self, request)`-shaped input gates on
   `FilterSet` / `OrderSet` and the new `(self, info)`-shaped read gate share
@@ -848,8 +826,7 @@ cannot reach.
 - `Meta.search_fields` — `TODO-BETA-060-0.1.2` ([`spec-060`][spec-060]).
 - `AggregateSet` / `Meta.aggregate_class` — the `0.1.3` aggregate card.
 - Layer-3 Meta key promotion machinery (dispatched binding form) — the
-  aggregation card `TODO-BETA-062-0.1.3`, which absorbed the retired
-  promotion card.
+  aggregation card `TODO-BETA-062-0.1.3`.
 - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`) —
   `TODO-BETA-064-0.1.4`; this card's Non-goal note is the seam it amends.
 - Product-catalog Layer-3 HTTP GraphQL sweep — `TODO-BETA-067-0.1.5`
@@ -894,15 +871,13 @@ cannot reach.
   including the new `Meta.depends_on` entry; TREE regen; KANBAN card wrap
   via DB + regen).
 - [ ] `CHANGELOG.md` gains the `0.1.1` entry (Slice 5 permission).
-- [ ] The `0.1.1` version quintet lands: `pyproject.toml`, `__version__`,
-  `tests/base/test_init.py`, the GLOSSARY package-version row, `uv.lock`.
+- [ ] The `0.1.1` version triplet lands: `__version__`,
+  `tests/base/test_init.py`, the GLOSSARY package-version row.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../../AGENTS.md
-[backlog]: ../../BACKLOG.md
-[goal]: ../../GOAL.md
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
@@ -944,11 +919,7 @@ cannot reach.
 [glossary-single-upstream-parity]: ../GLOSSARY.md#single-upstream-parity
 
 <!-- docs/SPECS/ -->
-[spec-030]: spec-030-connection_field-0_0_9.md
 [spec-034]: spec-034-permissions-0_0_10.md
-[spec-038]: spec-038-form_mutations-0_0_12.md
-[spec-052]: spec-052-debug_extraction-0_0_15.md
-[spec-053]: spec-053-boundary_dry_squeeze-0_0_15.md
 [spec-057]: spec-057-beta_release-0_1_0.md
 [spec-060]: spec-060-search_fields-0_1_2.md
 

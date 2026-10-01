@@ -1,34 +1,21 @@
 # Spec: Sealed `get_queryset` visibility-boundary policy artifacts — the governing security decisions, spec, and glossary for the framework-owned execution queryset
 
 Built for `0.0.14` (card `DONE-045-0.0.14`). This is a **documentation-only**
-slice over an already-landed implementation: commit `60998b17`
-("feat(visibility): seal get_queryset hook results into framework-owned
-querysets") shipped the sealed [visibility boundary][glossary-visibility-boundary].
-Only the policy artifacts — a governing set of numbered security decisions, this
-spec, a KANBAN card, and the [glossary][glossary] fold-in — were deferred to a
-shipping slice. This card discharges that deferral so the standing documentation
-matches the implemented security contract.
+card over the sealed [visibility boundary][glossary-visibility-boundary]: it
+owns the governing set of numbered security decisions, this spec, a KANBAN card,
+and the [glossary][glossary] fold-in, so the standing documentation states the
+implemented security contract.
 
-Decisions 1–6 and 8 below state the boundary's contract as it stands; Decision 7
-records release bookkeeping. Every rejected alternative, every change a decision
-has undergone, and every claim a decision may no longer make live in the
-deliberative companion [`docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale].
+Decisions 1–6 and 8 below state the boundary's contract; Decision 7 records
+release bookkeeping. Every rejected alternative lives in the deliberative
+companion [`docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale].
 
-Status: **COMPLETE — shipped in `0.0.14` (commit `60998b17`); this card records
-the governing artifacts, which describe the boundary as it now stands including
-its post-`0.0.14` hardening.** The Slice checklist boxes below stay unticked
-because the `Status:` line is the completion source of truth (the shipped-spec
-convention); the code they describe already landed.
+Status: **COMPLETE — shipped in `0.0.14`.** The Slice checklist boxes below stay
+unticked because the `Status:` line is the completion source of truth (the
+shipped-spec convention).
 
-No version bump is owned here: `0.0.14` was cut by the joint release commit
-`6a86d21f` ("release: 0.0.14 joint cut"), so this follow-on documentation card
-at the same patch line carries none of the version quintet
+No version bump and no `CHANGELOG.md` entry are owned here
 ([Decision 7](#decision-7--no-version-bump-the-0014-cut-already-landed)).
-
-Permission caveat: `AGENTS.md` prohibits `CHANGELOG.md` edits without explicit
-permission. This card ships no `CHANGELOG.md` entry — the behavior it documents
-already shipped under the `0.0.14` release entry the joint cut wrote — so no
-slice here touches it.
 
 ---
 
@@ -41,9 +28,9 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   [Prove-then-clone AST trust][glossary-prove-then-clone-ast-trust],
   [Callable shadow defect][glossary-callable-shadow-defect],
   [Prefetch alias threading][glossary-prefetch-alias-threading] — the five terms
-  this card authors, naming the hardened contract's moving parts.
+  this card authors, naming the contract's moving parts.
 - [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] — the
-  consumer seam whose source and result the boundary now seals.
+  consumer seam whose source and result the boundary seals.
 - [`apply_cascade_permissions`][glossary-apply_cascade_permissions] — the cascade
   caller that composes over the same boundary and supplies the `render_error`
   seam.
@@ -53,40 +40,37 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 
 ## Slice checklist
 
-A single documentation slice; the code shipped in commit `60998b17`.
+A single documentation slice.
 
 - [ ] **Slice 1 — Policy artifacts for the sealed boundary**
-  - [ ] Numbered security decisions (below) covering the changed contract:
+  - [ ] Numbered security decisions (below) covering the contract:
         untrusted-object rebuild, prove-then-clone AST trust,
-        identity-fast-path removal, `Prefetch` rebuild + alias threading,
-        queryset-shape rejections, and the typed error contract.
+        no identity fast path, `Prefetch` rebuild + alias threading,
+        queryset-shape rejections, the typed error contract, and the threat
+        model with canonical reconstruction.
   - [ ] This spec `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` and its
         companions `*-terms.csv` and `*-rationale.md`.
   - [ ] The five new glossary entries imported via the fakeshop glossary DB and
         `docs/GLOSSARY.md` regenerated (never hand-edited).
   - [ ] `KANBAN.md` / `KANBAN.html` regenerated from the kanban DB with this
         card in Done.
-  - [ ] The prior `[P2]` policy-artifact residual recorded as closed here.
 
 ## Problem statement
 
-The sealed boundary began as a method-inventory check: it validated a finite
-list of method overrides on the consumer `QuerySet` *class* and, if the class
-looked clean, returned the consumer object unchanged. The adversarial review
-established that **the method inventory is the wrong abstraction** — the leak
-vector is not the class's declared methods but the query STATE and the object's
-runtime dispatch. Zero-SQL probes drove the point home: an instance-shadowed
-`.all()`, a replaced instance-level `Query.chain`, and subclass `.filter()` /
-`_values` / `.first()` / `.__aiter__()` each erased the visibility predicate or
-returned synthetic rows *after* a class-level inventory had accepted the object.
-A `get_queryset` mistake is a data-leak bug, so the boundary must not trust the
-consumer object at all.
+A boundary that validates a finite list of method overrides on the consumer
+`QuerySet` *class* and, if the class looks clean, returns the consumer object
+unchanged is the wrong abstraction: the leak vector is not the class's declared
+methods but the query STATE and the object's runtime dispatch. An
+instance-shadowed `.all()`, a replaced instance-level `Query.chain`, and subclass
+`.filter()` / `_values` / `.first()` / `.__aiter__()` each erase the visibility
+predicate or return synthetic rows *after* a class-level inventory has accepted
+the object. A `get_queryset` mistake is a data-leak bug, so the boundary must not
+trust the consumer object at all.
 
 ## Current state
 
-- The sealed boundary shipped in commit `60998b17` and
-  [`django_strawberry_framework/utils/querysets.py`][querysets] is covered under
-  the repository's `fail_under = 100` gate.
+- [`django_strawberry_framework/utils/querysets.py`][querysets] owns the boundary
+  and is covered under the repository's `fail_under = 100` gate.
 - Both the source (before the hook) and the hook result (after) are rebuilt into
   a framework-owned plain `django.db.models.QuerySet`; the consumer object is
   never returned, and the rebuilt query's whole state is canonically
@@ -100,22 +84,29 @@ consumer object at all.
 - The sync and async runners share one preparation primitive
   (`_prepared_visibility_source`) and one normalization primitive
   (`_normalized_visibility_result`) so the two colored paths cannot drift.
+- Each surface seals under one frozen option set,
+  [`utils/querysets.py::_SealPolicy`][querysets] (`require_model_rows`,
+  `reject_sliced`, `rewrite_combined`, `require_shared_alias`,
+  `require_unevaluated`, `carry_result_cache`), declared once per surface and
+  applied to both seals of one visibility call. The `get_queryset` surfaces run
+  `_DEFAULT_SEAL_POLICY`, the cascade `_CASCADE_SEAL_POLICY`, and `Prefetch`
+  children `_PREFETCH_CHILD_POLICY` / `_LIST_RELATION_CHILD_POLICY`; the
+  post-sidecar result seal (`_SIDECAR_RESULT_POLICY`) and the raw-list row source
+  (`_RAW_LIST_SOURCE_POLICY`) are spec-050's surfaces.
 
 ## Goals
 
 - Record the governing numbered security decisions for the accepted queryset
-  shapes, identity/cache behavior, aliases, errors, and query execution the
-  sealed boundary changed.
+  shapes, identity/cache behavior, aliases, errors, and query execution of the
+  sealed boundary.
 - Author the five glossary terms naming the contract's moving parts, and relink
   the four existing terms the contract composes with.
-- Close the deferred `[P2]` policy-artifact residual in this durable spec.
 
 ## Non-goals
 
 - **No behavior change.** This card is documentation only; the boundary's code
-  ships independently of it and is unchanged by it.
-- **No version bump.** `0.0.14` was already cut by the joint release
-  ([Decision 7](#decision-7--no-version-bump-the-0014-cut-already-landed)).
+  is not owned by it.
+- **No version bump.** ([Decision 7](#decision-7--no-version-bump-the-0014-cut-already-landed)).
 
 ## Borrowing posture
 
@@ -123,7 +114,7 @@ None. The sealed boundary is internal security-boundary hardening with no
 upstream peer: neither `graphene-django` nor `strawberry-graphql-django` ships a
 comparable framework-owned-execution-queryset primitive, so there is no
 borrowing posture to pin. The contract is derived entirely from Django's own
-`django.db.models.sql.Query` compile surface and the adversarial review.
+`django.db.models.sql.Query` compile surface.
 
 ## Architectural decisions
 
@@ -140,8 +131,8 @@ Renumbering a decision is a package-wide rename, not a documentation edit.
 
 ### Decision 1 — The hook and source objects are untrusted query state, rebuilt into a framework-owned plain `django.db.models.QuerySet`
 
-**Decision.** The boundary no longer validates a finite inventory of method
-overrides on the consumer `QuerySet` class and returns the consumer object. It
+**Decision.** The boundary does not validate a finite inventory of method
+overrides on the consumer `QuerySet` class and return the consumer object. It
 treats both the source queryset (before the hook) and the hook's return value as
 untrusted query STATE: it reads that state from the instance `__dict__` via
 `object.__getattribute__` (so a custom `__getattribute__`, an instance-shadowed
@@ -150,8 +141,9 @@ during extraction), validates it, then rebuilds a fresh framework-owned plain
 `django.db.models.QuerySet` from the validated state. It NEVER returns the
 consumer object. Preserved: SQL query state (filters, annotations, joins,
 ordering, values projection; a combinator is rebuilt as the set of primary keys
-it selects, Decision 5), database routing / hints, and prefetch metadata. Dropped: the consumer's executable override dispatch (the
-subclass identity), which is the leak vector.
+it selects, Decision 5), database routing / hints, and prefetch metadata.
+Dropped: the consumer's executable override dispatch (the subclass identity),
+which is the leak vector.
 
 Reading state without dispatch is not the same as USING it without dispatch, so
 every `QuerySet.__dict__` field the seal carries forward — `_db`, `_hints`,
@@ -171,9 +163,8 @@ unbound `sql.Query.clone`, constructs a plain `models.QuerySet`);
 [`::_prepared_visibility_source`][querysets] (seals the source before the hook
 runs); [`::_normalized_visibility_result`][querysets] (seals the hook result).
 
-**Deliberation.** The rejected class-level method inventory, the rejected
-name-blacklist fix, and this decision's change history are recorded in the
-[rationale companion][rationale].
+**Deliberation.** The rejected class-level method inventory and the rejected
+name-blacklist fix are recorded in the [rationale companion][rationale].
 
 **Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests] (the
 shared seal / rebuild suite) plus the row-survival surfaces in
@@ -229,7 +220,7 @@ Three further properties the walk must hold, each of which a narrower reading of
   exact builtin sequence first.
 - **Retained containers are proven by payload, not only by type and key.**
   `sql.Query.clone`'s `.copy()` calls are shallow, so every object inside a
-  retained container survives into the sealed query and is handed to Django's own
+  retained container survives into the clone and is handed to Django's own
   bookkeeping — an `int` subclass stored as an `alias_refcount` value has its
   arithmetic invoked by ordinary downstream `.filter()` composition, and that
   callback can rewrite the sealed `where` tree before the new predicate is added.
@@ -264,7 +255,7 @@ three-state cycle rejection);
 initialized `alias_map`, not the poisonable `base_table` cache).
 
 **Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests]
-hostile-node cases (named in the source docstrings, e.g.
+hostile-node cases (e.g.
 `test_hostile_subquery_inner_query_fails_closed`,
 `test_hostile_expression_inside_genuine_subquery_where_fails_closed`,
 `test_query_shadow_defect_is_name_agnostic`,
@@ -274,21 +265,21 @@ connection row-survival case
 ([connection tests][connection-tests]).
 
 **Deliberation.** The rejected `__module__`-string provenance, the rejected
-"`clone` is dispatch-free" premise, the rejected vetted-expression allowlist, and
-the three later rounds that added the properties above are recorded in the
-[rationale companion][rationale].
+"`clone` is dispatch-free" premise, and the rejected vetted-expression allowlist
+are recorded in the [rationale companion][rationale].
 
 ### Decision 3 — The identity fast path is removed; hook results are always re-sealed and result caches dropped
 
-**Decision.** Both runners previously skipped result normalization when the hook
-returned the exact source object it received. That fast path is gone:
-`apply_type_visibility_sync` and `apply_type_visibility_async` ALWAYS re-seal the
-hook result through `_normalized_visibility_result` (no `result is queryset`
-shortcut). The rebuild never copies `_result_cache`, and `_known_related_objects`
-is deliberately dropped, so an injected cached row (synthetic or otherwise)
-cannot cross the boundary. Object identity is not immutability: a hook holding the
-sealed source can mutate `_result_cache` / `_query` / `model` / `_db` and return
-the same object, so identity licenses no shortcut.
+**Decision.** Neither runner skips result normalization when the hook returns
+the exact source object it received: `apply_type_visibility_sync` and
+`apply_type_visibility_async` ALWAYS re-seal the hook result through
+`_normalized_visibility_result` (no `result is queryset` shortcut). No
+`get_queryset` seal policy sets `carry_result_cache` (only the raw-list row
+source's does), so the rebuild never copies `_result_cache`, and
+`_known_related_objects` is always dropped, so an injected cached row (synthetic
+or otherwise) cannot cross the boundary. Object identity is not immutability: a
+hook holding the sealed source can mutate `_result_cache` / `_query` / `model` /
+`_db` and return the same object, so identity licenses no shortcut.
 
 **Enforcing symbols.**
 [`utils/querysets.py::apply_type_visibility_sync`][querysets] #"No identity fast path";
@@ -296,9 +287,11 @@ the same object, so identity licenses no shortcut.
 [`::_seal_or_defect`][querysets] #"Reproduce exactly what" (the rebuild copies
 forward MINUS `_result_cache` / `_known_related_objects`).
 
-**Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests] sync +
-async mutate-and-return-same-object regressions across the sensitive state
-families.
+**Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests]
+`test_identity_hook_result_is_resealed_dropping_injected_cache_sync` and
+`test_identity_hook_result_is_resealed_dropping_injected_cache_async` (a hook
+that injects a row into the received queryset's `_result_cache` and returns the
+same object).
 
 **Deliberation.** The rejected identity shortcut, the rejected
 unoverridden-default-hook narrowing, and the reason
@@ -313,23 +306,44 @@ rebuilt from scratch as an exact `django.db.models.Prefetch` (via
 `prefetch_through` / `prefetch_to` / `to_attr`), so a consumer `Prefetch`
 subclass cannot survive with an executable `get_current_querysets` override.
 Non-`Prefetch` lookup entries must be EXACTLY `str`. Each inner queryset is
-recursively sealed through `_seal_or_defect`; the outer effective alias is
-threaded into the child seal with `require_shared_alias=True` so a child
-explicitly routed off a DIFFERENT alias fails closed, and — critically — when the
-outer alias is UNRESOLVED (`None`, an unrouted parent) an explicitly routed child
-also fails closed, while an unrouted child inherits the outer alias. The child
-seal runs `allow_sliced=True` (a top-N-per-parent prefetch queryset is legal and
-nothing refilters it) with `require_model_rows` still in force. This is
+recursively sealed through `_seal_or_defect` under `_PREFETCH_CHILD_POLICY`, with
+the outer effective alias as its required alias; the policy's
+`require_shared_alias` makes a child explicitly routed off a DIFFERENT alias fail
+closed, and — critically — when the outer alias is UNRESOLVED (`None`, an
+unrouted parent) an explicitly routed child also fails closed, while an unrouted
+child inherits the outer alias. The policy's `reject_sliced=False` admits a
+sliced consumer `Prefetch` child (the slice is the consumer's own Django call:
+it survives with `to_attr` or on a to-one relation and raises Django's own error
+when Django refilters it), with `require_model_rows` still in force. This is
 [Prefetch alias threading][glossary-prefetch-alias-threading].
+
+The child's concrete model must also be the lookup relation's concrete target or
+a subclass of it: Django's prefetch machinery does not check this when both
+models carry a same-named foreign key (Django ticket #37267), so a child over an
+unrelated model would land rows the related type's visibility hook never saw in
+the relation. Such a child fails the outer seal closed as `untrusted`; a path the
+seal cannot resolve (a non-relation segment, a generic-FK alias) is left to
+Django's fetch-time traversal.
+
+The optimizer walker's own generated children seal under
+`_PREFETCH_CHILD_POLICY` on the nested-connection path (whose planner classifies
+a sliced child and degrades) and under `_LIST_RELATION_CHILD_POLICY` on a plain
+list relation, which also sets `require_shared_alias` but keeps the slice
+rejection.
 
 **Enforcing symbols.**
 [`utils/querysets.py::_rebuilt_prefetch_or_defect`][querysets];
 [`::_sealed_prefetch_related_lookups`][querysets];
-[`::_seal_or_defect`][querysets] #"effective_alias" (resolves the outer alias and
-passes `require_shared_alias`).
+[`::_prefetch_relation_target_or_none`][querysets] (the relation-target model
+check); [`::_seal_or_defect`][querysets] #"effective_alias = required_alias"
+(resolves the outer alias the children are sealed against).
 
 **Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests]
-Prefetch-subclass substitution and cross-alias-child cases; the evaluation-level
+`test_hostile_prefetch_queryset_is_neutralized_to_plain` (exact `Prefetch`
+wrapper, plain child), `test_prefetch_cross_alias_child_fails_closed`,
+`test_prefetch_unrouted_child_inherits_outer_alias`, and
+`test_prefetch_child_over_unrelated_model_fails_closed` with its
+nested-path / default-accessor / proxy-target siblings; the evaluation-level
 relation surfaces in [`tests/test_relay_node_field.py`][relay-tests] /
 [`tests/test_connection.py`][connection-tests].
 
@@ -339,42 +353,47 @@ in the [rationale companion][rationale].
 
 ### Decision 5 — Queryset-shape rejections + unconditional `Query.model`
 
-**Decision.** The seal fails closed on: a sliced query on every recomposing read
-surface (`sliced` defect; `allow_sliced=True` suppresses ONLY this rejection for
-the prefetch child and the optimizer walker's degrade-to-unplanned nested path); a
-non-`ModelIterable` `_iterable_class` on model-row surfaces (`projection` defect,
-membership tested by object identity against `_DJANGO_ITERABLE_CLASSES`, never
-`in` on a frozenset which would hash the candidate); a foreign `_query` type or a
-foreign `combined_queries` branch, a foreign row iterable, an unresolvable /
-malformed deferred filter, or an unsealable prefetch child (`untrusted` defect); a
-contributing table that is not the registered concrete table (`table` defect).
-A combined (`union()` / `intersection()` / `difference()`) query is rebuilt as
+**Decision.** The seal fails closed on: a sliced query on every surface whose
+policy sets `reject_sliced` (`sliced` defect; off only for a consumer `Prefetch`
+child and the walker's nested-connection child under `_PREFETCH_CHILD_POLICY`,
+and for the raw-list row source); a non-`ModelIterable` `_iterable_class` where
+the policy sets `require_model_rows` (`projection` defect; every surface except
+the cascade and the raw-list row source); an `_iterable_class` that is not one of
+Django's own row iterables, membership tested by object identity against
+`_DJANGO_ITERABLE_CLASSES`, never `in` on a frozenset which would hash the
+candidate; a foreign `_query` type or a foreign `combined_queries` branch, an
+unresolvable / malformed deferred filter, or an unsealable prefetch child
+(`untrusted` defect); a contributing table that is not the registered concrete
+table (`table` defect). Wherever the policy sets `rewrite_combined` (every
+surface except the raw-list row source, which windows a combination as it is), a
+combined (`union()` / `intersection()` / `difference()`) query is rebuilt as
 `Model.filter(pk__in=<combined>.values("pk"))`, its outer column ordering and
 `reverse()` kept, so every surface narrows, projects and prefetches the set of
-primary keys it selects (the raw-list seal alone windows a combination as it is);
-a shape that rewrite would serve different rows for (`union(all=True)`; a branch's
-annotations, `extra(select=...)`, `.values()` or `select_for_update`; an outer
-`.values()`, non-column ordering or slice) fails closed (`combined` defect).
-`Query.model` is now validated UNCONDITIONALLY via `_concrete_or_none` on the
-outer query and every combined branch — a `None` or non-model `Query.model` fails
-closed as a `table` defect instead of escaping as `SELECT  FROM ...` malformed
-SQL. `_concrete_or_none` requires an actual Django MODEL CLASS before it reads any
-metadata — duck-typing an object that merely exposes `_meta.concrete_model` let
-malformed state be installed as the sealed queryset's `.model`, which every
-downstream reader treats as a model class — so class-ness and model ancestry are
-proven before a consumer `_meta` / `concrete_model` descriptor could run.
+primary keys it selects; a shape that rewrite would serve different rows for
+(`union(all=True)`; a branch's annotations, `extra(select=...)`, `.values()` or
+`select_for_update`; an outer `.values()`, non-column ordering or slice) fails
+closed (`combined` defect). `Query.model` is validated UNCONDITIONALLY via
+`_concrete_or_none` on the outer query and every combined branch — a `None` or
+non-model `Query.model` fails closed as a `table` defect instead of escaping as
+`SELECT  FROM ...` malformed SQL. `_concrete_or_none` requires an actual Django
+MODEL CLASS before it reads any metadata, because the value that survives is
+installed as the sealed queryset's `.model`, which every downstream reader
+treats as a model class — so class-ness and model ancestry are proven before a
+consumer `_meta` / `concrete_model` descriptor could run.
 
-A pending `_deferred_filter` on an EXACT plain `QuerySet` is baked onto the
+A pending `_deferred_filter` (the tuple `RelatedManager._apply_rel_filters`
+leaves on every relation queryset, whatever its class) is baked onto the
 DETACHED clone through the unbound `sql.Query.add_q` after every argument is
-proven inert / genuine-Django (the candidate is never mutated); a subclass
-carrying a pending filter fails closed, as does a malformed shape Django never
-produces — a non-3-tuple, non-`dict` kwargs, non-sequence args, a non-`str` kwarg
-key, or a kwarg naming one of the `models.Q.__init__` internals Django itself
-prohibits in a filter call (`_connector` / `_negated`). Django 6.0 exposes those
-names as `django.db.models.query.PROHIBITED_FILTER_KWARGS`; the declared
-`Django>=5.2` floor rejects the same names inline with no module-level constant,
-so the import is guarded and the frozenset mirrored verbatim and the gate behaves
-identically at the floor.
+proven inert / genuine-Django (the candidate is never mutated). What fails closed
+is a malformed shape Django never produces — a non-3-tuple, a non-`bool`
+`negate`, non-`dict` kwargs, non-sequence args, a non-`str` kwarg key, or a kwarg
+naming one of the `models.Q.__init__` internals Django itself prohibits in a
+filter call (`_connector` / `_negated`) — or a predicate `add_q` cannot resolve.
+Django 6.0 exposes those names as
+`django.db.models.query.PROHIBITED_FILTER_KWARGS`; the declared `Django>=5.2.16`
+floor rejects the same names inline with no module-level constant, so the lookup
+falls back to a verbatim mirror of the frozenset and the gate behaves identically
+at the floor.
 
 **Enforcing symbols.**
 [`utils/querysets.py::_combined_query_table_defect`][querysets] (unconditional
@@ -382,20 +401,24 @@ identically at the floor.
 [`::_concrete_or_none`][querysets];
 [`::_pk_membership_query_or_defect`][querysets] and
 [`::_combined_lost_property`][querysets] (the combinator rewrite and its refusals);
-[`::_seal_or_defect`][querysets] #"is_sliced" and #"_DJANGO_ITERABLE_CLASSES"
-(slice / projection / iterable rejections);
+[`::_seal_or_defect`][querysets] #"is_sliced" (slice / projection rejections);
+[`::_is_django_iterable_class`][querysets] (identity membership);
 [`::_bake_deferred_filter_or_defect`][querysets] and
-[`::_deferred_value_defect`][querysets] (deferred-filter safety); the
-`allow_sliced` threading in
+[`::_deferred_value_defect`][querysets] (deferred-filter safety); the policy
+threading in
 [`django_strawberry_framework/optimizer/walker.py::_build_child_queryset`][walker]
-and the gate
+and the nested-connection gate
 [`django_strawberry_framework/optimizer/nested_fetch.py::unwindowable_child_queryset_reason`][nested-fetch].
 
 **Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests]
-shape-defect cases (model-`None`, a non-model class and an object both exposing a
-convincing `_meta.concrete_model`, sliced, values projection, custom iterable,
-wrong table, foreign branch, deferred-filter malformed/hostile); the walker
-`allow_sliced` path exercised through the nested-connection optimizer tests.
+shape-defect cases (`test_query_model_none_fails_closed_as_table`,
+`test_non_model_class_with_convincing_meta_fails_closed`,
+`test_non_class_model_with_convincing_meta_fails_closed`, sliced, values
+projection, custom iterable, wrong table, foreign branch, deferred-filter
+malformed/hostile); the walker's two child policies in
+`tests/optimizer/test_walker.py::test_plan_refuses_sliced_hook_result_for_plain_list_relation`
+and
+`tests/optimizer/test_walker.py::test_connection_child_seam_still_admits_a_sliced_hook_result`.
 
 **Deliberation.** The rejected base-table-gated `Query.model` check, the rejected
 `in`-on-a-frozenset membership test, the rejected duck-typed `_concrete_or_none`,
@@ -408,20 +431,27 @@ filter are recorded in the [rationale companion][rationale].
 [`ConfigurationError`][glossary-configurationerror] (never a raw backend
 `OperationalError`, `TypeError`, `AttributeError`, or unclosed coroutine). Defect
 codes run the one canonical ordering `type` -> `table` -> `untrusted` ->
-`sliced` -> `projection` -> `combined` -> `alias`, each mapped to bespoke consumer-facing
-wording, with ONE documented exception: the outer exact-`sql.Query` check emits
+`routing` -> `evaluated` -> `sliced` -> `projection` -> `combined` -> `alias`,
+with ONE documented exception: the outer exact-`sql.Query` check emits
 `untrusted` BEFORE the combinator table walk can emit `table`, because that walk
 reads query attributes through ordinary attribute access and only a
-proven-genuine `sql.Query` may be walked. A caller-supplied `render_error` seam
-lets the cascade keep its path-rich per-edge prose. The sync boundary reserves the
-[`SyncMisuseError`][glossary-syncmisuseerror] subclass (`ConfigurationError` +
-`RuntimeError`) for an async hook met in a sync context; the async runner rejects
-a nested awaitable after one await.
+proven-genuine `sql.Query` may be walked. `routing` and `evaluated` are reached
+only by the post-sidecar result seal (spec-050's surface); the `get_queryset`
+surfaces render the other seven codes, each with bespoke consumer-facing
+wording. Each message-building site dispatches exhaustively through
+`_defect_message`, so a code with no arm at a site self-names as a framework
+defect rather than borrowing another code's wording. A caller-supplied
+`render_error` seam lets the cascade keep its path-rich per-edge prose. The sync
+boundary reserves the [`SyncMisuseError`][glossary-syncmisuseerror] subclass
+(`ConfigurationError` + `RuntimeError`) for an async hook met in a sync context;
+the async runner awaits at most one returned awaitable and rejects a nested
+awaitable after it.
 
 **Enforcing symbols.**
 [`utils/querysets.py::_visibility_result_error`][querysets] (defect-code ->
 `ConfigurationError` mapping + `render_error` seam);
 [`::_prepared_visibility_source`][querysets] (source-side typed errors);
+[`::_defect_message`][querysets] (exhaustive per-site dispatch);
 [`::SyncMisuseError`][querysets] and [`::reject_async_in_sync_context`][querysets];
 [`django_strawberry_framework/exceptions.py::ConfigurationError`][exceptions].
 
@@ -436,12 +466,10 @@ per-code exception taxonomy, and the reason the cascade's prose lives behind a
 
 ### Decision 7 — No version bump: the `0.0.14` cut already landed
 
-**Decision.** This card carries none of the version quintet. `0.0.14` was cut by
-the joint release commit `6a86d21f` ("release: 0.0.14 joint cut"), which shipped
-the sealed boundary (commit `60998b17`) alongside its sibling `0.0.14` cards. A
-follow-on documentation card at an already-cut patch line owns no bump; the
-`pyproject.toml` `[project].version`, `django_strawberry_framework/__init__.py`
-`__version__`, and `tests/base/test_init.py` are untouched here.
+**Decision.** This card owns no version bump and no `CHANGELOG.md` entry: the
+sealed boundary ships under the `0.0.14` release, so `__version__` in
+`django_strawberry_framework/__init__.py` (the single version source) is
+untouched here.
 
 **Deliberation.** The rejected joint-cut-owner shape is recorded in the
 [rationale companion][rationale].
@@ -465,8 +493,8 @@ sealed query would otherwise SHARE with the candidate graph.
 or database-adapter dispatch site. That party already runs code in the process:
 they can rewrite the compiler, the ORM, or this boundary itself, so no walk
 performed inside the same interpreter is a trust boundary against them. This is
-the same stance the framework already takes on process-wide monkeypatching,
-which is unsupported by contract for exactly this reason.
+the same stance the framework takes on process-wide monkeypatching, which is
+unsupported by contract for exactly this reason.
 
 **Consequently the boundary is CLOSED to further dispatch-path expansion.** A
 newly identified way for a deliberately crafted object to reach `__str__`,
@@ -487,41 +515,36 @@ identity memo so a node reached twice rebuilds once and the sealed graph keeps t
 candidate's sharing topology. Reconstruction never calls a node's own `clone()` /
 `copy()` (shallow — it would keep sharing the children) and never `deepcopy`
 (it would dispatch a consumer value's `__deepcopy__` / `__reduce__` mid-seal).
-Each admitted plain-data bound value is normalized to an EXACT inert value (a
-`TextChoices` member becomes an exact `str`, a `date` subclass an exact
-`datetime.date`), read through the base type's own descriptors and C slots so
-neither an overridden dunder nor a property shadowing a field name can run during
-normalization. A subclass that cannot be reduced to an exact inert value fails
-closed as an `untrusted` defect.
 
 **What the sealed query still shares with the candidate, exhaustively.** The
 sealed query holds no consumer-owned AST node and no consumer-owned mutable
 container. What it shares is:
 
 - exact inert scalar leaves — bound parameters the adapter renders as `%s`, whose
-  every method is the interpreter's own;
-- the trusted schema: `models.Field` instances and model classes, which are the
-  queried model's own definitions rather than state the hook injected, and whose
-  rebuild would detach the compiler from the model's own descriptors;
+  every method is the interpreter's own (an exact `bytearray`, the one mutable
+  member, is copied instead) — and the exact stdlib timezone objects
+  (`datetime.timezone`, exact `zoneinfo.ZoneInfo`) a genuine `Trunc` / `Extract`
+  carries;
+- the trusted schema: classes, `models.Field` instances and `ForeignObjectRel`
+  relation descriptors, which are the queried model's own definitions rather than
+  state the hook injected, and whose rebuild would detach the compiler from the
+  model's own descriptors;
 - a `models.Model` instance in bound-value position, which IS the bound value and
-  from which Django's own code extracts a pk;
-- a bound-value slot the graph proofs do not route through the direct-lookup rule
-  — an expression's own plain-data payload, `Value.value` being the instance. A
-  `Value`'s `get_source_expressions()` returns no children, so the walk never
-  reaches that slot, and normalization replaces only a value descending from a
-  plain-data base; anything else in it is retained by reference. Reaching this
-  requires binding a non-plain-data object into an expression payload, which is a
-  crafted-object path and therefore out of scope above; the value is bound as a
-  `%s` parameter and cannot alter SQL structure. It is recorded here rather than
-  claimed closed.
+  from which Django's own code extracts a pk.
 
-A direct `Lookup` right-hand side is NOT in that list: it is validated
+Every other bound payload — a direct `Lookup` right-hand side, an expression's own
+payload slot (`Value.value`), a mapping key — goes through the one
+admitted-bound-value rule: a plain-data subclass is normalized to an EXACT inert
+value (a `TextChoices` member becomes an exact `str`, a `date` subclass an exact
+`datetime.date`), read through the base type's own descriptors and C slots so
+neither an overridden dunder nor a property shadowing a field name can run during
+normalization; anything that reduces to no exact inert value and is not trusted
+schema fails closed as an `untrusted` defect naming its type. A direct `Lookup`
+right-hand side is additionally validated before reconstruction
 (`_direct_rhs_defect` — an inert leaf, a plain container of them, or a value that
-defines no attribute hook of its own and descends from a plain-data base) and then
-normalized, so what the sealed query binds there is a framework-owned exact value.
-
-**Cost.** Canonical reconstruction measured roughly 1.7x on simple and medium
-queries and 2.3x on an annotation-heavy shape, against sealing without it.
+defines no attribute hook of its own and descends from a plain-data base), with
+its operands read from raw instance state rather than the lookup's own discovery
+accessor.
 
 **Enforcing symbols.** [`utils/querysets.py::_rebuild_query_payloads`][querysets]
 (the reconstruction pass over the clone's state);
@@ -529,8 +552,9 @@ queries and 2.3x on an annotation-heavy shape, against sealing without it.
 [`::_is_reconstructable_node`][querysets] (the rebuild-versus-retain policy);
 [`::_reconstruction_defect`][querysets] (keeps reconstruction inside the typed
 fail-closed contract); [`::_normalized_bound_value`][querysets] and
-`::_BOUND_VALUE_NORMALIZERS` (exact-value normalization through base-type
-descriptors); [`::_lookup_operands_defect`][querysets],
+`::_BOUND_VALUE_NORMALIZERS` (the admitted-bound-value rule and its exact-value
+normalization through base-type descriptors);
+[`::_lookup_operands_defect`][querysets],
 [`::_direct_rhs_defect`][querysets], [`::_rhs_hook_defect`][querysets] and
 [`::_static_attr_present`][querysets] (a lookup's operands read from raw state
 instead of its own discovery accessor); [`::_template_params_defect`][querysets]
@@ -542,49 +566,55 @@ annotation / filtered-relation / raw-SQL-parameter / `bytearray` siblings,
 `test_sealed_query_shares_no_ast_node_with_the_candidate`,
 `test_sealed_query_retains_its_schema_objects_by_reference`,
 `test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date`,
-`test_lookup_direct_rhs_attribute_hook_never_dispatches`, and
+`test_lookup_direct_rhs_attribute_hook_never_dispatches`,
+`test_value_payload_opaque_object_fails_closed`,
+`test_value_payload_plain_data_subclass_normalizes_to_exact_value`, and
 `test_func_extra_template_parameter_object_fails_closed`.
 
-**Deliberation.** The rejected per-finding walk expansion, the rejected revert of
-the post-`0.0.14` hardening, the rejected `clone()` / `copy()` / `deepcopy` rebuild
-strategies, the rejected exact-type admission rule for a bound value, and the
-rejected use of `get_source_expressions()` to discover a lookup's operands are
-recorded in the [rationale companion][rationale], together with the history of the
-bound-parameter residual above.
+**Deliberation.** The rejected per-finding walk expansion, the rejected option of
+dropping canonical reconstruction, the rejected `clone()` / `copy()` / `deepcopy`
+rebuild strategies, the rejected exact-type admission rule for a bound value, the
+rejected retain-by-reference treatment of a bound payload, and the rejected use
+of `get_source_expressions()` to discover a lookup's operands are recorded in the
+[rationale companion][rationale].
 
 ## Error shapes
 
-The defect-code table the shared checker emits, in the canonical evaluation order
+The defect-code table the shared checker emits for a `get_queryset` result, in
+the canonical evaluation order
 [Decision 6](#decision-6--typed-configurationerror-fail-closed-error-contract)
 states (including its one documented exception, the outer exact-`sql.Query`
 `untrusted` check preceding the `table` walk), each rendered by
-[`::_visibility_result_error`][querysets] (or the caller's `render_error` seam):
+[`::_visibility_result_error`][querysets] (or the caller's `render_error` seam).
+The seal's `routing` and `evaluated` codes sit between `untrusted` and `sliced`
+in that order and are rendered only by the post-sidecar result seal.
 
 | Code | Fails when | Consumer-facing wording (default) |
 |---|---|---|
 | `type` | hook returned a non-QuerySet/Manager (list, generator, `None`) | "must return a QuerySet or Manager of `<Model>` rows" |
 | `table` | contributing table is not the registered concrete table, or `Query.model` is `None`/non-model | "composes over `<Model>`'s concrete table" |
-| `untrusted` | foreign `Query` class, foreign row iterable, unresolved deferred filter, unsealable prefetch child | "cannot be sealed into a framework-owned execution queryset" |
+| `untrusted` | foreign `Query` class, foreign row iterable, unresolved deferred filter, unsealable prefetch child, a prefetch child over an unrelated model, an unreconstructable bound payload | "cannot be sealed into a framework-owned execution queryset" |
 | `sliced` | sliced query on a recomposing read surface | "Django forbids refiltering or reordering a sliced query" |
-| `projection` | non-`ModelIterable` `_iterable_class` on a model-row surface | "composes over `<Model>` model rows, not a `.values()` projection" |
+| `projection` | non-`ModelIterable` `_iterable_class` on a model-row surface | "composes over `<Model>` model rows, not a `.values()` / `.values_list()` (or custom-iterable) projection" |
 | `combined` | a combinator whose primary-key set cannot represent its rows (duplicates, branch annotations / `extra(select=...)` / `.values()` / `select_for_update`, outer `.values()` / non-column ordering / slice) | "serves a combined queryset as the set of `<Model>` primary keys it selects ... cannot be reduced to that set without changing its rows" |
-| `alias` | child routed off an alias that differs from the pinned resolution | "cannot re-route a pinned resolution; remove the `.using(...)` call" |
+| `alias` | child routed off an alias that differs from the pinned resolution | "cannot re-route a pinned resolution. Remove the `.using(...)` call." |
 
 ## Test plan
 
-The seal / row-survival matrix that already ships (maintainer-invoked gates only,
-per `AGENTS.md`):
+The seal / row-survival matrix (maintainer-invoked gates only, per `AGENTS.md`):
 
 - [`tests/utils/test_querysets.py`][queryset-tests] — the shared seal / rebuild
   suite: provenance, callable-shadow, expression-graph, container, shape-defect,
-  deferred-filter, prefetch alias-threading, per-code error-message, and sync +
-  async cache-removal cases.
+  deferred-filter, prefetch alias-threading and relation-target, bound-value
+  reconstruction, per-code error-message, and sync + async cache-removal cases.
 - [`tests/test_relay_node_field.py`][relay-tests],
   [`tests/test_connection.py`][connection-tests],
   [`tests/test_list_field.py`][list-tests] — evaluation-level row-survival
   surfaces (the sealed boundary must not drop legitimate rows).
 - [`tests/test_permissions.py`][permissions-tests] — the cascade `render_error`
   path.
+- `tests/optimizer/test_walker.py` — the walker's plain-list-relation and
+  nested-connection child policies.
 - `django_strawberry_framework/utils/querysets.py` sits inside the repository's
   `fail_under = 100` coverage gate, so every branch the decisions above add is
   covered or the gate fails.
@@ -597,7 +627,6 @@ This card's Slice 1 doc set (the only surface it touches):
   five new terms authored, the four existing terms relinked.
 - `KANBAN.md` / `KANBAN.html` via the kanban DB + re-render: this card in Done
   with its glossary links.
-- The prior `[P2]` policy-artifact residual recorded as closed in this spec.
 - This spec and its two companions,
   `docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-terms.csv` (glossary terms) and
   [`docs/SPECS/appx/spec-045-visibility_boundary-0_0_14-rationale.md`][rationale] (the
@@ -605,8 +634,7 @@ This card's Slice 1 doc set (the only surface it touches):
 
 `README.md`, `docs/README.md`, `docs/TREE.md`, `GOAL.md`, `TODAY.md`, and
 `CHANGELOG.md` are untouched: the boundary is internal security-boundary
-hardening with no consumer-visible surface change, and the `0.0.14` release entry
-already shipped.
+hardening with no consumer-visible surface change.
 
 ## Constraints on the supported query surface
 
@@ -617,33 +645,32 @@ These are deliberate constraints of the contract above, not defects:
   consumer needing a custom expression in a visibility filter expresses it through
   genuine Django primitives. The constraint is documented here and in the
   [prove-then-clone AST trust][glossary-prove-then-clone-ast-trust] glossary entry.
+- **An opaque object bound into an expression payload fails closed.** A
+  `Value(...)` (or any expression payload slot) carrying an object that is neither
+  plain data nor trusted schema has no framework-owned representation and is
+  refused as `untrusted`
+  ([Decision 8](#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion)).
 - **The boundary is closed to further dispatch-path expansion** on the terms
-  [Decision 8](#decision-8--threat-model-a-mistaken-hook-not-an-in-process-adversary-canonical-reconstruction-terminates-the-dispatch-path-expansion)
-  states, which also names what still does justify a change.
-- **One bound-value slot is retained rather than normalized** — an expression's own
-  plain-data payload, `Value.value` being the instance — for the reasons and with
-  the bounds Decision 8 records.
+  Decision 8 states, which also names what still does justify a change.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Any behavior change to the boundary — this card is documentation only; the
-  boundary's code ships in its own commits, `60998b17` onward.
+- Any behavior change to the boundary — this card is documentation only.
 - A future allowlist of vetted consumer expression types, should the
   custom-expression constraint above ever prove too tight. No card carries it.
 
 ## Definition of done
 
-- [ ] Numbered security decisions authored (above) covering the changed
-      contract: untrusted-object rebuild, prove-then-clone AST trust,
-      identity-fast-path removal, `Prefetch` rebuild + alias threading,
-      queryset-shape rejections, and the typed error contract.
+- [ ] Numbered security decisions authored (above) covering the contract:
+      untrusted-object rebuild, prove-then-clone AST trust, no identity fast
+      path, `Prefetch` rebuild + alias threading, queryset-shape rejections, the
+      typed error contract, and the threat model with canonical reconstruction.
 - [ ] Spec `docs/SPECS/spec-045-visibility_boundary-0_0_14.md` authored with its
       companions `*-terms.csv` and `*-rationale.md`.
 - [ ] The five new glossary entries imported via the fakeshop glossary DB and
       `docs/GLOSSARY.md` regenerated.
 - [ ] `KANBAN.md` / `KANBAN.html` regenerated from the kanban DB with this card
       in Done.
-- [ ] The prior `[P2]` policy-artifact residual recorded as closed here.
 
 <!-- LINK DEFINITIONS -->
 

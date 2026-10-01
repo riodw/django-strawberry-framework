@@ -1,6 +1,6 @@
 # Spec: Optimizer O4 — Nested Prefetch Chains
 
-Deliberation for this spec lives in its companion [rationale file][spec-003-rationale]: the implementation shapes it proposed and where the shipped code departed from each, the pre-O4 code it quoted, the per-file insertion-point guidance it carried for its builder, the staging convention its TODO anchors served, the documentation obligations it declared and discharged, and — where the package later corrected or outgrew something it asserted — what replaced that assertion and which alternative replacement lost. Read the spec for what holds; read that file for why it holds. Why the O4 record was split out of `docs/SPECS/spec-002-optimizer-0_0_2.md` at all is that spec's own deliberation and is recorded in [its rationale file][spec-002-rationale], not restated here.
+Deliberation for this spec lives in its companion [rationale file][spec-003-rationale]: why each recursion branch is shaped as it is, why the `Prefetch` lookup uses the instance accessor, why visibility runs through a shared boundary, and why the resolver key is one shared implementation. Read the spec for what holds; read that file for why it holds.
 
 ## Problem statement
 `docs/SPECS/spec-002-optimizer-0_0_2.md` rebuilds the optimizer around a root-gated selection-tree walk. O1, O2, O3, O5, and O6 make that walk effective for depth-1 relation selections; by itself it plans the relation it is looking at and stops there. O4 is the slice that plans nested relation paths, so a query like `{ allCategories { items { entries { value } } } }` is optimized at the root instead of falling back to per-row lazy loads at the second relation level.
@@ -29,7 +29,7 @@ The walk carries a Django lookup `prefix` so a nested plan entry can name its pa
 
 The plan carries further fields that later slices added — per-path resolver-key ledgers for B8 reconciliation, which belong to `docs/SPECS/spec-033-connection_optimizer-0_0_9.md` and are not restated here, and the frozen membership sets computed when the plan is finalized at handoff (`optimizer/plans.py::OptimizationPlan.finalize`). No sibling spec states that finalize discipline; the enforcement and the fields are named here by symbol only.
 
-Planning starts from the root selection set with an empty Django lookup prefix and with the runtime response path of the root field being planned — `("allEntries",)` for a query rooted at `allEntries`, and empty only for a caller that supplies no `info` at all. Every nested walk extends both. A nested walk on the same query extends the Django prefix (`item__category`); a walk across a prefetch boundary resets it (see "Prefetch-boundary recursion" below). The root runtime path is the root field's own response key because the resolver side reconstructs the same path from `info.path`, which includes the field it is resolving: a walker that started from an empty path would key every elision one segment short of what the resolver asks for, and no elision would ever match. The pre-O4 dispatch shape, and where the shipped walker departed from it, are in the [rationale file][spec-003-rationale].
+Planning starts from the root selection set with an empty Django lookup prefix and with the runtime response path of the root field being planned — `("allEntries",)` for a query rooted at `allEntries`, and empty only for a caller that supplies no `info` at all. Every nested walk extends both. A nested walk on the same query extends the Django prefix (`item__category`); a walk across a prefetch boundary resets it (see "Prefetch-boundary recursion" below). The root runtime path is the root field's own response key because the resolver side reconstructs the same path from `info.path`, which includes the field it is resolving: a walker that started from an empty path would key every elision one segment short of what the resolver asks for, and no elision would ever match.
 
 `OptimizationPlan.prefetch_related` accepts `Prefetch` objects. `docs/SPECS/spec-002-optimizer-0_0_2.md` describes O4 as emitting `prefetch_related("items__entries")` style chains; this spec narrows that to nested `Prefetch` objects whenever a child queryset needs its own optimization (custom `get_queryset`, child `only_fields`, child FK-id elisions, or further nested branches). Plain string lookups remain valid only when the child branch carries no per-queryset state.
 
@@ -71,7 +71,7 @@ Forward FK and forward OneToOne relations that remain `select_related` stay in t
 - Add the selected relation path to `select_related`.
 - Recurse into the related model with the prefix extended by that path. The recursive call handles scalars and nested relations together — a scalar-only collection step at this position drops every nested relation silently.
 
-This is the path that makes `entry > item > category` collapse into one SQL query. The shape this branch was proposed in, and where the shipped code departed from it, are in the [rationale file][spec-003-rationale].
+This is the path that makes `entry > item > category` collapse into one SQL query.
 
 ### Prefetch-boundary recursion for many-side and downgraded paths
 Reverse FK, M2M, and O6-downgraded forward relations cross a queryset boundary. Child scalar [`only()`][glossary-only-projection] paths must not be pushed into the root queryset. Instead:
@@ -92,8 +92,6 @@ Reverse FK, M2M, and O6-downgraded forward relations cross a queryset boundary. 
 
 For a default branch with no child plan and no child `only()` projection, a plain string lookup is still acceptable — but the simplest implementation always emits a `Prefetch`, which is semantically equivalent. Prefer `Prefetch` for uniformity with B8 diffing (which inspects `prefetch_to`).
 
-The shape this branch and its two helpers were proposed in, and where the shipped code departed from each, are in the [rationale file][spec-003-rationale].
-
 ### Hints are leaf operations
 [`OptimizerHint`][glossary-optimizerhint]`.prefetch(obj)` lets the consumer hand in their own `Prefetch` instance. O4 must not recurse into that relation's child selections — the consumer's queryset is the source of truth, including any `only()` and nested prefetches it carries. A hint-supplied `Prefetch` is a leaf.
 
@@ -110,7 +108,7 @@ Keep two identities separate:
 Do not try to derive resolver sentinel keys from `Prefetch` objects after planning. A `Prefetch` only carries Django lookup strings and a queryset; it does not retain the parent [`DjangoType`][glossary-djangotype], GraphQL response aliases, or selection-branch identity. The walker has that information while it traverses the selection tree, so it should record resolver keys as part of planning.
 
 ### Lookup-path flattening
-B8 needs a helper that flattens relation lookup paths, and it lives in `plans.py`. It recurses through the lookups attached to a nested `Prefetch`'s own queryset to arbitrary depth, not just one child level, and it returns the union of the plan's `select_related` strings and every flattened prefetch path, each nested level joined onto its parent under Django's lookup separator. The shape it was proposed in, and where the shipped helper departed from it, are in the [rationale file][spec-003-rationale].
+B8 needs a helper that flattens relation lookup paths, and it lives in `plans.py`. It recurses through the lookups attached to a nested `Prefetch`'s own queryset to arbitrary depth, not just one child level, and it returns the union of the plan's `select_related` strings and every flattened prefetch path, each nested level joined onto its parent under Django's lookup separator.
 
 ### Resolver sentinel keys
 A bare field name is not a usable elision key. If two unrelated parent types both expose a `category` field and only one of them elides, both forward resolvers see `"category"` in `info.context.dst_optimizer_fk_id_elisions` and the wrong one serves a stub. Nesting compounds it: `category` selections at different depths, under aliases, on sibling branches, and under different parent types all collide on one name.
@@ -122,7 +120,7 @@ Parent-type + field-name is necessary but not sufficient: it fixes unrelated par
 
 Thread the runtime response path through the walk alongside the Django `prefix`, taking each segment from a selection's alias or, where it has none, its name. Duplicate selections of one field are merged by underlying field name before planning, so the merge must preserve every response key the merged node represents: a selection reachable under more than one response key carries one resolver identity per key, never a single identity for the merged node. (`docs/SPECS/spec-033-connection_optimizer-0_0_9.md` multiplies the same fan-out over nested-connection runtime prefixes.) Do not collapse two branches into one elision key unless their selection sets are equivalent for that optimization.
 
-The key format is `<ParentType>.<field>@<a.b.c>`: the parent type's `__name__`, a `.`, the Django field name, an `@`, then the runtime-path segments joined on `.`. Where there is no parent type the key drops that prefix and reads `<field>@<a.b.c>`. It is one stable identity that survives nesting, aliases, sibling branches, and parent-type collisions. The resolver side reconstructs the same key when it runs and tests membership in `info.context.dst_optimizer_fk_id_elisions`. The two shapes this key and its resolver-side check were proposed in are in the [rationale file][spec-003-rationale].
+The key format is `<ParentType>.<field>@<a.b.c>`: the parent type's `__name__`, a `.`, the Django field name, an `@`, then the runtime-path segments joined on `.`. Where there is no parent type the key drops that prefix and reads `<field>@<a.b.c>`. It is one stable identity that survives nesting, aliases, sibling branches, and parent-type collisions. The resolver side reconstructs the same key when it runs and tests membership in `info.context.dst_optimizer_fk_id_elisions`.
 
 The resolver side derives its half of the key by walking `info.path` back to the root, dropping numeric list indexes and keeping response keys, aliases included. The walker side must use the same response-key convention.
 
@@ -178,7 +176,7 @@ The query-count rows belong to the live tier, because they are reachable through
 
 - a depth-2 reverse-FK chain, `{ allCategories { items { entries { value } } } }`, executes in 3 queries over `/graphql/`;
 - a depth-2 forward-FK chain, `{ allEntries { item { category { name } } } }`, executes in 1 query where no type on the chain overrides `get_queryset`, and pays one round trip per O6-downgraded link where one does. Pin whichever count the example project's own types produce, and derive it from a real run.
-- a nested id-only branch does not elide a same-name relation branch elsewhere. Cover both leak axes: a sibling *root* field, and a different *parent type*.
+- a nested id-only branch does not elide a same-name relation branch elsewhere. The sibling-root axis is pinned live by `examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_fk_id_elision_does_not_leak_to_sibling_root_in_http_query`; the parent-type axis is pinned by the resolver test below.
 
 Use the real fakeshop service seeders (`services.seed_data(n)`) for database tests. The four-model graph `Category → Item → Entry → Property` covers every cardinality the spec exercises.
 
@@ -214,7 +212,6 @@ O4 is complete when:
 [glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
-[spec-002-rationale]: appx/spec-002-optimizer-0_0_2-rationale.md
 [spec-003-rationale]: appx/spec-003-optimizer_nested_prefetch_chains-0_0_2-rationale.md
 
 <!-- docs/builder/ -->

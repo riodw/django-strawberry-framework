@@ -75,7 +75,6 @@ _validate_date = _plan_common.validate_date
 
 DEFAULT_EXCLUDES = (
     ".git/**",
-    ".mypy_cache/**",
     ".pytest_cache/**",
     ".ruff_cache/**",
     ".venv/**",

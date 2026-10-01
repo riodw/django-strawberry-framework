@@ -92,12 +92,11 @@ dev = [
     "pyyaml>=6.0.2",
     "ruff>=0.15.0",
     # The package ships ``py.typed``, so its annotations are a public contract
-    # that downstream type checkers consume. mypy (config in ``[tool.mypy]``) and
-    # basedpyright (config in ``[tool.basedpyright]``) both check them, with the
-    # Django and DRF stubs so framework types are real rather than ``Any``.
+    # that downstream type checkers consume. basedpyright (config in
+    # ``[tool.basedpyright]``) checks them, with the Django and DRF stubs so
+    # framework types are real rather than ``Any``.
     "django-stubs>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
-    "mypy>=2.3.1",
     "basedpyright>=1.40.1",
     # typeshed stubs for two libraries the package subclasses: django-filter (a hard
     # dependency; the filters family) and channels (a soft one; the WebSocket consumer
@@ -245,63 +244,17 @@ multiline-quotes = "double"
 # -- the grace covers long strings/comments the formatter cannot break.
 max-line-length = 110
 
-# mypy checks the shipped package (``py.typed`` makes its annotations public).
-# Every ``--strict`` flag plus the optional checks below. ``--strict`` includes the
-# flags that keep suppressions honest: an unneeded ``# type: ignore`` or redundant
-# ``cast`` is itself an error. No mypy plugin is loaded: the check reads only the
-# stubs' and packages' own annotations, so it sees the package exactly as a
-# downstream checker running no plugin does and never imports the example
-# project's settings. Every dependency is typed (its own ``py.typed``,
-# django-stubs, or the typeshed stubs in the ``dev`` group), so no module is exempt
-# from import checking. ``python_version`` is the lowest Python the installed stubs
-# support (they import ``typing.Self``); a lower one would read every ``Self`` return
-# as ``Any``. The package's own 3.10 floor is proven by the floor CI cell running the
-# suite on 3.10, not by the checker.
-[tool.mypy]
-python_version = "3.11"
-files = ["django_strawberry_framework"]
-check_untyped_defs = true
-disallow_any_decorated = true
-disallow_any_generics = true
-disallow_any_unimported = true
-disallow_incomplete_defs = true
-disallow_subclassing_any = true
-disallow_untyped_calls = true
-disallow_untyped_decorators = true
-disallow_untyped_defs = true
-# Every method that overrides a base (Strawberry, Django, graphql-core hooks included)
-# carries ``@override``, so an upstream rename that leaves an override orphaned fails here.
-# ``mutable-override`` rejects a subclass narrowing a mutable attribute's type, and
-# ``possibly-undefined`` a name some path leaves unbound. ``redundant-expr``,
-# ``truthy-bool``, ``truthy-iterable``, ``warn_unreachable`` and
-# ``strict_equality_for_none`` make a guard that its own annotations call dead an error:
-# each such guard either narrows a value typed as wide as what really arrives, or
-# carries a commented ignore saying why the contract stays narrow (GOAL.md "Trust
-# boundary").
-enable_error_code = [
-    "explicit-override",
-    "mutable-override",
-    "possibly-undefined",
-    "redundant-expr",
-    "truthy-bool",
-    "truthy-iterable",
-]
-extra_checks = true
-no_implicit_reexport = true
-strict_equality = true
-strict_equality_for_none = true
-warn_redundant_casts = true
-warn_return_any = true
-warn_unreachable = true
-warn_unused_ignores = true
-
-# basedpyright is the second checker of the same public contract: same scope and
-# checked Python as ``[tool.mypy]`` (the comment above it says why 3.11), in
-# ``standard`` mode, and a warning fails the run. Each checker reads only its own
-# suppression, and each fails on one it does not need: mypy owns ``# type: ignore[<code>]``
-# (``warn_unused_ignores``), basedpyright owns ``# pyright: ignore[<rule>]``
-# (``reportUnnecessaryTypeIgnoreComment``), so neither's suppression can hide the other's
-# error. A line both checkers reject carries both comments.
+# basedpyright checks the shipped package (``py.typed`` makes its annotations public)
+# and a warning fails the run. No plugin exists or is wanted: the check reads only the
+# stubs' and packages' own annotations, so it sees the package exactly as a downstream
+# checker does and never imports the example project's settings. Every dependency is
+# typed (its own ``py.typed``, django-stubs, or the typeshed stubs in the ``dev``
+# group). ``pythonVersion`` is the lowest Python the installed stubs support (they
+# import ``typing.Self``); a lower one would read every ``Self`` return as ``Any``. The
+# package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10,
+# not by the checker. The one suppression is ``# pyright: ignore[<rule>]``, always
+# rule-scoped: ``# type: ignore`` is not read at all, and a suppression the run does
+# not need is itself an error.
 [tool.basedpyright]
 include = ["django_strawberry_framework"]
 pythonVersion = "3.11"

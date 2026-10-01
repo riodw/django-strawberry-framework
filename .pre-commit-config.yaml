@@ -51,24 +51,14 @@ repos:
         types: [python]
         require_serial: true
 
-      - id: mypy
-        name: mypy (package types)
-        entry: uv run mypy
-        language: system
-        # `pass_filenames: false`: `[tool.mypy]` owns the scope, and a file list
-        # would check only the staged files, missing the callers whose types a
-        # signature change breaks. Fires on any package source, config or lock change
-        # (the lock pins the checker and every stub and annotated package it reads).
-        files: ^(django_strawberry_framework/.*\.py|pyproject\.toml|uv\.lock)$
-        pass_filenames: false
-        require_serial: true
-
       - id: basedpyright
         name: basedpyright (package types)
         entry: uv run basedpyright
         language: system
-        # The second checker of the same contract, scoped by `[tool.basedpyright]`
-        # for the reason the mypy hook gives, on the same trigger.
+        # `pass_filenames: false`: `[tool.basedpyright]` owns the scope, and a file
+        # list would check only the staged files, missing the callers whose types a
+        # signature change breaks. Fires on any package source, config or lock change
+        # (the lock pins the checker and every stub and annotated package it reads).
         files: ^(django_strawberry_framework/.*\.py|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
@@ -78,7 +68,7 @@ repos:
         entry: uv run python scripts/check_public_types.py
         language: system
         # Measures the INSTALLED package, so it builds its own environment. Fires on
-        # mypy's trigger plus its own source (which holds the diagnostic allowlist).
+        # basedpyright's trigger plus its own source (which holds the diagnostic allowlist).
         files: ^(django_strawberry_framework/.*\.py|pyproject\.toml|uv\.lock|scripts/check_public_types\.py)$
         pass_filenames: false
         require_serial: true

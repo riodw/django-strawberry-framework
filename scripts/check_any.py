@@ -1,10 +1,10 @@
 """Gate every explicit ``typing.Any`` in the package against an exact allowlist.
 
-``Any`` switches both type checkers off for every value it touches, and it
+``Any`` switches the type checker off for every value it touches, and it
 spreads: a helper returning ``Any`` makes each caller's result ``Any`` too.
-mypy runs near-strict here but without ``disallow_any_explicit``, basedpyright
-runs in ``standard`` mode, and ruff's ANN401 is off, so nothing else stops a new
-``Any`` from landing. Every ``Any`` the package keeps is forced from outside it:
+basedpyright runs in ``standard`` mode, which does not report ``Any``, and
+ruff's ANN401 is off, so nothing else stops a new ``Any`` from landing. Every
+``Any`` the package keeps is forced from outside it:
 a stub generic with no truthful narrower argument, an override or wrapper that
 forwards ``*args`` / ``**kwargs`` verbatim to an upstream signature, a PEP 562
 module ``__getattr__``. ``ALLOWED_ANY`` names each of them with the reason.
@@ -160,8 +160,8 @@ ALLOWED_ANY: tuple[AllowedAny, ...] = (
     AllowedAny(
         "django_strawberry_framework/consumers.py::build_revalidating_consumer_class",
         4,
-        "Class bases read off the consumer class at runtime; mypy accepts no variable base "
-        "except Any.",
+        "Class bases read off the consumer class at runtime; typed as type[object], the "
+        "generated subclasses lose every upstream member they call.",
     ),
     AllowedAny(
         "django_strawberry_framework/extensions/operation_state.py::DjangoExtensionsRunner.on_stream_result",

@@ -1,8 +1,8 @@
 """Gate the package's public API at a 100% ``basedpyright --verifytypes`` score.
 
 The package ships ``py.typed``, so every exported annotation is a contract a
-consumer's type checker reads as written. ``mypy`` and ``basedpyright`` over the
-package prove the code agrees with its declarations; neither proves the
+consumer's type checker reads as written. ``basedpyright`` over the package
+proves the code agrees with its declarations; it does not prove the
 declarations are complete. An exported name whose type a checker must infer
 (and another checker may infer differently), a signature that mentions a type
 this package leaves unknown, a public class or function without a docstring, or

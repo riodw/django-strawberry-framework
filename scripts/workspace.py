@@ -189,7 +189,6 @@ GENERATED_SEGMENTS = frozenset(
         "__pycache__",
         ".pytest_cache",
         ".ruff_cache",
-        ".mypy_cache",
         "htmlcov",
     },
 )
@@ -230,7 +229,6 @@ COMPOSE_PROJECT = "dsf-ws-postgres"
 LINT_COMMANDS = (
     "ruff check .",
     "ruff format --check .",
-    "mypy",
     "basedpyright",
     "python scripts/check_public_types.py",
     "python scripts/check_any.py",

@@ -42,15 +42,11 @@ jobs:
         run: uv run ruff check .
       - name: Ruff Format Check
         run: uv run ruff format --check .
-      - name: Type check (mypy)
-        # `[tool.mypy]` in pyproject.toml owns the scope (the package), the
-        # Python it checks against (the lowest its stubs support; the floor
-        # cells prove the package's own floor), and the strictness flags; it
-        # loads no mypy plugin and never imports the fakeshop settings.
-        run: uv run mypy
       - name: Type check (basedpyright)
-        # `[tool.basedpyright]` checks the same scope at the same Python, in
-        # `standard` mode, with warnings failing the run.
+        # `[tool.basedpyright]` in pyproject.toml owns the scope (the package), the
+        # Python it checks against (the lowest its stubs support; the floor cells
+        # prove the package's own floor) and the strictness rules, with warnings
+        # failing the run; it never imports the fakeshop settings.
         run: uv run basedpyright
       - name: Public API type completeness (basedpyright --verifytypes)
         # Installs the package non-editable in a temporary environment and

@@ -185,7 +185,6 @@ EXCLUDE_DIRS = frozenset(
         "migrations",
         "build",
         "dist",
-        ".mypy_cache",
         ".ruff_cache",
         ".pytest_cache",
         "node_modules",

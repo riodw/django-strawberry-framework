@@ -1435,9 +1435,8 @@ def build_strawberry_input_class(
             else strawberry.field(**strawberry_field_kwargs)
         )
     cls = type(name, (), namespace)
-    # mypy: strawberry.input's signature returns its argument's type unchanged, so the
+    # basedpyright: strawberry.input's signature returns its argument's type unchanged, so the
     # __strawberry_definition__ the decorator attaches is invisible without the cast
-    # basedpyright: same reason as mypy
     return cast("type[WithStrawberryObjectDefinition]", strawberry.input(cls, name=name))
 
 

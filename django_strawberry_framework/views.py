@@ -595,13 +595,10 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         # neither def redeclares the other; ``wraps`` gives the returned callback
         # upstream's ``__name__`` and ``__qualname__`` either way.
         view: Callable[..., object]
-        # mypy (both arms): ``wraps`` types each def as a ``_Wrapped`` over both
-        # upstream's ``Callable[..., Any]`` and the def's own ``*args: Any,
-        # **kwargs: Any`` / ``-> Any`` signature, so ``Any`` enters from either side.
         if iscoroutinefunction(upstream_view):
 
             @wraps(upstream_view)
-            async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:  # type: ignore[misc]
+            async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
                 instance = prepared_view(request)
                 if instance is None:
                     return await upstream_view(request, *args, **kwargs)
@@ -611,7 +608,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         else:
 
             @wraps(upstream_view)
-            def sync_view(request: HttpRequest, *args: object, **kwargs: object) -> object:  # type: ignore[misc]
+            def sync_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
                 instance = prepared_view(request)
                 if instance is None:
                     return upstream_view(request, *args, **kwargs)

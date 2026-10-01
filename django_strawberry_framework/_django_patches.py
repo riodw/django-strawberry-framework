@@ -315,9 +315,9 @@ def _disallowed_connection_methods(
         # The class attribute is a list of the same ``(name, operation)`` pairs.
         return cast(
             "list[tuple[str, str]]",
-            # mypy: django-stubs omits SimpleTestCase._disallowed_connection_methods (Django < 6.1)
-            # basedpyright: the same stub omission reads as an unknown attribute
-            cls._disallowed_connection_methods,  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            # basedpyright: django-stubs omits SimpleTestCase._disallowed_connection_methods
+            # (Django < 6.1), which reads as an unknown attribute
+            cls._disallowed_connection_methods,  # pyright: ignore[reportAttributeAccessIssue]
         )
     if (
         _validated_remove_databases_failures_source
@@ -436,8 +436,7 @@ def apply() -> None:
     _validated_remove_databases_failures_source = source
     if _patch_is_installed():
         return
-    # mypy: the patch itself; django-stubs omits the private classmethod
-    # basedpyright: the same stub omission reads as an unknown attribute
-    SimpleTestCase._remove_databases_failures = classmethod(  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits the private classmethod, which reads as an unknown attribute
+    SimpleTestCase._remove_databases_failures = classmethod(  # pyright: ignore[reportAttributeAccessIssue]
         _patched_remove_databases_failures,
     )

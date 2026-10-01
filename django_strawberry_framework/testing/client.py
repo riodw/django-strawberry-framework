@@ -220,10 +220,9 @@ class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):
         if not files:
             kwargs["content_type"] = "application/json"
 
-        # mypy: strawberry's BaseGraphQLTestClient types headers dict[str, object]; django-stubs
-        # narrows Client.post headers to Mapping[str, str]
-        # basedpyright: the same headers mismatch, as an argument type
-        return self.client.post(url if url is not None else self.path, **kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        # basedpyright: strawberry's BaseGraphQLTestClient types headers dict[str, object];
+        # django-stubs narrows Client.post headers to Mapping[str, str]
+        return self.client.post(url if url is not None else self.path, **kwargs)  # pyright: ignore[reportArgumentType]
 
     @override
     def _build_body(

@@ -519,8 +519,7 @@ def _make_auth_field(
         return sync_body(info, **kwargs)
 
     signature, annotations = build_lazy_field_signature(arguments, return_annotation)
-    # mypy: typeshed's FunctionType omits __signature__
-    _resolve.__signature__ = signature  # type: ignore[attr-defined]
+    _resolve.__signature__ = signature
     _resolve.__annotations__ = annotations
     return strawberry.field(
         resolver=_resolve,
@@ -741,11 +740,10 @@ def _login_authenticate(
         None
         if unstorable
         else auth.authenticate(
-            # mypy: django-stubs types ``authenticate``'s request as an ``HttpRequest``;
+            # basedpyright: django-stubs types ``authenticate``'s request as an ``HttpRequest``;
             # Django hands it to each backend untouched, and on Channels HTTP it is the
             # request-like ``ChannelsRequestAdapter``
-            # basedpyright: the same stub request type, as an argument type
-            request,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+            request,  # pyright: ignore[reportArgumentType]
             username=username,
             password=password,
         )
@@ -818,11 +816,10 @@ async def _channels_http_login_establish(
         # (``sessions._require_mutable_scope``) before the lock is held.
         scope = cast("MutableMapping[str, object]", request.scope)
         try:
-            # mypy: channels-stubs types ``login``'s scope as its private ``_ChannelScope``
-            # (a WebSocket scope); ``login`` only reads the ``session`` / ``user`` keys
-            # and writes ``user``, on the HTTP scope handed here
-            # basedpyright: the same stub scope mismatch, as an argument type
-            await channels_login(scope, user)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+            # basedpyright: channels-stubs types ``login``'s scope as its private ``_ChannelScope``
+            # (a WebSocket scope); ``login`` only reads the ``session`` / ``user`` keys and writes
+            # ``user``, on the HTTP scope handed here
+            await channels_login(scope, user)  # pyright: ignore[reportArgumentType]
             await session.asave()
         except BaseException as primary:  # incl. asyncio.CancelledError: compensate + re-raise
             try:
@@ -1057,11 +1054,10 @@ async def _channels_logout(
         scope = cast("MutableMapping[str, object]", request.scope)
         async with actor_transition(scope, was_authenticated=payload.ok):
             try:
-                # mypy: channels-stubs types ``logout``'s scope as its private
-                # ``_ChannelScope`` (a WebSocket scope); ``logout`` only reads the
-                # ``session`` / ``user`` keys and writes ``user``
-                # basedpyright: the same stub scope mismatch, as an argument type
-                await channels_logout(scope)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                # basedpyright: channels-stubs types ``logout``'s scope as its private
+                # ``_ChannelScope`` (a WebSocket scope); ``logout`` only reads the ``session`` /
+                # ``user`` keys and writes ``user``
+                await channels_logout(scope)  # pyright: ignore[reportArgumentType]
             except BaseException:  # incl. CancelledError: anonymize where possible + re-raise
                 with contextlib.suppress(Exception):
                     scope["user"] = AnonymousUser()

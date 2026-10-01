@@ -1247,9 +1247,9 @@ def _bind_set_owner_common(
     set_model = get_model(set_cls)
     if (
         set_model is not None
-        # mypy: a real definition always records its model; the check keeps a model-less
-        # owner definition from reaching ``issubclass``
-        and definition.model is not None  # type: ignore[comparison-overlap,redundant-expr]
+        # A real definition always records its model; the check keeps a model-less owner definition
+        # from reaching ``issubclass``
+        and definition.model is not None
         and (not isinstance(set_model, type) or not issubclass(definition.model, set_model))
     ):
         # A non-class ``set_model`` (e.g. the Django lazy-ref string idiom on

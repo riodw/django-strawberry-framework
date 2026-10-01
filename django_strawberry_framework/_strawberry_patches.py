@@ -955,11 +955,7 @@ def apply() -> None:
     upstream = _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself, assigned over the view class's method
-    upstream.base_view.parse_json = _patched_parse_json  # type: ignore[method-assign]
-    # mypy: the patch itself, assigned over the view class's method
-    upstream.base_view.parse_query_params = _patched_parse_query_params  # type: ignore[method-assign]
-    # mypy: the patch itself, assigned over the view class's method
-    upstream.sync_view.parse_multipart = _patched_sync_parse_multipart  # type: ignore[method-assign]
-    # mypy: the patch itself, assigned over the view class's method
-    upstream.async_view.parse_multipart = _patched_async_parse_multipart  # type: ignore[method-assign]
+    upstream.base_view.parse_json = _patched_parse_json
+    upstream.base_view.parse_query_params = _patched_parse_query_params
+    upstream.sync_view.parse_multipart = _patched_sync_parse_multipart
+    upstream.async_view.parse_multipart = _patched_async_parse_multipart

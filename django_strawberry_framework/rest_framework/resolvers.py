@@ -1539,7 +1539,7 @@ def _scope_specs_over_serializer(
         # The schema/runtime agreement guard already rejected a relation whose queryset
         # names no model, so the author queryset is set here.
         # basedpyright: drf-stubs types the attribute as a ``Manager``, whose ``__get__`` it binds
-        author_queryset = relation.queryset  # type: ignore[arg-type]  # drf-stubs: Manager.__get__  # pyright: ignore[reportAttributeAccessIssue]
+        author_queryset = relation.queryset  # pyright: ignore[reportAttributeAccessIssue]
         scoped = pin_write_queryset(
             cast("QuerySet[models.Model] | Manager[models.Model]", author_queryset).all(),
             pipeline.alias,
@@ -1566,7 +1566,7 @@ def _scope_specs_over_serializer(
                 pipeline.alias,
                 scoped,
             )
-        relation.queryset = scoped  # type: ignore[arg-type]  # drf-stubs: Manager.__get__
+        relation.queryset = scoped
 
 
 def _assert_save_kwargs_no_shadow(

@@ -1291,9 +1291,9 @@ class _DocumentWalk:
                 continue
             if isinstance(node, InlineFragmentNode):
                 condition = parent
-                # mypy: graphql-core types ``type_condition`` non-optional; a typeless inline
-                # fragment carries None
-                if node.type_condition is not None:  # type: ignore[comparison-overlap]
+                # graphql-core types ``type_condition`` non-optional; a typeless inline fragment
+                # carries None
+                if node.type_condition is not None:
                     condition = graphql_schema.get_type(node.type_condition.name.value) or parent
                 stack.extend(
                     (

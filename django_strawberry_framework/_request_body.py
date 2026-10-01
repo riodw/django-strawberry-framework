@@ -578,7 +578,7 @@ def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> 
         return True
     stream.close()
     request._stream = BytesIO(b"".join(chunks))
-    # mypy: django-stubs omits HttpRequest._read_started, which HttpRequest.read reads
-    # basedpyright: the same stub omission reads as an unknown attribute
-    request._read_started = False  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits HttpRequest._read_started, which HttpRequest.read reads; the
+    # omission reads as an unknown attribute
+    request._read_started = False  # pyright: ignore[reportAttributeAccessIssue]
     return False

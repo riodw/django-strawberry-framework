@@ -222,10 +222,10 @@ def ast_to_converted_selections(
                 condition: NamedTypeNode | None = node.type_condition
                 out.append(
                     InlineFragment(
-                        # mypy: Strawberry types ``InlineFragment.type_condition`` as ``str``;
-                        # a typeless fragment has no condition to name
-                        # basedpyright: same reason; it rejects ``str | None`` for the ``str`` field
-                        type_condition=(condition.name.value if condition is not None else None),  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                        # basedpyright: Strawberry types ``InlineFragment.type_condition`` as
+                        # ``str``; a typeless fragment has no condition to name. It rejects
+                        # ``str | None`` for the ``str`` field
+                        type_condition=(condition.name.value if condition is not None else None),  # pyright: ignore[reportArgumentType]
                         directives=convert_directives(info, node.directives),
                         selections=_convert(ast_child_selections(node)),
                     ),
@@ -358,8 +358,8 @@ def resolve_unvisited_fragment(
     """
     if not isinstance(node, FragmentSpreadNode):
         return None
-    # mypy: graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
-    frag_name = node.name.value if node.name else None  # type: ignore[truthy-bool]
+    # graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
+    frag_name = node.name.value if node.name else None
     if frag_name is None:
         return None
     visit_key: FragmentVisitKey = frag_name if depth is None else (frag_name, depth)
@@ -388,8 +388,8 @@ def directive_variable_names(node: Node) -> set[str]:
     for directive in directives:
         if not isinstance(directive, DirectiveNode):
             continue
-        # mypy: graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
-        d_name = directive.name.value if directive.name else None  # type: ignore[truthy-bool]
+        # graphql-core types ``name`` non-optional; a node built without ``name=`` holds None
+        d_name = directive.name.value if directive.name else None
         if d_name not in ("skip", "include"):
             continue
         for arg in directive.arguments or ():

@@ -306,8 +306,8 @@ def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) ->
             f"apply_cascade_permissions fields= must be a non-string iterable of "
             f"field names; got {fields!r}.",
         ) from exc
-    # mypy: ``fields`` is the public ``Iterable[str]`` contract; this validates a caller breaking it
-    non_strings = [entry for entry in entries if not isinstance(entry, str)]  # type: ignore[redundant-expr]
+    # ``fields`` is the public ``Iterable[str]`` contract; this validates a caller breaking it
+    non_strings = [entry for entry in entries if not isinstance(entry, str)]
     if non_strings:
         raise ConfigurationError(
             f"apply_cascade_permissions fields= entries must be field-name strings; "

@@ -558,11 +558,11 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list[models.Model] | None:
         visibility_where_sql=recognized.visibility_where_sql,
     )
     with connection.cursor() as cursor:
-        # mypy: django-stubs admits a closed set of Python scalars as ``execute`` params;
-        # ``Field.get_db_prep_value`` returns whatever value the backend adapts, which
-        # the driver binds, so the params stay ``object``
-        # basedpyright: same reason; it rejects ``list[object]`` as ``_ExecuteParameters``
-        cursor.execute(sql, params)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        # basedpyright: django-stubs admits a closed set of Python scalars as ``execute`` params;
+        # ``Field.get_db_prep_value`` returns whatever value the backend adapts, which the driver
+        # binds, so the params stay ``object``. It rejects ``list[object]`` as
+        # ``_ExecuteParameters``
+        cursor.execute(sql, params)  # pyright: ignore[reportArgumentType]
         # DB-API ``fetchall`` returns the result rows as sequences of column values.
         raw_rows: Sequence[Sequence[object]] = cursor.fetchall()
         fetched = _apply_lateral_converters(spec, raw_rows, connection)

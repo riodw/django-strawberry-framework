@@ -204,16 +204,14 @@ class _FileSystemPathFields:
     description a consumer's SDL will carry.
     """
 
-    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``,
-    # so the decorated def's type is ``Any`` (``misc`` under ``disallow_any_decorated``)
-    @strawberry.field(  # type: ignore[untyped-decorator]
+    @strawberry.field(
         description=(
             "SECURITY: the file's absolute path on the server filesystem. Opted in "
             "per column via Meta.filesystem_path_fields; it is deployment metadata, "
             "not client data. Null when the storage backend cannot produce one."
         ),
     )
-    def path(self) -> str | None:  # type: ignore[misc]
+    def path(self) -> str | None:
         """The absolute filesystem path, or ``None`` if storage cannot produce one."""
         return _safe_file_attr(self, "path")
 
@@ -702,9 +700,9 @@ def build_enum_from_choices(
         value: object
         label: object
         try:
-            # mypy: a choice entry is consumer-declared; unpacking it IS the pair check
-            # basedpyright: same reason; it rejects unpacking an ``object`` as not iterable
-            value, label = entry  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+            # basedpyright: a choice entry is consumer-declared, so unpacking it IS the pair check;
+            # it rejects unpacking an ``object`` as not iterable
+            value, label = entry  # pyright: ignore[reportGeneralTypeIssues]
         except BaseException as exc:
             raise ConfigurationError(
                 f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "

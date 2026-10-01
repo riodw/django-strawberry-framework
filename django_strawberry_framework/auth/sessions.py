@@ -154,8 +154,7 @@ def classify_transport(request: object) -> Transport:
         ) from exc
     if is_channels:
         require_channels()
-        # ``is_channels`` is the ``isinstance(request, ChannelsRequestAdapter)`` verdict above.
-        adapter = cast("ChannelsRequestAdapter", request)
+        adapter = request
         try:
             scope = adapter.scope
         except BaseException as exc:
@@ -298,8 +297,7 @@ def _require_mutable_scope(adapter: ChannelsRequestAdapter) -> MutableMapping[st
             f"same-scope session mutations, but got a {_safe_type_name(scope)}; real ASGI "
             "scopes are dictionaries. Do not route auth through an immutable scope.",
         )
-    # ``is_mutable`` is the ``isinstance(scope, MutableMapping)`` verdict checked above.
-    return cast("MutableMapping[str, object]", scope)
+    return scope
 
 
 @contextlib.asynccontextmanager

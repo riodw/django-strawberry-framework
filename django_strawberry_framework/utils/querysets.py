@@ -1753,9 +1753,9 @@ def _normalized_complex(value: complex) -> complex:
 
 def _normalized_decimal(value: Decimal) -> Decimal:
     """Return an exact ``Decimal`` rebuilt from a ``Decimal`` subclass's coefficient tuple."""
-    # mypy: typeshed's Decimal() omits the DecimalTuple special-value exponents it accepts
-    # basedpyright: same typeshed gap; it rejects ``DecimalTuple`` as ``_DecimalNew``
-    return Decimal(Decimal.as_tuple(value))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    # basedpyright: typeshed's Decimal() omits the DecimalTuple special-value exponents it accepts,
+    # so it rejects ``DecimalTuple`` as ``_DecimalNew``
+    return Decimal(Decimal.as_tuple(value))  # pyright: ignore[reportArgumentType]
 
 
 def _normalized_date(value: datetime.date) -> datetime.date:
@@ -1813,9 +1813,9 @@ def _normalized_timedelta(value: datetime.timedelta) -> datetime.timedelta:
 
 def _normalized_uuid(value: uuid.UUID) -> uuid.UUID:
     """Return an exact ``uuid.UUID`` rebuilt from a UUID subclass's integer slot."""
-    # mypy: typeshed declares UUID.int an instance attribute, not its __slots__ descriptor
-    # basedpyright: same typeshed gap; it reads ``UUID.int`` as an ``int`` with no ``__get__``
-    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))  # type: ignore[misc,attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: typeshed declares UUID.int an instance attribute, not its __slots__ descriptor,
+    # so it reads ``UUID.int`` as an ``int`` with no ``__get__``
+    return uuid.UUID(int=int.__index__(uuid.UUID.int.__get__(value)))  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # Plain-data bases a bound value may descend from, each paired with the primitive that
@@ -3944,18 +3944,15 @@ def _seal_or_defect(
     # a fresh fetch is always correct, whereas copying an untrusted cache could pre-seed
     # synthetic related instances that bypass the related type's own visibility hook).
     sealed._iterable_class = iterable
-    # mypy: django-stubs omits QuerySet._fields
-    # basedpyright: same stub omission, reported as an unknown attribute
-    sealed._fields = fields  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
-    # mypy: django-stubs omits QuerySet._prefetch_related_lookups
-    # basedpyright: same stub omission, reported as an unknown attribute
-    sealed._prefetch_related_lookups = sealed_prefetch  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
-    # mypy: django-stubs omits QuerySet._sticky_filter
-    # basedpyright: same stub omission, reported as an unknown attribute
-    sealed._sticky_filter = state.get("_sticky_filter") is True  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
-    # mypy: django-stubs omits QuerySet._for_write
-    # basedpyright: same stub omission, reported as an unknown attribute
-    sealed._for_write = state.get("_for_write") is True  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._fields, reported as an unknown attribute
+    sealed._fields = fields  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    sealed._prefetch_related_lookups = sealed_prefetch  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._sticky_filter, reported as an unknown attribute
+    sealed._sticky_filter = state.get("_sticky_filter") is True  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._for_write, reported as an unknown attribute
+    sealed._for_write = state.get("_for_write") is True  # pyright: ignore[reportAttributeAccessIssue]
     if policy.carry_result_cache:
         # The rows the source already fetched travel onto the rebuild, so a surface
         # that only windows them re-queries nothing. The list object is taken as it
@@ -4204,14 +4201,12 @@ def _coerced_manager_queryset(
             f"or other non-queryset cannot enter the visibility boundary and must not "
             f"be treated as the deliberate plain-iterable bypass.",
         )
-    # mypy: django-stubs omits QuerySet._db
-    # basedpyright: same stub omission, reported as an unknown attribute
-    if queryset._db != explicit:  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    if queryset._db != explicit:  # pyright: ignore[reportAttributeAccessIssue]
         raise ConfigurationError(
             f"A {_safe_type_name(manager)} pinned to alias {explicit!r} produced a "
-            # mypy: django-stubs omits QuerySet._db
-            # basedpyright: same stub omission, reported as an unknown attribute
-            f"queryset routed to {queryset._db!r} on .all(); a Manager coercion must "  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+            # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+            f"queryset routed to {queryset._db!r} on .all(); a Manager coercion must "  # pyright: ignore[reportAttributeAccessIssue]
             f"preserve the manager's explicit routing exactly (an unrouted manager "
             f"must stay unrouted until the resolution's required alias pins it), so a "
             f"visibility source or hook cannot silently change databases.",
@@ -4444,9 +4439,8 @@ def _prepared_visibility_source(
         )
         required_alias = pipeline.alias
     else:
-        # mypy: django-stubs omits QuerySet._db
-        # basedpyright: same stub omission, reported as an unknown attribute
-        required_alias = sealed._db  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+        required_alias = sealed._db  # pyright: ignore[reportAttributeAccessIssue]
     return sealed, required_alias
 
 

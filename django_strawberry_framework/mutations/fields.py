@@ -302,8 +302,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
         return mutation_cls.resolve_sync(info, **call_kwargs)
 
     signature, annotations = _synthesized_mutation_signature(mutation_cls)
-    # mypy: typeshed's FunctionType omits __signature__
-    _resolve.__signature__ = signature  # type: ignore[attr-defined]
+    _resolve.__signature__ = signature
     _resolve.__annotations__ = annotations
     # The mutation-atomicity marker (shipped 0.0.14): ``DjangoMutationExecutionContext`` finds this
     # through the built field's ``strawberry-definition`` extension and wraps the field's

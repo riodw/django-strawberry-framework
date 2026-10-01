@@ -499,9 +499,9 @@ class SerializerMutation(DjangoMutation):
     # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot); a type
     # checker sees the bound list, since every serializer operation has an input.
     if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
-        # mypy: narrows the base's pre-bind ``None``; bind always stores the list before a read
-        # basedpyright: the same narrowing, an invariant mutable-variable override
-        _input_field_specs: ClassVar[list[InputFieldSpec]]  # type: ignore[mutable-override]  # pyright: ignore[reportIncompatibleVariableOverride]
+        # basedpyright: the declaration narrows the base's pre-bind ``None`` (bind always stores
+        # the list before a read); it rejects the invariant mutable-variable override
+        _input_field_specs: ClassVar[list[InputFieldSpec]]  # pyright: ignore[reportIncompatibleVariableOverride]
     else:
         _input_field_specs = None
 

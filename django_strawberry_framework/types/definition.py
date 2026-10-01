@@ -439,9 +439,9 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     from strawberry.relay.exceptions import NodeIDAnnotationError
 
     try:
-        # mypy: every caller passes a class; the class check keeps a contract-breaking
-        # caller from reaching ``issubclass``
-        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)  # type: ignore[redundant-expr]
+        # Every caller passes a class; the class check keeps a contract-breaking caller from
+        # reaching ``issubclass``
+        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)
     except BaseException:
         return True
     if not is_node:

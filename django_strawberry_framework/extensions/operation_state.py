@@ -518,9 +518,7 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
             ContextVar("django_strawberry_framework_operation_state", default=None),
         )
 
-    # mypy: a settable property overriding a base class attribute ignores its
-    # @override markers (both are present below)
-    @property  # type: ignore[explicit-override]
+    @property
     @override
     def execution_context(self) -> Any:
         """The engine context of the operation this extension is answering here.

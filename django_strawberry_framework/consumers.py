@@ -1669,10 +1669,10 @@ async def _refreshed_actor(scope: Mapping[str, object]) -> object:
     # ``AuthMiddlewareStack``'s ``SessionMiddleware`` stores the engine's lazy
     # ``SessionStore`` under ``"session"`` (channels-stubs: ``_ChannelScope.session``).
     store = session_store_class()(cast("SessionBase", scope["session"]).session_key)
-    # mypy: channels-stubs types ``get_user``'s argument as a full ``_ChannelScope`` holding a
-    # lazy session; ``get_user`` reads only ``scope["session"]`` (see above).
-    # basedpyright: the same stub rejects a ``SessionBase`` where it types ``_LazySession``
-    return await get_user({"session": store})  # type: ignore[typeddict-item]  # pyright: ignore[reportArgumentType]
+    # basedpyright: channels-stubs types ``get_user``'s argument as a full ``_ChannelScope``
+    # holding a lazy session, so it rejects a ``SessionBase`` where it types ``_LazySession``;
+    # ``get_user`` reads only ``scope["session"]`` (see above).
+    return await get_user({"session": store})  # pyright: ignore[reportArgumentType]
 
 
 def build_revalidating_consumer_class(
@@ -1705,8 +1705,7 @@ def build_revalidating_consumer_class(
         "graphql_transport_ws_handler_class",
     )
 
-    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
-    class _RevalidatingTransportWSHandler(transport_ws_handler_base):  # type: ignore[misc, no-any-unimported]
+    class _RevalidatingTransportWSHandler(transport_ws_handler_base):
         """``graphql-transport-ws``: revalidated admission, stoppable results."""
 
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -1751,8 +1750,7 @@ def build_revalidating_consumer_class(
 
     graphql_ws_handler_base: Any = getattr(base_consumer_cls, "graphql_ws_handler_class")  # noqa: B009
 
-    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
-    class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):  # type: ignore[misc, no-any-unimported]
+    class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
 
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -1803,8 +1801,7 @@ def build_revalidating_consumer_class(
 
     websocket_adapter_base: Any = base_consumer_cls.websocket_adapter_class
 
-    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
-    class _RevocationGatedWebSocketAdapter(websocket_adapter_base):  # type: ignore[misc, no-any-unimported]
+    class _RevocationGatedWebSocketAdapter(websocket_adapter_base):
         """The outbound checkpoint, on the seam both protocols share.
 
         One class-level ``send_json`` override, installed on the generated
@@ -1935,8 +1932,7 @@ def build_revalidating_consumer_class(
 
     consumer_base: Any = base_consumer_cls
 
-    # mypy: a base read off ``base_consumer_cls`` at run time is ``Any`` by necessity
-    class GraphQLWebSocketConsumer(consumer_base):  # type: ignore[misc, no-any-unimported]
+    class GraphQLWebSocketConsumer(consumer_base):
         """The package's WebSocket GraphQL consumer: upstream plus revalidation.
 
         Three ``super()``-delegating hooks - one per protocol for operation
@@ -2162,10 +2158,9 @@ class DjangoWebSocketHostValidator:
             # (``AllowedHostsOriginValidator`` lives in it) to build the router.
             from channels.security.websocket import WebsocketDenier
 
-            # mypy: channels-stubs types every channels application's scope as its private
+            # basedpyright: channels-stubs types every channels application's scope as its private
             # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.
-            # basedpyright: the same stub scope mismatch, as an argument type
-            await WebsocketDenier()(scope, receive, send)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+            await WebsocketDenier()(scope, receive, send)  # pyright: ignore[reportArgumentType]
             return
         # Every other exception propagates deliberately (spec-046 Edge cases
         # #"The Host projection must not swallow its own bugs"): a projection bug

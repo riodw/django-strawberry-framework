@@ -171,9 +171,8 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
     _dst_window_signature: WindowSignature | None = None
 
     def _clone(self) -> RecognizedFetchQuerySet:
-        # mypy: django-stubs omits QuerySet._clone
-        # basedpyright: same stub omission, reported as an unknown attribute
-        clone = super()._clone()  # type: ignore[misc]  # pyright: ignore[reportAttributeAccessIssue]
+        # basedpyright: django-stubs omits QuerySet._clone, reported as an unknown attribute
+        clone = super()._clone()  # pyright: ignore[reportAttributeAccessIssue]
         setattr(clone, self._dst_spec_attr, getattr(self, self._dst_spec_attr))
         clone._dst_window_signature = self._dst_window_signature
         # ``_clone`` returns an instance of ``type(self)``.
@@ -196,9 +195,8 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
         # break the same way.
         from .lateral_fetch import window_predicate_signature
 
-        # mypy: django-stubs omits QuerySet._chain
-        # basedpyright: same stub omission, reported as an unknown attribute
-        clone = queryset._chain()  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
+        clone = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
         clone.__class__ = cls
         setattr(clone, cls._dst_spec_attr, spec)
         clone._dst_window_signature = window_predicate_signature(queryset.query)

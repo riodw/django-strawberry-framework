@@ -129,9 +129,7 @@ class _EmptyListAwareFilterMethod(FilterMethod):
         """Apply the custom method, treating empty list as a real value."""
         if value is None:
             return qs
-        # mypy: ``FilterMethod.method`` is the consumer's ``method=`` callable, typed
-        # ``Callable[..., Any]`` upstream; its contract is to return the filtered queryset.
-        return self.method(qs, self.f.field_name, value)  # type: ignore[no-any-return]
+        return self.method(qs, self.f.field_name, value)
 
 
 def _install_empty_list_aware_method(
@@ -147,15 +145,14 @@ def _install_empty_list_aware_method(
     subclass remains a per-filter type identity (graphene-parity public names);
     only the install sequence is shared.
     """
-    # mypy: typeshed declares ``Filter.method`` a plain attribute; django-filter defines
-    # it as a property, whose ``fset`` this reuses.
-    # basedpyright: same stub defect; it reports ``fset`` unknown on each arm of the declared
-    # ``Callable | str | None``
-    TypedFilter.method.fset(filter_instance, value)  # type: ignore[union-attr]  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
+    # basedpyright: typeshed declares ``Filter.method`` a plain attribute; django-filter defines it
+    # as a property, whose ``fset`` this reuses. It reports ``fset`` unknown on each arm of the
+    # declared ``Callable | str | None``
+    TypedFilter.method.fset(filter_instance, value)  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
     if value is not None:
-        # mypy: django-filter's own ``method`` setter shadows ``filter`` per instance
-        # the same way (``self.filter = FilterMethod(self)``).
-        filter_instance.filter = method_cls(filter_instance)  # type: ignore[method-assign]
+        # django-filter's own ``method`` setter shadows ``filter`` per instance the same way
+        # (``self.filter = FilterMethod(self)``).
+        filter_instance.filter = method_cls(filter_instance)
 
 
 def _apply_lookups(
@@ -384,14 +381,11 @@ class ArrayFilter(TypedFilter):
         queryset).
     """
 
-    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
-    # so ``.setter`` is untyped and the decorated def's type is ``Any`` (``misc`` under
-    # ``disallow_any_decorated``)
-    # basedpyright: same stub defect; it reports ``setter`` unknown on each arm of the declared
-    # ``Callable | str | None``
+    # basedpyright: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
+    # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``
     @override
-    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
-    def method(self, value: object) -> None:  # type: ignore[misc]
+    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
+    def method(self, value: object) -> None:
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
 
@@ -465,10 +459,9 @@ class RangeField(Field):
     # django-stubs declares both as ``forms.Field`` instance variables; Django
     # defines them as class attributes, which is what these override.
     # ``empty_values`` keeps the base's ``Sequence`` type: it is only read.
-    # mypy: stub: instance var
-    # basedpyright: same stub defect for both; it rejects a ClassVar over the stub's instance var
-    default_validators: ClassVar[list[_Validator]] = [validate_range]  # type: ignore[misc]  # pyright: ignore[reportIncompatibleVariableOverride]
-    empty_values: ClassVar[Sequence[object]] = [  # type: ignore[misc]  # pyright: ignore[reportIncompatibleVariableOverride]
+    # basedpyright: the stub declares both as instance vars; it rejects a ClassVar over each
+    default_validators: ClassVar[list[_Validator]] = [validate_range]  # pyright: ignore[reportIncompatibleVariableOverride]
+    empty_values: ClassVar[Sequence[object]] = [  # pyright: ignore[reportIncompatibleVariableOverride]
         None,
         [None, None],
         (None, None),
@@ -504,14 +497,11 @@ class ListFilter(TypedFilter):
     supplied" pass-through.
     """
 
-    # mypy: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
-    # so ``.setter`` is untyped and the decorated def's type is ``Any`` (``misc`` under
-    # ``disallow_any_decorated``)
-    # basedpyright: same stub defect; it reports ``setter`` unknown on each arm of the declared
-    # ``Callable | str | None``
+    # basedpyright: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
+    # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``
     @override
-    @TypedFilter.method.setter  # type: ignore[union-attr, untyped-decorator]  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
-    def method(self, value: object) -> None:  # type: ignore[misc]
+    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
+    def method(self, value: object) -> None:
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ListFilterMethod)
 
@@ -1035,10 +1025,10 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
         """Accept any value; GlobalID validation happens in the filter."""
         return True
 
-    # mypy: upstream's list-only return cannot express the preserved omission.
-    # basedpyright: same widening; it rejects the ``None`` arm against the ``list[str]`` return
+    # basedpyright: upstream's list-only return cannot express the preserved omission; it rejects
+    # the ``None`` arm against the ``list[str]`` return
     @override
-    def to_python(self, value: object) -> list[str] | None:  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
+    def to_python(self, value: object) -> list[str] | None:  # pyright: ignore[reportIncompatibleMethodOverride]
         """Preserve omission without bypassing ``Field.clean`` validation."""
         if value is None:
             return None
@@ -1382,9 +1372,9 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
                 "removed in 0.0.7 because it had no readers.",
             )
         self._has_explicit_queryset = kwargs.get("queryset") is not None
-        # mypy: forwarded verbatim; ``ModelChoiceFilter.__init__`` owns their validation.
-        # basedpyright: same forwarding; it rejects ``object`` kwargs for the ``str | None`` params
-        super().__init__(*args, **kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        # basedpyright: the kwargs are forwarded verbatim and ``ModelChoiceFilter.__init__`` owns
+        # their validation; it rejects ``object`` kwargs for the ``str | None`` params
+        super().__init__(*args, **kwargs)  # pyright: ignore[reportArgumentType]
         self._filterset = filterset
 
     def bind_filterset(self, filterset: type[FilterSet]) -> None:
@@ -1476,11 +1466,11 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     def filterset(self, value: _FilterSetTarget) -> None:
         self._set_target(value)
 
-    # mypy: typeshed types ``QuerySetRequestMixin.get_queryset`` as never ``None``; it returns
-    # the ``queryset=`` value verbatim, and that defaults to ``None``.
-    # basedpyright: same stub defect; it rejects the ``None`` arm against the ``QuerySet`` return
+    # basedpyright: typeshed types ``QuerySetRequestMixin.get_queryset`` as never ``None``, but it
+    # returns the ``queryset=`` value verbatim, which defaults to ``None``; the checker rejects the
+    # ``None`` arm against the ``QuerySet`` return
     @override
-    def get_queryset(  # type: ignore[override]  # pyright: ignore[reportIncompatibleMethodOverride]
+    def get_queryset(  # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         request: object,
     ) -> models.QuerySet[models.Model] | None:

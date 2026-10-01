@@ -376,9 +376,9 @@ def _build_router_class() -> type[ProtocolTypeRouter]:
         return _ROUTER_CLASS
     with _ROUTER_CLASS_LOCK:
         if _ROUTER_CLASS is not None:
-            # mypy: narrows the global from the unlocked check above; another thread
-            # may have built the class while this one waited on the lock.
-            return _ROUTER_CLASS  # type: ignore[unreachable]
+            # Re-checked under the lock: another thread may have built the class while this one
+            # waited on the lock.
+            return _ROUTER_CLASS
         return _build_router_class_uncached()
 
 
@@ -550,20 +550,20 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
                     # middleware, and before any consumer is constructed. The
                     # HTTP branch needs neither - Django's own ALLOWED_HOSTS
                     # middleware already owns the question there.
-                    # mypy: channels-stubs types ``OriginValidator``'s scope as its private
-                    # ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not satisfy.
                     "websocket": DjangoWebSocketHostValidator(
-                        # basedpyright: the same stub scope mismatch, as an argument type
-                        AllowedHostsOriginValidator(  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                        # basedpyright: channels-stubs types ``OriginValidator``'s scope as its
+                        # private ``_ChannelScope``, which asgiref's ``WebSocketScope`` does not
+                        # satisfy.
+                        AllowedHostsOriginValidator(  # pyright: ignore[reportArgumentType]
                             AuthMiddlewareStack(
                                 URLRouter(
                                     [
-                                        # mypy: django-stubs' ``re_path`` has no overload taking an
-                                        # ASGI application, and channels-stubs' ``URLRouter`` accepts
-                                        # only its check-only ``_ExtendedURLPattern``, which no call
-                                        # returns: Channels' documented ``re_path`` routing idiom.
-                                        # basedpyright: the same ``re_path`` stub gap, as a call error
-                                        re_path(websocket_url_pattern, websocket_application),  # type: ignore[list-item, arg-type]  # pyright: ignore[reportCallIssue, reportArgumentType]
+                                        # basedpyright: django-stubs' ``re_path`` has no overload
+                                        # taking an ASGI application, and channels-stubs'
+                                        # ``URLRouter`` accepts only its check-only
+                                        # ``_ExtendedURLPattern``, which no call returns: Channels'
+                                        # documented ``re_path`` routing idiom.
+                                        re_path(websocket_url_pattern, websocket_application),  # pyright: ignore[reportCallIssue, reportArgumentType]
                                     ],
                                 ),
                             ),

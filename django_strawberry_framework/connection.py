@@ -1109,9 +1109,9 @@ def _resolve_keyset_connection(
                 has_next_page=False,
             ),
         )
-        # mypy: a QuerySet is always async-iterable; the check keeps the dispatch shape of
+        # A QuerySet is always async-iterable; the check keeps the dispatch shape of
         # ``ListConnection.resolve_connection``
-        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():  # type: ignore[redundant-expr]
+        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
 
             async def _resolve_count_only_async() -> _ConnectionT:
                 return _set_total_count(
@@ -1155,9 +1155,9 @@ def _resolve_keyset_connection(
             before_supplied=before_supplied,
         )
 
-    # mypy: a QuerySet is always async-iterable; the check keeps the dispatch shape of
+    # A QuerySet is always async-iterable; the check keeps the dispatch shape of
     # ``ListConnection.resolve_connection``
-    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():  # type: ignore[redundant-expr]
+    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
 
         async def _resolve_async() -> _ConnectionT:
             source = fetch_queryset[:fetch_limit]
@@ -1251,11 +1251,10 @@ def _has_next_page_requested(info: Info[object, object]) -> bool:
     return _connection_field_requested(info, connection_has_next_page_selected)
 
 
-# The ``type-var`` ignore: a ``Meta.interfaces`` node type becomes a ``relay.Node`` only at
-# run time, so the package's ``NodeType`` stays unbounded.
-# basedpyright: same reason; it rejects the unbounded ``NodeType`` against ``ListConnection``'s
-# ``Node`` bound.
-class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # type: ignore[type-var]  # pyright: ignore[reportInvalidTypeArguments]
+# basedpyright: a ``Meta.interfaces`` node type becomes a ``relay.Node`` only at run time, so the
+# package's ``NodeType`` stays unbounded; it rejects the unbounded ``NodeType`` against
+# ``ListConnection``'s ``Node`` bound.
+class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # pyright: ignore[reportInvalidTypeArguments]
     """Generic Relay connection base owning package pagination dispatch.
 
     Adds the spec-030 Decision 3 ``first`` + ``last`` guard, consumes optimized nested
@@ -1440,7 +1439,7 @@ def _generate_connection_class(
 
     generated = types.new_class(
         f"{definition.graphql_type_name}Connection",
-        (DjangoConnection[target_type],),  # type: ignore[valid-type]  # runtime-built annotation
+        (DjangoConnection[target_type],),
         exec_body=_populate,
     )
     return strawberry.type(generated, description=description)
@@ -1463,10 +1462,8 @@ def _build_total_count_connection(
     or after delegating slicing to the base (spec-030 Decision 4).
     """
 
-    # mypy: Strawberry types its no-resolver ``strawberry.field(...)`` overload ``-> Any``,
-    # so the decorated def's type is ``Any`` (``misc`` under ``disallow_any_decorated``)
-    @strawberry.field(description="Total number of nodes in the connection.")  # type: ignore[untyped-decorator]
-    def total_count(self: object) -> int:  # type: ignore[misc]
+    @strawberry.field(description="Total number of nodes in the connection.")
+    def total_count(self: object) -> int:
         # The field renders ``Int!`` (the ``__annotations__`` below win for the
         # SDL); ``-> int`` is the honest return type because the count path is
         # QuerySet-only (the connection field's spec-030 Decision 7 rule raises a ``GraphQLError``
@@ -1526,8 +1523,8 @@ def _attach_count_sync(conn: _ConnectionT, nodes: object, *, want_count: bool) -
         # shape, so past this point ``want_count=True`` implies a QuerySet and
         # the bound method is safe to read (and only called when wanted).
         return conn
-    # mypy: ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``;
-    # a raising guard in another function cannot narrow ``nodes`` here
+    # ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``; a raising
+    # guard in another function cannot narrow ``nodes`` here
     counted = cast("models.QuerySet[models.Model, object]", nodes)
     return _set_total_count(conn, want_count=True, value=counted.count)
 
@@ -1552,8 +1549,8 @@ async def _attach_count_async(
         # The ``await`` keeps this step explicitly colored (the package's
         # sync/async convention); the attr write itself still routes through
         # the single ``_set_total_count`` writer.
-        # mypy: ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``;
-        # a raising guard in another function cannot narrow ``nodes`` here
+        # ``_guard_total_count_countable`` raised for a non-QuerySet under ``want_count``; a
+        # raising guard in another function cannot narrow ``nodes`` here
         counted = cast("models.QuerySet[models.Model, object]", nodes)
         _set_total_count(conn, want_count=True, value=await counted.acount())
     return conn
@@ -2060,10 +2057,9 @@ def _synthesized_signature(
     ]
     annotations: dict[str, object] = {"info": Info}
     if definition.filterset_class is not None:
-        # mypy: runtime-built annotation
-        # basedpyright: same reason; ``filter_input_type`` returns ``object``, which declares
-        # no ``|``, while the runtime ``Annotated`` alias does
-        filter_ann: object = filter_input_type(definition.filterset_class) | None  # type: ignore[operator]  # pyright: ignore[reportOperatorIssue]
+        # basedpyright: ``filter_input_type`` returns ``object``, which declares no ``|``, while
+        # the runtime-built ``Annotated`` alias does
+        filter_ann: object = filter_input_type(definition.filterset_class) | None  # pyright: ignore[reportOperatorIssue]
         params.append(
             inspect.Parameter(
                 CONNECTION_FILTER_KWARG,
@@ -2198,8 +2194,7 @@ def _build_connection_resolver(
     else:
         _resolve = _sync_connection_resolver(target_type, resolver, definition)
     signature, annotations = _synthesized_signature(target_type, definition)
-    # mypy: typeshed's FunctionType omits __signature__
-    _resolve.__signature__ = signature  # type: ignore[attr-defined]
+    _resolve.__signature__ = signature
     _resolve.__annotations__ = annotations
     return _resolve
 
@@ -2380,8 +2375,7 @@ def _build_relation_connection_resolver(
         )
 
     signature, annotations = _synthesized_signature(target_type, definition)
-    # mypy: typeshed's FunctionType omits __signature__
-    _resolve.__signature__ = signature  # type: ignore[attr-defined]
+    _resolve.__signature__ = signature
     _resolve.__annotations__ = annotations
     return _resolve
 

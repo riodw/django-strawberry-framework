@@ -253,9 +253,9 @@ def register_serializer_field_converter(
     Mirrors the read-side ``types/converters.py::SCALAR_MAP`` extension hook (a mutable
     module dict); the registration persists for the process.
     """
-    # mypy: ``field_class: type[object]`` is the public contract; the class check validates a
-    # consumer call that breaks it
-    if not (isinstance(field_class, type) and issubclass(field_class, serializers.Field)):  # type: ignore[redundant-expr]
+    # ``field_class: type[object]`` is the public contract; the class check validates a consumer
+    # call that breaks it
+    if not (isinstance(field_class, type) and issubclass(field_class, serializers.Field)):
         raise ConfigurationError(
             "register_serializer_field_converter: field_class must be a serializers.Field "
             f"subclass; got {field_class!r}.",

@@ -203,8 +203,8 @@ def _normalize_user_settings(value: object) -> dict[object, object]:
         raise ConfigurationError(
             f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {_safe_type_name(value)}.",
         )
-    # mypy: ``is_mapping`` above proved ``value`` a ``Mapping``, but mypy does not narrow
-    # through an aliased ``isinstance`` result; its keys and values stay unchecked.
+    # basedpyright: the aliased ``is_mapping`` check narrows ``value`` only to
+    # ``Mapping[Unknown, Unknown]``; the cast types its keys and values ``object``.
     mapping = cast("Mapping[object, object]", value)
     if type(mapping) is dict:
         return mapping
@@ -433,8 +433,8 @@ def upstream_patches_enabled(dependency: str) -> bool:
             # the final ``get``. ``dict()`` iteration is the single
             # consumption point; the plain copy is then the only object
             # validated and read.
-            # mypy: ``is_mapping`` above proved ``configured`` a ``Mapping``, but mypy does
-            # not narrow through an aliased ``isinstance`` result; entries stay unchecked here.
+            # basedpyright: the aliased ``is_mapping`` check narrows ``configured`` only to
+            # ``Mapping[Unknown, Unknown]``; the cast types its entries ``object``.
             try:
                 plain = dict(cast("Mapping[object, object]", configured))
             except Exception as exc:
@@ -536,7 +536,7 @@ def testing_endpoint_setting() -> str:
 # Same hazard class (and same idiom) as ``testing/client.py::TestClient``'s
 # class-level guard.
 # basedpyright: ``FunctionType`` declares no ``__test__``, though a function takes any attribute
-testing_endpoint_setting.__test__ = False  # type: ignore[attr-defined]  # mypy: a def takes no new attrs  # pyright: ignore[reportFunctionMemberAccess]
+testing_endpoint_setting.__test__ = False  # pyright: ignore[reportFunctionMemberAccess]
 
 
 def hide_flat_filters_setting() -> object:

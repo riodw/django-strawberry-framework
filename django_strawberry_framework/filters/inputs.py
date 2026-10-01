@@ -867,9 +867,9 @@ def _build_range_input_class(
     )
     if cache is None:
         cache = {}
-        # mypy: a per-instance cache slot no filter class declares
-        # basedpyright: same undeclared slot; it reports an unknown ``Filter`` attribute
-        filter_instance._range_input_classes = cache  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        # basedpyright: a per-instance cache slot no filter class declares, reported as an unknown
+        # ``Filter`` attribute
+        filter_instance._range_input_classes = cache  # pyright: ignore[reportAttributeAccessIssue]
     cached = cache.get(cache_key)
     if cached is not None:
         return cached

@@ -199,8 +199,7 @@ def _check_composite_pk_for_relay_node(type_cls: type[_RelayDjangoType]) -> None
     # swallows ``NodeIDAnnotationError`` into the ``"pk"`` fallback and
     # would let a composite-pk child slip past this gate.
     try:
-        # mypy: a classmethod read off its class is typed without __func__
-        relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
+        relay.Node.resolve_id_attr.__func__(type_cls)
     except NodeIDAnnotationError:
         pass
     else:
@@ -249,8 +248,7 @@ def _stamp_relay_id_attr(type_cls: type[relay.Node]) -> None:
     """
     type_cls._id_attr = None
     try:
-        # mypy: a classmethod read off its class is typed without __func__
-        id_attr: str = relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
+        id_attr: str = relay.Node.resolve_id_attr.__func__(type_cls)
     except NodeIDAnnotationError:
         id_attr = "pk"
     setattr(type_cls, _RELAY_ID_ATTR_SLOT, id_attr)
@@ -288,8 +286,9 @@ def _resolve_id_attr_default(cls: type[_RelayDjangoType]) -> str:
     if stamped is not None:
         return stamped
     try:
-        # mypy: a classmethod read off its class is typed without __func__
-        return cast("str", relay.Node.resolve_id_attr.__func__(cls))  # type: ignore[attr-defined]
+        # basedpyright: the bound classmethod's ``__func__`` call returns ``Any``; the scanned id
+        # attr is a ``str``
+        return cast("str", relay.Node.resolve_id_attr.__func__(cls))
     except NodeIDAnnotationError:
         return "pk"
 
@@ -764,9 +763,9 @@ def _install_typename_closure(
         return encode_typename(definition, strategy, cls, root)
 
     setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)
-    # mypy: runtime classmethod install
-    # basedpyright: same reason; it rejects the ``classmethod`` for ``Node.resolve_typename``
-    type_cls.resolve_typename = classmethod(resolve_typename)  # type: ignore[method-assign,assignment]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: a runtime classmethod install; it rejects the ``classmethod`` for
+    # ``Node.resolve_typename``
+    type_cls.resolve_typename = classmethod(resolve_typename)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:

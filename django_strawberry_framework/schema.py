@@ -867,9 +867,7 @@ class DjangoSchema(strawberry.Schema):
         )
         super().__init__(*args, **kwargs)
 
-    # mypy: a settable property overriding another module's attribute ignores
-    # its @override markers (both are present below)
-    @property  # type: ignore[explicit-override]
+    @property
     @override
     def extensions(self) -> tuple[Any, ...]:
         """The CONSUMER extension configuration this schema was accepted with.
@@ -1205,7 +1203,7 @@ class DjangoSchema(strawberry.Schema):
         """
         source = super()._stream(execution_context, extensions_runner, *args, **kwargs)
         if issubclass(type(extensions_runner), DjangoExtensionsRunner):
-            # The exact-type check above is the narrowing mypy cannot read.
+            # basedpyright: the exact-type check above is a narrowing it cannot read.
             return cast("DjangoExtensionsRunner", extensions_runner).resumed_stream(source)
         return source
 

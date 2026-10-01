@@ -359,7 +359,6 @@ def apply() -> None:
     adapter = _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself, assigned over the adapter's ``body`` property
     # basedpyright: the stub's setter-less ``body`` property, which the patch replaces
     # rather than sets through
-    adapter.body = property(_patched_body)  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]
+    adapter.body = property(_patched_body)  # pyright: ignore[reportAttributeAccessIssue]

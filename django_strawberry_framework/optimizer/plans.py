@@ -1316,10 +1316,10 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
         nulls_first = getattr(clone, "nulls_first", None)
         nulls_last = getattr(clone, "nulls_last", None)
         if nulls_first is not None or nulls_last is not None:
-            # mypy: django-stubs types ``OrderBy.nulls_first`` / ``nulls_last`` as ``bool``;
-            # ``OrderBy.__init__`` stores ``None`` for the backend's default placement.
-            # basedpyright: same stub defect; it rejects ``None`` for both ``bool`` attributes
-            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first  # type: ignore[assignment]  # pyright: ignore[reportAttributeAccessIssue]
+            # basedpyright: django-stubs types ``OrderBy.nulls_first`` / ``nulls_last`` as
+            # ``bool``; ``OrderBy.__init__`` stores ``None`` for the backend's default placement.
+            # It rejects ``None`` for both ``bool`` attributes
+            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first  # pyright: ignore[reportAttributeAccessIssue]
         reversed_order.append(clone)
     return reversed_order
 

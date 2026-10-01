@@ -189,5 +189,4 @@ def apply() -> None:
     upstream = _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # mypy: the patch itself, assigned over the executor class's method
-    upstream.execution_context.complete_list_value = _patched_complete_list_value  # type: ignore[method-assign]
+    upstream.execution_context.complete_list_value = _patched_complete_list_value

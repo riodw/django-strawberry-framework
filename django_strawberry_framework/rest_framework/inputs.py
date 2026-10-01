@@ -257,10 +257,9 @@ def normalize_nested_serializer_configs(
     next_path = _mapping_path | {mapping_id}
     for field_name, config in nested_configs.items():
         if not isinstance(config, NestedSerializerConfig):
-            # mypy: ``NestedSerializerConfig.nested_fields`` is the public contract; a
-            # consumer-built config can nest any value, which ``require_nested_serializer_config``
-            # rejects
-            normalized[field_name] = config  # type: ignore[unreachable]
+            # ``NestedSerializerConfig.nested_fields`` is the public contract; a consumer-built
+            # config can nest any value, which ``require_nested_serializer_config`` rejects
+            normalized[field_name] = config
             continue
         normalized[field_name] = NestedSerializerConfig(
             fields=normalize_field_name_sequence(

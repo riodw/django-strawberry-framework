@@ -610,10 +610,10 @@ def _is_relay_shaped(cls: "type[DjangoType]", interfaces: tuple[type[object], ..
     annotation-synthesis-time); centralizing the predicate keeps the
     Relay-shape contract single-sited.
     """
-    # mypy: callers pass a class and its validated interface classes; the class checks keep
-    # a contract-breaking caller from reaching ``issubclass``
-    return any(isinstance(i, type) and issubclass(i, relay.Node) for i in interfaces) or (  # type: ignore[redundant-expr]
-        isinstance(cls, type) and issubclass(cls, relay.Node)  # type: ignore[redundant-expr]
+    # Callers pass a class and its validated interface classes; the class checks keep a
+    # contract-breaking caller from reaching ``issubclass``
+    return any(isinstance(i, type) and issubclass(i, relay.Node) for i in interfaces) or (
+        isinstance(cls, type) and issubclass(cls, relay.Node)
     )
 
 
@@ -948,9 +948,9 @@ class DjangoType:
 
 def _detect_custom_get_queryset(cls: type[object]) -> bool:
     """Return whether ``cls`` or an intermediate base overrides ``get_queryset``."""
-    # mypy: the caller passes the class under creation; the class check keeps a
-    # contract-breaking caller from reaching ``issubclass``
-    if not (isinstance(cls, type) and issubclass(cls, DjangoType)):  # type: ignore[redundant-expr]
+    # The caller passes the class under creation; the class check keeps a contract-breaking caller
+    # from reaching ``issubclass``
+    if not (isinstance(cls, type) and issubclass(cls, DjangoType)):
         return False
     for base in cls.__mro__:
         if base is DjangoType:

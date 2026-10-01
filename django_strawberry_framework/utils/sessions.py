@@ -201,8 +201,7 @@ def scope_singleton(
         raise ConfigurationError(messages.uninspectable) from exc
     if not matches:
         raise ConfigurationError(messages.corrupted.format(actual=_safe_type_name(value)))
-    # ``matches`` is the ``isinstance(value, expect)`` verdict, so the slot holds an ``expect``.
-    return cast("_ScopedT", value)
+    return value
 
 
 def session_store_class() -> type[SessionBase]:

@@ -732,9 +732,8 @@ def pin_write_queryset(
     both. Fail closed instead of writing.
     """
     # ``None`` unless the hook called ``.using(...)``.
-    # mypy: django-stubs omits QuerySet._db
-    # basedpyright: same stub omission, reported as an unknown attribute
-    hook_alias: object = queryset._db  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    hook_alias: object = queryset._db  # pyright: ignore[reportAttributeAccessIssue]
     if hook_alias is not None and hook_alias != alias:
         if owner is None:
             owner = f"{queryset.model.__name__} get_queryset"
@@ -762,8 +761,8 @@ def check_instance_write_alias(
     divergence is a loud ``ConfigurationError`` before any write.
     """
     instance_alias = router.db_for_write(model, instance=instance)
-    # mypy: Django's router always answers an alias; the None check defends a replaced router
-    if instance_alias is not None and instance_alias != alias:  # type: ignore[comparison-overlap,redundant-expr]
+    # Django's router always answers an alias; the None check defends a replaced router
+    if instance_alias is not None and instance_alias != alias:
         raise ConfigurationError(
             f"The database router routes {model.__name__} writes to {instance_alias!r} for this "
             f"instance, but the mutation's transaction is pinned to {alias!r} (the no-instance "

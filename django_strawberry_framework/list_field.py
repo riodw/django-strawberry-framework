@@ -1049,7 +1049,7 @@ def _is_deterministic_order_lookup_chain(field: ModelField, pieces: Sequence[str
     # lookups are read through it too; the stubs narrow the parameter to ``Field``.
     # basedpyright: same stub narrowing; it rejects a ``ForeignObjectRel`` as ``output_field``.
     lhs: Expression | None
-    lhs = models.Value(None, output_field=field)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    lhs = models.Value(None, output_field=field)  # pyright: ignore[reportArgumentType]
     *transforms, final = tuple(pieces) or ("exact",)
     for name in transforms:
         lhs = _approved_order_transform(lhs, name)
@@ -1228,9 +1228,9 @@ def _model_from_definition(definition: DjangoTypeDefinition) -> type[models.Mode
             f"DjangoListField could not read the model from the definition of "
             f"{_safe_class_name(getattr(definition, 'origin', definition))}: {exc}",
         ) from exc
-    # mypy: the canonical definition records a model class; the check fails loud if that
-    # invariant is ever broken instead of seeding a resolver over a non-model
-    if not (isinstance(model, type) and issubclass(model, models.Model)):  # type: ignore[redundant-expr]
+    # The canonical definition records a model class; the check fails loud if that invariant is
+    # ever broken instead of seeding a resolver over a non-model
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
         raise ConfigurationError(
             f"DjangoListField target "
             f"{_safe_class_name(getattr(definition, 'origin', definition))} has a definition "
@@ -1839,8 +1839,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         wrapped = _async_wrap() if is_async_callable(user_resolver) else _sync_wrap()
 
     signature, annotations = _synthesized_list_signature(orderset_class)
-    # mypy: typeshed's FunctionType omits __signature__
-    wrapped.__signature__ = signature  # type: ignore[attr-defined]
+    wrapped.__signature__ = signature
     wrapped.__annotations__ = annotations
 
     return strawberry.field(

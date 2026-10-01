@@ -67,9 +67,9 @@ def global_id_for(type_cls: type[object], id: object) -> str:  # noqa: A002
     # which rebinds it to the class's own attribute.
     definition: object = None
     try:
-        # mypy: ``type_cls: type[object]`` is the public contract; the class check validates a
-        # test call that breaks it
-        is_django_type = isinstance(type_cls, type) and issubclass(type_cls, DjangoType)  # type: ignore[redundant-expr]
+        # ``type_cls: type[object]`` is the public contract; the class check validates a test call
+        # that breaks it
+        is_django_type = isinstance(type_cls, type) and issubclass(type_cls, DjangoType)
         definition = getattr(type_cls, "__django_strawberry_definition__", None)
         registered_definition = registry.get_definition(type_cls) if is_django_type else None
         is_registered_own_definition = (

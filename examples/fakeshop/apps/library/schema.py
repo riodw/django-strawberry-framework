@@ -1,12 +1,15 @@
 """Library GraphQL relation, optimizer, Relay/keyset, and model/form/serializer mutation surface."""
 
-from typing import Any
+from collections.abc import Mapping
 
 import strawberry
 from django.conf import settings
-from django.db.models import Prefetch
+from django.db.models import Manager, Prefetch, QuerySet
+from django.forms import BaseForm
+from rest_framework.fields import Field as DRFField
 from strawberry import relay
 from strawberry.types import Info
+from typing_extensions import override
 
 from apps.library import filters, filters_genre, forms, models, orders, orders_genre, serializers
 
@@ -27,11 +30,12 @@ from django_strawberry_framework import (
     DjangoType,
     NestedSerializerConfig,
     OptimizerHint,
+    SerializerHookContext,
     SerializerMutation,
     apply_cascade_permissions,
 )
-from django_strawberry_framework.filters import filter_input_type
-from django_strawberry_framework.orders import order_input_type
+from django_strawberry_framework.filters import FilterInput
+from django_strawberry_framework.orders import OrderInput
 
 # Consumer ``resolver=`` helper exercising the shared field-wrapper
 # ``Manager`` coercion line at
@@ -48,14 +52,14 @@ from django_strawberry_framework.orders import order_input_type
 # the README's "genuinely unreachable" fallback.
 
 
-def _branches_manager_resolver(root: Any, info: Info) -> Any:
+def _branches_manager_resolver(root: object, info: Info) -> Manager[models.Branch]:
     return models.Branch.objects
 
 
 # Consumer ``resolver=`` whose bare ``.order_by()`` clears ``ReadingList``'s
 # inherited title ordering. Django then compiles no ``Meta.ordering`` for the
 # source, so the connection over it pages under the pk tiebreaker alone.
-def _reading_lists_without_default_order(root: Any, info: Info) -> Any:
+def _reading_lists_without_default_order(root: object, info: Info) -> QuerySet[models.ReadingList]:
     return models.ReadingList.objects.order_by()
 
 
@@ -69,21 +73,30 @@ def _reading_lists_without_default_order(root: Any, info: Info) -> Any:
 # are those three verdicts, each reachable from a real ``/graphql/`` query.
 
 
-def _branch_notes_over_proxy_child_resolver(root: Any, info: Info) -> Any:
+def _branch_notes_over_proxy_child_resolver(
+    root: object,
+    info: Info,
+) -> QuerySet[models.BranchNote]:
     """Prefetch the proxy-targeted relation with a child over the PROXY itself."""
     return models.BranchNote.objects.prefetch_related(
         Prefetch("branch", queryset=models.ProxyBranch.objects.all()),
     ).order_by("id")
 
 
-def _branch_notes_over_concrete_child_resolver(root: Any, info: Info) -> Any:
+def _branch_notes_over_concrete_child_resolver(
+    root: object,
+    info: Info,
+) -> QuerySet[models.BranchNote]:
     """Prefetch the proxy-targeted relation with a child over the CONCRETE model."""
     return models.BranchNote.objects.prefetch_related(
         Prefetch("branch", queryset=models.Branch.objects.all()),
     ).order_by("id")
 
 
-def _branch_notes_over_unrelated_child_resolver(root: Any, info: Info) -> Any:
+def _branch_notes_over_unrelated_child_resolver(
+    root: object,
+    info: Info,
+) -> QuerySet[models.BranchNote]:
     """Prefetch the proxy-targeted relation with a child over an UNRELATED table.
 
     Refused by the seal: a proxy target does not widen the rule to any model.
@@ -175,7 +188,8 @@ class BookType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(cls, queryset: QuerySet[models.Book], info: Info) -> QuerySet[models.Book]:
         """Hide ``circulation_status="repair"`` books from non-staff requests.
 
         The ``ShelfType`` ``topic="secret"`` pattern, staff bypass included
@@ -250,7 +264,8 @@ class ShelfType(DjangoType):
     """Shelf declared before Branch to exercise FK finalization."""
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(cls, queryset: QuerySet[models.Shelf], info: Info) -> QuerySet[models.Shelf]:
         """Hide ``topic="secret"`` shelves from non-staff requests.
 
         The nested-``RelatedFilter`` visibility-scoping contract relies on the target type's ``get_queryset`` hiding
@@ -298,13 +313,19 @@ class GenreType(DjangoType):
 class BranchType(DjangoType):
     """Branch parent with reverse FK shelves."""
 
-    @strawberry.field
-    def shelves(self) -> list["ShelfType"]:
+    @strawberry.field(graphql_type=list[ShelfType])
+    @staticmethod
+    def shelves(root: strawberry.Parent[models.Branch]) -> list[models.Shelf]:
         """Consumer-authored relation resolver used by HTTP override tests."""
-        return list(self.shelves.order_by("-code"))
+        return list(root.shelves.order_by("-code"))
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.Branch],
+        info: Info,
+    ) -> QuerySet[models.Branch]:
         """Hide ``city="restricted"`` branches from anonymous requests.
 
         The root-resolver ordering contract relies on
@@ -339,7 +360,12 @@ class ProxyBranchType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.ProxyBranch],
+        info: Info,
+    ) -> QuerySet[models.ProxyBranch]:
         """Hide ``city="restricted"`` branches from non-staff requests."""
         if _user_is_staff(info):
             return queryset
@@ -430,7 +456,8 @@ class IssueType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(cls, queryset: QuerySet[models.Issue], info: Info) -> QuerySet[models.Issue]:
         """Hide ``embargoed=True`` issues from non-staff requests."""
         if _user_is_staff(info):
             return queryset
@@ -649,7 +676,8 @@ class VenueType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(cls, queryset: QuerySet[models.Venue], info: Info) -> QuerySet[models.Venue]:
         """Hide closed venues, then cascade the lead ticket's visibility."""
         return apply_cascade_permissions(cls, queryset.exclude(name__startswith="Closed"), info)
 
@@ -676,7 +704,12 @@ class LendingDeskType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.LendingDesk],
+        info: Info,
+    ) -> QuerySet[models.LendingDesk]:
         """Cascade the parent venue's visibility onto the desk."""
         return apply_cascade_permissions(cls, queryset, info)
 
@@ -701,7 +734,12 @@ class SelfServeDeskType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.SelfServeDesk],
+        info: Info,
+    ) -> QuerySet[models.SelfServeDesk]:
         """Cascade the parent desk's visibility onto the kiosk."""
         return apply_cascade_permissions(cls, queryset, info)
 
@@ -732,7 +770,12 @@ class RepairTicketType(DjangoType):
     """A repair ticket; ``VOID-`` tickets are withdrawn and hidden from every viewer."""
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.RepairTicket],
+        info: Info,
+    ) -> QuerySet[models.RepairTicket]:
         """Hide withdrawn tickets."""
         return queryset.exclude(code__startswith="VOID-")
 
@@ -783,7 +826,12 @@ class BranchSignageType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.BranchSignage],
+        info: Info,
+    ) -> QuerySet[models.BranchSignage]:
         """Cascade the proxy target's default-manager visibility onto the sign."""
         return apply_cascade_permissions(cls, queryset, info)
 
@@ -805,7 +853,12 @@ class CirculationDeskType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.CirculationDesk],
+        info: Info,
+    ) -> QuerySet[models.CirculationDesk]:
         """Cascade branch and shelf visibility onto the desk."""
         return apply_cascade_permissions(cls, queryset, info, fields=["branch", "shelf"])
 
@@ -961,8 +1014,11 @@ class Query:
         resolver=_branch_notes_over_unrelated_child_resolver,
     )
 
-    @strawberry.field
-    def named_library_records(self, info: strawberry.Info) -> list[Named]:
+    @strawberry.field(graphql_type=list[Named])
+    def named_library_records(
+        self,
+        info: strawberry.Info,
+    ) -> list[models.Branch | models.Genre | models.Patron]:
         """Polymorphic ``list[Named]`` mixing Branch / Genre / Patron rows (spec-015).
 
         The custom-interface demonstration: the field's declared type is the consumer
@@ -980,19 +1036,19 @@ class Query:
         non-staff callers. Genre / Patron route through the (default, no-op) hook too, so
         the field stays correct if either later gains a visibility rule.
         """
-        records: list[Any] = []
+        records: list[models.Branch | models.Genre | models.Patron] = []
         records.extend(BranchType.get_queryset(models.Branch.objects.order_by("id"), info))
         records.extend(GenreType.get_queryset(models.Genre.objects.order_by("id"), info))
         records.extend(PatronType.get_queryset(models.Patron.objects.order_by("id"), info))
         return records
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[BranchType])
     def all_library_branches(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters.BranchFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.BranchOrder)] | None = None,
-    ) -> list[BranchType]:
+        filter: FilterInput[filters.BranchFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.BranchOrder]] | None = None,
+    ) -> QuerySet[models.Branch]:
         queryset = BranchType.get_queryset(models.Branch.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.BranchFilter.apply_sync(filter, queryset, info)
@@ -1000,8 +1056,11 @@ class Query:
             queryset = orders.BranchOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
-    def all_library_branches_eager_eval(self, info: strawberry.Info) -> list[BranchType]:
+    @strawberry.field(graphql_type=list[BranchType])
+    def all_library_branches_eager_eval(
+        self,
+        info: strawberry.Info,
+    ) -> QuerySet[models.Branch] | list[models.Branch]:
         # The evaluated-queryset guard (spec-035), dogfooded. A consumer that
         # evaluates its queryset before returning it - here an ``if not queryset``
         # empty-guard whose ``bool(...)`` populates ``_result_cache`` - must NOT be
@@ -1015,8 +1074,8 @@ class Query:
             return []
         return queryset
 
-    @strawberry.field
-    def all_library_cards_projected(self) -> list[MembershipCardType]:
+    @strawberry.field(graphql_type=list[MembershipCardType])
+    def all_library_cards_projected(self) -> QuerySet[models.MembershipCard]:
         """Dogfood: consumer ``.only()`` vs a planned ``select_related``.
 
         ``PatronType`` has NO visibility hook, so selecting ``patron`` under
@@ -1029,8 +1088,8 @@ class Query:
         """
         return models.MembershipCard.objects.order_by("id").only("barcode")
 
-    @strawberry.field
-    def all_library_cards_deferred(self) -> list[MembershipCardType]:
+    @strawberry.field(graphql_type=list[MembershipCardType])
+    def all_library_cards_deferred(self) -> QuerySet[models.MembershipCard]:
         """Dogfood, defer flavor: ``.defer("patron")`` blocks the same join.
 
         Django raises the same deferred-and-traversed ``FieldError`` for a
@@ -1042,13 +1101,13 @@ class Query:
         """
         return models.MembershipCard.objects.order_by("id").defer("patron")
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[ShelfType])
     def all_library_shelves(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters.ShelfFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.ShelfOrder)] | None = None,
-    ) -> list[ShelfType]:
+        filter: FilterInput[filters.ShelfFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.ShelfOrder]] | None = None,
+    ) -> QuerySet[models.Shelf]:
         queryset = ShelfType.get_queryset(models.Shelf.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.ShelfFilter.apply_sync(filter, queryset, info)
@@ -1056,12 +1115,12 @@ class Query:
             queryset = orders.ShelfOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CirculationDeskType])
     def all_library_circulation_desks_filtered(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters.CirculationDeskFilter) | None = None,  # noqa: A002
-    ) -> list[CirculationDeskType]:
+        filter: FilterInput[filters.CirculationDeskFilter] | None = None,  # noqa: A002
+    ) -> QuerySet[models.CirculationDesk]:
         """Acceptance surface for the whole-set ``"__all__"`` filter sweep over every relation kind.
 
         ``CirculationDeskFilter`` declares ``fields = "__all__"``, so its ``shelf`` and
@@ -1077,13 +1136,13 @@ class Query:
             queryset = filters.CirculationDeskFilter.apply_sync(filter, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[BookType])
     def all_library_books(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters.BookFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.BookOrder)] | None = None,
-    ) -> list[BookType]:
+        filter: FilterInput[filters.BookFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.BookOrder]] | None = None,
+    ) -> QuerySet[models.Book]:
         queryset = BookType.get_queryset(models.Book.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.BookFilter.apply_sync(filter, queryset, info)
@@ -1091,29 +1150,29 @@ class Query:
             queryset = orders.BookOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
-    def all_library_prefetched_books(self) -> list[BookType]:
+    @strawberry.field(graphql_type=list[BookType])
+    def all_library_prefetched_books(self) -> QuerySet[models.Book]:
         return (
             models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
         )
 
-    @strawberry.field
-    def all_library_genres_consumer_descendant_prefetch(self) -> list[GenreType]:
+    @strawberry.field(graphql_type=list[GenreType])
+    def all_library_genres_consumer_descendant_prefetch(self) -> QuerySet[models.Genre]:
         # Collision surface: a consumer descendant prefetch
         # (``books__loans``) overlaps the optimizer's own Genre -> books ->
         # loans prefetch plan. The optimizer must reconcile the two rather than
         # raise "'books' lookup was already seen with a different queryset".
         return models.Genre.objects.prefetch_related("books__loans").order_by("id")
 
-    @strawberry.field
-    def all_library_genres_consumer_exact_plus_descendant_prefetch(self) -> list[GenreType]:
+    @strawberry.field(graphql_type=list[GenreType])
+    def all_library_genres_consumer_exact_plus_descendant_prefetch(self) -> QuerySet[models.Genre]:
         # The consumer declares BOTH the exact relation
         # (``books``) and a descendant (``books__loans``); both must reconcile
         # with the optimizer plan without colliding.
         return models.Genre.objects.prefetch_related("books", "books__loans").order_by("id")
 
-    @strawberry.field
-    def all_library_nullability_override_books(self) -> list[NullabilityOverrideBookType]:
+    @strawberry.field(graphql_type=list[NullabilityOverrideBookType])
+    def all_library_nullability_override_books(self) -> QuerySet[models.Book]:
         # ``required_overrides = ("subtitle",)`` declares ``subtitle`` as
         # ``String!`` on this type, but the column is ``null=True`` and fakeshop
         # seeds ``subtitle=None`` rows - so exclude null-subtitle rows to keep
@@ -1121,13 +1180,13 @@ class Query:
         # deterministic responses (spec-029 / Edge cases).
         return models.Book.objects.exclude(subtitle__isnull=True).order_by("id")
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GenreType])
     def all_library_genres(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters_genre.GenreFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders_genre.GenreOrder)] | None = None,
-    ) -> list[GenreType]:
+        filter: FilterInput[filters_genre.GenreFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders_genre.GenreOrder]] | None = None,
+    ) -> QuerySet[models.Genre]:
         queryset = GenreType.get_queryset(models.Genre.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters_genre.GenreFilter.apply_sync(filter, queryset, info)
@@ -1151,13 +1210,13 @@ class Query:
     nodes: list[relay.Node | None] = DjangoNodesField()
     genre: GenreType | None = DjangoNodeField(GenreType)
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[PatronType])
     def all_library_patrons(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters.PatronFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.PatronOrder)] | None = None,
-    ) -> list[PatronType]:
+        filter: FilterInput[filters.PatronFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.PatronOrder]] | None = None,
+    ) -> QuerySet[models.Patron]:
         queryset = PatronType.get_queryset(models.Patron.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.PatronFilter.apply_sync(filter, queryset, info)
@@ -1165,22 +1224,22 @@ class Query:
             queryset = orders.PatronOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
-    def all_library_public_patrons(self) -> list[PublicPatronType]:
+    @strawberry.field(graphql_type=list[PublicPatronType])
+    def all_library_public_patrons(self) -> QuerySet[models.Patron]:
         """Root field for the ``Meta.exclude`` deny-list view (see ``PublicPatronType``)."""
         return models.Patron.objects.order_by("id")
 
-    @strawberry.field
-    def all_library_membership_cards(self) -> list[MembershipCardType]:
+    @strawberry.field(graphql_type=list[MembershipCardType])
+    def all_library_membership_cards(self) -> QuerySet[models.MembershipCard]:
         return models.MembershipCard.objects.order_by("id")
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[LoanType])
     def all_library_loans(
         self,
         info: strawberry.Info,
-        filter: filter_input_type(filters.LoanFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.LoanOrder)] | None = None,
-    ) -> list[LoanType]:
+        filter: FilterInput[filters.LoanFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.LoanOrder]] | None = None,
+    ) -> QuerySet[models.Loan]:
         queryset = LoanType.get_queryset(models.Loan.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.LoanFilter.apply_sync(filter, queryset, info)
@@ -1347,7 +1406,8 @@ class CreateBranchWithShelf(DjangoFormMutation):
         form_class = forms.BranchWithShelfForm
         permission_classes = []
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: BaseForm, info: Info) -> None:
         branch = models.Branch.objects.create(name=form.cleaned_data["branch_name"])
         models.Shelf.objects.create(
             code=form.cleaned_data["shelf_code"],
@@ -1368,7 +1428,8 @@ class CreateBranchPair(DjangoFormMutation):
         form_class = forms.BranchPairForm
         permission_classes = []
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: BaseForm, info: Info) -> None:
         models.Branch.objects.create(name=form.cleaned_data["first_name"])
         models.Branch.objects.create(name=form.cleaned_data["second_name"])
 
@@ -1400,18 +1461,20 @@ class CreateShelfViaSchemaHookSerializer(SerializerMutation):
         permission_classes = []
 
     @classmethod
-    def get_serializer_for_schema(cls):
+    @override
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         # The stable, request-independent schema-time field map: construct WITH a
         # placeholder tenant (the field SET does not depend on the tenant value).
         return dict(serializers.TenantShelfSerializer(tenant="__schema__").fields)
 
+    @override
     def get_serializer_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         # Inject the runtime tenant so construction succeeds (and waive the create-required
         # guard - the override is trusted to supply what schema-time discovery cannot).
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
@@ -1467,7 +1530,7 @@ class CreateShelfViaSubclassedSerializer(CreateShelfViaSerializer):
     writes through the renamed wire name ``shelfCode``.
     """
 
-    class Meta:
+    class Meta(CreateShelfViaSerializer.Meta):
         serializer_class = serializers.RenamedShelfSerializer
         operation = "create"
         fields = ("shelf_code", "branch")
@@ -1514,16 +1577,18 @@ class CreateShelfViaHookTargetingPatron(SerializerMutation):
         permission_classes = []
 
     @classmethod
-    def get_serializer_for_schema(cls):
+    @override
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         return serializers.shelf_collision_schema_field_map(models.Patron)
 
+    @override
     def get_serializer_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         # Construct the runtime serializer with the SAME target_model the schema hook used,
         # so the schema-time ``target`` shape and the runtime ``target`` decode agree.
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
@@ -1551,16 +1616,18 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
         permission_classes = []
 
     @classmethod
-    def get_serializer_for_schema(cls):
+    @override
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         return serializers.shelf_collision_schema_field_map(models.Loan)
 
+    @override
     def get_serializer_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["target_model"] = models.Loan
         return kwargs
@@ -1584,7 +1651,8 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
         permission_classes = []
 
     @classmethod
-    def get_serializer_for_schema(cls):
+    @override
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         # Default no-arg discovery succeeds, so construct once and DROP the unsupported
         # alt_branches from its bound .fields - leaving the supported (code + branch) subset.
         fields = dict(serializers.HookNarrowedShelfSerializer().fields)
@@ -1615,16 +1683,18 @@ class CreateShelfViaHookNonNullNote(SerializerMutation):
         permission_classes = []
 
     @classmethod
-    def get_serializer_for_schema(cls):
+    @override
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         return serializers.nullability_schema_field_map(allow_null=False)
 
+    @override
     def get_serializer_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         # Construct the runtime serializer with the SAME note_allow_null the schema hook used,
         # so the schema-time ``note`` shape and the runtime ``note`` field agree.
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
@@ -1650,16 +1720,18 @@ class CreateShelfViaHookNullableNote(SerializerMutation):
         permission_classes = []
 
     @classmethod
-    def get_serializer_for_schema(cls):
+    @override
+    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
         return serializers.nullability_schema_field_map(allow_null=True)
 
+    @override
     def get_serializer_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["note_allow_null"] = True
         return kwargs
@@ -1748,13 +1820,14 @@ class UpdateBookSubstitutingInstance(SerializerMutation):
         operation = "update"
         permission_classes = []
 
+    @override
     def get_serializer_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["instance"] = (
             models.Book.objects.using(hook_context.write_alias)
@@ -1780,13 +1853,14 @@ class CreateShelfWithSaveKwargs(SerializerMutation):
         operation = "create"
         permission_classes = []
 
+    @override
     def get_serializer_save_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         return {"stamp": "stamped-at-save"}
 
 
@@ -1804,13 +1878,14 @@ class CreateShelfWithModelFieldSaveKwargs(SerializerMutation):
         operation = "create"
         permission_classes = []
 
+    @override
     def get_serializer_save_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         return {"topic": "smuggled-model-field"}
 
 
@@ -1827,13 +1902,14 @@ class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
         operation = "create"
         permission_classes = []
 
+    @override
     def get_serializer_save_kwargs(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         return {"code": "server-shadow"}
 
 
@@ -1876,13 +1952,14 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
         injected_fields = ("topic",)
         permission_classes = []
 
+    @override
     def get_serializer_injected_data(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         # Supply the narrowed-away required ``topic`` (the injection contract
         # Meta.injected_fields declares - keys must match it exactly).
         return {"topic": "stamped-by-injection"}
@@ -1908,13 +1985,14 @@ class UpdateBookWithInjectedStatus(SerializerMutation):
         injected_fields = ("status",)
         permission_classes = []
 
+    @override
     def get_serializer_injected_data(
         self,
-        info,
+        info: Info,
         *,
-        data,
-        hook_context,
-    ):
+        data: Mapping[str, object],
+        hook_context: SerializerHookContext,
+    ) -> dict[str, object]:
         # Supply the narrowed-away required ``status`` (the injection contract
         # Meta.injected_fields declares - keys must match it exactly).
         return {"status": "active"}

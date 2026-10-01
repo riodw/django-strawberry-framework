@@ -1,13 +1,14 @@
 """GraphQL schema for the glossary data app."""
 
 import strawberry
+from django.db.models import QuerySet
 from strawberry.types import Info
 
 from apps.glossary import filters, models, orders
 from apps.kanban import models as kanban_models
 from django_strawberry_framework import DjangoType, OptimizerHint
-from django_strawberry_framework.filters import filter_input_type
-from django_strawberry_framework.orders import order_input_type
+from django_strawberry_framework.filters import FilterInput
+from django_strawberry_framework.orders import OrderInput
 
 
 class GlossaryStatusType(DjangoType):
@@ -207,13 +208,13 @@ class GlossaryDocumentType(DjangoType):
 class Query:
     """Glossary root fields."""
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryTermType])
     def all_glossary_terms(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryTermFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryTermOrder)] | None = None,
-    ) -> list[GlossaryTermType]:
+        filter: FilterInput[filters.GlossaryTermFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryTermOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryTerm]:
         queryset = models.GlossaryTerm.objects.order_by("entry_order", "title_sort")
         if filter is not None:
             queryset = filters.GlossaryTermFilter.apply_sync(filter, queryset, info)
@@ -221,13 +222,13 @@ class Query:
             queryset = orders.GlossaryTermOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryStatusType])
     def all_glossary_statuses(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryStatusFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryStatusOrder)] | None = None,
-    ) -> list[GlossaryStatusType]:
+        filter: FilterInput[filters.GlossaryStatusFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryStatusOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryStatus]:
         queryset = models.GlossaryStatus.objects.order_by("order", "label")
         if filter is not None:
             queryset = filters.GlossaryStatusFilter.apply_sync(filter, queryset, info)
@@ -235,13 +236,13 @@ class Query:
             queryset = orders.GlossaryStatusOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryCategoryType])
     def all_glossary_categories(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryCategoryFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryCategoryOrder)] | None = None,
-    ) -> list[GlossaryCategoryType]:
+        filter: FilterInput[filters.GlossaryCategoryFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryCategoryOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryCategory]:
         queryset = models.GlossaryCategory.objects.order_by("order", "label")
         if filter is not None:
             queryset = filters.GlossaryCategoryFilter.apply_sync(filter, queryset, info)
@@ -249,13 +250,13 @@ class Query:
             queryset = orders.GlossaryCategoryOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryCategoryMembershipType])
     def all_glossary_category_memberships(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryCategoryMembershipFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryCategoryMembershipOrder)] | None = None,
-    ) -> list[GlossaryCategoryMembershipType]:
+        filter: FilterInput[filters.GlossaryCategoryMembershipFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryCategoryMembershipOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryCategoryMembership]:
         queryset = models.GlossaryCategoryMembership.objects.order_by("category__order", "order")
         if filter is not None:
             queryset = filters.GlossaryCategoryMembershipFilter.apply_sync(filter, queryset, info)
@@ -263,13 +264,13 @@ class Query:
             queryset = orders.GlossaryCategoryMembershipOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryAliasType])
     def all_glossary_aliases(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryAliasFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryAliasOrder)] | None = None,
-    ) -> list[GlossaryAliasType]:
+        filter: FilterInput[filters.GlossaryAliasFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryAliasOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryAlias]:
         queryset = models.GlossaryAlias.objects.order_by("term__title_sort", "label")
         if filter is not None:
             queryset = filters.GlossaryAliasFilter.apply_sync(filter, queryset, info)
@@ -277,13 +278,13 @@ class Query:
             queryset = orders.GlossaryAliasOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryTermLinkKindType])
     def all_glossary_term_link_kinds(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryTermLinkKindFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryTermLinkKindOrder)] | None = None,
-    ) -> list[GlossaryTermLinkKindType]:
+        filter: FilterInput[filters.GlossaryTermLinkKindFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryTermLinkKindOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryTermLinkKind]:
         queryset = models.GlossaryTermLinkKind.objects.order_by("order", "label")
         if filter is not None:
             queryset = filters.GlossaryTermLinkKindFilter.apply_sync(filter, queryset, info)
@@ -291,13 +292,13 @@ class Query:
             queryset = orders.GlossaryTermLinkKindOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryTermLinkType])
     def all_glossary_term_links(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryTermLinkFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryTermLinkOrder)] | None = None,
-    ) -> list[GlossaryTermLinkType]:
+        filter: FilterInput[filters.GlossaryTermLinkFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryTermLinkOrder]] | None = None,
+    ) -> QuerySet[models.GlossaryTermLink]:
         queryset = models.GlossaryTermLink.objects.order_by("source_term__title_sort", "order")
         if filter is not None:
             queryset = filters.GlossaryTermLinkFilter.apply_sync(filter, queryset, info)
@@ -305,13 +306,13 @@ class Query:
             queryset = orders.GlossaryTermLinkOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossarySpecMentionType])
     def all_glossary_spec_mentions(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossarySpecMentionFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossarySpecMentionOrder)] | None = None,
-    ) -> list[GlossarySpecMentionType]:
+        filter: FilterInput[filters.GlossarySpecMentionFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossarySpecMentionOrder]] | None = None,
+    ) -> QuerySet[models.GlossarySpecMention]:
         queryset = models.GlossarySpecMention.objects.order_by("spec_path", "order")
         if filter is not None:
             queryset = filters.GlossarySpecMentionFilter.apply_sync(filter, queryset, info)
@@ -319,13 +320,13 @@ class Query:
             queryset = orders.GlossarySpecMentionOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossarySourceLinkType])
     def all_glossary_source_links(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossarySourceLinkFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossarySourceLinkOrder)] | None = None,
-    ) -> list[GlossarySourceLinkType]:
+        filter: FilterInput[filters.GlossarySourceLinkFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossarySourceLinkOrder]] | None = None,
+    ) -> QuerySet[models.GlossarySourceLink]:
         queryset = models.GlossarySourceLink.objects.order_by("term__title_sort", "order")
         if filter is not None:
             queryset = filters.GlossarySourceLinkFilter.apply_sync(filter, queryset, info)
@@ -333,13 +334,13 @@ class Query:
             queryset = orders.GlossarySourceLinkOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[GlossaryDocumentType])
     def all_glossary_documents(
         self,
         info: Info,
-        filter: filter_input_type(filters.GlossaryDocumentFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.GlossaryDocumentOrder)] | None = None,
-    ) -> list[GlossaryDocumentType]:
+        filter: FilterInput[filters.GlossaryDocumentFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.GlossaryDocumentOrder]] | None = None,
+    ) -> QuerySet[kanban_models.BoardDoc]:
         queryset = kanban_models.BoardDoc.objects.filter(namespace="glossary").order_by("order")
         if filter is not None:
             queryset = filters.GlossaryDocumentFilter.apply_sync(filter, queryset, info)

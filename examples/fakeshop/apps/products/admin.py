@@ -3,7 +3,9 @@
 from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect
+from typing_extensions import override
 
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import create_users, delete_data, delete_users, seed_data
@@ -33,7 +35,12 @@ class UserAdmin(BaseUserAdmin):
         "user_permissions",
     )
 
-    def changelist_view(self, request, extra_context=None):
+    @override
+    def changelist_view(
+        self,
+        request: HttpRequest,
+        extra_context: dict[str, object] | None = None,
+    ) -> HttpResponse:
         # --- create_users ---
         create_count = request.GET.get("create_users")
         if create_count:
@@ -125,7 +132,12 @@ class ItemAdmin(admin.ModelAdmin):
     inlines = [EntryInline]
     autocomplete_fields = ["category"]
 
-    def changelist_view(self, request, extra_context=None):
+    @override
+    def changelist_view(
+        self,
+        request: HttpRequest,
+        extra_context: dict[str, object] | None = None,
+    ) -> HttpResponse:
         # --- seed_data ---
         seed_count = request.GET.get("seed_data")
         if seed_count:

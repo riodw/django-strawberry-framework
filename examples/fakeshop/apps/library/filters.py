@@ -17,9 +17,9 @@ filter graph.
 
 from __future__ import annotations
 
-from typing import Any
-
 from django import forms
+from django.db.models import QuerySet
+from django.http import HttpRequest
 from django_filters import CharFilter, ModelChoiceFilter, ModelMultipleChoiceFilter
 from django_filters.filters import BaseInFilter
 
@@ -67,7 +67,7 @@ class ModelChoiceInFilter(BaseInFilter, ModelChoiceFilter):
     """The django-filter ``in`` idiom over a model-choice filter: a list of branch keys."""
 
 
-def _unrestricted_branches(request: Any = None) -> Any:
+def _unrestricted_branches(request: HttpRequest | None = None) -> QuerySet[models.Branch]:
     """Every branch but the ``city="restricted"`` ones: the declared model-choice queryset.
 
     ``ShelfFilter``'s model-choice filters validate against it. ``home_branch_for_request``
@@ -108,7 +108,9 @@ class ShelfFilter(FilterSet):
     home_branch_in = ModelChoiceInFilter(field_name="branch", queryset=_unrestricted_branches())
     home_branch_for_request = ModelChoiceFilter(
         field_name="branch",
-        queryset=_unrestricted_branches,
+        # basedpyright: types-django-filter types ``queryset`` as a ``QuerySet``;
+        # ``QuerySetRequestMixin.get_queryset`` calls a callable one with the request
+        queryset=_unrestricted_branches,  # pyright: ignore[reportArgumentType]
     )
 
     class Meta:
@@ -185,7 +187,7 @@ class PatronFilter(FilterSet):
         model = models.Patron
         fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         # Wire the validator on the underlying ``forms.CharField`` so
         # ``form.is_valid()`` fires the "missing @" gate on inputs without
@@ -196,10 +198,10 @@ class PatronFilter(FilterSet):
 
     def filter_email_must_have_at_sign(
         self,
-        queryset: Any,
+        queryset: QuerySet[models.Patron],
         name: str,
         value: str,
-    ) -> Any:
+    ) -> QuerySet[models.Patron]:
         """Apply the declared filter once the validator has accepted the value."""
         return queryset.filter(email=value)
 

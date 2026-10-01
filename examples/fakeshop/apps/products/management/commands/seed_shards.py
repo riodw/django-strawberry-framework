@@ -73,7 +73,8 @@ high-volume load testing:
 
 from django.conf import settings
 from django.core.management import call_command
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError, CommandParser
+from typing_extensions import override
 
 from apps.products.services import create_users, seed_data
 
@@ -89,7 +90,8 @@ class Command(BaseCommand):
         "(shard_b -> db_shard_b.sqlite3). Requires FAKESHOP_SHARDED=1 in the environment."
     )
 
-    def add_arguments(self, parser) -> None:
+    @override
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--count",
             type=int,
@@ -97,8 +99,8 @@ class Command(BaseCommand):
             help="Number of Item instances per Faker provider on shard_b (default: 1)",
         )
 
-    def handle(self, *args, **options) -> None:
-        count = options["count"]
+    @override
+    def handle(self, *args: object, count: int, **options: object) -> None:
 
         # Fail fast if the sharded mode isn't active.
         if "shard_b" not in settings.DATABASES:

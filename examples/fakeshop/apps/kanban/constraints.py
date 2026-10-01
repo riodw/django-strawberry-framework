@@ -15,12 +15,14 @@ instead of the tower. The nesting becomes a runtime implementation detail.
 
 from __future__ import annotations
 
-import operator
-from functools import reduce
-from typing import Any
+from typing import TYPE_CHECKING
 
 from django.db import models
 from django.utils.deconstruct import deconstructible
+from typing_extensions import override
+
+if TYPE_CHECKING:
+    from django.db.models.sql.query import Query
 
 
 @deconstructible(path="apps.kanban.constraints.OneHotLinkCount")
@@ -38,16 +40,25 @@ class OneHotLinkCount(models.Expression):
         self.field_names = field_names
         super().__init__(output_field=models.IntegerField())
 
-    def resolve_expression(self, *args: Any, **kwargs: Any) -> Any:
-        summed = reduce(
-            operator.add,
-            (
-                models.Case(
-                    models.When(**{f"{name}__isnull": False}, then=1),
-                    default=0,
-                    output_field=models.IntegerField(),
-                )
-                for name in self.field_names
-            ),
-        )
-        return summed.resolve_expression(*args, **kwargs)
+    @override
+    def resolve_expression(
+        self,
+        query: Query | None = None,
+        allow_joins: bool = True,
+        reuse: set[str] | None = None,
+        summarize: bool = False,
+        for_save: bool = False,
+    ) -> models.Expression:
+        cases = [
+            models.Case(
+                models.When(**{f"{name}__isnull": False}, then=1),
+                default=0,
+                output_field=models.IntegerField(),
+            )
+            for name in self.field_names
+        ]
+        # Left-associative ``+`` fold: ``((case_1 + case_2) + case_3) + ...``.
+        summed: models.Expression = cases[0]
+        for case in cases[1:]:
+            summed = summed + case
+        return summed.resolve_expression(query, allow_joins, reuse, summarize, for_save)

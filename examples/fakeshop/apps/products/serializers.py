@@ -25,6 +25,7 @@ Decision-13 live matrix:
 """
 
 from rest_framework import serializers
+from typing_extensions import override
 
 from .models import Category, Item
 
@@ -53,7 +54,8 @@ class ItemSerializer(serializers.ModelSerializer):
     automatically through DRF's ``UniqueTogetherValidator`` as a ``"__all__"`` entry.
     """
 
-    class Meta:
+    # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         model = Item
         fields = (
             "name",
@@ -62,12 +64,13 @@ class ItemSerializer(serializers.ModelSerializer):
             "attachment",
         )
 
-    def validate_name(self, value):
+    def validate_name(self, value: str) -> str:
         if value == REJECTED_SERIALIZER_ITEM_NAME:
             raise serializers.ValidationError("This serializer name is not allowed.")
         return value
 
-    def validate(self, attrs):
+    @override
+    def validate(self, attrs: dict[str, object]) -> dict[str, object]:
         # The request-context proof: an explicit object ``validate()`` reading
         # the injected ``context["request"].user``. Rejecting a name equal to the
         # authenticated username proves the framework-merged request context lands.
@@ -104,11 +107,12 @@ class RenamedRelationItemSerializer(serializers.ModelSerializer):
         queryset=Category.objects.all(),
     )
 
-    class Meta:
+    # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         model = Item
         fields = ("display_name", "category_pk")
 
-    def validate_display_name(self, value):
+    def validate_display_name(self, value: str) -> str:
         if value == REJECTED_RENAMED_DISPLAY_NAME:
             raise serializers.ValidationError("This renamed name is not allowed.")
         return value

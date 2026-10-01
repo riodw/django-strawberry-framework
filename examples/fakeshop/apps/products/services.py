@@ -321,11 +321,11 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
     Returns:
         A summary dict with the number of newly created users.
     """
-    from django.contrib.auth import get_user_model
-    from django.contrib.auth.models import Permission
+    # ``config.settings`` keeps Django's default ``AUTH_USER_MODEL``, so the concrete
+    # ``auth.User`` is the configured model and its ``UserManager`` owns ``create_user``.
+    from django.contrib.auth.models import Permission, User
     from faker import Faker
 
-    User = get_user_model()
     user_manager = User.objects.db_manager(db_alias)
     perm_manager = Permission.objects.db_manager(db_alias)
     created = 0
@@ -394,9 +394,8 @@ def delete_users(target: int | str) -> dict[str, int]:
 
     Returns a summary dict with counts of deleted users.
     """
-    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import User
 
-    User = get_user_model()
     result: dict[str, int] = {"users": 0}
 
     if target == "all":

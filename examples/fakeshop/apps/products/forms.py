@@ -34,8 +34,10 @@ end. These forms cover the spec's Decision-12 live matrix:
 """
 
 from django import forms
+from django.contrib.auth.models import AnonymousUser, User
+from typing_extensions import override
 
-from .models import Item
+from .models import Category, Item
 
 # The sentinel value ``ItemModelForm.clean_name`` rejects - drives the field-level
 # ``form.errors`` keyed-to-the-form-field live case (a ``clean_<field>`` error).
@@ -57,7 +59,7 @@ class ItemModelForm(forms.ModelForm):
         model = Item
         fields = ("name", "description", "category")
 
-    def clean_name(self):
+    def clean_name(self) -> str:
         name = self.cleaned_data["name"]
         if name == REJECTED_ITEM_NAME:
             raise forms.ValidationError("This name is not allowed.")
@@ -77,7 +79,7 @@ class ContactForm(forms.Form):
     subject = forms.CharField(max_length=200)
     email = forms.EmailField()
 
-    def clean_subject(self):
+    def clean_subject(self) -> str:
         subject = self.cleaned_data["subject"].strip()
         if not subject:
             raise forms.ValidationError("Subject must not be blank.")
@@ -111,17 +113,19 @@ class StampedItemModelForm(forms.ModelForm):
         model = Item
         fields = ("name", "category")
 
-    def __init__(self, *args, user=None, **kwargs):
+    def __init__(self, *args, user: User | AnonymousUser, **kwargs) -> None:
         self._user = user
         super().__init__(*args, **kwargs)
 
-    def clean(self):
+    @override
+    def clean(self) -> dict[str, object] | None:
         cleaned = super().clean()
-        if self._user is None or not self._user.is_authenticated:
+        if not self._user.is_authenticated:
             raise forms.ValidationError("An authenticated user is required.")
         return cleaned
 
-    def save(self, commit=True):
+    @override
+    def save(self, commit: bool = True) -> Item:
         item = super().save(commit=False)
         item.description = f"stamped by {self._user.username}"
         if commit:
@@ -162,7 +166,7 @@ class DefaultCategoryItemModelForm(forms.ModelForm):
         model = Item
         fields = ("name",)
 
-    def __init__(self, *args, category=None, **kwargs):
+    def __init__(self, *args, category: Category | None = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if category is not None:
             self.instance.category = category

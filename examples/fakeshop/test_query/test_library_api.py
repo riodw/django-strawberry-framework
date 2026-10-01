@@ -999,7 +999,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
         ``order_by("-code")`` re-query never consumed) no longer runs.
       * 2 SELECTs (one per seeded ``Branch``) for the consumer-override
         ``BranchType.shelves`` resolver at ``apps/library/schema.py`` (which
-        evaluates ``self.shelves.order_by("-code")``). This mirrors the
+        evaluates ``root.shelves.order_by("-code")``). This mirrors the
         baseline established by
         ``test_library_relation_override_shapes_http_response_data`` above
         for the same nested-selection shape.

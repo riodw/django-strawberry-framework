@@ -37,7 +37,9 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 # from apps.products import fields as fieldsets                      # TODO-BETA-046-0.1.1
 
 import strawberry
+from django.db.models import Model, QuerySet
 from strawberry import relay
+from typing_extensions import override
 
 # ``SerializerMutation`` is imported BY NAME (never via star import): the root
 # ``__all__`` intentionally omits it while DRF is a soft dependency, so the
@@ -87,7 +89,12 @@ class CategoryType(DjangoType):
         # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.Category],
+        info: strawberry.Info,
+    ) -> QuerySet[models.Category]:
         """Staff see everything; everyone else (incl. view_category holders) sees public rows.
 
         Category has no cascadable forward edge, so the cascade is a no-op here - it
@@ -127,7 +134,12 @@ class ItemType(DjangoType):
         # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.Item],
+        info: strawberry.Info,
+    ) -> QuerySet[models.Item]:
         """Staff see everything; everyone else (incl. view_item holders) sees public Items under a visible Category.
 
         The view_item branch cascades just like the anonymous fallback: a non-staff
@@ -165,7 +177,12 @@ class PropertyType(DjangoType):
         # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.Property],
+        info: strawberry.Info,
+    ) -> QuerySet[models.Property]:
         """Staff see everything; everyone else (incl. view_property holders) sees public Properties under a visible Category.
 
         Like ItemType, the view_property branch cascades through the non-null
@@ -202,7 +219,12 @@ class EntryType(DjangoType):
         # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.Entry],
+        info: strawberry.Info,
+    ) -> QuerySet[models.Entry]:
         """Staff see everything; everyone else (incl. view_entry holders) sees public Entries whose item and property are visible.
 
         The view_entry branch cascades through both non-null FK edges (``item`` and
@@ -362,14 +384,15 @@ class CreateDefaultCategoryItemViaForm(DjangoModelFormMutation):
         form_class = forms.DefaultCategoryItemModelForm
         operation = "create"
 
+    @override
     def get_form_kwargs(
         self,
-        info,
+        info: strawberry.Info,
         *,
-        data,
-        files,
-        instance=None,
-    ):
+        data: dict[str, object],
+        files: dict[str, object],
+        instance: Model | None = None,
+    ) -> dict[str, object]:
         kwargs = super().get_form_kwargs(info, data=data, files=files, instance=instance)
         kwargs["category"] = models.Category.objects.order_by("pk").first()
         return kwargs
@@ -390,14 +413,15 @@ class CreateStampedItemViaForm(DjangoModelFormMutation):
         form_class = forms.StampedItemModelForm
         operation = "create"
 
+    @override
     def get_form_kwargs(
         self,
-        info,
+        info: strawberry.Info,
         *,
-        data,
-        files,
-        instance=None,
-    ):
+        data: dict[str, object],
+        files: dict[str, object],
+        instance: Model | None = None,
+    ) -> dict[str, object]:
         kwargs = super().get_form_kwargs(info, data=data, files=files, instance=instance)
         kwargs["user"] = info.context.request.user
         return kwargs

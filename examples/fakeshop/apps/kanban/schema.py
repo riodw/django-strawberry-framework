@@ -15,9 +15,10 @@ pattern the scalars app uses.
 import strawberry
 from django import forms
 from django.core.exceptions import ValidationError
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, QuerySet
 from strawberry import relay
 from strawberry.types import Info
+from typing_extensions import override
 
 from apps.kanban import filters, models, orders, services
 from django_strawberry_framework import (
@@ -26,9 +27,9 @@ from django_strawberry_framework import (
     DjangoType,
     OptimizerHint,
 )
-from django_strawberry_framework.filters import filter_input_type
+from django_strawberry_framework.filters import FilterInput
 from django_strawberry_framework.mutations.resolvers import payload_cls_for
-from django_strawberry_framework.orders import order_input_type
+from django_strawberry_framework.orders import OrderInput
 from django_strawberry_framework.utils.errors import field_error, validation_error_to_field_errors
 
 # ---------------------------------------------------------------------------
@@ -647,13 +648,13 @@ class BoardDocCardReferenceType(DjangoType):
 class Query:
     """Kanban board root fields."""
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CardType])
     def all_cards(
         self,
         info: Info,
-        filter: filter_input_type(filters.CardFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardOrder)] | None = None,
-    ) -> list[CardType]:
+        filter: FilterInput[filters.CardFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.CardOrder]] | None = None,
+    ) -> QuerySet[models.Card]:
         queryset = models.Card.objects.order_by("number")
         if filter is not None:
             queryset = filters.CardFilter.apply_sync(filter, queryset, info)
@@ -661,13 +662,13 @@ class Query:
             queryset = orders.CardOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CardType])
     def ready_cards(
         self,
         info: Info,
-        filter: filter_input_type(filters.CardFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardOrder)] | None = None,
-    ) -> list[CardType]:
+        filter: FilterInput[filters.CardFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.CardOrder]] | None = None,
+    ) -> QuerySet[models.Card]:
         """Cards ready to start now: ``todo``, unblocked, all dependencies done.
 
         Implemented as a single annotated queryset (``~Exists`` over the card's
@@ -690,13 +691,13 @@ class Query:
             queryset = orders.CardOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CardItemType])
     def all_kanban_card_items(
         self,
         info: Info,
-        filter: filter_input_type(filters.CardItemFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardItemOrder)] | None = None,
-    ) -> list[CardItemType]:
+        filter: FilterInput[filters.CardItemFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.CardItemOrder]] | None = None,
+    ) -> QuerySet[models.CardItem]:
         queryset = models.CardItem.objects.order_by("id")
         if filter is not None:
             queryset = filters.CardItemFilter.apply_sync(filter, queryset, info)
@@ -704,13 +705,13 @@ class Query:
             queryset = orders.CardItemOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CardGlossaryTermType])
     def all_kanban_card_glossary_terms(
         self,
         info: Info,
-        filter: filter_input_type(filters.CardGlossaryTermFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardGlossaryTermOrder)] | None = None,
-    ) -> list[CardGlossaryTermType]:
+        filter: FilterInput[filters.CardGlossaryTermFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.CardGlossaryTermOrder]] | None = None,
+    ) -> QuerySet[models.CardGlossaryTerm]:
         queryset = models.CardGlossaryTerm.objects.order_by("card__number", "order")
         if filter is not None:
             queryset = filters.CardGlossaryTermFilter.apply_sync(filter, queryset, info)
@@ -718,13 +719,13 @@ class Query:
             queryset = orders.CardGlossaryTermOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[StatusType])
     def all_kanban_statuses(
         self,
         info: Info,
-        filter: filter_input_type(filters.StatusFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.StatusOrder)] | None = None,
-    ) -> list[StatusType]:
+        filter: FilterInput[filters.StatusFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.StatusOrder]] | None = None,
+    ) -> QuerySet[models.Status]:
         queryset = models.Status.objects.order_by("order")
         if filter is not None:
             queryset = filters.StatusFilter.apply_sync(filter, queryset, info)
@@ -732,13 +733,13 @@ class Query:
             queryset = orders.StatusOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[PriorityType])
     def all_kanban_priorities(
         self,
         info: Info,
-        filter: filter_input_type(filters.PriorityFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.PriorityOrder)] | None = None,
-    ) -> list[PriorityType]:
+        filter: FilterInput[filters.PriorityFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.PriorityOrder]] | None = None,
+    ) -> QuerySet[models.Priority]:
         queryset = models.Priority.objects.order_by("order")
         if filter is not None:
             queryset = filters.PriorityFilter.apply_sync(filter, queryset, info)
@@ -746,13 +747,13 @@ class Query:
             queryset = orders.PriorityOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[MilestoneType])
     def all_kanban_milestones(
         self,
         info: Info,
-        filter: filter_input_type(filters.MilestoneFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.MilestoneOrder)] | None = None,
-    ) -> list[MilestoneType]:
+        filter: FilterInput[filters.MilestoneFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.MilestoneOrder]] | None = None,
+    ) -> QuerySet[models.Milestone]:
         queryset = models.Milestone.objects.order_by("order")
         if filter is not None:
             queryset = filters.MilestoneFilter.apply_sync(filter, queryset, info)
@@ -760,13 +761,13 @@ class Query:
             queryset = orders.MilestoneOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[UpstreamType])
     def all_kanban_upstreams(
         self,
         info: Info,
-        filter: filter_input_type(filters.UpstreamFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.UpstreamOrder)] | None = None,
-    ) -> list[UpstreamType]:
+        filter: FilterInput[filters.UpstreamFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.UpstreamOrder]] | None = None,
+    ) -> QuerySet[models.Upstream]:
         queryset = models.Upstream.objects.order_by("order")
         if filter is not None:
             queryset = filters.UpstreamFilter.apply_sync(filter, queryset, info)
@@ -774,13 +775,13 @@ class Query:
             queryset = orders.UpstreamOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[ParityLevelType])
     def all_kanban_parity_levels(
         self,
         info: Info,
-        filter: filter_input_type(filters.ParityLevelFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.ParityLevelOrder)] | None = None,
-    ) -> list[ParityLevelType]:
+        filter: FilterInput[filters.ParityLevelFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.ParityLevelOrder]] | None = None,
+    ) -> QuerySet[models.ParityLevel]:
         queryset = models.ParityLevel.objects.order_by("order")
         if filter is not None:
             queryset = filters.ParityLevelFilter.apply_sync(filter, queryset, info)
@@ -788,13 +789,13 @@ class Query:
             queryset = orders.ParityLevelOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[SectionType])
     def all_kanban_sections(
         self,
         info: Info,
-        filter: filter_input_type(filters.SectionFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.SectionOrder)] | None = None,
-    ) -> list[SectionType]:
+        filter: FilterInput[filters.SectionFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.SectionOrder]] | None = None,
+    ) -> QuerySet[models.Section]:
         queryset = models.Section.objects.order_by("order")
         if filter is not None:
             queryset = filters.SectionFilter.apply_sync(filter, queryset, info)
@@ -802,13 +803,13 @@ class Query:
             queryset = orders.SectionOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CardReferenceKindType])
     def all_kanban_reference_kinds(
         self,
         info: Info,
-        filter: filter_input_type(filters.CardReferenceKindFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardReferenceKindOrder)] | None = None,
-    ) -> list[CardReferenceKindType]:
+        filter: FilterInput[filters.CardReferenceKindFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.CardReferenceKindOrder]] | None = None,
+    ) -> QuerySet[models.CardReferenceKind]:
         queryset = models.CardReferenceKind.objects.order_by("order")
         if filter is not None:
             queryset = filters.CardReferenceKindFilter.apply_sync(filter, queryset, info)
@@ -816,13 +817,13 @@ class Query:
             queryset = orders.CardReferenceKindOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[BoardDocKindType])
     def all_kanban_board_doc_kinds(
         self,
         info: Info,
-        filter: filter_input_type(filters.BoardDocKindFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.BoardDocKindOrder)] | None = None,
-    ) -> list[BoardDocKindType]:
+        filter: FilterInput[filters.BoardDocKindFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.BoardDocKindOrder]] | None = None,
+    ) -> QuerySet[models.BoardDocKind]:
         queryset = models.BoardDocKind.objects.filter(docs__namespace="kanban").distinct()
         queryset = queryset.order_by("order")
         if filter is not None:
@@ -831,13 +832,13 @@ class Query:
             queryset = orders.BoardDocKindOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[TargetVersionType])
     def all_kanban_target_versions(
         self,
         info: Info,
-        filter: filter_input_type(filters.TargetVersionFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.TargetVersionOrder)] | None = None,
-    ) -> list[TargetVersionType]:
+        filter: FilterInput[filters.TargetVersionFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.TargetVersionOrder]] | None = None,
+    ) -> QuerySet[models.TargetVersion]:
         queryset = models.TargetVersion.objects.order_by("number")
         if filter is not None:
             queryset = filters.TargetVersionFilter.apply_sync(filter, queryset, info)
@@ -845,13 +846,13 @@ class Query:
             queryset = orders.TargetVersionOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[LabelType])
     def all_kanban_labels(
         self,
         info: Info,
-        filter: filter_input_type(filters.LabelFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.LabelOrder)] | None = None,
-    ) -> list[LabelType]:
+        filter: FilterInput[filters.LabelFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.LabelOrder]] | None = None,
+    ) -> QuerySet[models.Label]:
         queryset = models.Label.objects.order_by("key")
         if filter is not None:
             queryset = filters.LabelFilter.apply_sync(filter, queryset, info)
@@ -859,13 +860,13 @@ class Query:
             queryset = orders.LabelOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[TrackedPathType])
     def all_kanban_tracked_paths(
         self,
         info: Info,
-        filter: filter_input_type(filters.TrackedPathFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.TrackedPathOrder)] | None = None,
-    ) -> list[TrackedPathType]:
+        filter: FilterInput[filters.TrackedPathFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.TrackedPathOrder]] | None = None,
+    ) -> QuerySet[models.TrackedPath]:
         queryset = models.TrackedPath.objects.order_by("path")
         if filter is not None:
             queryset = filters.TrackedPathFilter.apply_sync(filter, queryset, info)
@@ -873,13 +874,13 @@ class Query:
             queryset = orders.TrackedPathOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[RelativeSizeType])
     def all_kanban_relative_sizes(
         self,
         info: Info,
-        filter: filter_input_type(filters.RelativeSizeFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.RelativeSizeOrder)] | None = None,
-    ) -> list[RelativeSizeType]:
+        filter: FilterInput[filters.RelativeSizeFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.RelativeSizeOrder]] | None = None,
+    ) -> QuerySet[models.RelativeSize]:
         queryset = models.RelativeSize.objects.order_by("order")
         if filter is not None:
             queryset = filters.RelativeSizeFilter.apply_sync(filter, queryset, info)
@@ -887,13 +888,13 @@ class Query:
             queryset = orders.RelativeSizeOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[BoardDocType])
     def all_kanban_board_docs(
         self,
         info: Info,
-        filter: filter_input_type(filters.BoardDocFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.BoardDocOrder)] | None = None,
-    ) -> list[BoardDocType]:
+        filter: FilterInput[filters.BoardDocFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.BoardDocOrder]] | None = None,
+    ) -> QuerySet[models.BoardDoc]:
         queryset = models.BoardDoc.objects.filter(namespace="kanban").order_by("order")
         if filter is not None:
             queryset = filters.BoardDocFilter.apply_sync(filter, queryset, info)
@@ -901,13 +902,13 @@ class Query:
             queryset = orders.BoardDocOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[ActorType])
     def all_kanban_actors(
         self,
         info: Info,
-        filter: filter_input_type(filters.ActorFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.ActorOrder)] | None = None,
-    ) -> list[ActorType]:
+        filter: FilterInput[filters.ActorFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.ActorOrder]] | None = None,
+    ) -> QuerySet[models.Actor]:
         queryset = models.Actor.objects.order_by("order", "key")
         if filter is not None:
             queryset = filters.ActorFilter.apply_sync(filter, queryset, info)
@@ -915,13 +916,13 @@ class Query:
             queryset = orders.ActorOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[AttemptOutcomeType])
     def all_kanban_attempt_outcomes(
         self,
         info: Info,
-        filter: filter_input_type(filters.AttemptOutcomeFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.AttemptOutcomeOrder)] | None = None,
-    ) -> list[AttemptOutcomeType]:
+        filter: FilterInput[filters.AttemptOutcomeFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.AttemptOutcomeOrder]] | None = None,
+    ) -> QuerySet[models.AttemptOutcome]:
         queryset = models.AttemptOutcome.objects.order_by("order")
         if filter is not None:
             queryset = filters.AttemptOutcomeFilter.apply_sync(filter, queryset, info)
@@ -929,13 +930,13 @@ class Query:
             queryset = orders.AttemptOutcomeOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[VerificationKindType])
     def all_kanban_verification_kinds(
         self,
         info: Info,
-        filter: filter_input_type(filters.VerificationKindFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.VerificationKindOrder)] | None = None,
-    ) -> list[VerificationKindType]:
+        filter: FilterInput[filters.VerificationKindFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.VerificationKindOrder]] | None = None,
+    ) -> QuerySet[models.VerificationKind]:
         queryset = models.VerificationKind.objects.order_by("order")
         if filter is not None:
             queryset = filters.VerificationKindFilter.apply_sync(filter, queryset, info)
@@ -943,13 +944,13 @@ class Query:
             queryset = orders.VerificationKindOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[CardTransitionType])
     def all_kanban_card_transitions(
         self,
         info: Info,
-        filter: filter_input_type(filters.CardTransitionFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardTransitionOrder)] | None = None,
-    ) -> list[CardTransitionType]:
+        filter: FilterInput[filters.CardTransitionFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.CardTransitionOrder]] | None = None,
+    ) -> QuerySet[models.CardTransition]:
         queryset = models.CardTransition.objects.order_by("card__number", "occurred_at")
         if filter is not None:
             queryset = filters.CardTransitionFilter.apply_sync(filter, queryset, info)
@@ -957,13 +958,13 @@ class Query:
             queryset = orders.CardTransitionOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[WorkAttemptType])
     def all_kanban_work_attempts(
         self,
         info: Info,
-        filter: filter_input_type(filters.WorkAttemptFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.WorkAttemptOrder)] | None = None,
-    ) -> list[WorkAttemptType]:
+        filter: FilterInput[filters.WorkAttemptFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.WorkAttemptOrder]] | None = None,
+    ) -> QuerySet[models.WorkAttempt]:
         queryset = models.WorkAttempt.objects.order_by("card__number", "started_at")
         if filter is not None:
             queryset = filters.WorkAttemptFilter.apply_sync(filter, queryset, info)
@@ -971,13 +972,13 @@ class Query:
             queryset = orders.WorkAttemptOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[DecisionType])
     def all_kanban_decisions(
         self,
         info: Info,
-        filter: filter_input_type(filters.DecisionFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.DecisionOrder)] | None = None,
-    ) -> list[DecisionType]:
+        filter: FilterInput[filters.DecisionFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.DecisionOrder]] | None = None,
+    ) -> QuerySet[models.Decision]:
         queryset = models.Decision.objects.order_by("decided_at")
         if filter is not None:
             queryset = filters.DecisionFilter.apply_sync(filter, queryset, info)
@@ -1027,12 +1028,12 @@ class IsStaffUser:
 
     def has_permission(
         self,
-        info,
-        mutation,
-        operation,
-        data,
-        instance=None,
-    ):
+        info: object,
+        mutation: type[object],
+        operation: str,
+        data: object,
+        instance: object = None,
+    ) -> bool:
         del mutation, operation, data, instance
         context = getattr(info, "context", None)
         request = getattr(context, "request", None) or context
@@ -1040,7 +1041,10 @@ class IsStaffUser:
         return bool(user is not None and getattr(user, "is_staff", False))
 
 
-def _service_error_payload(mutation_cls: type, exc: Exception):
+def _service_error_payload(
+    mutation_cls: type[DjangoFormMutation],
+    exc: services.KanbanServiceError | ValidationError,
+) -> object:
     """Map a service failure onto the mutation's ``{ ok: false, errors }`` payload."""
     payload_cls = payload_cls_for(mutation_cls)
     if isinstance(exc, ValidationError):
@@ -1050,18 +1054,20 @@ def _service_error_payload(mutation_cls: type, exc: Exception):
     return payload_cls(ok=False, errors=errors)
 
 
-class _ServiceErrorMixin:
+class _ServiceErrorMixin(DjangoFormMutation):
     """Resolver-seam override translating service errors into the write envelope.
 
-    Placed FIRST in the MRO so its ``resolve_sync`` / ``resolve_async`` win over the
-    ``DjangoFormMutation`` seams. It delegates to the framework's plain-form pipeline
+    An intermediate ``DjangoFormMutation`` base (no ``Meta``, so it is never bound
+    itself) whose ``resolve_sync`` / ``resolve_async`` override the plain-form
+    seams for every board mutation built on it. It delegates to the framework's plain-form pipeline
     and only adds an outer ``except`` for the two service error classes; the pipeline's
     own ``transaction.atomic()`` has already rolled the partial write back by the time
     the exception surfaces here (mirrors the pipeline's own error-envelope contract).
     """
 
     @classmethod
-    def resolve_sync(cls, info, *, data):
+    @override
+    def resolve_sync(cls, info: Info[object, object], *, data: object) -> object:
         from django_strawberry_framework.forms.resolvers import resolve_form_sync
 
         try:
@@ -1070,7 +1076,8 @@ class _ServiceErrorMixin:
             return _service_error_payload(cls, exc)
 
     @classmethod
-    async def resolve_async(cls, info, *, data):
+    @override
+    async def resolve_async(cls, info: Info[object, object], *, data: object) -> object:
         from django_strawberry_framework.forms.resolvers import resolve_form_async
 
         try:
@@ -1169,17 +1176,18 @@ class SetCardFilesForm(forms.Form):
 # --- Mutations (thin wrappers over the services) ---------------------------- #
 
 
-class CreateCardFromSpec(_ServiceErrorMixin, DjangoFormMutation):
+class CreateCardFromSpec(_ServiceErrorMixin):
     """Create a card and its child rows from a scalar spec (``services.create_card_from_spec``)."""
 
     class Meta:
         form_class = CreateCardFromSpecForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
-        spec = {
+        spec: services.CardSpec = {
             "title": data["title"],
             "target_version": data["target_version"],
             "relative_size": data["relative_size"],
@@ -1192,14 +1200,15 @@ class CreateCardFromSpec(_ServiceErrorMixin, DjangoFormMutation):
         services.create_card_from_spec(spec)
 
 
-class SetCardStatus(_ServiceErrorMixin, DjangoFormMutation):
+class SetCardStatus(_ServiceErrorMixin):
     """Move a card to a new status, logging a ``CardTransition`` (``services.set_card_status``)."""
 
     class Meta:
         form_class = SetCardStatusForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.set_card_status(
@@ -1210,27 +1219,29 @@ class SetCardStatus(_ServiceErrorMixin, DjangoFormMutation):
         )
 
 
-class MoveCardNumber(_ServiceErrorMixin, DjangoFormMutation):
+class MoveCardNumber(_ServiceErrorMixin):
     """Move a card to a board number, shifting neighbours (``services.move_card_number``)."""
 
     class Meta:
         form_class = MoveCardNumberForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.move_card_number(data["card"], data["number"])
 
 
-class AddDependency(_ServiceErrorMixin, DjangoFormMutation):
+class AddDependency(_ServiceErrorMixin):
     """Add a dependency edge between two cards (``services.add_dependency``)."""
 
     class Meta:
         form_class = AddDependencyForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         kwargs = {"raw_text": data.get("raw_text", "")}
@@ -1239,14 +1250,15 @@ class AddDependency(_ServiceErrorMixin, DjangoFormMutation):
         services.add_dependency(data["source_card"], data["target_card"], **kwargs)
 
 
-class RemoveDependency(_ServiceErrorMixin, DjangoFormMutation):
+class RemoveDependency(_ServiceErrorMixin):
     """Remove dependency edge(s) between two cards (``services.remove_dependency``)."""
 
     class Meta:
         form_class = RemoveDependencyForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.remove_dependency(
@@ -1256,41 +1268,44 @@ class RemoveDependency(_ServiceErrorMixin, DjangoFormMutation):
         )
 
 
-class SetCardItemComplete(_ServiceErrorMixin, DjangoFormMutation):
+class SetCardItemComplete(_ServiceErrorMixin):
     """Set a card item's completion checkbox (``services.set_item_complete``)."""
 
     class Meta:
         form_class = SetCardItemCompleteForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         complete = data.get("complete")
         services.set_item_complete(data["item"], True if complete is None else complete)
 
 
-class VerifyCardItem(_ServiceErrorMixin, DjangoFormMutation):
+class VerifyCardItem(_ServiceErrorMixin):
     """Record auditable verification of a card item (``services.verify_item``)."""
 
     class Meta:
         form_class = VerifyCardItemForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.verify_item(data["item"], actor=data["actor_key"], kind=data["kind_key"])
 
 
-class RecordWorkAttempt(_ServiceErrorMixin, DjangoFormMutation):
+class RecordWorkAttempt(_ServiceErrorMixin):
     """Open a work attempt on a card (``services.record_attempt``)."""
 
     class Meta:
         form_class = RecordWorkAttemptForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.record_attempt(
@@ -1301,14 +1316,15 @@ class RecordWorkAttempt(_ServiceErrorMixin, DjangoFormMutation):
         )
 
 
-class FinishWorkAttempt(_ServiceErrorMixin, DjangoFormMutation):
+class FinishWorkAttempt(_ServiceErrorMixin):
     """Close a work attempt, stamping its outcome (``services.finish_attempt``)."""
 
     class Meta:
         form_class = FinishWorkAttemptForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.finish_attempt(
@@ -1318,14 +1334,15 @@ class FinishWorkAttempt(_ServiceErrorMixin, DjangoFormMutation):
         )
 
 
-class RecordDecision(_ServiceErrorMixin, DjangoFormMutation):
+class RecordDecision(_ServiceErrorMixin):
     """Record a design decision, board-level or scoped to a card (``services.record_decision``)."""
 
     class Meta:
         form_class = RecordDecisionForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         services.record_decision(
@@ -1337,7 +1354,7 @@ class RecordDecision(_ServiceErrorMixin, DjangoFormMutation):
         )
 
 
-class SetCardFiles(_ServiceErrorMixin, DjangoFormMutation):
+class SetCardFiles(_ServiceErrorMixin):
     """Replace a card's tracked-path links by ``kind`` (predicted / changed).
 
     Routes to ``services.set_card_predicted_files`` or ``services.set_card_changed_files``
@@ -1348,7 +1365,8 @@ class SetCardFiles(_ServiceErrorMixin, DjangoFormMutation):
         form_class = SetCardFilesForm
         permission_classes = [IsStaffUser]
 
-    def perform_mutate(self, form, info):
+    @override
+    def perform_mutate(self, form: forms.BaseForm, info: Info[object, object]) -> None:
         del info
         data = form.cleaned_data
         paths = data.get("paths") or []

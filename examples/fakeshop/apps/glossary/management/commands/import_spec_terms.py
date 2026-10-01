@@ -8,6 +8,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
+from typing_extensions import override
 
 from apps.glossary import models as glossary_models
 from apps.kanban import models as kanban_models
@@ -85,6 +86,7 @@ class Command(BaseCommand):
         "reconcile each done card's CardGlossaryTerm links to match."
     )
 
+    @override
     def add_arguments(self, parser: CommandParser) -> None:
         """Register command arguments."""
         parser.add_argument(
@@ -218,10 +220,15 @@ class Command(BaseCommand):
                 order=row.order,
             )
 
+    @override
     def handle(self, *args: object, **options: object) -> None:
         """Sync or validate done-card glossary links from companion CSVs."""
-        repo_root = options["repo_root"].resolve()
-        plans = self._plan_done_cards(repo_root)
+        repo_root = options["repo_root"]
+        # ``add_arguments`` parses ``--repo-root`` to a ``Path``, but ``call_command``
+        # hands a keyword option through unparsed, so the value is checked here.
+        if not isinstance(repo_root, Path):
+            raise CommandError(f"--repo-root must be a Path, got {type(repo_root).__name__}.")
+        plans = self._plan_done_cards(repo_root.resolve())
 
         if options["check"]:
             for plan in plans:

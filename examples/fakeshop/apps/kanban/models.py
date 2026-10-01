@@ -17,14 +17,23 @@ Two foundations every model leans on:
   signal receiver creates the row automatically on first save.
 """
 
+from __future__ import annotations
+
 import uuid
+from typing import TYPE_CHECKING, TypeVar
 
 from django.db import models
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django.utils.text import slugify
+from typing_extensions import override
 
 from .constraints import OneHotLinkCount
+
+if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import RelatedManager
+
+_M = TypeVar("_M", bound=models.Model)
 
 DEPENDENCY_REFERENCE_KIND_KEYS = frozenset(
     {
@@ -97,9 +106,9 @@ ACTOR_KIND_KEYS = frozenset(kind for kind, _ in ACTOR_KINDS)
 
 
 def manager(
-    model,
-    using,
-):
+    model: type[_M],
+    using: str | None,
+) -> models.Manager[_M] | models.QuerySet[_M]:
     """Return ``model.objects`` bound to ``using`` (or the default alias).
 
     The one shared home for the ``model.objects.using(alias)`` helper that
@@ -138,11 +147,12 @@ class LookupBase(TimeStampedModel):
     label = models.TextField()
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         abstract = True
         ordering = ["order"]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label
 
 
@@ -301,7 +311,7 @@ class TargetVersion(TimeStampedModel):
         on_delete=models.PROTECT,
     )
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "major",
             "minor",
@@ -333,12 +343,14 @@ class TargetVersion(TimeStampedModel):
             parts[index] = int(digits) if digits else 0
         return parts[0], parts[1], parts[2]
 
-    def save(self, *args, **kwargs):
+    @override
+    def save(self, *args, **kwargs) -> None:
         """Keep the ``major``/``minor``/``patch`` triple in sync with ``number``."""
         self.major, self.minor, self.patch = self.parse_version(self.number or "")
         super().save(*args, **kwargs)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.number} ({self.milestone.key})"
 
 
@@ -355,7 +367,10 @@ class SpecDoc(TimeStampedModel):
     # read time (see :attr:`url`), so a repo rename never needs a data migration.
     path = models.TextField(default="")
 
-    class Meta:
+    # Declared for the type checker (annotation-only; see ``Card``).
+    card_id: int | None
+
+    class Meta(TimeStampedModel.Meta):
         verbose_name = "spec doc"
         verbose_name_plural = "spec docs"
 
@@ -364,7 +379,8 @@ class SpecDoc(TimeStampedModel):
         """Full GitHub blob URL, derived from the repo-relative ``path``."""
         return f"{SPEC_URL_PREFIX}/{self.path}"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -381,7 +397,7 @@ class TrackedPath(TimeStampedModel):
     state = models.SlugField(choices=TRACKED_PATH_STATES, default=TRACKED_PATH_CURRENT)
     is_directory = models.BooleanField(default=False)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = ["path"]
         verbose_name = "tracked path"
         verbose_name_plural = "tracked paths"
@@ -397,7 +413,8 @@ class TrackedPath(TimeStampedModel):
         """Whether this path exists in the working tree today (``state=current``)."""
         return self.state == TRACKED_PATH_CURRENT
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.path
 
 
@@ -478,7 +495,17 @@ class Card(TimeStampedModel):
         blank=True,
     )
 
-    class Meta:
+    # Attributes Django adds at class creation, declared for the type checker
+    # (annotation-only, so Django ignores them). A ``*_id`` is ``None`` until its
+    # FK is assigned on an unsaved row.
+    status_id: int | None
+    target_version_id: int | None
+    items: RelatedManager[CardItem]
+    glossary_links: RelatedManager[CardGlossaryTerm]
+    path_links: RelatedManager[CardPathLink]
+    outgoing_references: RelatedManager[CardReference]
+
+    class Meta(TimeStampedModel.Meta):
         ordering = ["number"]
         verbose_name = "card"
         verbose_name_plural = "cards"
@@ -489,7 +516,8 @@ class Card(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.card_id} - {self.title}"
 
     @property
@@ -527,7 +555,7 @@ class Card(TimeStampedModel):
         )
 
     @property
-    def dependency_cards(self) -> "models.QuerySet[Card]":
+    def dependency_cards(self) -> models.QuerySet[Card]:
         """Cards this card depends on, over ``dependency``/``blocked_by`` references.
 
         Replaces the former ``dependencies`` M2M: ``CardReference`` is now the
@@ -539,7 +567,7 @@ class Card(TimeStampedModel):
         ).distinct()
 
     @property
-    def dependent_cards(self) -> "models.QuerySet[Card]":
+    def dependent_cards(self) -> models.QuerySet[Card]:
         """Cards that depend on this card (the reverse of :attr:`dependency_cards`)."""
         return Card.objects.filter(
             outgoing_references__target_card=self,
@@ -550,12 +578,12 @@ class Card(TimeStampedModel):
     # CardType resolve from these) so existing queries keep their field names
     # after the ``dependencies`` M2M was replaced by CardReference edges.
     @property
-    def dependencies(self) -> "models.QuerySet[Card]":
+    def dependencies(self) -> models.QuerySet[Card]:
         """Alias of :attr:`dependency_cards` for the GraphQL ``dependencies`` field."""
         return self.dependency_cards
 
     @property
-    def dependents(self) -> "models.QuerySet[Card]":
+    def dependents(self) -> models.QuerySet[Card]:
         """Alias of :attr:`dependent_cards` for the GraphQL ``dependents`` field."""
         return self.dependent_cards
 
@@ -643,7 +671,12 @@ class CardReference(TimeStampedModel):
     # (set by ``services.set_card_status``). Null while the edge is still active.
     resolved_at = models.DateTimeField(null=True, blank=True)
 
-    class Meta:
+    # Declared for the type checker (annotation-only; see ``Card``).
+    source_card_id: int | None
+    target_card_id: int | None
+    kind_id: int | None
+
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "source_card",
             "order",
@@ -682,7 +715,8 @@ class CardReference(TimeStampedModel):
             ),
         ]
 
-    def save(self, *args, **kwargs):
+    @override
+    def save(self, *args, **kwargs) -> None:
         """Assign a per-``source_card`` sequential ``order`` on insert.
 
         Replaces the former ``(source_card, source, order)`` DB unique
@@ -701,7 +735,8 @@ class CardReference(TimeStampedModel):
             self.order = 0 if last is None else last + 1
         super().save(*args, **kwargs)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.source_card.title} -> {self.target_card.title} ({self.kind.key})"
 
 
@@ -721,7 +756,10 @@ class CardGlossaryTerm(TimeStampedModel):
     raw_text = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    # Declared for the type checker (annotation-only; see ``Card``).
+    card_id: int | None
+
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
             "order",
@@ -754,7 +792,8 @@ class CardGlossaryTerm(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.card.title} -> {self.term.title}"
 
 
@@ -765,7 +804,7 @@ class ParityClaim(TimeStampedModel):
     upstream = models.ForeignKey(Upstream, related_name="parity_claims", on_delete=models.PROTECT)
     level = models.ForeignKey(ParityLevel, related_name="parity_claims", on_delete=models.PROTECT)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         verbose_name = "parity claim"
         verbose_name_plural = "parity claims"
         constraints = [
@@ -778,7 +817,8 @@ class ParityClaim(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.card.title} / {self.upstream.key} ({self.level.key})"
 
 
@@ -795,7 +835,7 @@ class CardPathLink(TimeStampedModel):
     path = models.ForeignKey(TrackedPath, related_name="card_links", on_delete=models.CASCADE)
     kind = models.SlugField(choices=CARD_PATH_LINK_KINDS, default=CARD_PATH_LINK_PREDICTED)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
             "path",
@@ -816,7 +856,8 @@ class CardPathLink(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.card.title} -> {self.path.path} ({self.kind})"
 
 
@@ -850,7 +891,7 @@ class CardItem(TimeStampedModel):
         on_delete=models.PROTECT,
     )
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
             "section",
@@ -871,7 +912,8 @@ class CardItem(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.card.title} \u00b7 {self.section.label}: {self.text[:40]}"
 
 
@@ -881,11 +923,12 @@ class Label(TimeStampedModel):
     key = models.SlugField(unique=True)
     color = models.TextField(blank=True, default="")
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         verbose_name = "label"
         verbose_name_plural = "labels"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.key
 
 
@@ -919,7 +962,10 @@ class CardTransition(TimeStampedModel):
     note = models.TextField(blank=True, default="")
     occurred_at = models.DateTimeField(default=timezone.now)
 
-    class Meta:
+    # Declared for the type checker (annotation-only; see ``Card``).
+    from_status_id: int | None
+
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
             "occurred_at",
@@ -927,7 +973,8 @@ class CardTransition(TimeStampedModel):
         verbose_name = "card transition"
         verbose_name_plural = "card transitions"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         origin = self.from_status.key if self.from_status_id else "(new)"
         return f"{self.card.title}: {origin} -> {self.to_status.key}"
 
@@ -954,7 +1001,10 @@ class WorkAttempt(TimeStampedModel):
     summary = models.TextField(blank=True, default="")
     evidence = models.TextField(blank=True, default="")
 
-    class Meta:
+    # Declared for the type checker (annotation-only; see ``Card``).
+    outcome_id: int | None
+
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
             "started_at",
@@ -962,7 +1012,8 @@ class WorkAttempt(TimeStampedModel):
         verbose_name = "work attempt"
         verbose_name_plural = "work attempts"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         outcome = self.outcome.key if self.outcome_id else "in-progress"
         return f"{self.card.title} attempt ({outcome})"
 
@@ -995,14 +1046,15 @@ class Decision(TimeStampedModel):
         on_delete=models.SET_NULL,
     )
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "decided_at",
         ]
         verbose_name = "decision"
         verbose_name_plural = "decisions"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.question[:40]} -> {self.choice[:40]}"
 
 
@@ -1032,7 +1084,10 @@ class BoardDoc(TimeStampedModel):
     body = models.TextField(blank=True, default="")
     include_heading = models.BooleanField(default=True)
 
-    class Meta:
+    # Declared for the type checker (annotation-only; see ``Card``).
+    card_references: RelatedManager[BoardDocCardReference]
+
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "namespace",
             "order",
@@ -1049,7 +1104,8 @@ class BoardDoc(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.title or self.key
 
 
@@ -1074,7 +1130,7 @@ class BoardDocCardReference(TimeStampedModel):
     raw_text = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "doc",
             "order",
@@ -1094,7 +1150,8 @@ class BoardDocCardReference(TimeStampedModel):
             models.Index(fields=["card"]),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.doc} -> {self.card} ({self.order})"
 
 
@@ -1354,12 +1411,13 @@ class UUIDModel(TimeStampedModel):
         related_name="uuid",
     )
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         verbose_name = "UUID"
         verbose_name_plural = "UUIDs"
         constraints = [_exactly_one_link_constraint()]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         # Reference the single linked domain row (the one non-null O2O), if any.
         for name in _UUID_LINK_NAMES:
             if getattr(self, f"{name}_id") is not None:

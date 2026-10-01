@@ -19,13 +19,14 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import TypeAlias, TypeVar
 
 from django.db import models as django_models
 from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
 from django.utils.text import slugify
+from typing_extensions import Required, TypedDict
 
 from apps.kanban import models
 from apps.kanban.constants import (
@@ -33,6 +34,11 @@ from apps.kanban.constants import (
     TRACKED_FILE_PATHS,
     TRACKED_PATH_SET,
 )
+
+_M = TypeVar("_M", bound=django_models.Model)
+# What ``models.manager`` returns for ``Card``: the default manager or an
+# alias-bound queryset; both expose the read/write methods the resolvers use.
+_CardRows: TypeAlias = "django_models.Manager[models.Card] | django_models.QuerySet[models.Card]"
 
 DEFAULT_STATUS_KEY = "todo"
 DEPENDENCY_NOTE_SECTION_KEY = "dependencies_note"
@@ -73,6 +79,61 @@ class DependencyNote:
     item: models.CardItem
 
 
+class SectionBulletSpec(TypedDict, total=False):
+    """A ``sections`` bullet given as a mapping rather than a bare string."""
+
+    text: str
+    done: bool
+
+
+class ParitySpec(TypedDict):
+    """One ``parity`` entry: an ``Upstream`` key and a ``ParityLevel`` key."""
+
+    upstream: str
+    level: str
+
+
+class DependencySpec(TypedDict, total=False):
+    """One ``dependencies`` entry: the target card plus its prose note."""
+
+    card: Required[object]
+    note: str
+
+
+class ReferenceSpec(TypedDict, total=False):
+    """One ``references`` entry: the target card, reference kind key, and raw text."""
+
+    target: Required[object]
+    kind: str
+    text: str
+
+
+class CardSpec(TypedDict, total=False):
+    """The structured card spec :func:`create_card_from_spec` consumes.
+
+    ``title`` / ``target_version`` / ``relative_size`` are required (checked at
+    runtime too, since specs arrive from JSON); ``number`` / ``after`` place the
+    card on the board; ``target_version`` names a ``TargetVersion.number`` and every
+    other string names a lookup ``key``. Card identifiers (``after``, a dependency's
+    ``card``, a reference's ``target``) take any form :func:`resolve_card` accepts.
+    """
+
+    title: Required[str]
+    target_version: Required[str]
+    relative_size: Required[str]
+    priority: str
+    status: str
+    planning_note: str
+    number: int | str
+    after: object
+    labels: list[str]
+    parity: list[ParitySpec]
+    sections: dict[str, list[str | SectionBulletSpec]]
+    dependencies: list[DependencySpec]
+    references: list[ReferenceSpec]
+    changed_files: list[str]
+
+
 # The alias-aware manager helper lives once in models.py; both services.py and
 # signals.py bind to it here so the lookup cannot drift between the two modules.
 _manager = models.manager
@@ -85,17 +146,17 @@ def _database_alias(*instances: django_models.Model) -> str | None:
     return next(iter(aliases), None)
 
 
-def _lookup(model: type[django_models.Model], key: str, using: str | None):
+def _lookup(model: type[_M], key: str, using: str | None) -> _M:
     return _lookup_by(model, key, using, field="key")
 
 
 def _lookup_by(
-    model: type[django_models.Model],
+    model: type[_M],
     key: str,
     using: str | None,
     *,
     field: str,
-):
+) -> _M:
     try:
         return _manager(model, using).get(**{field: key})
     except model.DoesNotExist:
@@ -306,7 +367,7 @@ def _default_priority(using: str | None) -> models.Priority:
     return priority
 
 
-def _require_fields(spec: dict[str, Any], fields: tuple[str, ...]) -> None:
+def _require_fields(spec: CardSpec, fields: tuple[str, ...]) -> None:
     for field in fields:
         if not spec.get(field):
             raise KanbanServiceError(
@@ -315,7 +376,7 @@ def _require_fields(spec: dict[str, Any], fields: tuple[str, ...]) -> None:
             )
 
 
-def _resolve_by_title(card_manager, title: str) -> models.Card | None:
+def _resolve_by_title(card_manager: _CardRows, title: str) -> models.Card | None:
     """Resolve a card by its (today-unique) title.
 
     Uses ``.get()`` so a future duplicate title fails loudly with
@@ -332,7 +393,7 @@ def _resolve_by_title(card_manager, title: str) -> models.Card | None:
         ) from error
 
 
-def _resolve_by_uuid(card_manager, value: object) -> models.Card:
+def _resolve_by_uuid(card_manager: _CardRows, value: object) -> models.Card:
     """Resolve a card by its UUIDModel primary key (reached via the ``uuid`` O2O)."""
     try:
         parsed = uuid.UUID(str(value))
@@ -350,7 +411,7 @@ def _resolve_by_uuid(card_manager, value: object) -> models.Card:
     return card
 
 
-def _resolve_by_slug(card_manager, value: object) -> models.Card:
+def _resolve_by_slug(card_manager: _CardRows, value: object) -> models.Card:
     """Resolve a card by its derived slug (``slugify(title).replace('-', '_')``).
 
     ``slug`` is a pure function of ``title`` and is not stored, so it cannot be
@@ -367,7 +428,7 @@ def _resolve_by_slug(card_manager, value: object) -> models.Card:
     )
 
 
-def _resolve_card_scalar(identifier: object, card_manager) -> models.Card:
+def _resolve_card_scalar(identifier: object, card_manager: _CardRows) -> models.Card:
     """Resolve a card by exact title, then by integer board number."""
     if isinstance(identifier, str):
         card = _resolve_by_title(card_manager, identifier)
@@ -418,10 +479,11 @@ def resolve_card(identifier: object, *, using: str | None = None) -> models.Card
     return _resolve_card_scalar(identifier, card_manager)
 
 
-def _target_number(spec: dict[str, Any], using: str | None) -> int:
-    if spec.get("number") is not None:
+def _target_number(spec: CardSpec, using: str | None) -> int:
+    requested = spec.get("number")
+    if requested is not None:
         try:
-            number = int(spec["number"])
+            number = int(requested)
         except (TypeError, ValueError) as error:
             raise KanbanServiceError(
                 '"number" must be an integer when provided.',
@@ -446,8 +508,9 @@ def _target_number(spec: dict[str, Any], using: str | None) -> int:
                 code="card_number_out_of_range",
             )
         return number
-    if spec.get("after") is not None:
-        return resolve_card(spec["after"], using=using).number + 1
+    after = spec.get("after")
+    if after is not None:
+        return resolve_card(after, using=using).number + 1
     highest = _manager(models.Card, using).order_by("-number").first()
     return (highest.number + 1) if highest else 1
 
@@ -791,7 +854,7 @@ def verify_item(
     item: models.CardItem,
     *,
     actor: object,
-    kind: object,
+    kind: models.VerificationKind | str,
     at: object = None,
 ) -> models.CardItem:
     """Record auditable verification of a card item and mark it complete.
@@ -844,7 +907,7 @@ def record_attempt(
     """
     using = _database_alias(card)
     actor_row = _resolve_actor(actor, using)
-    fields: dict[str, Any] = {
+    fields: dict[str, object] = {
         "card": card,
         "actor": actor_row,
         "summary": summary,
@@ -949,7 +1012,7 @@ def _create_labels(card: models.Card, labels: list[str], using: str | None) -> N
 
 def _create_parity_claims(
     card: models.Card,
-    parity_claims: list[dict[str, str]],
+    parity_claims: list[ParitySpec],
     using: str | None,
 ) -> None:
     for claim in parity_claims:
@@ -962,7 +1025,7 @@ def _create_parity_claims(
 
 def _create_sections(
     card: models.Card,
-    sections: dict[str, list[str | dict[str, Any]]],
+    sections: dict[str, list[str | SectionBulletSpec]],
     using: str | None,
 ) -> None:
     for section_key, bullets in sections.items():
@@ -985,7 +1048,7 @@ def _create_sections(
 
 def _create_dependencies(
     card: models.Card,
-    dependencies: list[dict[str, str]],
+    dependencies: list[DependencySpec],
     using: str | None,
 ) -> None:
     for order, dependency in enumerate(dependencies):
@@ -999,7 +1062,7 @@ def _create_dependencies(
 
 def _create_references(
     card: models.Card,
-    references: list[dict[str, str]],
+    references: list[ReferenceSpec],
     using: str | None,
 ) -> None:
     for reference in references:
@@ -1011,7 +1074,7 @@ def _create_references(
         )
 
 
-def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> models.Card:
+def create_card_from_spec(spec: CardSpec, *, using: str | None = None) -> models.Card:
     """Create a kanban card and all child rows from a structured card spec."""
     _require_fields(spec, ("title", "target_version", "relative_size"))
     title = spec["title"]
@@ -1020,13 +1083,15 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
             f"A card titled {title!r} already exists.",
             code="duplicate_card_title",
         )
-    if isinstance(spec.get("sections"), dict) and "dependencies" in spec["sections"]:
+    sections = spec.get("sections", {})
+    if isinstance(sections, dict) and "dependencies" in sections:
         raise KanbanServiceError(
             'Put dependencies under the top-level "dependencies" key, not "sections".',
             code="dependencies_in_sections",
         )
 
     status_key = spec.get("status", DEFAULT_STATUS_KEY)
+    priority_key = spec.get("priority")
     if status_key == DONE_STATUS_KEY:
         raise KanbanServiceError(
             'Kanban card creation cannot create "done" cards because done cards require '
@@ -1047,8 +1112,8 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
             status=_lookup(models.Status, status_key, using),
             target_version=target_version,
             priority=(
-                _lookup(models.Priority, spec["priority"], using)
-                if spec.get("priority")
+                _lookup(models.Priority, priority_key, using)
+                if priority_key
                 else _default_priority(using)
             ),
             relative_size=_lookup(models.RelativeSize, spec["relative_size"], using),
@@ -1056,7 +1121,7 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
         )
         _create_labels(card, spec.get("labels", []), using)
         _create_parity_claims(card, spec.get("parity", []), using)
-        _create_sections(card, spec.get("sections", {}), using)
+        _create_sections(card, sections, using)
         _create_dependencies(card, spec.get("dependencies", []), using)
         _create_references(card, spec.get("references", []), using)
         # Created cards are never "done", so their linked paths are predictions.

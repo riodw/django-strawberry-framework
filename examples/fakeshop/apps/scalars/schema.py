@@ -24,10 +24,10 @@ survives plan execution. Visible in the live HTTP test by an inactive
 tag resolving to ``null`` on the source specimen.
 """
 
-from typing import Any
-
 import strawberry
+from django.db.models import Manager, QuerySet
 from strawberry.types import Info
+from typing_extensions import override
 
 from apps.scalars import filters, forms, models, orders
 from django_strawberry_framework import (
@@ -38,8 +38,8 @@ from django_strawberry_framework import (
     DjangoType,
     auto,
 )
-from django_strawberry_framework.filters import filter_input_type
-from django_strawberry_framework.orders import order_input_type
+from django_strawberry_framework.filters import FilterInput
+from django_strawberry_framework.orders import OrderInput
 
 
 class ScalarSpecimenTagType(DjangoType):
@@ -52,7 +52,12 @@ class ScalarSpecimenTagType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info, **kwargs: Any) -> Any:
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.ScalarSpecimenTag],
+        info: Info,
+    ) -> QuerySet[models.ScalarSpecimenTag]:
         return queryset.filter(active=True)
 
     class Meta:
@@ -162,9 +167,10 @@ class OverriddenScalarSpecimenType(DjangoType):
     note: auto
 
     @strawberry.field
-    def label(self) -> str:
+    @staticmethod
+    def label(root: strawberry.Parent[models.OverrideSpecimen]) -> str:
         """Assigned-resolver override; upper-cases the column so the override is observable."""
-        return self.label.upper()
+        return root.label.upper()
 
     class Meta:
         model = models.OverrideSpecimen
@@ -233,28 +239,28 @@ class MediaSpecimenWithPathType(DjangoType):
 class Query:
     """Scalars coverage root fields."""
 
-    @strawberry.field
-    def all_media_specimens_with_path(self) -> list[MediaSpecimenWithPathType]:
+    @strawberry.field(graphql_type=list[MediaSpecimenWithPathType])
+    def all_media_specimens_with_path(self) -> list[models.MediaSpecimen]:
         """Root field for the filesystem-path opt-in demonstration type (spec-048)."""
         return list(models.MediaSpecimen.objects.order_by("id"))
 
-    @strawberry.field
-    def all_override_specimens(self) -> list[OverriddenScalarSpecimenType]:
+    @strawberry.field(graphql_type=list[OverriddenScalarSpecimenType])
+    def all_override_specimens(self) -> list[models.OverrideSpecimen]:
         """Root field for the consumer-authored field-override demonstration type."""
         return list(models.OverrideSpecimen.objects.order_by("id"))
 
-    @strawberry.field
-    def all_media_specimens(self) -> list[MediaSpecimenType]:
+    @strawberry.field(graphql_type=list[MediaSpecimenType])
+    def all_media_specimens(self) -> list[models.MediaSpecimen]:
         """Root field for the file/image read-output demonstration type (spec-037)."""
         return list(models.MediaSpecimen.objects.order_by("id"))
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[ScalarSpecimenType])
     def all_scalar_specimens(
         self,
         info: Info,
-        filter: filter_input_type(filters.ScalarSpecimenFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.ScalarSpecimenOrder)] | None = None,
-    ) -> list[ScalarSpecimenType]:
+        filter: FilterInput[filters.ScalarSpecimenFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.ScalarSpecimenOrder]] | None = None,
+    ) -> QuerySet[models.ScalarSpecimen]:
         queryset = models.ScalarSpecimen.objects.order_by("id")
         if filter is not None:
             queryset = filters.ScalarSpecimenFilter.apply_sync(filter, queryset, info)
@@ -262,8 +268,8 @@ class Query:
             queryset = orders.ScalarSpecimenOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
-    def all_scalar_specimens_via_manager(self) -> list[ScalarSpecimenType]:
+    @strawberry.field(graphql_type=list[ScalarSpecimenType])
+    def all_scalar_specimens_via_manager(self) -> Manager[models.ScalarSpecimen]:
         """Resolver returning a bare ``Manager`` instead of ``Manager.all()``.
 
         Consumers frequently write ``return Model.objects`` rather than
@@ -275,15 +281,15 @@ class Query:
         any forward-FK selection. This field exposes that coercion path
         end-to-end (no ``DjangoListField`` wrapping involved).
         """
-        return models.ScalarSpecimen.objects  # type: ignore[return-value]
+        return models.ScalarSpecimen.objects
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[NullableScalarSpecimenType])
     def all_nullable_scalar_specimens(
         self,
         info: Info,
-        filter: filter_input_type(filters.NullableScalarSpecimenFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.NullableScalarSpecimenOrder)] | None = None,
-    ) -> list[NullableScalarSpecimenType]:
+        filter: FilterInput[filters.NullableScalarSpecimenFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.NullableScalarSpecimenOrder]] | None = None,
+    ) -> QuerySet[models.NullableScalarSpecimen]:
         queryset = models.NullableScalarSpecimen.objects.order_by("id")
         if filter is not None:
             queryset = filters.NullableScalarSpecimenFilter.apply_sync(filter, queryset, info)
@@ -291,13 +297,13 @@ class Query:
             queryset = orders.NullableScalarSpecimenOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
+    @strawberry.field(graphql_type=list[ScalarSpecimenTagType])
     def all_scalar_specimen_tags(
         self,
         info: Info,
-        filter: filter_input_type(filters.ScalarSpecimenTagFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.ScalarSpecimenTagOrder)] | None = None,
-    ) -> list[ScalarSpecimenTagType]:
+        filter: FilterInput[filters.ScalarSpecimenTagFilter] | None = None,  # noqa: A002
+        order_by: list[OrderInput[orders.ScalarSpecimenTagOrder]] | None = None,
+    ) -> QuerySet[models.ScalarSpecimenTag]:
         queryset = models.ScalarSpecimenTag.objects.order_by("id")
         if filter is not None:
             queryset = filters.ScalarSpecimenTagFilter.apply_sync(filter, queryset, info)
@@ -305,8 +311,8 @@ class Query:
             queryset = orders.ScalarSpecimenTagOrder.apply_sync(order_by, queryset, info)
         return queryset
 
-    @strawberry.field
-    def scalar_specimen_by_signed_big(self, signed_big: BigInt) -> ScalarSpecimenType | None:
+    @strawberry.field(graphql_type=ScalarSpecimenType | None)
+    def scalar_specimen_by_signed_big(self, signed_big: BigInt) -> models.ScalarSpecimen | None:
         """Lookup-by-``BigInt`` query field exercising input-position parsing.
 
         Returns the ``ScalarSpecimen`` whose ``signed_big`` column matches

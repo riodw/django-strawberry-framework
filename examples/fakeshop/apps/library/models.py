@@ -1,8 +1,16 @@
 """Managed models for library acceptance coverage."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from typing_extensions import override
+
+if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import RelatedManager
 
 
 class TaggedItem(models.Model):
@@ -28,7 +36,8 @@ class TaggedItem(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.tag
 
 
@@ -43,11 +52,15 @@ class Branch(models.Model):
         TaggedItem,
     )
 
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    shelves: RelatedManager[Shelf]
+
     class Meta:
         verbose_name = "Branch"
         verbose_name_plural = "Branches"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -72,7 +85,9 @@ class ProxyBranch(Branch):
         for_concrete_model=False,
     )
 
-    class Meta:
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model
+    # keeps one), so Branch has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         proxy = True
         verbose_name = "Proxy branch"
         verbose_name_plural = "Proxy branches"
@@ -97,7 +112,8 @@ class BranchNote(models.Model):
     )
     body = models.TextField()
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.body
 
 
@@ -133,7 +149,8 @@ class Shelf(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.code
 
 
@@ -142,7 +159,8 @@ class Genre(models.Model):
 
     name = models.TextField(unique=True)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -191,7 +209,8 @@ class Book(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.title
 
 
@@ -207,7 +226,8 @@ class Patron(models.Model):
     # survives values outside JSON's safe-integer range).
     lifetime_fines_cents = models.BigIntegerField(default=0)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -221,7 +241,8 @@ class MembershipCard(models.Model):
     )
     barcode = models.TextField(unique=True)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.barcode
 
 
@@ -230,7 +251,8 @@ class Periodical(models.Model):
 
     name = models.TextField(unique=True)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -267,11 +289,12 @@ class Issue(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.title
 
 
-class LoanQuerySet(models.QuerySet):
+class LoanQuerySet(models.QuerySet["Loan"]):
     """A no-op project queryset used by the real ``Loan`` manager declaration."""
 
 
@@ -305,7 +328,8 @@ class Loan(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.book} to {self.patron}"
 
 
@@ -321,7 +345,8 @@ class Publisher(models.Model):
     name = models.TextField(unique=True)
     house_code = models.TextField(unique=True)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -353,7 +378,8 @@ class Edition(models.Model):
         blank=True,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.isbn_13
 
 
@@ -371,6 +397,8 @@ class Printing(models.Model):
         related_name="printings",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``edition``, declared for the type checker.
+    edition_id: str
     publisher_2 = models.ForeignKey(
         Publisher,
         related_name="printings_2",
@@ -393,7 +421,8 @@ class Printing(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.edition_id} x{self.run_size}"
 
 
@@ -413,6 +442,8 @@ class PatronProfile(models.Model):
         on_delete=models.CASCADE,
         primary_key=True,
     )
+    # Key column Django adds beside ``patron``, declared for the type checker.
+    patron_id: int
     address_2 = models.TextField(blank=True, default="")
     postal_code = models.TextField(blank=True, default="")
     favorite_genre = models.ForeignKey(
@@ -424,11 +455,12 @@ class PatronProfile(models.Model):
         blank=True,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"profile for {self.patron_id}"
 
 
-class AnnotationManager(models.Manager):
+class AnnotationManager(models.Manager["Annotation"]):
     """Default manager collapsing the duplicate rows older imports left behind.
 
     ``distinct()`` on the base queryset cannot carry a per-parent window, so
@@ -436,7 +468,8 @@ class AnnotationManager(models.Manager):
     relation manager instead of being planned as one batched query.
     """
 
-    def get_queryset(self):
+    @override
+    def get_queryset(self) -> models.QuerySet[Annotation]:
         return super().get_queryset().distinct()
 
 
@@ -452,7 +485,8 @@ class Annotation(models.Model):
     )
     body = models.TextField()
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.body
 
 
@@ -467,7 +501,8 @@ class Distributor(models.Model):
 
     displayName = models.TextField(unique=True)  # noqa: N815
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.displayName
 
 
@@ -486,7 +521,8 @@ class Consignment(models.Model):
         on_delete=models.CASCADE,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label
 
 
@@ -499,7 +535,8 @@ class TitledEntry(models.Model):
         abstract = True
         ordering = ["title"]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.title
 
 
@@ -552,7 +589,8 @@ class Venue(models.Model):
         blank=True,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -568,10 +606,11 @@ class SelfServeDesk(LendingDesk):
     kiosk_code = models.TextField()
 
 
-class OpenVenueManager(models.Manager):
+class OpenVenueManager(models.Manager["OpenVenue"]):
     """Default manager keeping only venues that have opened."""
 
-    def get_queryset(self):
+    @override
+    def get_queryset(self) -> models.QuerySet[OpenVenue]:
         return super().get_queryset().filter(opened_on__isnull=False)
 
 
@@ -603,7 +642,8 @@ class RepairTicket(models.Model):
         on_delete=models.CASCADE,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.code
 
 
@@ -620,7 +660,8 @@ class VenueBadge(models.Model):
         on_delete=models.CASCADE,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.code
 
 
@@ -637,14 +678,16 @@ class VenueSponsor(models.Model):
         blank=True,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
-class VisibleBranchManager(models.Manager):
+class VisibleBranchManager(models.Manager["VisibleBranch"]):
     """Default manager hiding branches that have no city on record."""
 
-    def get_queryset(self):
+    @override
+    def get_queryset(self) -> models.QuerySet[VisibleBranch]:
         return super().get_queryset().exclude(city="")
 
 
@@ -660,7 +703,9 @@ class VisibleBranch(Branch):
 
     objects = VisibleBranchManager()
 
-    class Meta:
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model
+    # keeps one), so Branch has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         proxy = True
         verbose_name = "Visible branch"
         verbose_name_plural = "Visible branches"
@@ -676,7 +721,8 @@ class BranchSignage(models.Model):
         on_delete=models.CASCADE,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.code
 
 
@@ -722,7 +768,8 @@ class CirculationDesk(models.Model):
         TaggedItem,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -736,7 +783,8 @@ class DeskShift(models.Model):
         on_delete=models.CASCADE,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -750,5 +798,6 @@ class DeskProfile(models.Model):
         on_delete=models.CASCADE,
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.code

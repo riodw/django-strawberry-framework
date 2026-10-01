@@ -14,7 +14,12 @@ Imports are function-local: the module must be importable before
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import strawberry
+
+    from django_strawberry_framework.optimizer.nested_fetch import StrategySelection
 
 
 def make_django_type(
@@ -35,20 +40,23 @@ def make_django_type(
     """
     from django_strawberry_framework import DjangoType
 
-    meta_attrs: dict[str, Any] = {"model": model, "fields": fields}
+    meta_attrs: dict[str, object] = {"model": model, "fields": fields}
     if node:
         from strawberry import relay
 
         meta_attrs["interfaces"] = (relay.Node,)
     if meta_extra:
         meta_attrs.update(meta_extra)
-    namespace: dict[str, Any] = {"Meta": type("Meta", (), meta_attrs)}
+    namespace: dict[str, object] = {"Meta": type("Meta", (), meta_attrs)}
     if namespace_extra:
         namespace.update(namespace_extra)
     return type(name, (DjangoType,), namespace)
 
 
-def build_strategy_schema(query_cls: type, strategy: Any) -> Any:
+def build_strategy_schema(
+    query_cls: type,
+    strategy: StrategySelection | None,
+) -> strawberry.Schema:
     """One ``strawberry.Schema`` over ``query_cls`` running ``strategy``.
 
     ``strategy`` is a ``nested_connection_strategy`` selection (``"windowed"``,

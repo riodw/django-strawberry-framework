@@ -1,6 +1,7 @@
 """Delete generated products test users without touching superusers."""
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandParser
+from typing_extensions import override
 
 from apps.products.services import delete_users
 
@@ -12,15 +13,16 @@ class Command(BaseCommand):
         'or "all" to delete all non-superusers.'
     )
 
-    def add_arguments(self, parser):
+    @override
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "target",
             type=str,
             help='Number of users to delete or "all"',
         )
 
-    def handle(self, *args, **options):
-        target = options["target"]
+    @override
+    def handle(self, *args: object, target: str, **options: object) -> None:
 
         if target != "all":
             try:

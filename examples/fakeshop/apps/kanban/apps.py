@@ -1,6 +1,7 @@
 """Django app configuration that registers kanban consistency signals at startup."""
 
 from django.apps import AppConfig
+from typing_extensions import override
 
 
 class KanbanConfig(AppConfig):
@@ -10,5 +11,6 @@ class KanbanConfig(AppConfig):
     name = "apps.kanban"
     verbose_name = "Kanban"
 
+    @override
     def ready(self) -> None:
         from . import signals  # noqa: F401

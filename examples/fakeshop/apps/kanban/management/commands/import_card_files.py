@@ -40,6 +40,7 @@ import pathlib
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
+from typing_extensions import override
 
 from apps.kanban import models, services
 
@@ -53,32 +54,26 @@ class Command(BaseCommand):
 
     help = "Replace changed- or predicted-file links for existing kanban cards."
 
-    # Aliases pin these; the merged command leaves ``fixed_kind`` unset so the
-    # kind arrives via ``--kind`` and reads files from the canonical ``files`` key.
-    fixed_kind: str | None = None
+    # The JSON key each card entry carries its file list under.
     files_key: str = "files"
 
+    @override
     def add_arguments(self, parser: CommandParser) -> None:
-        """Register the positional JSON path, --dry-run, and (unless pinned) --kind."""
+        """Register the positional JSON path, --dry-run, and --kind."""
         parser.add_argument("path", type=str, help="Path to the card/file JSON file.")
         parser.add_argument(
             "--dry-run",
             action="store_true",
             help="Validate and report the plan without writing to the database.",
         )
-        if self.fixed_kind is None:
-            parser.add_argument(
-                "--kind",
-                required=True,
-                choices=[models.CARD_PATH_LINK_CHANGED, models.CARD_PATH_LINK_PREDICTED],
-                help="Whether the listed files are changed (DONE cards) or predicted.",
-            )
+        parser.add_argument(
+            "--kind",
+            required=True,
+            choices=[models.CARD_PATH_LINK_CHANGED, models.CARD_PATH_LINK_PREDICTED],
+            help="Whether the listed files are changed (DONE cards) or predicted.",
+        )
 
-    def _kind(self, options: dict) -> str:
-        """Return the effective link kind (pinned by an alias or from --kind)."""
-        return self.fixed_kind if self.fixed_kind is not None else options["kind"]
-
-    def _validate_spec(self, spec: object) -> dict:
+    def _validate_spec(self, spec: object) -> dict[str, object]:
         """Return a card spec dict after validating replacement-command shape."""
         if not isinstance(spec, dict):
             raise CommandError('Each entry in "cards" must be an object.')
@@ -88,7 +83,7 @@ class Command(BaseCommand):
             )
         return spec
 
-    def _load(self, path: str) -> list[dict]:
+    def _load(self, path: str) -> list[object]:
         file_path = pathlib.Path(path)
         if not file_path.is_file():
             raise CommandError(f"File not found: {path}")
@@ -113,11 +108,21 @@ class Command(BaseCommand):
         else:
             services.set_card_predicted_files(card, paths, field_name=self.files_key)
 
-    def handle(self, *args: object, **options: object) -> None:
-        """Load JSON and replace card-file links inside one transaction."""
-        specs = self._load(options["path"])
-        dry_run = options["dry_run"]
-        kind = self._kind(options)
+    @override
+    def handle(
+        self,
+        *args: object,
+        path: str,
+        dry_run: bool,
+        kind: str,
+        **options: object,
+    ) -> None:
+        """Load JSON and replace card-file links inside one transaction.
+
+        ``path`` / ``dry_run`` / ``kind`` are the parser destinations
+        :meth:`add_arguments` registers, which Django passes as keywords.
+        """
+        specs = self._load(path)
         updated: list[str] = []
         try:
             with transaction.atomic():

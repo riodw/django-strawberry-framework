@@ -50,9 +50,16 @@ live. ``manage.py inspect_django_type OverriddenScalarSpecimenType`` then prints
 each field's true producing row in its converter column.
 """
 
+from __future__ import annotations
+
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from django.db import models
+from typing_extensions import override
+
+if TYPE_CHECKING:
+    from django.db.backends.base.base import BaseDatabaseWrapper
 
 
 class ScalarSpecimenTag(models.Model):
@@ -70,7 +77,8 @@ class ScalarSpecimenTag(models.Model):
     label = models.TextField(unique=True)
     active = models.BooleanField(default=True)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label
 
 
@@ -134,7 +142,8 @@ class ScalarSpecimen(models.Model):
         related_name="tagged_specimens",
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label
 
 
@@ -181,7 +190,8 @@ class NullableScalarSpecimen(models.Model):
         related_name="nullable_partners",
     )
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label or f"NullableScalarSpecimen#{self.pk}"
 
 
@@ -197,10 +207,11 @@ class Base36Field(models.Field):
     still surface in GraphQL. Stored as ``TEXT`` so SQLite round-trips it.
     """
 
+    @override
     def db_type(
         self,
-        connection,
-    ):
+        connection: BaseDatabaseWrapper,
+    ) -> str:
         return "text"
 
 
@@ -236,7 +247,8 @@ class MediaSpecimen(models.Model):
     optional_attachment = models.FileField(upload_to="scalar_media/files/", blank=True)
     spare_image = models.ImageField(upload_to="scalar_media/images/", null=True)
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label
 
 
@@ -267,5 +279,6 @@ class OverrideSpecimen(models.Model):
     # rather than overridden, so the auto ``SCALAR_MAP`` converter still produces it.
     note = models.TextField(blank=True, default="")
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label

@@ -52,9 +52,12 @@ class ShelfRelationsForm(forms.ModelForm):
             "alt_branches",
         )
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.fields["branch"].queryset = models.Branch.objects.all()
+        branch = self.fields["branch"]
+        if not isinstance(branch, forms.ModelChoiceField):
+            raise TypeError("ShelfRelationsForm.branch must be the declared ModelChoiceField.")
+        branch.queryset = models.Branch.objects.all()
 
 
 class BookGenresModelForm(forms.ModelForm):

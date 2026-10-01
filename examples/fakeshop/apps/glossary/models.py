@@ -9,8 +9,13 @@ live as rows.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from django.db import models
+from typing_extensions import override
+
+if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import RelatedManager
 
 
 class TimeStampedModel(models.Model):
@@ -31,14 +36,15 @@ class LookupBase(TimeStampedModel):
     order = models.PositiveIntegerField(default=0)
     description = models.TextField(blank=True, default="")
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         abstract = True
         ordering = [
             "order",
             "label",
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.label
 
 
@@ -52,6 +58,9 @@ class GlossaryStatus(LookupBase):
 
 class GlossaryCategory(LookupBase):
     """Reader-facing grouping from the ``Browse by category`` section."""
+
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    memberships: RelatedManager[GlossaryCategoryMembership]
 
     class Meta(LookupBase.Meta):
         verbose_name = "glossary category"
@@ -87,7 +96,12 @@ class GlossaryTerm(TimeStampedModel):
         blank=True,
     )
 
-    class Meta:
+    # Reverse accessors Django adds at class creation, declared for the type checker.
+    outgoing_links: RelatedManager[GlossaryTermLink]
+    spec_mentions: RelatedManager[GlossarySpecMention]
+    source_links: RelatedManager[GlossarySourceLink]
+
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "entry_order",
             "title_sort",
@@ -122,7 +136,8 @@ class GlossaryTerm(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.title
 
 
@@ -137,7 +152,7 @@ class GlossaryAlias(TimeStampedModel):
     label = models.TextField()
     normalized = models.TextField()
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "term",
             "label",
@@ -163,7 +178,8 @@ class GlossaryAlias(TimeStampedModel):
         ]
         indexes = [models.Index(fields=["normalized"])]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.label} -> {self.term.title}"
 
 
@@ -196,7 +212,7 @@ class GlossaryTermLink(TimeStampedModel):
     raw_label = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "source_term",
             "kind",
@@ -229,7 +245,8 @@ class GlossaryTermLink(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.source_term.title} -> {self.target_term.title} ({self.kind.key})"
 
 
@@ -248,7 +265,7 @@ class GlossaryCategoryMembership(TimeStampedModel):
     )
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "category",
             "order",
@@ -272,7 +289,8 @@ class GlossaryCategoryMembership(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.category.label}: {self.term.title}"
 
 
@@ -289,7 +307,7 @@ class GlossarySpecMention(TimeStampedModel):
     notes = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "spec_path",
             "order",
@@ -320,7 +338,8 @@ class GlossarySpecMention(TimeStampedModel):
         """Return the basename of ``spec_path`` for compact GraphQL views."""
         return Path(self.spec_path).name
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.spec_path}: {self.term_text}"
 
 
@@ -337,7 +356,7 @@ class GlossarySourceLink(TimeStampedModel):
     kind = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
 
-    class Meta:
+    class Meta(TimeStampedModel.Meta):
         ordering = [
             "term",
             "order",
@@ -362,5 +381,6 @@ class GlossarySourceLink(TimeStampedModel):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return f"{self.term.title}: {self.label}"

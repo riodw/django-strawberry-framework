@@ -1,6 +1,7 @@
 """Delete seeded products catalog rows by count, item scope, or full catalog scope."""
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandParser
+from typing_extensions import override
 
 from apps.products.services import delete_data
 
@@ -13,15 +14,16 @@ class Command(BaseCommand):
         'or "everything" to wipe all four tables.'
     )
 
-    def add_arguments(self, parser):
+    @override
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "target",
             type=str,
             help='Number of items to delete, "all", or "everything"',
         )
 
-    def handle(self, *args, **options):
-        target = options["target"]
+    @override
+    def handle(self, *args: object, target: str, **options: object) -> None:
 
         # Validate: must be a positive int, "all", or "everything"
         if target not in ("all", "everything"):

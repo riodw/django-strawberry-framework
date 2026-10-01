@@ -17,6 +17,7 @@ while it stands.
 """
 
 from django.db import models
+from typing_extensions import override
 
 
 class Category(models.Model):
@@ -41,7 +42,8 @@ class Category(models.Model):
         verbose_name = "Category"
         verbose_name_plural = "Categories"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -92,7 +94,8 @@ class Item(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -132,7 +135,8 @@ class Property(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.name
 
 
@@ -177,7 +181,8 @@ class Entry(models.Model):
             ),
         ]
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.value
 
 
@@ -211,5 +216,6 @@ class ItemHold(models.Model):
         verbose_name = "Item hold"
         verbose_name_plural = "Item holds"
 
-    def __str__(self):
+    @override
+    def __str__(self) -> str:
         return self.reason

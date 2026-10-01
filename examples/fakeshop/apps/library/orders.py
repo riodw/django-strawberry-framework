@@ -21,8 +21,6 @@ order graph.
 
 from __future__ import annotations
 
-from typing import Any
-
 from graphql import GraphQLError
 
 from apps.library import models
@@ -46,7 +44,7 @@ class BranchOrder(OrderSet):
         fields = ["id", "name", "city"]
 
     @classmethod
-    def check_name_permission(cls, request: Any) -> None:
+    def check_name_permission(cls, request: object) -> None:
         """Active-input-only scalar gate: denies an anonymous order by ``name``.
 
         The gate fires ONLY when the consumer's input names ``name``
@@ -65,7 +63,7 @@ class BranchOrder(OrderSet):
             )
 
     @classmethod
-    def check_shelves_permission(cls, request: Any) -> None:
+    def check_shelves_permission(cls, request: object) -> None:
         """Active-related-branch gate: denies an anonymous order through ``shelves``.
 
         Active-branch dispatch: the gate fires ONLY when the consumer's

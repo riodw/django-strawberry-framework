@@ -757,64 +757,25 @@ def test_classify_hostile_class_happy_path_still_works():
     assert classify_transport(_adapter({"type": "http"})) is Transport.CHANNELS_HTTP
 
 
-def test_require_session_evil_transport_value_with_missing_session_is_contained():
-    class EvilTransport:
-        @property
-        def value(self):  # type: ignore[override]
-            raise ValueError("evil")
-
+def test_require_session_missing_session_names_the_transport():
     class NoSession:
         pass
 
-    with pytest.raises(ConfigurationError, match="has no session"):
-        require_session(NoSession(), EvilTransport())  # type: ignore[arg-type]
+    with pytest.raises(
+        ConfigurationError,
+        match="has no session for the channels_websocket transport",
+    ):
+        require_session(NoSession(), Transport.CHANNELS_WEBSOCKET)
 
 
-def test_require_session_evil_transport_value_with_hostile_session_is_contained():
+def test_require_session_hostile_session_read_is_contained():
     class HostileSession:
         @property
         def session(self):  # type: ignore[override]
             raise RuntimeError("hostile session")
 
-    class EvilTransport:
-        @property
-        def value(self):  # type: ignore[override]
-            raise ValueError("evil")
-
-    with pytest.raises(ConfigurationError, match="has no session"):
-        require_session(HostileSession(), EvilTransport())  # type: ignore[arg-type]
-
-
-def test_require_session_evil_transport_repr_is_contained():
-    class EvilReprTransport:
-        @property
-        def value(self):  # type: ignore[override]
-            class BadRepr:
-                def __repr__(self) -> str:
-                    raise TypeError("bad repr")
-
-            return BadRepr()
-
-        def __repr__(self) -> str:
-            raise TypeError("evil transport repr")
-
-    with pytest.raises(ConfigurationError, match="has no session"):
-        require_session(object(), EvilReprTransport())  # type: ignore[arg-type]
-
-
-def test_require_session_hostile_str_value_isinstance_raising_is_contained():
-    class Hostile:
-        @property
-        def __class__(self):  # type: ignore[override]
-            raise TypeError("hostile class in isinstance")
-
-    class EvilStrTransport:
-        @property
-        def value(self):  # type: ignore[override]
-            return Hostile()
-
-    with pytest.raises(ConfigurationError, match="has no session"):
-        require_session(object(), EvilStrTransport())  # type: ignore[arg-type]
+    with pytest.raises(ConfigurationError, match="has no session for the django_http transport"):
+        require_session(HostileSession(), Transport.DJANGO_HTTP)
 
 
 def test_require_session_success_does_not_touch_transport_value():

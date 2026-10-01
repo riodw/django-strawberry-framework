@@ -215,26 +215,6 @@ def classify_transport(request: object) -> Transport:
     )
 
 
-def _safe_transport_label(transport: Transport) -> str:
-    """Render ``transport`` for an error message without trusting its dunders.
-
-    ``transport`` is expected to be a ``Transport`` enum, but the error path
-    must not propagate ``BaseException`` from a hostile ``transport.value``,
-    ``transport.__repr__``, or a ``str``-subclass ``value``. Falls back to
-    ``_safe_type_name`` so the message stays actionable.
-    """
-    try:
-        raw: object = transport.value
-    except BaseException:
-        return _safe_type_name(transport)
-    try:
-        if isinstance(raw, str):
-            return str.__str__(raw)
-        return _safe_arg_repr(raw)
-    except BaseException:
-        return _safe_type_name(transport)
-
-
 def require_session(request: object, transport: Transport) -> SessionBase:
     """Return the request's session, or raise the actionable missing-middleware error.
 
@@ -251,16 +231,14 @@ def require_session(request: object, transport: Transport) -> SessionBase:
     try:
         session: object = getattr(request, "session", None)
     except BaseException as exc:
-        label = _safe_transport_label(transport)
         raise ConfigurationError(
-            f"The auth session boundary has no session for the {label} transport; "
+            f"The auth session boundary has no session for the {transport.value} transport; "
             "install Django's SessionMiddleware (and, for Channels, wrap the scope in "
             "AuthMiddlewareStack) so login/logout can mutate a real session.",
         ) from exc
     if session is None:
-        label = _safe_transport_label(transport)
         raise ConfigurationError(
-            f"The auth session boundary has no session for the {label} transport; "
+            f"The auth session boundary has no session for the {transport.value} transport; "
             "install Django's SessionMiddleware (and, for Channels, wrap the scope in "
             "AuthMiddlewareStack) so login/logout can mutate a real session.",
         )

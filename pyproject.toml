@@ -273,14 +273,50 @@ executionEnvironments = [
     { root = "examples/fakeshop" },
 ]
 pythonVersion = "3.11"
-typeCheckingMode = "standard"
+# Every rule on (`all`), minus the rules and flags below; a warning fails the run.
+typeCheckingMode = "all"
 failOnWarnings = true
 enableTypeIgnoreComments = false
 reportUnnecessaryTypeIgnoreComment = "error"
-reportImplicitOverride = "error"
-reportUnnecessaryContains = "error"
-reportUnnecessaryComparison = "error"
-reportUnreachable = "error"
+# Off by design. The formatter's multi-line string layout is implicit concatenation
+# (ruff bans only the explicit `+` form, ISC003); the package shares underscore names
+# across its own modules; and import cycles are broken at runtime by local imports.
+reportImplicitStringConcatenation = "none"
+reportPrivateUsage = "none"
+reportImportCycles = "none"
+# Off until their remaining sites are fixed (the ratchet): turn one on to list them.
+strictListInference = false
+strictDictionaryInference = false
+strictSetInference = false
+strictGenericNarrowing = false
+reportAny = "none"
+reportExplicitAny = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
+reportUnannotatedClassAttribute = "none"
+reportUnusedCallResult = "none"
+reportMissingParameterType = "none"
+reportMissingTypeArgument = "none"
+reportUnusedParameter = "none"
+reportUninitializedInstanceVariable = "none"
+reportUnnecessaryIsInstance = "none"
+reportUnusedFunction = "none"
+reportDeprecated = "none"
+reportCallInDefaultInitializer = "none"
+reportMissingTypeStubs = "none"
+reportIncompatibleUnannotatedOverride = "none"
+reportInvalidCast = "none"
+reportUnsafeMultipleInheritance = "none"
+reportPropertyTypeMismatch = "none"
+reportMissingSuperCall = "none"
+reportUntypedFunctionDecorator = "none"
+reportConstantRedefinition = "none"
+reportPrivateLocalImportUsage = "none"
+reportUnusedClass = "none"
+reportUnusedImport = "none"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

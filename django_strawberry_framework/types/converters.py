@@ -65,13 +65,14 @@ import decimal
 import keyword
 import re
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from enum import Enum, EnumMeta
 from types import GenericAlias
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, TypeVar, cast
 
 import strawberry
 from django.db import models
+from django.db.models.fields.files import FieldFile, ImageFieldFile
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
@@ -88,19 +89,18 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .base import DjangoType
 
 
-@overload
-def _safe_file_attr(file_file: object, attr: Literal["size", "width", "height"]) -> int | None: ...
-@overload
-def _safe_file_attr(file_file: object, attr: Literal["url", "path"]) -> str | None: ...
-def _safe_file_attr(file_file: object, attr: str) -> int | str | None:
-    """Read ``getattr(file_file, attr)``, degrading storage failures to ``None``.
+_T = TypeVar("_T")
+
+
+def _safe_file_attr(read: Callable[[], _T]) -> _T | None:
+    """Run one storage-backed ``FieldFile`` read, degrading storage failures to ``None``.
 
     The single per-subfield guard shared by every nullable subfield resolver
     on ``DjangoFileType`` / ``DjangoImageType`` (``size`` / ``url``, plus
     ``width`` / ``height`` on images and the opt-in ``path`` on
-    ``DjangoFilePathType`` / ``DjangoImagePathType``). ``file_file`` is the bound
-    ``FieldFile`` the parent resolver returned (always truthy here -- an empty
-    file resolves the whole object to ``None`` before any subfield runs).
+    ``DjangoFilePathType`` / ``DjangoImagePathType``). ``read`` reads one property
+    off the bound ``FieldFile`` the parent resolver returned (always truthy here --
+    an empty file resolves the whole object to ``None`` before any subfield runs).
 
     The catch list is deliberately NARROW -- ``ValueError`` / ``OSError`` /
     ``NotImplementedError`` -- the storage-shaped errors a non-filesystem
@@ -114,9 +114,7 @@ def _safe_file_attr(file_file: object, attr: str) -> int | str | None:
     ``Exception`` would also swallow genuine resolver bugs.
     """
     try:
-        # ``file_file`` is the bound ``FieldFile``: ``size`` / ``width`` / ``height``
-        # are ``int`` and ``url`` / ``path`` are ``str``, per the overloads above.
-        return cast("int | str | None", getattr(file_file, attr))
+        return read()
     except (ValueError, OSError, NotImplementedError):
         return None
 
@@ -138,8 +136,9 @@ class DjangoFileType:
     properties (``url`` / ``size``) raise on a non-filesystem backend or a
     vanished file, and that access happens per-subfield AFTER the parent
     resolver returns -- outside any parent ``try/except`` -- so the guard must
-    live on each subfield (spec-037 Decision 4). ``self`` IS the bound
-    ``FieldFile`` the generated parent resolver returned.
+    live on each subfield (spec-037 Decision 4). Each resolver's ``root`` is the
+    bound ``FieldFile`` the generated parent resolver returned
+    (``types/resolvers.py::_make_file_resolver``), not an instance of this class.
 
     Subfield nullability deliberately diverges from upstream's all-non-null
     shape: ``name`` is non-null (a stored string, present whenever the object
@@ -149,20 +148,24 @@ class DjangoFileType:
     """
 
     @strawberry.field
-    def name(self) -> str:
+    @staticmethod
+    def name(root: strawberry.Parent[FieldFile]) -> str:
         """The stored file name. Non-null and read directly (no storage guard)."""
-        # ``self`` is the bound, non-empty ``FieldFile``, whose name is a stored string.
-        return cast("str", self.name)
+        # ``FieldFile.__str__`` is ``self.name or ""``, and the parent resolver returns
+        # only a truthy file (one with a non-empty name), so this is the stored name.
+        return str(root)
 
     @strawberry.field
-    def size(self) -> int | None:
+    @staticmethod
+    def size(root: strawberry.Parent[FieldFile]) -> int | None:
         """The file size in bytes, or ``None`` if storage cannot read it."""
-        return _safe_file_attr(self, "size")
+        return _safe_file_attr(lambda: root.size)
 
     @strawberry.field
-    def url(self) -> str | None:
+    @staticmethod
+    def url(root: strawberry.Parent[FieldFile]) -> str | None:
         """The file URL, or ``None`` if storage cannot produce one."""
-        return _safe_file_attr(self, "url")
+        return _safe_file_attr(lambda: root.url)
 
 
 @strawberry.type
@@ -178,14 +181,16 @@ class DjangoImageType(DjangoFileType):
     """
 
     @strawberry.field
-    def width(self) -> int | None:
+    @staticmethod
+    def width(root: strawberry.Parent[ImageFieldFile]) -> int | None:
         """The image width in pixels, or ``None`` if storage cannot read it."""
-        return _safe_file_attr(self, "width")
+        return _safe_file_attr(lambda: root.width)
 
     @strawberry.field
-    def height(self) -> int | None:
+    @staticmethod
+    def height(root: strawberry.Parent[ImageFieldFile]) -> int | None:
         """The image height in pixels, or ``None`` if storage cannot read it."""
-        return _safe_file_attr(self, "height")
+        return _safe_file_attr(lambda: root.height)
 
 
 @strawberry.type
@@ -211,9 +216,10 @@ class _FileSystemPathFields:
             "not client data. Null when the storage backend cannot produce one."
         ),
     )
-    def path(self) -> str | None:
+    @staticmethod
+    def path(root: strawberry.Parent[FieldFile]) -> str | None:
         """The absolute filesystem path, or ``None`` if storage cannot produce one."""
-        return _safe_file_attr(self, "path")
+        return _safe_file_attr(lambda: root.path)
 
 
 @strawberry.type

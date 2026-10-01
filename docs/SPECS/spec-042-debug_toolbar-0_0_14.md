@@ -1524,7 +1524,7 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
   on it, and do not let the toolbar copy drift from the two-sided-restore
   discipline.
 - [ ] **D4** — the guard has **no memoization**, and the module holds **no
-  class cache to manage**: unlike the router's `_ROUTER_CLASS`, the class is a
+  class cache to manage**: unlike the router's `_router_class`, the class is a
   plain module global, so `sys.modules` eviction alone fully resets the
   module's state — one less moving part in the absence fixture
   ([Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)).

@@ -100,26 +100,13 @@ against — a claim whose subject was assumed from where the text sat rather tha
 population. The catching mechanism was re-running the partitioned grep after the edit rather than
 before it.
 
-### `## Migration of current code (per the verification report)` — two cited symbols no longer exist
+### `## Migration of current code (per the verification report)` — every cited symbol exists
 
-The conversion to symbol-qualified form left two citations naming symbols the package has since
-retired: `types/converters.py::convert_relation` and `registry.py::TypeRegistry.lazy_ref`. Both were
-kept, and neither was silently repointed at a live symbol.
-
-**Why keeping them is correct.** This section is a migration record: it describes what the 0.0.4
-slice changed, starting from the pre-slice state. `convert_relation` is named as the function the
-slice rewrote and `TypeRegistry.lazy_ref` as the placeholder it deleted — the spec's own text says
-**Deleted** — so both names are load-bearing history. Repointing them at
-`types/converters.py::resolved_relation_annotation` would make the record describe a migration that
-never happened. This is the same boundary the board has already ruled twice, most recently on the
-`convert_relation` sweep item carried by `TODO-ALPHA-051-0.0.15`: a present-tense survival in a
-shipped spec is correct as history and is not in a sweep.
-
-**The residual risk, stated rather than fixed.** A symbol-qualified citation to a retired symbol
-still reads as a live pointer to a reader who does not notice the section it sits in. The
-countermeasure available today is the section framing; the durable one is the source-symbol-citation
-checker scoped by `TODO-ALPHA-053-0.1.0`, whose own specification already names this exact case —
-distinguishing a live spec's claim from a shipped spec's history — as the thing it must get right.
+Every bullet cites the symbol that carries its behavior in the package as it is: relation annotations
+through `types/converters.py::resolved_relation_annotation`, forward references through the pending
+relation API led by `registry.py::TypeRegistry.add_pending_relation`. A spec citation is a claim that
+its symbol exists, and `scripts/check_citations.py` gates the spec corpus on it, so no bullet names a
+symbol the package no longer defines.
 
 ### `## Strawberry finalization strategy` and `### Unresolved-target error format` — two inbound citations repointed
 

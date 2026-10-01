@@ -318,7 +318,7 @@ No `FAKESHOP_SHARDED=1` gate, because the hardening protects every consumer rath
 ### Changes this Decision underwent
 
 - **`0d655bde`** switched the negative test to the live capture.
-- **`136c5476`** added `tests/test_apps.py::test_ready_dispatches_all_three_patch_appliers_and_refires_safely`, because each module's installed-at-collection assertion was masked by earlier direct `apply()` calls on the same worker — a dropped dispatch line could have passed the gate.
+- **`136c5476`** added the `ready()` dispatch test (`tests/test_apps.py::test_ready_dispatches_all_four_patch_appliers_and_refires_safely`), because each module's installed-at-collection assertion was masked by earlier direct `apply()` calls on the same worker — a dropped dispatch line could have passed the gate.
 - **`18550f5d`** added the reload test, which reloads each patch module twice so the contract holds for a reload of a reload.
 
 ### Claims this Decision may no longer make

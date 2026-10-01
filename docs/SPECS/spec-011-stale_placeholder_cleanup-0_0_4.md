@@ -4,7 +4,7 @@ Target release: `0.0.4` (per [KANBAN.md][kanban] card `DONE-011-0.0.4`).
 Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
 Owner: package maintainer.
 
-Deliberation and this spec's change record live in its companion [rationale file][spec-011-rationale]: what each retired placeholder's skip reason said, which placeholder was deliberately kept and what closed it, how the replacement coverage's fixtures changed hands afterwards, and every claim this spec once made and may no longer make.
+Deliberation lives in its companion [rationale file][spec-011-rationale].
 
 ## Card snapshot
 
@@ -13,12 +13,12 @@ Deliberation and this spec's change record live in its companion [rationale file
 
 ## Scope
 
-Three skipped test placeholders stood in for behavior the test tree could not yet exercise. All three are retired, and each one's subject is pinned by a test that runs:
+Many-to-many relations and forward references are pinned by tests that run, not by skipped placeholders:
 
-- `tests/types/test_base.py::test_relation_m2m_returns_list` and `tests/optimizer/test_extension.py::test_optimizer_applies_prefetch_related_for_m2m` deferred many-to-many relations. Many-to-many resolution in both directions is [definition-order][glossary-definition-order-independence] behavior and is pinned by [`tests/types/test_definition_order.py`][test-types-definition-order] `::test_many_to_many_forward_and_reverse_relations_resolve`; the optimizer's planning decision for the same relations is pinned by [`tests/optimizer/test_definition_order.py`][test-optimizer-definition-order] `::test_plan_relation_decisions_match_cardinality_after_finalization`.
-- `tests/types/test_base.py::test_forward_reference_resolves_when_target_defined_later` deferred forward references. Relation targets declared after their source, same-module string annotations surviving finalization, and cross-module lazy relation overrides are pinned by [`tests/types/test_definition_order.py`][test-types-definition-order]; the schema those graphs produce builds end to end in [`tests/types/test_definition_order_schema.py`][test-types-definition-order-schema].
+- Many-to-many resolution in both directions is [definition-order][glossary-definition-order-independence] behavior and is pinned by [`tests/types/test_definition_order.py`][test-types-definition-order] `::test_many_to_many_forward_and_reverse_relations_resolve`; the optimizer's planning decision for the same relations is pinned by [`tests/optimizer/test_definition_order.py`][test-optimizer-definition-order] `::test_plan_relation_decisions_match_cardinality_after_finalization`.
+- Relation targets declared after their source, same-module string annotations surviving finalization, and cross-module lazy relation overrides are pinned by [`tests/types/test_definition_order.py`][test-types-definition-order]; the schema those graphs produce builds end to end in [`tests/types/test_definition_order_schema.py`][test-types-definition-order-schema].
 
-No skipped or `xfail`-marked test remains anywhere under `tests/types/` or `tests/optimizer/`.
+No unconditional `skip` or `xfail` marker stands in for a test anywhere under `tests/types/` or `tests/optimizer/`.
 
 [Scalar field override semantics][glossary-scalar-field-override-semantics] is a separate concern from definition order — a contest between a consumer's annotation and the synthesized one, not a question of when a type is declared — so it is outside this card's scope. Card `DONE-019-0.0.6` owns it and ships it at `0.0.6`.
 

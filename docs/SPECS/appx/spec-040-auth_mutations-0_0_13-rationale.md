@@ -1627,11 +1627,11 @@ Each bullet names its slice or pass, and the per-cycle record of each is
 
 ### [`## Edge cases and constraints`][spec-040-edges]
 
-- **Post-ship (Slice 4, this cycle) — the failure-class count moved from three to four.**
-  `a6f5a6cb` added the credential storability preflight, whose short-circuit reaches the
-  same undifferentiated envelope, and `tests/auth/test_mutations.py::test_all_four_failure_classes_share_one_byte_identical_envelope`
-  asserts all four payloads byte-identical. "All three collapse" was a stated count that
-  a later card falsified.
+- **The failure-class count is four.** The credential storability preflight
+  short-circuits to the same undifferentiated envelope as wrong credentials, an unknown
+  user and an inactive user, so the edge case names four classes, and the live suite in
+  `examples/fakeshop/test_query/test_auth_api.py` pins each one byte for byte against the
+  wrong-password envelope.
 - **Post-ship (Slice 4, this cycle) — two bullets spelled one transport's mechanism as
   the contract.** **Anonymous logout** named `auth.logout` (the Django HTTP teardown) and
   **Async contexts** asserted that the session work runs inside the

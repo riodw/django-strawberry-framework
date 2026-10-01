@@ -127,17 +127,6 @@ commit from history. The set is finite and nameable — **three** placeholders, 
 `118f71a1` (2026-05-07, "Complete spec-foundation.md - Slices 7-12 (v0.0.4)"), which also carried the
 foundation card's slices.
 
-| Retired placeholder | Its skip reason at `118f71a1~1` |
-|---|---|
-| `tests/optimizer/test_extension.py::test_optimizer_applies_prefetch_related_for_m2m` | "Slice 4+: M2M relation — fakeshop has no M2M field; deferred." (body was a bare `pass`) |
-| `tests/types/test_base.py::test_relation_m2m_returns_list` | "Slice 3+: M2M relation — fakeshop has no M2M field; deferred." (body was a bare `pass`) |
-| `tests/types/test_base.py::test_forward_reference_resolves_when_target_defined_later` | "Slice 3+: forward-reference / definition-order independence. The current implementation requires targets to be registered first; lazy_ref is pending." (body was a bare `pass`) |
-
-Read from `git show 118f71a1~1:tests/types/test_base.py` and
-`git show 118f71a1~1:tests/optimizer/test_extension.py`. None of the three names exists anywhere
-under `tests/`, `examples/`, or `django_strawberry_framework/` at HEAD, and
-`grep -rEn "pytest\.mark\.(skip|xfail)" tests/types/ tests/optimizer/` returns zero lines.
-
 *The same commit created all three replacement files* — `tests/types/test_definition_order.py`,
 `tests/types/test_definition_order_schema.py`, and `tests/optimizer/test_definition_order.py` are
 absent at `118f71a1~1` and present at `118f71a1` — and deleted the two staged anchors that named the
@@ -178,7 +167,7 @@ claim was "**Kept** the remaining scalar override skip documented as a separate
 [scalar-field][glossary-scalar-field-override-semantics] concern under `DONE-019-0.0.6`" — written in
 a tense that stopped holding at `0.0.6`.
 
-*What was kept, and why.* `tests/types/test_base.py::test_consumer_annotation_overrides_synthesized`,
+*What was kept, and why.* The scalar-override placeholder in `tests/types/test_base.py`,
 whose subject is an override contest between a consumer's class-level annotation and the synthesized
 one — scalar-override semantics, not definition order. Its skip reason at `118f71a1~1` already
 recorded the split in its own words: "Slice 2 known issue: Strawberry's `@strawberry.type` decorator
@@ -271,13 +260,12 @@ this pass's working tree on top of it.
 
 ### The strategy, and what it rejected
 
-The strategy: a cleanup card's contract **is** the set it removed, so the spec must name that set and
-say what covers each subject now, and nothing else. Two alternatives lost.
+The strategy: a spec describes the code as it is now, so the spec names the tests that pin each
+subject the placeholders deferred, and the checkable negative that no placeholder stands in for a
+test; the removed names belong to git, not to the contract. Two alternatives lost.
 
-- **Leave `## Scope` as two summary bullets and put the names only here.** Rejected: it keeps the
-  spec uncheckable against the tree, which is the defect this pass exists to close. A reader
-  confirming a cleanup card needs the deleted names in the contract, not in the deliberation file —
-  the rationale answers *why*, and the spec must answer *what*.
+- **Name the removed placeholders by `path::QualifiedName` in `## Scope`.** Rejected: a citation
+  asserts its symbol exists, and these do not, so the citation gate would rightly fail them.
 - **Rewrite the spec into a full builder-format spec** with slices, a test plan, and a definition of
   done. Rejected for the reason [`spec-007-…-rationale.md`][spec-007-rationale] gives: the work
   shipped three weeks before the file existed, so any such expansion is a reconstruction presented in
@@ -286,10 +274,9 @@ say what covers each subject now, and nothing else. Two alternatives lost.
 
 ### `## Scope` — two rendered rows became a named set
 
-Spec: [Scope][spec-011-scope]. The section now names all three retired placeholders by
-`path::QualifiedName` (`AGENTS.md` rule 27 — no `path:NN` line numbers, which rot on the next edit of
-a file this spec does not own), pairs each with the test that pins its subject today, and closes with
-one checkable negative — no skipped or `xfail`-marked test remains under `tests/types/` or
+Spec: [Scope][spec-011-scope]. The section names, for each subject the placeholders deferred, the
+test that pins it by `path::QualifiedName` (`AGENTS.md` rule 27), and closes with one checkable
+negative — no unconditional `skip` or `xfail` marker stands in for a test under `tests/types/` or
 `tests/optimizer/`. Every named symbol was re-derived at this working tree, not copied from the build
 plan. The scalar-override paragraph replaces the kept-skip bullet with the standing division of
 concerns and the owning card.
@@ -305,9 +292,7 @@ The block keeps all ten canonical group headers in order. It gained `[spec-011-r
 keeps the unused `[backlog]` for the reason the entry above gives. Every path was disk-checked from
 `docs/SPECS/`, and the archived-depth trap was re-checked in both directions: `../../tests/…` reaches
 the package test tree and `../GLOSSARY.md` reaches [`docs/GLOSSARY.md`][glossary], with no
-same-named file one level up to mask a bad depth. The retired placeholders' own files are cited as
-bare symbol paths rather than links, since the symbols no longer exist in them and a link would
-promise otherwise.
+same-named file one level up to mask a bad depth.
 
 <!-- LINK DEFINITIONS -->
 

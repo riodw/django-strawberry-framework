@@ -86,7 +86,7 @@ class TenantScopedType(DjangoType):
     """Abstract intermediate — no Meta, just a shared get_queryset."""
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(cls, queryset, info):
         return queryset.filter(tenant=info.context.tenant)
 
 
@@ -116,7 +116,7 @@ class ItemType(DjangoType):
         interfaces = (relay.Node,)
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(cls, queryset, info):
         user = getattr(info.context, "user", None)
         if user and user.is_staff:
             return queryset
@@ -303,7 +303,7 @@ The registry carries no `lazy_ref`. Definition-order independence is delivered b
 
 ## `get_queryset`
 
-`DjangoType` exposes `@classmethod get_queryset(cls, queryset, info, **kwargs)` with a default identity implementation. This is the single authoritative hook for permission scoping, multi-tenancy, soft-delete filtering, and any future consumer-side queryset constraints. The optimizer must respect it, especially on related fields.
+`DjangoType` exposes `@classmethod get_queryset(cls, queryset, info)` with a default identity implementation; the package calls it with exactly those two arguments, so an override declares exactly those two parameters. This is the single authoritative hook for permission scoping, multi-tenancy, soft-delete filtering, and any future consumer-side queryset constraints. The optimizer must respect it, especially on related fields.
 
 ```python
 class ItemType(DjangoType):
@@ -312,7 +312,7 @@ class ItemType(DjangoType):
         fields = "__all__"
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(cls, queryset, info):
         user = getattr(info.context, "user", None)
         if user and user.is_staff:
             return queryset

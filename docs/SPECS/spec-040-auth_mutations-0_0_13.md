@@ -2005,9 +2005,11 @@ sharing the named helper there would be a *bug*, so they carry a source comment.
   `is_active=False` included; the fourth short-circuits to the same `None` at the
   storability preflight,
   [Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
-  No enumeration oracle; the live suite pins the identical shape for wrong-password
-  and unknown-username, and a package row asserts all four payloads are
-  byte-identical.
+  No enumeration oracle; the live suite pins each class byte for byte against the
+  wrong-password envelope
+  (`examples/fakeshop/test_query/test_auth_api.py::test_wrong_password_and_unknown_username_return_identical_envelope`,
+  `::test_inactive_user_gets_the_same_envelope`, and, for the storability preflight,
+  `::test_login_surrogate_username_is_the_undifferentiated_envelope_not_a_crash`).
 - **Login while already authenticated.** Allowed; `auth.login`'s session handling
   is three-branch (Django's `django/contrib/auth/__init__.py::login`): an
   **anonymous→authenticated** login cycles the session key

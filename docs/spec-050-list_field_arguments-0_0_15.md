@@ -288,7 +288,7 @@ Graphene migration retains its one-line field declaration and Meta-owned order s
 does not by itself establish the separate [cookbook-parity][glossary-cookbook-parity] target.
 
 The working cookbook's
-[`django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py::Query`][cookbook-schema]
+[`~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py::Query`][cookbook-schema]
 declares all four root collections as `AdvancedDjangoFilterConnectionField`, while each node
 owns `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`,
 through its nested `Meta` declaration and defines `get_queryset` as a class hook beside that

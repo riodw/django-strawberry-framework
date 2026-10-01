@@ -77,43 +77,39 @@ The exact class names may change, but the architectural goal is the same:
 - bidirectional model graphs work naturally
 - the optimizer stays first-class
 
-## The 0.0.4 local package baseline
-This section is the starting-state snapshot this architecture was designed against: the package as it stood when the spec was authored, before the 0.0.4 foundation slice landed. It is deliberately historical and is not a claim about the package today. Package source at that point:
+## Local package substrate
+The architecture builds on these package modules:
 
 - `django_strawberry_framework/types/base.py`
 - `django_strawberry_framework/types/converters.py`
 - `django_strawberry_framework/types/resolvers.py`
+- `django_strawberry_framework/types/finalizer.py`
 - `django_strawberry_framework/registry.py`
 - `django_strawberry_framework/optimizer/extension.py`
 - `django_strawberry_framework/optimizer/walker.py`
 
-The functions this architecture builds on, as they stood at that baseline:
+and these functions:
 
 - `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`
 - `django_strawberry_framework/types/base.py::_validate_meta`
 - `django_strawberry_framework/types/base.py::_select_fields`
 - `django_strawberry_framework/types/base.py::_build_annotations`
-- `django_strawberry_framework/types/converters.py::convert_relation` — **retired since.** Relation annotations now resolve through `types/converters.py::resolved_relation_annotation`; the name survives here because the baseline is what the layers below were designed against.
+- `django_strawberry_framework/types/converters.py::resolved_relation_annotation`
 - `django_strawberry_framework/types/resolvers.py::_make_relation_resolver`
 - `django_strawberry_framework/types/resolvers.py::_attach_relation_resolvers`
-- `django_strawberry_framework/registry.py::TypeRegistry.lazy_ref` — **retired since.** It was a placeholder raising `NotImplementedError`, and the pending-relation API superseded it in the 0.0.4 slice, exactly as `spec-010-foundation-0_0_4.md` #"### Must redo (not augment)" prescribed.
+- `django_strawberry_framework/registry.py::TypeRegistry.add_pending_relation`
+- `django_strawberry_framework/types/finalizer.py::finalize_django_types`
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension]: `django_strawberry_framework/optimizer/extension.py`
 - `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.check_schema`
 - `django_strawberry_framework/optimizer/walker.py::plan_relation`
 - `django_strawberry_framework/optimizer/walker.py::_plan_prefetch_relation`
 
-Current behavior is simple and useful, but too eager:
+Type creation is two-phase:
 
-1. `DjangoType.__init_subclass__` validates `Meta`.
-2. `_select_fields` chooses Django fields.
-3. `_build_annotations` converts every selected field immediately.
-4. `convert_relation` immediately looks up the target model in the registry.
-5. unresolved target types raise immediately.
-6. the class is registered.
-7. relation resolvers are attached.
-8. `strawberry.type(cls)` finalizes the type.
+1. `DjangoType.__init_subclass__` validates `Meta`, chooses Django fields (`_select_fields`), synthesizes annotations (`_build_annotations`), registers the type with its definition, and records every relation it synthesizes as a pending relation through `TypeRegistry.add_pending_relation`.
+2. `finalize_django_types()` classifies every pending relation, raising `ConfigurationError` for any target with no registered `DjangoType` before mutating a class, rewrites each resolved relation's annotation through `resolved_relation_annotation`, attaches relation resolvers, and calls `strawberry.type(cls)` once per type.
 
-This hardwires type conversion and Strawberry finalization into one class-creation moment. That makes bidirectional model graphs impossible without omitting one side of a relation.
+Type conversion and Strawberry finalization therefore happen at different moments, which is what lets a bidirectional model graph declare both sides of a relation in any order.
 
 ## Reference architecture: django-graphene-filters
 `django-graphene-filters` is the feature-complete proof that the desired product surface works.
@@ -917,7 +913,7 @@ It does **not** ship:
 Keep current behavior for acyclic simple types if possible.
 
 ### Phase 2: [Definition-order independence][glossary-definition-order-independence]
-Move `convert_relation` from eager lookup to pending relation creation.
+Relation conversion records a pending relation instead of looking the target up eagerly.
 
 Acceptance tests:
 

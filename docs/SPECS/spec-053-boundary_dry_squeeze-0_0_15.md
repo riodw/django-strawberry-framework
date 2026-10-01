@@ -560,10 +560,6 @@ sweeps (and future maintainer-agents) do not re-flag them:
   (docstring: do not unify).
 - `sets_mixins.py::collect_related_declarations`'s bespoke diamond-tombstone
   logic (stronger than upstream; replacement would regress).
-- ~~`forms/inputs.py::FormInputFieldSpec` vs the unified `InputFieldSpec`~~ —
-  consolidated after the audits: `FormInputFieldSpec` no longer exists and
-  `forms/inputs.py` builds `utils/inputs.py::InputFieldSpec` directly
-  (entry kept as history so the resolution is visible).
 - The two choice-enum caches (registry `(model, field)`-keyed vs
   `_SERIALIZER_CHOICE_ENUMS` name-keyed) — documented separate key spaces.
 - `types/base.py`'s per-field loops (`_build_annotations` /

@@ -93,8 +93,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     - [ ] `examples/fakeshop/test_query/test_scalars_api.py::test_scalar_specimen_bigint_input_decimal_string_argument_over_http`
     - [ ] `examples/fakeshop/test_query/test_scalars_api.py::test_scalar_specimen_bigint_input_int_literal_argument_over_http`
     - [ ] `tests/types/test_converters.py::test_bigint_in_input_position_with_null_via_schema_execution`
-    - [ ] `tests/types/test_converters.py::test_bigint_rejects_bool_argument_via_schema_execution` — confirms input parser fires through the schema path
-    - [ ] `tests/types/test_converters.py::test_bigint_rejects_float_argument_via_schema_execution`
+    - [ ] `examples/fakeshop/test_query/test_scalars_api.py::test_filter_specimens_by_bigint_exact_rejects_non_integer_literal` — confirms the input parser rejects `bool` and `float` literals through the live schema path, for both the signed and unsigned `BigInt` fields
     - [ ] `tests/types/test_converters.py::test_bigint_resolver_returning_bool_raises_via_schema_execution` — B2 fix: confirms `_serialize_bigint` rejects non-`int` resolver return values at the schema boundary
 - [ ] Slice 2: `JSONField` mapping
   - [ ] Add `models.JSONField: strawberry.scalars.JSON` to `SCALAR_MAP`

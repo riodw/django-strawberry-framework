@@ -471,7 +471,7 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   ([Decision 19](#decision-19--a-django-backed-websocket-host-boundary-beside-channels-origin-check)).
 - **The soft-dependency machinery is intact and stays.** `require_channels()` over
   [`require_optional_module`][glossary-require_optional_module], the split
-  present-but-incompatible hints, the cached `_ROUTER_CLASS` module global that
+  present-but-incompatible hints, the cached `_router_class` module global that
   [eviction-simulated absence][glossary-eviction-simulated-absence] tests rely on, and
   the [PEP 562][glossary-pep-562-lazy-export] module `__getattr__`.
 - **Django already enforces more than the audit credits it with — but not everything, and
@@ -526,28 +526,18 @@ A true description of the repo as this spec is authored (`0.0.14`, HEAD on `main
   in
   [Decision 9](#decision-9--the-strict-utf-8-wire-contract-is-enforced-by-the-package-view-its-own-body-source-one-strict-decode)
   rather than restated here.
-- **Three live tests assert the encodings this card rejects.**
-  `test_products_api.py::test_post_utf16_json_body_succeeds_like_async_transport`,
-  `::test_post_utf16_le_json_body_succeeds_like_async_transport`, and
-  `::test_post_utf8_bom_json_body_succeeds_like_async_transport`, with companion
-  raw-bytes contract tests in `tests/test_cross_web_patches.py`
-  (`test_body_returns_raw_bytes_for_utf8_bom`,
-  `test_body_returns_raw_bytes_for_utf16_le_without_bom`). Those three names are the
-  state this card **found**; Slice 3 inverted all three, so a reader grepping them now
-  finds
-  `::test_post_utf16_json_body_is_rejected_as_400`,
+- **Three live tests pin the encodings the wire contract rejects.**
+  `examples/fakeshop/test_query/test_products_api.py::test_post_utf16_json_body_is_rejected_as_400`,
   `::test_post_utf16_le_json_body_is_rejected_as_400`, and
-  `::test_post_utf8_bom_json_body_is_rejected_as_400` instead — the raw-bytes contract
-  tests keep their names and were re-aimed in place.
-- **`tests/test_routers.py` is 582 lines and its HTTP assertions encode the old
-  contract.** `test_http_branch_is_auth_wrapped_and_routes_only_graphql_without_fallback`,
-  `test_django_application_fallback_is_appended_after_the_graphql_route`, and
-  `test_custom_url_pattern_reaches_the_re_path_on_both_branches` all assert behavior this
-  card deliberately removes. The Origin / auth tests
+  `::test_post_utf8_bom_json_body_is_rejected_as_400`, with companion raw-bytes contract
+  tests in `tests/test_cross_web_patches.py` (`test_body_returns_raw_bytes_for_utf8_bom`,
+  `test_body_returns_raw_bytes_for_utf16_le_without_bom`).
+- **`tests/test_routers.py` pins both branches.** Its HTTP-branch tests are listed under
+  [Decision 13](#decision-13--test-strategy-which-existing-tests-change-and-why). The Origin / auth tests
   (`test_websocket_handshake_origin_directions`,
   `test_websocket_branch_wraps_origin_validator_outside_the_auth_stack`,
   `test_authenticated_session_round_trip_reaches_the_resolver`,
-  `test_request_contract_resolves_over_the_websocket_branch`) assert behavior it keeps.
+  `test_request_contract_resolves_over_the_websocket_branch`) pin the WebSocket behavior.
 - **The WebSocket actor is read once and never refreshed.**
   `utils/permissions.py::ChannelsRequestAdapter.user` returns `self._scope.get("user")`
   with no revalidation; only same-connection `auth/mutations.py` login / logout mutate
@@ -1709,22 +1699,20 @@ no authorization capability while idle.
 contract, and it says which, explicitly, so a reviewer can distinguish a deliberate
 inversion from a regression.
 
-**Rewritten (they encode the old HTTP contract).**
+**The HTTP-branch contract, and the tests that pin it.**
 
-- `tests/test_routers.py::test_http_branch_is_auth_wrapped_and_routes_only_graphql_without_fallback`
-  — the HTTP branch is no longer auth-wrapped and no longer routes GraphQL at all.
-  Becomes: the `"http"` value **is** the supplied Django application object, identically.
-- `::test_django_application_fallback_is_appended_after_the_graphql_route` — there is no
-  fallback and no GraphQL route to append after. Becomes: omission is a `TypeError` and
-  explicit `None` is a [`ConfigurationError`][glossary-configurationerror].
-- `::test_custom_url_pattern_reaches_the_re_path_on_both_branches` — the pattern reaches
-  one branch now. Becomes: `websocket_url_pattern` reaches the WebSocket `re_path` only,
-  plus an exact-match matrix (`/graphql`, `/graphql/` connect; `/graphql-admin`,
-  `/graphqlanything`, `/graphql/extra` do not).
-- `::test_http_communicator_graphql_round_trip` and
-  `::test_non_graphql_path_reaches_the_fallback_only_when_provided` — both drive the
-  removed consumer. Become one test that the HTTP branch delegates to the supplied
-  application unchanged.
+- `tests/test_routers.py::test_http_branch_is_the_supplied_django_application_by_identity`
+  — the `"http"` value **is** the supplied Django application object, identically; the
+  HTTP branch is not auth-wrapped and routes no GraphQL.
+- `::test_construction_rejects_an_omitted_or_unusable_django_application` — omission is a
+  `TypeError`, and explicit `None` or any non-callable is a
+  [`ConfigurationError`][glossary-configurationerror].
+- `::test_custom_websocket_url_pattern_reaches_only_the_websocket_re_path` and
+  `::test_default_websocket_url_pattern_matches_exactly` — `websocket_url_pattern`
+  reaches the WebSocket `re_path` only, and the default pattern is exact (`/graphql`,
+  `/graphql/` connect; `/graphql-admin`, `/graphqlanything`, `/graphql/extra` do not).
+- `::test_http_branch_delegates_every_path_to_the_supplied_application` — the HTTP branch
+  delegates every path to the supplied application unchanged.
 
 **Preserved verbatim (they construct no router, so nothing in them moves).** The whole
 [eviction-simulated absence][glossary-eviction-simulated-absence] block and the cached-class
@@ -2663,7 +2651,7 @@ removed in the change that ships the slice — the repo's standing staging disci
   [`require_optional_module`][glossary-require_optional_module] stays exactly as
   [`spec-041`][spec-041] Decision 5 shaped it, with the same
   `_CHANNELS_INSTALL_HINT` / `_CHANNELS_BROKEN_HINT` /
-  `_STRAWBERRY_CHANNELS_BROKEN_HINT` triple and the same `_ROUTER_CLASS` cache the
+  `_STRAWBERRY_CHANNELS_BROKEN_HINT` triple and the same `_router_class` cache the
   [eviction-simulated absence][glossary-eviction-simulated-absence] tests depend on. No
   new guard, no new hint string, no second lazy-export mechanism.
 - **The WebSocket revalidation is one function, called from all three seams.**

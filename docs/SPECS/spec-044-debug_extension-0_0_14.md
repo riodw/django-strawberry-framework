@@ -614,7 +614,7 @@ A true description of the repo as this spec is authored:
   shapes](#error-shapes) records it.)
   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
   Extension classes passed in `extensions=` are instantiated **per
-  operation** (`schema.py::Schema.get_extensions` `#"ext()"`) at the new
+  operation** (`strawberry/schema/schema.py::Schema.get_extensions` `#"ext()"`) at the new
   `strawberry-graphql>=0.316.0` floor. The old `0.262.0` floor cached
   `Schema._sync_extensions`, sharing both extension state and the engine-set
   `execution_context` across sync requests; that upstream race is why this

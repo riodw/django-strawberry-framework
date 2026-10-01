@@ -197,7 +197,7 @@ this card's bound promises even though this card did not do it.
 | `292c7411` | `derive_connection_window_bounds` narrows through `resolve_relay_max_results` before building the slice metadata. **At the release the policy ceiling reached the offset window unclamped** — a real hole in the shipped ceiling, not a tidy-up. Also made `utils/context.py::get_context_value` fall through to its default on a hostile descriptor. | correction | [D7][spec-047-d7], Edge cases |
 | `6013cda6` | Folded delete and the plain form onto `run_write_pipeline_sync`, deleting the delete branch's own `check_deadline`. | refactor | [D9][spec-047-d9], [D13][spec-047-d13] |
 | `18550f5d` | `_with_resource_policy_extension` stopped normalizing `extensions` through truthiness, so a `__bool__`-overriding container cannot be consulted before Strawberry sees its entries; the class-or-instance test became `schema.py::_extension_entry_matches`. | correction | [D11][spec-047-d11] |
-| `de2601e9` | Retired `connection.py::_resolve_connection_fast_path` (readable only at `git show de2601e9^:django_strawberry_framework/connection.py`); the two `resolve_connection` overrides collapsed into one reading a `_resolves_total_count` class flag. Behavior preserved exactly. | refactor | [D7][spec-047-d7], [D9][spec-047-d9] |
+| `de2601e9` | Retired the connection fast-path resolver; the two `resolve_connection` overrides collapsed into one reading a `_resolves_total_count` class flag. Behavior preserved exactly. | refactor | [D7][spec-047-d7], [D9][spec-047-d9] |
 | `ba15c767` | (i) Replaced the end-of-operation **clear** with a snapshot-and-restore. (ii) Made the scalar-where-a-list-is-declared coercion **actually** charge a container plus one level of value depth — the Edge case was aspirational before. (iii) An upload whose `size` **raises on access** became a rejection, a sixth unmeasurable spelling. | correction | [D2][spec-047-d2], [D4][spec-047-d4], Edge cases |
 | `597dbbb4` | (i) **Operation variable defaults are charged** — a `$p: Int = 5000` default was a free payload. (ii) Bytes-like scalars charge against `max_scalar_bytes`. (iii) `_charge_list_family` is reached only for a real list. (iv) `ResourceLimitExceeded` gained `detail` and `__reduce__`. | correction | [D4][spec-047-d4], [D11][spec-047-d11], bounds table |
 | `2d94b89e` | `_STRUCTURAL_DELIMITER_PAIRS` single-sources the three bracket families; the open and close token sets derive from it. Zero behavioral change. | refactor | [D3][spec-047-d3] |
@@ -223,9 +223,7 @@ the old sentence can see that it was retired deliberately rather than lost.
 - **[Decision 2][spec-047-d2] — "the end-of-operation clear".** There is no clear. The
   extension snapshots both context keys and restores what was there, so a nested schema
   execution hands the outer operation back its own cap and deadline; clearing left the outer
-  request with no deadline for the rest of its work. `clear_resource_context` survives as an
-  export and is called by nothing in the package — only `tests/test_resource_policy.py` calls
-  it — so nothing should describe it as part of the operation lifecycle.
+  request with no deadline for the rest of its work.
 - **[Decision 2][spec-047-d2] — the request context as the place the budget is "read back
   from".** The keys are still published there, and a consumer may still read them and may
   still stash an EARLIER deadline to shorten its own request. What they are not is the value
@@ -308,13 +306,10 @@ the old sentence can see that it was retired deliberately rather than lost.
   present-tense reading of a file later cards move. The card's own fact is that `0.0.14` was
   already reached before its first slice, which stays true at any later date; what `__version__`
   reads today belongs to whichever card is current.
-- **[Decision 13][spec-047-d13] — the audited exclusion for
-  `forms/resolvers.py::_run_plain_form_pipeline_sync`.** That function **no longer exists at
-  any current revision** — it is readable at
-  `git show 6013cda6^:django_strawberry_framework/forms/resolvers.py` and nowhere else. Both
-  form flavors share `_run_form_pipeline_sync`, which enters `run_write_pipeline_sync`
-  unconditionally, so the plain form now *does* get the deadline check and the stated reason for
-  excluding it ("no database seam to guard") no longer describes the arrangement. The decision
+- **[Decision 13][spec-047-d13] — an audited exclusion for the plain form.** Both form
+  flavors share `forms/resolvers.py::_run_form_pipeline_sync`, which enters
+  `run_write_pipeline_sync` unconditionally, so the plain form gets the deadline check and has no
+  database-seam exclusion. The decision
   opens with five boundaries and two audited exclusions rather than six and three.
 - **The preamble and the Out-of-scope list — "`WIP-ALPHA-049-0.0.14`".** Card 049 shipped;
   the board reads `DONE-049-0.0.14`, and both of this spec's references now do too. Recorded
@@ -369,11 +364,9 @@ A register of changes is only trustworthy beside the population it found unchang
   never an unimplemented contract. That is why the round changed no source.
 
 **The lesson worth keeping.** `scripts/check_citations.py` gates `path::Symbol` in first-party
-source and on the board, and skips `docs/` prose entirely. So a spec's citations rot silently:
-`connection.py::_resolve_connection_fast_path` was named in two decisions of a spec whose
-`Status:` line says shipped, and the symbol had been deleted by a refactor that touched neither
-file. Nothing failed. A spec that cites code owes a citation sweep whenever it is edited,
-because no hook will run one for it.
+source, on the board and across the spec corpus (`docs/spec-*.md`, `docs/SPECS/**/*.md`), so a
+refactor that deletes a symbol a shipped spec cites fails the gate in the same change, and the
+spec is rewritten to the code as it is then.
 
 ## Decision entries
 

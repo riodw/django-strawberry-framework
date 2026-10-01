@@ -65,10 +65,12 @@ jobs:
         run: uv run python scripts/check_trailing_commas.py --check
 
       - name: Citations resolve (AGENTS.md rule 27 path::Symbol refs)
-        # Every `path.py::Symbol` reference in first-party source and on the board
-        # must name a file that exists and a symbol that file still defines. The
-        # `check-citations` pre-commit hook runs the same sweep on every commit;
-        # this step is the backstop for commits made with hooks skipped.
+        # Every `path.py::Symbol` reference in first-party source must name a file
+        # that exists and a symbol that file still defines; on the board and in the
+        # spec corpus (docs/spec-*.md, docs/SPECS/**/*.md) a cited file that exists
+        # must still define the symbol. The `check-citations` pre-commit hook runs
+        # the same sweep on every commit; this step is the backstop for commits made
+        # with hooks skipped.
         run: uv run python scripts/check_citations.py --check
 
       - name: Kanban tracked-path constants

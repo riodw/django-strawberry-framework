@@ -526,8 +526,8 @@ context key or a middleware reusing a generic string name collides just as effec
 authority is therefore a module-private `ContextVar` (`_active_budget`), which no context write
 can reach, is scoped per task under asyncio and per thread otherwise, and propagates across
 `sync_to_async` / `async_to_sync` so it is armed wherever the package's own collection seams
-run. It is the same `ContextVar`-over-stash shape `optimizer/_context.py::_active_strictness`
-takes, for the same reason: a per-execution answer a context stash cannot be trusted to give.
+run. It is the same `ContextVar`-over-stash shape `optimizer/_context.py::active_strictness`
+reads, for the same reason: a per-execution answer a context stash cannot be trusted to give.
 
 **The mirror may narrow, never widen.** A resolver stashing an EARLIER instant under
 `DST_RESOURCE_DEADLINE` is shortening its own request, which it is always entitled to do, and
@@ -547,8 +547,8 @@ narrows nothing, and where nothing is armed it fails closed: a value the seam ca
 the clock is not a deadline it can certify the request is inside.
 
 **A published policy with nothing armed still answers**, which is the path a plain
-`strawberry.Schema` with no extension, and a direct `stash_resource_policy` call, take. That is
-a context none of this package's collection resolvers runs inside.
+`strawberry.Schema` with no extension, whose consumer may publish a policy under the key, takes.
+That is a context none of this package's collection resolvers runs inside.
 
 **The operation SNAPSHOTS both keys and puts them back; it does not clear them.**
 `utils/context.py::restored_context_keys` brackets each operation: it records what each key
@@ -954,7 +954,7 @@ invalid value — an infinite deadline is a deadline that never fires, which is 
 spelling [Goals](#goals) 3 says no bound has. `bool` is refused here as it is at every
 integer bound, and a numeric SUBCLASS is outside the domain by the same exact-type rule the
 integer bounds take. The deadline has two escapes of its own that make the rule load-bearing
-rather than tidy: `stash_resource_policy` derives the absolute deadline as
+rather than tidy: `resource_policy.py::_absolute_deadline` derives the absolute deadline as
 `time.monotonic() + seconds`, where Python gives a subclass's reflected `__radd__` priority
 over `float`'s own and a `nan` result silently disarms the budget of a policy the deployment
 believes it configured; and an expired rejection renders the configured value through
@@ -1173,7 +1173,7 @@ check runs rather than about how long anything takes.
 
 | Slice | Files | Delta |
 |---|---|---|
-| 1 | `resource_policy.py` (new) | `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ResourceLimitExceeded`, `RESOURCE_LIMIT_ERROR_CODE`, `DST_RESOURCE_POLICY` / `DST_RESOURCE_DEADLINE`, `resolve_resource_policy`, `stash_resource_policy` / `policy_from_info` / `clear_resource_context`, `effective_bound`, `validate_collection_bound`, `bounded_rows`, `check_deadline`. |
+| 1 | `resource_policy.py` (new) | `ResourcePolicy`, `DEFAULT_RESOURCE_POLICY`, `ResourceLimitExceeded`, `RESOURCE_LIMIT_ERROR_CODE`, `DST_RESOURCE_POLICY` / `DST_RESOURCE_DEADLINE`, `resolve_resource_policy`, `begin_resource_budget` / `end_resource_budget` / `policy_from_info`, `effective_bound`, `validate_collection_bound`, `bounded_rows`, `check_deadline`. |
 | 1 | `utils/context.py` (new), `optimizer/_context.py` | The shape-agnostic dispatch lifted out and shared; the optimizer module keeps its keys and its reset and re-exports the helpers. |
 | 1 | `conf.py` | `RESOURCE_POLICY_KEY` and `resource_policy_setting()`, a thin reader that validates nothing. |
 | 2 | `extensions/resource_policy.py` (new) | `scan_document_text`, `charge_document`, `_DocumentBudget`, `_ValueBudget` (per-reference charging, `_closes_a_cycle` ancestor-path guard), `_field_definition` (introspection meta-fields), `_is_connection_type` (full edge shape), [`DjangoResourcePolicyExtension`][glossary-djangoresourcepolicyextension]. |
@@ -1204,13 +1204,14 @@ behavior needs them named:
   ahead of the `ID`-scalar test
   ([Decision 4](#decision-4--the-document-and-value-budgets-are-one-iterative-walk)).
 
-**Two names on this module's surface that no slice row above carries.** Each `Delta` cell
+**Three names on this module's surface that no slice row above carries.** Each `Delta` cell
 names what its slice landed, and `resource_policy.py`'s `__all__` is wider than the Slice 1
 row: it also exports `bounded_rows_async`, the async color of the raw-list seam
-([Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam)), and
+([Decision 6](#decision-6--every-raw-list-is-bounded-at-one-seam)),
 `validate_trusted_flag`, the constructor-site half of the widening rule
-([Decision 10](#decision-10--per-field-overrides-narrow-the-schema-policy-is-the-trusted-declaration)).
-Both belong to the surface rather than to a slice; neither is a root package export, so
+([Decision 10](#decision-10--per-field-overrides-narrow-the-schema-policy-is-the-trusted-declaration)),
+and `MAX_RESOURCE_BOUND`, the ceiling every positive bound is validated against. All three
+belong to the surface rather than to a slice; none is a root package export, so
 `__init__.py`'s `__all__` is unaffected.
 
 ## Helper-reuse obligations (DRY)

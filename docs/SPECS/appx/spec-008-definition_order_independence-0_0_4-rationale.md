@@ -197,10 +197,10 @@ citations sit inside one function, which the raw line numbers concealed:
   namespace through `StrawberryAnnotation` — the three cited lines are its `def` line, its
   `namespace = sys.modules[c.__module__].__dict__` read, and its
   `StrawberryAnnotation(v, namespace=namespace)` construction.
-- `tests/types.py #"from __future__ import annotations"` enables postponed annotations;
-  `tests/types.py::Fruit #"color: Color | None"` references `Color` before it is declared;
-  `tests/types.py::Color #"fruits: list[Fruit]"` references `Fruit` from the reverse side; and
-  `tests/types.py::User` / `::Group` / `::Tag` show a second cyclic graph built the same way.
+- `~/projects/strawberry-django-main/tests/types.py #"from __future__ import annotations"` enables postponed annotations;
+  `~/projects/strawberry-django-main/tests/types.py::Fruit #"color: Color | None"` references `Color` before it is declared;
+  `~/projects/strawberry-django-main/tests/types.py::Color #"fruits: list[Fruit]"` references `Fruit` from the reverse side; and
+  `~/projects/strawberry-django-main/tests/types.py::User` / `::Group` / `::Tag` show a second cyclic graph built the same way.
 
 *Moved — the explicit-annotation-mode example, in full.*
 

@@ -148,14 +148,15 @@ Each top-level item maps to one commit / PR.
 Three independent defaults each hand a client information the client was never meant to
 have, and each of the three is safe only because someone remembered something.
 
-**S5 — every generated file output publishes an absolute server path.**
-`types/converters.py::DjangoFileType.path` returns `FieldFile.path`, and its own field
-description calls it "the absolute filesystem path".
-[`DjangoImageType`][glossary-djangoimagetype] subclasses the type and inherits it. So every
-`FileField` and `ImageField` column on every [`DjangoType`][glossary-djangotype] in every
-schema this package generates offers `path: String` to any client that can reach the row —
-whenever the storage backend supports one. An SDL probe found four such occurrences in the
-example project alone. Row visibility still governs *which* file-bearing object a client
+**S5 — a generated file output must not publish an absolute server path by default.**
+`FieldFile.path` is the absolute filesystem path. A `path` subfield on the default file
+output would hand it, on every `FileField` and `ImageField` column of every
+[`DjangoType`][glossary-djangotype] in every schema this package generates, to any client
+that can reach the row — whenever the storage backend supports one. So the default
+`DjangoFileType` and [`DjangoImageType`][glossary-djangoimagetype] carry no `path`; the
+subfield is defined once on `types/converters.py::_FileSystemPathFields.path` and published
+only by `types/converters.py::DjangoFilePathType` / `::DjangoImagePathType`, which a column
+reaches by naming itself in `Meta.filesystem_path_fields`. Row visibility still governs *which* file-bearing object a client
 can reach, but an absolute deployment path is unnecessary metadata on top of that: it
 leaks usernames, release directory names, container mount points, tenant layout, and
 storage conventions, and it is exactly the material that turns a later traversal, template,

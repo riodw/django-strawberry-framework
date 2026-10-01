@@ -211,7 +211,7 @@ version was previously re-typed as a bare literal that nothing compared against 
 
 ### F7 — first construction is serialized
 
-*Claimed:* only the unsynchronized `_ROUTER_CLASS` module-global cache.
+*Claimed:* only the unsynchronized `_router_class` module-global cache.
 *HEAD:* `routers.py` #"_ROUTER_CLASS_LOCK" plus a double-checked
 `routers.py::_build_router_class` /
 `routers.py::_build_router_class_uncached` pair, pinned by
@@ -491,7 +491,7 @@ drift:** D2's *intent* is strengthened, not weakened — but the obligation as w
 reader at the wrong file.
 
 **Change record — first construction is serialized (F7).** The decision described only the
-`_ROUTER_CLASS` module global. HEAD adds `_ROUTER_CLASS_LOCK` and the double-checked
+`_router_class` module global. HEAD adds `_ROUTER_CLASS_LOCK` and the double-checked
 `_build_router_class` / `_build_router_class_uncached` pair. **Why it does not weaken the
 eviction contract** (Helper-reuse **D3**, and the absence tests that depend on it): both the
 cache and the lock are module globals, so evicting `routers` from `sys.modules` still drops both
@@ -607,7 +607,7 @@ object back in both places (the DRF fixture's defensive
 asserts the post-teardown same-object invariant.
 
 **Change record — Revision 8: the degraded-install test reuses the same eviction.** Without
-evicting `routers` first, an earlier construction test's cached `_ROUTER_CLASS` would satisfy
+evicting `routers` first, an earlier construction test's cached `_router_class` would satisfy
 the symbol access and the blocked builder import would never fire — a no-op test that passes.
 
 **Change record — the execution rows moved transport (F10).** The decision said the suite

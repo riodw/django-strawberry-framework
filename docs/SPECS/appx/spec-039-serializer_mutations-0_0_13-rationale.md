@@ -660,9 +660,8 @@ to this naming choice, not to an accident of the guard.
   omitted two shipped modules, `rest_framework/__init__.py` (the `require_drf()` guard) and
   `rest_framework/hook_context.py` (the frozen hook surface). All four are corrected in
   place. The lesson worth keeping: a promotion target written before the promotion is a
-  **prediction**, and eight further spec sites cited the predicted private name — a
-  vocabulary `scripts/check_citations.py` cannot see, because it reads `.py` and `KANBAN.md`
-  only.
+  **prediction**, and eight further spec sites cited the predicted private name;
+  `scripts/check_citations.py` fails such a name wherever a spec spells it `path::Symbol`.
 
 ## Decision 5 — Public surface: `SerializerMutation` exported from the root, the `038`-generalized factory reused
 
@@ -1670,8 +1669,8 @@ Unlike the entries above this heading, these were measured against `HEAD`.
   model-backed sync pipeline, `FormInputFieldSpec`). Each sat in a "Duplicated today"
   column describing the fork a promotion resolved, so the promotion itself is what deleted
   them. They are now described by content rather than by dead name — a fork that no longer
-  exists cannot be cited by symbol, and `scripts/check_citations.py` reads `.py` and
-  `KANBAN.md` only, so nothing would ever have flagged them.
+  exists cannot be cited by symbol, and `scripts/check_citations.py` fails a spec citation
+  that names one.
 - **The three obligations the rationale move logged for the reconciliation slice, and where
   each stands.** That earlier entry is left as written — this file is append-only during a
   build — so its present tense ("it stays until a pass can fold each bullet…") is now the

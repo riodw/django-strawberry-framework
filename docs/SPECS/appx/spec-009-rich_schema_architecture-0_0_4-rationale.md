@@ -122,24 +122,13 @@ Three of the five questions had been overtaken by shipped work.
 The two remaining questions — generic fallback, and whether sentinel redaction is required — were
 re-checked and left alone. Both answers still hold.
 
-### `## Current local package baseline` → `## The 0.0.4 local package baseline`
+### `## Local package substrate`
 
-The section is a snapshot of the package as it stood when the spec was authored, and it was headed
-and worded as though it described the package now. Every line number in it had rotted, and two of the
-thirteen functions it listed as "Important current functions" no longer exist.
-
-The correction anchors the section to the moment it describes rather than rewriting it to the present.
-That is the right direction for a design horizon: the layers below were designed against *that*
-baseline, so replacing it with today's inventory would break the argument the rest of the document
-makes. The rejected alternative was deleting the section outright, which would have left the layer
-designs with no stated starting point.
-
-Two entries carry an explicit **retired since** marker rather than being repointed:
-`types/converters.py::convert_relation`, whose work is now done by
-`types/converters.py::resolved_relation_annotation`, and `registry.py::TypeRegistry.lazy_ref`, the
-`NotImplementedError` placeholder the 0.0.4 slice deleted. Marking beats deleting because both names
-appear in the layer arguments further down; marking beats repointing because neither replacement is
-what the baseline argument was about.
+The section names the package modules and functions the layers build on, and the two-phase type
+creation (collect at class creation, resolve and decorate in `finalize_django_types()`) that makes a
+bidirectional model graph declarable in any order. It describes the package as it is; the layer
+designs below read against that substrate. The rejected alternative was deleting the section
+outright, which would have left the layer designs with no stated starting point.
 
 ### `### Status: deferred design idea, no card yet` → `### The unresolved-relation contract is error-only`
 

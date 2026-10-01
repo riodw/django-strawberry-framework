@@ -58,12 +58,13 @@ def _write(root, relative, text):
 
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
-    """Build a fake repo with the four source trees, a board and docs."""
+    """Build a fake repo with the four source trees, a board, an archived spec and docs."""
     monkeypatch.setattr(check_citations, "REPO_ROOT", tmp_path)
     for name in check_citations.SOURCE_TREES:
         (tmp_path / name).mkdir()
     _write(tmp_path, "django_strawberry_framework/widgets.py", MODULE)
     _write(tmp_path, "KANBAN.md", "# Board\n")
+    _write(tmp_path, "docs/SPECS/spec-000-fixture.md", "# Spec\n")
     return tmp_path
 
 
@@ -218,7 +219,7 @@ def test_default_run_gates_the_corpus_and_board(tree, capsys):
     _write(tree, "KANBAN.md", "planned `later.py::Thing`, real `widgets.py::Widget`\n")
     assert check_citations.main([]) == 0
     assert capsys.readouterr().out == (
-        "OK: 3 citations resolve (1 in 2 .py files, 2 in KANBAN.md).\n"
+        "OK: 3 citations resolve (1 in 2 .py files, 2 in KANBAN.md, 0 in 1 spec files).\n"
     )
     _write(tree, "examples/broken.py", "# widgets.py::gone\n")
     assert check_citations.main(["--check"]) == 1
@@ -327,6 +328,7 @@ def test_cited_by_marks_gated_and_ungated_citers(tree, capsys):
     _write(tree, "docs/builder/bld-050-x.md", "cycle cites `widgets.py::Widget`\n")
     _write(tree, "docs/review/rev-widgets.comments.md", "cites `widgets.py::Widget`\n")
     _write(tree, "docs/SPECS/spec-001-x.md", "archive cites `widgets.py::Widget`\n")
+    _write(tree, "docs/SPECS/NEXT.md", "e.g. `widgets.py::Widget`\n")
     _write(tree, "tests/test_pin.py", '# widgets.py #"size: int = 1"\n')
 
     target = "django_strawberry_framework/widgets.py::Widget"
@@ -336,10 +338,11 @@ def test_cited_by_marks_gated_and_ungated_citers(tree, capsys):
         "tests/test_citer.py:1: `widgets.py::Widget.render` [gated] resolved (symbol)",
         'tests/test_pin.py:1: `widgets.py #"size: int = 1"` [ungated] resolved (substring)',
         "KANBAN.md:1: `widgets.py::Widget` [gated] resolved (symbol)",
+        "docs/SPECS/spec-001-x.md:1: `widgets.py::Widget` [gated] resolved (symbol)",
         "docs/design.md:1: `widgets.py::Widget.size` [ungated] resolved (symbol)",
     ]
     assert lines[-1].startswith(
-        f"4 citing site(s) of `{target}` (2 gated, 2 ungated, 0 unresolved)",
+        f"5 citing site(s) of `{target}` (3 gated, 2 ungated, 0 unresolved)",
     )
 
 
@@ -367,3 +370,61 @@ def test_cited_by_matches_a_deleted_target_by_its_spelled_path(tree, capsys):
 def test_cited_by_refuses_a_malformed_symbol(tree):
     with pytest.raises(check_citations.CitationCheckError, match="dotted symbol"):
         check_citations.main(["--cited-by", "widgets.py::1bad"])
+
+
+def test_a_spec_citing_a_symbol_its_file_no_longer_defines_fails_the_gate(tree, capsys):
+    _write(tree, "docs/SPECS/spec-001-x.md", "archive cites `widgets.py::Widget.render`\n")
+    _write(
+        tree,
+        "docs/SPECS/appx/spec-001-x-rationale.md",
+        "companion cites `widgets.py::build`\n",
+    )
+    _write(tree, "docs/spec-050-y.md", "in flight cites `widgets.py::LIMIT`\n")
+    assert check_citations.main([]) == 0
+    assert capsys.readouterr().out == (
+        "OK: 3 citations resolve (0 in 1 .py files, 0 in KANBAN.md, 3 in 4 spec files).\n"
+    )
+
+    _write(tree, "docs/SPECS/appx/spec-001-x-rationale.md", "companion cites `widgets.py::gone`\n")
+    assert check_citations.main(["--check"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("FAIL: 1 unresolvable citation(s) of 3 checked")
+    assert "docs/SPECS/appx/spec-001-x-rationale.md:1: cites `widgets.py::gone`" in out
+
+    _write(
+        tree,
+        "docs/SPECS/appx/spec-001-x-rationale.md",
+        "companion cites `widgets.py::build`\n",
+    )
+    _write(tree, "docs/spec-050-y.md", "in flight cites `widgets.py::Widget.retired`\n")
+    assert check_citations.main(["--check"]) == 1
+    assert "docs/spec-050-y.md:1: cites `widgets.py::Widget.retired`" in capsys.readouterr().out
+
+
+def test_a_spec_may_cite_a_planned_file_and_next_md_is_not_a_spec(tree, capsys):
+    _write(tree, "docs/SPECS/spec-001-x.md", "planned `extensions/graph.py::GraphExtension`\n")
+    _write(tree, "docs/SPECS/NEXT.md", "cite as `widgets.py::Widget.resolve_fields`, e.g.\n")
+    assert check_citations.main([]) == 0
+    assert capsys.readouterr().out == (
+        "OK: 1 citations resolve (0 in 1 .py files, 0 in KANBAN.md, 1 in 2 spec files).\n"
+    )
+    assert check_citations.main(["--paths", "docs/SPECS/spec-001-x.md"]) == 0
+    capsys.readouterr()
+
+
+def test_the_gate_refuses_an_empty_spec_corpus(tree):
+    (tree / "docs/SPECS/spec-000-fixture.md").unlink()
+    with pytest.raises(check_citations.CitationCheckError, match="No spec sources match"):
+        check_citations.main([])
+
+
+def test_a_citation_inside_an_absolute_path_is_skipped(tree):
+    outcomes = _cite(
+        tree,
+        """\
+        # ~/projects/django-graphene-filters/examples/schema.py::Query
+        # /Users/someone/checkout/widgets.py::gone and widgets.py::gone
+        """,
+    )
+    assert _verdicts(outcomes) == [("widgets.py::gone", False)]
+    assert outcomes[0].citation.line == 2

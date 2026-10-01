@@ -894,8 +894,8 @@ done
 The companion sweep finds the split anchors themselves: an occurrence of `#` immediately followed by
 a double quote, with no further double quote later on the same line, is a citation broken across a
 line break. It resolves in no target, and no gate reports it —
-[`scripts/check_citations.py`][check-citations] matches `path::Symbol` within a single line and holds
-`docs/` out of scope by design.
+[`scripts/check_citations.py`][check-citations] resolves `path::Symbol` citations and gates no
+`#"substring"` pinpoint.
 
 *The verbatim risk bullet, so the fourth citation resolves.* From the moved
 `## Risks and open questions`:
@@ -912,14 +912,6 @@ so the slice can ship even if a corner case turns up."
 
 The remaining seven substrings, plus the three that shipped source still cites under the pre-renumber
 `spec-011` name, each resolve exactly once in the reconciled spec.
-
-### A dead symbol reference the reconciliation carried forward
-
-Bears on [Decision 7][spec-015-decision-7]. Its FK-id-elision invariant cited
-`django_strawberry_framework/types/resolvers.py::_is_fk_id_elided`, a symbol that does not exist at
-`HEAD` and did not exist when the reconciliation ran — it was inherited unexamined from the
-pre-reconciliation text, in the one Decision the pass otherwise rewrote. The resolver-side executor
-is `::_build_fk_id_stub` (the walker reads the stamped `FieldMeta.fk_id_elision_eligible` slot), and the citation now names it.
 
 ### Decision 3's injection-loop fence did not match the shipped guard
 

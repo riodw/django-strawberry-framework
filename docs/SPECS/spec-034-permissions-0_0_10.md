@@ -121,7 +121,7 @@ Per the [`START.md`][start] "do both libraries provide it? → foundational" tes
 
 | Upstream | `django-strawberry-framework` | Status |
 | --- | --- | --- |
-| graphene_django: `types.py::DjangoObjectType.get_queryset` applied to FK/O2O resolution by `converter.py::CustomField.wrap_resolve` (escape hatch: `utils/utils.py::bypass_get_queryset`) — per-relation visibility | shipped since `0.0.1`/`0.0.3`: the [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] + the optimizer's `Prefetch` downgrade keep target hooks effective under joins | shipped — pre-existing parity |
+| graphene_django: `graphene_django/types.py::DjangoObjectType.get_queryset` applied to FK/O2O resolution by `graphene_django/converter.py::convert_field_to_djangomodel.dynamic_type.CustomField.wrap_resolve` (escape hatch: `graphene_django/utils/utils.py::bypass_get_queryset`) — per-relation visibility | shipped since `0.0.1`/`0.0.3`: the [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] + the optimizer's `Prefetch` downgrade keep target hooks effective under joins | shipped — pre-existing parity |
 | django_graphene_filters: `permissions.py::apply_cascade_permissions` — graph-level cascade (ContextVar cycle guard, single-column scope, nullable preservation, alias pinning) | `permissions.py::apply_cascade_permissions` ([Decision 5](#decision-5--the-cascade-walk-call-time-model-graph-walk-registry-primary-lookup-every-registered-target-composes-subquery-intersection)) | **this card (`0.0.10`) — required parity (helper-level; the consumer `view_<model>` branch intentionally diverges — see Decision 6)** |
 | (no async variant upstream — graphene runs sync) | `aapply_cascade_permissions` via `sync_to_async` ([Decision 10](#decision-10--syncasync-contract-syncmisuseerror-on-async-hooks-from-the-sync-walk-the-async-variant-wraps-the-walk-in-sync_to_async)) | this card — beyond parity, required by the package's dual-context resolver story |
 | strawberry_django: `permissions.py` field extensions + `integrations/guardian.py` | — | 🍓 parity-adjacent (decorator-shaped; explicitly not borrowed) |
@@ -269,7 +269,7 @@ When a parent row's FK points at a target row the target type's hook hides, the 
 Rationale companion — this Decision's justification and its three rejected alternatives: [Decision 6][rationale-d6].
 
 **Consumer-recipe divergence (cookbook `view_<model>`).** Parity is at the *helper*
-level. The cookbook's consumer hooks (`recipes/schema.py::ObjectNode.get_queryset`
+level. The cookbook's consumer hooks (`~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py::ObjectNode.get_queryset`
 and siblings) keep the middle `has_perm("recipes.view_<model>")` branch as a bare
 `queryset.filter(is_private=False)` and lean on the resolver-level sentinel
 (`django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` /
@@ -337,7 +337,7 @@ The card's open question #4, answered: the shipped [`FilterSet`][glossary-filter
 
 | Layer | Host | Signature | Judges | Ships |
 | --- | --- | --- | --- | --- |
-| Row visibility (incl. cascade) | `DjangoType.get_queryset` | `(cls, queryset, info, **kwargs)` | which rows exist | shipped / this card |
+| Row visibility (incl. cascade) | `DjangoType.get_queryset` | `(cls, queryset, info)` | which rows exist | shipped / this card |
 | Input gates | `FilterSet` / `OrderSet` | `check_<field>_permission(self, request)` | whether *this request's input* may reference a field | shipped (`0.0.8`) |
 | Read gates | [`FieldSet`][glossary-fieldset] | `check_<field>_permission(self, info)` | whether a resolved field's value may be read | `0.1.1` ([Decision 2](#decision-2--card-scope-boundary-the-cascade-ships-end-to-end-the-per-field-read-gate-is-defined-here-and-implemented-with-fieldset-011)) |
 

@@ -30,15 +30,23 @@ Two corpora, deliberately different strictness:
   violation too, because a bare upstream basename is exactly the ambiguity rule 27
   exists to remove -- cite ``django_graphene_filters/connection_field.py::x``, not
   ``connection_field.py::x``.
-* **``KANBAN.md``** fails only on real rot -- a cited file that exists whose symbol
-  does not. TODO cards legitimately cite files that are not written yet, and parity
-  cards cite upstream trees that are not vendored here, so an unresolvable file
-  carries no signal on the board.
+* **``KANBAN.md`` and the spec corpus** (the in-flight ``docs/spec-*.md`` and every
+  ``docs/SPECS/**/*.md``, ``appx/`` companions included) fail only on real rot -- a
+  cited file that exists whose symbol does not. TODO cards and planned specs
+  legitimately cite files that are not written yet, and parity notes cite upstream
+  trees that are not vendored here, so an unresolvable file carries no signal there.
+  Every spec describes the code as it is now, so a spec citing a symbol its file no
+  longer defines is rot like any other. ``docs/SPECS/NEXT.md`` is the spec-authoring
+  process doc, not a spec: its ``e.g.`` citations illustrate the citation form over
+  symbols that need not exist, so it is the one file under ``docs/SPECS/`` left out.
 
-``docs/`` is deliberately out of the gate. The spec archive is a historical record
-reconciled per-card during a residual cycle, not a surface a commit should gate on.
-``--cited-by`` reads the standing ``docs/`` markdown anyway, marked ungated, because
-a rename or a reword strands those citers too.
+A citation inside an absolute path (``~/projects/...`` or ``/Users/...``) names a
+file in a checkout outside this repo and is skipped like an upstream prefix.
+
+The rest of ``docs/`` is out of the gate: per-cycle artifacts close with their cycle,
+and standing docs are reconciled by hand. ``--cited-by`` reads the standing ``docs/``
+markdown anyway, marked ungated, because a rename or a reword strands those citers
+too.
 
 The whole corpus is swept on every run (``pass_filenames: false``): a rename in the
 file you are committing rots citations in files you are not, so a staged-paths-only
@@ -49,7 +57,7 @@ Reviewer flags (none changes the default run):
 
 * ``--paths PATH...`` checks only the citations found in the named files (any
   ``.py`` or ``.md``; resolution still runs against the whole tree). A named
-  ``KANBAN.md`` keeps its soft rule; every other named file is fail-closed.
+  ``KANBAN.md`` or spec keeps its soft rule; every other named file is fail-closed.
 * ``--json`` prints every checked citation with its file, line, kind (``symbol`` /
   ``dunder`` / ``substring``), resolved flag, target file and, for a failure, the
   "now lives in" hint. The summary line goes to stderr so stdout stays JSON.
@@ -59,9 +67,9 @@ Reviewer flags (none changes the default run):
 * ``--cited-by PATH[::Symbol]`` lists every file and line that cites that path (or
   that symbol, or a member of it) across the gate corpus and the standing ``docs/``
   markdown (per-cycle ``rev-*`` / ``review-*`` / ``dry-*`` / ``bld-*`` /
-  ``bug_hunt-*`` artifacts, ``docs/SPECS/`` and scratch folders excluded), each row
-  marked ``gated`` or ``ungated``. Run it before renaming a symbol or rewording a
-  cited line.
+  ``bug_hunt-*`` artifacts and scratch folders excluded; the spec corpus is in the
+  gate corpus), each row marked ``gated`` or ``ungated``. Run it before renaming a
+  symbol or rewording a cited line.
 
 Usage::
 
@@ -81,6 +89,7 @@ import fnmatch
 import json
 import os
 import re
+import string
 import sys
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -101,6 +110,17 @@ PACKAGE_ROOT = "django_strawberry_framework"
 
 # Markdown files inside the gate, checked under the softer "real rot only" rule.
 MARKDOWN_SOURCES = ("KANBAN.md",)
+
+# The spec corpus, gated under the same "real rot only" rule as the board: the
+# in-flight spec and its companions at `docs/` top level, and the whole archive.
+SPEC_GLOBS = ("docs/spec-*.md", "docs/SPECS/**/*.md")
+# The spec-authoring process doc that lives beside the archive. It is not a spec:
+# its `e.g.` citations illustrate the citation form over symbols that need not exist.
+SPEC_EXCLUDED = frozenset({"docs/SPECS/NEXT.md"})
+
+# Characters a filesystem path token is spelled with, for finding where the path a
+# citation sits in begins.
+_PATH_TOKEN_CHARS = frozenset(string.ascii_letters + string.digits + "_./~-")
 
 # Path prefixes naming a tree that is not vendored here. Citations under them are
 # upstream references (graphene-django parity notes, Django internals) and can only
@@ -156,7 +176,8 @@ SUBSTRING_RE = re.compile(
 )
 
 # `--cited-by` reads standing docs but not the per-cycle artifacts that close with
-# their cycle, the spec archive, or untracked scratch folders.
+# their cycle or untracked scratch folders; the spec archive is read as gate corpus
+# (`NEXT.md`, the one non-spec file in it, is not read at all).
 DOCS_ROOT = "docs"
 PER_CYCLE_ARTIFACTS = (
     "rev-*.md",
@@ -245,13 +266,23 @@ def iter_python_sources() -> tuple[Path, ...]:
     return tuple(sorted(found))
 
 
+def iter_spec_sources() -> tuple[Path, ...]:
+    """Return every gated spec-corpus markdown file, sorted."""
+    found = {path for pattern in SPEC_GLOBS for path in REPO_ROOT.glob(pattern) if path.is_file()}
+    return tuple(sorted(path for path in found if _relative(path) not in SPEC_EXCLUDED))
+
+
 def iter_standing_docs() -> tuple[Path, ...]:
-    """Return the standing ``docs/`` markdown ``--cited-by`` reads, sorted."""
+    """Return the standing ``docs/`` markdown ``--cited-by`` reads, sorted.
+
+    The spec corpus is gated, so it is read as part of the gate corpus instead.
+    """
     docs = REPO_ROOT / DOCS_ROOT
+    specs = set(iter_spec_sources())
     found: list[Path] = []
     for path in docs.rglob("*.md"):
         parts = path.relative_to(docs).parts
-        if EXCLUDED_DOCS_DIRS.intersection(parts[:-1]):
+        if EXCLUDED_DOCS_DIRS.intersection(parts[:-1]) or path in specs:
             continue
         if any(fnmatch.fnmatch(path.name, pattern) for pattern in PER_CYCLE_ARTIFACTS):
             continue
@@ -486,6 +517,20 @@ def _symbol_kind(symbol: str) -> str:
     return KIND_DUNDER if DUNDER_RE.fullmatch(symbol.rsplit(".", 1)[-1]) else KIND_SYMBOL
 
 
+def _inside_absolute_path(text: str, offset: int) -> bool:
+    """Whether the citation starting at ``offset`` is the tail of an absolute path.
+
+    ``CITATION_RE`` cannot start on ``~`` or ``/`` and stops at ``-``, so in
+    ``~/projects/django-graphene-filters/examples/schema.py::Query`` it matches only
+    ``filters/examples/schema.py``. Walking back over the path token it sits in finds
+    the ``~`` / ``/`` that marks a checkout outside this repo.
+    """
+    start = offset
+    while start > 0 and text[start - 1] in _PATH_TOKEN_CHARS:
+        start -= 1
+    return start < offset and text[start] in "~/"
+
+
 def _line_of(text: str, offset: int) -> int:
     """Return the 1-based line number of ``offset`` in ``text``."""
     return text.count("\n", 0, offset) + 1
@@ -530,8 +575,8 @@ def iter_citation_records(text: str, *, substrings: bool = False) -> Iterator[Ci
             )
             found.append((match.start(), record))
     found.sort(key=lambda item: (item[0], item[1].kind == KIND_SUBSTRING))
-    for _, citation in found:
-        if citation.cited.startswith(UPSTREAM_PREFIXES):
+    for offset, citation in found:
+        if citation.cited.startswith(UPSTREAM_PREFIXES) or _inside_absolute_path(text, offset):
             continue
         if citation.kind != KIND_SUBSTRING and is_family(citation.symbol or ""):
             continue
@@ -770,11 +815,12 @@ def _named_sources(paths: Sequence[str]) -> list[tuple[Path, bool]]:
         CitationCheckError: A named path is missing or outside the repo.
     """
     named: list[tuple[Path, bool]] = []
+    specs = set(iter_spec_sources())
     for raw in paths:
         path = _repo_path(raw)
         if not path.is_file():
             raise CitationCheckError(f"{raw}: no such file.")
-        entry = (path, _relative(path) not in MARKDOWN_SOURCES)
+        entry = (path, _relative(path) not in MARKDOWN_SOURCES and path not in specs)
         if entry not in named:
             named.append(entry)
     return named
@@ -803,7 +849,9 @@ def _gate_sources(corpus: Sequence[Path]) -> list[tuple[Path, bool]]:
     """Return the CI corpus as ``(file, require_file)`` pairs.
 
     Raises:
-        CitationCheckError: A gated markdown source is missing.
+        CitationCheckError: A gated markdown source is missing, or the spec corpus
+            is empty (a moved or renamed spec tree would otherwise pass by checking
+            nothing).
     """
     sources = [(path, True) for path in corpus if _relative(path) not in SYNTHETIC_SOURCES]
     for name in MARKDOWN_SOURCES:
@@ -811,6 +859,11 @@ def _gate_sources(corpus: Sequence[Path]) -> list[tuple[Path, bool]]:
         if not markdown.is_file():
             raise CitationCheckError(f"{name} is missing; the citation gate expects it.")
         sources.append((markdown, False))
+    specs = iter_spec_sources()
+    if not specs:
+        globs = " / ".join(SPEC_GLOBS)
+        raise CitationCheckError(f"No spec sources match {globs}; the citation gate expects them.")
+    sources.extend((path, False) for path in specs)
     return sources
 
 
@@ -957,7 +1010,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     named = args.paths is not None
     sources = _named_sources(args.paths) if named else _gate_sources(corpus)
     outcomes: list[Outcome] = []
-    python_checked = 0
+    checked = {"py": 0, "board": 0, "spec": 0}
     for source, require_file in sources:
         found = evaluate_source(
             source,
@@ -968,14 +1021,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         outcomes.extend(found)
         if source.suffix == ".py":
-            python_checked += sum(1 for item in found if item.citation.kind != KIND_SUBSTRING)
+            bucket = "py"
+        elif _relative(source) in MARKDOWN_SOURCES:
+            bucket = "board"
+        else:
+            bucket = "spec"
+        checked[bucket] += sum(1 for item in found if item.citation.kind != KIND_SUBSTRING)
 
     pinpoints = sum(1 for item in outcomes if item.citation.kind == KIND_SUBSTRING)
     if named:
         scope = f"{len(outcomes)} in {len(sources)} named file(s)"
     else:
-        markdown_checked = len(outcomes) - pinpoints - python_checked
-        scope = f"{python_checked} in {len(corpus)} .py files, {markdown_checked} in KANBAN.md"
+        spec_files = sum(
+            1
+            for source, _ in sources
+            if source.suffix != ".py" and _relative(source) not in MARKDOWN_SOURCES
+        )
+        scope = (
+            f"{checked['py']} in {len(corpus)} .py files, {checked['board']} in KANBAN.md, "
+            f"{checked['spec']} in {spec_files} spec files"
+        )
     if args.substrings:
         scope += f"; {pinpoints} of them substring pinpoints"
     return _report(outcomes, scope, as_json=args.json)

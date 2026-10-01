@@ -115,7 +115,7 @@ The target is not a full connection/query-field release. The target is to make m
 - `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type, ...] = ()"` declares `interfaces: tuple[type, ...] = ()` on `DjangoTypeDefinition`. The `0.0.4` foundation slice reserved this slot specifically for this work; this slice fills it and adds no other.
 - `django_strawberry_framework/types/finalizer.py::finalize_django_types` runs Phase 1 (resolve pending relations), Phase 2 (`_attach_relation_resolvers`), the Phase 2.5 interface pass this spec adds, and Phase 3 (`strawberry.type(cls, name=..., description=...)`, then mark the definition finalized).
 - `django_strawberry_framework/types/converters.py::convert_scalar` synthesizes `id` from `AutoField` / `BigAutoField` / `SmallAutoField` (`django_strawberry_framework/types/converters.py #"SCALAR_MAP: dict[type[models.Field], Any]"`, applied via `django_strawberry_framework/types/converters.py::convert_scalar`), so a non-Relay `DjangoType` produces a GraphQL `id: Int!`. On a Relay-shaped type that annotation would collide with Strawberry's `Node._id -> id: GlobalID!`, which is what Decision 2 suppresses.
-- `DjangoType.get_queryset(cls, queryset, info, **kwargs)` (`django_strawberry_framework/types/base.py::DjangoType.get_queryset`) is the shipped visibility hook, documented in `docs/README.md #"visibility hook (cooperates with the optimizer"`. Every framework-owned invocation of it — the Relay node resolvers included — runs through the shared hardened boundary at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` / `::apply_type_visibility_async`, so the Relay resolvers call into it through that seam rather than directly.
+- `DjangoType.get_queryset(cls, queryset, info)` (`django_strawberry_framework/types/base.py::DjangoType.get_queryset`) is the shipped visibility hook, documented in `docs/README.md #"visibility hook (cooperates with the optimizer"`. Every framework-owned invocation of it — the Relay node resolvers included — runs through the shared hardened boundary at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` / `::apply_type_visibility_async`, so the Relay resolvers call into it through that seam rather than directly.
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] is consultable through `info.context` (`optimizer/extension.py`), and root-level list resolvers receive full optimizer treatment. Per-node optimizer cooperation inside `resolve_node` / `resolve_nodes` is deliberately not wired (Decision 3).
 - The `0.0.4` lifecycle contract is pinned in `docs/GLOSSARY.md #"Declaring a new concrete"`: "Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests that need a new registry lifecycle should use `registry.clear()` and fresh type classes." The Relay slice preserves this contract bit-for-bit.
 ## Goals
@@ -195,7 +195,7 @@ class BookType(DjangoType):
         interfaces = (relay.Node,)
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(cls, queryset, info):
         user = getattr(info.context, "user", None)
         if user and user.is_staff:
             return queryset

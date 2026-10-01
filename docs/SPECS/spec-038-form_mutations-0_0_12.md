@@ -338,7 +338,7 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     `DjangoFormMutation` **rejects any `Meta.operation`** as unsupported (a model-less
     mutation has no model operation — Decision 10) and uses the fixed identity
     sentinel **`"form"`** for the operation component of its input-shape cache key,
-    whose fourth component is the field-discovery hook discriminator
+    whose fourth component is the field-discovery basis content identity
     ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
     There are **two** allowed-key sets, not one:
     `forms/sets.py::_ALLOWED_MODELFORM_META_KEYS` is
@@ -1251,17 +1251,18 @@ optional one may be omitted.
 **Shape identity + naming + collision (the `036` discipline).** A generated form
 input's identity is **not** its name — it is the tuple **`(form_class, operation
 kind, frozenset(effective field names after `Meta.fields` / `Meta.exclude`),
-field-discovery hook discriminator)`**, parallel to `036`'s `(model, operation kind,
+field-discovery basis content identity)`**, parallel to `036`'s `(model, operation kind,
 effective field set)` ([`mutations/inputs.py`][mutations-inputs]
 `mutation_input_shape` / `mutation_input_type_name`) plus one component the form
-flavor needs. The fourth component is a **hook discriminator**, not a fifth concept:
-[`forms/sets.py`][forms-sets]`::_form_input_hook_identity` is `None` unless the
-mutation overrides `get_form_fields`, in which case it is the mutation class, so two
-mutations over one form with **different** field-discovery overrides cannot dedupe to
-one input. The **operation kind** component is the
+flavor needs. The fourth component is the **basis content** the `get_form_fields` hook
+contributes, not a fifth concept: `forms/inputs.py::_form_basis_content_identity`
+projects each basis field to its converter-dispatch type, its requiredness and a
+column-less relation field's related model, so two mutations over one form whose hooks
+produce identical bases dedupe onto one input, and any content difference builds a
+separate one. The **operation kind** component is the
 `DjangoModelFormMutation`'s `"create"` / `"update"`, or the fixed sentinel **`"form"`**
 for a plain `DjangoFormMutation` (which has no model operation) — so a plain
-form's input cache key is well-defined (`(form_class, "form", effective set)`) and two
+form's input cache key is well-defined (`(form_class, "form", effective set, basis content)`) and two
 plain mutations over the same form + effective set dedupe. Keying on the **form class object** (not its `__name__`)
 captures the field *representation* — two forms with the same field names but
 different field types are different `form_class`es, so they never wrongly dedupe. The

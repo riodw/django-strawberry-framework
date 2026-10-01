@@ -268,13 +268,13 @@ counterpart to reconcile — its field-level story is per-field
 Borrowed, engine-adapted, and deliberately diverged:
 
 - **Borrowed verbatim** — the three-declaration contract and its discovery
-  metaclass (`fieldset.py::FieldSetMetaclass`: `check_` / `_permission`
+  metaclass (`django_graphene_filters/fieldset.py::FieldSetMetaclass`: `check_` / `_permission`
   affix stripping, `resolve_` prefix stripping, `dir(new_class)` walk so
   mixin/base declarations inherit); the cascade order (gate → override →
   default); the zero-overhead posture (only managed fields get wrapped —
   unmanaged fields keep their untouched resolvers); the
   original-resolver-preserving wrapper shape
-  (`object_type.py::_wrap_field_resolvers` captures and delegates to the
+  (`django_graphene_filters/object_type.py::_wrap_field_resolvers` captures and delegates to the
   prior resolver as the cascade's step 3); the warning-not-error stance for
   a FieldSet method targeting a field absent from the owning type's surface
   (a FieldSet may be intentionally shared across types with different
@@ -287,7 +287,7 @@ Borrowed, engine-adapted, and deliberately diverged:
   double-lookup is unnecessary (the framework owns its field surface pre-
   schema, keyed by snake_case).
 - **Deliberately diverged** — upstream's deny-value machinery
-  (`object_type.py::_get_deny_value`: swallow the gate's exception, return a
+  (`django_graphene_filters/object_type.py::_get_deny_value`: swallow the gate's exception, return a
   cached type-appropriate default — `None` / `""` / `False` / epoch) is
   **rejected**; a raising gate propagates as a `GraphQLError`
   ([Decision 3](#decision-3--denial-raises-redaction-returns--no-deny-value-table)).
@@ -381,7 +381,7 @@ distinct concern from the consumer-facing class. `fieldset/` has no
 ### Decision 2 — The three-declaration contract
 
 `FieldSetMetaclass` discovers, at class-creation time (upstream
-`fieldset.py::FieldSetMetaclass` parity):
+`django_graphene_filters/fieldset.py::FieldSetMetaclass` parity):
 
 1. **Gates** — methods matching `check_<field>_permission`; `<field>` must
    name a concrete model field of `Meta.model` or a declared computed field,
@@ -420,7 +420,7 @@ exception swallowing and **no** type-appropriate default substitution.
 
 This deliberately diverges from upstream, whose wrapper calls
 `check_field()` (swallowing every exception into `False`) and substitutes a
-cached deny value (`object_type.py::_get_deny_value`: `None` / `""` /
+cached deny value (`django_graphene_filters/object_type.py::_get_deny_value`: `None` / `""` /
 `False` / epoch datetime). Rationale:
 
 - The package's taxonomy has been pinned since `0.0.10` (glossary
@@ -668,7 +668,7 @@ coroutine and bypassed.
   original resolver, gate, and override (Decision 11).
 - `exceptions.py::ConfigurationError` + the deferred-surface message shape —
   every new finalize-time raise uses the uniform error family.
-- Upstream-shape reuse ledger: `mixins.py::get_concrete_field_names` has no
+- Upstream-shape reuse ledger: `django_graphene_filters/mixins.py::get_concrete_field_names` has no
   direct import (upstream is not a dependency); its role — concrete-field
   enumeration for gate validation — is filled by the package's existing
   model-introspection helpers used by `Meta.fields` resolution; do not write

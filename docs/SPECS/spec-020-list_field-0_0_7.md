@@ -69,8 +69,8 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     1. `qs = initial_queryset(target_type)`.
     2. `qs = await apply_type_visibility_async(target_type, qs, info)`.
     3. `return await bounded_rows_async(qs, info, max_rows, trusted=trusted_max_rows)`.
-  - [ ] Async detection uses the same `in_async_context` hook the Relay defaults use — pin the import as `from strawberry.utils.inspect import in_async_context` (already imported at `django_strawberry_framework/types/relay.py #"from strawberry.utils.inspect import in_async_context"`).
-  - [ ] Optional `resolver=` constructor argument that overrides the default body. When supplied, wrap the consumer resolver so a `Manager`/`QuerySet` return value is fed through `target_type.get_queryset(qs, info)` (graphene-django parity). The wrapper itself does the `Manager → QuerySet` coercion BEFORE applying `get_queryset` (the optimizer's downstream `Manager` coercion is a safety net, not a substitute). **Three arms, chosen at construction time**: an async generator function (`django_strawberry_framework/utils/typing.py::is_async_generator_callable`), any other async callable (`django_strawberry_framework/utils/typing.py::is_async_callable` — the wrapper-aware superset of `inspect.iscoroutinefunction`, which also sees an `async def __call__` instance, a `functools.partial`, and a raw `staticmethod` descriptor), or a plain sync callable. The async-callable arm builds an `async def` wrapper that `await`s the consumer's coroutine BEFORE the isinstance check, so an async resolver returning a `QuerySet` still gets `get_queryset` applied. The sync arm additionally detects an async-only iterable return at call time and rejects it with `SyncMisuseError` when execution is synchronous. Python `list` returns from any arm pass through unchanged. There is no runtime-coroutine fallback and none is needed: a sync resolver that returns a coroutine, a custom awaitable, or a `Future` is rejected loudly (see [Edge cases and constraints](#edge-cases-and-constraints)). Optimizer cooperation still applies because the extension is root-gated against `info.path.prev is None` (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve #"if info.path.prev is not None:"`); a consumer resolver returning a `QuerySet` is planned exactly like the default.
+  - [ ] Async detection uses the same `django_strawberry_framework/utils/execution_mode.py::async_execution` predicate the Relay defaults use (`django_strawberry_framework/types/relay.py #"from ..utils.execution_mode import async_execution"`).
+  - [ ] Optional `resolver=` constructor argument that overrides the default body. When supplied, wrap the consumer resolver so a `Manager`/`QuerySet` return value is fed through `target_type.get_queryset(qs, info)` (graphene-django parity). The wrapper itself does the `Manager → QuerySet` coercion BEFORE applying `get_queryset` (the optimizer's downstream `Manager` coercion is a safety net, not a substitute). **Two arms, chosen at construction time**: an async callable (`django_strawberry_framework/utils/typing.py::is_async_callable` — the wrapper-aware superset of `inspect.iscoroutinefunction`, which also sees an `async def __call__` instance, a `functools.partial`, and a raw `staticmethod` descriptor), or any other callable, an async generator function included. The async-callable arm builds an `async def` wrapper that `await`s the consumer's coroutine BEFORE the isinstance check, so an async resolver returning a `QuerySet` still gets `get_queryset` applied. The sync arm additionally detects an async-only iterable return at call time and rejects it with `SyncMisuseError` when execution is synchronous. Python `list` returns from either arm pass through unchanged apart from the row window (offset, limit, row bound). There is no runtime-coroutine fallback and none is needed: a sync resolver that returns a coroutine, a custom awaitable, or a `Future` is rejected loudly (see [Edge cases and constraints](#edge-cases-and-constraints)). Optimizer cooperation still applies because the extension is root-gated against `info.path.prev is None` (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve #"if info.path.prev is not None:"`); a consumer resolver returning a `QuerySet` is planned exactly like the default.
   - [ ] Optional `description=` / `deprecation_reason=` / `directives=` pass-through into the inner `strawberry.field(...)` call so the symbol is feature-comparable to `strawberry.field(...)` at the metadata level, plus the `max_rows=` / `trusted_max_rows=` row-bound arguments validated per [Decision 5](#decision-5--validation--error-shapes).
   - [ ] Re-export from `django_strawberry_framework/__init__.py` in alphabetical order ([Decision 1](#decision-1--module-location-mechanism--public-export)); add `"DjangoListField"` to `__all__`.
   - [ ] Update `tests/base/test_init.py`'s pinned `__all__` assertion.
@@ -325,117 +325,36 @@ The rejected placement alternatives (bundling into `connection.py`, inlining int
 
 ### Decision 2 — Default resolver shape
 
-The factory function captures `target_type` via closure and builds a wrapped resolver whose signature matches Strawberry's contract (Strawberry calls a field resolver with `(root, info)` where `info` MUST be annotated `strawberry.types.Info`; `**kwargs` is NOT a harmless catch-all because Strawberry treats every parameter as a GraphQL argument). Sketch:
+The factory function captures `target_type` via closure and builds a wrapped resolver whose published signature matches Strawberry's contract: `_synthesized_list_signature` sets the wrapper's `__signature__` / `__annotations__` to `(root, info: strawberry.types.Info)` plus the published list arguments, because Strawberry treats every signature parameter as a GraphQL argument. Sketch of the shape (the module is authoritative):
 
 ```python path=null start=null
 # django_strawberry_framework/list_field.py
-from collections.abc import AsyncIterable, Callable, Iterable, Sequence
-from typing import Any
-
-import strawberry
-from strawberry.types import Info
-from strawberry.utils.inspect import in_async_context
-
-from .resource_policy import bounded_rows, bounded_rows_async, validate_collection_bound
-from .utils.querysets import (
-    apply_type_visibility_async,
-    apply_type_visibility_sync,
-    initial_queryset,
-    post_process_queryset_result_async,
-    post_process_queryset_result_sync,
-)
-from .utils.typing import is_async_callable, is_async_generator_callable
-
-
-# Module-scope consumer-resolver post-processing helpers (pinned at module scope,
-# NOT inside the factory body, so they're referentially transparent and
-# unit-testable independently of `DjangoListField(...)`. `target_type` and `info`
-# are explicit parameters. The `Manager` -> `QuerySet` coercion + visibility-hook
-# contract is single-sited in `utils/querysets.py`; these stay as the named
-# consumer-wrapper entry points the `_wrap` resolvers call. The default-resolver
-# path bypasses them because `qs` is already known to be a QuerySet from
-# `initial_queryset(...)` -- no normalization is needed there. The `_consumer`
-# suffix in the names makes the per-consumer-resolver scope explicit.)
-
-
-def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> Any:
-    return post_process_queryset_result_sync(target_type, result, info)
-
-
-async def _post_process_consumer_async(target_type: type, result: Any, info: Info) -> Any:
-    return await post_process_queryset_result_async(target_type, result, info)
-
-
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity.
-    target_type: type,
-    *,
-    resolver: Callable | None = None,
-    description: str | None = None,
-    deprecation_reason: str | None = None,
-    directives: Sequence[object] = (),
-    max_rows: int | None = None,
-    trusted_max_rows: bool = False,
-) -> Any:
-    if max_rows is not None:
-        validate_collection_bound(max_rows, field="DjangoListField max_rows")
-    # The four shared target guards, per Decision 5.
-    _validate_djangotype_target(target_type, resolver, field="DjangoListField")
-
+    target_type, *, resolver=None, description=None, deprecation_reason=None,
+    directives=(), max_rows=None, trusted_max_rows=False,
+):
+    # max_rows / trusted_max_rows validation and the shared target guards (Decision 5).
     if resolver is None:
-        def _default(root: Any, info: Info) -> Any:
-            qs = initial_queryset(target_type)
-            if in_async_context():
-                # The async branch DOES need its own coroutine wrapper: the row
-                # bound has to be applied to the AWAITED value, after the
-                # visibility hook has composed onto the unsliced source.
-                return _bounded_async(
-                    apply_type_visibility_async(target_type, qs, info),
-                    info, max_rows, trusted=trusted_max_rows,
-                )
-            return bounded_rows(
-                apply_type_visibility_sync(target_type, qs, info),
-                info, max_rows, trusted=trusted_max_rows,
-            )
+        def _default(*args, offset=None, limit=None, order_by=strawberry.UNSET, **kwargs):
+            _, info, args_record = _argument_record(args, kwargs, ...)
+            qs = base_queryset(target_model)
+            if async_execution():
+                return _execute_queryset_pipeline_async(node_type, qs, info, args_record, ...)
+            return _execute_queryset_pipeline_sync(node_type, qs, info, args_record, ...)
         wrapped = _default
     else:
-        user_resolver = resolver
-
-        async def _resolve_async_iterable(source: Any, info: Info) -> Any:
-            return await bounded_rows_async(
-                await _post_process_consumer_async(target_type, source, info),
-                info, max_rows, trusted=trusted_max_rows,
-            )
-
-        if is_async_generator_callable(user_resolver):
-            # An async generator function is CALLED synchronously and yields
-            # asynchronously, so this wrapper stays a plain `def`.
-            def _wrap(root: Any, info: Info) -> Any:
-                source = user_resolver(root, info)
-                _require_async_iterable_context()
-                return _resolve_async_iterable(source, info)
-        elif is_async_callable(user_resolver):
-            async def _wrap(root: Any, info: Info) -> Any:
-                # `await` the consumer coroutine BEFORE handing the result to
-                # `_post_process_consumer_async`, otherwise the
-                # isinstance-QuerySet branch sees the coroutine, not the value.
-                return await bounded_rows_async(
-                    await _post_process_consumer_async(
-                        target_type, await user_resolver(root, info), info,
-                    ),
-                    info, max_rows, trusted=trusted_max_rows,
-                )
-        else:
-            def _wrap(root: Any, info: Info) -> Any:
-                source = user_resolver(root, info)
-                if isinstance(source, AsyncIterable) and not isinstance(source, Iterable):
-                    _require_async_iterable_context()
-                    return _resolve_async_iterable(source, info)
-                return bounded_rows(
-                    _post_process_consumer_sync(target_type, source, info),
-                    info, max_rows, trusted=trusted_max_rows,
-                )
-        wrapped = _wrap
-
+        # _async_wrap: await the consumer coroutine FIRST, then
+        #   prepared_resolver_source(source, node_type, async_guard=reject_residual_async_source).
+        # _sync_wrap: call the consumer; an async-only iterable goes through
+        #   reject_async_iterable_in_sync_context(...) and is awaited by the executor;
+        #   anything else goes through
+        #   prepared_resolver_source(source, node_type, async_guard=reject_awaitable_sync_source).
+        # A QuerySet source runs the queryset pipeline; any other iterable is windowed
+        # by resource_policy.py::_windowed_rows and passes through otherwise unchanged.
+        wrapped = _async_wrap() if is_async_callable(user_resolver) else _sync_wrap()
+    signature, annotations = _synthesized_list_signature(orderset_class)
+    wrapped.__signature__ = signature
+    wrapped.__annotations__ = annotations
     return strawberry.field(
         resolver=wrapped,
         description=description,
@@ -444,16 +363,16 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity.
     )
 ```
 
-Where `apply_type_visibility_sync` / `apply_type_visibility_async`, `initial_queryset` and `post_process_queryset_result_sync` / `_async` are imported from `django_strawberry_framework/utils/querysets.py` (see [Decision 3](#decision-3--get_queryset-and-async-symmetry)); `bounded_rows` / `bounded_rows_async` / `validate_collection_bound` from `django_strawberry_framework/resource_policy.py`; and `_bounded_async`, `_require_async_iterable_context` and `_validate_djangotype_target` are module-local to `list_field.py`.
+The queryset pipeline (`django_strawberry_framework/list_field.py::_execute_queryset_pipeline_sync` / `::_execute_queryset_pipeline_async`) applies the visibility hook first (`apply_type_visibility_sync` / `apply_type_visibility_async` from `django_strawberry_framework/utils/querysets.py`, see [Decision 3](#decision-3--get_queryset-and-async-symmetry)), then any supplied ordering and offset guard, then the row bound through `_windowed_rows`. `prepared_resolver_source` is `django_strawberry_framework/utils/querysets.py::prepared_resolver_source`: it refuses the wrong async shape first, coerces a `Manager` to a `QuerySet`, and reports which branch the value landed in.
 
-**Three consumer-resolver arms, not two.** A consumer `resolver=` is (a) an async generator function, (b) any other async callable — `async def`, an instance whose `__call__` is `async def`, a raw `staticmethod` descriptor, or any nesting of `functools.partial` / `staticmethod` around those, as `django_strawberry_framework/utils/typing.py::is_async_callable` defines it (`django_strawberry_framework/utils/typing.py::_callable_inspection_target` peels both wrapper kinds in a loop, so the nesting depth is not a contract surface) — or (c) a plain sync callable. Arms (a) and (b) are committed to at construction time; arm (c) additionally detects an async-only iterable at call time, because a sync callable may return one. An async-only iterable met from synchronous GraphQL execution is rejected with `SyncMisuseError` rather than silently yielding nothing: `django_strawberry_framework/list_field.py::_require_async_iterable_context` raises unless `in_async_context()`. `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_http_partial_async_generator_resolver_is_bounded`, `::test_async_generator_natural_exhaustion_does_not_call_aclose` and `examples/fakeshop/test_query/test_list_field_api.py::test_holder_sync_http_rejects_an_async_generator_resolver` pin the arm.
+**Two consumer-resolver arms, plus a call-time check.** A consumer `resolver=` is either an async callable — `async def`, an instance whose `__call__` is `async def`, a raw `staticmethod` descriptor, or any nesting of `functools.partial` / `staticmethod` around those, as `django_strawberry_framework/utils/typing.py::is_async_callable` defines it (`django_strawberry_framework/utils/typing.py::_callable_inspection_target` peels both wrapper kinds in a loop, so the nesting depth is not a contract surface) — or any other callable, an async generator function included (calling it returns an async-only iterable rather than a coroutine). The arm is committed to at construction time; the sync arm additionally detects an async-only iterable at call time, because a sync callable may return one. An async-only iterable met from synchronous GraphQL execution is rejected with `SyncMisuseError` rather than silently yielding nothing: `django_strawberry_framework/utils/querysets.py::reject_async_iterable_in_sync_context` raises unless the operation's executor is async. `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_http_partial_async_generator_resolver_is_bounded`, `::test_async_generator_natural_exhaustion_does_not_call_aclose` and `examples/fakeshop/test_query/test_list_field_api.py::test_holder_sync_http_rejects_an_async_generator_resolver` pin the async-iterable path.
 
-**The row bound is applied last, never before the visibility hook.** A sliced queryset cannot be refiltered or reordered, and both the visibility hook and the consumer post-processing compose onto the source — so slicing first would turn the bound into a crash on every type that declares a hook. The ordering is a correctness constraint, not a preference, which is why the async default branch carries its own `_bounded_async` coroutine wrapper: the bound must land on the awaited value.
+**The row bound is applied last, never before the visibility hook.** A sliced queryset cannot be refiltered or reordered, and both the visibility hook and the consumer post-processing compose onto the source — so slicing first would turn the bound into a crash on every type that declares a hook. The ordering is a correctness constraint, not a preference, which is why the async pipeline applies the bound to the awaited, visibility-composed queryset.
 
 **Async-detection asymmetry — intentional, not a harmonization candidate**. Two different detection mechanisms appear above:
 
-- The **default** resolver uses **runtime** `in_async_context()` inside a plain `def _default(...)` body that lazily returns either a value or a coroutine. Strawberry handles `AwaitableOrValue` from sync resolvers, so the same factory output dispatches correctly under both `schema.execute_sync(...)` and `await schema.execute(...)`. This is the same pattern the optimizer extension uses at `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve`.
-- The **consumer-resolver wrapper** uses **construction-time** `is_async_callable(user_resolver)` (and `is_async_generator_callable` first) to commit to either an `async def _wrap` or a plain `def _wrap`. The wrapper has to be statically sync OR async at factory time because Strawberry inspects the resolver's signature once at schema construction and commits to async-vs-sync handling globally — an `async def` wrapper lets Strawberry await it directly without going through `AwaitableOrValue`. The predicate is deliberately **not** `inspect.iscoroutinefunction`, which returns `False` for a `functools.partial` around an `async def`, for a callable object with an `async def __call__`, and for a raw `staticmethod` descriptor wrapping an `async def`.
+- The **default** resolver uses **runtime** `async_execution()` inside a plain `def _default(...)` body that lazily returns either a value or a coroutine. Strawberry handles `AwaitableOrValue` from sync resolvers, so the same factory output dispatches correctly under both `schema.execute_sync(...)` and `await schema.execute(...)`. This is the same pattern the optimizer extension uses at `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve`.
+- The **consumer-resolver wrapper** uses **construction-time** `is_async_callable(user_resolver)` to commit to either an `async def _wrap` or a plain `def _wrap`. The wrapper has to be statically sync OR async at factory time because Strawberry inspects the resolver's signature once at schema construction and commits to async-vs-sync handling globally — an `async def` wrapper lets Strawberry await it directly without going through `AwaitableOrValue`. The predicate is deliberately **not** `inspect.iscoroutinefunction`, which returns `False` for a `functools.partial` around an `async def`, for a callable object with an `async def __call__`, and for a raw `staticmethod` descriptor wrapping an `async def`.
 
 Harmonizing the two would either force the default into static commitment (loses sync-callability) or force the consumer wrapper into lazy upgrade (adds an extra coroutine layer per call). Both mechanisms are correct for their respective dispatch sites; a future maintainer noticing the asymmetry should leave it alone.
 
@@ -470,7 +389,7 @@ The sync + async `cls.get_queryset(...)` cooperation is delegated to the shared 
 - `apply_type_visibility_sync(cls, qs, info)` at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` — applies the hook in a sync context; rejects an async hook with `SyncMisuseError`, a `ConfigurationError` subclass that also inherits `RuntimeError`, after closing the unawaited coroutine so no "coroutine was never awaited" warning escapes. Each surface passes its own recourse wording.
 - `apply_type_visibility_async(cls, qs, info)` at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_async` — applies the hook in an async context; awaits awaitables; passes sync returns through.
 
-Async detection re-uses the same `in_async_context` symbol the Relay defaults use — the canonical import is `from strawberry.utils.inspect import in_async_context` (already imported at `django_strawberry_framework/types/relay.py #"from strawberry.utils.inspect import in_async_context"`). The `list_field.py` module imports it from the same site; no fork.
+Async detection re-uses the `django_strawberry_framework/utils/execution_mode.py::async_execution` predicate the Relay defaults use (`django_strawberry_framework/types/relay.py #"from ..utils.execution_mode import async_execution"`). The `list_field.py` module imports it from the same site; no fork.
 
 **The hook's return crosses a sealed boundary.** The contract is not "call the hook and use what comes back". Both helpers SEAL the source and the hook's result into a fresh framework-owned plain `QuerySet` rebuilt from validated query state — shape, concrete and actual-base table, sealability, model-row-ness, routed alias — and fail closed on any return they cannot prove: a `Manager` whose `.all()` degrades to a non-queryset, a silently re-routed database, a `.values()` projection on a read surface, an instance-shadowed `all`, or a sliced result a later recomposition would have to reorder. A hostile or careless `get_queryset` override therefore cannot widen the rows this field serves, and an unprovable return raises rather than passing through. Pinned by `examples/fakeshop/test_query/test_list_field_api.py::test_shipped_branches_hostile_queryset_subclass_cannot_leak_restricted_rows` (and its async twin `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_hostile_queryset_subclass_cannot_leak_restricted_rows`), `examples/fakeshop/test_query/test_list_field_api.py::test_holder_manager_that_degrades_to_a_list_is_rejected` (async twin `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_manager_that_degrades_to_a_list_is_rejected`), and `examples/fakeshop/test_query/test_list_field_api.py::test_holder_manager_that_drifts_alias_is_rejected`.
 

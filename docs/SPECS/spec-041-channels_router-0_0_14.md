@@ -124,7 +124,7 @@ used throughout the spec:
   discipline for both dependency states: the `builtins.__import__` block +
   strict `sys.modules` eviction with the **two-sided** (parent-attribute)
   restore, reused by the degraded-install path so the re-executed module has
-  no cached `_ROUTER_CLASS`.
+  no cached `_router_class`.
 - [`require_optional_module`][glossary-require-optional-module] — the Slice-1
   primitive added to [`utils/imports.py`][utils-imports] (module name +
   keyword-only `install_hint`, no `feature_label`); `require_channels()` is a
@@ -241,7 +241,7 @@ genuinely-unreachable-live case, not a live-first weakening
         `_CHANNELS_INSTALL_HINT` string, no
         memoization), the module-level PEP 562 `__getattr__` that materializes and
         caches the `DjangoGraphQLProtocolRouter` class (in the module global
-        `_ROUTER_CLASS`, its first construction serialized behind a module-global
+        `_router_class`, its first construction serialized behind a module-global
         lock) on first access (guard first, then the class body
         subclassing `channels.routing.ProtocolTypeRouter`), and the composition
         itself — `"http"`: the required `django_application`, assigned verbatim;
@@ -315,7 +315,7 @@ genuinely-unreachable-live case, not a live-first weakening
         class caches, an order-dependent flake under `pytest-xdist`). The
         degraded-install path (Test 17) uses the **same** module-eviction +
         parent-attribute-restore fixture so the freshly re-executed module has
-        no cached `_ROUTER_CLASS`, making the blocked builder import actually
+        no cached `_router_class`, making the blocked builder import actually
         fire regardless of any earlier construction test
         ([Test plan](#test-plan)).
   - [ ] Every new symbol carries its docstring (the [`docs/TREE.md`][tree] render
@@ -871,7 +871,7 @@ the same three-part architecture ([`spec-039`][spec-039] Decision 12, generalize
    `channels.routing.ProtocolTypeRouter`, so it **cannot** be defined at module
    import without paying the import. `routers.py` therefore defines the class
    inside a builder (`_build_router_class()`) and caches the built class in the
-   module global **`_ROUTER_CLASS`**, exposing it via a [PEP 562
+   module global **`_router_class`**, exposing it via a [PEP 562
    **module-level `__getattr__`**][glossary-pep-562-lazy-export]: accessing
    `routers.DjangoGraphQLProtocolRouter` runs
    `require_channels()`, builds (or returns the cached) class, and hands it out.
@@ -1200,7 +1200,7 @@ specified in the decisions cited; **no slice bumps the version** — the joint
 | --- | --- | --- |
 | [`pyproject.toml`][pyproject] + `uv.lock` | `channels[daphne]>=4.3.2` into `[dependency-groups].dev`; lock regenerated in the same commit | 1 |
 | [`utils/imports.py`][utils-imports] | `require_optional_module(module_name, *, install_hint)` added to the shared optional-import owner (no `feature_label`), + unit tests (Helper-reuse D-P1) | 1 |
-| `django_strawberry_framework/routers.py` (new) | `__all__ = ("DjangoGraphQLProtocolRouter",)`; `_CHANNELS_INSTALL_HINT` + a separate builder-failure message per broken half, both interpolating the [`utils/imports.py`][utils-imports] floors / `require_channels()` (thin `require_optional_module` wrapper) / `_build_router_class()` caching in `_ROUTER_CLASS` behind a module-global lock / PEP 562 `__getattr__` → `DjangoGraphQLProtocolRouter`; the composition of [Decision 6](#decision-6--constructor-and-composition) ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now) / [5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard) / [7](#decision-7--the-consumers-come-from-strawberrychannels-engine-owned-not-package-owned)) | 1 |
+| `django_strawberry_framework/routers.py` (new) | `__all__ = ("DjangoGraphQLProtocolRouter",)`; `_CHANNELS_INSTALL_HINT` + a separate builder-failure message per broken half, both interpolating the [`utils/imports.py`][utils-imports] floors / `require_channels()` (thin `require_optional_module` wrapper) / `_build_router_class()` caching in `_router_class` behind a module-global lock / PEP 562 `__getattr__` → `DjangoGraphQLProtocolRouter`; the composition of [Decision 6](#decision-6--constructor-and-composition) ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now) / [5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard) / [7](#decision-7--the-consumers-come-from-strawberrychannels-engine-owned-not-package-owned)) | 1 |
 | [`utils/permissions.py`][utils-permissions] | `request_from_info()` Channels-context branch + a wrapping adapter over both scope shapes (`.user` / `.session` / `.scope` explicit and contained, `__getattr__` delegation) ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)) | 1 |
 | `tests/test_routers.py` (new) + helper unit tests | Tests 1–18 per the [Test plan](#test-plan) | 1 |
 | [`docs/GLOSSARY.md`][glossary] | Router entry body + [Auth mutations][glossary-auth-mutations] deferral rewrite; status flips deferred | 2 |
@@ -1233,19 +1233,19 @@ carries its reason.
   the *built class* (not a successful guard result), so eviction-based absence
   tests can re-hit the guard — the non-memoizing contract from
   [`__init__.py`][init]'s root `__getattr__`, adapted: the class cache is the
-  module global `_ROUTER_CLASS` and the lock serializing its first construction is
+  module global `_router_class` and the lock serializing its first construction is
   a module global too, so a `sys.modules` eviction of `routers`
   naturally drops both with the module — **and the eviction discipline is
   two-sided**: the absence fixture saves/restores the parent package's
   `routers` attribute together with the `sys.modules` entries, restoring the
   original module object to *both* places, so no test order can leave the
   attribute path and the import path holding different module objects (and
-  therefore different `_ROUTER_CLASS` caches). **The degraded-install test
+  therefore different `_router_class` caches). **The degraded-install test
   (Test 17) uses the same eviction + parent-attribute restore** *before*
   blocking a builder import: without evicting `routers`, an earlier
-  construction test's cached `_ROUTER_CLASS` would satisfy the symbol access
+  construction test's cached `_router_class` would satisfy the symbol access
   and the blocked import would never fire — the test must observe
-  `_ROUTER_CLASS` unreachable because the module was re-executed, not mutated
+  `_router_class` unreachable because the module was re-executed, not mutated
   in place, making it order-independent under normal pytest order and
   `pytest-xdist`
   ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)
@@ -1445,7 +1445,7 @@ assertions read as contract, not as attribute spelunking.
 5. A custom `websocket_url_pattern=` reaches the WebSocket `re_path`, and reaches
    nothing else — there is no second branch for it to leak into.
 6. Repeated symbol access returns the identical cached class (the builder
-   memoizes into `_ROUTER_CLASS`), and the class is subclassable (a consumer
+   memoizes into `_router_class`), and the class is subclassable (a consumer
    extension smoke check). Concurrent first access from several threads still
    yields **one** class, the module-global lock being what makes that true.
    `routers.__all__ == ("DjangoGraphQLProtocolRouter",)`
@@ -1555,7 +1555,7 @@ assertions read as contract, not as attribute spelunking.
 17. **Parametrized over the two builder halves**, each in its own case, using
     the **same module-eviction + parent-attribute-restore fixture as the
     absent path** so the re-executed `routers` module has no cached
-    `_ROUTER_CLASS` and the blocked import actually fires (without the evict, an
+    `_router_class` and the blocked import actually fires (without the evict, an
     earlier construction test's cache would satisfy the access and the block
     would be a no-op, and the test order-dependent):
     - **(a) a blocked `channels.*` builder import** (evict `routers` + block

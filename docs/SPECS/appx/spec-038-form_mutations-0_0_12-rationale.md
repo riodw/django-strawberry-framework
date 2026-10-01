@@ -568,14 +568,12 @@ symmetric without duplicating the scalar table.
   branch — no longer exists as a symbol; the gap it left is closed inside the shared
   spine, for both branches. **The visibility-on-every-branch security contract
   survived the rewrite verbatim**; only the mechanism sentence changed.
-- **Post-ship:** the input-shape cache key is a **4-tuple**. `a2418106` (2026-08-16,
-  "materialize one-shot form field declarations before reuse") added
-  `forms/sets.py::_form_input_hook_identity(mutation_cls)` as a fourth component —
-  `None` unless the mutation overrides `get_form_fields`, otherwise the mutation class
-  — so two mutations over one form with different field-discovery overrides cannot
-  dedupe to one input. The conceptual identity is unchanged; the spec's 3-tuple simply
-  omitted a discriminator. Fixed in this Decision, `## Definition of done` item 2 and
-  the Slice-1 / Slice-2 checklist clauses.
+- **The input-shape cache key is a 4-tuple.** Its fourth component is
+  `forms/inputs.py::_form_basis_content_identity(form_class, form_fields)`, the basis
+  content a `get_form_fields` hook contributes, so two mutations over one form whose
+  hooks produce different bases cannot dedupe to one input while identical bases do.
+  The Decision, `## Definition of done` item 2 and the Slice-1 / Slice-2 checklist
+  clauses state the 4-tuple.
 - **Post-ship:** there are **two** narrowing guards, not one, keyed on the same
   `get_form_kwargs` / `get_form` waiver. `cf3293cf` (2026-06-26) added
   `forms/inputs.py::guard_partial_required_column_less_fields`, which rejects an

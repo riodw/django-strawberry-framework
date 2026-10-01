@@ -2078,9 +2078,6 @@ async def test_async_channels_http_wrong_password_is_failed_login_envelope_sessi
     assert await Session.objects.acount() == 0
 
 
-# --- Enumeration guard: one byte-identical envelope across failure classes ----
-
-
 # --- Django HTTP: the session stays modified so the cookie is emitted ---------
 
 

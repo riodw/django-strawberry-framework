@@ -258,11 +258,11 @@ viewer cannot see.
   ([Decision 13](#decision-13--search-honors-filterset-permission-gates)).
 - Upstream (`/Users/riordenweber/projects/django-graphene-filters`):
   `object_type.py` accepts `search_fields` in Meta;
-  `connection_field.py::search_args` adds the `search` argument when the
+  `django_graphene_filters/connection_field.py::search_args` adds the `search` argument when the
   node type declares the tuple and threads it to the filterset;
-  `filterset.py::build_search_conditions` whitespace-splits the input,
+  `django_graphene_filters/filterset.py::build_search_conditions` whitespace-splits the input,
   ORs each term across `construct_search(field)` lookups, ANDs the terms,
-  and `filterset.py::get_filter_fields` ALSO injects a `search` key into
+  and `django_graphene_filters/filterset.py::get_filter_fields` ALSO injects a `search` key into
   the advanced filter input type.
 
 ## Goals
@@ -304,7 +304,7 @@ viewer cannot see.
   watch-item), explicitly distinct from this card's basic OR'd `icontains`
   surface and gated on it.
 - **A `search` key inside the `filter:` input type.** Upstream injects one
-  (`filterset.py::get_filter_fields`); rejected here
+  (`django_graphene_filters/filterset.py::get_filter_fields`); rejected here
   ([Decision 9](#decision-9--no-search-key-inside-the-filter-input-type)).
 - **`search:` on [`DjangoListField`][glossary-djangolistfield] or the Relay
   node fields.** The card scopes the argument to connection fields; the
@@ -499,8 +499,8 @@ declaration beginning with any key in
 `filters/inputs.py::LOOKUP_PREFIXES` raises at declaration time with a
 message that assigns shortcut support to card 061; it must never be
 treated as a literal model-field name or escape to a backend error. The
-validated tuple lands on a new
-`types/definition.py::DjangoTypeDefinition.search_fields` slot
+validated tuple lands on a new `search_fields` slot of
+`types/definition.py::DjangoTypeDefinition`
 (`tuple[str, ...] | None = None`, normalized from list input).
 
 Path resolution — does `galaxy__name` actually reach a searchable field —

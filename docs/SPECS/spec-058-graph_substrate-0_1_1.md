@@ -457,7 +457,7 @@ class EventType(ModelType):
         model = Event
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(cls, queryset, info):
         audience = graph.get_or_compute(info, key=..., factory=...)
         plan = graph.any_of(
             graph.direct(Q(owner_id__in=audience.user_ids)),
@@ -908,7 +908,7 @@ than as the lone `0.1.1` card. **Rejected:** this card owning the bump
 Pinned now: (a) graph predicates are **public builders consumed inside the
 existing [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook]**
 — queryset-in, queryset-out composition, no new hook, no decorator, hook
-signature `(cls, queryset, info, **kwargs)` as the base class declares;
+signature `(cls, queryset, info)` as the base class declares;
 (b) edge scopes declare as **`Meta.edge_scopes`**, a mapping of relation
 field name to sync factory, added to `ALLOWED_META_KEYS` as a **net-new
 key** — not a `DEFERRED_META_KEYS` promotion; that set stays unchanged, and

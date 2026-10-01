@@ -761,8 +761,7 @@ def check_instance_write_alias(
     divergence is a loud ``ConfigurationError`` before any write.
     """
     instance_alias = router.db_for_write(model, instance=instance)
-    # Django's router always answers an alias; the None check defends a replaced router
-    if instance_alias is not None and instance_alias != alias:
+    if instance_alias != alias:
         raise ConfigurationError(
             f"The database router routes {model.__name__} writes to {instance_alias!r} for this "
             f"instance, but the mutation's transaction is pinned to {alias!r} (the no-instance "

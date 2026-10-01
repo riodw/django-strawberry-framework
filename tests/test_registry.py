@@ -443,7 +443,7 @@ def test_failed_type_teardown_remains_registered_for_retry(fresh_registry, actio
 
 
 def test_register_type_teardown_rejects_invalid_registration(fresh_registry):
-    """A teardown must be callable and belong to an already-registered type.
+    """A teardown must belong to an already-registered type.
 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
@@ -452,8 +452,6 @@ def test_register_type_teardown_rejects_invalid_registration(fresh_registry):
     class CategoryType:
         pass
 
-    with pytest.raises(TypeError, match="zero-argument callable"):
-        fresh_registry.register_type_teardown(CategoryType, object())
     with pytest.raises(ConfigurationError, match="unregistered type CategoryType"):
         fresh_registry.register_type_teardown(CategoryType, lambda: None)
 
@@ -485,19 +483,6 @@ def test_before_bind_iteration_excludes_full_clear_only_callbacks():
     finally:
         _subsystem_clears.clear()
         _subsystem_clears.update(callbacks)
-
-
-def test_register_subsystem_clear_rejects_string_references():
-    """A renamed teardown function cannot degrade into a silent import miss.
-
-    Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
-    LIFO order, retry, or ImportError guards. No live sibling.
-    """
-    with pytest.raises(TypeError, match="zero-argument callable"):
-        register_subsystem_clear(
-            "package.module.clear",  # type: ignore[arg-type]
-            owner="test.invalid",
-        )
 
 
 def test_register_subsystem_clear_rejects_empty_owner():

@@ -513,8 +513,12 @@ def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model():
 # ---------------------------------------------------------------------------
 
 
-def _owner_definition_stub(name, *, model=None, graphql_name=None):
-    """Return a minimal owner-definition-shaped object for binding tests."""
+def _owner_definition_stub(name, *, model, graphql_name=None):
+    """Return a minimal owner-definition-shaped object for binding tests.
+
+    ``model`` is the bound orderset's ``Meta.model``: a real owner definition always carries a
+    Django model, and the first-bind model check runs ``issubclass`` against it.
+    """
 
     class _Stub:
         origin = type(name, (), {"__qualname__": name})
@@ -538,7 +542,7 @@ def test_bind_orderset_owner_idempotent_for_same_definition():
             model = Shelf
             fields = ["code"]
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Shelf)
     definition = Stub()
     _bind_orderset_owner(ShelfOrder, definition)  # previous None -> bind
     _bind_orderset_owner(ShelfOrder, definition)  # previous IS definition -> no-op
@@ -568,7 +572,7 @@ def test_bind_orderset_owner_rejects_diverging_related_targets():
         origin = type("NewTargetType", (), {"__qualname__": "NewTargetType"})
         graphql_type_name = "NewTargetType"
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda f: (_PrevTargetDefinition, object()) if f == "shelf" else None)
     second = Stub(resolver=lambda f: (_NewTargetDefinition, object()) if f == "shelf" else None)
     _bind_orderset_owner(BookOrder, first)
@@ -596,7 +600,7 @@ def test_bind_orderset_owner_continues_when_both_targets_unresolved():
             model = Book
             fields = ["title"]
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda _f: None)
     second = Stub(resolver=lambda _f: None)
     _bind_orderset_owner(BookOrder, first)
@@ -624,7 +628,7 @@ def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not()
         origin = type("SomeTargetType", (), {"__qualname__": "SomeTargetType"})
         graphql_type_name = "SomeTargetType"
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda f: (_SomeTargetDefinition, object()) if f == "shelf" else None)
     second = Stub(resolver=lambda _f: None)
     _bind_orderset_owner(BookOrder, first)

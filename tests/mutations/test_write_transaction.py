@@ -1261,8 +1261,8 @@ def test_check_instance_write_alias_fails_closed_on_divergence(monkeypatch):
     )
     with pytest.raises(ConfigurationError, match="instance-sensitive"):
         check_instance_write_alias(product_models.Item, "default", object())
-    # A None / matching answer passes.
-    monkeypatch.setattr(write_transaction.router, "db_for_write", lambda model, **hints: None)
+    # A matching answer passes.
+    monkeypatch.setattr(write_transaction.router, "db_for_write", lambda model, **hints: "default")
     check_instance_write_alias(product_models.Item, "default", object())
 
 

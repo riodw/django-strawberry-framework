@@ -324,7 +324,6 @@ def test_validation_error_mapper_handles_lazy_translation_objects():
     ("prefix", "segment", "expected"),
     [
         ("", "name", "name"),
-        (None, "name", "name"),
         ("items", "0", "items.0"),
         ("items.0", "name", "items.0.name"),
         ("items.0", "__all__", "items.0.__all__"),

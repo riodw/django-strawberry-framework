@@ -154,8 +154,7 @@ def field_error(path: str, messages: object, *, codes: object = None) -> FieldEr
     """
     from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 
-    # ``path: str`` is the public contract; the None check validates a caller breaking it
-    normalized_path = _safe_text(path, fallback="") if path is not None else ""
+    normalized_path = _safe_text(path, fallback="")
     key = normalized_path if normalized_path else NON_FIELD_ERROR_KEY
     # Root rule: a model-wide / non-field error (an empty path, or the bare
     # ``"__all__"`` sentinel as the WHOLE path - the DRF flattener joins the top-level
@@ -444,7 +443,6 @@ def join_error_path(prefix: str, segment: str) -> str:
     ``items.0.__all__`` (the root-vs-nested ``__all__`` distinction itself
     stays with each flattener's key handling).
     """
-    # ``prefix: str`` is the public contract; the None check validates a caller breaking it
-    normalized_prefix = _safe_text(prefix, fallback="") if prefix is not None else ""
+    normalized_prefix = _safe_text(prefix, fallback="")
     normalized_segment = _safe_text(segment)
     return f"{normalized_prefix}.{normalized_segment}" if normalized_prefix else normalized_segment

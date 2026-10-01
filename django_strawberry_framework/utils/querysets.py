@@ -478,10 +478,6 @@ class _AsyncQuerySetRows:
     __slots__ = ("_queryset",)
 
     def __init__(self, queryset: models.QuerySet[models.Model, object]) -> None:
-        if not isinstance(queryset, models.QuerySet):
-            raise TypeError(
-                f"_AsyncQuerySetRows requires a QuerySet; got {_safe_type_name(queryset)}",
-            )
         self._queryset = queryset
 
     def __aiter__(self) -> AsyncIterator[object]:

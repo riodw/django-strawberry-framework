@@ -787,8 +787,11 @@ declaration that will not dispatch.
   `## Definition of done` item 3, and the subsystem-clear-registration-seam table cell).
   Commit `48f9f65d`
   (2026-07-11, "Refactor subsystem clear registration and handling") replaced them with a
-  zero-argument callable plus a keyword `owner`, and now **rejects** a string
-  (`TypeError`, pinned by `tests/test_registry.py::test_register_subsystem_clear_rejects_string_references`).
+  zero-argument callable plus a keyword `owner`, and then **rejected** a string
+  (`TypeError`, pinned by `test_register_subsystem_clear_rejects_string_references` in
+  `git show 2bcd50bd:tests/test_registry.py`); the runtime guard later retired because
+  every registration is a package-internal call the type checker holds to the callable
+  annotation.
   The reason it changed is the reason the callable form is better: a string row lets a
   rename fail *silently*, leaving state uncleared, where importing the owner to register
   makes the same rename fail loudly at import. The soft-dependency property the spec

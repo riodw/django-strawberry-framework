@@ -732,13 +732,10 @@ def resolve_globalid_target_definition(
     if not isinstance(field_name, str) or not field_name:
         return None
 
-    current_def: DjangoTypeDefinition | None = owner
+    current_def = owner
     segments = field_name.split("__")
 
     for i, segment in enumerate(segments):
-        if current_def is None:
-            return None
-
         current_model = getattr(current_def, "model", None)
         pk_field = getattr(getattr(current_model, "_meta", None), "pk", None)
         pk_name = getattr(pk_field, "name", None)

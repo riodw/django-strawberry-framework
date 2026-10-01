@@ -196,8 +196,6 @@ def split_order_ref(order_ref: str, *, owner: str | None = None) -> tuple[str, b
     one local field name, with no relation traversal.
     """
     lead = f"{owner} entry" if owner is not None else "Invalid cursor_field entry:"
-    if not isinstance(order_ref, str):
-        raise ConfigurationError(f"{lead} {order_ref!r} must be a string.")
     descending = order_ref.startswith("-")
     name = order_ref[1:] if descending else order_ref
     if not name or name.startswith("-"):

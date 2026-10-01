@@ -536,13 +536,6 @@ def test_meta_sorting_wraps_a_hostile_generic_iterator():
         _sorted_meta_values(_HostileIterable())
 
 
-def test_set_meta_helpers_reject_non_mapping_metadata():
-    with pytest.raises(ConfigurationError, match="must be a mapping"):
-        make_set_meta_cache_key([])  # type: ignore[arg-type]
-    with pytest.raises(ConfigurationError, match="must be a mapping"):
-        normalize_set_meta_for_factory([], reserved_keys=frozenset())  # type: ignore[arg-type]
-
-
 def test_input_builder_wraps_unreadable_and_malformed_field_specifications():
     class _UnreadableSpecs:
         def __iter__(self):

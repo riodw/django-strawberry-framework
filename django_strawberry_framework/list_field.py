@@ -413,22 +413,14 @@ def _resolve_argument_wire_name(info: Info[object, object], parameter_name: str)
     """
     fallback = _DEFAULT_WIRE_NAMES.get(parameter_name, parameter_name)
     try:
-        # A consumer ``info_class`` can shadow the resolver with anything.
-        get_arg_def: object = info.get_argument_definition
+        # A consumer ``info_class`` can shadow the resolver with a raising descriptor.
+        get_arg_def = info.get_argument_definition
     except AttributeError:
         return fallback
     except Exception as exc:
         raise ConfigurationError(
             f"Failed to read the argument-definition resolver for {parameter_name!r}: {exc}",
         ) from exc
-    if get_arg_def is None:
-        return fallback
-    if not callable(get_arg_def):
-        raise ConfigurationError(
-            f"Failed to resolve wire name for argument {parameter_name!r}: "
-            "info.get_argument_definition is not callable.",
-        )
-
     try:
         arg_def = get_arg_def(parameter_name)
     except Exception as exc:

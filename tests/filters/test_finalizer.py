@@ -1041,12 +1041,17 @@ def test_phase_2_5_runs_under_relay_node_interface():
 # ---------------------------------------------------------------------------
 
 
-def _owner_definition_stub(name):
-    """Return a minimal owner-definition-shaped object for binding tests."""
+def _owner_definition_stub(name, *, model):
+    """Return a minimal owner-definition-shaped object for binding tests.
+
+    ``model`` is the bound filterset's ``Meta.model``: a real owner definition always carries a
+    Django model, and the first-bind model check runs ``issubclass`` against it.
+    """
+    owner_model = model
 
     class _Stub:
         origin = type(name, (), {})
-        model = None  # real owner definitions always carry a Django model
+        model = owner_model
         # Real ``DjangoTypeDefinition`` carries this flag; default owners use the
         # identity hook, so the get_queryset-safety axis stays a no-op here and
         # these tests isolate the target-resolution branches they exercise.
@@ -1069,7 +1074,7 @@ def test_bind_filterset_owner_idempotent_for_same_definition():
             model = Shelf
             fields = {"code": ["exact"]}
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Shelf)
     definition = Stub()
     _bind_filterset_owner(ShelfFilter, definition)  # previous None -> bind
     _bind_filterset_owner(ShelfFilter, definition)  # previous IS definition -> return
@@ -1091,7 +1096,7 @@ def test_bind_filterset_owner_continues_when_both_targets_unresolved():
             model = Book
             fields = {"title": ["exact"]}
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda _f: None)
     second = Stub(resolver=lambda _f: None)
     _bind_filterset_owner(BookFilter, first)
@@ -1224,7 +1229,7 @@ def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not(
             model = Book
             fields = {"title": ["exact"]}
 
-    Stub = _owner_definition_stub("OwnerType")
+    Stub = _owner_definition_stub("OwnerType", model=Book)
     target_def = type("ResolvedShelfDefinition", (), {"origin": type("ResolvedShelfType", (), {})})
     first = Stub(resolver=lambda _f: None)
     second = Stub(resolver=lambda _f: (target_def, object()))

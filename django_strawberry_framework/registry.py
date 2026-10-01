@@ -96,8 +96,6 @@ def register_subsystem_clear(
     replace the old function object instead of accumulating duplicates. Optional
     subsystems remain lazy because only an imported owner can register.
     """
-    if not callable(clear):
-        raise TypeError("register_subsystem_clear() requires a zero-argument callable")
     if not owner:
         raise ValueError("register_subsystem_clear() requires a non-empty owner")
     _subsystem_clears[owner] = (clear, before_bind)
@@ -281,8 +279,6 @@ class TypeRegistry:
         must never delete or overwrite a same-named consumer replacement.
         """
         self._check_mutable()
-        if not callable(teardown):
-            raise TypeError("register_type_teardown() requires a zero-argument callable")
         if type_cls not in self._models:
             raise ConfigurationError(
                 f"Cannot register class teardown for unregistered type {type_cls.__name__}",

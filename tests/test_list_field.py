@@ -678,7 +678,6 @@ async def test_async_completion_adapter_semantics():
     would commit the seeded rows and leave them for every later test.
     """
     from django_strawberry_framework.utils.querysets import (
-        _AsyncQuerySetRows,
         is_async_queryset_adapter,
         unwrap_async_queryset_adapter,
         wrap_async_queryset_adapter,
@@ -687,8 +686,6 @@ async def test_async_completion_adapter_semantics():
     await sync_to_async(services.seed_data)(1)
 
     assert wrap_async_queryset_adapter("not_a_qs") == "not_a_qs"
-    with pytest.raises(TypeError, match="_AsyncQuerySetRows requires a QuerySet"):
-        _AsyncQuerySetRows("not_a_qs")
 
     qs = Category.objects.all()[:3]
     adapter = wrap_async_queryset_adapter(qs)
@@ -1373,12 +1370,6 @@ def test_argument_definition_metadata_reads_fail_closed():
     with pytest.raises(ConfigurationError, match="argument-definition resolver"):
         _resolve_argument_wire_name(HostileInfo(), "offset")
 
-    with pytest.raises(ConfigurationError, match="is not callable"):
-        _resolve_argument_wire_name(
-            SimpleNamespace(get_argument_definition=object()),
-            "offset",
-        )
-
     def raise_from_lookup(_name):
         raise RuntimeError("unreadable argument definition")
 
@@ -2011,15 +2002,10 @@ def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition(
 
     ``_resolve_argument_wire_name`` runs only while building an error, so a
     context that cannot answer "what is this argument called on the wire?" must
-    still produce the error rather than replacing it with its own failure. Three
-    such contexts reach the same fallback: no argument-definition resolver, no
-    definition for the parameter, and a definition with no executable-schema
-    metadata behind it.
+    still produce the error rather than replacing it with its own failure. Two
+    such contexts reach the same fallback: no definition for the parameter, and a
+    definition with no executable-schema metadata behind it.
     """
-    # A resolver-less info.
-    info_no_resolver = SimpleNamespace(schema=None, get_argument_definition=None)
-    assert _resolve_argument_wire_name(info_no_resolver, "offset") == "offset"
-
     # A resolver that has no definition for the parameter.
     info_no_argdef = SimpleNamespace(
         schema=None,

@@ -736,10 +736,6 @@ def make_set_meta_cache_key(
     Dict-shaped ``fields`` keys sort via ``key=repr`` so mixed,
     mutually-unorderable key types cannot ``TypeError`` the key.
     """
-    if not isinstance(safe_meta, dict):
-        raise ConfigurationError(
-            f"Generated set metadata must be a mapping; got {_safe_type_name(safe_meta)}.",
-        )
     model = dict.get(safe_meta, "model")
     fields = dict.get(safe_meta, "fields")
     if isinstance(fields, dict):
@@ -800,10 +796,6 @@ def normalize_set_meta_for_factory(
       exclusions" and must not survive as an extras discriminator that splits
       a cache slot (the ``fields=None``-vs-absent equivalence, exclude side).
     """
-    if not isinstance(meta, dict):
-        raise ConfigurationError(
-            f"Generated set metadata must be a mapping; got {_safe_type_name(meta)}.",
-        )
     try:
         safe_meta: dict[str, object] = {
             key: value for key, value in dict.items(meta) if key not in reserved_keys

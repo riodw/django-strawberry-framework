@@ -1784,7 +1784,7 @@ def _instrument_intent_specs(
         _record_field_intent(field, ledger, field_path)
 
 
-def _record_field_intent(field: Any, ledger: _RelationIntentLedger, path: str) -> None:
+def _record_field_intent(field: DRFField, ledger: _RelationIntentLedger, path: str) -> None:
     """Shadow ``field.run_validation`` with a recording wrapper (per-instance, never shared)."""
     original = field.run_validation
 

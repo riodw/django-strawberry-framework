@@ -382,12 +382,6 @@ ALLOWED_ANY: tuple[AllowedAny, ...] = (
         "class-body annotation supply the schema type.",
     ),
     AllowedAny(
-        "django_strawberry_framework/resource_policy.py::ResourcePolicy.narrowed",
-        1,
-        "Forwarded to dataclasses.replace, which mypy types per field; values are validated "
-        "by __post_init__.",
-    ),
-    AllowedAny(
         "django_strawberry_framework/resource_policy.py::_windowed_rows",
         1,
         "A consumer resolver's return reaches islice/slicing unchecked; object needs an "
@@ -421,12 +415,6 @@ ALLOWED_ANY: tuple[AllowedAny, ...] = (
         2,
         "Assigns .queryset on a copied validator; drf-stubs' Validator declares no "
         "queryset, so any element type rejects the write.",
-    ),
-    AllowedAny(
-        "django_strawberry_framework/rest_framework/resolvers.py::_record_field_intent",
-        1,
-        "Replaces the bound method run_validation with an instance attribute, which mypy "
-        "rejects on a typed field and on a Protocol.",
     ),
     AllowedAny(
         "django_strawberry_framework/rest_framework/serializer_converter.py::DRFBaseSerializer",
@@ -495,12 +483,6 @@ ALLOWED_ANY: tuple[AllowedAny, ...] = (
         2,
         "Forwards *args/**kwargs verbatim to strawberry Schema.execute_sync; the supported "
         "range is uncapped, so its parameters cannot be pinned.",
-    ),
-    AllowedAny(
-        "django_strawberry_framework/schema.py::DjangoSchema.extensions",
-        1,
-        "The truthful tuple[object, ...] fails mypy's override check against the base "
-        "attribute's extension tuple type.",
     ),
     AllowedAny(
         "django_strawberry_framework/testing/client.py::Response.response",

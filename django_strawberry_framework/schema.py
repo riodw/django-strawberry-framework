@@ -869,7 +869,7 @@ class DjangoSchema(strawberry.Schema):
 
     @property
     @override
-    def extensions(self) -> tuple[Any, ...]:
+    def extensions(self) -> tuple[object, ...]:
         """The CONSUMER extension configuration this schema was accepted with.
 
         The package's own enforcement extensions are not in it and never were

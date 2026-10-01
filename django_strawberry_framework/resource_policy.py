@@ -399,7 +399,7 @@ class ResourcePolicy:
                 )
             _require_positive_int(value, f"ResourcePolicy.{field.name}")
 
-    def narrowed(self, **overrides: Any) -> ResourcePolicy:
+    def narrowed(self, **overrides: object) -> ResourcePolicy:
         """Return a copy with ``overrides`` applied, rejecting any that widen a bound.
 
         The narrowing contract in one place: a caller that holds a policy may

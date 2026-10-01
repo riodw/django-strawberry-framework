@@ -44,7 +44,6 @@ from typing_extensions import override
 from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from ..utils.querysets import applied_order
-from .join_taxonomy import WINDOWABLE_RELATION_KINDS, classify_relation_join
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Callable, Mapping
@@ -58,7 +57,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from ..keyset import KeysetSeek
     from ..utils.connections import WindowRangePlan
-    from ..utils.typing import ModelField
 
     #: One ``QuerySet.prefetch_related`` lookup: a plain lookup path or a ``Prefetch``.
     PrefetchLookup: TypeAlias = str | Prefetch[str]
@@ -963,49 +961,6 @@ def deterministic_order(
     return (*effective, model._meta.pk.attname)
 
 
-def window_partition_for_prefetch(field: ModelField) -> str:
-    """Return the parent-side partition expression for a windowed prefetch.
-
-    The expression Django's prefetch attach uses to map each child row back to
-    its parent - ``remote_field.attname or remote_field.name`` on the relation
-    field, exactly what upstream's ``_optimize_prefetch_queryset`` partitions by
-    (spec-033 Decision 4). By relation kind (the ``_ensure_connector_only_fields``
-    dispatch structure, but the PARENT-side partition, not the child ``.only()``
-    connector):
-
-    - reverse FK / reverse one-to-one -> the child-table FK attname
-      (``"shelf_id"`` / ``"patron_id"``);
-    - reverse M2M -> the child's forward M2M field name (``Genre.books`` ->
-      ``"genres"``);
-    - forward M2M -> the target's reverse query name, which is NOT the accessor
-      when ``related_name`` is absent (``Book.genres`` -> ``"books"``).
-
-    Takes the RAW Django relation field (not a ``FieldMeta``): the forward-M2M
-    reverse query name lives only on ``field.remote_field`` and is not carried on
-    ``FieldMeta``. Raises ``OptimizerError`` for a single-valued forward relation
-    or any kind without a windowable partition, so ``plan_connection_relation``
-    leaves the selection unplanned and falls back per-parent rather than guessing.
-
-    A thin shim over ``optimizer/join_taxonomy.py::classify_relation_join``
-    (the single join-condition classifier both fetch strategies share); kept
-    exported with the historical raise contract so direct callers and test
-    pins are unchanged.
-    """
-    descriptor = classify_relation_join(field)
-    if descriptor.kind not in WINDOWABLE_RELATION_KINDS:
-        raise OptimizerError(
-            f"window_partition_for_prefetch: relation {getattr(field, 'name', field)!r} "
-            f"has kind {descriptor.kind!r}, which has no windowable parent partition; "
-            "the nested connection falls back to per-parent resolution.",
-        )
-    if descriptor.partition_expr is None:
-        raise OptimizerError(
-            f"window_partition_for_prefetch: could not resolve a parent partition for "
-            f"relation {getattr(field, 'name', field)!r}; falling back to per-parent.",
-        )
-    return descriptor.partition_expr
-
-
 def apply_window_pagination(
     queryset: QuerySet[_M],
     *,
@@ -1042,9 +997,9 @@ def apply_window_pagination(
     probe, ALSO when a plain ``first: N`` page selects only ``hasNextPage`` (not
     ``totalCount``), which overfetches an n+1 sentinel instead (``next_page_probe``
     below). The nested planner computes the ``totalCount`` and ``hasNextPage`` observers
-    SEPARATELY and applies that probe exception rather than gating on the combined
-    ``selections.py::connection_count_required`` observability predicate; the two
-    fetch modes are mutually exclusive by construction (enforced by
+    SEPARATELY and applies that probe exception rather than gating on their
+    combined observability; the two fetch modes are mutually exclusive by
+    construction (enforced by
     ``utils/connections.py::assert_window_fetch_mode`` at the window entry). The
     default ``True`` preserves every direct caller; the fast path treats a missing
     annotation as "not planned" and degrades safely

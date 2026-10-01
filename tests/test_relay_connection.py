@@ -2325,7 +2325,7 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
     The conditional-count drift guard in ``_resolve_from_window``, narrowed by
     The count-policy overhaul leaves only a ``totalCount``
     observer (``want_count=True``) on a window that carries no count annotation.
-    Plan-time (``connection_count_required``) and resolve-time (``want_count``)
+    Plan-time (``connection_total_count_selected``) and resolve-time (``want_count``)
     share the selection walk, so this is unreachable live until they DRIFT -
     which is exactly when serving a fabricated count must lose to the per-parent
     fallback. The count-free ``hasNextPage`` shapes that USED to fall back here

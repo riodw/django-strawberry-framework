@@ -351,7 +351,9 @@ def _scalar_from_model_field(model_field: ModelField | None) -> _TypeForm:
     from ..types.converters import scalar_for_field
 
     # A ``SCALAR_MAP`` value is a registered runtime annotation (a class or ``NewType``).
-    return cast("_TypeForm", scalar_for_field(model_field))
+    # basedpyright: ``TypeForm`` also admits forms with no runtime ``__or__`` (a string forward
+    # reference), which no ``SCALAR_MAP`` entry is
+    return cast("_TypeForm", scalar_for_field(model_field))  # pyright: ignore[reportInvalidCast]
 
 
 def _relation_identity_annotation(
@@ -960,7 +962,7 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, obj
     """
     # basedpyright: it models an ``Annotated[...]`` value as the bare special form, which has
     # no ``__or__``; the runtime ``Annotated`` alias widens with ``| None`` below.
-    self_ref = cast("_TypeForm", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])
+    self_ref = cast("_TypeForm", Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)])  # pyright: ignore[reportInvalidCast]
     list_ref = GenericAlias(list, (self_ref,))
     return [
         (

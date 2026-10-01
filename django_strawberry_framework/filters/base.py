@@ -382,9 +382,10 @@ class ArrayFilter(TypedFilter):
     """
 
     # basedpyright: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
-    # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``
+    # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``, and
+    # the decorator it cannot type as untyped
     @override
-    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
+    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUntypedFunctionDecorator]
     def method(self, value: object) -> None:
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ArrayFilterMethod)
@@ -498,9 +499,10 @@ class ListFilter(TypedFilter):
     """
 
     # basedpyright: typeshed declares ``Filter.method`` a plain attribute, not the property it is,
-    # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``
+    # so it reports ``setter`` unknown on each arm of the declared ``Callable | str | None``, and
+    # the decorator it cannot type as untyped
     @override
-    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess]
+    @TypedFilter.method.setter  # pyright: ignore[reportFunctionMemberAccess, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUntypedFunctionDecorator]
     def method(self, value: object) -> None:
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
         _install_empty_list_aware_method(self, value, ListFilterMethod)
@@ -1377,9 +1379,10 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     def bind_filterset(self, filterset: type[FilterSet]) -> None:
         """Bind the owning `FilterSet` once; subsequent calls are no-ops.
 
-        Idempotent so the metaclass `__new__` can re-bind every related
-        filter on subclass creation without clobbering a deliberate
-        override.
+        The public spelling of the bind the metaclass performs at class
+        creation (``sets_mixins.py::collect_related_declarations`` calls
+        ``_bind_owner`` directly), so a call once the declaring class exists
+        is a no-op and cannot clobber that owner.
 
         Silent-no-op contract:
             A second call with a DIFFERENT ``filterset`` (the rare case
@@ -1459,8 +1462,10 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
         # ``_validate_target`` rejected every non-``None`` resolution outside the family.
         return cast("type[FilterSet] | None", self._resolved_target())
 
+    # basedpyright: the setter takes a lazy target (a class, an import path, or a factory)
+    # that the getter resolves to the class on read
     @filterset.setter
-    def filterset(self, value: _FilterSetTarget) -> None:
+    def filterset(self, value: _FilterSetTarget) -> None:  # pyright: ignore[reportPropertyTypeMismatch]
         self._set_target(value)
 
     # basedpyright: typeshed types ``QuerySetRequestMixin.get_queryset`` as never ``None``, but it

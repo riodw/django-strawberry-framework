@@ -5468,8 +5468,8 @@ def test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch()
 # ---------------------------------------------------------------------------
 
 
-def test_active_permission_field_paths_covers_input_shapes():
-    """``_active_permission_field_paths`` resolves source paths, skips the rest."""
+def test_active_permission_leaf_paths_covers_input_shapes():
+    """``_active_permission_targets``' leaf half resolves source paths, skips the rest."""
     import dataclasses
 
     class ShelfFilter(FilterSet):
@@ -5485,9 +5485,9 @@ def test_active_permission_field_paths_covers_input_shapes():
             fields = {"name": ["exact"]}
 
     # None / UNSET / non-(dict-or-dataclass) -> empty.
-    assert BranchFilter._active_permission_field_paths(None) == []
-    assert BranchFilter._active_permission_field_paths(strawberry.UNSET) == []
-    assert BranchFilter._active_permission_field_paths(42) == []
+    assert BranchFilter._active_permission_targets(None)[0] == []
+    assert BranchFilter._active_permission_targets(strawberry.UNSET)[0] == []
+    assert BranchFilter._active_permission_targets(42)[0] == []
 
     @dataclasses.dataclass
     class _Input:
@@ -5497,12 +5497,12 @@ def test_active_permission_field_paths_covers_input_shapes():
 
     # Active scalar resolves to its source path; the related branch and the
     # logical-operator key are excluded (gated elsewhere); ``None`` skipped.
-    paths = BranchFilter._active_permission_field_paths(
+    paths = BranchFilter._active_permission_targets(
         _Input(name="x", shelves={"code": "y"}, and_=[{"name": "z"}]),
-    )
+    )[0]
     assert paths == ["name"]
     # A raw dict resolves via the form-key fallback.
-    assert BranchFilter._active_permission_field_paths({"name": "x"}) == ["name"]
+    assert BranchFilter._active_permission_targets({"name": "x"})[0] == ["name"]
 
 
 # ---------------------------------------------------------------------------
@@ -5548,14 +5548,13 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
 # Consolidation pins: ``FilterSet._iter_input_items``
 # ---------------------------------------------------------------------
 #
-# Three sites (``_normalize_input``, ``_operator_bag_items``,
-# ``_active_permission_field_paths``) route through a single shared
-# staticmethod that walks dicts AND Strawberry-input dataclasses into
-# ``(name, value)`` pairs. The helper returns ``None`` for non-walkable
-# shapes and ``[]`` for walkable-but-empty inputs. Site 2
-# (``_operator_bag_items``) keeps its scalar/collection/dict pre-rejection
-# above the helper call so operator bags remain dataclass-only at the
-# call boundary while sites 1 / 3 accept both dict and dataclass shapes.
+# Two sites (``_normalize_input``, ``_operator_bag_items``) route through a
+# single shared staticmethod that walks dicts AND Strawberry-input dataclasses
+# into ``(name, value)`` pairs. The helper returns ``None`` for non-walkable
+# shapes and ``[]`` for walkable-but-empty inputs. ``_operator_bag_items``
+# keeps its scalar/collection/dict pre-rejection above the helper call so
+# operator bags remain dataclass-only at the call boundary while
+# ``_normalize_input`` accepts both dict and dataclass shapes.
 
 
 def test_iter_input_items_returns_pairs_for_plain_dict():

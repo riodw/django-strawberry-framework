@@ -124,7 +124,13 @@ class _AuthoritySubclass(DjangoResourcePolicyExtension):
     """A consumer subclass of the bounding authority, which is not one."""
 
 
-class _HybridAuthority(DjangoResourcePolicyExtension, DjangoErrorPolicyExtension):
+# basedpyright: cooperative MRO: ``DjangoResourcePolicyExtension.__init__`` calls
+# ``super().__init__()``, which reaches ``_OperationBoundExtension.__init__`` exactly once
+# through ``DjangoErrorPolicyExtension`` (which defines none), so every base is initialized
+class _HybridAuthority(  # pyright: ignore[reportUnsafeMultipleInheritance]
+    DjangoResourcePolicyExtension,
+    DjangoErrorPolicyExtension,
+):
     """One class answering to both authorities, of which it can dispatch one."""
 
 
@@ -175,15 +181,6 @@ class _NarrowResourceFactory:
 
     def __call__(self):
         return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=1))
-
-
-class _WideResourceFactory:
-    """The entry a resolver would rather the next request were bounded by."""
-
-    __slots__ = ()
-
-    def __call__(self):
-        return DjangoResourcePolicyExtension(policy=ResourcePolicy(max_aliases=999))
 
 
 class _AcceptedConsumerFactory:
@@ -304,6 +301,7 @@ class _Nester(SchemaExtension):
     """
 
     def __init__(self) -> None:
+        super().__init__()
         self.ran = False
         self.published: list[dict] = []
 

@@ -129,7 +129,7 @@ class Ordering(enum.Enum):
 
 # Provenance table populated by ``_build_input_fields`` and consulted at
 # runtime by ``normalize_input_value`` (and indirectly by
-# ``OrderSet._active_permission_field_paths``). Keyed by
+# ``OrderSet._active_permission_targets``). Keyed by
 # ``(OrderSet subclass, python_attr)``; emptied by
 # ``clear_order_input_namespace``.
 #
@@ -367,9 +367,10 @@ def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: object) -> No
     if not any(iter_active_fields(orderset_cls, input_value, traversal)):
         return
     if (
-        # Every caller passes an OrderSet class; the class check keeps a contract-breaking direct
-        # caller out of the spec build
-        isinstance(orderset_cls, type)
+        # basedpyright: trust boundary: the public ``normalize_input_value`` passes its
+        # ``orderset_cls`` argument through unchecked; the class check keeps a non-class caller
+        # out of the spec build
+        isinstance(orderset_cls, type)  # pyright: ignore[reportUnnecessaryIsInstance]
         and callable(getattr(orderset_cls, "get_fields", None))
         and not any(owner is orderset_cls for owner, _ in _field_specs)
     ):

@@ -2,8 +2,8 @@
 
 Covers ``OrderArgumentsFactory``'s BFS walk, per-class collision check,
 idempotency, subclass rejection, the leaf / related-branch annotation
-shape produced by ``_build_class_type``, plus the Layer-6
-``get_orderset_class`` + ``_dynamic_orderset_cache`` plumbing.
+shape produced by ``_build_class_type``, and set-shaped ``Meta.fields``
+expansion order.
 
 Factory construction and collision guards have no wire shape. Published
 ``orderBy`` argument types live in
@@ -24,18 +24,12 @@ from django_strawberry_framework.orders import (
     OrderSet,
     RelatedOrder,
 )
-from django_strawberry_framework.orders.factories import (
-    _RESERVED_FACTORY_KEYS,
-    OrderArgumentsFactory,
-    _dynamic_orderset_cache,
-    get_orderset_class,
-)
+from django_strawberry_framework.orders.factories import OrderArgumentsFactory
 from django_strawberry_framework.orders.inputs import (
     Ordering,
     _field_specs,
     _materialized_names,
 )
-from django_strawberry_framework.utils.inputs import normalize_set_meta_for_factory
 
 
 @pytest.fixture(autouse=True)
@@ -43,13 +37,11 @@ def _isolate_state():
     """Clear per-test state so cross-test class-level caches don't leak."""
     _materialized_names.clear()
     _field_specs.clear()
-    _dynamic_orderset_cache.clear()
     OrderArgumentsFactory.input_object_types.clear()
     OrderArgumentsFactory._type_orderset_registry.clear()
     yield
     _materialized_names.clear()
     _field_specs.clear()
-    _dynamic_orderset_cache.clear()
     OrderArgumentsFactory.input_object_types.clear()
     OrderArgumentsFactory._type_orderset_registry.clear()
 
@@ -411,149 +403,21 @@ def test_factory_dedupes_double_enqueued_target_via_seen_check():
 
 
 # ---------------------------------------------------------------------------
-# get_orderset_class + dynamic-cache plumbing
+# Meta.fields expansion order
 # ---------------------------------------------------------------------------
 
 
-def test_get_orderset_class_returns_explicit_class_unchanged():
-    class ExplicitOrder(OrderSet):
-        class Meta:
-            model = library_models.Book
-            fields = ["title"]
-
-    result = get_orderset_class(ExplicitOrder)
-    assert result is ExplicitOrder
-
-
-def test_get_orderset_class_caches_dynamic_orderset_by_meta():
-    """Two equivalent ``get_orderset_class(None, ...)`` calls collapse onto one class."""
-    first = get_orderset_class(None, model=library_models.Book, fields=["title"])
-    second = get_orderset_class(None, model=library_models.Book, fields=["title"])
-    assert first is second
-    assert first.__name__ == "BookAutoOrder"
-    assert issubclass(first, OrderSet)
-
-
-def test_get_orderset_class_distinct_meta_produces_distinct_classes():
-    """Distinct ``fields`` -> distinct generated classes."""
-    first = get_orderset_class(None, model=library_models.Book, fields=["title"])
-    second = get_orderset_class(None, model=library_models.Book, fields=["subtitle"])
-    assert first is not second
-
-
-def test_get_orderset_class_strips_reserved_kwargs():
-    """``orderset_base_class`` is stripped before being passed to the dynamic factory."""
-    cls = get_orderset_class(
-        None,
-        model=library_models.Book,
-        fields=["title"],
-        orderset_base_class=OrderSet,
-    )
-    assert issubclass(cls, OrderSet)
-
-
-def test_get_orderset_class_collapses_set_and_frozenset_fields():
-    """Top-level set/frozenset Meta.fields must share a canonical cache slot."""
-    via_set = get_orderset_class(
-        None,
-        model=library_models.Book,
-        fields={"title", "subtitle"},
-    )
-    via_fs = get_orderset_class(
-        None,
-        model=library_models.Book,
-        fields=frozenset({"subtitle", "title"}),
-    )
-    assert via_set is via_fs
-
-
-def test_get_orderset_class_collapses_exclude_order():
-    """Equivalent exclusion sets must not split the generated-class cache."""
-    first = get_orderset_class(
-        None,
-        model=library_models.Book,
-        fields="__all__",
-        exclude=["title", "subtitle"],
-    )
-    second = get_orderset_class(
-        None,
-        model=library_models.Book,
-        fields="__all__",
-        exclude={"subtitle", "title"},
-    )
-    assert first is second
-    assert OrderArgumentsFactory(first).arguments is OrderArgumentsFactory(second).arguments
-
-
-def test_normalize_meta_strips_reserved_and_canonicalizes_sets():
-    """Order Meta has no fields synonym; reserved keys drop and sets sort."""
-    normalized = normalize_set_meta_for_factory(
-        {
-            "model": library_models.Book,
-            "fields": {"title", "subtitle"},
-            "orderset_base_class": OrderSet,
-        },
-        reserved_keys=_RESERVED_FACTORY_KEYS,
-        fields_alias=None,
-    )
-    assert "orderset_base_class" not in normalized
-    assert normalized["fields"] == sorted(["title", "subtitle"], key=repr)
-
-
-def test_orderset_class_meta_and_factory_kwargs_share_set_fields_order():
-    """Class-declared set-shaped ``Meta.fields`` expand in Layer-6 canonical order."""
+def test_orderset_set_shaped_meta_fields_expand_in_canonical_order():
+    """Class-declared set-shaped ``Meta.fields`` expand in ``repr``-sorted order."""
 
     class BookOrderSetFields(OrderSet):
         class Meta:
             model = library_models.Book
             fields = {"title", "subtitle"}
 
-    generated = get_orderset_class(
-        None,
-        model=library_models.Book,
-        fields={"title", "subtitle"},
-    )
     expected = sorted(["title", "subtitle"], key=repr)
     assert list(BookOrderSetFields.get_fields()) == expected
-    assert list(generated.get_fields()) == expected
     assert BookOrderSetFields.Meta.fields == {"title", "subtitle"}
-
-
-def test_get_orderset_class_requires_model_when_dynamic():
-    """Without an explicit class AND without ``model``, the dynamic factory raises."""
-    with pytest.raises(ConfigurationError, match="get_orderset_class requires `model`"):
-        get_orderset_class(None, fields=["title"])
-
-
-def test_get_orderset_class_rejects_non_model_when_dynamic():
-    """A dynamic factory must reject a non-Django model before django-filter does."""
-    with pytest.raises(ConfigurationError, match="Django model class"):
-        get_orderset_class(None, model=object, fields=["title"])
-
-
-def test_get_orderset_class_allows_fields_less_meta():
-    """A fields-less Meta still builds: OrderSet's plain ``type`` metaclass has no
-
-    django-filter-style assert, so the zero-field rejection stays at the BFS
-    construction site. This is the family scoping of
-    ``create_dynamic_set_class``'s ``require_fields_or_exclude`` flag (the
-    filter side sets it; orders leaves the default off).
-    """
-    cls = get_orderset_class(None, model=library_models.Book)
-    assert cls.__name__ == "BookAutoOrder"
-    assert issubclass(cls, OrderSet)
-    with pytest.raises(ConfigurationError, match="no fields"):
-        OrderArgumentsFactory(cls).arguments
-
-
-def test_factory_builds_dynamic_orderset():
-    """OrderArgumentsFactory builds input class for dynamic OrderSet from get_orderset_class."""
-    dynamic_cls = get_orderset_class(None, model=library_models.Book, fields=["title"])
-    factory = OrderArgumentsFactory(dynamic_cls)
-    input_cls = factory.arguments
-    assert input_cls.__name__ == "BookAutoOrderInputType"
-    assert "BookAutoOrderInputType" in OrderArgumentsFactory.input_object_types
-    assert OrderArgumentsFactory._type_orderset_registry["BookAutoOrderInputType"] is dynamic_cls
 
 
 def test_factory_handles_diamond_dependency_graph():

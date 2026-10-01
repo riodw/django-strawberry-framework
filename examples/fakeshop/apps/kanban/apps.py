@@ -13,4 +13,5 @@ class KanbanConfig(AppConfig):
 
     @override
     def ready(self) -> None:
-        from . import signals  # noqa: F401
+        # basedpyright: imported for its side effect: importing the module connects its receivers
+        from . import signals  # noqa: F401  # pyright: ignore[reportUnusedImport]

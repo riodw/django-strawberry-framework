@@ -1,4 +1,4 @@
-"""Order input-class BFS factory + a dynamic-OrderSet cache with no in-package consumer.
+"""Order input-class BFS factory.
 
 Layer 5 of the spec-028 six-layer pipeline (the BFS that builds every
 reachable Strawberry input class via ``_build_input_fields`` +
@@ -9,17 +9,11 @@ GraphQL input shape stay downstream of one decision site (mirror of
 ``filters/factories.py``'s Layer 5 + spec-027 Decision 4).
 
 The finalizer materializes the built classes as module globals at
-finalize time; this module owns build-only. Layer 6 (dynamic
-``OrderSet`` generation against a connection-field meta dict) has no
-source consumer: ``connection.py::DjangoConnectionField`` resolves
-ordering from the already-resolved ``Meta.orderset_class`` sidecar
-directly rather than auto-generating an ``OrderSet``. The cache
-plumbing ships as the filter-side twin (build-and-test-only) so hashing
-and ``type(...)`` construction stay in
-``utils/inputs.py::make_dynamic_set_getter`` instead of being copied the
-day a consumer lands. Auto-generation of an ``OrderSet`` from
-``Meta.fields`` without an explicit class remains a standing deferred
-Non-goal (spec-028 Decision 12).
+finalize time; this module owns build-only.
+``connection.py::DjangoConnectionField`` resolves ordering from the
+already-resolved ``Meta.orderset_class`` sidecar; auto-generation of an
+``OrderSet`` from ``Meta.fields`` without an explicit class remains a
+standing deferred Non-goal (spec-028 Decision 12).
 """
 
 from __future__ import annotations
@@ -28,34 +22,12 @@ from typing import TYPE_CHECKING, ClassVar
 
 from typing_extensions import override
 
-from ..utils.inputs import GeneratedInputArgumentsFactory, make_dynamic_set_getter
+from ..utils.inputs import GeneratedInputArgumentsFactory
 from .inputs import _build_input_fields
 from .sets import OrderSet
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.definition import DjangoTypeDefinition
-
-# Module-level dynamic-OrderSet cache per Layer 6. Keys are produced by
-# ``utils/inputs.py::make_set_meta_cache_key`` so dict / list / scalar
-# shapes for ``Meta.fields`` collapse onto stable tuple keys. The cache
-# is the duplicate-``__name__`` collision break-glass for the (deferred,
-# unconsumed) auto-OrderSet surface. No source path exercises this yet --
-# see the module docstring; the cache is build-and-test-only. The hashing
-# / ``type(...)`` skeleton is shared with ``filters/factories.py`` via
-# ``make_dynamic_set_getter``; this dict stays family-owned so an order
-# clear cannot drop a filter class (and the reverse). Class-Meta expansion
-# in ``orders/sets.py`` reads the same fingerprint through
-# ``utils/inputs.py::read_set_meta_fields``.
-#
-# Lifecycle: this cache has NO clear hook, matching the filter-side
-# Layer-6 dict. Keys embed the model identity, so a rebuilt model gets a
-# fresh key rather than a wrong hit.
-_dynamic_orderset_cache: dict[tuple[object, ...], type[OrderSet]] = {}
-
-
-# Reserved kwargs stripped from ``get_orderset_class``'s meta input to
-# prevent keyword collisions with the dynamic-class factory below.
-_RESERVED_FACTORY_KEYS: frozenset[str] = frozenset({"orderset_base_class"})
 
 
 class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):
@@ -109,53 +81,3 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory[OrderSet]):
         """Order input triples -- no operator bag (spec-028 Decision 8)."""
         del type_name  # the order side has no ``and_`` / ``or_`` / ``not_`` bag.
         return _build_input_fields(set_cls, owner_definition)
-
-
-# ---------------------------------------------------------------------------
-# Layer 6 -- dynamic-OrderSet cache (filter-side twin; no cookbook counterpart)
-# ---------------------------------------------------------------------------
-
-
-_get_orderset_class = make_dynamic_set_getter(
-    cache=_dynamic_orderset_cache,
-    set_base_class=OrderSet,
-    auto_name_suffix="AutoOrder",
-    getter_name="get_orderset_class",
-    reserved_keys=_RESERVED_FACTORY_KEYS,
-    explicit_param="orderset_class",
-    fields_alias=None,
-)
-
-
-def get_orderset_class(orderset_class: type[OrderSet] | None, **meta: object) -> type[OrderSet]:
-    """Return an ``OrderSet`` class for use against a connection / list field.
-
-    Filter-side twin of ``filters/factories.py::get_filterset_class``. The
-    function trusts its caller. It has no source consumer yet: the
-    auto-OrderSet surface that would call it (a field targeting a model
-    without an explicit ``orderset_class``) is a standing deferred Non-goal
-    (spec-028 Decision 12). ``DjangoConnectionField`` consumes the
-    already-resolved ``Meta.orderset_class`` sidecar directly and does not
-    route through here. Built-and-tested ahead of that consumer so the
-    hashing / ``type(...)`` skeleton stays single-sited with the filter
-    twin.
-
-    Args:
-        orderset_class: An optional pre-declared ``OrderSet`` subclass.
-            When provided, returned unchanged.
-        **meta: ``Meta``-shaped keys (``model``, ``fields``, ``exclude``,
-            ...) for the synthetic ``OrderSet`` subclass. Required when
-            ``orderset_class is None``.
-
-    Returns:
-        An ``OrderSet`` class. The dynamic-cache path collapses equivalent
-        meta into a shared class so two callers with equivalent
-        declarations get the same ``__name__`` (preventing the BFS
-        factory's duplicate-name collision check from firing). Two callers
-        with **distinct** Meta declarations against the same model will
-        land at the same generated ``__name__`` and so collide through the
-        BFS factory's ``_type_orderset_registry`` collision check; resolve
-        by declaring an explicit ``orderset_class=`` at one of the two
-        call sites.
-    """
-    return _get_orderset_class(orderset_class, **meta)

@@ -636,22 +636,22 @@ def test_orderset_extract_branch_value_reads_dict_field():
     assert OrderSet._extract_branch_value({"shelf": "value"}, "missing") is None
 
 
-def test_orderset_active_permission_field_paths_returns_empty_for_none_input():
+def test_orderset_active_permission_leaf_paths_returns_empty_for_none_input():
     """Covers ``utils/input_values.py::iter_active_fields`` #"is_inactive_value(input_value"."""
-    assert OrderSet._active_permission_field_paths(None) == []
+    assert OrderSet._active_permission_targets(None)[0] == []
 
 
-def test_orderset_active_permission_field_paths_returns_empty_for_non_dataclass_non_dict_input():
+def test_orderset_active_permission_leaf_paths_returns_empty_for_non_dataclass_non_dict_input():
     """Covers ``utils/input_values.py::iter_active_fields`` #"if items is None:".
 
     A plain object (no ``__dataclass_fields__``, not a ``dict``) makes
     ``iter_input_items`` return ``None``, so the walker yields nothing and
     the delegate hands back an empty list.
     """
-    assert OrderSet._active_permission_field_paths(object()) == []
+    assert OrderSet._active_permission_targets(object())[0] == []
 
 
-def test_orderset_active_permission_field_paths_walks_dict_items():
+def test_orderset_active_permission_leaf_paths_walks_dict_items():
     """Covers ``utils/input_values.py::iter_input_items`` #"if isinstance(input_value, dict):".
 
     Dict-shaped inputs are walked through ``dict.items`` so the
@@ -668,11 +668,11 @@ def test_orderset_active_permission_field_paths_walks_dict_items():
     # ``django_source_path`` rather than the python-attr fallback.
     OrderArgumentsFactory(DictInputOrder).arguments
 
-    paths = DictInputOrder._active_permission_field_paths({"title": Ordering.ASC})
+    paths = DictInputOrder._active_permission_targets({"title": Ordering.ASC})[0]
     assert paths == ["title"]
 
 
-def test_orderset_active_permission_field_paths_falls_back_to_python_attr_when_no_field_spec_entry():
+def test_orderset_active_permission_leaf_paths_falls_back_to_python_attr_when_no_field_spec_entry():
     """Covers ``utils/permissions.py::active_permission_targets`` #"else fallback_path(field.python_attr)".
 
     When ``_field_specs`` has no entry for ``(cls, python_attr)`` (e.g.
@@ -690,7 +690,7 @@ def test_orderset_active_permission_field_paths_falls_back_to_python_attr_when_n
     # Do NOT call ``_build_input_fields`` -- the ``_field_specs`` ledger
     # has no entry for ``(NoSpecsActiveOrder, "title")``. The autouse
     # ``_isolate_orderset_state`` fixture clears it at entry.
-    paths = NoSpecsActiveOrder._active_permission_field_paths({"title": Ordering.ASC})
+    paths = NoSpecsActiveOrder._active_permission_targets({"title": Ordering.ASC})[0]
     assert paths == ["title"]
 
 

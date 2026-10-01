@@ -46,7 +46,6 @@ import inspect
 import types
 from collections.abc import (
     AsyncIterable,
-    AsyncIterator,
     Awaitable,
     Callable,
     Iterable,
@@ -1109,9 +1108,9 @@ def _resolve_keyset_connection(
                 has_next_page=False,
             ),
         )
-        # A QuerySet is always async-iterable; the check keeps the dispatch shape of
-        # ``ListConnection.resolve_connection``
-        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
+        # ``nodes`` was proven a QuerySet above, which is always async-iterable, so the
+        # async arm is decided by the execution mode alone.
+        if want_count and async_execution():
 
             async def _resolve_count_only_async() -> _ConnectionT:
                 return _set_total_count(
@@ -1155,9 +1154,9 @@ def _resolve_keyset_connection(
             before_supplied=before_supplied,
         )
 
-    # A QuerySet is always async-iterable; the check keeps the dispatch shape of
-    # ``ListConnection.resolve_connection``
-    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and async_execution():
+    # ``nodes`` was proven a QuerySet above, which is always async-iterable, so the
+    # async arm is decided by the execution mode alone.
+    if async_execution():
 
         async def _resolve_async() -> _ConnectionT:
             source = fetch_queryset[:fetch_limit]
@@ -1225,9 +1224,9 @@ def _total_count_requested(info: Info[object, object]) -> bool:
 
     Delegates the whole walk to the shared per-selection primitive
     ``optimizer/selections.py::connection_total_count_selected`` - the SAME
-    implementation the plan-time ``connection_count_required`` uses - so the
-    resolve-time count detection cannot drift from the optimizer's plan-time
-    predicate (the conditional ``_dst_total_count`` contract's invariant).
+    implementation the plan-time ``nested_planner.py::plan_connection_relation``
+    uses - so the resolve-time count detection cannot drift from the optimizer's
+    plan-time predicate (the conditional ``_dst_total_count`` contract's invariant).
     """
     return _connection_field_requested(info, connection_total_count_selected)
 
@@ -1243,10 +1242,10 @@ def _has_next_page_requested(info: Info[object, object]) -> bool:
     plan drift (defensive per-parent fallback) from an inert placeholder flag.
     Delegates the whole walk to the shared per-selection primitive
     ``optimizer/selections.py::connection_has_next_page_selected`` - the same
-    implementation the plan-time ``connection_count_required`` uses - so the
-    two halves cannot drift independently, and both read the page-info /
-    has-next-page GraphQL names from the active schema's converter rather than a
-    camelCase literal.
+    implementation the plan-time ``nested_planner.py::plan_connection_relation``
+    uses - so the two halves cannot drift independently, and both read the
+    page-info / has-next-page GraphQL names from the active schema's converter
+    rather than a camelCase literal.
     """
     return _connection_field_requested(info, connection_has_next_page_selected)
 
@@ -1894,7 +1893,7 @@ def _pipeline_sync(
     Awaitable sources are rejected before normalization. They can only come
     from a plain ``def`` consumer resolver that returns an awaitable, a shape
     committed to this sync path at field construction. The list field enforces
-    the same boundary through ``post_process_queryset_result_sync``.
+    the same boundary through the same ``reject_awaitable_sync_source`` guard.
 
     ``definition`` is the target's ONE construction-time definition read, handed
     down from the factory: the sidecar arguments this pipeline applies and the
@@ -1969,7 +1968,7 @@ async def _pipeline_async(
     awaitable here is a nested async resolver whose inner awaitable would
     otherwise pass the non-queryset sidecar guard and skip visibility entirely.
     The shared ``reject_residual_async_source`` guard (the same one the list
-    field's ``post_process_queryset_result_async`` applies) fails it closed
+    field's ``list_field.py::DjangoListField._async_wrap`` applies) fails it closed
     before ``_prepare_pipeline_source`` can treat it as a plain iterable.
 
     ``definition`` is the factory's one construction-time read, exactly as the

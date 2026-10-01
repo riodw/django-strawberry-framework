@@ -207,7 +207,9 @@ class FieldMeta:
                 f"FieldMeta.from_django_field expected a Django field descriptor "
                 f"exposing 'name' and 'is_relation'; got {_safe_type_name(field)}.",
             ) from exc
-        if not isinstance(field_name, str):
+        # basedpyright: trust boundary: ``field`` is a public parameter, and a descriptor can
+        # answer ``name`` with any object
+        if not isinstance(field_name, str):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise OptimizerError(
                 f"FieldMeta.from_django_field expected a string field name; "
                 f"got {_safe_type_name(field_name)}.",

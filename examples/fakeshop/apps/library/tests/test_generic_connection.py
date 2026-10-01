@@ -66,7 +66,8 @@ def _build_schema(*, strategy=None, total_count=False):
     opts the target connection into a ``totalCount`` field.
     """
 
-    class TaggedItemNode(DjangoType):
+    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
+    class TaggedItemNode(DjangoType):  # pyright: ignore[reportUnusedClass]
         class Meta:
             model = TaggedItem
             fields = ("id", "tag")
@@ -321,7 +322,8 @@ def _build_proxy_schema():
     ``Branch``'s concrete content type.
     """
 
-    class TaggedItemNode(DjangoType):
+    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
+    class TaggedItemNode(DjangoType):  # pyright: ignore[reportUnusedClass]
         class Meta:
             model = TaggedItem
             fields = ("id", "tag")

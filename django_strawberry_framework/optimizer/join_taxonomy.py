@@ -29,11 +29,9 @@ One classification (``classify_relation_join``) carries every join-derived
 fact the fetch strategies need:
 
 - ``windowable`` + ``partition_expr`` - the windowed-prefetch strategy's
-  ``PARTITION BY`` input (previously derived ad hoc by
-  ``plans.py::window_partition_for_prefetch``, now a shim over this module).
+  ``PARTITION BY`` input.
 - ``parent_join_column`` - the child-side column Django needs loaded to
-  attach prefetched rows to parents (previously
-  ``nested_planner.py::_connector_only_field``, now a shim too).
+  attach prefetched rows to parents.
 - ``through_model`` + ``lateral_shape`` - the Postgres LATERAL strategy's
   join-SQL selector (``optimizer/lateral_fetch.py``: a ``DIRECT_FK`` shape
   correlates the child table directly; a ``THROUGH_TABLE`` shape joins the
@@ -42,9 +40,9 @@ fact the fetch strategies need:
 
 The classifier takes the RAW Django relation field (or rel descriptor), not a
 ``FieldMeta``: the forward-M2M reverse query name lives only on
-``field.remote_field``. Defensive ``getattr`` fallbacks preserve the exact
-test-double contract the two shims' direct callers rely on
-(``reverse_connector_attname`` / ``target_field_attname`` synthetic shapes).
+``field.remote_field``. Defensive ``getattr`` fallbacks keep the synthetic
+test-double shapes (``reverse_connector_attname`` / ``target_field_attname``)
+classifiable.
 """
 
 from __future__ import annotations
@@ -79,9 +77,6 @@ class LateralJoinShape(enum.Enum):
 # The relation kinds a windowed prefetch can partition: every many-valued
 # shape plus the reverse one-to-one (whose child row also carries the parent
 # id). Single-valued FORWARD relations have no windowable parent partition.
-# Public so the historical raise-contract shim
-# (``plans.py::window_partition_for_prefetch``) can distinguish "wrong kind"
-# from "kind OK, partition unresolved" without re-listing the set.
 WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
     {
         "many",
@@ -205,8 +200,7 @@ def _partition_expr(field: object) -> str | None:
 def _parent_join_column(field: object, kind: RelationKind) -> str | None:
     """The child-side column Django needs loaded to attach rows to parents.
 
-    The relation-kind-specific connector
-    (``nested_planner.py::_connector_only_field``): the child FK
+    The relation-kind-specific connector: the child FK
     attname for a reverse FK / reverse one-to-one, the target field's attname
     for a forward single-valued relation, and the related model's pk attname
     for an M2M (the join table owns the attach, so the child only needs its
@@ -322,8 +316,8 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
     connection (the field flag reads are attribute lookups). Never raises -
     an unwindowable or unresolvable shape classifies as
     ``windowable=False`` / ``partition_expr=None`` and the caller decides the
-    fallback posture (``window_partition_for_prefetch`` keeps its historical
-    ``OptimizerError`` contract on top of this).
+    fallback posture (``nested_planner.py::plan_connection_relation`` leaves an
+    unwindowable relation unplanned for per-parent resolution).
     """
     try:
         kind = relation_kind(field)

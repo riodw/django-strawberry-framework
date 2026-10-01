@@ -595,7 +595,9 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         # neither def redeclares the other; ``wraps`` gives the returned callback
         # upstream's ``__name__`` and ``__qualname__`` either way.
         view: Callable[..., object]
-        if iscoroutinefunction(upstream_view):
+        # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's below
+        # it, where that one is not deprecated; the checker infers only the asyncio branch
+        if iscoroutinefunction(upstream_view):  # pyright: ignore[reportDeprecated]
 
             @wraps(upstream_view)
             async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:
@@ -996,7 +998,9 @@ _csrf_protected_run = csrf_protect(_run_after_csrf_check)
 _csrf_protected_async_run = csrf_protect(_async_run_after_csrf_check)
 
 
-class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
+# basedpyright: the mixin defines no ``__init__`` (its base is ``object`` at run time), so
+# construction runs the Strawberry view's ``BaseView.__init__``, which chains to ``View``'s
+class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """The package's synchronous Django GraphQL view.
 
         A subclass of ``strawberry.django.views.GraphQLView`` that overrides exactly
@@ -1062,7 +1066,9 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):
         return super().parse_multipart(request)
 
 
-class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):
+# basedpyright: the mixin defines no ``__init__`` (its base is ``object`` at run time), so
+# construction runs the Strawberry view's ``BaseView.__init__``, which chains to ``View``'s
+class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """The asynchronous twin, with an identical surface.
 
     The shape an ASGI deployment generally wants: ``AsyncGraphQLView.as_view``

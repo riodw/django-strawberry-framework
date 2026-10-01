@@ -19,8 +19,8 @@ from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.extension import mutation_payload_child_selections
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
 from django_strawberry_framework.optimizer.nested_fetch import unwindowable_child_queryset_reason
-from django_strawberry_framework.optimizer.nested_planner import _connector_only_field
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
     _apply_hint,
@@ -2019,16 +2019,15 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
     assert any("could not resolve connector column" in r.message for r in caplog.records)
 
 
-def test_connector_only_field_projects_the_shared_join_descriptor():
-    """The nested-planner shim reports the classifier's ``parent_join_column``.
+def test_parent_join_column_is_the_reverse_fk_child_attname():
+    """The connector the writer above loads is the classifier's ``parent_join_column``.
 
-    ``nested_planner.py::_connector_only_field`` and the writer above are the
-    two consumers of the same connector fact, so the shim must project
-    ``classify_relation_join``'s descriptor rather than re-deriving the column:
-    a reverse FK resolves to the child-side FK attname.
+    ``classify_relation_join`` is the one source of the connector fact the
+    prefetch-connector writer projects, so a reverse FK resolves to the
+    child-side FK attname.
     """
     field = Category._meta.get_field("items")
-    assert _connector_only_field(field) == "category_id"
+    assert classify_relation_join(field).parent_join_column == "category_id"
 
 
 def test_plan_prefetch_obj_hint_marks_plan_non_cacheable():
@@ -2786,9 +2785,9 @@ def test_plan_connection_relation_non_windowable_partition_is_noop():
     """A relation with no windowable parent partition falls back per-parent (no window).
 
     Driving ``_plan_connection_relation`` against a forward FK (``Item.category``)
-    reaches the partition step, where ``window_partition_for_prefetch`` raises
-    ``OptimizerError`` for the non-windowable single-valued kind; the planner
-    swallows it and leaves the selection unplanned (spec-033 Decision 6).
+    reaches the partition step, where ``classify_relation_join`` reports the
+    single-valued kind as not windowable; the planner leaves the selection
+    unplanned (spec-033 Decision 6).
     """
     from django_strawberry_framework.optimizer.walker import _plan_connection_relation
 
@@ -3462,17 +3461,15 @@ def test_m2m_shared_child_partitions_per_parent(direction):
     different sides of the relation: the reverse ``Genre.books`` through the
     child's forward M2M field name, and the forward ``Book.genres`` through the
     target's reverse query name. The executed prefetch is what catches a wrong
-    partition; the two ``window_partition_for_prefetch`` equalities record the
-    derivation itself.
+    partition; the two ``partition_expr`` equalities record the derivation
+    itself.
     """
     from apps.library.models import Book, Branch, Genre, Shelf
 
-    from django_strawberry_framework.optimizer.plans import window_partition_for_prefetch
-
     # Reverse M2M (Genre.books) partitions through the child's forward M2M field.
-    assert window_partition_for_prefetch(Genre._meta.get_field("books")) == "genres"
+    assert classify_relation_join(Genre._meta.get_field("books")).partition_expr == "genres"
     # Forward M2M (Book.genres) partitions by the reverse query name.
-    assert window_partition_for_prefetch(Book._meta.get_field("genres")) == "books"
+    assert classify_relation_join(Book._meta.get_field("genres")).partition_expr == "books"
 
     registry.clear()
     try:

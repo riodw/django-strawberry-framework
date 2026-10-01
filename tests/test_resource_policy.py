@@ -94,13 +94,11 @@ from django_strawberry_framework.resource_policy import (
     bounded_rows,
     bounded_rows_async,
     check_deadline,
-    clear_resource_context,
     effective_bound,
     end_resource_budget,
     policy_from_info,
     record_admission_rejection,
     resolve_resource_policy,
-    stash_resource_policy,
     validate_collection_bound,
     validate_trusted_flag,
 )
@@ -498,27 +496,20 @@ def test_a_field_declared_collection_bound_must_be_a_positive_integer(value):
     ids=["object", "dict", "frozen"],
 )
 def test_the_policy_round_trips_or_fails_closed_on_every_context_shape(context_factory):
-    """A frozen context cannot hold the stash, and still gets a BOUNDED policy.
+    """A frozen context cannot hold the published mirror, and still gets a BOUNDED policy.
 
-    That is the whole point of the fail-closed miss path: an unwritable context
-    degrades to the package defaults, never to "no policy".
+    The policy is read after its operation ended, so the mirror is all that
+    answers. That is the whole point of the fail-closed miss path: an
+    unwritable context degrades to the package defaults, never to "no policy".
     """
     context = context_factory()
     policy = ResourcePolicy(max_depth=3)
-    stash_resource_policy(context, policy)
+    with _armed(context, policy):
+        pass
     read = policy_from_info(SimpleNamespace(context=context))
     assert read in (policy, DEFAULT_RESOURCE_POLICY)
     assert read is not policy
     assert read is not DEFAULT_RESOURCE_POLICY
-
-
-def test_clearing_the_context_restores_the_default_policy():
-    context = SimpleNamespace()
-    stash_resource_policy(context, ResourcePolicy(max_depth=3))
-    clear_resource_context(context)
-    assert policy_from_info(SimpleNamespace(context=context)) == DEFAULT_RESOURCE_POLICY
-    assert not hasattr(context, DST_RESOURCE_POLICY)
-    assert not hasattr(context, DST_RESOURCE_DEADLINE)
 
 
 def test_a_non_policy_value_under_the_key_is_ignored():
@@ -610,13 +601,13 @@ def test_a_non_numeric_stashed_deadline_leaves_the_request_running():
     check_deadline(SimpleNamespace(context={DST_RESOURCE_DEADLINE: True}))
 
 
-def test_a_future_deadline_leaves_the_request_running():
+def test_a_future_deadline_leaves_the_request_running(arm_resource_budget):
     context = {}
-    stash_resource_policy(context, ResourcePolicy(execution_deadline_seconds=60))
+    arm_resource_budget(context, ResourcePolicy(execution_deadline_seconds=60))
     check_deadline(SimpleNamespace(context=context))
 
 
-def test_a_passed_deadline_reports_the_configured_seconds_not_the_clock():
+def test_a_passed_deadline_reports_the_configured_seconds_not_the_clock(arm_resource_budget):
     """``limit`` is the bound the deployment configured, never a monotonic timestamp.
 
     The elapsed time and the absolute deadline are process-internal timings a
@@ -624,7 +615,7 @@ def test_a_passed_deadline_reports_the_configured_seconds_not_the_clock():
     carrying a monotonic clock reading reads as a bound nobody configured.
     """
     context = {}
-    stash_resource_policy(context, ResourcePolicy(execution_deadline_seconds=2.5))
+    arm_resource_budget(context, ResourcePolicy(execution_deadline_seconds=2.5))
     context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
     with pytest.raises(ResourceLimitExceeded) as caught:
         check_deadline(SimpleNamespace(context=context))
@@ -724,10 +715,10 @@ def test_a_hostile_int_subclass_narrowing_a_bound_is_typed_rejected():
         ResourcePolicy(max_list_rows=2).narrowed(max_list_rows=HostileInt(3))
 
 
-def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic():
+def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic(arm_resource_budget):
     """A reflected ``__radd__`` wins over ``float``'s, so it must never be stored.
 
-    ``stash_resource_policy`` derives the absolute deadline as
+    ``begin_resource_budget`` derives the absolute deadline as
     ``time.monotonic() + seconds``. Python gives a SUBCLASS's reflected operand
     priority, so a subclass that survived construction could hand that addition
     back a ``nan`` - and a ``nan`` deadline compares false against every clock
@@ -743,7 +734,7 @@ def test_a_float_subclass_cannot_reach_the_derived_deadline_arithmetic():
         ResourcePolicy(execution_deadline_seconds=PoisonFloat(0.001))
 
     context: dict[str, Any] = {}
-    stash_resource_policy(context, ResourcePolicy(execution_deadline_seconds=0.001))
+    arm_resource_budget(context, ResourcePolicy(execution_deadline_seconds=0.001))
     assert math.isfinite(context[DST_RESOURCE_DEADLINE])
 
 
@@ -802,12 +793,12 @@ def test_an_armed_budget_outranks_a_policy_a_resolver_writes_over_it():
 def test_a_policy_written_without_arming_one_still_answers():
     """The mirror is the fallback where nothing armed a budget.
 
-    A plain ``strawberry.Schema`` that never installed the extension, and a
-    direct ``stash_resource_policy`` call, both leave the seams on this path -
-    a context none of the package's own collection resolvers runs inside.
+    A plain ``strawberry.Schema`` that never installed the extension leaves the
+    seams on this path, answered by whatever policy the consumer published
+    under the key - a context none of the package's own collection resolvers
+    runs inside.
     """
-    context: dict[str, Any] = {}
-    stash_resource_policy(context, ResourcePolicy(max_list_rows=5))
+    context: dict[str, Any] = {DST_RESOURCE_POLICY: ResourcePolicy(max_list_rows=5)}
     assert policy_from_info(SimpleNamespace(context=context)).max_list_rows == 5
 
 
@@ -947,7 +938,7 @@ def test_ending_a_budget_restores_the_one_it_was_opened_inside():
     # whose cleanup belongs to the extension's ``restored_context_keys`` rather
     # than to the budget token.
     assert policy_from_info(info).max_list_rows == 2
-    clear_resource_context(context)
+    context.clear()
     assert policy_from_info(info) == DEFAULT_RESOURCE_POLICY
 
 
@@ -976,16 +967,16 @@ async def test_the_armed_budget_reaches_a_sync_to_async_worker_thread():
 # ---------------------------------------------------------------------------
 
 
-def test_bounded_rows_slices_a_sequence_to_the_policy_bound():
+def test_bounded_rows_slices_a_sequence_to_the_policy_bound(arm_resource_budget):
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(list(range(10)), info) == [0, 1]
 
 
-def test_bounded_rows_bounds_a_non_subscriptable_iterable():
+def test_bounded_rows_bounds_a_non_subscriptable_iterable(arm_resource_budget):
     """The unsliceable shape must still be bounded, not waved through."""
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
 
     class _Rows:
         def __iter__(self):
@@ -999,7 +990,7 @@ def test_bounded_rows_bounds_a_non_subscriptable_iterable():
     [dict, None],
     ids=["plain-dict", "guarded-mapping-subclass"],
 )
-def test_bounded_rows_bounds_a_mapping_shaped_result(mapping_cls):
+def test_bounded_rows_bounds_a_mapping_shaped_result(mapping_cls, arm_resource_budget):
     """A MAPPING-shaped result is bounded via ``islice``, never a raw ``KeyError``.
 
     A mapping answers a slice subscript with ``KeyError`` on interpreters where
@@ -1016,7 +1007,7 @@ def test_bounded_rows_bounds_a_mapping_shaped_result(mapping_cls):
             raise KeyError("guarded")
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = (
         _GuardedDict({"a": 1, "b": 2, "c": 3})
         if mapping_cls is None
@@ -1026,7 +1017,10 @@ def test_bounded_rows_bounds_a_mapping_shaped_result(mapping_cls):
 
 
 @pytest.mark.parametrize("container", [list, tuple], ids=["list", "tuple"])
-def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(container):
+def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(
+    container,
+    arm_resource_budget,
+):
     """A sequence type may override ``__getitem__``; the bound must not run through it.
 
     ``result[:limit]`` is the operation the raw-list ceiling is made of, and on a
@@ -1043,7 +1037,7 @@ def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(cont
             return super().__getitem__(key)
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(_Escape(range(10)), info) == [0, 1]
 
 
@@ -1052,7 +1046,12 @@ def test_bounded_rows_does_not_let_a_sequence_subclass_answer_its_own_slice(cont
     [(1, 1, [1]), (0, 0, []), (2, None, [2, 3])],
     ids=["window", "zero-width-window", "offset-to-the-ceiling"],
 )
-def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(offset, limit, expected):
+def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(
+    offset,
+    limit,
+    expected,
+    arm_resource_budget,
+):
     """The offset window and the zero-width window bound the hostile shape too.
 
     ``result[start:start]`` is as much a consumer call as ``result[start:stop]``,
@@ -1067,13 +1066,13 @@ def test_a_windowed_sequence_subclass_is_bounded_on_every_coordinate(offset, lim
             return super().__getitem__(key)
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert (
         _windowed_rows(_Escape(range(10)), info, offset=offset, requested_limit=limit) == expected
     )
 
 
-def test_bounded_rows_bounds_a_hostile_mapping_subclass():
+def test_bounded_rows_bounds_a_hostile_mapping_subclass(arm_resource_budget):
     """A ``dict`` subclass is counted, never subscripted, so its guard cannot matter."""
 
     class _Escape(dict):
@@ -1081,13 +1080,13 @@ def test_bounded_rows_bounds_a_hostile_mapping_subclass():
             return list(self)
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(_Escape({"a": 1, "b": 2, "c": 3}), info) == ["a", "b"]
 
 
-def test_bounded_rows_honours_a_trusted_widening():
+def test_bounded_rows_honours_a_trusted_widening(arm_resource_budget):
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(list(range(10)), info, 4, trusted=True) == [
         0,
         1,
@@ -1102,7 +1101,11 @@ def test_bounded_rows_honours_a_trusted_widening():
     ["offset", "requested_limit"],
     ids=["offset", "requested-limit"],
 )
-async def test_the_exported_raw_list_bound_takes_no_client_window(color, coordinate):
+async def test_the_exported_raw_list_bound_takes_no_client_window(
+    color,
+    coordinate,
+    arm_resource_budget,
+):
     """A client page window is not on the exported surface, so an importer cannot widen it.
 
     A supplied window is a claim the bounding seam cannot check, and the one that
@@ -1114,7 +1117,7 @@ async def test_the_exported_raw_list_bound_takes_no_client_window(color, coordin
     signature.
     """
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     if color == "sync":
         with pytest.raises(TypeError):
             bounded_rows(list(range(10)), info, **{coordinate: 10})
@@ -1125,7 +1128,7 @@ async def test_the_exported_raw_list_bound_takes_no_client_window(color, coordin
     assert await bounded_rows_async(list(range(10)), info) == [0, 1]
 
 
-async def test_bounded_rows_async_closes_after_the_effective_prefix():
+async def test_bounded_rows_async_closes_after_the_effective_prefix(arm_resource_budget):
     class Rows:
         def __init__(self):
             self.value = 0
@@ -1143,7 +1146,7 @@ async def test_bounded_rows_async_closes_after_the_effective_prefix():
             self.closed = True
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     rows = Rows()
 
     assert await bounded_rows_async(rows, info) == [0, 1]
@@ -1224,7 +1227,9 @@ async def test_bounded_rows_async_hostile_notes_property_getter_does_not_mask_th
     assert str(caught.value) == "source failed"
 
 
-async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_error():
+async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_error(
+    arm_resource_budget,
+):
     class BrokenCleanupRows:
         def __init__(self):
             self.value = 0
@@ -1240,7 +1245,7 @@ async def test_bounded_rows_async_surfaces_cleanup_failure_without_a_source_erro
             raise RuntimeError("cleanup failed")
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=1))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=1))
     with pytest.raises(RuntimeError, match="cleanup failed"):
         await bounded_rows_async(BrokenCleanupRows(), info)
 
@@ -1266,7 +1271,9 @@ async def test_bounded_rows_async_hostile_aclose_lookup_does_not_mask_the_source
     assert any("hostile aclose lookup" in note for note in getattr(caught.value, "__notes__", []))
 
 
-async def test_bounded_rows_async_hostile_aclose_lookup_surfaces_without_source_error():
+async def test_bounded_rows_async_hostile_aclose_lookup_surfaces_without_source_error(
+    arm_resource_budget,
+):
     """A hostile aclose attribute lookup raises directly when iteration succeeded."""
 
     class HostileAcloseLookupRows:
@@ -1286,20 +1293,20 @@ async def test_bounded_rows_async_hostile_aclose_lookup_surfaces_without_source_
             return super().__getattribute__(name)
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=1))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=1))
     with pytest.raises(RuntimeError, match="hostile aclose lookup"):
         await bounded_rows_async(HostileAcloseLookupRows(), info)
 
 
-def test_bounded_rows_preserves_none():
+def test_bounded_rows_preserves_none(arm_resource_budget):
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert bounded_rows(None, info) is None
 
 
-def test_bounded_rows_checks_deadline_before_preserving_none():
+def test_bounded_rows_checks_deadline_before_preserving_none(arm_resource_budget):
     info = SimpleNamespace(context={})
-    stash_resource_policy(
+    arm_resource_budget(
         info.context,
         ResourcePolicy(max_list_rows=2, execution_deadline_seconds=1),
     )
@@ -1309,7 +1316,9 @@ def test_bounded_rows_checks_deadline_before_preserving_none():
         bounded_rows(None, info)
 
 
-async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_any_row():
+async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_any_row(
+    arm_resource_budget,
+):
     """A passed deadline abandons the source, so the seam closes it on the way out.
 
     The clock is read after the resolver has already produced its source, so this
@@ -1335,7 +1344,7 @@ async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_an
             self.closes += 1
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(execution_deadline_seconds=1))
+    arm_resource_budget(info.context, ResourcePolicy(execution_deadline_seconds=1))
     info.context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
     rows = Rows()
 
@@ -1350,6 +1359,7 @@ async def test_bounded_rows_async_closes_a_source_the_deadline_rejects_before_an
 @pytest.mark.parametrize("requested_limit", [None, 0], ids=["default-window", "limit-zero"])
 async def test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fails(
     requested_limit,
+    arm_resource_budget,
 ):
     """A failing ``aclose`` on the rejected source annotates the rejection, never replaces it.
 
@@ -1370,7 +1380,7 @@ async def test_bounded_rows_async_keeps_the_deadline_primary_when_the_close_fail
             raise RuntimeError("cleanup failed")
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(execution_deadline_seconds=1))
+    arm_resource_budget(info.context, ResourcePolicy(execution_deadline_seconds=1))
     info.context[DST_RESOURCE_DEADLINE] = time.monotonic() - 1
 
     with pytest.raises(ResourceLimitExceeded) as caught:
@@ -1438,7 +1448,9 @@ async def test_cleanup_rejected_async_iterable_survives_an_unannotatable_error()
     assert not hasattr(primary, "__notes__")
 
 
-async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_task():
+async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_task(
+    arm_resource_budget,
+):
     """A cancellation arriving while ``aclose`` runs outranks the source error it interrupts.
 
     Every other cleanup failure is demoted to a note so the source error stays
@@ -1462,7 +1474,7 @@ async def test_bounded_rows_async_lets_a_cancellation_during_cleanup_reach_the_t
             await asyncio.sleep(3600)
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     task = asyncio.ensure_future(bounded_rows_async(CancelledDuringCleanupRows(), info))
     await closing.wait()
     task.cancel()
@@ -1498,13 +1510,13 @@ async def test_cleanup_rejected_async_iterable_lets_a_cancelled_acquisition_thro
     assert not getattr(primary, "__notes__", [])
 
 
-async def test_bounded_rows_async_preserves_none():
+async def test_bounded_rows_async_preserves_none(arm_resource_budget):
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     assert await bounded_rows_async(None, info) is None
 
 
-async def test_bounded_rows_async_exhausted_iterator_without_truncation():
+async def test_bounded_rows_async_exhausted_iterator_without_truncation(arm_resource_budget):
     """An async iterator yielding fewer items than the bound exhausts normally without early aclose."""
 
     class ShortRows:
@@ -1526,15 +1538,15 @@ async def test_bounded_rows_async_exhausted_iterator_without_truncation():
             self.closed = True
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=5))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=5))
     rows = ShortRows()
     assert await bounded_rows_async(rows, info) == [1, 2]
     assert rows.closed is False
 
 
-def test_bounded_rows_slices_with_offset_and_requested_limit():
+def test_bounded_rows_slices_with_offset_and_requested_limit(arm_resource_budget):
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     data = list(range(10))
     assert _windowed_rows(data, info, offset=2, requested_limit=3) == [2, 3, 4]
@@ -1543,9 +1555,11 @@ def test_bounded_rows_slices_with_offset_and_requested_limit():
     assert _windowed_rows(data, info, offset=7, requested_limit=None) == [7, 8, 9]
 
 
-def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limit():
+def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limit(
+    arm_resource_budget,
+):
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     class _Rows:
         def __iter__(self):
@@ -1559,10 +1573,10 @@ def test_bounded_rows_slices_unsliceable_iterable_with_offset_and_requested_limi
     ]
 
 
-def test_bounded_rows_zero_window_does_not_advance_generator():
+def test_bounded_rows_zero_window_does_not_advance_generator(arm_resource_budget):
     """A zero window returns an empty list without consuming or advancing unsliceable iterators."""
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     def _gen():
         yield 1
@@ -1577,7 +1591,7 @@ def test_bounded_rows_zero_window_does_not_advance_generator():
     assert _windowed_rows([1, 2, 3], info, offset=1, requested_limit=0) == []
 
 
-async def test_bounded_rows_async_slices_with_offset_and_requested_limit():
+async def test_bounded_rows_async_slices_with_offset_and_requested_limit(arm_resource_budget):
     class Rows:
         def __init__(self):
             self.value = 0
@@ -1595,14 +1609,14 @@ async def test_bounded_rows_async_slices_with_offset_and_requested_limit():
             self.closed = True
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
     rows = Rows()
 
     assert await _windowed_rows_async(rows, info, offset=2, requested_limit=3) == [2, 3, 4]
     assert rows.closed is True
 
 
-async def test_bounded_rows_async_zero_window_closes_without_next():
+async def test_bounded_rows_async_zero_window_closes_without_next(arm_resource_budget):
     """A zero window on an async iterator closes it immediately without calling __anext__."""
 
     class Rows:
@@ -1621,7 +1635,7 @@ async def test_bounded_rows_async_zero_window_closes_without_next():
             self.closed = True
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
     rows = Rows()
 
     assert await _windowed_rows_async(rows, info, offset=0, requested_limit=0) == []
@@ -1716,10 +1730,11 @@ def test_bounded_rows_window_parameter_matrix(
     declared,
     trusted,
     expected,
+    arm_resource_budget,
 ):
     """Parametrize sequences and non-subscriptable iterables across window parameters."""
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
     items = list(range(30))
     source = source_factory(items)
 
@@ -1738,10 +1753,10 @@ def test_bounded_rows_window_parameter_matrix(
     assert list(result_positional) == list(range(4))
 
 
-async def test_bounded_rows_async_positive_offset_arithmetic():
+async def test_bounded_rows_async_positive_offset_arithmetic(arm_resource_budget):
     """Positive-offset arithmetic over an async iterator at helper seam (spec-050 Decision 8)."""
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     async def _gen():
         for i in range(20):
@@ -1756,7 +1771,7 @@ async def test_bounded_rows_async_positive_offset_arithmetic():
     ]
 
 
-def test_bounded_rows_declined_sync_cleanup_resumable():
+def test_bounded_rows_declined_sync_cleanup_resumable(arm_resource_budget):
     """Pin the declined sync cleanup contract: truncated sync generator stays suspended and resumable."""
     finally_ran = False
 
@@ -1768,7 +1783,7 @@ def test_bounded_rows_declined_sync_cleanup_resumable():
             finally_ran = True
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     g = _sync_gen()
     result = _windowed_rows(g, info, offset=2, requested_limit=3)
@@ -1783,7 +1798,7 @@ def test_bounded_rows_declined_sync_cleanup_resumable():
     assert finally_ran is True
 
 
-def test_bounded_rows_unsliceable_iterable_exact_consumption(monkeypatch):
+def test_bounded_rows_unsliceable_iterable_exact_consumption(monkeypatch, arm_resource_budget):
     """Counters around __iter__/__next__ and patched islice seam verify exact consumption."""
     from itertools import islice
 
@@ -1805,7 +1820,7 @@ def test_bounded_rows_unsliceable_iterable_exact_consumption(monkeypatch):
             return val
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     islice_calls = 0
     orig_islice = islice
@@ -1832,7 +1847,7 @@ def test_bounded_rows_unsliceable_iterable_exact_consumption(monkeypatch):
     assert c1.next_calls == 5
 
 
-async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix():
+async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix(arm_resource_budget):
     """Async-only exact consumption, iterator acquisition, and cleanup counts matrix."""
 
     class TrackedAsyncIterable:
@@ -1867,7 +1882,7 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix():
                 raise RuntimeError("Cleanup failure")
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     # 1. Zero limit acquires and closes once with zero advances
     src_zero = TrackedAsyncIterable([1, 2, 3])
@@ -1926,7 +1941,7 @@ async def test_bounded_rows_async_exact_consumption_and_cleanup_matrix():
         await _windowed_rows_async(src_clean_fail, info, offset=0, requested_limit=2)
 
 
-def test_bounded_rows_shared_policy_seams_spy(monkeypatch):
+def test_bounded_rows_shared_policy_seams_spy(monkeypatch, arm_resource_budget):
     """Spy on check_deadline and effective_bound at bounded_rows seam."""
     import django_strawberry_framework.resource_policy as rp
 
@@ -1950,7 +1965,7 @@ def test_bounded_rows_shared_policy_seams_spy(monkeypatch):
     monkeypatch.setattr(rp, "effective_bound", spy_bound)
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     # Coordinate-bearing call: calls each seam once before source advance
     check_deadline_calls = 0
@@ -2007,7 +2022,7 @@ class _ClaimsToBeAQuerySet:
 
 
 @pytest.mark.django_db
-def test_a_queryset_subclass_cannot_answer_its_own_row_bound():
+def test_a_queryset_subclass_cannot_answer_its_own_row_bound(arm_resource_budget):
     """The ceiling is a slice, so a subclass owning that slice owns the ceiling.
 
     ``isinstance(value, QuerySet)`` admitted every subclass to the SQL-slice
@@ -2018,7 +2033,7 @@ def test_a_queryset_subclass_cannot_answer_its_own_row_bound():
     """
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     hostile = _EscapingQuerySet(model=Category)
     rows = bounded_rows(hostile, info)
     assert type(rows) is QuerySet
@@ -2026,11 +2041,13 @@ def test_a_queryset_subclass_cannot_answer_its_own_row_bound():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_queryset_subclass_cannot_answer_its_own_row_bound_when_awaited():
+async def test_a_queryset_subclass_cannot_answer_its_own_row_bound_when_awaited(
+    arm_resource_budget,
+):
     """The awaited helper reaches the same seam, so it carries the same ceiling."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     hostile = _EscapingQuerySet(model=Category)
     rows = await bounded_rows_async(hostile, info)
     assert type(rows) is QuerySet
@@ -2038,11 +2055,11 @@ async def test_a_queryset_subclass_cannot_answer_its_own_row_bound_when_awaited(
 
 
 @pytest.mark.django_db
-def test_a_windowed_queryset_subclass_is_windowed_on_the_rebuilt_queryset():
+def test_a_windowed_queryset_subclass_is_windowed_on_the_rebuilt_queryset(arm_resource_budget):
     """The coordinate window is taken on the rebuild, not on the source's subscript."""
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=4))
     hostile = _EscapingQuerySet(model=Category)
     rows = _windowed_rows(hostile, info, offset=1, requested_limit=2)
     assert type(rows) is QuerySet
@@ -2052,33 +2069,35 @@ def test_a_windowed_queryset_subclass_is_windowed_on_the_rebuilt_queryset():
 
 
 @pytest.mark.django_db
-def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows():
+def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows(arm_resource_budget):
     """A zero-width window is a subscript the source must not be asked to answer."""
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=4))
     hostile = _EscapingQuerySet(model=Category)
     rows = _windowed_rows(hostile, info, offset=1, requested_limit=0)
     assert list(rows) == []
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows_when_awaited():
+async def test_a_zero_width_window_on_a_queryset_subclass_returns_no_rows_when_awaited(
+    arm_resource_budget,
+):
     """The awaited window seam delegates here, so the zero-width arm is the same one."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=4))
     hostile = _EscapingQuerySet(model=Category)
     rows = await _windowed_rows_async(hostile, info, offset=1, requested_limit=0)
     assert list(rows) == []
 
 
 @pytest.mark.django_db
-def test_an_exact_queryset_still_carries_the_row_bound_into_sql():
+def test_an_exact_queryset_still_carries_the_row_bound_into_sql(arm_resource_budget):
     """The common shape pays nothing and keeps the ``LIMIT`` the bound exists to push."""
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = Category.objects.all()
     rows = bounded_rows(source, info)
     assert type(rows) is QuerySet
@@ -2087,7 +2106,7 @@ def test_an_exact_queryset_still_carries_the_row_bound_into_sql():
 
 
 @pytest.mark.django_db
-def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql():
+def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql(arm_resource_budget):
     """A rebuilt subclass is still a queryset, so the bound stays a ``LIMIT``.
 
     Counting a sealable subclass into a Python list would restore the row
@@ -2095,7 +2114,7 @@ def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql():
     """
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
 
     class _ProjectQuerySet(QuerySet):
         """A project's own queryset class, faithfully rebuildable."""
@@ -2107,11 +2126,11 @@ def test_a_sealable_queryset_subclass_keeps_the_row_bound_in_sql():
 
 
 @pytest.mark.django_db
-def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced():
+def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced(arm_resource_budget):
     """An unrebuildable source fails closed; it never falls back to its own slice."""
     seed_data(2)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
 
     class _ForeignQuery(Query):
         """A ``Query`` subclass, which the seal cannot rebuild."""
@@ -2123,11 +2142,13 @@ def test_a_queryset_subclass_that_cannot_be_sealed_is_refused_not_sliced():
 
 
 @pytest.mark.django_db
-def test_a_queryset_subclass_carrying_a_consumer_expression_names_what_the_bound_can_rebuild():
+def test_a_queryset_subclass_carrying_a_consumer_expression_names_what_the_bound_can_rebuild(
+    arm_resource_budget,
+):
     """The raw-list refusal names the seal's full cause list and its own result-cache rule."""
     seed_data(1)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
 
     class _ConsumerUpper(Func):
         function = "UPPER"
@@ -2145,7 +2166,7 @@ def test_a_queryset_subclass_carrying_a_consumer_expression_names_what_the_bound
     assert "a result cache that is not an exact list" in message
 
 
-def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice():
+def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice(arm_resource_budget):
     """``__class__`` is consumer code, so the shape is read from ``type(value)``.
 
     An object that answers ``isinstance`` with ``QuerySet`` reached the SQL-slice
@@ -2153,13 +2174,13 @@ def test_a_value_that_only_claims_to_be_a_queryset_cannot_reach_the_slice():
     ordinary iterable and is bounded by counting.
     """
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     claimant = _ClaimsToBeAQuerySet()
     assert isinstance(claimant, QuerySet)
     assert bounded_rows(claimant, info) == [0, 1]
 
 
-def test_a_queryset_subclass_whose_state_is_unreadable_is_refused():
+def test_a_queryset_subclass_whose_state_is_unreadable_is_refused(arm_resource_budget):
     """State is read through ``object.__getattribute__``, and that read can still fail.
 
     A class is free to define ``__dict__`` as a descriptor that raises, and the
@@ -2167,7 +2188,7 @@ def test_a_queryset_subclass_whose_state_is_unreadable_is_refused():
     letting the raw exception out of a collection resolver.
     """
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
 
     class _UnreadableQuerySet(QuerySet):
         @property
@@ -2180,7 +2201,7 @@ def test_a_queryset_subclass_whose_state_is_unreadable_is_refused():
     assert "instance state is unreadable" in str(excinfo.value)
 
 
-def test_a_queryset_subclass_without_a_model_class_is_refused():
+def test_a_queryset_subclass_without_a_model_class_is_refused(arm_resource_budget):
     """The model a source declares is a slot, and the rebuild needs a real class there.
 
     A raw-list source is validated against no registered type, so the model it
@@ -2189,7 +2210,7 @@ def test_a_queryset_subclass_without_a_model_class_is_refused():
     replace.
     """
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = _EscapingQuerySet(model=Category)
     object.__getattribute__(source, "__dict__")["model"] = object()
     with pytest.raises(ConfigurationError) as excinfo:
@@ -2256,11 +2277,12 @@ def _held_rows(source: QuerySet) -> list:
 @pytest.mark.django_db
 def test_an_evaluated_exact_queryset_is_windowed_from_the_rows_it_holds(
     django_assert_num_queries,
+    arm_resource_budget,
 ):
     """A source that arrives evaluated is windowed from its own rows, not re-queried."""
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = _evaluated(QuerySet)
     held = _held_rows(source)
 
@@ -2275,6 +2297,7 @@ def test_an_evaluated_exact_queryset_is_windowed_from_the_rows_it_holds(
 @pytest.mark.django_db
 def test_an_evaluated_project_queryset_class_is_windowed_from_the_rows_it_holds(
     django_assert_num_queries,
+    arm_resource_budget,
 ):
     """The rebuild carries the fetched rows, so a project queryset class costs no query.
 
@@ -2284,7 +2307,7 @@ def test_an_evaluated_project_queryset_class_is_windowed_from_the_rows_it_holds(
     """
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = _evaluated(_ProjectQuerySet)
     held = _held_rows(source)
 
@@ -2302,11 +2325,12 @@ def test_an_evaluated_project_queryset_class_is_windowed_from_the_rows_it_holds(
 @pytest.mark.django_db
 def test_a_coordinate_window_over_an_evaluated_project_queryset_class_reads_carried_rows(
     django_assert_num_queries,
+    arm_resource_budget,
 ):
     """The offset window is taken over the carried rows, so it too costs nothing."""
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=4))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=4))
     source = _evaluated(_ProjectQuerySet)
     held = _held_rows(source)
 
@@ -2321,7 +2345,9 @@ def test_a_coordinate_window_over_an_evaluated_project_queryset_class_reads_carr
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_awaited():
+async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_awaited(
+    arm_resource_budget,
+):
     """The awaited seam reaches the same window, so it reads the same held rows.
 
     A query count is not the instrument here: the awaited call runs on the event
@@ -2332,7 +2358,7 @@ async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_aw
     """
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = await sync_to_async(_evaluated)(QuerySet)
     held = _held_rows(source)
 
@@ -2344,11 +2370,13 @@ async def test_an_evaluated_exact_queryset_is_windowed_from_its_own_rows_when_aw
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_an_evaluated_project_queryset_class_is_windowed_from_its_own_rows_when_awaited():
+async def test_an_evaluated_project_queryset_class_is_windowed_from_its_own_rows_when_awaited(
+    arm_resource_budget,
+):
     """The awaited seam takes the rebuilt source's carried rows rather than a second fetch."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = await sync_to_async(_evaluated)(_ProjectQuerySet)
     held = _held_rows(source)
 
@@ -2360,7 +2388,7 @@ async def test_an_evaluated_project_queryset_class_is_windowed_from_its_own_rows
 
 
 @pytest.mark.django_db
-def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried():
+def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried(arm_resource_budget):
     """A cache Django did not build answers the window with its own subscript, so it is refused.
 
     The carried rows are windowed by subscripting them. An exact ``list`` is the
@@ -2369,7 +2397,7 @@ def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried():
     """
     seed_data(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = _ProjectQuerySet(model=Category)
     source._result_cache = _LyingResultCache()
 
@@ -2381,11 +2409,11 @@ def test_a_result_cache_that_is_not_a_list_is_refused_rather_than_carried():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited():
+async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited(arm_resource_budget):
     """The awaited seam refuses the same cache, so neither color carries one."""
     await sync_to_async(seed_data)(6)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     source = _ProjectQuerySet(model=Category)
     source._result_cache = _LyingResultCache()
 
@@ -2396,7 +2424,9 @@ async def test_a_result_cache_that_is_not_a_list_is_refused_when_awaited():
 
 
 @pytest.mark.django_db
-def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_predicate():
+def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_predicate(
+    arm_resource_budget,
+):
     """A relation's pending predicate is baked onto the rebuild, whatever class carries it.
 
     Django's own ``_apply_rel_filters`` builds the source, so the pending state
@@ -2406,7 +2436,7 @@ def test_a_relation_source_from_a_project_queryset_class_keeps_its_relation_pred
     """
     seed_data(3)
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=2))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=2))
     parent = Category.objects.order_by("pk").first()
     source = parent.items._apply_rel_filters(_ProjectQuerySet(model=Item))
     assert type(source) is _ProjectQuerySet

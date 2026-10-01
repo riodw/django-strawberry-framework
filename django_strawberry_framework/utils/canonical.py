@@ -1,11 +1,12 @@
 """Hostile-safe primitives for canonically reading consumer-controlled containers.
 
-Two subsystems reduce arbitrary consumer data to a comparable token: the
-generated-input metadata cache key (``utils/inputs.py::make_hashable_meta_value``,
-whose output is a Layer-6 cache key) and the write pipeline's pre-save drift
-fingerprint (``utils/write_transaction.py::_field_fingerprint``, which is
-request-scoped). Their OUTPUT encodings are deliberately different and stay with
-each owner - one produces a hashable structure, the other a flat digest string.
+Two subsystems reduce arbitrary consumer data to a canonical form: the set
+families' unordered ``Meta.fields`` ordering
+(``utils/inputs.py::_sorted_meta_values``, whose output is a sorted list) and the
+write pipeline's pre-save drift fingerprint
+(``utils/write_transaction.py::_field_fingerprint``, which is request-scoped).
+Their OUTPUT encodings are deliberately different and stay with each owner - one
+produces an ordered list, the other a flat digest string.
 
 What must NOT differ is how either one READS the data on the way there, because
 both read values a consumer controls, and the two halves of that read are where
@@ -64,7 +65,7 @@ def base_container_values(value: object) -> tuple[object, ...]:
     fingerprints a lie without raising anything. There is no base slot to read
     for a type the interpreter does not define, so the honest answer is a typed
     refusal. Both callers gate on the five built-in types before arriving here
-    (``utils/inputs.py::_hashable_meta_value``,
+    (``utils/inputs.py::canonicalize_set_meta_fields``,
     ``utils/write_transaction.py::_field_fingerprint``), so
     the refusal fires only for a future caller that widened its gate without
     deciding how an arbitrary iterable should be read.

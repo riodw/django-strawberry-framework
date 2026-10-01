@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import json
 import time
 from dataclasses import dataclass
@@ -59,6 +60,8 @@ from django_strawberry_framework.utils.context import get_context_value, stash_o
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 if TYPE_CHECKING:
+    from collections.abc import Coroutine
+
     from django.db.models.sql.compiler import _AsSqlType
 
 _CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
@@ -457,6 +460,54 @@ async def test_async_http_rejects_a_sync_resolver_that_returns_a_custom_awaitabl
     )
     assert payload["data"] is None
     assert "returned an awaitable" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_http_rejects_an_async_resolver_that_resolves_to_another_awaitable():
+    """An ``async def`` resolver whose awaited value is a SECOND awaitable fails closed.
+
+    The list field awaits the consumer resolver once. A value still awaitable
+    after that await is neither a ``QuerySet`` nor a plain iterable, so passing
+    it through the non-queryset branch would skip ``BranchType.get_queryset``
+    and leak the Hidden/restricted row. The inner awaitable is disposed, never
+    awaited: it is closed with its body never run.
+    """
+    await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
+    await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
+    inner_body_ran: list[str] = []
+    inner_coroutines: list[Coroutine[object, object, object]] = []
+
+    async def _inner():
+        inner_body_ran.append("ran")
+        return library_models.Branch.objects.all()
+
+    async def _resolve_to_awaitable(root, info):
+        coroutine = _inner()
+        inner_coroutines.append(coroutine)
+        return coroutine
+
+    @strawberry.type
+    class _NestedAwaitableQuery:
+        branches: list[library_schema.BranchType] = DjangoListField(
+            library_schema.BranchType,
+            resolver=_resolve_to_awaitable,
+        )
+
+    try:
+        payload = await _post_async(
+            DjangoSchema(query=_NestedAwaitableQuery, config=strawberry_config()),
+            "{ branches { name } }",
+            extra_settings=_ERROR_POLICY_PASS_THROUGH,
+        )
+        assert payload["data"] is None
+        assert "resolved to another awaitable" in payload["errors"][0]["message"]
+        assert [inspect.getcoroutinestate(c) for c in inner_coroutines] == [inspect.CORO_CLOSED]
+        assert inner_body_ran == []
+    finally:
+        # A coroutine the field failed to dispose would otherwise surface as an
+        # unraisable "never awaited" warning inside whichever test collects it.
+        for coroutine in inner_coroutines:
+            coroutine.close()
 
 
 def _async_callable_object_resolver():

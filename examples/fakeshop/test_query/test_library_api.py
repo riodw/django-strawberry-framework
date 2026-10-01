@@ -5414,7 +5414,8 @@ def _relay_relation_isnull_holder_schema():
     from django_strawberry_framework import DjangoType, finalize_django_types
     from django_strawberry_framework.filters import FilterInput, FilterSet
 
-    class HolderRelayIsnullGenreType(DjangoType):
+    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
+    class HolderRelayIsnullGenreType(DjangoType):  # pyright: ignore[reportUnusedClass]
         class Meta:
             model = models.Genre
             fields = ("id", "name")
@@ -5480,7 +5481,8 @@ def test_generic_relation_tags_resolve_over_http_with_optimizer():
                 fields = ("id", "name", "tags")
                 name = "HolderTaggedBranchType"
 
-        class HolderTaggedItemType(DjangoType):
+        # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
+        class HolderTaggedItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = models.TaggedItem
                 fields = ("id", "tag")
@@ -11153,8 +11155,9 @@ def test_golden_sdl_products_serializer_input():
 # M2M duplicate-through-join tripwires (spec-033 Decision 4).
 #
 # The windowed nested-connection prefetch partitions by an M2M relation name
-# (plans.py::window_partition_for_prefetch), which joins the through table at
-# plan time. Django's prefetch filtering then applies the parent predicate with
+# (the ``partition_expr`` of optimizer/join_taxonomy.py::classify_relation_join),
+# which joins the through table at plan time. Django's prefetch filtering then
+# applies the parent predicate with
 # django/db/models/fields/related_descriptors.py::_filter_prefetch_queryset
 # #"reuse_all=True", which REUSES that join. On older Django generations (and
 # in a hypothetical refactor that moves the window annotation after prefetch

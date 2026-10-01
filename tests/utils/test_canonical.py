@@ -1,7 +1,7 @@
 """Tests for the hostile-safe container read / ordering primitives (``utils/canonical.py``).
 
-The module has two consumers - the generated-input metadata cache key
-(``utils/inputs.py::make_hashable_meta_value``) and the write pipeline's pre-save
+The module has two consumers - the set families' ``Meta.fields`` ordering
+(``utils/inputs.py::_sorted_meta_values``) and the write pipeline's pre-save
 drift fingerprint (``utils/write_transaction.py::_field_fingerprint``) - and both
 reach it only through their own gates. These tests exercise the primitives
 DIRECTLY, because the properties that matter (a subclass's overridden iteration

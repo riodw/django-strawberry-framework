@@ -32,7 +32,6 @@ from django_strawberry_framework.optimizer.plans import (
     order_entry_has_explicit_nulls,
     resolver_key,
     runtime_path_from_path,
-    window_partition_for_prefetch,
 )
 
 
@@ -1054,67 +1053,6 @@ class TestApplyWindowPagination:
         )
         assert WINDOW_ROW_NUMBER in qs.query.annotations
         assert WINDOW_TOTAL_COUNT in qs.query.annotations
-
-
-class TestWindowPartitionForPrefetch:
-    """``window_partition_for_prefetch`` returns the parent-side attach key per kind."""
-
-    def test_reverse_fk_partitions_by_child_fk_attname(self):
-        """A reverse FK (``Category.items``) partitions by the child FK column."""
-        field = Category._meta.get_field("items")
-        assert window_partition_for_prefetch(field) == "category_id"
-
-    def test_forward_m2m_partitions_by_reverse_query_name(self):
-        """A forward M2M partitions by the target's reverse query name, not the accessor.
-
-        ``Book.genres`` has reverse query name ``"books"`` (the ``related_name``);
-        partitioning the Genre child rows by ``"books"`` follows the reverse M2M
-        back to each Book parent.
-        """
-        from apps.library.models import Book
-
-        field = Book._meta.get_field("genres")
-        assert window_partition_for_prefetch(field) == "books"
-
-    def test_reverse_m2m_partitions_through_forward_field_name(self):
-        """A reverse M2M (``Genre.books``) partitions through the child's forward M2M field."""
-        from apps.library.models import Genre
-
-        field = Genre._meta.get_field("books")
-        assert window_partition_for_prefetch(field) == "genres"
-
-    def test_forward_m2m_partition_diverges_from_accessor(self):
-        """The forward-M2M partition is the reverse query name, NOT the accessor.
-
-        ``Book.genres``'s instance accessor is ``"genres"`` but its windowable
-        partition is the reverse query name ``"books"`` - the divergence the
-        helper must resolve off ``remote_field`` rather than the accessor
-        (spec-033 Decision 4; the reverse-no-``related_name`` shape the package
-        special-cases everywhere).
-        """
-        from apps.library.models import Book
-
-        field = Book._meta.get_field("genres")
-        assert window_partition_for_prefetch(field) == "books"
-        assert field.remote_field.name == "books"
-
-    def test_forward_single_relation_raises(self):
-        """A single-valued forward FK has no windowable partition - raises ``OptimizerError``."""
-        field = Item._meta.get_field("category")
-        with pytest.raises(OptimizerError, match="no windowable parent partition"):
-            window_partition_for_prefetch(field)
-
-    def test_windowable_kind_without_remote_field_keys_raises(self):
-        """A windowable kind whose ``remote_field`` resolves neither attname nor name raises.
-
-        Stock Django relation descriptors always carry a ``remote_field`` name, so
-        this is a defensive guard: a malformed descriptor that classifies as a
-        windowable kind but exposes no parent partition column falls back
-        per-parent rather than partitioning by ``None`` (spec-033 Decision 4).
-        """
-        field = SimpleNamespace(many_to_many=True, remote_field=SimpleNamespace(), name="mock_rel")
-        with pytest.raises(OptimizerError, match="could not resolve a parent partition"):
-            window_partition_for_prefetch(field)
 
 
 class TestOrderEntryHasExplicitNulls:

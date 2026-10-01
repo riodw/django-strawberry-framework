@@ -143,7 +143,9 @@ class GraphQLRequestBodyBoundaryMiddleware:
         """Bind the downstream chain and refuse a chain that cannot deliver the ordering."""
         self.get_response = get_response
         _require_boundary_before_csrf()
-        if iscoroutinefunction(self.get_response):
+        # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's below
+        # it, where that one is not deprecated; the checker infers only the asyncio branch
+        if iscoroutinefunction(self.get_response):  # pyright: ignore[reportDeprecated]
             markcoroutinefunction(self)
 
     def __call__(self, request: HttpRequest) -> HttpResponseBase | Awaitable[HttpResponseBase]:
@@ -164,7 +166,9 @@ class GraphQLRequestBodyBoundaryMiddleware:
         # A plain ``bool``: typeshed's ``iscoroutinefunction`` is a TypeGuard, and a guard
         # on it - direct, or through a local, which pyright follows - would re-type
         # ``self`` as a bare callable.
-        is_async = bool(iscoroutinefunction(self))
+        # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's below
+        # it, where that one is not deprecated; the checker infers only the asyncio branch
+        is_async = bool(iscoroutinefunction(self))  # pyright: ignore[reportDeprecated]
         if is_async:
             return self.__acall__(request)
         token = _boundary_middleware_request.set(request)

@@ -176,7 +176,9 @@ def resolve_policy(
     # ``sorted()`` over mixed unorderable names (the
     # ``conf.py::upstream_patches_enabled`` key-guard precedent).
     for name in plain:
-        if not isinstance(name, str):
+        # basedpyright: trust boundary: the mapping comes from consumer settings and can hold any
+        # key
+        if not isinstance(name, str):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise ConfigurationError(
                 f"The {display_name} {unit} names must be strings; got {describe_value(name)}.",
             )

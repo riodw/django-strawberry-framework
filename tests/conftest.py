@@ -88,6 +88,30 @@ def isolate_global_registry():
     _connection_type_cache.clear()
 
 
+@pytest.fixture
+def arm_resource_budget():
+    """Return ``arm(context, policy)``, arming a budget the way the resource extension does.
+
+    ``begin_resource_budget`` is the production entry point: it arms the policy
+    the enforcement seams read and publishes the consumer-readable mirror. Every
+    budget armed through ``arm`` is ended at teardown, so no armed budget
+    outlives the test that armed it.
+    """
+    from django_strawberry_framework.resource_policy import (
+        begin_resource_budget,
+        end_resource_budget,
+    )
+
+    scopes = []
+
+    def arm(context, policy):
+        scopes.append(begin_resource_budget(context, policy))
+
+    yield arm
+    for scope in reversed(scopes):
+        end_resource_budget(scope)
+
+
 @pytest.fixture(autouse=True)
 def _close_context_local_db_connections():
     """Close per-task SQLite connections an async test left open.

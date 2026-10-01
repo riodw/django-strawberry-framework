@@ -672,6 +672,7 @@ class _RefusedConfiguration(SchemaExtension):
     """
 
     def __init__(self, message: str) -> None:
+        super().__init__()
         self._message = message
 
     @override
@@ -896,9 +897,11 @@ class DjangoSchema(strawberry.Schema):
         accepted = _SCHEMA_EXTENSIONS.recall(self)
         return () if accepted is None else accepted
 
+    # basedpyright: the property replaces upstream's unannotated attribute on purpose (see the
+    # getter), and no write round-trips: the constructor's settles it, every later one is refused
     @extensions.setter
     @override
-    def extensions(self, value: Iterable[object]) -> None:
+    def extensions(self, value: Iterable[object]) -> None:  # pyright: ignore[reportIncompatibleUnannotatedOverride, reportPropertyTypeMismatch]
         """Settle the accepted configuration, once, from the base constructor.
 
         ``strawberry.Schema.__init__`` materializes its ``extensions=`` argument

@@ -256,7 +256,9 @@ def _validate_relay_djangotype_target(
     return definition
 
 
-class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):
+# basedpyright: ``GraphQLError.__init__`` calls ``super().__init__(message)``, which reaches
+# ``BaseException.__init__`` through the package base (it defines no ``__init__``)
+class ListArgumentError(GraphQLError, DjangoStrawberryFrameworkError):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """An argument to ``DjangoListField`` was invalid or violated policy bounds.
 
     Dual-inherits ``GraphQLError`` (so Strawberry/GraphQL transport serializes it
@@ -838,11 +840,15 @@ def _is_deterministic_order_reference(query: Query, name: str, prefix: str) -> b
     return _resolve_order_field_path(query.get_meta(), referenced) is not None
 
 
+# The relation edges an order-determinism probe starts from: none traversed yet.
+_NO_SEEN_EDGES: frozenset[tuple[type[models.Model], str]] = frozenset()
+
+
 def _is_deterministic_order_name(
     query: Query,
     name: str,
     opts: Options[models.Model] | None = None,
-    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
+    seen: frozenset[tuple[type[models.Model], str]] = _NO_SEEN_EDGES,
     prefix: str = "",
 ) -> bool:
     """Resolve a string ordering term the way the compiler resolves it, then classify it.
@@ -891,7 +897,7 @@ def _is_deterministic_order_term(
     query: Query,
     term: Any,
     opts: Options[models.Model] | None = None,
-    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
+    seen: frozenset[tuple[type[models.Model], str]] = _NO_SEEN_EDGES,
     prefix: str = "",
 ) -> bool:
     """Classify one selected ordering term by the form Django will compile it into.
@@ -978,7 +984,7 @@ def _is_deterministic_order_value(
     query: Query,
     value: object,
     opts: Options[models.Model] | None = None,
-    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
+    seen: frozenset[tuple[type[models.Model], str]] = _NO_SEEN_EDGES,
     prefix: str = "",
 ) -> bool:
     """Classify one value a predicate's lookup compares its column against.
@@ -1111,7 +1117,7 @@ def _is_deterministic_order_condition(
     query: Query,
     condition: models.Q,
     opts: Options[models.Model] | None = None,
-    seen: frozenset[tuple[type[models.Model], str]] = frozenset(),
+    seen: frozenset[tuple[type[models.Model], str]] = _NO_SEEN_EDGES,
     prefix: str = "",
 ) -> bool:
     """Classify the predicate a conditional ordering term picks its value with.
@@ -1220,9 +1226,10 @@ def _model_from_definition(definition: DjangoTypeDefinition) -> type[models.Mode
             f"DjangoListField could not read the model from the definition of "
             f"{_safe_class_name(getattr(definition, 'origin', definition))}: {exc}",
         ) from exc
-    # The canonical definition records a model class; the check fails loud if that invariant is
-    # ever broken instead of seeding a resolver over a non-model
-    if not (isinstance(model, type) and issubclass(model, models.Model)):
+    # basedpyright: trust boundary: the definition is a mutable record reachable from the
+    # target's public class attribute; the check fails loud instead of seeding a resolver over
+    # a non-model
+    if not (isinstance(model, type) and issubclass(model, models.Model)):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ConfigurationError(
             f"DjangoListField target "
             f"{_safe_class_name(getattr(definition, 'origin', definition))} has a definition "
@@ -1256,7 +1263,8 @@ def _field_label(info: Info[object, object]) -> str:
         field_name: object = info.field_name
     except Exception:
         return "DjangoListField"
-    return field_name if isinstance(field_name, str) and field_name else "DjangoListField"
+    # basedpyright: trust boundary: that shadowing ``info_class`` can answer any object
+    return field_name if isinstance(field_name, str) and field_name else "DjangoListField"  # pyright: ignore[reportUnnecessaryIsInstance]
 
 
 def _resolver_root_and_info(

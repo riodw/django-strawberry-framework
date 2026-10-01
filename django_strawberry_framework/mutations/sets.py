@@ -180,10 +180,13 @@ def reject_unknown_meta_keys(name: str, meta: object, allowed: frozenset[str]) -
         raise ConfigurationError(f"{name}.Meta must be a class; got {_safe_arg_repr(meta)}.")
     # A metaclass can inject non-string keys into the consumer's ``Meta`` namespace.
     meta_keys: Iterable[object] = vars(meta)
-    declared = {key for key in meta_keys if not (isinstance(key, str) and key.startswith("_"))}
+    # basedpyright: trust boundary: typeshed types ``vars`` as string-keyed, which that
+    # metaclass injection breaks
+    declared = {key for key in meta_keys if not (isinstance(key, str) and key.startswith("_"))}  # pyright: ignore[reportUnnecessaryIsInstance]
     unknown = sorted(
         declared - allowed,
-        key=lambda k: (not isinstance(k, str), str(k)),
+        # basedpyright: trust boundary: the same injected keys
+        key=lambda k: (not isinstance(k, str), str(k)),  # pyright: ignore[reportUnnecessaryIsInstance]
     )
     if unknown:
         raise ConfigurationError(f"{name}.Meta has unknown keys: {unknown}.")
@@ -698,6 +701,13 @@ def make_meta_validating_metaclass(
     """
 
     class MetaValidatingMetaclass(type):
+        if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
+            # Every class this metaclass builds declares the ``_validate_meta`` seam and
+            # the ``_mutation_meta`` slot ``__new__`` fills from it.
+            _mutation_meta: object
+
+            def _validate_meta(cls, meta: type[object], /) -> object: ...
+
         def __new__(
             cls: type[MetaValidatingMetaclass],
             name: str,
@@ -709,11 +719,7 @@ def make_meta_validating_metaclass(
             meta = attrs.get("Meta")
             if meta is None:
                 return new_class
-            # Every class this metaclass builds declares the ``_validate_meta`` seam
-            # and the ``_mutation_meta`` slot it fills (the contract ``_MetaValidated``
-            # names); the metaclass itself declares neither.
-            validated = cast("_MetaValidated", new_class)
-            validated._mutation_meta = validated._validate_meta(meta)
+            new_class._mutation_meta = new_class._validate_meta(meta)
             # The class just built is the ledger's declaration class; neither checker
             # can tie this metaclass instance to the element type its ledger records.
             register(cast("_DeclarationT", new_class))
@@ -1498,17 +1504,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
     # ``DjangoMutation`` family (model / ``ModelForm`` / serializer) or the
     # model-less ``DjangoFormMutation``.
     WriteMutationClass: TypeAlias = type[DjangoMutation] | type[DjangoFormMutation]
-
-    class _MetaValidated(Protocol):
-        """A class ``make_meta_validating_metaclass``'s product builds.
-
-        It declares the ``_validate_meta`` seam the metaclass calls with the nested
-        ``Meta`` and the ``_mutation_meta`` slot the result is stashed in.
-        """
-
-        _mutation_meta: object
-
-        def _validate_meta(self, meta: type[object]) -> object: ...
 
     # The payload object type one ledger's drain resolves: the primary
     # ``DjangoType`` for the model-backed ledger, ``None`` for the model-less one.

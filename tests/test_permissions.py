@@ -93,7 +93,6 @@ from django_strawberry_framework.filters import FilterSet
 from django_strawberry_framework.orders import Ordering, OrderSet
 from django_strawberry_framework.permissions import (
     SyncMisuseError,
-    _cascadable_edge_names,
     _cascade_state,
     _edge_plan,
     _is_cascadable_edge,
@@ -469,7 +468,7 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
     # The GFK's *backing* FK is itself an ordinary single-column forward FK and
     # legitimately cascadable; the virtual ``content_object`` is UNSUPPORTED.
     plan = _edge_plan(CirculationDesk)
-    assert _cascadable_edge_names(CirculationDesk) == {"branch", "shelf", "content_type"}
+    assert frozenset(f.name for f in plan.cascadable) == {"branch", "shelf", "content_type"}
     assert plan.unsupported == ("content_object",)
 
     # Each edge passes / fails the predicates for the documented reason.
@@ -609,7 +608,7 @@ def test_mti_multiple_parent_links_both_cascade():
     both_type = _make_type("MtiBothType", MtiBoth, primary=False)
     finalize_django_types()
 
-    names = _cascadable_edge_names(MtiBoth)
+    names = frozenset(f.name for f in _edge_plan(MtiBoth).cascadable)
     assert {"mtileftbase_ptr", "mtirightbase_ptr"} <= names
 
     # Both parent links compose a subquery (identity hooks included - the

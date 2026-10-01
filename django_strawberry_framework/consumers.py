@@ -261,7 +261,7 @@ connection limits are transport-resource policy owned by the ASGI server, the
 reverse proxy, or a deliberately injected consumer (Decision 12).
 
 The class is built by ``routers.py::_build_router_class`` inside the same
-soft-``channels`` guard and the same ``_ROUTER_CLASS`` cache the router itself
+soft-``channels`` guard and the same ``_router_class`` cache the router itself
 lives in, so its lifetime is exactly the router class's; this module caches
 nothing. It is deliberately **not** exported, and unreachable by import rather
 than merely absent from ``__all__``: the class statement is FUNCTION-LOCAL to
@@ -457,8 +457,10 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         @property
         def schema(self) -> BaseSchema: ...
 
+        # basedpyright: the slot is read as upstream's schema and overwritten with the wrapper,
+        # which answers only the result-source names upstream reads from it
         @schema.setter
-        def schema(self, value: _StopAwareSchema, /) -> None: ...
+        def schema(self, value: _StopAwareSchema, /) -> None: ...  # pyright: ignore[reportPropertyTypeMismatch]
 
 
 #: The outgoing frame a revalidated send hands to the transport unchanged.

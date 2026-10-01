@@ -13,8 +13,8 @@ On top of that skeleton the module carries:
   ``apply_async`` (no ``apply(...)`` dispatcher per spec-028 DoD 4(c)).
 - The classmethod permission pipeline, inherited from
   ``ActiveInputPermissionMixin`` (``_run_permission_checks`` /
-  ``_active_permission_targets`` / ``_active_permission_field_paths`` /
-  ``_invoke_permission_method`` / ``_request_from_info``) that drives
+  ``_active_permission_targets`` / ``_invoke_permission_method`` /
+  ``_request_from_info``) that drives
   active-input-only per-field ``check_<field>_permission`` dispatch per
   spec-028 Decision 8 step 6.
 - The cookbook-style ``get_flat_orders`` classmethod walking the
@@ -27,7 +27,7 @@ import contextlib
 import dataclasses
 import threading
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
@@ -212,7 +212,7 @@ _ORDER_NORMALIZATION_CAPTURE: ContextVar[_NormalizationLedger | None] = ContextV
 
 
 @contextlib.contextmanager
-def capture_applied_order_normalization() -> Iterator[None]:
+def capture_applied_order_normalization() -> Generator[None, None, None]:
     """Open the invocation-scoped ledger public ``apply_*`` attests into.
 
     The list field wraps public ordering and its offset guard in one scope so
@@ -488,8 +488,8 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         ``"__all__"`` shorthand (every column-backed model field name
         per spec-028 -- forward FK columns are included,
         M2M managers and reverse FKs are excluded). Unordered ``set`` /
-        ``frozenset`` declarations expand in the same ``repr``-sorted order
-        Layer-6 factory kwargs hash (``read_set_meta_fields``); dict-shaped
+        ``frozenset`` declarations expand in one ``repr``-sorted order under
+        every ``PYTHONHASHSEED`` (``read_set_meta_fields``); dict-shaped
         declarations iterate their keys (the django-filter lookup-bag shape
         degrades to its field names).
 
@@ -511,8 +511,8 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         fields: OrderedDict[str, RelatedOrder | None] = OrderedDict()
         meta = getattr(cls, "Meta", None)
-        # Shared reader with Layer-6 factory kwargs: synonym resolve + unordered
-        # ``set`` / ``frozenset`` canonicalization. No write-back here -- the
+        # Shared reader: synonym resolve + unordered ``set`` / ``frozenset``
+        # canonicalization. No write-back here -- the
         # metaclass owns alias promotion; expansion must not mutate class Meta.
         meta_fields = read_set_meta_fields(meta)
         if meta_fields is None:
@@ -743,7 +743,9 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         for index, (field_path, direction) in enumerate(flat_orders):
             if direction is None:
                 continue
-            if not isinstance(direction, Ordering):
+            # basedpyright: trust boundary: a consumer ``get_flat_orders`` override can return any
+            # direction
+            if not isinstance(direction, Ordering):  # pyright: ignore[reportUnnecessaryIsInstance]
                 raise ConfigurationError(
                     f"OrderSet {cls.__qualname__} received invalid order direction "
                     f"{_safe_arg_repr(direction)} for path {field_path!r}; "

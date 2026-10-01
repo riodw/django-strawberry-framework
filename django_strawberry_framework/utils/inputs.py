@@ -18,9 +18,7 @@ re-export the helpers below under their spec-named aliases (``FieldSpec`` /
 ``_input_type_name_for``) so existing imports and the test suite keep addressing
 them on the family module. Set-family Decision-9 ledgers ride
 ``make_set_input_namespace`` (heavy clear); write flavors ride
-``make_input_namespace`` (light clear). Layer-6 dynamic-set caches ride
-``make_dynamic_set_getter`` (hashing / normalize / ``type(...)`` skeleton);
-each family keeps its own cache dict and base class. Set-family ``Meta.fields``
+``make_input_namespace`` (light clear). Set-family ``Meta.fields``
 fingerprints ride ``resolve_set_meta_fields`` (synonym rule),
 ``promote_set_meta_fields`` (class-Meta write-back), ``read_set_meta_fields``
 (expansion / apply read), and ``canonicalize_set_meta_fields`` (unordered
@@ -81,7 +79,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         def graphql_name(self) -> str: ...
 
     class _WritableSetMeta(Protocol):
-        """A consumer class ``Meta`` whose ``fields`` the synonym write-back sets."""
+        """A consumer class ``Meta`` whose ``fields`` the synonym rule reads and writes back."""
 
         fields: object
 
@@ -90,11 +88,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
         def clear(self) -> None:
             """Drop every entry the ledger holds."""
-
-    class _DynamicSetGetter(Protocol[_SetT]):
-        """The Layer-6 ``get_<family>set_class`` getter ``make_dynamic_set_getter`` builds."""
-
-        def __call__(self, explicit: type[_SetT] | None, **meta: object) -> type[_SetT]: ...
 
 
 @dataclass(frozen=True)
@@ -327,7 +320,7 @@ class FieldConversionBase:
     ``make_kind_converter`` callables so the VALUE shape stays one site.
     """
 
-    __slots__ = ("annotation", "kind", "required")
+    __slots__: tuple[str, ...] = ("annotation", "kind", "required")
 
     def __init__(
         self,
@@ -512,11 +505,6 @@ def make_set_input_namespace(
     return ledger, field_specs, materialize_fn, clear_fn
 
 
-def _opaque_meta_value(value: object) -> tuple[str, int, int]:
-    """Return an identity token for a value whose structure cannot be inspected."""
-    return ("__unhashable_meta_value__", id(type(value)), id(value))
-
-
 def _sorted_meta_values(value: object) -> list[object]:
     """Sort a metadata container without trusting iteration or representation hooks.
 
@@ -533,110 +521,7 @@ def _sorted_meta_values(value: object) -> list[object]:
         ) from exc
 
 
-_MAX_META_VALUE_DEPTH = 64
-
-
-def _hashable_meta_value(v: object, active: set[int], depth: int) -> object:
-    """Recursive implementation with an active-path cycle guard and depth bound."""
-    is_container = isinstance(
-        v,
-        (
-            dict,
-            set,
-            frozenset,
-            list,
-            tuple,
-        ),
-    )
-    if is_container:
-        if depth > _MAX_META_VALUE_DEPTH:
-            raise ConfigurationError(
-                "Generated set metadata exceeds the maximum supported container depth "
-                f"({_MAX_META_VALUE_DEPTH}). Flatten the metadata value.",
-            )
-        marker = id(v)
-        if marker in active:
-            raise ConfigurationError(
-                "Generated set metadata contains a cyclic container value; cache-key "
-                "metadata must be acyclic.",
-            )
-        active.add(marker)
-        try:
-            if isinstance(v, dict):
-                pairs = tuple(
-                    (
-                        _hashable_meta_value(key, active, depth + 1),
-                        _hashable_meta_value(value, active, depth + 1),
-                    )
-                    for key, value in dict.items(v)
-                )
-                return tuple(sorted(pairs, key=canonical_sort_key))
-            if isinstance(v, (set, frozenset)):
-                values = (
-                    _hashable_meta_value(item, active, depth + 1)
-                    for item in base_container_values(v)
-                )
-                return tuple(sorted(values, key=canonical_sort_key))
-            return tuple(
-                _hashable_meta_value(item, active, depth + 1) for item in base_container_values(v)
-            )
-        finally:
-            active.remove(marker)
-    try:
-        hash(v)
-    except BaseException:
-        return _opaque_meta_value(v)
-    return v
-
-
-def make_hashable_meta_value(v: object) -> object:
-    """Recursively convert unhashable objects into hashable cache-key parts.
-
-    ``dict`` and ``set`` / ``frozenset`` are *unordered* containers, so their
-    hashable form is sorted - two structurally-equal inputs must collapse to one
-    cache key regardless of source iteration order. ``list`` / ``tuple`` are
-    *ordered* (a list-shaped ``Meta.fields`` defines field order), so their order
-    is preserved. Both unordered branches sort by ``repr`` rather than by the
-    values themselves so they stay total-ordered even for mixed,
-    mutually-unorderable member or key types (e.g. ``{1, "a"}`` or
-    ``{"a": 1, 0: 2}``); equal members produce equal reprs, so the canonical
-    order is stable.
-
-    Opaque values that refuse ``hash()`` (or raise from ``__hash__``) have no
-    safe structural canonical form. Those land as
-    ``("__unhashable_meta_value__", id(type(v)), id(v))`` so reuse of the same
-    object still hits the cache while distinct objects cannot alias.
-
-    Container traversal is bounded to ``_MAX_META_VALUE_DEPTH`` and tracks the
-    active object path. Cyclic metadata and pathologically deep values therefore
-    raise a typed ``ConfigurationError`` at schema construction instead of
-    escaping as a raw ``RecursionError``.
-    """
-    return _hashable_meta_value(v, set(), 0)
-
-
 FILTERSET_FIELDS_ALIAS = "filter_fields"
-
-
-def _set_meta_has(source: object, key: str) -> bool:
-    """Return whether a Meta class or kwargs mapping carries ``key``.
-
-    Mappings use own-key membership (Layer-6 factory kwargs). Anything else
-    uses ``hasattr`` so inherited Meta attributes count -- the
-    ``FilterSetMetaclass`` contract. Switching the class path to ``__dict__``
-    would promote ``filter_fields`` onto a subclass Meta that inherits
-    ``fields``, which is shipped behavior this helper must not change.
-    """
-    if isinstance(source, dict):
-        return key in source
-    return hasattr(source, key)
-
-
-def _set_meta_get(source: object, key: str) -> object:
-    """Read ``key`` from a Meta class or kwargs mapping."""
-    if isinstance(source, dict):
-        return source[key]
-    return getattr(source, key)
 
 
 def resolve_set_meta_fields(
@@ -651,28 +536,29 @@ def resolve_set_meta_fields(
     OrderSet) is the cookbook / graphene-django synonym. ``from_alias`` is True
     only when the caller should populate ``fields`` from the synonym.
 
-    This is the one fingerprint both set families apply so a fields
-    declaration cannot mean one thing at class creation and another in the
-    Layer-6 cache key. Write-back is ``promote_set_meta_fields`` (class Meta
-    copies onto ``.fields`` and leaves the consumer alias in place). Dict
-    alias dropping stays in ``normalize_set_meta_for_factory`` so the synonym
-    cannot split a cache slot via extras. Expansion reads
+    This is the one fingerprint both set families apply to a class ``Meta``.
+    Presence uses ``hasattr`` so inherited Meta attributes count -- the
+    ``FilterSetMetaclass`` contract: a ``__dict__`` read would promote
+    ``filter_fields`` onto a subclass Meta that inherits ``fields``.
+    Write-back is ``promote_set_meta_fields`` (class Meta copies onto
+    ``.fields`` and leaves the consumer alias in place). Expansion reads
     ``read_set_meta_fields`` (resolve + canonicalize, no mutation).
     """
     if source is None:
         return None, False
-    if _set_meta_has(source, "fields"):
-        return _set_meta_get(source, "fields"), False
-    if fields_alias is not None and _set_meta_has(source, fields_alias):
-        return _set_meta_get(source, fields_alias), True
+    if hasattr(source, "fields"):
+        # ``hasattr`` answered just above; the checker does not narrow on it.
+        return cast("_WritableSetMeta", source).fields, False
+    if fields_alias is not None and hasattr(source, fields_alias):
+        return getattr(source, fields_alias), True
     return None, False
 
 
 def canonicalize_set_meta_fields(fields: object) -> object:
-    """Return unordered ``Meta.fields`` shapes in the Layer-6 cache-stable form.
+    """Return unordered ``Meta.fields`` shapes in a process-stable order.
 
     ``set`` / ``frozenset`` become ``repr``-sorted lists so class-Meta expansion
-    and factory cache keys agree across ``PYTHONHASHSEED``. Dict-shaped lookup
+    is identical across ``PYTHONHASHSEED``. Dict-shaped lookup
     bags keep key insertion order and sort set-valued lookup lists. Ordered
     ``list`` / ``tuple`` and scalar ``"__all__"`` pass through unchanged.
     """
@@ -692,252 +578,27 @@ def promote_set_meta_fields(source: object, *, fields_alias: str | None = None) 
     Returns the resolved fields value. A class Meta that supplied only
     ``fields_alias`` gets ``.fields`` written so django-filter / OrderSet
     expansion see one key; the consumer alias attribute stays in place.
-    Dict sources are not mutated -- ``normalize_set_meta_for_factory`` owns
-    dict promotion and alias dropping for cache keys.
 
     ``FilterSetMetaclass`` and ``OrderSetMetaclass`` both call this so the
     write-back rule cannot drift. OrderSet passes ``fields_alias=None`` (no
     cookbook synonym); the call is then a pure read.
     """
     fields, from_alias = resolve_set_meta_fields(source, fields_alias=fields_alias)
-    if from_alias and not isinstance(source, dict):
+    if from_alias:
         # A class Meta answered ``fields_alias`` above; the write lands on that same object.
         cast("_WritableSetMeta", source).fields = fields
     return fields
 
 
 def read_set_meta_fields(source: object, *, fields_alias: str | None = None) -> object:
-    """Return resolved, cache-stable ``Meta.fields`` without mutating ``source``.
+    """Return resolved, process-stable ``Meta.fields`` without mutating ``source``.
 
     The expansion / apply reader: ``resolve_set_meta_fields`` then
-    ``canonicalize_set_meta_fields``. Class-declared ``set``-shaped fields
-    therefore expand in the same order Layer-6 factory kwargs hash and store
-    onto a generated Meta.
+    ``canonicalize_set_meta_fields``, so class-declared ``set``-shaped fields
+    expand in one order under every ``PYTHONHASHSEED``.
     """
     fields, _from_alias = resolve_set_meta_fields(source, fields_alias=fields_alias)
     return canonicalize_set_meta_fields(fields)
-
-
-def make_set_meta_cache_key(
-    safe_meta: dict[str, object],
-) -> tuple[object, tuple[str, object], object]:
-    """Build a hashable ``(model, fields_key, extra)`` cache key from Meta kwargs.
-
-    ``model`` is the primary discriminator. ``fields`` may be ``"__all__"``, a
-    list of field names, or a dict mapping field -> list of lookups -- all
-    serialised into a hashable form so identical declarations share a class.
-    Extra meta keys ride ``make_hashable_meta_value``. Callers should pass meta
-    already run through ``normalize_set_meta_for_factory`` so a fields-alias
-    synonym and unordered ``set`` / ``frozenset`` shapes have been
-    canonicalized; the branches below still accept those shapes directly as
-    defense in depth.
-
-    Ordered ``list`` / ``tuple`` ``fields`` preserve declaration order.
-    Dict-shaped ``fields`` keys sort via ``key=repr`` so mixed,
-    mutually-unorderable key types cannot ``TypeError`` the key.
-    """
-    model = dict.get(safe_meta, "model")
-    fields = dict.get(safe_meta, "fields")
-    if isinstance(fields, dict):
-        fields_key: tuple[str, object] = ("dict", make_hashable_meta_value(fields))
-    elif isinstance(fields, (list, tuple)):
-        fields_key = (
-            "seq",
-            tuple(make_hashable_meta_value(item) for item in base_container_values(fields)),
-        )
-    elif isinstance(fields, (set, frozenset)):
-        fields_key = (
-            "seq",
-            tuple(
-                sorted(
-                    (make_hashable_meta_value(item) for item in base_container_values(fields)),
-                    key=canonical_sort_key,
-                ),
-            ),
-        )
-    else:
-        fields_key = ("raw", make_hashable_meta_value(fields))
-    extra = make_hashable_meta_value(
-        {key: value for key, value in dict.items(safe_meta) if key not in {"model", "fields"}},
-    )
-    return (make_hashable_meta_value(model), fields_key, extra)
-
-
-def normalize_set_meta_for_factory(
-    meta: dict[str, object],
-    *,
-    reserved_keys: frozenset[str],
-    fields_alias: str | None = None,
-) -> dict[str, object]:
-    """Normalize Meta kwargs before cache keying and dynamic class creation.
-
-    Two equivalences must collapse onto one cache slot (and one generated set
-    class) or the BFS factory's duplicate-``__name__`` check fires against two
-    ``<Model>Auto*`` classes that are the same declaration arrived via different
-    surface shapes:
-
-    - ``fields_alias`` (``FILTERSET_FIELDS_ALIAS`` on the filter side; ``None``
-      on orders) is the metaclass synonym for ``fields``. Promotion is
-      ``resolve_set_meta_fields``; this helper then drops the alias so it is
-      not an extras discriminator. Unordered ``fields`` shapes then ride
-      ``canonicalize_set_meta_fields`` (the same helper OrderSet expansion
-      reads).
-    - Top-level ``set`` / ``frozenset`` ``fields`` (and set-valued lookup bags
-      under a dict-shaped ``fields``) are unordered; canonicalize them to
-      ``repr``-sorted lists so cache keys and generated field order are stable
-      across ``PYTHONHASHSEED``. Ordered ``list`` / ``tuple`` ``fields`` keep
-      their declaration order.
-    - ``exclude`` is a set of names semantically, even though django-filter
-      accepts any sequence; canonicalize every list / tuple / set-shaped
-      declaration to the same ``repr``-sorted list so equivalent exclusions
-      cannot mint duplicate ``<Model>Auto*`` classes. A falsy ``exclude``
-      (``None``, empty containers) drops the key entirely: django-filter reads
-      exclusions as ``exclude or []``, so every falsy spelling is "no
-      exclusions" and must not survive as an extras discriminator that splits
-      a cache slot (the ``fields=None``-vs-absent equivalence, exclude side).
-    """
-    try:
-        safe_meta: dict[str, object] = {
-            key: value for key, value in dict.items(meta) if key not in reserved_keys
-        }
-    except BaseException as exc:
-        raise ConfigurationError(
-            "Generated set metadata entries could not be read.",
-        ) from exc
-    fields, from_alias = resolve_set_meta_fields(safe_meta, fields_alias=fields_alias)
-    if from_alias:
-        safe_meta["fields"] = fields
-    if fields_alias is not None:
-        # ``fields`` wins (metaclass alias rule); drop the synonym so it
-        # cannot split an otherwise-identical cache slot via extras.
-        safe_meta.pop(fields_alias, None)
-    fields = safe_meta.get("fields")
-    canonical_fields = canonicalize_set_meta_fields(fields)
-    if canonical_fields is not fields:
-        safe_meta["fields"] = canonical_fields
-    exclude = safe_meta.get("exclude")
-    if not exclude:
-        # django-filter reads exclusions as ``exclude or []``: every falsy
-        # spelling (``None``, an empty container) excludes nothing, exactly
-        # like omitting the key. Drop it so "no exclusions" cannot split a
-        # cache slot via an extras discriminator.
-        safe_meta.pop("exclude", None)
-    elif isinstance(
-        exclude,
-        (
-            list,
-            tuple,
-            set,
-            frozenset,
-        ),
-    ):
-        safe_meta["exclude"] = _sorted_meta_values(exclude)
-    return safe_meta
-
-
-def create_dynamic_set_class(
-    safe_meta: dict[str, object],
-    *,
-    set_base_class: type[_SetT],
-    auto_name_suffix: str,
-    getter_name: str,
-    explicit_param: str,
-    require_fields_or_exclude: bool = False,
-) -> type[_SetT]:
-    """Build a synthetic set-family subclass from a ``Meta`` dict.
-
-    Replaces graphene-django's ``custom_filterset_factory`` (which the cookbook
-    reaches for) with a plain ``type(name, (set_base_class,), {"Meta": meta})``
-    call. Spec-027 explicitly drops the ``replace_csv_filters`` rewrap --
-    Strawberry's typed input handles ``list[T]`` natively. The order twin
-    uses the same ``type(...)`` construction (no cookbook counterpart).
-
-    ``require_fields_or_exclude`` pre-validates the base class's own Meta
-    requirement with a typed ``ConfigurationError`` instead of letting the
-    base metaclass reject it. The filter side sets it because django-filter's
-    metaclass hard-asserts that a ``Meta.model`` carries at least one of
-    ``fields`` / ``exclude`` -- without the gate that raw ``AssertionError``
-    escapes ``get_filterset_class``. The order side leaves it off: its plain
-    ``type`` metaclass accepts a fields-less Meta, whose zero-field rejection
-    stays at the BFS construction site.
-    """
-    model = safe_meta.get("model")
-    if model is None:
-        raise ConfigurationError(
-            f"{getter_name} requires `model` when called without an explicit "
-            f"{explicit_param}; received meta without a `model` key.",
-        )
-    if not isinstance(model, type) or not issubclass(model, django_models.Model):
-        raise ConfigurationError(
-            f"{getter_name} requires `model` to be a Django model class when called "
-            f"without an explicit {explicit_param}; got {model!r}.",
-        )
-    if (
-        require_fields_or_exclude
-        and safe_meta.get("fields") is None
-        and safe_meta.get("exclude") is None
-    ):
-        raise ConfigurationError(
-            f"{getter_name} requires `fields` or `exclude` when called without an explicit "
-            f"{explicit_param}; received meta with neither.",
-        )
-    meta_attrs = dict(safe_meta)
-    name = f"{model.__name__}{auto_name_suffix}"
-    meta_class = type("Meta", (object,), meta_attrs)
-    # A class built on ``set_base_class`` alone is a ``set_base_class`` subclass.
-    return cast("type[_SetT]", type(name, (set_base_class,), {"Meta": meta_class}))
-
-
-def make_dynamic_set_getter(
-    *,
-    cache: dict[tuple[object, ...], type[_SetT]],
-    set_base_class: type[_SetT],
-    auto_name_suffix: str,
-    getter_name: str,
-    reserved_keys: frozenset[str],
-    explicit_param: str,
-    fields_alias: str | None = None,
-    require_fields_or_exclude: bool = False,
-) -> _DynamicSetGetter[_SetT]:
-    """Return a Layer-6 ``get_<family>set_class`` getter over a family cache.
-
-    Filter and order factories keep disjoint caches and base classes; this
-    single-sites the lookup / normalize / key / ``type(...)`` skeleton so a
-    cache-key fix cannot drift between families. ``fields_alias`` is the
-    metaclass synonym (``FILTERSET_FIELDS_ALIAS`` on the filter side; ``None``
-    on orders, which has no synonym) resolved by ``resolve_set_meta_fields``.
-    ``require_fields_or_exclude`` threads to ``create_dynamic_set_class`` for
-    base classes whose metaclass demands a ``fields`` / ``exclude`` declaration
-    (the django-filter-backed filter side); the default keeps the order side's
-    fields-less Meta lifecycle intact.
-    """
-
-    def get_set_class(explicit: type[_SetT] | None, **meta: object) -> type[_SetT]:
-        if explicit is not None:
-            return explicit
-        safe_meta = normalize_set_meta_for_factory(
-            meta,
-            reserved_keys=reserved_keys,
-            fields_alias=fields_alias,
-        )
-        cache_key = make_set_meta_cache_key(safe_meta)
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return cached
-        generated = create_dynamic_set_class(
-            safe_meta,
-            set_base_class=set_base_class,
-            auto_name_suffix=auto_name_suffix,
-            getter_name=getter_name,
-            explicit_param=explicit_param,
-            require_fields_or_exclude=require_fields_or_exclude,
-        )
-        cache[cache_key] = generated
-        return generated
-
-    get_set_class.__name__ = getter_name
-    get_set_class.__qualname__ = getter_name
-    return get_set_class
 
 
 def make_shape_build_cache() -> tuple[dict[_KeyT, _ValueT], Callable[[], None]]:

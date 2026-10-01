@@ -1,12 +1,10 @@
-"""FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
+"""FilterArgumentsFactory tests for BFS input generation.
 
-Covers `FilterArgumentsFactory`'s BFS walk and per-class collision
-check, plus the Layer-6 `get_filterset_class` + `_dynamic_filterset_cache`
-+ `make_set_meta_cache_key` plumbing.
+Covers `FilterArgumentsFactory`'s BFS walk and per-class collision check.
 
 Shipped filter argument types are introspected live via ``*FilterInputType``.
-This file keeps the BFS walk, name-collision refusal, and dynamic FilterSet
-cache-key identity -- construction internals a request cannot name.
+This file keeps the BFS walk and name-collision refusal -- construction
+internals a request cannot name.
 """
 
 from __future__ import annotations
@@ -27,34 +25,21 @@ from django_strawberry_framework.filters import (
     RelatedFilter,
 )
 from django_strawberry_framework.filters.base import RelationPkFilter, RelationPkMultipleFilter
-from django_strawberry_framework.filters.factories import (
-    _RESERVED_FACTORY_KEYS,
-    FilterArgumentsFactory,
-    _dynamic_filterset_cache,
-    get_filterset_class,
-)
+from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 from django_strawberry_framework.filters.inputs import _field_specs
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
-from django_strawberry_framework.utils.inputs import (
-    FILTERSET_FIELDS_ALIAS,
-    make_hashable_meta_value,
-    make_set_meta_cache_key,
-    normalize_set_meta_for_factory,
-)
 
 
 @pytest.fixture(autouse=True)
 def _isolate_state():
     registry.clear()
     _field_specs.clear()
-    _dynamic_filterset_cache.clear()
     FilterArgumentsFactory.input_object_types.clear()
     FilterArgumentsFactory._type_filterset_registry.clear()
     yield
     registry.clear()
     _field_specs.clear()
-    _dynamic_filterset_cache.clear()
     FilterArgumentsFactory.input_object_types.clear()
     FilterArgumentsFactory._type_filterset_registry.clear()
 
@@ -361,227 +346,21 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_rel
     assert bag["in_"].type_annotation.annotation == (list[int] | None)
 
 
-# ---------------------------------------------------------------------------
-# get_filterset_class + dynamic-cache plumbing
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.django_db
-def test_get_filterset_class_returns_explicit_class_unchanged():
-    class ExplicitFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"name": ["exact"]}
-
-    result = get_filterset_class(ExplicitFilter)
-    assert result is ExplicitFilter
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_caches_dynamic_filterset_by_meta():
-    """Two equivalent `get_filterset_class(None, ...)` calls collapse onto one class."""
-    first = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
-    second = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
-    assert first is second
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_distinct_meta_produces_distinct_classes():
-    """Distinct `fields` -> distinct generated classes."""
-    first = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
-    second = get_filterset_class(None, model=Category, fields={"name": ["icontains"]})
-    assert first is not second
-
-
-def test_make_cache_key_normalizes_dict_fields_shape():
-    key = make_set_meta_cache_key({"model": Category, "fields": {"name": ["exact", "icontains"]}})
-    # `dict` shape produces the (model, ('dict', (sorted-tuples,)), extra) tuple.
-    assert key[0] is Category
-    assert key[1][0] == "dict"
-
-
-def test_make_cache_key_normalizes_list_fields_shape():
-    key = make_set_meta_cache_key({"model": Category, "fields": ["name", "is_private"]})
-    assert key[1][0] == "seq"
-    assert key[1][1] == ("name", "is_private")
-
-
-def test_make_cache_key_normalizes_set_fields_shape():
-    key = make_set_meta_cache_key({"model": Category, "fields": {"is_private", "name"}})
-    assert key[1] == ("seq", ("is_private", "name"))
-
-
-def test_make_cache_key_normalizes_scalar_all_fields_shape():
-    key = make_set_meta_cache_key({"model": Category, "fields": "__all__"})
-    assert key[1] == ("raw", "__all__")
-
-
-def test_make_hashable_dict_branch_supports_mixed_key_types():
-    """A dict with mutually-unorderable key types is normalized without raising.
-
-    The dict branch sorts by ``key=repr`` symmetrically with the
-    ``set`` / ``frozenset`` branch, so mixed key types (e.g. ``str`` + ``int``)
-    no longer trip Python's default tuple comparison.     The docstring at
-    ``utils/inputs.py::make_hashable_meta_value`` advertises the mixed-type defence as a
-    property of the function, not just of the unordered-container branch.
-    """
-    # Default tuple-sort would raise ``TypeError: '<' not supported between
-    # instances of 'int' and 'str'`` on the ``(k, val)`` pairs below.
-    result = make_hashable_meta_value({"a": 1, 0: 2})
-    assert isinstance(result, tuple)
-    # Both members are preserved; canonical order is whatever ``repr`` sort
-    # produces, so we assert by set-equality rather than positional order.
-    assert set(result) == {("a", 1), (0, 2)}
-
-
-def test_make_cache_key_distinguishes_extra_meta_keys():
-    key_a = make_set_meta_cache_key(
-        {"model": Category, "fields": "__all__", "exclude": ("id",)},
-    )
-    key_b = make_set_meta_cache_key({"model": Category, "fields": "__all__"})
-    assert key_a != key_b
-
-
-def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
-    """Two metas that differ only in shape detail hash to the same key.
-
-    The cache key is the contract that lets connection fields with
-    equivalent ``Meta`` declarations collapse onto a single generated
-    ``FilterSet`` class. The keying logic walks: ``model`` identity +
-    ``fields`` normalized through ``make_hashable_meta_value`` (handles nested
-    dicts / lists / sets) + sorted extras. Pinning the equivalence
-    classes prevents a future "tweak the key shape" change from
-    silently widening or narrowing what counts as the same slot.
-    """
-    # 1. ``fields`` dict with list values: tuple-vs-list lookups
-    #    collapse onto the same key (lists normalize through
-    #    ``make_hashable_meta_value`` to tuples).
-    key_dict_a = make_set_meta_cache_key(
-        {"model": Category, "fields": {"name": ["exact", "icontains"]}},
-    )
-    key_dict_b = make_set_meta_cache_key(
-        {"model": Category, "fields": {"name": ("exact", "icontains")}},
-    )
-    assert key_dict_a == key_dict_b
-
-    # 2. ``fields`` dict key order does not matter - sorted output.
-    key_order_a = make_set_meta_cache_key(
-        {"model": Category, "fields": {"a": ["exact"], "b": ["exact"]}},
-    )
-    key_order_b = make_set_meta_cache_key(
-        {"model": Category, "fields": {"b": ["exact"], "a": ["exact"]}},
-    )
-    assert key_order_a == key_order_b
-
-    # 3. ``extras`` insertion order does not matter - sorted output.
-    key_extra_a = make_set_meta_cache_key(
-        {
-            "model": Category,
-            "fields": "__all__",
-            "exclude": ("id",),
-            "form": "x",
-        },
-    )
-    key_extra_b = make_set_meta_cache_key(
-        {
-            "model": Category,
-            "fields": "__all__",
-            "form": "x",
-            "exclude": ("id",),
-        },
-    )
-    assert key_extra_a == key_extra_b
-
-    # 4. Different ``model`` classes never collide even when fields match.
-    from apps.products.models import Item
-
-    key_cat = make_set_meta_cache_key({"model": Category, "fields": "__all__"})
-    key_item = make_set_meta_cache_key({"model": Item, "fields": "__all__"})
-    assert key_cat != key_item
-
-    # 5. Sequence-shape ``fields`` collapses list and tuple inputs onto
-    #    the same key (both normalize to a tuple under "seq").
-    key_seq_a = make_set_meta_cache_key({"model": Category, "fields": ["name", "is_private"]})
-    key_seq_b = make_set_meta_cache_key({"model": Category, "fields": ("name", "is_private")})
-    assert key_seq_a == key_seq_b
-
-
-def test_dynamic_filterset_cache_collapses_equivalent_metas_to_one_class():
-    """Two structurally-equivalent meta dicts return the same generated class.
-
-    End-to-end pin: even when the inputs differ in surface shape
-    (list-vs-tuple lookups, key order in fields / extras), the
-    dynamic-cache slot is shared so the BFS factory's collision check
-    cannot fire against the same logical Meta declaration arriving via
-    two connection-field call sites.
-    """
-    cls_list = get_filterset_class(None, model=Category, fields={"name": ["exact", "icontains"]})
-    cls_tuple = get_filterset_class(None, model=Category, fields={"name": ("exact", "icontains")})
-    assert cls_list is cls_tuple
-
-
-def test_dynamic_filterset_cache_collapses_exclude_order():
-    """Equivalent exclusion sets must not split the generated-class cache."""
-    first = get_filterset_class(
-        None,
-        model=Category,
-        fields="__all__",
-        exclude=["name", "id"],
-    )
-    second = get_filterset_class(
-        None,
-        model=Category,
-        fields="__all__",
-        exclude={"id", "name"},
-    )
-    assert first is second
-    assert FilterArgumentsFactory(first).arguments is FilterArgumentsFactory(second).arguments
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_collapses_exclude_none_with_absent():
-    """``exclude=None`` is "no exclusions" (django-filter reads ``exclude or []``).
-
-    A falsy exclude must collapse onto the absent slot: keeping it as an
-    extras discriminator minted two ``<Model>AutoFilter`` classes for one
-    logical declaration, and the second BFS build then failed the
-    duplicate-``__name__`` collision check.
-    """
-    via_absent = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
-    via_none = get_filterset_class(
-        None,
-        model=Category,
-        fields={"name": ["exact"]},
-        exclude=None,
-    )
-    assert via_absent is via_none
-    _ = FilterArgumentsFactory(via_absent).arguments
-    _ = FilterArgumentsFactory(via_none).arguments  # must not raise
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_requires_fields_or_exclude_when_dynamic():
-    """A dynamic factory must reject a Meta with neither ``fields`` nor ``exclude``.
-
-    django-filter's metaclass hard-asserts that a ``Meta.model`` declares at
-    least one of the two; without the pre-validation that raw
-    ``AssertionError`` escaped ``get_filterset_class`` instead of the
-    package's typed ``ConfigurationError``.
-    """
-    with pytest.raises(ConfigurationError, match="requires `fields` or `exclude`"):
-        get_filterset_class(None, model=Category)
-
-
-@pytest.mark.django_db
-def test_dynamic_filterset_cache_does_not_replace_csv_filters():
+def test_an_in_lookup_is_not_replaced_by_a_csv_filter():
     """The cookbook's ``replace_csv_filters`` rewrap is dropped per spec-027.
 
     `Meta.fields = {"name": ["in"]}` -> the resulting filter is the
     upstream `django-filter` default (with the inherited list shape),
     NOT a CSV-rewritten variant.
     """
-    cls = get_filterset_class(None, model=Category, fields={"name": ["in"]})
-    filters = cls.get_filters()
+
+    class CategoryInFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["in"]}
+
+    filters = CategoryInFilter.get_filters()
     # `name__in` should land as a regular filter; the import path the
     # cookbook's CSV variant would have used (`graphene_django.filter`
     # internals) is NOT touched.
@@ -593,183 +372,15 @@ def test_dynamic_filterset_cache_does_not_replace_csv_filters():
 
 
 @pytest.mark.django_db
-def test_get_filterset_class_strips_reserved_kwargs():
-    """`filterset_base_class` is stripped before being passed to the dynamic factory."""
-    # Should not raise even though we pass the reserved kwarg.
-    cls = get_filterset_class(
-        None,
-        model=Category,
-        fields={"name": ["exact"]},
-        filterset_base_class=FilterSet,
-    )
-    assert issubclass(cls, FilterSet)
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_collapses_filter_fields_alias():
-    """``filter_fields`` is the metaclass synonym for ``fields``; cache must share a slot.
-
-    Without normalizing the alias before keying, ``filter_fields=`` and
-    ``fields=`` mint two ``<Model>AutoFilter`` classes with the same
-    ``__name__``, and ``FilterArgumentsFactory`` raises on the second BFS.
-    """
-    via_alias = get_filterset_class(
-        None,
-        model=Category,
-        filter_fields={"name": ["exact"]},
-    )
-    via_fields = get_filterset_class(
-        None,
-        model=Category,
-        fields={"name": ["exact"]},
-    )
-    assert via_alias is via_fields
-    _ = FilterArgumentsFactory(via_alias).arguments
-    _ = FilterArgumentsFactory(via_fields).arguments  # must not raise
-
-
-@pytest.mark.django_db
-def test_filter_fields_alias_agrees_on_class_meta_and_factory_kwargs():
-    """Declared FilterSet Meta and Layer-6 kwargs resolve to the same fields."""
+def test_filter_fields_alias_resolves_on_class_meta():
+    """A declared ``Meta.filter_fields`` resolves to the FilterSet's fields."""
 
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             filter_fields = {"name": ["exact"]}
 
-    generated = get_filterset_class(
-        None,
-        model=Category,
-        filter_fields={"name": ["exact"]},
-    )
-    assert CategoryFilter._meta.fields == generated._meta.fields == {"name": ["exact"]}
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_collapses_set_and_frozenset_fields():
-    """Top-level set/frozenset Meta.fields must share a canonical cache slot.
-
-    ``frozenset`` previously fell through to the raw key branch while ``set``
-    took seq without sorting, so equivalent unordered declarations minted
-    distinct AutoFilter classes and collided in the BFS registry.
-    """
-    via_set = get_filterset_class(None, model=Category, fields={"name", "is_private"})
-    via_fs = get_filterset_class(
-        None,
-        model=Category,
-        fields=frozenset({"is_private", "name"}),
-    )
-    assert via_set is via_fs
-    # Canonical order matches a repr-sorted list of the same members.
-    via_sorted = get_filterset_class(
-        None,
-        model=Category,
-        fields=sorted(["name", "is_private"], key=repr),
-    )
-    assert via_set is via_sorted
-
-
-def test_make_cache_key_dict_fields_mixed_key_types_sort_by_repr():
-    """Dict-shaped fields with mixed key types must not TypeError on sort."""
-    key = make_set_meta_cache_key({"model": Category, "fields": {"name": ["exact"], 0: ["exact"]}})
-    assert key[1][0] == "dict"
-
-
-def test_normalize_meta_promotes_filter_fields_and_canonicalizes_sets():
-    normalized = normalize_set_meta_for_factory(
-        {
-            "model": Category,
-            "filter_fields": {"name", "is_private"},
-            "filterset_base_class": FilterSet,
-        },
-        reserved_keys=_RESERVED_FACTORY_KEYS,
-        fields_alias=FILTERSET_FIELDS_ALIAS,
-    )
-    assert "filter_fields" not in normalized
-    assert "filterset_base_class" not in normalized
-    assert normalized["fields"] == sorted(["name", "is_private"], key=repr)
-
-
-def test_normalize_meta_prefers_fields_over_filter_fields_alias():
-    normalized = normalize_set_meta_for_factory(
-        {"model": Category, "fields": ["name"], "filter_fields": ["is_private"]},
-        reserved_keys=_RESERVED_FACTORY_KEYS,
-        fields_alias=FILTERSET_FIELDS_ALIAS,
-    )
-    assert normalized["fields"] == ["name"]
-    assert "filter_fields" not in normalized
-
-
-def test_get_filterset_class_requires_model_when_dynamic():
-    """Without an explicit class AND without `model`, the dynamic factory raises."""
-    with pytest.raises(ConfigurationError):
-        get_filterset_class(None, fields={"name": ["exact"]})
-
-
-def test_get_filterset_class_rejects_non_model_when_dynamic():
-    """A dynamic factory must reject a non-Django model before django-filter does."""
-    with pytest.raises(ConfigurationError, match="Django model class"):
-        get_filterset_class(None, model=object, fields={"name": ["exact"]})
-
-
-@pytest.mark.django_db
-def test_get_filterset_class_supports_unhashable_meta_values():
-    """`get_filterset_class` should support unhashable types (like lists, dicts, sets) in Meta options without raising TypeError."""
-    # List in exclude
-    cls_a = get_filterset_class(None, model=Category, fields="__all__", exclude=["id"])
-    cls_b = get_filterset_class(None, model=Category, fields="__all__", exclude=["id"])
-    assert cls_a is cls_b
-
-    # Nested set or list in extra meta
-    cls_c = get_filterset_class(
-        None,
-        model=Category,
-        fields={"name": ["exact"]},
-        extra_opt={
-            "nested": {1, 2, 3},
-        },
-    )
-    cls_d = get_filterset_class(
-        None,
-        model=Category,
-        fields={"name": ["exact"]},
-        extra_opt={
-            "nested": {1, 2, 3},
-        },
-    )
-    assert cls_c is cls_d
-
-
-def test_get_filterset_class_keys_opaque_unhashable_meta_values_by_identity():
-    """Opaque extension Meta values must not leak a cache-key TypeError.
-
-    ``django-filter`` accepts arbitrary extra ``Meta`` attributes, so an
-    integration may pass an unhashable policy object through the dynamic
-    factory. There is no generic structural normalization for that object;
-    the cache must still build and only reuse the class when the same object
-    identity is supplied.
-    """
-
-    class Policy:
-        __hash__ = None
-
-    policy = Policy()
-    first = get_filterset_class(None, model=Category, fields="__all__", policy=policy)
-    second = get_filterset_class(None, model=Category, fields="__all__", policy=policy)
-    assert first is second
-
-    other = get_filterset_class(None, model=Category, fields="__all__", policy=Policy())
-    assert other is not first
-
-
-def test_make_cache_key_normalizes_opaque_unhashable_raw_fields():
-    """The scalar ``fields`` cache-key branch must use the shared normalizer."""
-
-    class OpaqueFields:
-        __hash__ = None
-
-    key = make_set_meta_cache_key({"model": Category, "fields": OpaqueFields()})
-    hash(key)
+    assert CategoryFilter._meta.fields == {"name": ["exact"]}
 
 
 def test_filter_arguments_factory_rejects_subclassing():
@@ -817,16 +428,6 @@ def test_filter_arguments_factory_skips_placeholder_related_filter_target():
     factory = FilterArgumentsFactory(BranchFilterPlaceholder)
     input_cls = factory.arguments
     assert "BranchFilterPlaceholderInputType" in FilterArgumentsFactory.input_object_types
-
-
-@pytest.mark.django_db
-def test_filter_arguments_factory_builds_dynamic_filterset_input():
-    """Dynamic FilterSets produced by get_filterset_class can be built by the factory."""
-    dyn_cls = get_filterset_class(None, model=Category, fields={"name": ["exact"]})
-    factory = FilterArgumentsFactory(dyn_cls)
-    input_cls = factory.arguments
-    assert input_cls is not None
-    assert "CategoryAutoFilterInputType" in FilterArgumentsFactory.input_object_types
 
 
 # Touch `NumberFilter` import to ensure the import is exercised (used

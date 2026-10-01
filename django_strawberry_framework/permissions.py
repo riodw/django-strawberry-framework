@@ -260,16 +260,6 @@ def _edge_plan(model: type[models.Model]) -> _EdgePlan:
     return _EdgePlan(cascadable=tuple(cascadable), unsupported=tuple(unsupported))
 
 
-def _cascadable_edges(model: type[models.Model]) -> tuple[ForeignKeyField, ...]:
-    """Return ``model``'s cascadable edge fields (the cached plan's tuple)."""
-    return _edge_plan(model).cascadable
-
-
-def _cascadable_edge_names(model: type[models.Model]) -> frozenset[str]:
-    """Return the names of ``model``'s cascadable edges (Decision 5 step 1)."""
-    return frozenset(field.name for field in _cascadable_edges(model))
-
-
 def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) -> set[str] | None:
     """Resolve ``fields`` to the set of edge names to walk, validating loudly.
 
@@ -309,8 +299,9 @@ def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) ->
             f"apply_cascade_permissions fields= must be a non-string iterable of "
             f"field names; got {fields!r}.",
         ) from exc
-    # ``fields`` is the public ``Iterable[str]`` contract; this validates a caller breaking it
-    non_strings = [entry for entry in entries if not isinstance(entry, str)]
+    # basedpyright: trust boundary: ``fields`` is the public ``Iterable[str]`` contract of
+    # ``apply_cascade_permissions``; this validates a caller breaking it
+    non_strings = [entry for entry in entries if not isinstance(entry, str)]  # pyright: ignore[reportUnnecessaryIsInstance]
     if non_strings:
         raise ConfigurationError(
             f"apply_cascade_permissions fields= entries must be field-name strings; "

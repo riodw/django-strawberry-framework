@@ -661,14 +661,6 @@ class ActiveInputPermissionMixin:
         return verbatim_path(python_attr)
 
     @classmethod
-    def _active_permission_field_paths(cls, input_value: object) -> list[str]:
-        """Return the base Django source path for each active top-level leaf.
-
-        Thin delegate to ``_active_permission_targets``'s ``LEAF`` half.
-        """
-        return cls._active_permission_targets(input_value)[0]
-
-    @classmethod
     def _active_permission_targets(
         cls,
         input_value: object,

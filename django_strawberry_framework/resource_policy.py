@@ -74,7 +74,7 @@ from typing_extensions import override
 
 from .conf import resource_policy_setting
 from .exceptions import ConfigurationError, DjangoStrawberryFrameworkError, describe_value
-from .utils.context import clear_context_key, get_context_value, stash_on_context
+from .utils.context import get_context_value, stash_on_context
 from .utils.errors import coded_error_extensions
 from .utils.operation_lease import OperationLease
 from .utils.policies import canonical_policy, copy_policy, resolve_policy
@@ -92,12 +92,10 @@ __all__ = (
     "bounded_rows",
     "bounded_rows_async",
     "check_deadline",
-    "clear_resource_context",
     "effective_bound",
     "end_resource_budget",
     "policy_from_info",
     "resolve_resource_policy",
-    "stash_resource_policy",
     "validate_collection_bound",
     "validate_trusted_flag",
 )
@@ -119,7 +117,9 @@ DST_RESOURCE_POLICY = "dst_resource_policy"
 DST_RESOURCE_DEADLINE = "dst_resource_deadline"
 
 
-class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # noqa: N818 - the wire-visible name of a bound rejection, not an internal error class
+# basedpyright: ``GraphQLError.__init__`` calls ``super().__init__(message)``, which reaches
+# ``BaseException.__init__`` through the package base (it defines no ``__init__``)
+class ResourceLimitExceeded(GraphQLError, DjangoStrawberryFrameworkError):  # pyright: ignore[reportUnsafeMultipleInheritance]  # noqa: N818 - the wire-visible name of a bound rejection, not an internal error class
     """A request exceeded one of its resource bounds; nothing was executed.
 
     Multiple-inherits ``GraphQLError`` (so the rejection travels the wire as a
@@ -562,10 +562,10 @@ class _RequestBudget:
 #: finally ends.
 #:
 #: The published keys stay exactly as spec-047 shipped them, as a mirror a
-#: consumer can read; they are also the fallback for a caller that publishes a
-#: policy without arming one (a direct ``stash_resource_policy``, or a plain
-#: ``strawberry.Schema`` with no extension), which is a context no resolver of
-#: this package's is running inside.
+#: consumer can read; they are also the fallback wherever no budget is armed (a
+#: plain ``strawberry.Schema`` with no extension, whose consumer may publish a
+#: policy under the key, or a task the operation's binding does not reach),
+#: which is a context no resolver of this package's is running inside.
 _active_budget: ContextVar[OperationLease[_RequestBudget] | None] = ContextVar(
     "django_strawberry_framework_resource_budget",
     default=None,
@@ -642,22 +642,6 @@ def _publish_budget_mirror(
     """
     stash_on_context(context, DST_RESOURCE_POLICY, copy_policy(policy))
     stash_on_context(context, DST_RESOURCE_DEADLINE, deadline)
-
-
-def stash_resource_policy(context: object, policy: ResourcePolicy) -> None:
-    """Publish ``policy`` (and its derived deadline) onto the request context.
-
-    The consumer-readable mirror, and only that. :func:`begin_resource_budget`
-    is what arms the budget the enforcement seams actually read; a caller that
-    publishes without arming leaves the seams on their fallback, which reads
-    this mirror back.
-
-    The policy is canonicalized first (:func:`_operation_policy`), because that
-    fallback makes what is published here the value a bound is read from, so it
-    is admitted on the same terms as an armed one.
-    """
-    policy = _operation_policy(policy)
-    _publish_budget_mirror(context, policy, _absolute_deadline(policy))
 
 
 def _operation_policy(policy: ResourcePolicy) -> ResourcePolicy:
@@ -869,12 +853,6 @@ def _deadline_expired(deadline: object) -> bool | None:
     if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
         return None
     return True
-
-
-def clear_resource_context(context: object) -> None:
-    """Remove both resource keys, so a reused ``context_value`` cannot leak a deadline."""
-    clear_context_key(context, DST_RESOURCE_POLICY)
-    clear_context_key(context, DST_RESOURCE_DEADLINE)
 
 
 def policy_from_info(info: object) -> ResourcePolicy:

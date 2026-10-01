@@ -480,7 +480,9 @@ def _yes_no(value: bool) -> str:
 
 def _annotation_is_optional(annotation: object) -> bool:
     """Return whether ``annotation`` is a ``T | None`` union."""
-    if typing.get_origin(annotation) in (typing.Union, pytypes.UnionType):
+    # basedpyright: ``typing.Union`` read as a value, the origin ``get_origin`` reports for an
+    # ``Optional[T]`` / ``Union[...]`` spelling below 3.14; no ``|`` spelling names that object
+    if typing.get_origin(annotation) in (typing.Union, pytypes.UnionType):  # pyright: ignore[reportDeprecated]
         return type(None) in typing.get_args(annotation)
     return False
 
@@ -655,7 +657,9 @@ def _render_annotation(annotation: object, scalar_namer: _ScalarNamer = _scalar_
     (the many-side list itself is non-null and its elements are non-null).
     """
     origin = typing.get_origin(annotation)
-    if origin in (typing.Union, pytypes.UnionType):
+    # basedpyright: ``typing.Union`` read as a value, the origin ``get_origin`` reports for an
+    # ``Optional[T]`` / ``Union[...]`` spelling below 3.14; no ``|`` spelling names that object
+    if origin in (typing.Union, pytypes.UnionType):  # pyright: ignore[reportDeprecated]
         union_args: tuple[object, ...] = typing.get_args(annotation)
         args = [a for a in union_args if a is not type(None)]
         if len(args) == 1:

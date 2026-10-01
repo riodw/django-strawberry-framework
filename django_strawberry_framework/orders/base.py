@@ -104,11 +104,12 @@ class RelatedOrder(RelatedSetTargetMixin):
     def bind_orderset(self, orderset: type[OrderSet]) -> None:
         """Bind the owning ``OrderSet`` once; subsequent calls are no-ops.
 
-        Idempotent so ``OrderSetMetaclass.__new__`` can rebind every
-        related order on subclass creation without clobbering a deliberate
-        override. Mirrors the filter side's
-        ``RelatedFilter.bind_filterset`` idempotency contract. Thin wrapper
-        over the shared ``RelatedSetTargetMixin._bind_owner``.
+        The public spelling of the bind ``OrderSetMetaclass.__new__``
+        performs at class creation (``sets_mixins.py::collect_related_declarations``
+        calls ``_bind_owner`` directly), so a call once the declaring class
+        exists is a no-op and cannot clobber that owner. Mirrors the filter
+        side's ``RelatedFilter.bind_filterset`` idempotency contract. Thin
+        wrapper over the shared ``RelatedSetTargetMixin._bind_owner``.
         """
         self._bind_owner(orderset)
 
@@ -160,6 +161,8 @@ class RelatedOrder(RelatedSetTargetMixin):
         # ``_validate_target`` rejected every non-``None`` resolution outside the family.
         return cast("type[OrderSet] | None", self._resolved_target())
 
+    # basedpyright: the setter takes a lazy target (a class, an import path, or a factory)
+    # that the getter resolves to the class on read
     @orderset.setter
-    def orderset(self, value: _OrderSetTarget) -> None:
+    def orderset(self, value: _OrderSetTarget) -> None:  # pyright: ignore[reportPropertyTypeMismatch]
         self._set_target(value)

@@ -35,7 +35,6 @@ _SHARED_PERMISSION_METHODS = (
     "_extract_branch_value",
     "_iter_active_related_branches",
     "_invoke_permission_method",
-    "_active_permission_field_paths",
     "_active_permission_targets",
     "_run_permission_checks",
 )
@@ -710,8 +709,8 @@ def test_active_input_permission_mixin_field_paths_and_branches():
 
     parent_input = _ParentInput(title="custom_title", child=_ChildInput(sub_field="sub"))
 
-    # _active_permission_field_paths returns active leaf source paths
-    paths = _ParentSet._active_permission_field_paths(parent_input)
+    # _active_permission_targets' leaf half holds the active leaf source paths
+    paths = _ParentSet._active_permission_targets(parent_input)[0]
     assert paths == ["title"]
 
     # _iter_active_related_branches returns active related branches

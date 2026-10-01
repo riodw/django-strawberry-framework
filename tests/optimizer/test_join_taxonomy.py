@@ -20,12 +20,7 @@ from django_strawberry_framework.optimizer.join_taxonomy import (
 
 
 def test_windowable_relation_kinds_is_classifier_membership_set():
-    """The exported kind set is the classifier's sole windowable-kind vocabulary.
-
-    ``plans.py::window_partition_for_prefetch`` imports this same frozenset so
-    its dual raise messages (wrong kind vs unresolved partition) cannot drift
-    from ``classify_relation_join``'s membership test.
-    """
+    """The exported kind set is the classifier's sole windowable-kind vocabulary."""
     assert (
         frozenset(
             {
@@ -114,9 +109,7 @@ def test_reverse_one_to_one_classifies_direct_fk():
 def test_windowable_kind_without_partition_classifies_unwindowable():
     """A many-shaped double with no resolvable partition -> windowable False.
 
-    The shim (``window_partition_for_prefetch``) raises its could-not-resolve
-    ``OptimizerError`` from this classification; the descriptor itself never
-    raises (callers own the fallback posture).
+    The descriptor never raises; callers own the fallback posture.
     """
     double = SimpleNamespace(
         name="mystery",

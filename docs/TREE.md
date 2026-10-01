@@ -228,7 +228,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resource_policy.py        # ``DjangoResourcePolicyExtension`` - the request-side enforcement of ``ResourcePolicy``.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
-│   ├── factories.py              # Filter input-class BFS factory + a dynamic-FilterSet cache with no in-package consumer.
+│   ├── factories.py              # Filter input-class BFS factory.
 │   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
 │   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── forms/    # Form-mutations subsystem - the Django-``Form`` / ``ModelForm`` write side.
@@ -267,7 +267,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── walker.py                 # Selection walker that emits the ``OptimizationPlan``, delegating nested Relay connections.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
-│   ├── factories.py              # Order input-class BFS factory + a dynamic-OrderSet cache with no in-package consumer.
+│   ├── factories.py              # Order input-class BFS factory.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
@@ -360,7 +360,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── fieldset/    # planned by TODO-BETA-059-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
-│   ├── factories.py              # Filter input-class BFS factory + a dynamic-FilterSet cache with no in-package consumer.
+│   ├── factories.py              # Filter input-class BFS factory.
 │   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
 │   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── forms/    # Form-mutations subsystem - the Django-``Form`` / ``ModelForm`` write side.
@@ -400,7 +400,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── walker.py                 # Selection walker that emits the ``OptimizationPlan``, delegating nested Relay connections.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
-│   ├── factories.py              # Order input-class BFS factory + a dynamic-OrderSet cache with no in-package consumer.
+│   ├── factories.py              # Order input-class BFS factory.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── permissions/    # planned by TODO-BETA-064-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
@@ -522,7 +522,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_operation_state.py   # The operation-state boundary: what one operation reads, writes, and leaves behind.
 ├── filters/    # Package tests for the FilterSet subsystem.
 │   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.
-│   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
+│   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
@@ -776,7 +776,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── fieldset/    # planned by TODO-BETA-059-0.1.1 - Mirrored package tests for the fieldset subsystem.
 ├── filters/    # Package tests for the FilterSet subsystem.
 │   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.
-│   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
+│   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
 │   ├── test_pg_full_text.py      # planned by TODO-BETA-061-0.1.2 - Postgres full-text search filter primitives.

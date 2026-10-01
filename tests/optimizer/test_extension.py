@@ -1356,36 +1356,36 @@ def test_build_cache_key_is_stable_when_source_location_missing():
     assert isinstance(key[3], tuple)
 
 
-def test_collect_directive_var_names_with_skip():
-    """B1: _collect_directive_var_names finds vars in @skip directives."""
+def test_directive_var_family_with_skip():
+    """B1: the directive family finds vars in @skip directives."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("query Q($show: Boolean!) { items @skip(if: $show) { name } }")
-    names = _collect_directive_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset({"show"})
 
 
-def test_collect_directive_var_names_with_include():
-    """B1: _collect_directive_var_names finds vars in @include directives."""
+def test_directive_var_family_with_include():
+    """B1: the directive family finds vars in @include directives."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("query Q($v: Boolean!) { items @include(if: $v) { name } }")
-    names = _collect_directive_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset({"v"})
 
 
-def test_collect_directive_var_names_ignores_non_directive_vars():
+def test_directive_var_family_ignores_non_directive_vars():
     """B1: variables in field arguments (not directives) are not collected."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("query Q($limit: Int!) { items(limit: $limit) { name } }")
-    names = _collect_directive_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset()
 
 
@@ -1447,39 +1447,39 @@ def test_walk_cache_relevant_vars_handles_unresolved_fragment_name():
     assert visited == set()
 
 
-def test_collect_directive_var_names_ignores_other_directives():
+def test_directive_var_family_ignores_other_directives():
     """B1: only @skip and @include directives split the plan cache."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("query Q($v: Boolean!) { items @custom(if: $v) { name } }")
-    names = _collect_directive_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset()
 
 
-def test_collect_directive_var_names_nested_fragments():
+def test_directive_var_family_nested_fragments():
     """B1: vars in directives on nested fields are collected."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse(
         "query Q($a: Boolean!, $b: Boolean!) { "
         "items { name @skip(if: $a) entries @include(if: $b) { value } } }",
     )
-    names = _collect_directive_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset({"a", "b"})
 
 
-def test_collect_directive_var_names_no_directives():
-    """B1: a query with no directives returns an empty frozenset."""
+def test_directive_var_family_no_directives():
+    """B1: a query with no directives yields an empty directive family."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("{ items { name } }")
-    names = _collect_directive_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[0]
     assert names == frozenset()
 
 
@@ -1639,9 +1639,7 @@ def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
     """
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import (
-        _collect_nested_pagination_var_names,
-    )
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     frag = "fragment F on Thing { booksConnection(first: $n) { edges { node { title } } } }"
     root_first = parse(
@@ -1653,7 +1651,7 @@ def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
     for doc in (root_first, nested_first):
         operation = doc.definitions[0]
         fragments = {d.name.value: d for d in doc.definitions[1:]}
-        names = _collect_nested_pagination_var_names(operation, fragments)
+        names = _collect_cache_var_families(operation, fragments)[1]
         assert names == frozenset({"n"})
 
 
@@ -1667,42 +1665,36 @@ def test_pagination_var_collection_is_syntactic_superset():
     """
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import (
-        _collect_nested_pagination_var_names,
-    )
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("{ parents { someField(first: $n) { value } } }")
-    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset({"n"})
 
 
-def test_collect_nested_pagination_var_names_excludes_root_field():
+def test_nested_pagination_var_family_excludes_root_field():
     """Root-field pagination variables are excluded from the collected name set."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import (
-        _collect_nested_pagination_var_names,
-    )
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("query Q($n: Int!) { rootConn(first: $n) { edges { node { name } } } }")
-    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset()
 
 
-def test_collect_nested_pagination_var_names_all_arg_names():
+def test_nested_pagination_var_family_all_arg_names():
     """All four pagination arg names collect; a non-pagination arg (``limit``) does not."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import (
-        _collect_nested_pagination_var_names,
-    )
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse(
         "query Q($f: Int, $l: Int, $b: String, $a: String, $lim: Int) { "
         "parents { conn(first: $f, last: $l, before: $b, after: $a, limit: $lim) "
         "{ edges { node { name } } } } }",
     )
-    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset(
         {
             "f",
@@ -1713,7 +1705,7 @@ def test_collect_nested_pagination_var_names_all_arg_names():
     )  # ``$lim`` (a filter var) stays out
 
 
-def test_collect_nested_pagination_var_names_ignores_inline_literals():
+def test_nested_pagination_var_family_ignores_inline_literals():
     """A nested pagination arg with an inline literal (not a variable) is not collected.
 
     Inline literals already key the cache via the printed AST; the collector
@@ -1721,12 +1713,10 @@ def test_collect_nested_pagination_var_names_ignores_inline_literals():
     """
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import (
-        _collect_nested_pagination_var_names,
-    )
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse("{ parents { booksConnection(first: 3) { edges { node { title } } } } }")
-    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    names = _collect_cache_var_families(doc.definitions[0], {})[1]
     assert names == frozenset()
 
 
@@ -2773,11 +2763,11 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
     assert ext.cache_info().size == 0
 
 
-def test_collect_directive_var_names_in_named_fragment():
-    """B1: _collect_directive_var_names follows named fragment spreads."""
+def test_directive_var_family_in_named_fragment():
+    """B1: the directive family follows named fragment spreads."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse(
         "query Q($show: Boolean!) { allItems { ...ItemBits } } "
@@ -2785,15 +2775,15 @@ def test_collect_directive_var_names_in_named_fragment():
     )
     operation = doc.definitions[0]
     fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
-    names = _collect_directive_var_names(operation, fragments=fragments)
+    names = _collect_cache_var_families(operation, fragments)[0]
     assert names == frozenset({"show"})
 
 
-def test_collect_directive_var_names_includes_fragment_spread_directives():
+def test_directive_var_family_includes_fragment_spread_directives():
     """B1: directives on a ``...Spread`` itself feed the cache key, not just the body."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+    from django_strawberry_framework.optimizer.extension import _collect_cache_var_families
 
     doc = parse(
         "query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } "
@@ -2801,7 +2791,7 @@ def test_collect_directive_var_names_includes_fragment_spread_directives():
     )
     operation = doc.definitions[0]
     fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
-    names = _collect_directive_var_names(operation, fragments=fragments)
+    names = _collect_cache_var_families(operation, fragments)[0]
     assert names == frozenset({"show"})
 
 
@@ -5515,18 +5505,18 @@ def test_optimizer_unadapted_non_queryset_passthrough():
     Wire cost of a list-returning root with the optimizer installed is
     ``examples/fakeshop/test_query/test_products_visibility_api.py::test_nested_connection_still_costs_one_query_per_parent_when_the_optimizer_gets_a_list``.
     """
-    from django_strawberry_framework.utils.querysets import is_async_queryset_adapter
+    from django_strawberry_framework.utils.querysets import unwrap_async_queryset_adapter
 
     ext = DjangoOptimizerExtension()
     non_qs_result = ext._optimize([1, 2, 3], SimpleNamespace())
     assert non_qs_result == [1, 2, 3]
-    assert not is_async_queryset_adapter(non_qs_result)
+    assert not unwrap_async_queryset_adapter(non_qs_result)[1]
 
 
 def test_optimizer_preserves_async_adapter_evaluated_cache():
     """Evaluated queryset with adapter returns re-wrapped adapter."""
     from django_strawberry_framework.utils.querysets import (
-        is_async_queryset_adapter,
+        unwrap_async_queryset_adapter,
         wrap_async_queryset_adapter,
     )
 
@@ -5534,16 +5524,16 @@ def test_optimizer_preserves_async_adapter_evaluated_cache():
     qs_eval = Category.objects.all()
     qs_eval._result_cache = []
     adapted_eval = wrap_async_queryset_adapter(qs_eval)
-    assert is_async_queryset_adapter(adapted_eval)
+    assert unwrap_async_queryset_adapter(adapted_eval)[1]
     eval_res = ext._optimize(adapted_eval, SimpleNamespace())
-    assert is_async_queryset_adapter(eval_res)
+    assert unwrap_async_queryset_adapter(eval_res)[1]
     assert eval_res._queryset is qs_eval
 
 
 def test_optimizer_preserves_async_adapter_unresolved_type():
     """Unresolved return type with adapter returns re-wrapped adapter."""
     from django_strawberry_framework.utils.querysets import (
-        is_async_queryset_adapter,
+        unwrap_async_queryset_adapter,
         wrap_async_queryset_adapter,
     )
 
@@ -5557,14 +5547,14 @@ def test_optimizer_preserves_async_adapter_unresolved_type():
         field_nodes=[],
     )
     unresolved_res = ext._optimize(adapted_unresolved, info_unresolved)
-    assert is_async_queryset_adapter(unresolved_res)
+    assert unwrap_async_queryset_adapter(unresolved_res)[1]
     assert unresolved_res._queryset is qs_unresolved
 
 
 def test_optimizer_preserves_async_adapter_optimized_tail():
     """Optimized tail with adapter returns re-wrapped adapter."""
     from django_strawberry_framework.utils.querysets import (
-        is_async_queryset_adapter,
+        unwrap_async_queryset_adapter,
         wrap_async_queryset_adapter,
     )
 
@@ -5590,7 +5580,7 @@ def test_optimizer_preserves_async_adapter_optimized_tail():
     qs_valid = Category.objects.all()
     adapted_valid = wrap_async_queryset_adapter(qs_valid)
     optimized_res = ext._optimize(adapted_valid, info_optimized)
-    assert is_async_queryset_adapter(optimized_res)
+    assert unwrap_async_queryset_adapter(optimized_res)[1]
     assert optimized_res._queryset is not None
 
 

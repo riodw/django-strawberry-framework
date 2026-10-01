@@ -1,6 +1,6 @@
 """Tests for the shared generated-input substrate (``utils/inputs.py``).
 
-Name collision, Meta cache keys, and hashable-meta depth are construction-time.
+Name collision and ``Meta.fields`` canonicalization are construction-time.
 Shipped filter/order input names live in
 ``examples/fakeshop/test_query/test_library_api.py`` and
 ``examples/fakeshop/test_query/test_connection_pagination_api.py``.
@@ -21,22 +21,18 @@ from django_strawberry_framework.utils.inputs import (
     InputFieldSpec,
     _sorted_meta_values,
     build_strawberry_input_class,
-    create_dynamic_set_class,
+    canonicalize_set_meta_fields,
     emit_set_input_field_triples,
     get_or_store_shape_build,
     graphql_camel_name,
     iter_input_field_collisions,
     iter_set_subclasses,
-    make_dynamic_set_getter,
-    make_hashable_meta_value,
     make_input_namespace,
     make_set_input_namespace,
-    make_set_meta_cache_key,
     make_shape_build_cache,
     materialize_generated_input_class,
     name_set_input_type_name,
     normalize_field_name_sequence,
-    normalize_set_meta_for_factory,
     pascalize_token,
     promote_set_meta_fields,
     read_set_meta_fields,
@@ -432,69 +428,9 @@ def test_filter_and_order_input_namespaces_ride_make_set_input_namespace():
     )
 
 
-def test_make_hashable_meta_value_sorts_mixed_dict_keys():
-    """Unordered dict keys sort by ``repr`` so mixed types cannot TypeError."""
-    result = make_hashable_meta_value({"a": 1, 0: 2})
-    assert isinstance(result, tuple)
-    assert set(result) == {("a", 1), (0, 2)}
-
-
-def test_make_hashable_meta_value_rejects_cyclic_containers():
-    value = []
-    value.append(value)
-
-    with pytest.raises(ConfigurationError, match="cyclic container"):
-        make_hashable_meta_value(value)
-
-
-def test_make_hashable_meta_value_rejects_excessive_container_depth():
-    value = []
-    cursor = value
-    for _ in range(100):
-        child = []
-        cursor.append(child)
-        cursor = child
-
-    with pytest.raises(ConfigurationError, match="maximum supported container depth"):
-        make_hashable_meta_value(value)
-
-
-def test_make_hashable_meta_value_allows_shared_acyclic_containers():
-    shared = ["exact"]
-
-    assert make_hashable_meta_value([shared, shared]) == (("exact",), ("exact",))
-
-
 def test_base_container_values_reads_builtin_dict_items():
     """The container reader exposes built-in dict entries without invoking overrides."""
     assert base_container_values({"name": 1}) == (("name", 1),)
-
-
-def test_normalize_set_meta_wraps_unreadable_reserved_key_membership():
-    class _UnreadableReservedKeys:
-        def __contains__(self, value: object) -> bool:
-            raise RuntimeError("membership unavailable")
-
-    with pytest.raises(ConfigurationError, match="entries could not be read"):
-        normalize_set_meta_for_factory(
-            {"fields": ("name",)},
-            reserved_keys=_UnreadableReservedKeys(),  # type: ignore[arg-type]
-        )
-
-
-def test_make_hashable_meta_value_keys_opaque_unhashable_by_identity():
-    """Values that refuse ``hash()`` discriminate by type-and-object identity."""
-
-    class Policy:
-        __hash__ = None
-
-    policy = Policy()
-    first = make_hashable_meta_value(policy)
-    second = make_hashable_meta_value(policy)
-    other = make_hashable_meta_value(Policy())
-    assert first == second
-    assert first != other
-    hash(first)
 
 
 def test_normalize_field_name_sequence_wraps_hostile_iterators():
@@ -547,8 +483,8 @@ def test_input_builder_wraps_unreadable_and_malformed_field_specifications():
         build_strawberry_input_class("MalformedInput", [("name", int)])  # type: ignore[list-item]
 
 
-def test_meta_cache_helpers_bypass_hostile_containers_and_reprs():
-    """Cache canonicalization never trusts consumer container hooks or reprs."""
+def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs():
+    """``Meta.fields`` canonicalization never trusts consumer container hooks or reprs."""
 
     class _HostileRepr:
         def __repr__(self):
@@ -566,125 +502,61 @@ def test_meta_cache_helpers_bypass_hostile_containers_and_reprs():
         def __iter__(self):
             raise RuntimeError("hostile list iterator")
 
-    for value in (
-        {_HostileRepr()},
-        _HostileDict(name="x"),
-        _HostileSet(["b", "a"]),
-        _HostileList(["b", "a"]),
-    ):
-        canonical = make_hashable_meta_value(value)
-        hash(canonical)
-
-    normalized = normalize_set_meta_for_factory(
-        _HostileDict(
-            model=object,
-            fields=_HostileDict(name=_HostileSet(["exact", "contains"])),
-            exclude=_HostileList(["z", "a"]),
-        ),
-        reserved_keys=frozenset(),
-    )
-    assert normalized["fields"]["name"] == ["contains", "exact"]
-    assert normalized["exclude"] == ["a", "z"]
+    hostile_repr = _HostileRepr()
+    assert canonicalize_set_meta_fields({hostile_repr}) == [hostile_repr]
+    assert canonicalize_set_meta_fields(_HostileSet(["b", "a"])) == ["a", "b"]
+    assert canonicalize_set_meta_fields(
+        _HostileDict(name=_HostileSet(["exact", "contains"])),
+    ) == {"name": ["contains", "exact"]}
+    assert _sorted_meta_values(_HostileList(["z", "a"])) == ["a", "z"]
 
 
-def test_make_set_meta_cache_key_tags_fields_shape():
-    """Dict / sequence / scalar ``fields`` land on distinct tagged key branches."""
-
-    class _Model:
-        pass
-
-    dict_key = make_set_meta_cache_key({"model": _Model, "fields": {"name": ["exact"]}})
-    seq_key = make_set_meta_cache_key({"model": _Model, "fields": ["name"]})
-    raw_key = make_set_meta_cache_key({"model": _Model, "fields": "__all__"})
-    assert dict_key[0] is _Model
-    assert dict_key[1][0] == "dict"
-    assert seq_key[1] == ("seq", ("name",))
-    assert raw_key[1] == ("raw", "__all__")
-    hash(dict_key)
-    hash(seq_key)
-    hash(raw_key)
-
-
-def test_normalize_set_meta_for_factory_promotes_fields_alias_and_strips_reserved():
-    """``fields_alias`` promotes when ``fields`` is absent; reserved keys drop."""
-    normalized = normalize_set_meta_for_factory(
-        {"model": object, "filter_fields": {"b", "a"}, "filterset_base_class": object},
-        reserved_keys=frozenset({"filterset_base_class"}),
-        fields_alias=FILTERSET_FIELDS_ALIAS,
-    )
-    assert "filter_fields" not in normalized
-    assert "filterset_base_class" not in normalized
-    assert normalized["fields"] == sorted(["a", "b"], key=repr)
-
-
-def test_normalize_set_meta_for_factory_prefers_fields_over_alias():
-    """When both ``fields`` and the synonym are present, ``fields`` wins."""
-    normalized = normalize_set_meta_for_factory(
-        {"fields": ["name"], "filter_fields": ["other"]},
-        reserved_keys=frozenset(),
-        fields_alias=FILTERSET_FIELDS_ALIAS,
-    )
-    assert normalized["fields"] == ["name"]
-    assert "filter_fields" not in normalized
-
-
-def test_resolve_set_meta_fields_promotes_alias_on_dict_and_meta_class():
-    """Class Meta and factory kwargs apply the same ``filter_fields`` synonym."""
+def test_resolve_set_meta_fields_promotes_the_alias_on_a_meta_class():
+    """A class Meta supplying only ``filter_fields`` resolves through the synonym."""
     alias = {"code": ["exact"]}
 
     class Meta:
         filter_fields = alias
 
     assert resolve_set_meta_fields(Meta, fields_alias=FILTERSET_FIELDS_ALIAS) == (alias, True)
-    assert resolve_set_meta_fields(
-        {"filter_fields": alias},
-        fields_alias=FILTERSET_FIELDS_ALIAS,
-    ) == (alias, True)
 
 
-def test_resolve_set_meta_fields_fields_wins_on_dict_and_meta_class():
-    """``fields`` wins on both surfaces; ``from_alias`` is False."""
+def test_resolve_set_meta_fields_fields_wins_over_the_alias():
+    """``fields`` wins over ``filter_fields``; ``from_alias`` is False."""
 
     class Both:
         fields = ["name"]
         filter_fields = ["other"]
 
     assert resolve_set_meta_fields(Both, fields_alias=FILTERSET_FIELDS_ALIAS) == (["name"], False)
-    assert resolve_set_meta_fields(
-        {"fields": ["name"], "filter_fields": ["other"]},
-        fields_alias=FILTERSET_FIELDS_ALIAS,
-    ) == (["name"], False)
 
 
 def test_resolve_set_meta_fields_none_source_and_no_alias_family():
     """``None`` source and the order-side ``fields_alias=None`` are no-ops."""
     assert resolve_set_meta_fields(None, fields_alias=FILTERSET_FIELDS_ALIAS) == (None, False)
-    assert resolve_set_meta_fields(
-        {"filter_fields": ["name"]},
-        fields_alias=None,
-    ) == (None, False)
+
+    class AliasOnly:
+        filter_fields = ["name"]
+
+    assert resolve_set_meta_fields(AliasOnly, fields_alias=None) == (None, False)
 
 
-def test_filterset_metaclass_and_factory_share_fields_alias_owner():
-    """Class-Meta promotion and Layer-6 kwargs canonicalize through one rule."""
-    from django_strawberry_framework.filters import factories as filter_factories
+def test_set_metaclasses_share_the_fields_alias_owner():
+    """Both set families promote and read ``Meta.fields`` through one rule."""
     from django_strawberry_framework.filters import sets as filter_sets
     from django_strawberry_framework.orders import sets as order_sets
 
     assert filter_sets.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
-    assert filter_factories.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
     assert filter_sets.promote_set_meta_fields is promote_set_meta_fields
     assert order_sets.promote_set_meta_fields is promote_set_meta_fields
     assert order_sets.read_set_meta_fields is read_set_meta_fields
     assert "promote_set_meta_fields" in filter_sets.FilterSetMetaclass.__new__.__code__.co_names
     assert "promote_set_meta_fields" in order_sets.OrderSetMetaclass.__new__.__code__.co_names
     assert "read_set_meta_fields" in order_sets.OrderSet._expand_meta_fields.__code__.co_names
-    assert "resolve_set_meta_fields" in normalize_set_meta_for_factory.__code__.co_names
-    assert "canonicalize_set_meta_fields" in normalize_set_meta_for_factory.__code__.co_names
 
 
-def test_promote_set_meta_fields_writes_alias_on_class_meta_not_dict():
-    """Class Meta gets ``.fields``; kwargs dicts stay untouched for the factory."""
+def test_promote_set_meta_fields_writes_the_alias_onto_class_meta():
+    """Class Meta gets ``.fields``; the consumer's alias attribute stays."""
 
     class Meta:
         filter_fields = ["code"]
@@ -693,13 +565,9 @@ def test_promote_set_meta_fields_writes_alias_on_class_meta_not_dict():
     assert Meta.fields == ["code"]
     assert Meta.filter_fields == ["code"]
 
-    payload = {"filter_fields": ["name"]}
-    assert promote_set_meta_fields(payload, fields_alias=FILTERSET_FIELDS_ALIAS) == ["name"]
-    assert "fields" not in payload
-
 
 def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source():
-    """Expansion reads cache-stable order; class Meta keeps the original set."""
+    """Expansion reads process-stable order; class Meta keeps the original set."""
     names = {"title", "subtitle"}
 
     class Meta:
@@ -707,159 +575,14 @@ def test_read_set_meta_fields_canonicalizes_sets_without_mutating_source():
 
     assert read_set_meta_fields(Meta) == sorted(["title", "subtitle"], key=repr)
     assert Meta.fields is names
-    assert read_set_meta_fields({"fields": names}) == sorted(["title", "subtitle"], key=repr)
-    assert read_set_meta_fields({"fields": {"name": {"exact", "contains"}}}) == {
+
+    class LookupMeta:
+        fields = {"name": {"exact", "contains"}}
+
+    assert read_set_meta_fields(LookupMeta) == {
         "name": sorted(["contains", "exact"], key=repr),
     }
     assert read_set_meta_fields(None) is None
-
-
-def test_create_dynamic_set_class_requires_model():
-    """Missing ``model`` fails loud with the family getter's name in the message."""
-    with pytest.raises(ConfigurationError, match="get_probeset_class requires `model`"):
-        create_dynamic_set_class(
-            {"fields": ["name"]},
-            set_base_class=object,
-            auto_name_suffix="AutoProbe",
-            getter_name="get_probeset_class",
-            explicit_param="probeset_class",
-        )
-
-
-def test_normalize_meta_drops_falsy_exclude():
-    """django-filter reads exclusions as ``exclude or []``: every falsy spelling
-
-    (``None``, an empty container) is "no exclusions" and must drop the key
-    entirely, so the absent-vs-falsy pair cannot split a Layer-6 cache slot
-    via an extras discriminator. Truthy containers still canonicalize.
-    """
-    for falsy in (
-        None,
-        [],
-        (),
-        set(),
-        frozenset(),
-    ):
-        normalized = normalize_set_meta_for_factory(
-            {"model": object, "fields": ["name"], "exclude": falsy},
-            reserved_keys=frozenset(),
-        )
-        assert "exclude" not in normalized
-    canonical = normalize_set_meta_for_factory(
-        {"model": object, "fields": ["name"], "exclude": ("b", "a")},
-        reserved_keys=frozenset(),
-    )
-    assert canonical["exclude"] == ["a", "b"]
-
-
-def test_create_dynamic_set_class_enforces_fields_or_exclude_only_when_flag_set():
-    """The fields/exclude pre-validation is opt-in per base class.
-
-    The filter side sets ``require_fields_or_exclude`` because django-filter's
-    metaclass hard-asserts a ``Meta.model`` declares at least one of the two;
-    the order side's plain ``type`` metaclass accepts a fields-less Meta, so
-    the default keeps that lifecycle intact.
-    """
-    # A real model class: the Django-model check must pass so the flag's own
-    # rejection is what fires.
-    from apps.products.models import Category
-
-    fields_less = {"model": Category}
-    with pytest.raises(ConfigurationError, match="requires `fields` or `exclude`"):
-        create_dynamic_set_class(
-            dict(fields_less),
-            set_base_class=object,
-            auto_name_suffix="AutoProbe",
-            getter_name="get_probeset_class",
-            explicit_param="probeset_class",
-            require_fields_or_exclude=True,
-        )
-    # Default off: the fields-less Meta builds (the order-side lifecycle).
-    built = create_dynamic_set_class(
-        dict(fields_less),
-        set_base_class=object,
-        auto_name_suffix="AutoProbe",
-        getter_name="get_probeset_class",
-        explicit_param="probeset_class",
-    )
-    assert built.__name__ == "CategoryAutoProbe"
-    # exclude alone satisfies the requirement (django-filter: all-fields-minus).
-    exclude_only = create_dynamic_set_class(
-        {"model": Category, "exclude": ["name"]},
-        set_base_class=object,
-        auto_name_suffix="AutoProbe",
-        getter_name="get_probeset_class",
-        explicit_param="probeset_class",
-        require_fields_or_exclude=True,
-    )
-    assert exclude_only.__name__ == "CategoryAutoProbe"
-
-
-def test_make_dynamic_set_getter_collapses_equivalent_meta_and_passthroughs_explicit():
-    """The Layer-6 skeleton caches equivalent meta and returns an explicit class."""
-    from apps.products.models import Category
-
-    class _ProbeSet:
-        pass
-
-    cache: dict = {}
-    getter = make_dynamic_set_getter(
-        cache=cache,
-        set_base_class=_ProbeSet,
-        auto_name_suffix="AutoProbe",
-        getter_name="get_probeset_class",
-        reserved_keys=frozenset({"probeset_base_class"}),
-        explicit_param="probeset_class",
-    )
-    first = getter(None, model=Category, fields=["name"])
-    second = getter(None, model=Category, fields=("name",))
-    assert first is second
-    assert first.__name__ == "CategoryAutoProbe"
-    assert issubclass(first, _ProbeSet)
-    explicit = type("Explicit", (_ProbeSet,), {})
-    assert getter(explicit) is explicit
-    stripped = getter(None, model=Category, fields=["title"], probeset_base_class=_ProbeSet)
-    assert stripped is not first
-    assert stripped.__name__ == "CategoryAutoProbe"
-
-
-@pytest.mark.django_db
-def test_filter_and_order_dynamic_caches_ride_make_dynamic_set_getter():
-    """Both family getters share the skeleton closures and keep disjoint caches."""
-    from apps.products.models import Category
-
-    from django_strawberry_framework.filters import factories as filter_factories
-    from django_strawberry_framework.filters.sets import FilterSet
-    from django_strawberry_framework.orders import factories as order_factories
-    from django_strawberry_framework.orders.sets import OrderSet
-
-    # Neither family re-exports the hashing helpers under a private alias: the
-    # owner is ``utils/inputs.py`` and both getters reach it through the one
-    # shared ``make_dynamic_set_getter`` closure below.
-    for module in (filter_factories, order_factories):
-        assert not hasattr(module, "_make_hashable")
-        assert not hasattr(module, "_make_cache_key")
-        assert not hasattr(module, "_normalize_meta_for_factory")
-    assert make_hashable_meta_value is not None
-    assert make_set_meta_cache_key is not None
-    assert (
-        filter_factories._get_filterset_class.__code__
-        is order_factories._get_orderset_class.__code__
-    )
-
-    filter_factories._dynamic_filterset_cache.clear()
-    order_factories._dynamic_orderset_cache.clear()
-    try:
-        filt = filter_factories.get_filterset_class(None, model=Category, fields=["name"])
-        order = order_factories.get_orderset_class(None, model=Category, fields=["name"])
-        assert filt is not order
-        assert filt.__name__ == "CategoryAutoFilter"
-        assert order.__name__ == "CategoryAutoOrder"
-        assert issubclass(filt, FilterSet)
-        assert issubclass(order, OrderSet)
-    finally:
-        filter_factories._dynamic_filterset_cache.clear()
-        order_factories._dynamic_orderset_cache.clear()
 
 
 def test_make_shape_build_cache_returns_dict_and_clear():
@@ -1188,64 +911,3 @@ def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision()
     triples = _emit([("a_b", object()), ("b", object())], clean)
     assert [triple[0] for triple in triples] == ["a_b", "b"]
     assert set(clean) == {(_ProbeSet, "a_b"), (_ProbeSet, "b")}
-
-
-def test_make_hashable_meta_value_lands_hostile_hash_and_wrong_type_hash_opaque():
-    """A ``__hash__`` that raises OR returns a non-int lands the opaque token.
-
-    CPython rejects a non-int ``__hash__`` return with ``TypeError``, so both
-    hostile spellings reach the same ``except`` and must not escape the walk.
-    """
-
-    class _RaisingHash:
-        def __hash__(self):
-            raise RuntimeError("boom")
-
-    class _WrongTypeHash:
-        def __hash__(self):
-            return "not an int"  # noqa: PLE0309 -- the hostile spelling under test
-
-    for value in (_RaisingHash(), _WrongTypeHash()):
-        result = make_hashable_meta_value(value)
-        hash(result)  # the landed token is itself hashable
-        assert isinstance(result, tuple)
-        assert result[0] == "__unhashable_meta_value__"
-
-
-def test_opaque_meta_token_never_collides_with_a_real_string_value():
-    """The marker string lives inside a TUPLE token, so a real value cannot alias it.
-
-    A meta value that happens to BE the string ``__unhashable_meta_value__``
-    hashes to itself -- a plain ``str``, never the 3-tuple the opaque path
-    emits -- so the two cannot collapse onto one cache-key slot.
-    """
-    from django_strawberry_framework.utils.inputs import _opaque_meta_value
-
-    class Unhashable:
-        __hash__ = None
-
-    token = _opaque_meta_value(Unhashable())
-    assert isinstance(token, tuple) and token[0] == "__unhashable_meta_value__"
-    assert make_hashable_meta_value("__unhashable_meta_value__") == ("__unhashable_meta_value__")
-
-
-def test_make_hashable_meta_value_depth_boundary_is_exact():
-    """``_MAX_META_VALUE_DEPTH`` allows exactly 65 nested containers, rejects 66.
-
-    The root sits at depth 0 and each nesting adds one; the guard fires when a
-    container would be walked at depth 65. Pinning the exact boundary keeps an
-    off-by-one from ever shipping in either direction.
-    """
-
-    def nested(count: int) -> list:
-        value: list = []
-        cursor = value
-        for _ in range(count):
-            child: list = []
-            cursor.append(child)
-            cursor = child
-        return value
-
-    make_hashable_meta_value(nested(64))  # 65 lists: innermost at depth 64, allowed
-    with pytest.raises(ConfigurationError, match="maximum supported container depth"):
-        make_hashable_meta_value(nested(65))  # 66 lists: innermost at depth 65

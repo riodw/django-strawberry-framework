@@ -7,6 +7,7 @@ from django.conf import settings
 from django.db.models import Manager, Prefetch, QuerySet
 from django.forms import BaseForm
 from rest_framework.fields import Field as DRFField
+from rest_framework.serializers import ModelSerializer as DRFModelSerializer
 from strawberry import relay
 from strawberry.types import Info
 from typing_extensions import override
@@ -43,13 +44,12 @@ from django_strawberry_framework.orders import OrderInput
 # The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
 # coverage lines reachable from a live ``/graphql/`` query to land here. Returns
 # ``models.Branch.objects`` (a ``Manager``) - NOT ``.all()`` - so the field-
-# wrapper's coercion fires. The async equivalent
-# (the same ``normalize_query_source`` line reached via
-# ``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_async``) is genuinely unreachable from the sync ``GraphQLView``
-# mounted at ``/graphql/`` (Strawberry's sync execution rejects async resolvers
-# with ``RuntimeError: GraphQL execution failed to complete synchronously``),
-# so the async ``Manager`` coercion stays in ``tests/test_list_field.py`` per
-# the README's "genuinely unreachable" fallback.
+# wrapper's coercion fires. Both colors of the list field's resolver wrapper
+# share that line; the async color
+# (``django_strawberry_framework/list_field.py::DjangoListField._async_wrap``) is
+# reachable only over ``AsyncDjangoGraphQLView``, where
+# ``examples/fakeshop/test_query/test_list_field_async_api.py::test_async_manager_that_degrades_to_a_list_is_rejected``
+# drives an ``async def`` resolver's ``Manager`` through it.
 
 
 def _branches_manager_resolver(root: object, info: Info) -> Manager[models.Branch]:
@@ -1487,7 +1487,9 @@ class CreateShelfViaSerializer(SerializerMutation):
     """Create a ``Shelf`` through ``ShelfSerializer`` - the subclass-mutation PARENT (spec-039)."""
 
     class Meta:
-        serializer_class = serializers.ShelfSerializer
+        # Typed to admit the subclass Meta's own ``Shelf`` serializer
+        # (see ``CreateShelfViaSubclassedSerializer``).
+        serializer_class: type[DRFModelSerializer[models.Shelf]] = serializers.ShelfSerializer
         operation = "create"
         permission_classes = []
 

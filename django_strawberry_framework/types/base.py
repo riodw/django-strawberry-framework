@@ -610,11 +610,9 @@ def _is_relay_shaped(cls: "type[DjangoType]", interfaces: tuple[type[object], ..
     annotation-synthesis-time); centralizing the predicate keeps the
     Relay-shape contract single-sited.
     """
-    # Callers pass a class and its validated interface classes; the class checks keep a
-    # contract-breaking caller from reaching ``issubclass``
-    return any(isinstance(i, type) and issubclass(i, relay.Node) for i in interfaces) or (
-        isinstance(cls, type) and issubclass(cls, relay.Node)
-    )
+    # Callers pass a class and its interfaces, which ``_validate_interfaces`` admitted only as
+    # interface classes.
+    return any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
 
 
 def _meta_attr(meta: object, key: str, default: object = None) -> object:
@@ -718,7 +716,8 @@ class DjangoType:
         # policy as ``_normalize_fields_spec``.
         annotation_keys: Iterable[object] = consumer_annotations
         non_string_annotation_keys = sorted(
-            (key for key in annotation_keys if not isinstance(key, str)),
+            # basedpyright: trust boundary: the metaclass-injected keys described above
+            (key for key in annotation_keys if not isinstance(key, str)),  # pyright: ignore[reportUnnecessaryIsInstance]
             key=repr,
         )
         if non_string_annotation_keys:
@@ -947,10 +946,9 @@ class DjangoType:
         return definition.has_custom_get_queryset
 
 
-def _detect_custom_get_queryset(cls: type[object]) -> bool:
+def _detect_custom_get_queryset(cls: object) -> bool:
     """Return whether ``cls`` or an intermediate base overrides ``get_queryset``."""
-    # The caller passes the class under creation; the class check keeps a contract-breaking caller
-    # from reaching ``issubclass``
+    # Any object is answered: a non-class, or a class outside ``DjangoType``, overrides nothing.
     if not (isinstance(cls, type) and issubclass(cls, DjangoType)):
         return False
     for base in cls.__mro__:
@@ -981,12 +979,14 @@ def _normalize_fields_spec(value: object) -> tuple[str, ...] | Literal["__all__"
         raise ConfigurationError(
             "Meta.fields must be '__all__' or a non-string sequence of field names",
         ) from exc
+    names: list[str] = []
     for entry in entries:
         if not isinstance(entry, str):
             raise ConfigurationError(
                 f"Meta.fields must contain field name strings; got {_safe_arg_repr(entry)}",
             )
-    return entries
+        names.append(entry)
+    return tuple(names)
 
 
 def _normalize_sequence_spec(value: object, key: str = "exclude") -> tuple[str, ...] | None:
@@ -1018,12 +1018,14 @@ def _normalize_sequence_spec(value: object, key: str = "exclude") -> tuple[str, 
         raise ConfigurationError(
             f"Meta.{key} must be a non-string sequence or set of field names",
         ) from exc
+    names: list[str] = []
     for entry in entries:
         if not isinstance(entry, str):
             raise ConfigurationError(
                 f"Meta.{key} must contain field name strings; got {_safe_arg_repr(entry)}",
             )
-    return entries
+        names.append(entry)
+    return tuple(names)
 
 
 def _consumer_assigned_fields(
@@ -1545,7 +1547,8 @@ def _validate_optimizer_hints(
     if not hints:
         return
     for key in hints:
-        if not isinstance(key, str):
+        # basedpyright: trust boundary: a consumer's ``Meta.optimizer_hints`` can hold any key
+        if not isinstance(key, str):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise ConfigurationError(
                 f"{model.__name__}.Meta.optimizer_hints keys must be field name strings; "
                 f"got {_safe_arg_repr(key)}.",
@@ -1928,16 +1931,20 @@ def _select_fields(
     return tuple(f for f in all_fields if f.name in selected_names)
 
 
+# The default for each field-name set ``_build_annotations`` reads: no field names.
+_NO_FIELD_NAMES: frozenset[str] = frozenset()
+
+
 def _build_annotations(
     cls: type[DjangoType],
     fields: "tuple[ModelField, ...]",
     *,
     source_model: type[models.Model],
-    consumer_authored_fields: frozenset[str] = frozenset(),
+    consumer_authored_fields: frozenset[str] = _NO_FIELD_NAMES,
     interfaces: tuple[type[object], ...] = (),
-    nullable_overrides: frozenset[str] = frozenset(),
-    required_overrides: frozenset[str] = frozenset(),
-    filesystem_path_fields: frozenset[str] = frozenset(),
+    nullable_overrides: frozenset[str] = _NO_FIELD_NAMES,
+    required_overrides: frozenset[str] = _NO_FIELD_NAMES,
+    filesystem_path_fields: frozenset[str] = _NO_FIELD_NAMES,
 ) -> tuple[dict[str, object], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 

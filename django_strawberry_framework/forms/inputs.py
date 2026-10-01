@@ -249,14 +249,17 @@ def _form_field_basis(form_class: FormClass, form_fields: Any = None) -> dict[st
     invalid_names: list[object] = []
     for name in basis:
         try:
+            # basedpyright: trust boundary: a consumer ``get_form_fields`` hook can return a
+            # mapping with any keys
             invalid = (
-                not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name)
+                not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name)  # pyright: ignore[reportUnnecessaryIsInstance]
             )
         except BaseException:
             invalid = True
         if invalid:
             invalid_names.append(name)
-    invalid_fields = [name for name, field in basis.items() if not isinstance(field, forms.Field)]
+    # basedpyright: trust boundary: the same hook can map a name to any value
+    invalid_fields = [name for name, field in basis.items() if not isinstance(field, forms.Field)]  # pyright: ignore[reportUnnecessaryIsInstance]
     if invalid_names or invalid_fields:
         # Each entry renders through ``_safe_arg_repr``: this message is assembled
         # at the raise site, so a hook-supplied key with a hostile ``__repr__``

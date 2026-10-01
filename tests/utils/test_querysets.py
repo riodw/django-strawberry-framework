@@ -87,8 +87,6 @@ from django_strawberry_framework.utils.querysets import (
     normalize_query_source,
     normalized_row_source,
     pks_all_present,
-    post_process_queryset_result_async,
-    post_process_queryset_result_sync,
     reject_async_in_sync_context,
     reject_async_iterable_in_sync_context,
     reject_awaitable_sync_source,
@@ -270,37 +268,6 @@ async def test_apply_type_visibility_async_passes_sync_hook_through():
     base = Category.objects.all()
     result = await apply_type_visibility_async(_SyncType, base, info=None)
     assert isinstance(result, models.QuerySet)
-
-
-# ---------------------------------------------------------------------------
-# post_process_queryset_result_* -- the list-field consumer-resolver shape
-# ---------------------------------------------------------------------------
-
-
-def test_post_process_sync_coerces_manager_then_applies_visibility():
-    """A ``Manager`` return is coerced then run through ``get_queryset`` (sync)."""
-    result = post_process_queryset_result_sync(_SyncType, Category.objects, info=None)
-    assert isinstance(result, models.QuerySet)
-
-
-def test_post_process_sync_passes_python_list_through():
-    """A non-queryset Python list is returned unchanged (no visibility hook)."""
-    payload = [object(), object()]
-    result = post_process_queryset_result_sync(_SyncType, payload, info=None)
-    assert result is payload
-
-
-async def test_post_process_async_coerces_manager_then_applies_visibility():
-    """A ``Manager`` return is coerced then awaited through ``get_queryset`` (async)."""
-    result = await post_process_queryset_result_async(_AsyncType, Category.objects, info=None)
-    assert isinstance(result, models.QuerySet)
-
-
-async def test_post_process_async_passes_python_list_through():
-    """A non-queryset Python list is returned unchanged on the async path."""
-    payload = [object()]
-    result = await post_process_queryset_result_async(_AsyncType, payload, info=None)
-    assert result is payload
 
 
 # ---------------------------------------------------------------------------
@@ -1917,20 +1884,6 @@ async def test_async_generator_hook_result_fails_closed():
 
     with pytest.raises(ConfigurationError, match="got async_generator"):
         await apply_type_visibility_async(_AgenType, Category.objects.all(), info=None)
-
-
-async def test_post_process_async_rejects_residual_awaitable():
-    """An already-awaited async consumer resolver resolving to another awaitable fails closed.
-
-    This closes the shape where the residual awaitable would otherwise pass
-    the non-queryset branch and skip visibility entirely.
-    """
-
-    async def _residual():
-        return Category.objects.all()  # pragma: no cover - disposed, never awaited
-
-    with pytest.raises(ConfigurationError, match="resolved to another awaitable"):
-        await post_process_queryset_result_async(_SyncType, _residual(), info=None)
 
 
 @pytest.mark.django_db(transaction=True)

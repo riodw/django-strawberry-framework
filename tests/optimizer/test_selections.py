@@ -17,7 +17,6 @@ from django_strawberry_framework.optimizer.selections import (
     ConnectionFieldNames,
     ast_child_selections,
     ast_to_converted_selections,
-    connection_count_required,
     connection_field_names,
     connection_has_next_page_selected,
     connection_node_children,
@@ -430,8 +429,16 @@ def test_included_field_selections_materializes_one_shot_iterables():
     assert included_field_selections(tup) is tup
 
 
-def test_connection_count_required_matrix():
-    """``connection_count_required`` fires on ``totalCount`` / ``pageInfo.hasNextPage`` only.
+def _count_observers(selection, **kwargs):
+    """Return ``(totalCount selected, hasNextPage selected)`` for one connection selection."""
+    return (
+        connection_total_count_selected(selection, **kwargs),
+        connection_has_next_page_selected(selection, **kwargs),
+    )
+
+
+def test_connection_count_observers_matrix():
+    """The two count observers fire on ``totalCount`` / ``pageInfo.hasNextPage`` only.
 
     The plan-time half of the conditional ``_dst_total_count`` contract
     (spec-033 Decision 4): cursors and ``hasPreviousPage`` derive from the row
@@ -440,16 +447,16 @@ def test_connection_count_required_matrix():
     args are already evaluated on converted selections).
     """
     edges_only = _field("conn", selections=[_field("edges", selections=[_field("node")])])
-    assert connection_count_required(edges_only) is False
+    assert _count_observers(edges_only) == (False, False)
 
     total = _field("conn", selections=[_field("edges"), _field("totalCount")])
-    assert connection_count_required(total) is True
+    assert _count_observers(total) == (True, False)
 
     has_next = _field(
         "conn",
         selections=[_field("pageInfo", selections=[_field("hasNextPage")])],
     )
-    assert connection_count_required(has_next) is True
+    assert _count_observers(has_next) == (False, True)
 
     previous_only = _field(
         "conn",
@@ -457,7 +464,7 @@ def test_connection_count_required_matrix():
             _field("pageInfo", selections=[_field("hasPreviousPage"), _field("endCursor")]),
         ],
     )
-    assert connection_count_required(previous_only) is False
+    assert _count_observers(previous_only) == (False, False)
 
     # Fragment wrappers descend at the connection level AND inside pageInfo.
     fragment_wrapped = _field(
@@ -470,14 +477,14 @@ def test_connection_count_required_matrix():
             ),
         ],
     )
-    assert connection_count_required(fragment_wrapped) is True
+    assert _count_observers(fragment_wrapped) == (False, True)
 
     # Directive-excluded observers do not fire.
     skipped = _field(
         "conn",
         selections=[_field("totalCount", directives={"skip": {"if": True}})],
     )
-    assert connection_count_required(skipped) is False
+    assert _count_observers(skipped) == (False, False)
 
     # A node-level totalCount deep inside edges { node { ... } } is the INNER
     # connection's business, not this one's.
@@ -490,7 +497,7 @@ def test_connection_count_required_matrix():
             ),
         ],
     )
-    assert connection_count_required(nested_only) is False
+    assert _count_observers(nested_only) == (False, False)
 
 
 # ---------------------------------------------------------------------------
@@ -595,8 +602,8 @@ def test_connection_predicates_consume_the_resolved_names():
             _field("edges", selections=[_field("node", selections=[_field("title")])]),
         ],
     )
-    assert connection_count_required(connection, names=snake) is True
-    assert connection_count_required(connection) is False
+    assert _count_observers(connection, names=snake) == (True, True)
+    assert _count_observers(connection) == (False, False)
     node_children = connection_node_children(
         connection,
         runtime_prefixes=(("conn",),),

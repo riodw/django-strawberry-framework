@@ -339,9 +339,8 @@ choice between a flat list with direct offset arguments and a Relay connection w
   This card does not infer a filter argument merely because a target has
   [`Meta.filterset_class`][glossary-metafilterset-class].
 - **Dynamic `OrderSet` generation.** A target without `Meta.orderset_class` gets no
-  `orderBy`.
-  [`django_strawberry_framework/orders/factories.py::get_orderset_class`][orders-factories]
-  remains build-and-test plumbing, not a public auto-generation path.
+  `orderBy`; [`django_strawberry_framework/orders/factories.py`][orders-factories]
+  builds input classes for declared `OrderSet`s only and ships no auto-generation path.
 - **A total-order proof.** The card requires an active order, not a mathematical uniqueness
   proof. Lists do not mint cursors, and this surface does not append a pk tiebreaker.
 - **A new offset-policy setting.** `ResourcePolicy.max_list_rows` bounds both returned raw

@@ -63,7 +63,8 @@ class BranchFilter(FilterSet):
         }
 
 
-class ModelChoiceInFilter(BaseInFilter, ModelChoiceFilter):
+# basedpyright: each ``__init__`` above ``Filter`` forwards ``*args, **kwargs`` to ``super()``
+class ModelChoiceInFilter(BaseInFilter, ModelChoiceFilter):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """The django-filter ``in`` idiom over a model-choice filter: a list of branch keys."""
 
 

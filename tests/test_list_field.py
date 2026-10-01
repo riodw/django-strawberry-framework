@@ -98,7 +98,6 @@ from django_strawberry_framework.list_field import (
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.resource_policy import (
     ResourcePolicy,
-    stash_resource_policy,
 )
 from django_strawberry_framework.types.relay import SyncMisuseError
 from django_strawberry_framework.utils.querysets import require_orderset_class
@@ -470,7 +469,7 @@ def test_list_argument_error_rejects_an_unknown_reason_and_renders_bools():
         ListArgumentError("items", "arg", "custom_reason", value=42)
 
 
-def test_resolve_argument_wire_name_never_runs_the_schema_name_converter():
+def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(arm_resource_budget):
     """Neither a valid normalization nor a rejection invokes ``name_converter``.
 
     The converter is consumer code that Strawberry already ran while building
@@ -494,7 +493,7 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter():
         schema=SimpleNamespace(config=schema_config),
         get_argument_definition=lambda name: SimpleNamespace(name=name),
     )
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     record = _normalize_list_arguments("items", info, None, False, offset=10, limit=20)
     assert record.offset == 10
@@ -511,6 +510,7 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter():
 @pytest.mark.parametrize("argument", ["offset", "limit"])
 def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_run(
     argument,
+    arm_resource_budget,
 ):
     """``offset`` / ``limit`` must be EXACT ints, so no subclass hook reaches the boundary.
 
@@ -538,7 +538,7 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
             raise RuntimeError("hostile format ran")
 
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments("items", info, None, False, **{argument: HostileInt(5)})
@@ -548,7 +548,9 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
     assert fired == []
 
 
-def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raising():
+def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raising(
+    arm_resource_budget,
+):
     """A plain ``int`` too large for CPython to stringify still rejects as a typed error.
 
     ``sys.set_int_max_str_digits`` caps integer-to-string conversion, so an
@@ -556,7 +558,7 @@ def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raisi
     over-ceiling arm renders through the guarded helper instead.
     """
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments("items", info, None, False, offset=10**10000)
@@ -592,6 +594,7 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
     argument,
     value,
     rendered,
+    arm_resource_budget,
 ):
     """GraphQL ``Int`` coercion never hands ``_normalize_list_arguments`` a bool, str, or float.
 
@@ -599,7 +602,7 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
     ``non_integer`` rather than reaching the range comparisons.
     """
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments("items", info, None, False, **{argument: value})
@@ -608,10 +611,12 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
     assert exc.value.value == rendered
 
 
-def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_integers():
+def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_integers(
+    arm_resource_budget,
+):
     """A direct call that GraphQL ``Int`` cannot assemble still names ``offset`` first."""
     info = SimpleNamespace(context={})
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=100))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments("items", info, None, False, offset="bad", limit=101)
@@ -678,7 +683,6 @@ async def test_async_completion_adapter_semantics():
     would commit the seeded rows and leave them for every later test.
     """
     from django_strawberry_framework.utils.querysets import (
-        is_async_queryset_adapter,
         unwrap_async_queryset_adapter,
         wrap_async_queryset_adapter,
     )
@@ -689,7 +693,7 @@ async def test_async_completion_adapter_semantics():
 
     qs = Category.objects.all()[:3]
     adapter = wrap_async_queryset_adapter(qs)
-    assert is_async_queryset_adapter(adapter)
+    assert unwrap_async_queryset_adapter(adapter)[1]
     assert hasattr(adapter, "__aiter__")
     assert not hasattr(adapter, "__iter__")
 
@@ -1151,10 +1155,10 @@ def test_an_exact_boolean_trusted_max_rows_builds_the_field(value):
     assert DjangoListField(ExactFlagType, max_rows=50, trusted_max_rows=value) is not None
 
 
-def test_list_field_direct_call_safe_non_integer_rendering():
+def test_list_field_direct_call_safe_non_integer_rendering(arm_resource_budget):
     """Safe rendering of non-integer values in ListArgumentError message."""
     info = SimpleNamespace(context={}, schema=None)
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     with pytest.raises(ListArgumentError) as exc_info:
         _normalize_list_arguments(
@@ -1193,7 +1197,7 @@ def test_list_field_error_pickle_round_trip():
     assert getattr(restored, "custom_tag", None) == "tagged"
 
 
-def test_list_field_direct_call_schema_name_fallback_and_definition_lookup():
+def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(arm_resource_budget):
     """Direct-call stubs fall back to the default spelling; a definition alone is not a name."""
     info_no_def = SimpleNamespace(schema=None)
     assert _resolve_argument_wire_name(info_no_def, "offset") == "offset"
@@ -1213,7 +1217,7 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup():
         get_argument_definition=lambda name: ArgDef(),
         context={},
     )
-    stash_resource_policy(info_stub.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info_stub.context, ResourcePolicy(max_list_rows=10))
     _normalize_list_arguments("field", info_stub, None, False, offset=1, limit=2)
     with pytest.raises(ListArgumentError) as exc_info:
         _normalize_list_arguments("field", info_stub, None, False, offset=-1)
@@ -1278,10 +1282,10 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
     assert _published_wire_name(info_ok, arg_def, "offset") == "OFFSET"
 
 
-def test_list_field_record_independence():
+def test_list_field_record_independence(arm_resource_budget):
     """_ListArguments fields operate independently without proxy conflation."""
     info = SimpleNamespace(context={}, schema=None)
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     # Omitted arguments
     rec_empty = _normalize_list_arguments("f", info, None, False)
@@ -1433,7 +1437,6 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
 def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
     """DjangoOptimizerExtension._optimize unwrap/rewrap identity, marks, and early return paths."""
     from django_strawberry_framework.utils.querysets import (
-        is_async_queryset_adapter,
         unwrap_async_queryset_adapter,
         wrap_async_queryset_adapter,
     )
@@ -1444,13 +1447,13 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
     qs = Category.objects.all()
     info_unresolved = SimpleNamespace(field_name="cats", return_type=object())
     out1 = ext._optimize(qs, info_unresolved)
-    assert not is_async_queryset_adapter(out1)
+    assert not unwrap_async_queryset_adapter(out1)[1]
     assert out1 is qs
 
     # 2. Adapted queryset on unresolved return type: early return rewraps adapter
     adapter = wrap_async_queryset_adapter(qs)
     out2 = ext._optimize(adapter, info_unresolved)
-    assert is_async_queryset_adapter(out2)
+    assert unwrap_async_queryset_adapter(out2)[1]
     unwrapped2, was2 = unwrap_async_queryset_adapter(out2)
     assert was2 is True
     assert unwrapped2 is qs
@@ -1460,7 +1463,7 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
     qs_evaluated._result_cache = []
     adapter_eval = wrap_async_queryset_adapter(qs_evaluated)
     out3 = ext._optimize(adapter_eval, info_unresolved)
-    assert is_async_queryset_adapter(out3)
+    assert unwrap_async_queryset_adapter(out3)[1]
     unwrapped3, was3 = unwrap_async_queryset_adapter(out3)
     assert was3 is True
     assert unwrapped3 is qs_evaluated
@@ -1469,13 +1472,13 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
     qs_sliced = Category.objects.all()[2:5]
     adapter_sliced = wrap_async_queryset_adapter(qs_sliced)
     out4 = ext._optimize(adapter_sliced, info_unresolved)
-    assert is_async_queryset_adapter(out4)
+    assert unwrap_async_queryset_adapter(out4)[1]
     unwrapped4, _ = unwrap_async_queryset_adapter(out4)
     assert unwrapped4.query.low_mark == 2
     assert unwrapped4.query.high_mark == 5
 
 
-def test_list_field_deadline_check_position(monkeypatch):
+def test_list_field_deadline_check_position(monkeypatch, arm_resource_budget):
     """check_deadline is invoked in pre-fetch position for argument-bearing requests."""
     import django_strawberry_framework.resource_policy as rp
 
@@ -1490,7 +1493,7 @@ def test_list_field_deadline_check_position(monkeypatch):
     monkeypatch.setattr(rp, "check_deadline", spy_check)
 
     info = SimpleNamespace(context={}, schema=None)
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     args_record = _ListArguments(
         offset=1,
@@ -1580,7 +1583,7 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
         )
 
 
-def test_list_field_declined_sync_cleanup_generator_suspended():
+def test_list_field_declined_sync_cleanup_generator_suspended(arm_resource_budget):
     """Declined sync cleanup: generator truncated by client window stays suspended and resumable."""
     finally_ran = False
 
@@ -1592,7 +1595,7 @@ def test_list_field_declined_sync_cleanup_generator_suspended():
             finally_ran = True
 
     info = SimpleNamespace(context={}, schema=None)
-    stash_resource_policy(info.context, ResourcePolicy(max_list_rows=10))
+    arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     g = sync_numbers()
     args_record = _ListArguments(

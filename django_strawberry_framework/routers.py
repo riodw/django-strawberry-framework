@@ -79,7 +79,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         ``tests/test_routers.py::test_the_declared_router_constructor_matches_the_runtime_one``.
         """
 
-        def __init__(
+        # basedpyright: a checker-only declaration whose body never runs; the runtime
+        # constructor in ``_build_router_class_uncached`` is the one that calls the base
+        def __init__(  # pyright: ignore[reportMissingSuperCall]
             self,
             schema: BaseSchema,
             django_application: ASGIHandler,
@@ -200,7 +202,7 @@ _INVALID_WEBSOCKET_URL_PATTERN_HINT = (
 # The built router class, cached by ``_build_router_class()``. A module global so
 # evicting this module from ``sys.modules`` drops the cache with it - the property
 # the eviction-simulated absence and degraded-install tests rely on.
-_ROUTER_CLASS: type[ProtocolTypeRouter] | None = None
+_router_class: type[ProtocolTypeRouter] | None = None
 _ROUTER_CLASS_LOCK = threading.Lock()
 
 
@@ -372,14 +374,14 @@ def _websocket_application(
 def _build_router_class() -> type[ProtocolTypeRouter]:
     """Return the one lazily-built router class, serializing its first construction."""
     # A local snapshot, so the re-check under the lock reads the global afresh.
-    cached = _ROUTER_CLASS
+    cached = _router_class
     if cached is not None:
         return cached
     with _ROUTER_CLASS_LOCK:
-        if _ROUTER_CLASS is not None:
+        if _router_class is not None:
             # Re-checked under the lock: another thread may have built the class while this one
             # waited on the lock.
-            return _ROUTER_CLASS
+            return _router_class
         return _build_router_class_uncached()
 
 
@@ -393,7 +395,7 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     half raises its own actionable ``ImportError`` chaining the original
     (spec-041 Error shapes).
     """
-    global _ROUTER_CLASS
+    global _router_class
 
     require_channels()
 
@@ -411,7 +413,7 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     from django.urls import re_path
 
     # Built once, inside the same guarded builder, so the package consumer class
-    # is cached with ``_ROUTER_CLASS`` and dies with it: a module-level cache in
+    # is cached with ``_router_class`` and dies with it: a module-level cache in
     # ``consumers.py`` would survive the eviction-simulated absence tests and hand
     # a fresh router a subclass derived from a dead ``GraphQLWSConsumer``.
     package_consumer_class = build_revalidating_consumer_class(GraphQLWSConsumer)
@@ -576,8 +578,8 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
                 },
             )
 
-    _ROUTER_CLASS = DjangoGraphQLProtocolRouter
-    return _ROUTER_CLASS
+    _router_class = DjangoGraphQLProtocolRouter
+    return _router_class
 
 
 def __getattr__(name: str) -> Any:

@@ -1123,6 +1123,10 @@ def _declared_input_type(graphql_schema: GraphQLSchema, type_node: TypeNode) -> 
     return declared if is_input_type(declared) else None
 
 
+# The fragment-spread path a root's walk starts from: no spread entered yet.
+_NO_SPREAD_PATH: frozenset[str] = frozenset()
+
+
 class _DocumentWalk:
     """One request's walk over its document: both budgets, and the fragments it expanded.
 
@@ -1249,7 +1253,7 @@ class _DocumentWalk:
         root: GraphQLNamedType | None,
         *,
         shape: bool,
-        path: frozenset[str] = frozenset(),
+        path: frozenset[str] = _NO_SPREAD_PATH,
     ) -> None:
         """Walk one root's selections, charging values everywhere and shape where ``shape``."""
         graphql_schema = self.graphql_schema
@@ -1720,7 +1724,9 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         yield
 
 
-class _AdmissionGuard(SchemaExtension):
+# basedpyright: package-internal, not unused: it is imported and appended by
+# ``django_strawberry_framework/schema.py::_admitted_chain``
+class _AdmissionGuard(SchemaExtension):  # pyright: ignore[reportUnusedClass]
     """Restate the operation's admission verdict after every consumer validation hook.
 
     Not a second enforcement stage: it charges nothing, arms nothing, and

@@ -60,7 +60,7 @@ from ..utils.typing import schema_config_from_info
 from ._context import converted_selections_memo
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from typing import Protocol, TypeAlias
+    from typing import TypeAlias
 
     from graphql.language.ast import (
         FieldNode,
@@ -71,7 +71,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.info import Info
     from strawberry.types.nodes import (
-        Arguments,
         FragmentSpread,
         InlineFragment,
         SelectedField,
@@ -95,24 +94,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     #: A ``resolve_unvisited_fragment`` visit key: the fragment name, or
     #: ``(name, depth)`` for the depth-sensitive walk.
     FragmentVisitKey: TypeAlias = str | tuple[str, int]
-
-    class RuntimePrefixCarrier(Protocol):
-        """A walker clone carrying ``_optimizer_runtime_prefixes``.
-
-        ``with_runtime_prefix`` and the walker's alias merge store it as a list of
-        runtime-path tuples.
-        """
-
-        _optimizer_runtime_prefixes: list[tuple[str, ...]]
-
-    class ResponseKeyArgumentsCarrier(Protocol):
-        """A merged walker clone carrying its per-response-key argument payloads.
-
-        The walker's alias merge stores a map from response key to that
-        occurrence's converted arguments; read here as a ``None``-tolerant view.
-        """
-
-        _optimizer_response_key_arguments: Mapping[str | None, Arguments]
 
 # ---------------------------------------------------------------------------
 # AST -> converted-selection adapter - the package-owned ``convert_selections``
@@ -746,7 +727,7 @@ def connection_total_count_selected(
     The count field as a DIRECT child of the connection, through fragment
     wrappers only (``direct_child_selected``). The single implementation of
     the count-observability walk: the plan-time
-    ``connection_count_required`` and the resolve-time
+    ``nested_planner.py::plan_connection_relation`` and the resolve-time
     ``connection.py::_total_count_requested`` both call it, so the two
     halves of the conditional ``_dst_total_count`` contract share one walk
     by construction - which also means they share ONE resolved ``names``
@@ -766,8 +747,8 @@ def connection_has_next_page_selected(
     The ``hasNextPage`` sibling of ``connection_total_count_selected``: a
     direct page-info child (through fragment wrappers, alias-merged via
     ``named_children``), then a direct has-next-page child under it. Shared by
-    the plan-time ``connection_count_required`` and the resolve-time
-    ``connection.py::_has_next_page_requested``.
+    the plan-time ``nested_planner.py::plan_connection_relation`` and the
+    resolve-time ``connection.py::_has_next_page_requested``.
     """
     return any(
         direct_child_selected(
@@ -776,46 +757,3 @@ def connection_has_next_page_selected(
         )
         for page_info in named_children(selection, names.page_info)
     )
-
-
-def connection_count_required(
-    selection: ConvertedSelection,
-    *,
-    names: ConnectionFieldNames = DEFAULT_CONNECTION_FIELD_NAMES,
-) -> bool:
-    """Return whether a connection selection can OBSERVE the partition total count.
-
-    The count-OBSERVABILITY predicate (spec-033 Decision 4):
-    ``True`` when the selection carries ``totalCount`` as a direct child of the
-    connection, or ``hasNextPage`` under a direct ``pageInfo`` child - the two
-    fields a per-partition ``Count(1) OVER (PARTITION BY ...)`` can serve
-    (cursors and ``hasPreviousPage`` need only ``_dst_row_number``). Both walks
-    live in the two per-selection primitives above, which the resolve-time
-    predicates (``connection.py::_total_count_requested`` and its ``hasNextPage``
-    sibling) call too, so plan-time and resolve-time share ONE implementation of
-    each walk - and the resolve-time defensive fallback covers even a drift here.
-
-    This is the generic observability gate, NOT the planner's final count
-    decision. The planner computes the ``totalCount`` and ``hasNextPage``
-    observers SEPARATELY
-    (``optimizer/nested_planner.py::plan_connection_relation``) and feeds them to
-    the single ``WindowRangePlan.fetch_mode`` decision: a plain ``first: N`` page
-    that selects ``hasNextPage`` but NOT ``totalCount`` resolves to
-    ``FetchMode.PROBED``, served by the n+1 overfetch probe with NO
-    ``_dst_total_count`` annotation (``utils/connections.py::FetchMode``), its
-    ``hasNextPage`` read from the sentinel's presence rather than
-    ``row_number < total``. Nor does every count-observable shape annotate the
-    count: an unbounded forward or reversed ``last``-only page with
-    ``hasNextPage`` selected resolves to ``FetchMode.CONSTANT_FALSE`` and serves
-    ``hasNextPage`` as a constant ``False`` with NO ``_dst_total_count`` either.
-    So ``True`` here means "the count is observable"; the fetch mode
-    then chooses count vs probe vs constant-false.
-
-    Alias-merged selections carry the UNION of every alias's children
-    (``walker.py::_merge_aliased_selections``), so one alias selecting
-    ``totalCount`` conservatively keeps the count for the shared window.
-    """
-    return connection_total_count_selected(
-        selection,
-        names=names,
-    ) or connection_has_next_page_selected(selection, names=names)

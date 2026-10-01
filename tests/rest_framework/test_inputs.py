@@ -39,7 +39,7 @@ from strawberry.types.base import StrawberryOptional
 
 from django_strawberry_framework import DjangoType, SerializerMutation
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.mutations.inputs import CREATE
+from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import inputs as serializer_inputs
 from django_strawberry_framework.rest_framework.inputs import (
@@ -48,7 +48,6 @@ from django_strawberry_framework.rest_framework.inputs import (
     SerializerInputShape,
     _fingerprint_relation_target,
     build_serializer_input_class,
-    build_serializer_inputs,
     clear_serializer_input_namespace,
     describe_serializer_input,
     get_serializer_for_schema,
@@ -68,6 +67,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     SCALAR,
 )
 from django_strawberry_framework.scalars import Upload
+from django_strawberry_framework.utils.inputs import normalize_field_name_sequence
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +97,67 @@ def _is_optional(field) -> bool:
 def _inner_type(field):
     """Return the inner type of a ``StrawberryOptional`` field, else the type itself."""
     return field.type.of_type if isinstance(field.type, StrawberryOptional) else field.type
+
+
+def _build_serializer_inputs(
+    serializer_class,
+    *,
+    fields=None,
+    exclude=None,
+    optional_fields=None,
+    guard_required=True,
+    field_map=None,
+    nested_configs=None,
+):
+    """Build ``(create_cls, create_shape, partial_cls, partial_shape)`` in isolation.
+
+    Composes the generation primitives without a ``SerializerMutation`` declaration:
+    ``fields`` / ``exclude`` / ``optional_fields`` are normalized ONCE (so a one-shot
+    iterator feeds both builds), the create-required-narrowing guard runs unless
+    ``guard_required`` is False, then both operation kinds are built.
+    """
+    normalized_fields = normalize_field_name_sequence(
+        fields,
+        label="fields",
+        flavor="SerializerMutation",
+    )
+    normalized_exclude = normalize_field_name_sequence(
+        exclude,
+        label="exclude",
+        flavor="SerializerMutation",
+    )
+    normalized_optional = normalize_field_name_sequence(
+        optional_fields,
+        label="optional_fields",
+        flavor="SerializerMutation",
+    )
+    normalized_nested_configs = normalize_nested_serializer_configs(nested_configs)
+    effective = resolve_effective_serializer_fields(
+        serializer_class,
+        fields=normalized_fields,
+        exclude=normalized_exclude,
+        field_map=field_map,
+    )
+    if guard_required:
+        guard_create_required_serializer_fields(
+            serializer_class,
+            tuple(effective),
+            field_map=field_map,
+        )
+    built = []
+    for operation_kind in (CREATE, PARTIAL):
+        built.extend(
+            build_serializer_input_class(
+                serializer_class,
+                operation_kind=operation_kind,
+                fields=normalized_fields,
+                exclude=normalized_exclude,
+                optional_fields=normalized_optional,
+                field_map=field_map,
+                nested_configs=normalized_nested_configs,
+            ),
+        )
+    return tuple(built)
 
 
 def _register_products_types() -> None:
@@ -211,7 +272,7 @@ def test_schema_hook_stable_field_map_generates_input():
             return {}
 
     stable = {"name": _bound(serializers.CharField(), "name")}
-    cre, _shape, _par, _pshape = build_serializer_inputs(CtxSer, field_map=dict(stable))
+    cre, _shape, _par, _pshape = _build_serializer_inputs(CtxSer, field_map=dict(stable))
     assert set(_field_map(cre)) == {"name"}
 
 
@@ -224,7 +285,7 @@ def test_build_serializer_inputs_materializes_one_shot_narrowing(selector, expec
     _register_products_types()
 
     names = ("name",) if selector == "fields" else ("category",)
-    create_cls, _, partial_cls, _ = build_serializer_inputs(
+    create_cls, _, partial_cls, _ = _build_serializer_inputs(
         _item_serializer(),
         guard_required=False,
         **{selector: iter(names)},
@@ -247,7 +308,7 @@ def _bound(field: serializers.Field, name: str) -> serializers.Field:
 def test_create_input_required_and_optional_shapes():
     """``<Serializer>Input``: required fields non-optional, optional fields ``| None`` + UNSET."""
     _register_products_types()
-    cre, _, _, _ = build_serializer_inputs(_item_serializer())
+    cre, _, _, _ = _build_serializer_inputs(_item_serializer())
     assert cre.__name__ == "ItemSerInput"
     fields = _field_map(cre)
 
@@ -267,7 +328,7 @@ def test_create_input_required_and_optional_shapes():
 def test_partial_input_all_fields_optional():
     """``<Serializer>PartialInput``: every field optional + UNSET."""
     _register_products_types()
-    _, _, par, _ = build_serializer_inputs(_item_serializer())
+    _, _, par, _ = _build_serializer_inputs(_item_serializer())
     assert par.__name__ == "ItemSerPartialInput"
     fields = _field_map(par)
     for name in ("name", "category_id", "is_private"):
@@ -282,7 +343,7 @@ def test_serializer_only_field_included():
         name = serializers.CharField()
         captcha = serializers.CharField(required=False)
 
-    cre, _, _, _ = build_serializer_inputs(ContactSer)
+    cre, _, _, _ = _build_serializer_inputs(ContactSer)
     fields = _field_map(cre)
     assert set(fields) == {"name", "captcha"}
     assert not _is_optional(fields["name"])
@@ -297,7 +358,7 @@ def test_serializer_only_field_included():
 def test_fk_to_non_relay_products_target_uses_raw_pk_id():
     """The products ``Item.category`` FK (non-Relay) becomes a raw pk id; reverse map preserved."""
     _register_products_types()
-    cre, cshape, _, _ = build_serializer_inputs(_item_serializer())
+    cre, cshape, _, _ = _build_serializer_inputs(_item_serializer())
     fields = _field_map(cre)
     assert _inner_type(fields["category_id"]) is int
     cat_spec = next(s for s in cshape.field_specs if s.target_name == "category")
@@ -313,7 +374,7 @@ def test_serializer_only_relation_to_relay_target_uses_globalid():
     class PickSer(serializers.Serializer):
         target = serializers.PrimaryKeyRelatedField(queryset=relay_target.objects.all())
 
-    cre, _, _, _ = build_serializer_inputs(PickSer)
+    cre, _, _, _ = _build_serializer_inputs(PickSer)
     fields = _field_map(cre)
     assert _inner_type(fields["target_id"]) is relay.GlobalID
 
@@ -329,7 +390,7 @@ def test_file_field_maps_to_upload():
     class AvatarSer(serializers.Serializer):
         avatar = serializers.FileField()
 
-    cre, _, _, _ = build_serializer_inputs(AvatarSer)
+    cre, _, _, _ = _build_serializer_inputs(AvatarSer)
     fields = _field_map(cre)
     assert _inner_type(fields["avatar"]) is Upload
 
@@ -360,7 +421,7 @@ def test_choices_modelserializer_field_resolves_to_read_side_enum():
             model = Book
             fields = ("circulation_status",)
 
-    cre, _, _, _ = build_serializer_inputs(BookStatusSer)
+    cre, _, _, _ = _build_serializer_inputs(BookStatusSer)
     fields = _field_map(cre)
     read_enum = convert_choices_to_enum(
         Book._meta.get_field("circulation_status"),
@@ -382,20 +443,20 @@ def test_read_only_and_hidden_fields_dropped():
         ro = serializers.CharField(read_only=True)
         hid = serializers.HiddenField(default="x")
 
-    cre, _, _, _ = build_serializer_inputs(S)
+    cre, _, _, _ = _build_serializer_inputs(S)
     assert set(_field_map(cre)) == {"name"}
 
 
 def test_fields_narrowing_omits_dropped_field():
     """``Meta.fields`` narrows the input; ``Meta.exclude`` drops the named field."""
     _register_products_types()
-    cre, _, _, _ = build_serializer_inputs(
+    cre, _, _, _ = _build_serializer_inputs(
         _item_serializer(),
         fields=("name", "category", "is_private"),
         guard_required=False,
     )
     assert "is_private" in _field_map(cre)
-    cre2, _, _, _ = build_serializer_inputs(
+    cre2, _, _, _ = _build_serializer_inputs(
         _item_serializer(),
         exclude=("is_private",),
         guard_required=False,
@@ -455,7 +516,7 @@ def test_serializer_meta_optional_fields_is_not_the_api():
         class Meta:
             optional_fields = ("a",)  # the serializer's own Meta - NOT the input API
 
-    cre, _, _, _ = build_serializer_inputs(S)  # no optional_fields parameter passed
+    cre, _, _, _ = _build_serializer_inputs(S)  # no optional_fields parameter passed
     fields = _field_map(cre)
     # ``a`` stays REQUIRED: the serializer-level Meta key has no effect on the input.
     assert not _is_optional(fields["a"])
@@ -469,7 +530,7 @@ def test_optional_fields_all_bare_string_rejected():
         a = serializers.CharField()
 
     with pytest.raises(ConfigurationError, match="bare string"):
-        build_serializer_inputs(S, optional_fields="__all__")
+        _build_serializer_inputs(S, optional_fields="__all__")
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +547,8 @@ def test_differing_annotations_yield_distinct_descriptor_names():
     class IntSer(serializers.Serializer):
         x = serializers.IntegerField()
 
-    cre_str, _, _, _ = build_serializer_inputs(StrSer, optional_fields=("x",))
-    cre_int, _, _, _ = build_serializer_inputs(IntSer, optional_fields=("x",))
+    cre_str, _, _, _ = _build_serializer_inputs(StrSer, optional_fields=("x",))
+    cre_int, _, _, _ = _build_serializer_inputs(IntSer, optional_fields=("x",))
     # Both are divergent shapes (optional_fields set); their descriptor-derived
     # suffixes encode the differing annotation, so the names differ.
     assert cre_str.__name__ != cre_int.__name__
@@ -522,8 +583,8 @@ def test_allow_null_difference_yields_distinct_descriptor_names():
     # Both hook shapes ({x, note}) diverge from Ser's default ({x}), so each takes a
     # descriptor-derived name; ``note`` is required in both (nullability driven only by
     # allow_null), so the emitted ``str`` vs ``str | None`` is the sole differing axis.
-    cre_non_null, _, _, _ = build_serializer_inputs(Ser, field_map=_field_map(allow_null=False))
-    cre_nullable, _, _, _ = build_serializer_inputs(Ser, field_map=_field_map(allow_null=True))
+    cre_non_null, _, _, _ = _build_serializer_inputs(Ser, field_map=_field_map(allow_null=False))
+    cre_nullable, _, _, _ = _build_serializer_inputs(Ser, field_map=_field_map(allow_null=True))
     assert cre_non_null.__name__ != cre_nullable.__name__
 
 
@@ -544,11 +605,11 @@ def test_description_difference_yields_distinct_descriptor_names():
 
         return dict(_HookSer().fields)
 
-    cre_a, shape_a, _, _ = build_serializer_inputs(
+    cre_a, shape_a, _, _ = _build_serializer_inputs(
         Ser,
         field_map=_hook_fields(help_text="Help A", max_length=10),
     )
-    cre_b, shape_b, _, _ = build_serializer_inputs(
+    cre_b, shape_b, _, _ = _build_serializer_inputs(
         Ser,
         field_map=_hook_fields(help_text="Help B", max_length=99),
     )
@@ -620,7 +681,7 @@ def test_descriptor_name_distinguishes_relation_target_model():
 def test_identical_descriptor_dedupes_via_ledger():
     """Materializing the same class twice under one name is a no-op (identical descriptors dedupe)."""
     _register_products_types()
-    cre, _, _, _ = build_serializer_inputs(_item_serializer())
+    cre, _, _, _ = _build_serializer_inputs(_item_serializer())
     materialize_serializer_input_class("ItemSerInput", cre)
     materialize_serializer_input_class("ItemSerInput", cre)  # idempotent, no raise
     assert sys.modules[SERIALIZER_INPUTS_MODULE_PATH].ItemSerInput is cre
@@ -643,7 +704,7 @@ def test_distinct_descriptors_colliding_on_one_name_raise():
 def test_descriptor_is_its_own_cache_key():
     """The frozen ``SerializerInputShape`` is hashable and is its own cache key."""
     _register_products_types()
-    _, cshape, _, _ = build_serializer_inputs(_item_serializer())
+    _, cshape, _, _ = _build_serializer_inputs(_item_serializer())
     assert isinstance(cshape, SerializerInputShape)
     assert cshape.cache_key is cshape
     # Hashable (frozen dataclass) - usable as a dict key.
@@ -700,14 +761,14 @@ def _required_field_serializer():
 def test_create_guard_rejects_dropping_required_scalar():
     """A create ``Meta.fields`` dropping a required scalar raises naming it."""
     with pytest.raises(ConfigurationError, match="required_scalar"):
-        build_serializer_inputs(_required_field_serializer(), fields=("maybe",))
+        _build_serializer_inputs(_required_field_serializer(), fields=("maybe",))
 
 
 def test_create_guard_rejects_dropping_required_relation():
     """A create ``Meta.exclude`` dropping a required relation raises naming it."""
     _register_products_types()
     with pytest.raises(ConfigurationError, match="category"):
-        build_serializer_inputs(_item_serializer(), exclude=("category",))
+        _build_serializer_inputs(_item_serializer(), exclude=("category",))
 
 
 def test_read_only_field_dropped_before_create_guard():
@@ -726,7 +787,7 @@ def test_read_only_field_dropped_before_create_guard():
         ro = serializers.CharField(read_only=True)
 
     # ``ro`` is dropped automatically; the guard sees only writable required fields.
-    cre, _, _, _ = build_serializer_inputs(S)  # no raise
+    cre, _, _, _ = _build_serializer_inputs(S)  # no raise
     assert set(_field_map(cre)) == {"name"}
 
 
@@ -751,7 +812,7 @@ def test_excluding_read_only_field_raises_non_writable():
 
 def test_create_guard_waiver_does_not_raise():
     """``guard_required=False`` (the get_serializer_kwargs-override waiver) builds without raising."""
-    cre, _, _, _ = build_serializer_inputs(
+    cre, _, _, _ = _build_serializer_inputs(
         _required_field_serializer(),
         fields=("maybe",),
         guard_required=False,
@@ -769,7 +830,7 @@ def test_guard_runs_per_declaration():
     ser = _required_field_serializer()
     effective = resolve_effective_serializer_fields(ser, fields=("maybe",))
     # First, a waiving build (guard_required=False) materializes the shape - no guard.
-    build_serializer_inputs(ser, fields=("maybe",), guard_required=False)
+    _build_serializer_inputs(ser, fields=("maybe",), guard_required=False)
     # A later non-waiving check on the SAME effective set still raises.
     with pytest.raises(ConfigurationError, match="required_scalar"):
         guard_create_required_serializer_fields(ser, effective)
@@ -786,7 +847,7 @@ def test_required_non_null_field_is_required_with_no_default():
     class S(serializers.Serializer):
         nick = serializers.CharField()  # required=True, allow_null=False
 
-    cre, _, _, _ = build_serializer_inputs(S)
+    cre, _, _, _ = _build_serializer_inputs(S)
     field = _field_map(cre)["nick"]
     assert not _is_optional(field)  # bare T (non-null)
     # No UNSET default: GraphQL itself enforces presence + non-null for this field.
@@ -799,7 +860,7 @@ def test_field_with_default_is_optional_no_fabricated_default():
     class S(serializers.Serializer):
         note = serializers.CharField(required=False, default="x")
 
-    cre, _, _, _ = build_serializer_inputs(S)
+    cre, _, _, _ = _build_serializer_inputs(S)
     field = _field_map(cre)["note"]
     assert _is_optional(field)
     # The GraphQL default is UNSET (omittable), NOT the DRF ``"x"`` default.
@@ -822,7 +883,7 @@ def test_relation_id_attr_collision_is_fail_loud():
         category_id = serializers.IntegerField()
 
     with pytest.raises(ConfigurationError) as exc:
-        build_serializer_inputs(CollidingSer)
+        _build_serializer_inputs(CollidingSer)
     message = str(exc.value)
     assert "category_id" in message
     assert "collide" in message
@@ -836,7 +897,7 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
         fooBar = serializers.IntegerField()  # noqa: N815 - intentional collision fixture
 
     with pytest.raises(ConfigurationError) as exc:
-        build_serializer_inputs(CamelCollideSer)
+        _build_serializer_inputs(CamelCollideSer)
     assert "collide" in str(exc.value)
 
 
@@ -898,7 +959,7 @@ def test_two_writable_fields_sharing_one_source_raise():
             fields = ("name", "alias")
 
     with pytest.raises(ConfigurationError, match="sharing one source"):
-        build_serializer_inputs(DoubleWriteSer, guard_required=False)
+        _build_serializer_inputs(DoubleWriteSer, guard_required=False)
 
 
 def test_read_only_field_sharing_source_with_writable_is_accepted():
@@ -914,7 +975,7 @@ def test_read_only_field_sharing_source_with_writable_is_accepted():
             fields = ("name", "name_echo")
 
     # ``name_echo`` is read-only -> dropped, so no source collision.
-    cre, _, _, _ = build_serializer_inputs(MixedSer, guard_required=False)
+    cre, _, _, _ = _build_serializer_inputs(MixedSer, guard_required=False)
     assert set(_field_map(cre)) == {"name"}
 
 
@@ -926,7 +987,7 @@ def test_read_only_field_sharing_source_with_writable_is_accepted():
 def test_materialized_input_is_module_global():
     """A materialized input class is a real global of ``rest_framework.inputs`` (the lazy-ref contract)."""
     _register_products_types()
-    cre, _, _, _ = build_serializer_inputs(_item_serializer())
+    cre, _, _, _ = _build_serializer_inputs(_item_serializer())
     materialize_serializer_input_class("ItemSerInput", cre)
     assert sys.modules[SERIALIZER_INPUTS_MODULE_PATH].ItemSerInput is cre
 
@@ -939,7 +1000,7 @@ def test_materialized_input_is_module_global():
 def test_scalar_reverse_map_is_identity():
     """A plain scalar field's reverse map is identity (``name`` -> ``name``, kind scalar)."""
     _register_products_types()
-    _, cshape, _, _ = build_serializer_inputs(_item_serializer())
+    _, cshape, _, _ = _build_serializer_inputs(_item_serializer())
     name_spec = next(s for s in cshape.field_specs if s.target_name == "name")
     assert name_spec.input_attr == "name"
     assert name_spec.graphql_name == "name"
@@ -977,7 +1038,7 @@ def test_multiple_schema_time_problems_aggregate_into_one_error():
             fields = ("slug_rel", "weird")
 
     with pytest.raises(ConfigurationError) as exc:
-        build_serializer_inputs(MultiBadSer, guard_required=False)
+        _build_serializer_inputs(MultiBadSer, guard_required=False)
     message = str(exc.value)
     # One aggregated error naming BOTH offending fields at once.
     assert "2 schema-time problem(s)" in message
@@ -1000,7 +1061,7 @@ def test_single_schema_time_problem_raises_verbatim():
             fields = ("slug_rel",)
 
     with pytest.raises(ConfigurationError, match="PrimaryKeyRelatedField") as exc:
-        build_serializer_inputs(OneBadSer, guard_required=False)
+        _build_serializer_inputs(OneBadSer, guard_required=False)
     # No aggregate header for a single problem.
     assert "schema-time problem(s)" not in str(exc.value)
 
@@ -1011,7 +1072,7 @@ def test_generated_input_field_carries_drf_metadata_description():
     class DescribedSer(serializers.Serializer):
         label = serializers.CharField(help_text="A label.", max_length=8)
 
-    cre, _, _, _ = build_serializer_inputs(DescribedSer)
+    cre, _, _, _ = _build_serializer_inputs(DescribedSer)
     (field,) = [f for f in cre.__strawberry_definition__.fields if f.python_name == "label"]
     assert field.description is not None
     assert "A label." in field.description
@@ -1052,7 +1113,7 @@ def test_describe_serializer_input_reports_shape():
     class SourceSer(serializers.Serializer):
         display_name = serializers.CharField(source="name", help_text="Public display name.")
 
-    _cre, cre_shape, _par, _par_shape = build_serializer_inputs(SourceSer)
+    _cre, cre_shape, _par, _par_shape = _build_serializer_inputs(SourceSer)
     description = describe_serializer_input(cre_shape.type_name)
     assert description is not None
     assert "serializer:" in description
@@ -1245,7 +1306,7 @@ def test_build_serializer_inputs_materializes_one_shot_nested_selectors():
         detail = child()
 
     config = NestedSerializerConfig(fields=iter(("code",)))
-    create_cls, create_shape, partial_cls, partial_shape = build_serializer_inputs(
+    create_cls, create_shape, partial_cls, partial_shape = _build_serializer_inputs(
         Parent,
         nested_configs={"detail": config},
     )
@@ -1418,13 +1479,13 @@ def test_distinct_nested_shapes_yield_distinct_top_names():
 
 
 def test_build_serializer_inputs_threads_nested_into_both_shapes():
-    """``build_serializer_inputs`` threads ``nested_configs`` into BOTH the create + partial shapes."""
+    """``_build_serializer_inputs`` threads ``nested_configs`` into BOTH the create + partial shapes."""
     child = _nested_child_serializer()
 
     class Parent(serializers.Serializer):
         detail = child()
 
-    create_cls, create_shape, partial_cls, partial_shape = build_serializer_inputs(
+    create_cls, create_shape, partial_cls, partial_shape = _build_serializer_inputs(
         Parent,
         guard_required=False,
         nested_configs={"detail": NestedSerializerConfig()},
@@ -1742,7 +1803,7 @@ def test_build_serializer_inputs_preserves_optional_fields_one_shot_iterator():
         name = serializers.CharField(required=True)
 
     gen = (f for f in ("code",))
-    _create_cls, c_shape, _partial_cls, p_shape = build_serializer_inputs(
+    _create_cls, c_shape, _partial_cls, p_shape = _build_serializer_inputs(
         SampleSer,
         optional_fields=gen,
     )
@@ -1888,4 +1949,4 @@ def test_set_valued_builder_fields_fail_loud():
     serializer_class = _item_serializer()
 
     with pytest.raises(ConfigurationError, match="ordered sequence of field name strings"):
-        build_serializer_inputs(serializer_class, fields={"name", "category"})
+        _build_serializer_inputs(serializer_class, fields={"name", "category"})

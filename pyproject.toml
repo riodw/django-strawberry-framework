@@ -247,8 +247,10 @@ max-line-length = 110
 # basedpyright checks the shipped package (``py.typed`` makes its annotations public)
 # and the ``scripts/`` tooling that gates it, and a warning fails the run. A script runs
 # as ``python scripts/<name>.py``, so its execution environment is rooted at
-# ``scripts/`` (sibling imports such as ``_kanban_lib``) with the fakeshop project on
-# the path (``apps.*`` / ``config.*`` imports, resolved statically, never executed). No
+# ``scripts/`` (sibling imports such as ``_kanban_lib``) with the repo root (``scripts.*``
+# and package imports as first-party source, not through the editable install) and the
+# fakeshop project on the path (``apps.*`` / ``config.*`` imports, resolved statically,
+# never executed). No
 # plugin exists or is wanted: the check reads only the stubs' and packages' own
 # annotations, so it sees the package exactly as a downstream checker does and never
 # imports the example project's settings. Every dependency is typed (its own
@@ -272,7 +274,7 @@ include = [
 ]
 exclude = ["**/node_modules", "**/__pycache__", "**/.*"]
 executionEnvironments = [
-    { root = "scripts", extraPaths = ["examples/fakeshop"] },
+    { root = "scripts", extraPaths = ["examples/fakeshop", "."] },
     { root = "examples/fakeshop" },
 ]
 pythonVersion = "3.11"
@@ -283,15 +285,16 @@ enableTypeIgnoreComments = false
 reportUnnecessaryTypeIgnoreComment = "error"
 # Off by design. The formatter's multi-line string layout is implicit concatenation
 # (ruff bans only the explicit `+` form, ISC003); the package shares underscore names
-# across its own modules; and import cycles are broken at runtime by local imports.
+# across its own modules, so a private helper another module imports reads as unused
+# in its own; import cycles are broken at runtime by local imports; and attributes a
+# metaclass, descriptor or Django's model machinery sets are declared annotation-only
+# (reverse accessors, key columns, `__slots__` entries), which reads as uninitialized.
 reportImplicitStringConcatenation = "none"
 reportPrivateUsage = "none"
+reportUnusedFunction = "none"
 reportImportCycles = "none"
+reportUninitializedInstanceVariable = "none"
 # Off until their remaining sites are fixed (the ratchet): turn one on to list them.
-strictListInference = false
-strictDictionaryInference = false
-strictSetInference = false
-strictGenericNarrowing = false
 reportAny = "none"
 reportExplicitAny = "none"
 reportUnknownMemberType = "none"
@@ -304,22 +307,6 @@ reportUnusedCallResult = "none"
 reportMissingParameterType = "none"
 reportMissingTypeArgument = "none"
 reportUnusedParameter = "none"
-reportUninitializedInstanceVariable = "none"
-reportUnnecessaryIsInstance = "none"
-reportUnusedFunction = "none"
-reportDeprecated = "none"
-reportCallInDefaultInitializer = "none"
-reportMissingTypeStubs = "none"
-reportIncompatibleUnannotatedOverride = "none"
-reportInvalidCast = "none"
-reportUnsafeMultipleInheritance = "none"
-reportPropertyTypeMismatch = "none"
-reportMissingSuperCall = "none"
-reportUntypedFunctionDecorator = "none"
-reportConstantRedefinition = "none"
-reportPrivateLocalImportUsage = "none"
-reportUnusedClass = "none"
-reportUnusedImport = "none"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

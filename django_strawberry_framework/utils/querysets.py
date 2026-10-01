@@ -91,6 +91,7 @@ from typing import TYPE_CHECKING, Any, Generic, ParamSpec, TypeGuard, TypeVar, c
 from asgiref.sync import sync_to_async
 from django.db import models, router
 from django.db.models import Prefetch, sql
+from django.db.models import query as django_query
 from django.db.models.constants import LOOKUP_SEP
 from django.db.models.expressions import Combinable, RawSQL
 from django.db.models.fields.reverse_related import ForeignObjectRel
@@ -102,16 +103,6 @@ from django.db.models.query import (
     ValuesIterable,
     ValuesListIterable,
 )
-
-try:
-    from django.db.models.query import PROHIBITED_FILTER_KWARGS
-except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
-    # Django < 6.0 has no module-level constant; ``QuerySet._filter_or_exclude``
-    # rejects the same ``models.Q.__init__`` internals inline. Mirror Django
-    # 6.0's ``django.db.models.query.PROHIBITED_FILTER_KWARGS`` verbatim so the
-    # deferred-filter defect gate behaves identically at the declared
-    # ``Django>=5.2.16`` floor (pyproject ``[project.dependencies]``).
-    PROHIBITED_FILTER_KWARGS = frozenset({"_connector", "_negated"})
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
@@ -158,6 +149,17 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
         def get_source_expressions(self) -> Iterable[object]: ...
 
+
+# Django < 6.0 has no module-level constant; ``QuerySet._filter_or_exclude``
+# rejects the same ``models.Q.__init__`` internals inline. The fallback mirrors Django
+# 6.0's ``django.db.models.query.PROHIBITED_FILTER_KWARGS`` verbatim so the
+# deferred-filter defect gate behaves identically at the declared
+# ``Django>=5.2.16`` floor (pyproject ``[project.dependencies]``).
+PROHIBITED_FILTER_KWARGS: frozenset[str] = getattr(
+    django_query,
+    "PROHIBITED_FILTER_KWARGS",
+    frozenset({"_connector", "_negated"}),
+)
 
 _T = TypeVar("_T")
 _R = TypeVar("_R")
@@ -482,11 +484,6 @@ class _AsyncQuerySetRows:
 
     def __aiter__(self) -> AsyncIterator[object]:
         return self._queryset.__aiter__()
-
-
-def is_async_queryset_adapter(val: object) -> bool:
-    """Return whether ``val`` is an ``_AsyncQuerySetRows`` adapter instance."""
-    return isinstance(val, _AsyncQuerySetRows)
 
 
 def wrap_async_queryset_adapter(qs: _T) -> _T | _AsyncQuerySetRows:
@@ -4190,7 +4187,8 @@ def _coerced_manager_queryset(
             f"A {_safe_type_name(manager)}.all() coercion could not produce a QuerySet; "
             "the Manager's query source raised while entering the visibility boundary.",
         ) from exc
-    if not isinstance(queryset, models.QuerySet):
+    # basedpyright: trust boundary: a consumer Manager can override ``all()`` to return anything
+    if not isinstance(queryset, models.QuerySet):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ConfigurationError(
             f"A {_safe_type_name(manager)}.all() coercion must produce a QuerySet, but "
             f"returned {_safe_type_name(queryset)}; a Manager that degrades into a list "
@@ -4922,7 +4920,7 @@ def reject_residual_async_source(source: object, type_cls: type[DjangoType]) -> 
 
     Both async consumer pipelines await the consumer ``resolver=`` return
     exactly once before the value reaches source normalization: the list
-    field's ``post_process_queryset_result_async`` and the connection field's
+    field's ``list_field.py::DjangoListField._async_wrap`` and the connection field's
     ``connection.py::_pipeline_async``. A value that is STILL awaitable after
     that await is an ``async def`` resolver that resolved to another awaitable;
     it is neither a ``QuerySet`` nor a legitimate plain iterable, so the
@@ -4986,56 +4984,3 @@ def prepared_resolver_source(
     if queryset_guard is not None:
         queryset_guard(normalized[0])
     return normalized[0], True
-
-
-def post_process_queryset_result_sync(
-    type_cls: type[DjangoType],
-    result: object,
-    info: object,
-) -> object:
-    """Normalize a consumer-resolver return then apply visibility (sync).
-
-    The list-field consumer-resolver shape: a ``Manager`` is coerced to a
-    ``QuerySet`` (the field wrapper owns the coercion), a ``QuerySet`` runs the
-    type's ``get_queryset`` visibility hook, and a non-queryset Python
-    list / generator passes through unchanged. The default-resolver path bypasses
-    this (its source is already ``initial_queryset(...)``, a known ``QuerySet``).
-
-    An awaitable reaching here is rejected loudly through the single-sited
-    ``reject_awaitable_sync_source`` guard, which keeps the invariant that a
-    consumer ``QuerySet`` return is never resolved without its visibility hook.
-    """
-    prepared = prepared_resolver_source(
-        result,
-        type_cls,
-        async_guard=reject_awaitable_sync_source,
-    )
-    if prepared[1] is True:
-        return apply_type_visibility_sync(type_cls, prepared[0], info)
-    return prepared[0]
-
-
-async def post_process_queryset_result_async(
-    type_cls: type[DjangoType],
-    result: object,
-    info: object,
-) -> object:
-    """Async sibling of ``post_process_queryset_result_sync``.
-
-    The caller awaits the consumer coroutine BEFORE handing the result here so
-    the queryset branch sees the awaited value, not the coroutine itself. A
-    RESIDUAL awaitable - an already-awaited async consumer resolver that
-    resolved to another awaitable - fails closed through the shared
-    ``reject_residual_async_source`` guard (also used by the connection async
-    pipeline): it is neither a queryset nor a legitimate plain-iterable return,
-    and passing it through the non-queryset branch would skip the
-    ``get_queryset`` visibility hook.
-    """
-    prepared = prepared_resolver_source(
-        result,
-        type_cls,
-        async_guard=reject_residual_async_source,
-    )
-    if prepared[1] is True:
-        return await apply_type_visibility_async(type_cls, prepared[0], info)
-    return prepared[0]

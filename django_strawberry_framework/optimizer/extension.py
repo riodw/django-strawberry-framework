@@ -344,51 +344,19 @@ def _collect_cache_var_families(
 ) -> tuple[set[str], set[str]]:
     """Run the unified traversal and return ``(directive_names, pagination_names)``.
 
-    The single entry the thin family wrappers and the union collector share, so
-    the AST is walked once per call regardless of which family the caller wants.
+    ``directive_names`` holds only the variables inside a ``@skip`` /
+    ``@include`` ``if`` argument: every other variable leaves the selection tree
+    unchanged and stays out of the cache key to avoid cardinality explosion.
+    ``pagination_names`` holds the ``first`` / ``last`` / ``before`` / ``after``
+    variables on a non-root field node, which the planner bakes into windowed
+    prefetch querysets; the collection is a syntactic SUPERSET by design, since
+    over-collection costs a duplicate cache entry while under-collection would
+    serve wrong data (spec-033 Decision 7). Both families come from ONE AST walk.
     """
     directive_names: set[str] = set()
     pagination_names: set[str] = set()
     _walk_cache_relevant_vars(node, fragments, set(), 0, directive_names, pagination_names)
     return directive_names, pagination_names
-
-
-def _collect_directive_var_names(
-    node: "Node",
-    fragments: "Mapping[str, FragmentDefinitionNode] | None" = None,
-) -> frozenset[str]:
-    """Return variable names used in ``@skip`` / ``@include`` directives.
-
-    Thin wrapper over the unified ``_collect_cache_var_families`` traversal,
-    returning only the directive family. Only variables referenced inside the
-    ``if`` argument of ``@skip`` / ``@include`` matter for plan caching; all
-    other variables do not affect the selection tree and must be excluded from
-    the cache key to avoid cardinality explosion. ``fragments`` follows
-    ``FragmentSpreadNode`` references into their definitions so directives inside
-    named fragments are included in the cache key.
-    """
-    directive_names, _ = _collect_cache_var_families(node, fragments or {})
-    return frozenset(directive_names)
-
-
-def _collect_nested_pagination_var_names(
-    node: "Node",
-    fragments: "Mapping[str, FragmentDefinitionNode] | None" = None,
-) -> frozenset[str]:
-    """Return variable names used in pagination args on **non-root** field nodes.
-
-    Thin wrapper over the unified ``_collect_cache_var_families`` traversal,
-    returning only the pagination family (``first`` / ``last`` / ``before`` /
-    ``after`` variables on a field node at response-path depth >= 1). The planner
-    bakes those resolved pagination values into windowed prefetch querysets, so
-    two requests sharing a printed AST (``booksConnection(first: $n)``) but
-    differing in ``$n`` must NOT share a cached plan -- a correctness rule
-    (spec-033 Decision 7). The collection is a syntactic SUPERSET by design: any non-root
-    field's pagination-named variable is collected; over-collection costs cheap
-    duplicate cache entries, under-collection would serve wrong data.
-    """
-    _, pagination_names = _collect_cache_var_families(node, fragments or {})
-    return frozenset(pagination_names)
 
 
 def _collect_cache_relevant_var_names(

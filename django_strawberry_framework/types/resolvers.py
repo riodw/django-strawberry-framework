@@ -426,9 +426,10 @@ def _custom_visibility_type(field_meta: FieldMeta) -> "type[DjangoType] | None":
     """
     if field_meta.related_model is None:
         return None
-    # ``FieldMeta.related_model`` copies the Django field's ``related_model``, which is still the
-    # lazy-reference string when the relation never resolved
-    if not isinstance(field_meta.related_model, type):
+    # basedpyright: django-stubs types ``related_model`` as a model class, but
+    # ``FieldMeta.related_model`` copies the Django field's, which is still the lazy-reference
+    # string when the relation never resolved
+    if not isinstance(field_meta.related_model, type):  # pyright: ignore[reportUnnecessaryIsInstance]
         return None
     target_type = registry.get(field_meta.related_model)
     if target_type is None:
@@ -904,11 +905,15 @@ def _make_relation_resolver(
     return _name_resolver(forward_resolver, field_name)
 
 
+# The default for the attachers' ``skip_field_names``: no field skipped.
+_NO_SKIPPED_FIELDS: frozenset[str] = frozenset()
+
+
 def _attach_relation_resolvers(
     cls: "type[DjangoType]",
     fields: "tuple[ModelField, ...]",
     *,
-    skip_field_names: frozenset[str] = frozenset(),
+    skip_field_names: frozenset[str] = _NO_SKIPPED_FIELDS,
 ) -> None:
     """Attach a resolver per relation in the pre-selected ``fields`` list.
 
@@ -958,7 +963,7 @@ def _attach_file_resolvers(
     cls: "type[DjangoType]",
     fields: "tuple[ModelField, ...]",
     *,
-    skip_field_names: frozenset[str] = frozenset(),
+    skip_field_names: frozenset[str] = _NO_SKIPPED_FIELDS,
 ) -> None:
     """Attach a parent resolver per file/image column in the pre-selected ``fields``.
 

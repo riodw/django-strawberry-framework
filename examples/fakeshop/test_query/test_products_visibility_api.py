@@ -638,7 +638,8 @@ def _holder_patron_card_schema(*, optimizer):
 
     registry.clear()
 
-    class HolderCardType(DjangoType):
+    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
+    class HolderCardType(DjangoType):  # pyright: ignore[reportUnusedClass]
         class Meta:
             model = MembershipCard
             fields = ("id", "barcode")
@@ -729,7 +730,8 @@ async def test_async_reverse_one_to_one_custom_visibility_over_http():
 
     registry.clear()
 
-    class HolderCardType(DjangoType):
+    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
+    class HolderCardType(DjangoType):  # pyright: ignore[reportUnusedClass]
         class Meta:
             model = MembershipCard
             fields = ("id", "barcode")

@@ -259,7 +259,8 @@ class DjangoTypeDefinition:
             raise ConfigurationError(
                 f"Could not inspect the GraphQL type name for {_safe_type_name(self.origin)}.",
             ) from exc
-        if not isinstance(name, str):
+        # basedpyright: trust boundary: a consumer metaclass can answer ``__name__`` with any object
+        if not isinstance(name, str):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise ConfigurationError(
                 f"GraphQL type name for {_safe_type_name(self.origin)} must be a non-empty string; "
                 f"got {_safe_arg_repr(name)}.",
@@ -439,9 +440,9 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     from strawberry.relay.exceptions import NodeIDAnnotationError
 
     try:
-        # Every caller passes a class; the class check keeps a contract-breaking caller from
-        # reaching ``issubclass``
-        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)
+        # basedpyright: trust boundary: a consumer class can answer ``__class__`` with any object,
+        # which ``isinstance`` consults; the check keeps ``issubclass`` off a non-class answer
+        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)  # pyright: ignore[reportUnnecessaryIsInstance]
     except BaseException:
         return True
     if not is_node:

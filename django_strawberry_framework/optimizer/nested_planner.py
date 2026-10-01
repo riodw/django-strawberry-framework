@@ -91,7 +91,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .hints import OptimizerHint
     from .nested_fetch import NestedConnectionStrategy, StrategySelection
     from .plans import OrderEntry
-    from .selections import FieldSelection, ResponseKeyArgumentsCarrier
+    from .selections import FieldSelection
 
 _M = TypeVar("_M", bound=models.Model)
 _RowT = TypeVar("_RowT")
@@ -162,25 +162,6 @@ class NestedConnectionPlanResult:
     def accepted(self) -> bool:
         """Return whether at least one fetch window was accepted."""
         return bool(self.accepted_response_keys)
-
-
-def _connector_only_field(parent_field: ModelField | FieldMeta) -> str | None:
-    """Return the single connector column Django needs for non-generic attach.
-
-    The relation-kind-specific connector: the child FK attname for a reverse FK /
-    reverse one-to-one, the target field's attname for a forward single-valued
-    relation, and the related model's pk attname for an M2M (the join table owns
-    the attach, so the child only needs its pk). Returns ``None`` when no column
-    resolves. Attach-complete projection (connector plus a ``GenericRelation``
-    morph column) lives on ``RelationJoinDescriptor.prefetch_attach_columns``
-    and is consumed by ``walker._ensure_connector_only_fields`` and
-    ``_project_scalar_only_window``.
-
-    A thin shim over ``optimizer/join_taxonomy.py::classify_relation_join``
-    (``parent_join_column`` only), kept under the historical name for direct
-    test-double pins.
-    """
-    return classify_relation_join(parent_field).parent_join_column
 
 
 def _order_entry_field_name(entry: object) -> str | None:
@@ -1201,13 +1182,16 @@ def plan_connection_relation(
     # legacy shared ``to_attr``; a real key namespaces it. ``seek`` is the
     # decoded keyset value seek, ``None`` under the offset vocabulary and for
     # keyset first pages alike.
+    response_key_arguments: Mapping[str | None, Arguments] = (
+        # Diverging aliases exist only on the walker's merged ``SimpleNamespace``, whose
+        # alias merge stored this map; read by name because the other selection shape
+        # declares no such attribute.
+        getattr(sel, "_optimizer_response_key_arguments")  # noqa: B009
+        if divergent
+        else {None: getattr(sel, "arguments", None) or {}}
+    )
     keyed_windows, malformed_keys, fallback_keys = _divergent_key_windows(
-        (
-            # Diverging aliases exist only on the walker's merged ``SimpleNamespace``.
-            cast("ResponseKeyArgumentsCarrier", sel)._optimizer_response_key_arguments
-            if divergent
-            else {None: getattr(sel, "arguments", None) or {}}
-        ),
+        response_key_arguments,
         info,
         keyset_context,
     )
@@ -1382,9 +1366,8 @@ def plan_connection_relation(
     # (the n+1 overfetch probe): annotate the per-partition ``Count(1) OVER``
     # only when something needs it. The two selection observers come from the
     # shared per-selection walks (``selections.py``), computed ONCE here and
-    # reused for the single fetch-mode decision (their OR is what
-    # ``connection_count_required`` returns; splitting them avoids re-walking
-    # the selection). Both the count and the probe are DERIVED from one
+    # reused for the single fetch-mode decision. Both the count and the probe are
+    # DERIVED from one
     # ``WindowRangePlan.fetch_mode`` value below - the shared ``FetchMode``
     # source of truth - so the two decisions cannot drift from each other or
     # from the resolver's physical-shape reads. The decision is made HERE only:

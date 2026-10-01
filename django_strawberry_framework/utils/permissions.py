@@ -482,7 +482,7 @@ def active_permission_targets(
     ``RELATED`` half is byte-identical to ``active_related_branches``'s
     field-spec-less, logic-key-less config; the ``LEAF`` half is what the gate
     dispatch consumes, read straight off this pass by
-    ``sets_mixins.py::ActiveInputPermissionMixin._active_permission_field_paths``.
+    ``run_active_input_permission_checks``.
     The classification rule therefore stays single-sited here.
     """
     config = SetInputTraversal(

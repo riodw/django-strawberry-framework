@@ -1612,7 +1612,7 @@ def test_the_websocket_pattern_is_keyword_only_with_no_legacy_url_pattern_alias(
 
 
 def test_repeated_access_returns_the_cached_class_which_is_subclassable():
-    """The builder memoizes into ``_ROUTER_CLASS``; the class is a real base.
+    """The builder memoizes into ``_router_class``; the class is a real base.
 
     Fakeshop has no ``config/asgi.py`` or WebSocket mount (rungs 1-3). Live HTTP
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
@@ -1637,7 +1637,7 @@ def test_concurrent_first_class_access_returns_one_cached_class(monkeypatch):
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
     original_guard = routers_module.require_channels
-    monkeypatch.setattr(routers_module, "_ROUTER_CLASS", None)
+    monkeypatch.setattr(routers_module, "_router_class", None)
     entered = threading.Event()
     second_entered = threading.Event()
     ready = threading.Barrier(2)
@@ -3215,7 +3215,7 @@ async def test_an_injected_consumer_is_denied_by_both_handshake_boundaries():
 # strict ``sys.modules`` eviction/restore, two-sided (the parent package's
 # ``routers`` attribute is restored to the SAME original module object as
 # ``sys.modules``, because a retried import re-executes ``routers.py`` and rebinds
-# the attribute to a fresh module with its own empty ``_ROUTER_CLASS`` cache).
+# the attribute to a fresh module with its own empty ``_router_class`` cache).
 # Evicting ``django_strawberry_framework.routers`` drops that cache so the guard
 # actually re-fires (``routers.py::_build_router_class`` short-circuits on a warm
 # cache without calling ``require_channels``).
@@ -3283,7 +3283,7 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
 
     The blocked-then-retried import re-executes ``routers.py`` and rebinds the
     parent attribute to a fresh module; a one-sided restore would leave two live
-    modules with independent ``_ROUTER_CLASS`` caches - the order-dependent
+    modules with independent ``_router_class`` caches - the order-dependent
     Test-6 identity flake under ``pytest-xdist``.
 
     Absence / import-guard proof; a request cannot show what is not imported. Live
@@ -3383,7 +3383,7 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
     """Present-but-incompatible installs name WHICH half is broken.
 
     Same eviction + two-sided-restore discipline as the absent path (so the
-    re-executed module has no cached ``_ROUTER_CLASS`` and the builder import
+    re-executed module has no cached ``_router_class`` and the builder import
     actually fires), but here the top-level
     ``channels`` re-imports cleanly and only one builder SUBMODULE is a ``None``
     sentinel: a failing ``channels.*`` import names the channels floor; a failing

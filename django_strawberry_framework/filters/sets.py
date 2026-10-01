@@ -1060,8 +1060,8 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
     Expansion of related filters into per-lookup ORM paths is deferred to
     `FilterSet.get_filters` so circular `RelatedFilter` references
     declared in the same module are legal. ``Meta.filter_fields`` aliasing
-    is ``utils/inputs.py::promote_set_meta_fields`` (shared with Layer 6
-    and ``OrderSetMetaclass``).
+    is ``utils/inputs.py::promote_set_meta_fields`` (shared with
+    ``OrderSetMetaclass``).
     """
 
     def __new__(
@@ -1075,12 +1075,10 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
 
         # ``filter_fields`` is the cookbook / graphene-django synonym for
         # ``Meta.fields``. Write-back is
-        # ``utils/inputs.py::promote_set_meta_fields`` so Layer-6 factory
-        # kwargs and ``OrderSetMetaclass`` cannot drift from class-Meta
-        # aliasing. The consumer's ``filter_fields`` attribute is left in
-        # place (the factory dict path drops the alias so it cannot split a
-        # cache slot). Presence uses ``hasattr`` (inherited Meta attributes
-        # count).
+        # ``utils/inputs.py::promote_set_meta_fields`` so ``OrderSetMetaclass``
+        # cannot drift from class-Meta aliasing. The consumer's
+        # ``filter_fields`` attribute is left in place. Presence uses
+        # ``hasattr`` (inherited Meta attributes count).
         promote_set_meta_fields(attrs.get("Meta"), fields_alias=FILTERSET_FIELDS_ALIAS)
 
         # Upstream's ``__new__`` is typed to return its own metaclass; ``cls`` built it.
@@ -2625,9 +2623,7 @@ class FilterSet(
         ``_build_input_fields`` wraps each scalar field's lookups in a
         nested ``<Field>FilterInputType`` dataclass. The normalizer
         detects that shape via ``__dataclass_fields__`` (the same sniff
-        used at the three call sites that walk Strawberry input dataclasses:
-        ``_normalize_input``, ``_operator_bag_items``, and
-        ``_active_permission_field_paths``); we sniff
+        ``_normalize_input`` uses to walk Strawberry input dataclasses); we sniff
         ``__dataclass_fields__`` instead of testing ``isinstance(..., dataclass)``
         because Strawberry's ``@strawberry.input`` decorator stamps real
         ``dataclass`` machinery on the class -- ``dataclasses.is_dataclass``

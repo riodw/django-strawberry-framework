@@ -183,6 +183,9 @@ register_subsystem_clear(
 # of nested input types. Generous by default; most nested write APIs are one or two deep.
 _NESTED_MAX_DEPTH: int = 5
 
+# The mapping ids a nested-config normalization starts from: no mapping entered yet.
+_ROOT_MAPPING_PATH: frozenset[int] = frozenset()
+
 
 @dataclass(frozen=True)
 class NestedSerializerConfig:
@@ -228,7 +231,7 @@ class NestedSerializerConfig:
 def normalize_nested_serializer_configs(
     nested_configs: Mapping[str, NestedSerializerConfig] | None,
     *,
-    _mapping_path: frozenset[int] = frozenset(),
+    _mapping_path: frozenset[int] = _ROOT_MAPPING_PATH,
 ) -> Mapping[str, NestedSerializerConfig] | None:
     """Materialize every selector in a nested-config tree exactly once.
 
@@ -245,10 +248,11 @@ def normalize_nested_serializer_configs(
     """
     if nested_configs is None:
         return None
-    if not isinstance(nested_configs, Mapping):
-        # basedpyright: the annotation is the contract; the check rejects a caller without a type
-        # checker (a consumer-built ``NestedSerializerConfig.nested_fields`` reaches here
-        # unvalidated), per GOAL.md "Trust boundary": configuration is validated at construction
+    # basedpyright: the annotation is the contract; the check rejects a caller without a type
+    # checker (a consumer-built ``NestedSerializerConfig.nested_fields`` reaches here
+    # unvalidated), per GOAL.md "Trust boundary": configuration is validated at construction
+    if not isinstance(nested_configs, Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]
+        # basedpyright: unreachable under the annotation, for the trust boundary above
         raise ConfigurationError(  # pyright: ignore[reportUnreachable]
             f"nested_configs must be a mapping of {{field_name: NestedSerializerConfig}}; "
             f"got {_safe_arg_repr(nested_configs)}.",
@@ -259,9 +263,10 @@ def normalize_nested_serializer_configs(
     normalized: dict[str, NestedSerializerConfig] = {}
     next_path = _mapping_path | {mapping_id}
     for field_name, config in nested_configs.items():
-        if not isinstance(config, NestedSerializerConfig):
-            # ``NestedSerializerConfig.nested_fields`` is the public contract; a consumer-built
-            # config can nest any value, which ``require_nested_serializer_config`` rejects
+        # basedpyright: trust boundary: ``NestedSerializerConfig.nested_fields`` is the public
+        # contract; a consumer-built config can nest any value, which
+        # ``require_nested_serializer_config`` rejects
+        if not isinstance(config, NestedSerializerConfig):  # pyright: ignore[reportUnnecessaryIsInstance]
             normalized[field_name] = config
             continue
         normalized[field_name] = NestedSerializerConfig(
@@ -1794,90 +1799,6 @@ def build_serializer_input_class(
     # the materialize ledger, whose error is then enriched with this shape's description).
     _SERIALIZER_SHAPE_REGISTRY[type_name] = shape
     return input_cls, shape
-
-
-def build_serializer_inputs(
-    serializer_class: type[DRFSerializer],
-    *,
-    fields: object = None,
-    exclude: object = None,
-    optional_fields: object = None,
-    guard_required: bool = True,
-    field_map: dict[str, DRFField] | None = None,
-    nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
-) -> tuple[type[object], SerializerInputShape, type[object], SerializerInputShape]:
-    """Build BOTH the create + partial inputs for a serializer, with the create-required guard.
-
-    Single entry point producing ``(<Serializer>Input, create_shape,
-    <Serializer>PartialInput, partial_shape)``. The create input honors
-    ``field.required`` minus ``optional_fields`` (the mutation's
-    ``Meta.optional_fields`` value, spec-039); the partial input is
-    always every-field-optional. ``field_map`` is the
-    ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
-    default module discovery when called in isolation).
-
-    **The create-required-narrowing guard (spec-039 Decision 7).** When
-    ``guard_required`` is True, raises ``ConfigurationError`` naming any required
-    writable serializer field dropped by ``Meta.fields`` / ``Meta.exclude`` (the
-    serializer can never validate without it). ``guard_required=False`` exists for
-    ISOLATED shape builds (package tests exercising the generator without a
-    mutation declaration); the mutation bind path never passes it - the guard
-    always runs there, with ``Meta.injected_fields`` as the only per-field
-    subtraction.
-    """
-    # ``fields`` / ``exclude`` may be supplied as any sequence accepted by the
-    # public Meta contract, including a one-shot iterator.  The preliminary
-    # effective-field resolution below validates and materializes that value;
-    # pass the normalized tuples to BOTH shape builds so the create pass cannot
-    # exhaust an iterator before the partial pass sees it.
-    normalized_fields = normalize_field_name_sequence(
-        fields,
-        label="fields",
-        flavor="SerializerMutation",
-    )
-    normalized_exclude = normalize_field_name_sequence(
-        exclude,
-        label="exclude",
-        flavor="SerializerMutation",
-    )
-    normalized_optional = normalize_field_name_sequence(
-        optional_fields,
-        label="optional_fields",
-        flavor="SerializerMutation",
-    )
-    normalized_nested_configs = normalize_nested_serializer_configs(nested_configs)
-    effective = resolve_effective_serializer_fields(
-        serializer_class,
-        fields=normalized_fields,
-        exclude=normalized_exclude,
-        field_map=field_map,
-    )
-    if guard_required:
-        guard_create_required_serializer_fields(
-            serializer_class,
-            tuple(effective),
-            field_map=field_map,
-        )
-
-    create_cls, create_shape = build_serializer_input_class(
-        serializer_class,
-        operation_kind=CREATE,
-        fields=normalized_fields,
-        exclude=normalized_exclude,
-        optional_fields=normalized_optional,
-        field_map=field_map,
-        nested_configs=normalized_nested_configs,
-    )
-    partial_cls, partial_shape = build_serializer_input_class(
-        serializer_class,
-        operation_kind=PARTIAL,
-        fields=normalized_fields,
-        exclude=normalized_exclude,
-        optional_fields=normalized_optional,
-        field_map=field_map,
-        nested_configs=normalized_nested_configs,
-    )
-    return create_cls, create_shape, partial_cls, partial_shape
 
 
 # The serializer shape cache can be primed before finalization by

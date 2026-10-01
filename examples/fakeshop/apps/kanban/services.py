@@ -1084,7 +1084,8 @@ def create_card_from_spec(spec: CardSpec, *, using: str | None = None) -> models
             code="duplicate_card_title",
         )
     sections = spec.get("sections", {})
-    if isinstance(sections, dict) and "dependencies" in sections:
+    # basedpyright: trust boundary: a spec arrives from JSON, so ``sections`` can be any value
+    if isinstance(sections, dict) and "dependencies" in sections:  # pyright: ignore[reportUnnecessaryIsInstance]
         raise KanbanServiceError(
             'Put dependencies under the top-level "dependencies" key, not "sections".',
             code="dependencies_in_sections",

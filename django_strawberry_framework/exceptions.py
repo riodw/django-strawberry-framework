@@ -42,7 +42,8 @@ def _safe_type_name(value: object) -> str:
         except BaseException:
             continue
         try:
-            is_str_name = isinstance(name, str)
+            # basedpyright: trust boundary: a metaclass can answer ``__name__`` with any object
+            is_str_name = isinstance(name, str)  # pyright: ignore[reportUnnecessaryIsInstance]
         except BaseException:
             is_str_name = False
         if not is_str_name:
@@ -406,10 +407,6 @@ class OptimizerError(DjangoStrawberryFrameworkError):
           sentinel through as a real edge).
         - Window bounds: ``utils/connections.py::window_range_plan`` rejects
           a negative offset or limit on a direct window request.
-        - Window partition resolution: ``optimizer/plans.py::
-          window_partition_for_prefetch`` rejects a relation whose join kind is
-          not windowable, or one for which no parent partition expression can be
-          resolved (both signal a fall back to per-parent resolution).
         - Reversed keyset window: ``optimizer/plans.py::apply_window_pagination``
           rejects a keyset-seek window that is also reversed, since backward
           keyset pagination resolves through the per-parent/root slicer, never a

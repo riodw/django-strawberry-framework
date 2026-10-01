@@ -56,6 +56,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from typing_extensions import override
+
 try:
     from scripts import _plan_common
 except ModuleNotFoundError:  # run as a file: ``docs/dry`` is on the path, the repo root is not
@@ -472,7 +474,9 @@ def _module_name(path: Path, root: Path) -> str:
     return ".".join(parts)
 
 
-def _doc_summary(node: ast.AST) -> str | None:
+def _doc_summary(
+    node: ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef | ast.Module,
+) -> str | None:
     """Return the first compact line of a node's docstring."""
     docstring = ast.get_docstring(node, clean=True)
     if not docstring:
@@ -527,7 +531,7 @@ def _function_fingerprint(
     return hashlib.sha256(payload.encode()).hexdigest(), node_count
 
 
-def _constant_name(node: ast.AST) -> str | None:
+def _constant_name(node: ast.Assign | ast.AnnAssign) -> str | None:
     """Return a module-level uppercase assignment name, if any."""
     if (
         isinstance(node, ast.Assign)
@@ -622,7 +626,7 @@ def _collect_symbols_and_bodies(
                 if include_nested:
                     visit_body(node.body, (*parents, node.name), inside_function=True)
                 continue
-            if not parents and include_constants:
+            if not parents and include_constants and isinstance(node, (ast.Assign, ast.AnnAssign)):
                 name = _constant_name(node)
                 if name is not None:
                     symbols.append(
@@ -631,7 +635,7 @@ def _collect_symbols_and_bodies(
                             name,
                             name,
                             "constant",
-                            _constant_signature(node),  # type: ignore[arg-type]
+                            _constant_signature(node),
                             node.lineno,
                             node.end_lineno or node.lineno,
                             None,
@@ -706,22 +710,27 @@ class _LiteralVisitor(ast.NodeVisitor):
                     if isinstance(item, ast.AST):
                         self.visit(item)
 
+    @override
     def visit_Module(self, node: ast.Module) -> None:
         """Visit module contents without the module docstring."""
         self._visit_definition(node)
 
+    @override
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Visit class contents without the class docstring."""
         self._visit_definition(node)
 
+    @override
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Visit function contents without the function docstring."""
         self._visit_definition(node)
 
+    @override
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         """Visit async-function contents without the function docstring."""
         self._visit_definition(node)
 
+    @override
     def visit_Constant(self, node: ast.Constant) -> None:
         """Record a sufficiently long string literal."""
         if isinstance(node.value, str) and len(node.value) >= self.minimum_length:
@@ -894,8 +903,6 @@ def _collect_references(
                     imported_aliases[alias.asname or alias.name] = imported_module
 
         for node in ast.walk(record.tree):
-            leaf: str | None = None
-            kind = ""
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 leaf = node.id
                 kind = "name"
@@ -923,7 +930,9 @@ def _collect_references(
                                 ),
                             )
                         continue
-            if leaf is None or len(by_leaf.get(leaf, ())) != 1:
+            else:
+                continue
+            if len(by_leaf.get(leaf, ())) != 1:
                 continue
             symbol = by_leaf[leaf][0]
             if record.path == symbol.path and node.lineno == symbol.lineno:

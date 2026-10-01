@@ -266,6 +266,8 @@ include = [
     "examples",
     "conftest.py",
     "line_count.py",
+    # The one tracked module under docs/; docs/shadow/ holds untracked generated copies.
+    "docs/dry/export_dry_review.py",
 ]
 exclude = ["**/node_modules", "**/__pycache__", "**/.*"]
 executionEnvironments = [

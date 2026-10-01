@@ -16,8 +16,13 @@ the catalog's guarded reference, a hold that keeps an item from being deleted
 while it stands.
 """
 
+from typing import TYPE_CHECKING
+
 from django.db import models
 from typing_extensions import override
+
+if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import RelatedManager
 
 
 class Category(models.Model):
@@ -37,6 +42,9 @@ class Category(models.Model):
         auto_now=True,
         editable=False,
     )
+
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    items: "RelatedManager[Item]"
 
     class Meta:
         verbose_name = "Category"
@@ -60,6 +68,8 @@ class Item(models.Model):
         related_name="items",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``category``, declared for the type checker.
+    category_id: int
     # Optional file column for the form-mutation multipart ``Upload`` test surface
     # (spec-038). Nullable / blank so existing ``seed_data`` /
     # ``Item.objects.create`` calls are unaffected, and a plain ``FileField`` (not
@@ -158,6 +168,8 @@ class Entry(models.Model):
         related_name="entries",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``item``, declared for the type checker.
+    item_id: int
     is_private = models.BooleanField(default=False)
     created_date = models.DateTimeField(
         auto_now_add=True,

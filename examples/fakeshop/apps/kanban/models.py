@@ -147,6 +147,10 @@ class LookupBase(TimeStampedModel):
     label = models.TextField()
     order = models.PositiveIntegerField(default=0)
 
+    # Reverse one-to-one Django adds from ``UUIDModel`` to every concrete lookup,
+    # declared for the type checker.
+    uuid: UUIDModel
+
     class Meta(TimeStampedModel.Meta):
         abstract = True
         ordering = ["order"]
@@ -504,6 +508,10 @@ class Card(TimeStampedModel):
     glossary_links: RelatedManager[CardGlossaryTerm]
     path_links: RelatedManager[CardPathLink]
     outgoing_references: RelatedManager[CardReference]
+    parity_claims: RelatedManager[ParityClaim]
+    transitions: RelatedManager[CardTransition]
+    spec: SpecDoc
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = ["number"]
@@ -835,6 +843,9 @@ class CardPathLink(TimeStampedModel):
     path = models.ForeignKey(TrackedPath, related_name="card_links", on_delete=models.CASCADE)
     kind = models.SlugField(choices=CARD_PATH_LINK_KINDS, default=CARD_PATH_LINK_PREDICTED)
 
+    # Reverse one-to-one Django adds from ``UUIDModel``, declared for the type checker.
+    uuid: UUIDModel
+
     class Meta(TimeStampedModel.Meta):
         ordering = [
             "card",
@@ -1003,6 +1014,7 @@ class WorkAttempt(TimeStampedModel):
 
     # Declared for the type checker (annotation-only; see ``Card``).
     outcome_id: int | None
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [
@@ -1045,6 +1057,10 @@ class Decision(TimeStampedModel):
         blank=True,
         on_delete=models.SET_NULL,
     )
+
+    # Declared for the type checker (annotation-only; see ``Card``).
+    superseded_by_set: RelatedManager[Decision]
+    uuid: UUIDModel
 
     class Meta(TimeStampedModel.Meta):
         ordering = [

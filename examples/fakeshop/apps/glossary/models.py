@@ -96,7 +96,11 @@ class GlossaryTerm(TimeStampedModel):
         blank=True,
     )
 
+    # Key column Django adds beside ``status``, declared for the type checker;
+    # ``None`` until assigned on an unsaved row.
+    status_id: int | None
     # Reverse accessors Django adds at class creation, declared for the type checker.
+    aliases: RelatedManager[GlossaryAlias]
     outgoing_links: RelatedManager[GlossaryTermLink]
     spec_mentions: RelatedManager[GlossarySpecMention]
     source_links: RelatedManager[GlossarySourceLink]
@@ -149,6 +153,9 @@ class GlossaryAlias(TimeStampedModel):
         related_name="aliases",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``term``, declared for the type checker;
+    # ``None`` until assigned on an unsaved row.
+    term_id: int | None
     label = models.TextField()
     normalized = models.TextField()
 
@@ -204,6 +211,9 @@ class GlossaryTermLink(TimeStampedModel):
         related_name="incoming_links",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``target_term``, declared for the type checker;
+    # ``None`` until assigned on an unsaved row.
+    target_term_id: int | None
     kind = models.ForeignKey(
         GlossaryTermLinkKind,
         related_name="links",
@@ -263,6 +273,10 @@ class GlossaryCategoryMembership(TimeStampedModel):
         related_name="category_memberships",
         on_delete=models.CASCADE,
     )
+    # Key columns Django adds beside ``category`` and ``term``, declared for the type checker;
+    # ``None`` until assigned on an unsaved row.
+    category_id: int | None
+    term_id: int | None
     order = models.PositiveIntegerField(default=0)
 
     class Meta(TimeStampedModel.Meta):
@@ -302,6 +316,9 @@ class GlossarySpecMention(TimeStampedModel):
         related_name="spec_mentions",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``term``, declared for the type checker;
+    # ``None`` until assigned on an unsaved row.
+    term_id: int | None
     spec_path = models.TextField()
     term_text = models.TextField()
     notes = models.TextField(blank=True, default="")
@@ -351,6 +368,9 @@ class GlossarySourceLink(TimeStampedModel):
         related_name="source_links",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``term``, declared for the type checker;
+    # ``None`` until assigned on an unsaved row.
+    term_id: int | None
     label = models.TextField()
     target = models.TextField()
     kind = models.TextField(blank=True, default="")

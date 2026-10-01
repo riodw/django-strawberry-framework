@@ -10,7 +10,11 @@ from django.db import models
 from typing_extensions import override
 
 if TYPE_CHECKING:
-    from django.db.models.fields.related_descriptors import RelatedManager
+    from django.db.models.fields.related_descriptors import (
+        ManyRelatedManager,
+        RelatedManager,
+        ReverseManyToOneDescriptor,
+    )
 
 
 class TaggedItem(models.Model):
@@ -52,8 +56,9 @@ class Branch(models.Model):
         TaggedItem,
     )
 
-    # Reverse accessor Django adds at class creation, declared for the type checker.
+    # Reverse accessors Django adds at class creation, declared for the type checker.
     shelves: RelatedManager[Shelf]
+    circulation_desks: RelatedManager[CirculationDesk]
 
     class Meta:
         verbose_name = "Branch"
@@ -84,6 +89,8 @@ class ProxyBranch(Branch):
         TaggedItem,
         for_concrete_model=False,
     )
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    notes: RelatedManager[BranchNote]
 
     # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model
     # keeps one), so Branch has no Meta at run time for this one to subclass
@@ -137,6 +144,11 @@ class Shelf(models.Model):
         blank=True,
         related_name="alt_shelves",
     )
+    # Key column Django adds beside ``branch``, declared for the type checker.
+    branch_id: int
+    # Reverse accessors Django adds at class creation, declared for the type checker.
+    books: RelatedManager[Book]
+    circulation_desk: CirculationDesk
 
     class Meta:
         constraints = [
@@ -158,6 +170,8 @@ class Genre(models.Model):
     """A genre used to group books."""
 
     name = models.TextField(unique=True)
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    books: ManyRelatedManager[Book]
 
     @override
     def __str__(self) -> str:
@@ -197,6 +211,8 @@ class Book(models.Model):
         editable=False,
         blank=True,
     )
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    loans: RelatedManager[Loan]
 
     class Meta:
         constraints = [
@@ -225,6 +241,10 @@ class Patron(models.Model):
     # a stress value, which is exactly the point - proves the wire format
     # survives values outside JSON's safe-integer range).
     lifetime_fines_cents = models.BigIntegerField(default=0)
+    # Reverse accessors Django adds at class creation, declared for the type checker;
+    # ``loans`` as the descriptor itself, since it is also read on the class.
+    card: MembershipCard
+    loans: ReverseManyToOneDescriptor[Loan]
 
     @override
     def __str__(self) -> str:
@@ -501,6 +521,9 @@ class Distributor(models.Model):
 
     displayName = models.TextField(unique=True)  # noqa: N815
 
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    consignmentItems: RelatedManager[Consignment]  # noqa: N815
+
     @override
     def __str__(self) -> str:
         return self.displayName
@@ -542,6 +565,9 @@ class TitledEntry(models.Model):
 
 class ReadingList(TitledEntry):
     """A curated reading list, listed by title through the inherited ordering."""
+
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    entries: RelatedManager[ReadingListEntry]
 
 
 class ReadingListEntry(TitledEntry):
@@ -588,6 +614,11 @@ class Venue(models.Model):
         null=True,
         blank=True,
     )
+    # Reverse accessors Django adds at class creation, declared for the type checker.
+    lendingdesk: LendingDesk
+    repairticket_set: RelatedManager[RepairTicket]
+    venuebadge: VenueBadge
+    venuesponsor_set: ManyRelatedManager[VenueSponsor]
 
     @override
     def __str__(self) -> str:
@@ -598,6 +629,9 @@ class LendingDesk(Venue):
     """A staffed desk: a ``Venue`` whose own table holds only its local columns."""
 
     window_count = models.IntegerField(default=0)
+
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    selfservedesk: SelfServeDesk
 
 
 class SelfServeDesk(LendingDesk):
@@ -767,6 +801,10 @@ class CirculationDesk(models.Model):
     tags = GenericRelation(
         TaggedItem,
     )
+
+    # Reverse accessors Django adds at class creation, declared for the type checker.
+    children: RelatedManager[DeskShift]
+    profile: DeskProfile
 
     @override
     def __str__(self) -> str:

@@ -46,6 +46,8 @@ from decimal import Decimal
 from functools import cache
 from typing import TYPE_CHECKING
 
+from typing_extensions import TypedDict
+
 from apps.products.models import Category, Entry, Item, Property
 
 if TYPE_CHECKING:
@@ -480,7 +482,22 @@ def delete_data(target: int | str) -> dict[str, int]:
 # holds that second rule, by calling every helper below against one database.
 
 
-def seed_cascade_split(db_alias: str = "default") -> dict[str, object]:
+class CascadeSplit(TypedDict):
+    """The rows ``seed_cascade_split`` seeds, by role."""
+
+    private_cat: Category
+    public_cat: Category
+    priv_prop: Property
+    pub_prop: Property
+    item_under_private: Item
+    item_under_public: Item
+    entry_under_private: Entry
+    entry_under_public: Entry
+    entry_via_private_item: Entry
+    entry_via_private_property: Entry
+
+
+def seed_cascade_split(db_alias: str = "default") -> CascadeSplit:
     """Seed a deterministic private/public 2-deep chain for cascade-visibility tests.
 
     The named seed helper for the cascade live tests (the "seed-helper tests are the
@@ -570,7 +587,16 @@ DECOY_CATEGORY_NAME = "zzz_decoy_category"
 TARGET_ITEM_NAME = "zzz_target_item"
 
 
-def seed_cascade_identity_chain(db_alias: str = "default") -> dict[str, object]:
+class CascadeIdentityChain(TypedDict):
+    """The rows ``seed_cascade_identity_chain`` seeds, by role."""
+
+    category: Category
+    item: Item
+    property: Property
+    entry: Entry
+
+
+def seed_cascade_identity_chain(db_alias: str = "default") -> CascadeIdentityChain:
     """Seed one public ``Category -> Item + Property -> Entry`` chain.
 
     The minimal shape for the identity-hook cascade rows: every edge is public, so
@@ -593,7 +619,14 @@ def seed_cascade_identity_chain(db_alias: str = "default") -> dict[str, object]:
     }
 
 
-def seed_public_category_with_item(db_alias: str = "default") -> dict[str, object]:
+class PublicCategoryWithItem(TypedDict):
+    """The rows ``seed_public_category_with_item`` seeds, by role."""
+
+    category: Category
+    item: Item
+
+
+def seed_public_category_with_item(db_alias: str = "default") -> PublicCategoryWithItem:
     """Seed one public ``Category`` holding one public ``Item``.
 
     The control fixture for rows that assert a permissive hook leaves the item
@@ -609,7 +642,20 @@ def seed_public_category_with_item(db_alias: str = "default") -> dict[str, objec
     return {"category": category, "item": item}
 
 
-def seed_field_scope_split(db_alias: str = "default") -> dict[str, object]:
+class FieldScopeSplit(TypedDict):
+    """The rows ``seed_field_scope_split`` seeds, by role."""
+
+    category: Category
+    public_item: Item
+    hidden_item: Item
+    public_prop: Property
+    hidden_prop: Property
+    keeps: Entry
+    drops_item: Entry
+    survives_prop: Entry
+
+
+def seed_field_scope_split(db_alias: str = "default") -> FieldScopeSplit:
     """Seed public/hidden ``Item`` and ``Property`` rows under one public category.
 
     Three entries isolate the two cascade edges: one wholly public, one whose item
@@ -659,7 +705,14 @@ def seed_field_scope_split(db_alias: str = "default") -> dict[str, object]:
     }
 
 
-def seed_gate_name_split(db_alias: str = "default") -> dict[str, object]:
+class GateNameSplit(TypedDict):
+    """The rows ``seed_gate_name_split`` seeds, by role."""
+
+    public: Category
+    hidden: Category
+
+
+def seed_gate_name_split(db_alias: str = "default") -> GateNameSplit:
     """Seed one public and one hidden ``Category`` for the gated-``name`` filter rows.
 
     A gate walks the filter INPUT, so the hidden row is what proves a passing input
@@ -670,7 +723,15 @@ def seed_gate_name_split(db_alias: str = "default") -> dict[str, object]:
     return {"public": public, "hidden": hidden}
 
 
-def seed_gate_order_split(db_alias: str = "default") -> dict[str, object]:
+class GateOrderSplit(TypedDict):
+    """The rows ``seed_gate_order_split`` seeds, by role."""
+
+    alpha: Category
+    beta: Category
+    hidden: Category
+
+
+def seed_gate_order_split(db_alias: str = "default") -> GateOrderSplit:
     """Seed two public ``Category`` rows out of alphabetical order, plus a hidden one.
 
     Insertion order deliberately contradicts name order so an ascending sort is
@@ -683,7 +744,16 @@ def seed_gate_order_split(db_alias: str = "default") -> dict[str, object]:
     return {"alpha": alpha, "beta": beta, "hidden": hidden}
 
 
-def seed_gate_existence_split(db_alias: str = "default") -> dict[str, object]:
+class GateExistenceSplit(TypedDict):
+    """The rows ``seed_gate_existence_split`` seeds, by role."""
+
+    public_cat: Category
+    private_cat: Category
+    visible_item: Item
+    hidden_item: Item
+
+
+def seed_gate_existence_split(db_alias: str = "default") -> GateExistenceSplit:
     """Seed a public and a private ``Category``, each holding one public ``Item``.
 
     The no-existence-leak fixture: the item under the private category is dropped
@@ -716,7 +786,15 @@ def seed_gate_existence_split(db_alias: str = "default") -> dict[str, object]:
     }
 
 
-def seed_decoy_and_target_rows(db_alias: str = "default") -> dict[str, object]:
+class DecoyAndTargetRows(TypedDict):
+    """The rows ``seed_decoy_and_target_rows`` seeds, by role."""
+
+    decoy: Category
+    holder: Category
+    item: Item
+
+
+def seed_decoy_and_target_rows(db_alias: str = "default") -> DecoyAndTargetRows:
     """Seed a ``Category`` no query returns beside a ``Category`` holding one ``Item``.
 
     The decoy row exists only so a test can prove the answer came from the ``Item``

@@ -60,6 +60,7 @@ from typing_extensions import override
 
 if TYPE_CHECKING:
     from django.db.backends.base.base import BaseDatabaseWrapper
+    from django.db.models.fields.related_descriptors import RelatedManager
 
 
 class ScalarSpecimenTag(models.Model):
@@ -76,6 +77,9 @@ class ScalarSpecimenTag(models.Model):
 
     label = models.TextField(unique=True)
     active = models.BooleanField(default=True)
+
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    tagged_specimens: RelatedManager[ScalarSpecimen]
 
     @override
     def __str__(self) -> str:
@@ -142,6 +146,12 @@ class ScalarSpecimen(models.Model):
         related_name="tagged_specimens",
     )
 
+    # Key column Django adds beside ``parent``, declared for the type checker.
+    parent_id: int | None
+    # Reverse accessors Django adds at class creation, declared for the type checker.
+    children: RelatedManager[ScalarSpecimen]
+    nullable_partners: RelatedManager[NullableScalarSpecimen]
+
     @override
     def __str__(self) -> str:
         return self.label
@@ -189,6 +199,8 @@ class NullableScalarSpecimen(models.Model):
         on_delete=models.SET_NULL,
         related_name="nullable_partners",
     )
+    # Key column Django adds beside ``partner``, declared for the type checker.
+    partner_id: int | None
 
     @override
     def __str__(self) -> str:

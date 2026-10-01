@@ -269,6 +269,8 @@ enableTypeIgnoreComments = false
 reportUnnecessaryTypeIgnoreComment = "error"
 reportImplicitOverride = "error"
 reportUnnecessaryContains = "error"
+reportUnnecessaryComparison = "error"
+reportUnreachable = "error"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

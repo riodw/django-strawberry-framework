@@ -698,7 +698,10 @@ class DjangoDebugExtension(_OperationBoundExtension[_DebugOperationState]):
         """
         super().__init__()
         if not isinstance(allow_unsafe_production, bool):
-            raise ConfigurationError(
+            # basedpyright: the ``bool`` annotation is the contract; this check rejects a caller
+            # without a type checker (an env-var string read straight through), per GOAL.md
+            # "Trust boundary" (configuration is validated at construction)
+            raise ConfigurationError(  # pyright: ignore[reportUnreachable]
                 "DjangoDebugExtension(allow_unsafe_production=...) must be a bool; got "
                 f"{describe_value(allow_unsafe_production)}. A truthy non-bool would arm "
                 "the production disclosure, so it is refused rather than interpreted.",

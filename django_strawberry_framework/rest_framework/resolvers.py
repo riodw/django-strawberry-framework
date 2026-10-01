@@ -942,7 +942,7 @@ def _injected_serializer_data(
             hook_context=hook_context,
         ),
     )
-    if set(injected) != declared:
+    if frozenset(injected) != declared:
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.get_serializer_injected_data returned "
             f"key(s) {sorted(injected)!r}, but Meta.injected_fields declares "

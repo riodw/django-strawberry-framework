@@ -134,7 +134,7 @@ _KNOWN_LIST_ARGUMENT_REASONS: frozenset[str] = frozenset(get_args(_ListArgumentR
 
 
 def _validate_djangotype_target(
-    target_type: type[object],
+    target_type: object,
     resolver: object,
     *,
     field: str,

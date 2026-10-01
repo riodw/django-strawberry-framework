@@ -1291,9 +1291,10 @@ class _DocumentWalk:
                 continue
             if isinstance(node, InlineFragmentNode):
                 condition = parent
-                # graphql-core types ``type_condition`` non-optional; a typeless inline fragment
-                # carries None
-                if node.type_condition is not None:
+                # basedpyright: graphql-core types ``InlineFragmentNode.type_condition``
+                # non-optional, but ``Parser.parse_fragment`` stores ``None`` on a typeless
+                # inline fragment (``... @include(if: $x) { ... }``)
+                if node.type_condition is not None:  # pyright: ignore[reportUnnecessaryComparison]
                     condition = graphql_schema.get_type(node.type_condition.name.value) or parent
                 stack.extend(
                     (

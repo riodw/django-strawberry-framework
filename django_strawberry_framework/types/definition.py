@@ -415,7 +415,7 @@ def origin_has_custom_id_resolver(origin: type[object], pk_name: str) -> bool:
 
 
 def _normalize_pk_name(pk_name: object) -> str | None:
-    """Return a plain primary-key name, or ``None`` for malformed input."""
+    """Return a plain primary-key or id attribute name, or ``None`` for malformed input."""
     if not isinstance(pk_name, str):
         return None
     normalized = str.__str__(pk_name)
@@ -455,10 +455,9 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
         return False
     except BaseException:
         return True
-    if not isinstance(id_attr, str):
-        return True
-    id_attr = str.__str__(id_attr)
-    return id_attr not in ("pk", pk_name)
+    # A non-string or empty override result cannot name the pk column.
+    normalized_id_attr = _normalize_pk_name(id_attr)
+    return normalized_id_attr is None or normalized_id_attr not in ("pk", pk_name)
 
 
 def _class_has_custom_id_resolver(type_cls: type[object], name: str) -> bool:

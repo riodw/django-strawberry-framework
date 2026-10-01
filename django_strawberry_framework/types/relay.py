@@ -768,6 +768,19 @@ def _install_typename_closure(
     type_cls.resolve_typename = classmethod(resolve_typename)  # pyright: ignore[reportAttributeAccessIssue]
 
 
+def _plain_globalid_slot(slot: object) -> str | None:
+    """Return a ``GlobalID`` slot as a plain ``str``, or ``None`` when it is not a string.
+
+    ``GlobalID.__post_init__`` enforces string slots, but an instance built around it (or a
+    subclass) can carry any value. A ``str`` subclass is normalized before truthiness,
+    splitting, and registry lookups so hostile ``__str__`` / ``__format__`` overrides cannot
+    escape the decode input boundary.
+    """
+    if not isinstance(slot, str):
+        return None
+    return str.__str__(slot)
+
+
 def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
     """Decode a ``GlobalID`` to its ``(DjangoType, node_id)`` via resolve-then-enforce.
 
@@ -844,24 +857,20 @@ def decode_global_id(gid: object) -> tuple[type[_RelayDjangoType], str]:
 
     try:
         # A caller-built ``GlobalID`` (or subclass) carries whatever its slots were given.
-        type_name: object = decoded.type_name
-        node_id: object = decoded.node_id
+        raw_type_name = decoded.type_name
+        raw_node_id = decoded.node_id
     except BaseException as exc:
         raise ConfigurationError(
             "decode_global_id: GlobalID fields could not be read; both type_name and "
             "node_id must be non-empty strings.",
         ) from exc
-    if not isinstance(type_name, str) or not isinstance(node_id, str):
+    if (type_name := _plain_globalid_slot(raw_type_name)) is None or (
+        node_id := _plain_globalid_slot(raw_node_id)
+    ) is None:
         raise ConfigurationError(
             "decode_global_id: GlobalID fields must be strings; both type_name and "
             "node_id must be non-empty.",
         )
-    # ``isinstance`` intentionally accepts GlobalID subclasses. Normalize
-    # their string slots before truthiness, splitting, and registry lookups so
-    # hostile ``__str__`` / ``__format__`` overrides cannot escape this input
-    # boundary.
-    type_name = str.__str__(type_name)
-    node_id = str.__str__(node_id)
     if not type_name or not node_id:
         raise ConfigurationError(
             f"decode_global_id: GlobalID has an empty slot (type_name={_safe_arg_repr(type_name)}, "

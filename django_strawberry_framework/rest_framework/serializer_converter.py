@@ -261,7 +261,10 @@ def register_serializer_field_converter(
             f"subclass; got {field_class!r}.",
         )
     if not callable(converter):
-        raise ConfigurationError(
+        # basedpyright: the ``SerializerFieldConverter`` annotation is the contract; the check
+        # rejects a caller without a type checker, per GOAL.md "Trust boundary": configuration is
+        # validated at construction
+        raise ConfigurationError(  # pyright: ignore[reportUnreachable]
             f"register_serializer_field_converter: converter for {field_class.__name__!r} must be "
             f"a callable(field) -> SerializerFieldConversion; got {converter!r}.",
         )

@@ -136,7 +136,10 @@ def safe_wrap_connection_method(
             machinery at the next ``connection.<method>()`` call.
     """
     if not callable(wrapper):
-        raise TypeError(
+        # basedpyright: the annotation is the contract; this rejects a caller with no type
+        # checker, documented in this docstring's ``Raises:``, per GOAL.md "Trust boundary"
+        # configuration validation.
+        raise TypeError(  # pyright: ignore[reportUnreachable]
             "safe_wrap_connection_method() received a non-callable wrapper",
         )
     current: object = getattr(connection, method_name)

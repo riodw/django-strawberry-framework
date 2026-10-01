@@ -127,7 +127,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
 
     from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
-    from ..utils.typing import ConcreteField, ForeignKeyField, ModelField
+    from ..utils.typing import ForeignKeyField, ModelField
 
     # ``(field_name, target_type, child_filterset, child_input, child_base)`` per active
     # related branch, as ``FilterSet._iter_visibility_steps`` yields it.
@@ -1594,11 +1594,12 @@ class FilterSet(
             # forward-defensive no-op in case the upstream contract changes.
             return fields
 
-        # ADD the PK if upstream excluded it (typically the auto-id column). Django
-        # leaves ``Options.pk`` ``None`` on an abstract model with no explicit primary
-        # key; django-stubs types it as always a ``Field``.
-        pk_field: ConcreteField | None = model._meta.pk
-        if pk_field is not None and pk_field.name not in fields:
+        # ADD the PK if upstream excluded it (typically the auto-id column).
+        pk_field = model._meta.pk
+        # basedpyright: django-stubs types ``Options.pk`` as always a ``Field``, but Django leaves
+        # it ``None`` on an abstract model (``ModelBase.__new__`` returns before ``_prepare``
+        # adds the auto primary key), so the comparison is live
+        if pk_field is not None and pk_field.name not in fields:  # pyright: ignore[reportUnnecessaryComparison]
             fields[pk_field.name] = ["exact"]
 
         # REMOVE every ManyToManyField from the swept dict.
@@ -1654,12 +1655,14 @@ class FilterSet(
         # basedpyright: typeshed narrows ``field`` to ``Field``; upstream ``get_filters`` passes
         # the ``ForeignObjectRel`` of a reverse relation too. It rejects ``ModelField``'s
         # ``ForeignObjectRel`` arm
-        default: Filter | None = super().filter_for_field(
+        default = super().filter_for_field(
             field,  # pyright: ignore[reportArgumentType]
             field_name,
             lookup_expr,
         )
-        if default is None:
+        # basedpyright: ``None`` for an unrecognized field (see the ``override`` note above), so
+        # the comparison is live
+        if default is None:  # pyright: ignore[reportUnnecessaryComparison]
             # Upstream's unrecognized-field contract. django-filter's
             # ``filter_for_field`` returns ``None`` for a model field with no
             # ``FILTER_DEFAULTS`` entry (``FileField`` / ``ImageField`` /

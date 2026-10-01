@@ -65,7 +65,6 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from graphql.language.ast import (
         FieldNode,
         FragmentDefinitionNode,
-        NamedTypeNode,
         Node,
         SelectionSetNode,
     )
@@ -217,15 +216,15 @@ def ast_to_converted_selections(
         out: list[Selection] = []
         for node in nodes:
             if isinstance(node, InlineFragmentNode):
-                # graphql-core types ``type_condition`` non-optional, but the parser leaves it
-                # ``None`` on a typeless inline fragment (``... @include(if: $x) { ... }``).
-                condition: NamedTypeNode | None = node.type_condition
+                condition = node.type_condition
                 out.append(
                     InlineFragment(
-                        # basedpyright: Strawberry types ``InlineFragment.type_condition`` as
-                        # ``str``; a typeless fragment has no condition to name. It rejects
-                        # ``str | None`` for the ``str`` field
-                        type_condition=(condition.name.value if condition is not None else None),  # pyright: ignore[reportArgumentType]
+                        # basedpyright: graphql-core types ``InlineFragmentNode.type_condition``
+                        # non-optional, but ``Parser.parse_fragment`` stores ``None`` on a typeless
+                        # inline fragment (``... @include(if: $x) { ... }``), so the comparison is
+                        # live. Strawberry types ``InlineFragment.type_condition`` as ``str``; a
+                        # typeless fragment has no condition to name, so it rejects the ``None`` arm
+                        type_condition=(condition.name.value if condition is not None else None),  # pyright: ignore[reportArgumentType, reportUnnecessaryComparison]
                         directives=convert_directives(info, node.directives),
                         selections=_convert(ast_child_selections(node)),
                     ),

@@ -246,7 +246,10 @@ def normalize_nested_serializer_configs(
     if nested_configs is None:
         return None
     if not isinstance(nested_configs, Mapping):
-        raise ConfigurationError(
+        # basedpyright: the annotation is the contract; the check rejects a caller without a type
+        # checker (a consumer-built ``NestedSerializerConfig.nested_fields`` reaches here
+        # unvalidated), per GOAL.md "Trust boundary": configuration is validated at construction
+        raise ConfigurationError(  # pyright: ignore[reportUnreachable]
             f"nested_configs must be a mapping of {{field_name: NestedSerializerConfig}}; "
             f"got {_safe_arg_repr(nested_configs)}.",
         )

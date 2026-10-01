@@ -240,5 +240,5 @@ def test_the_shipped_allowlist_is_well_formed():
     assert len(sites) == len(set(sites))
     for entry in check_any.ALLOWED_ANY:
         assert re.fullmatch(rf"{check_any.PACKAGE}/[\w/]+\.py::[\w.]+", entry.site), entry
-        assert entry.count >= 1, entry
+        assert entry.limit >= 1, entry
         assert entry.reason.strip(), entry

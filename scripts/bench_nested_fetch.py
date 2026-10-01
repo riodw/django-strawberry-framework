@@ -192,7 +192,7 @@ def _postgres_server_version() -> str:
 
 def main() -> int:
     """Parse args, seed the target database, and print the strategy matrix."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("--parents", type=int, default=200, help="shelf count (default 200)")
     parser.add_argument(
         "--children",

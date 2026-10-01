@@ -1100,9 +1100,10 @@ def _describe_live_marker(marker: Path) -> str:
             "possibly still in the tree; restore each file with its `restore_with` command, "
             "then delete the marker"
         )
+    files = payload.get("files")
     restores = [
         str(item.get("restore_with"))
-        for item in payload.get("files", ())
+        for item in (files if isinstance(files, list) else ())
         if isinstance(item, dict) and item.get("restore_with")
     ]
     restore_text = f" ({'; '.join(restores)})" if restores else ""
@@ -1725,7 +1726,7 @@ def _run_scope(entry: ProofEntry, capture: RunCapture | None = None) -> RunOutco
     exact argv and the environment additions.
     """
     command = [*PYTEST_COMMAND, *entry.scope]
-    environment = None
+    additions: dict[str, str] = {}
     if capture is not None:
         command = [
             *PYTEST_COMMAND,
@@ -1742,7 +1743,7 @@ def _run_scope(entry: ProofEntry, capture: RunCapture | None = None) -> RunOutco
             PROBE_OUTPUT_ENV: str(capture.probe_output),
             PROBE_PACKAGE_ENV: PACKAGE_NAME,
         }
-        environment = {**os.environ, **additions}
+    environment = None if capture is None else {**os.environ, **additions}
     started = time.monotonic()
     completed = subprocess.run(
         command,

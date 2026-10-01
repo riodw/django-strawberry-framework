@@ -274,14 +274,19 @@ def _literal_constructs(text: str, blines: list[bytes]) -> Iterator[Construct]:
             continue
         if count < 2:  # 0/1-item collections are never touched (incl. 1-tuples)
             continue
+        # basedpyright: typeshed's ``ast.expr`` types end positions ``int | None`` since a
+        # hand-built node may omit them; ``ast.parse`` sets both on every node it returns
+        end_lineno: int = node.end_lineno  # pyright: ignore[reportAssignmentType]
+        # basedpyright: same ``ast.expr`` end-position declaration as ``end_lineno`` above
+        end_col_offset: int = node.end_col_offset  # pyright: ignore[reportAssignmentType]
         open_bytes = blines[node.lineno - 1]
         if (
             isinstance(node, ast.Tuple)
             and open_bytes[node.col_offset : node.col_offset + 1] != b"("
         ):
             continue  # bare tuple (``a, b, c`` / ``return a, b``) -- skip
-        close_byte = node.end_col_offset - 1
-        close_bytes = blines[node.end_lineno - 1]
+        close_byte = end_col_offset - 1
+        close_bytes = blines[end_lineno - 1]
         if (
             not (0 <= close_byte < len(close_bytes))
             or close_bytes[close_byte : close_byte + 1] not in _CLOSE_BYTES
@@ -290,7 +295,7 @@ def _literal_constructs(text: str, blines: list[bytes]) -> Iterator[Construct]:
         yield (
             node.lineno - 1,
             _byte_to_char(open_bytes, node.col_offset),
-            node.end_lineno - 1,
+            end_lineno - 1,
             _byte_to_char(close_bytes, close_byte),
             count,
             True,
@@ -827,7 +832,24 @@ def _format_graphql(content: str) -> str | None:
     (fixpoint-safe).
     """
     try:
-        from graphql import GraphQLError, parse, print_ast
+        from graphql import (
+            ArgumentNode,
+            DefinitionNode,
+            DirectiveNode,
+            FieldNode,
+            FragmentDefinitionNode,
+            FragmentSpreadNode,
+            GraphQLError,
+            InlineFragmentNode,
+            ListValueNode,
+            ObjectValueNode,
+            OperationDefinitionNode,
+            SelectionNode,
+            SelectionSetNode,
+            ValueNode,
+            parse,
+            print_ast,
+        )
     except ImportError:
         _warn_once(
             "note: graphql-core is not installed; the GraphQL layout rule is not "
@@ -842,34 +864,34 @@ def _format_graphql(content: str) -> str | None:
     def pad(level: int) -> str:
         return "  " * level
 
-    def value(node: object, level: int) -> str:
-        if node.kind == "object_value":
+    def value(node: ValueNode, level: int) -> str:
+        if isinstance(node, ObjectValueNode):
             if not node.fields:
                 return "{}"
             rows = [
                 f"{pad(level + 1)}{f.name.value}: {value(f.value, level + 1)}" for f in node.fields
             ]
             return "{\n" + "\n".join(rows) + "\n" + pad(level) + "}"
-        if node.kind == "list_value":
+        if isinstance(node, ListValueNode):
             if not node.values:
                 return "[]"
             rows = [f"{pad(level + 1)}{value(v, level + 1)}" for v in node.values]
             return "[\n" + "\n".join(rows) + "\n" + pad(level) + "]"
         return print_ast(node)  # string / int / float / bool / null / enum / variable
 
-    def directives(nodes: object) -> str:
+    def directives(nodes: Sequence[DirectiveNode]) -> str:
         return "".join(f" {print_ast(d)}" for d in nodes)
 
-    def arguments(nodes: object, level: int) -> str:
+    def arguments(nodes: Sequence[ArgumentNode], level: int) -> str:
         rows = [f"{pad(level + 1)}{a.name.value}: {value(a.value, level + 1)}" for a in nodes]
         return "(\n" + "\n".join(rows) + "\n" + pad(level) + ")"
 
-    def selection_set(node: object, level: int) -> str:
+    def selection_set(node: SelectionSetNode, level: int) -> str:
         rows = [selection(s, level + 1) for s in node.selections]
         return "{\n" + "\n".join(rows) + "\n" + pad(level) + "}"
 
-    def selection(node: object, level: int) -> str:
-        if node.kind == "field":
+    def selection(node: SelectionNode, level: int) -> str:
+        if isinstance(node, FieldNode):
             text = pad(level) + (f"{node.alias.value}: " if node.alias else "") + node.name.value
             if node.arguments:
                 text += arguments(node.arguments, level)
@@ -877,16 +899,16 @@ def _format_graphql(content: str) -> str | None:
             if node.selection_set:
                 text += " " + selection_set(node.selection_set, level)
             return text
-        if node.kind == "fragment_spread":
+        if isinstance(node, FragmentSpreadNode):
             return f"{pad(level)}...{node.name.value}{directives(node.directives)}"
-        if node.kind == "inline_fragment":
+        if isinstance(node, InlineFragmentNode):
             cond = f" on {node.type_condition.name.value}" if node.type_condition else ""
             head = f"{pad(level)}...{cond}{directives(node.directives)}"
             return head + " " + selection_set(node.selection_set, level)
         return pad(level) + print_ast(node)
 
-    def definition(node: object) -> str:
-        if node.kind == "operation_definition":
+    def definition(node: DefinitionNode) -> str:
+        if isinstance(node, OperationDefinitionNode):
             anonymous = (
                 node.operation.value == "query"
                 and node.name is None
@@ -899,7 +921,7 @@ def _format_graphql(content: str) -> str | None:
             if node.variable_definitions:
                 head += "(" + ", ".join(print_ast(v) for v in node.variable_definitions) + ")"
             return head + directives(node.directives) + " " + selection_set(node.selection_set, 0)
-        if node.kind == "fragment_definition":
+        if isinstance(node, FragmentDefinitionNode):
             head = f"fragment {node.name.value} on {node.type_condition.name.value}"
             return head + directives(node.directives) + " " + selection_set(node.selection_set, 0)
         return print_ast(node)  # type-system / unhandled defs -> graphql-core inline printer

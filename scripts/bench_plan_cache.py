@@ -61,8 +61,9 @@ import argparse
 import statistics
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from _bench_common import (
     bootstrap_fakeshop_django,
@@ -76,6 +77,9 @@ from _bench_common import (
     summarize_rounds,
     write_report,
 )
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.optimizer.extension import CacheInfo
 
 # Below this many measured iterations, warm-vs-cold timing deltas are dominated
 # by noise (a single sample can even make ``cold`` look faster than ``warm``),
@@ -139,7 +143,7 @@ def _bench_one(
     *,
     cold: bool,
     variables: dict[str, Any] | None = None,
-) -> tuple[list[int], Any]:
+) -> tuple[list[int], CacheInfo]:
     """Return (timings_ns, cache_info) for ``iterations`` runs of ``query``."""
     _reset(optimizer)
     timings: list[int] = []
@@ -160,7 +164,7 @@ def _us(ns: float) -> float:
     return ns / 1000.0
 
 
-def _us_summary(rounds: list[list[int]]) -> dict[str, float]:
+def _us_summary(rounds: Sequence[Sequence[float]]) -> dict[str, float]:
     summary = summarize_rounds(rounds)
     return {
         "min": _us(summary["min"]),
@@ -198,7 +202,7 @@ def _measure(
     root_rows, sql_queries = _probe(schema, query, variables)
     warm_rounds: list[list[int]] = []
     cold_rounds: list[list[int]] = []
-    warm_info = None
+    warm_infos: list[CacheInfo] = []
     for round_index in range(args.rounds):
         order = (False, True) if round_index % 2 == 0 else (True, False)
         for cold in order:
@@ -215,11 +219,12 @@ def _measure(
                 cold_rounds.append(timings)
             else:
                 warm_rounds.append(timings)
-                warm_info = info
+                warm_infos.append(info)
     # Cacheability is a property of the built plan, not of how many hits a
     # given run happened to observe: a single warm execution has zero hits
     # yet the plan IS cached. Read it from cache-entry behaviour - a plan
     # was stored iff the cache holds an entry after the run.
+    warm_info = warm_infos[-1]
     cacheable = warm_info.size > 0
     warm = _us_summary(warm_rounds)
     cold = _us_summary(cold_rounds)

@@ -90,6 +90,7 @@ import sys
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
 try:
     import _plan_common
@@ -1190,14 +1191,24 @@ class PlanItem:
     inits: tuple[str, ...] = ()
 
 
+class _PlanItemFields(TypedDict):
+    """The :class:`PlanItem` fields gathered while its indented field lines are parsed."""
+
+    label: str
+    ticked: bool
+    status: str
+    artifacts: tuple[str, ...]
+    inits: tuple[str, ...]
+
+
 def parse_plan(text: str) -> list[PlanItem]:
     """Parse every checkbox item and its indented fields from a plan."""
     items: list[PlanItem] = []
-    current: dict[str, object] | None = None
+    current: _PlanItemFields | None = None
 
     def flush() -> None:
         if current is not None:
-            items.append(PlanItem(**current))  # type: ignore[arg-type]
+            items.append(PlanItem(**current))
 
     for line in text.splitlines():
         item = _ITEM_LINE.match(line)
@@ -1448,7 +1459,7 @@ def _add_scope_arguments(parser: argparse.ArgumentParser, scope_help: str) -> No
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build the ``plan`` / ``resume`` / ``scope`` / ``reconcile`` parser."""
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument(
         "--root",
         type=Path,

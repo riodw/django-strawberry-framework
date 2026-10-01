@@ -245,23 +245,30 @@ multiline-quotes = "double"
 max-line-length = 110
 
 # basedpyright checks the shipped package (``py.typed`` makes its annotations public)
-# and a warning fails the run. No plugin exists or is wanted: the check reads only the
-# stubs' and packages' own annotations, so it sees the package exactly as a downstream
-# checker does and never imports the example project's settings. Every dependency is
-# typed (its own ``py.typed``, django-stubs, or the typeshed stubs in the ``dev``
-# group). ``pythonVersion`` is the lowest Python the installed stubs support (they
-# import ``typing.Self``); a lower one would read every ``Self`` return as ``Any``. The
-# package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10,
-# not by the checker. The one suppression is ``# pyright: ignore[<rule>]``, always
-# rule-scoped: ``# type: ignore`` is not read at all, and a suppression the run does
-# not need is itself an error.
+# and the ``scripts/`` tooling that gates it, and a warning fails the run. A script runs
+# as ``python scripts/<name>.py``, so its execution environment is rooted at
+# ``scripts/`` (sibling imports such as ``_kanban_lib``) with the fakeshop project on
+# the path (``apps.*`` / ``config.*`` imports, resolved statically, never executed). No
+# plugin exists or is wanted: the check reads only the stubs' and packages' own
+# annotations, so it sees the package exactly as a downstream checker does and never
+# imports the example project's settings. Every dependency is typed (its own
+# ``py.typed``, django-stubs, or the typeshed stubs in the ``dev`` group).
+# ``pythonVersion`` is the lowest Python the installed stubs support (they import
+# ``typing.Self``); a lower one would read every ``Self`` return as ``Any``. The
+# package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10, not
+# by the checker. The one suppression is ``# pyright: ignore[<rule>]``, always
+# rule-scoped: ``# type: ignore`` is not read at all, and a suppression the run does not
+# need is itself an error.
 [tool.basedpyright]
-include = ["django_strawberry_framework"]
+include = ["django_strawberry_framework", "scripts"]
+executionEnvironments = [{ root = "scripts", extraPaths = ["examples/fakeshop"] }]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 failOnWarnings = true
 enableTypeIgnoreComments = false
 reportUnnecessaryTypeIgnoreComment = "error"
+reportImplicitOverride = "error"
+reportUnnecessaryContains = "error"
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

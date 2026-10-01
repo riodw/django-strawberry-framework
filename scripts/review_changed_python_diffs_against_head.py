@@ -104,8 +104,9 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 if __package__:
     from scripts.review_historical_package_snapshot_at_commit import (
@@ -538,13 +539,38 @@ def _check_stem_collisions(changes: Sequence[_Change]) -> None:
             raise RuntimeError(f"diff artifact names collide: {collisions!r}")
 
 
+class _ListRow(TypedDict):
+    """One ``--list`` row: a :class:`_Change` and its HEAD blob (``None`` when absent there)."""
+
+    status: str
+    path: str
+    old_path: str | None
+    head_blob: str | None
+
+
+class _DirtyListRow(_ListRow):
+    """A dirty ``--list`` row, also carrying its working-tree blob (``None`` when deleted)."""
+
+    worktree_blob: str | None
+
+
+class _ListPayload(TypedDict):
+    """The ``--list`` data, printed as JSON or rendered by :func:`_format_list`."""
+
+    base: str
+    base_commit: str
+    head: str
+    changed: list[_ListRow]
+    dirty: list[_DirtyListRow]
+
+
 def _list_payload(
     base: str,
     head: str,
     changes: Sequence[_Change],
     dirty: Sequence[_Change],
     repo_root: Path,
-) -> dict[str, object]:
+) -> _ListPayload:
     """Build the ``--list`` data: changed rows with HEAD blobs, dirty rows with both blobs."""
     head_blobs = _head_blobs(sorted({c.path for c in [*changes, *dirty]}), head)
     worktree_blobs = _worktree_blobs(sorted({c.path for c in dirty}), repo_root)
@@ -553,11 +579,19 @@ def _list_payload(
         "base_commit": _run_git(["rev-parse", f"{base}^{{commit}}"]).strip(),
         "head": head,
         "changed": [
-            {**asdict(change), "head_blob": head_blobs.get(change.path)} for change in changes
+            {
+                "status": change.status,
+                "path": change.path,
+                "old_path": change.old_path,
+                "head_blob": head_blobs.get(change.path),
+            }
+            for change in changes
         ],
         "dirty": [
             {
-                **asdict(change),
+                "status": change.status,
+                "path": change.path,
+                "old_path": change.old_path,
                 "head_blob": head_blobs.get(change.path),
                 "worktree_blob": worktree_blobs.get(change.path),
             }
@@ -566,7 +600,7 @@ def _list_payload(
     }
 
 
-def _format_list(payload: dict[str, object]) -> str:
+def _format_list(payload: _ListPayload) -> str:
     """Render the ``--list`` payload as plain text."""
     changed = payload["changed"]
     dirty = payload["dirty"]

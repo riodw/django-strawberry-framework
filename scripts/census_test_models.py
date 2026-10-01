@@ -24,6 +24,7 @@ import ast
 import collections
 import functools
 from pathlib import Path
+from typing import TypeGuard
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_ROOT = REPO_ROOT / "tests"
@@ -118,7 +119,7 @@ def _type_call_model(
     node: ast.AST,
     local_models: set[str],
     imports: dict[str, tuple[str, str | None]],
-) -> bool:
+) -> TypeGuard[ast.Call]:
     """Return whether ``node`` is ``type(name, (<model base>, ...), attrs)``."""
     return (
         isinstance(node, ast.Call)
@@ -170,7 +171,9 @@ def model_name(node: ModelNode) -> str:
     if isinstance(node, ast.ClassDef):
         return node.name
     first = node.args[0]
-    return first.value if isinstance(first, ast.Constant) else "<type()>"
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return "<type()>"
 
 
 def census(root: Path = TESTS_ROOT) -> collections.Counter[str]:

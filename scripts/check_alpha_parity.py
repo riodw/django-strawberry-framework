@@ -32,7 +32,7 @@ except ModuleNotFoundError:  # imported as ``scripts.check_alpha_parity`` (repo 
 def main() -> int:
     """Audit every Alpha card and fail on any non-``internal`` parity gap."""
     configure_django()
-    from apps.kanban.models import Card
+    from apps.kanban.models import Card, CardItem, ParityClaim
 
     alpha = Card.objects.filter(target_version__milestone__key="alpha").order_by("number")
     violations: list[tuple[str, str]] = []
@@ -41,8 +41,11 @@ def main() -> int:
         if card.labels.filter(key="internal").exists():
             exempt += 1
             continue
-        n_parity = card.parity_claims.count()
-        n_justification = card.items.filter(section__key="verified_upstream").count()
+        n_parity = ParityClaim.objects.filter(card=card).count()
+        n_justification = CardItem.objects.filter(
+            card=card,
+            section__key="verified_upstream",
+        ).count()
         if n_parity and n_justification:
             continue
         missing = []

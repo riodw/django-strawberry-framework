@@ -134,9 +134,10 @@ def rows_grew(root_rows: list[int | None]) -> bool:
     A flat count over flat root rows is not a batching proof: the added
     parents never reached the resolver.
     """
-    if any(rows is None for rows in root_rows):
+    known = [rows for rows in root_rows if rows is not None]
+    if len(known) < len(root_rows):
         return False
-    return all(later > earlier for earlier, later in pairwise(root_rows))
+    return all(later > earlier for earlier, later in pairwise(known))
 
 
 def parse_cardinalities(raw: str) -> list[int]:

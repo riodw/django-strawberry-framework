@@ -55,10 +55,10 @@ _TYPE_ARGUMENT_CALLS = frozenset({"cast", "TypeVar"})
 
 
 class AllowedAny(NamedTuple):
-    """A site allowed to keep ``count`` uses of ``Any``, and why nothing narrower is true."""
+    """A site allowed to keep ``limit`` uses of ``Any``, and why nothing narrower is true."""
 
     site: str
-    count: int
+    limit: int
     reason: str
 
 
@@ -751,7 +751,7 @@ def census(root: Path) -> dict[str, list[int]]:
 
 def judge(found: dict[str, list[int]], allowed: Sequence[AllowedAny]) -> Verdict:
     """Compare a census with the allowlist."""
-    limits = Counter({entry.site: entry.count for entry in allowed})
+    limits = Counter({entry.site: entry.limit for entry in allowed})
     failing = tuple(
         (site, len(lines), limits[site])
         for site, lines in sorted(found.items())
@@ -760,7 +760,7 @@ def judge(found: dict[str, list[int]], allowed: Sequence[AllowedAny]) -> Verdict
     stale = tuple(
         (entry, len(found.get(entry.site, ())))
         for entry in allowed
-        if len(found.get(entry.site, ())) < entry.count
+        if len(found.get(entry.site, ())) < entry.limit
     )
     return Verdict(failing, stale)
 
@@ -772,13 +772,13 @@ def render(verdict: Verdict, found: dict[str, list[int]]) -> str:
         where = ", ".join(str(line) for line in found[site])
         lines.append(f"{site}: {count} use(s) of Any, {limit} allowed (lines {where})")
     for entry, count in verdict.stale:
-        lines.append(f"{entry.site}: stale allowlist entry, {entry.count} allowed, {count} found")
+        lines.append(f"{entry.site}: stale allowlist entry, {entry.limit} allowed, {count} found")
     return "\n".join(lines)
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     """Parse the command line."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument(
         "--list",
         action="store_true",

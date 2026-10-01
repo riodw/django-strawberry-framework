@@ -78,7 +78,9 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
+
+from typing_extensions import override
 
 DEFAULT_MARKERS = (
     "QuerySet",
@@ -358,9 +360,14 @@ class _Scope:
         )
 
     @property
+    def function_node(self) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+        """Return the definition when the scope is a function or method, else ``None``."""
+        return None if isinstance(self.node, ast.ClassDef) else self.node
+
+    @property
     def is_function(self) -> bool:
         """Return whether the scope is a function or method."""
-        return not isinstance(self.node, ast.ClassDef)
+        return self.function_node is not None
 
 
 @dataclass(frozen=True)
@@ -492,11 +499,13 @@ class _StaticVisitor(ast.NodeVisitor):
         self.duplicate_literals: Counter[str] = Counter()
         self._parent_stack: list[str] = []
 
+    @override
     def visit_Module(self, node: ast.Module) -> None:
         """Record the module docstring and then visit the module body."""
         self._record_docstring(node, "<module>")
         self._visit_children_excluding_docstring(node)
 
+    @override
     def visit_Import(self, node: ast.Import) -> None:
         """Record an import statement."""
         names = ", ".join(
@@ -508,6 +517,7 @@ class _StaticVisitor(ast.NodeVisitor):
         )
         self.generic_visit(node)
 
+    @override
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         """Record a from-import statement."""
         module = "." * node.level + (node.module or "")
@@ -524,6 +534,7 @@ class _StaticVisitor(ast.NodeVisitor):
         )
         self.generic_visit(node)
 
+    @override
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Record a class and then visit its body."""
         self._record_symbol("class", node, "")
@@ -532,14 +543,17 @@ class _StaticVisitor(ast.NodeVisitor):
         self._visit_children_excluding_docstring(node)
         self._parent_stack.pop()
 
+    @override
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Record a function and then visit its body."""
         self._visit_function("def", node)
 
+    @override
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         """Record an async function and then visit its body."""
         self._visit_function("async def", node)
 
+    @override
     def visit_Call(self, node: ast.Call) -> None:
         """Record a function call."""
         name = _call_name(node.func)
@@ -547,6 +561,7 @@ class _StaticVisitor(ast.NodeVisitor):
             self.calls.append(_CallRecord(node.lineno, name))
         self.generic_visit(node)
 
+    @override
     def visit_Constant(self, node: ast.Constant) -> None:
         """Record duplicate string literals."""
         if isinstance(node.value, str):
@@ -1135,9 +1150,9 @@ def _decorator_names(node: ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
 
 
 def _hot_reasons(scope: _Scope) -> list[str]:
-    if not scope.is_function:
+    node = scope.function_node
+    if node is None:
         return []
-    node = scope.node
     reasons = []
     if HOT_ENTRY_NAME.match(node.name):
         reasons.append(f"name `{node.name}`")
@@ -1172,11 +1187,10 @@ def _positional_boolean_params(arguments: ast.arguments) -> list[str]:
     ]
 
 
-def _parameter_count(scope: _Scope) -> int:
+def _parameter_count(kind: str, arguments: ast.arguments) -> int:
     """Count parameters, excluding a method's leading ``self`` / ``cls``."""
-    arguments = scope.node.args
     names = [arg.arg for arg in (*arguments.posonlyargs, *arguments.args)]
-    if scope.kind.endswith("method") and names and names[0] in {"self", "cls"}:
+    if kind.endswith("method") and names and names[0] in {"self", "cls"}:
         names = names[1:]
     count = len(names) + len(arguments.kwonlyargs)
     count += arguments.vararg is not None
@@ -1285,14 +1299,18 @@ def _symbol_metrics(
                 db_calls.append(_Lead(child.lineno, name or "?", db, loop))
                 if loop is not None:
                     per_row.append(_Lead(child.lineno, name or "?", db, loop))
-    is_function = scope.is_function
+    function_node = scope.function_node
     return _SymbolMetrics(
         scope=scope,
         docstring=docstring,
         code_lines=code_lines,
         max_nesting_depth=max_depth,
-        parameter_count=_parameter_count(scope) if is_function else 0,
-        positional_boolean_params=_positional_boolean_params(node.args) if is_function else [],
+        parameter_count=(
+            0 if function_node is None else _parameter_count(scope.kind, function_node.args)
+        ),
+        positional_boolean_params=(
+            [] if function_node is None else _positional_boolean_params(function_node.args)
+        ),
         await_count=awaits,
         db_calls=db_calls,
         per_row=per_row,
@@ -1357,7 +1375,7 @@ class _ReferenceIndex:
 # --- Performance leads ----------------------------------------------------------------
 
 
-def _is_type_checking_if(node: ast.stmt) -> bool:
+def _is_type_checking_if(node: ast.stmt) -> TypeGuard[ast.If]:
     if not isinstance(node, ast.If):
         return False
     test = node.test
@@ -2242,18 +2260,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         caller-correctable error.
     """
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    single_target: Path | None = args.target
+    json_path: Path | None = args.json
     if args.code_digest is not None:
-        if args.all or args.target is not None:
+        if args.all or single_target is not None:
             print(
                 "--code-digest takes its sources alone, without a target or --all.",
                 file=sys.stderr,
             )
             return 2
         return _print_code_digests(args.code_digest)
-    if args.all and args.target is not None:
+    if args.all and single_target is not None:
         print("Pass either --all or a single target file, not both.", file=sys.stderr)
         return 2
-    if not args.all and args.target is None:
+    if not args.all and single_target is None:
         print("Target is required unless --all is passed.", file=sys.stderr)
         return 2
 
@@ -2261,10 +2281,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     package_root = (args.root / _ALL_TARGET_ROOT).resolve()
-    references = _ReferenceIndex(package_root, args.root) if args.json is not None else None
-    documents: list[dict[str, object]] | None = [] if args.json is not None else None
+    references = _ReferenceIndex(package_root, args.root) if json_path is not None else None
+    documents: list[dict[str, object]] = []
+    collected = documents if json_path is not None else None
 
-    if args.all:
+    if single_target is None:  # --all: the checks above admit exactly one of the two
         if not package_root.is_dir():
             print(f"Package directory does not exist: {package_root}", file=sys.stderr)
             return 2
@@ -2273,12 +2294,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"No Python files found under {package_root}", file=sys.stderr)
             return 2
         for target in targets:
-            exit_code = _inspect_target(target, args, markers, output_dir, references, documents)
+            exit_code = _inspect_target(target, args, markers, output_dir, references, collected)
             if exit_code != 0:
                 return exit_code
-        if documents is not None:
+        if json_path is not None:
             _write_json(
-                args.json.resolve(),
+                json_path.resolve(),
                 {
                     "header": {
                         "root": _relative_path(package_root, args.root),
@@ -2293,15 +2314,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     exit_code = _inspect_target(
-        args.target.resolve(),
+        single_target.resolve(),
         args,
         markers,
         output_dir,
         references,
-        documents,
+        collected,
     )
-    if exit_code == 0 and documents:
-        _write_json(args.json.resolve(), documents[0])
+    if exit_code == 0 and json_path is not None:
+        _write_json(json_path.resolve(), documents[0])
     return exit_code
 
 

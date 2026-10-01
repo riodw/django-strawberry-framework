@@ -52,14 +52,14 @@ repos:
         require_serial: true
 
       - id: basedpyright
-        name: basedpyright (package types)
+        name: basedpyright (package + scripts types)
         entry: uv run basedpyright
         language: system
         # `pass_filenames: false`: `[tool.basedpyright]` owns the scope, and a file
         # list would check only the staged files, missing the callers whose types a
-        # signature change breaks. Fires on any package source, config or lock change
-        # (the lock pins the checker and every stub and annotated package it reads).
-        files: ^(django_strawberry_framework/.*\.py|pyproject\.toml|uv\.lock)$
+        # signature change breaks. Fires on any package or script source, config or lock
+        # change (the lock pins the checker and every stub and annotated package it reads).
+        files: ^(django_strawberry_framework/.*\.py|scripts/.*\.py|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
 

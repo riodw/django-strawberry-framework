@@ -136,6 +136,7 @@ import dataclasses
 import datetime
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
@@ -147,7 +148,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, TypedDict
+
+from typing_extensions import override
 
 try:
     import _bench_common
@@ -345,6 +348,7 @@ class Address:
         _check_segments(parts[1:], text)
         return cls(parts[0], "/".join(parts[1:-1]), parts[-1])
 
+    @override
     def __str__(self) -> str:
         """Return the address as ``<flow>/<item>/<role>``."""
         return f"{self.flow}/{self.item}/{self.role}"
@@ -450,10 +454,15 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
-def _read_json(path: Path, default: object) -> object:
+def _read_json_object(path: Path, default: dict) -> dict:
+    """Return the JSON object this script wrote at ``path``, or ``default`` when it is absent."""
     if not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        msg = f"{path} holds a JSON {type(document).__name__}, not the object this script writes"
+        raise WorkspaceError(msg)
+    return document
 
 
 # --------------------------------------------------------------------------------------------
@@ -1023,15 +1032,15 @@ def _running_postgres(repo_root: Path) -> Postgres | None:
 
 
 def _load_state(layout: Layout) -> dict:
-    state = _read_json(layout.state_path, None)
-    if state is None:
-        state = {
+    return _read_json_object(
+        layout.state_path,
+        {
             "version": 1,
             "repo_root": str(layout.repo_root),
             "slots": {},
             "items": {},
-        }
-    return state
+        },
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1074,7 +1083,9 @@ def bind(layout: Layout, address: Address, *, fresh: bool = False) -> Binding:
                 raise WorkspaceError(msg)
             slot = f"slot-{max((_slot_number(name) for name in slots), default=0) + 1}"
         else:
-            listing = ", ".join(f"{slot} {bound['address']}" for slot, bound in slots.items())
+            listing = ", ".join(
+                f"{slot} {bound['address']}" for slot, bound in slots.items() if bound
+            )
             msg = (
                 f"{layout.flow}: all {len(slots)} copies are bound ({listing}). Release a "
                 f"finished item: uv run python scripts/workspace.py release {layout.flow}/<item>"
@@ -1195,7 +1206,7 @@ def provenance_faults(
 
 
 def _pump(
-    source: BinaryIO,
+    source: io.BufferedReader,
     sink: BinaryIO,
     log: BinaryIO,
     lock: threading.Lock,
@@ -1294,7 +1305,7 @@ def execute(
         manifest = (
             sync_slot(layout, binding.slot)
             if binding.needs_sync or not layout.manifest_path(binding.slot).exists()
-            else _read_json(layout.manifest_path(binding.slot), {})
+            else _read_json_object(layout.manifest_path(binding.slot), {})
         )
         env, database = cell_env(layout, binding.slot, cell)
         found = probe(binding.directory, env)
@@ -1460,11 +1471,11 @@ def status(repo_root: Path, flow: str | None) -> list[str]:
         for item, entry in sorted(state["items"].items()):
             lines.append(f"  item {item}  ITEM_BASELINE={entry['item_baseline']}")
     postgres = _running_postgres(repo_root)
-    if postgres is None:
+    container = None if postgres is None else postgres.find()
+    if postgres is None or container is None:
         lines.append("postgres: no fakeshop container runs")
     else:
         leases = postgres.databases()
-        container = postgres.find()
         lines.append(f"postgres: container {container[0]}, {len(leases)} workspace database(s)")
         lines.extend(f"  {name}" for name in leases)
     return lines
@@ -1551,11 +1562,41 @@ def build_gate_git(repo_root: Path, gate_dir: Path) -> str:
     return head
 
 
-def summarize_suite(log_text: str) -> dict[str, object]:
+class _SuiteSummary(TypedDict):
+    """What :func:`summarize_suite` reads out of one suite's pytest output."""
+
+    summary: str | None
+    collected: int | None
+    coverage: list[str]
+
+
+class _GateRun(_SuiteSummary):
+    """One gate suite that ran: its command, exit code, log and pytest summary."""
+
+    run_id: str
+    cell: str
+    command: list[str]
+    exit: int
+    seconds: float
+    database: str | None
+    log: str
+
+
+class _GateUnverified(TypedDict):
+    """One gate suite whose cell could not be set up, so it never ran."""
+
+    run_id: str
+    cell: str
+    command: list[str]
+    exit: None
+    unverified: str
+
+
+def summarize_suite(log_text: str) -> _SuiteSummary:
     """Pull pytest's summary, collected count and coverage lines out of one suite's output."""
     summary = None
     collected = None
-    coverage = []
+    coverage: list[str] = []
     for line in log_text.splitlines():
         stripped = line.strip()
         match = SUMMARY_PATTERN.match(stripped)
@@ -1581,6 +1622,7 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
         bound_to = baseline_sha(repo_root)
         manifest = sync_copy(repo_root, layout.gate_dir, preserved=PRESERVED | {".git"})
         head = build_gate_git(repo_root, layout.gate_dir)
+        suite_results: dict[str, _GateRun | _GateUnverified] = {}
         result: dict[str, object] = {
             "flow": layout.flow,
             "at": _now(),
@@ -1592,7 +1634,7 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
             },
             "tree_digest": manifest["tree_digest"],
             "package_digest": manifest["package_digest"],
-            "suites": {},
+            "suites": suite_results,
         }
         uv_run = [
             "uv",
@@ -1608,12 +1650,16 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
             arguments, cell = GATE_SUITES[suite]
             run_id = new_run_id(layout.flow)
             log_path = layout.evidence / "logs" / f"{run_id}.log"
-            entry: dict[str, object] = {"run_id": run_id, "cell": cell, "command": list(arguments)}
             try:
                 env, database = gate_env(layout, cell)
             except WorkspaceError as error:
-                entry.update(exit=None, unverified=str(error))
-                result["suites"][suite] = entry
+                suite_results[suite] = {
+                    "run_id": run_id,
+                    "cell": cell,
+                    "command": list(arguments),
+                    "exit": None,
+                    "unverified": str(error),
+                }
                 all_passed = False
                 sys.stderr.write(f"gate {suite}: unverified: {error}\n")
                 continue
@@ -1621,16 +1667,19 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
             sys.stderr.write(header)
             started = time.monotonic()
             code = stream([*uv_run, "--", *arguments], env, log_path, header)
-            entry.update(
-                exit=code,
-                seconds=round(time.monotonic() - started, 2),
-                database=database,
-                log=str(log_path),
+            ran: _GateRun = {
+                "run_id": run_id,
+                "cell": cell,
+                "command": list(arguments),
+                "exit": code,
+                "seconds": round(time.monotonic() - started, 2),
+                "database": database,
+                "log": str(log_path),
                 **summarize_suite(log_path.read_text(encoding="utf-8", errors="replace")),
-            )
-            result["suites"][suite] = entry
+            }
+            suite_results[suite] = ran
             all_passed = all_passed and code == 0
-            _append_gate_run(layout, entry, suite, manifest)
+            _append_gate_run(layout, ran, suite, manifest)
         if "pg" in suites:
             postgres = _running_postgres(repo_root)
             if postgres is not None:
@@ -1638,7 +1687,7 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
         result_path = layout.evidence / f"gate-{new_run_id(layout.flow)}.json"
         _write_json(result_path, result)
     print(f"gate {layout.flow}: bound to {bound_to}; result {result_path}")
-    for suite, entry in result["suites"].items():
+    for suite, entry in suite_results.items():
         summary = entry.get("summary") or ("passed" if entry["exit"] == 0 else "failed")
         verdict = entry.get("unverified") or f"exit {entry['exit']}: {summary}"
         print(f"  {suite:<8} {entry['run_id']}  {verdict}")
@@ -1660,7 +1709,7 @@ def gate_env(layout: Layout, cell: str) -> tuple[dict[str, str], str | None]:
 
 def _append_gate_run(
     layout: Layout,
-    entry: dict,
+    entry: _GateRun,
     suite: str,
     manifest: dict,
 ) -> None:
@@ -1807,7 +1856,7 @@ def _cmd_gate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     """Return the command-line parser."""
     parser = argparse.ArgumentParser(
-        description=__doc__.split("\n\n", 1)[0],
+        description=(__doc__ or "").partition("\n\n")[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     commands = parser.add_subparsers(dest="name", required=True)

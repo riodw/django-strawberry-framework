@@ -255,10 +255,11 @@ max-line-length = 110
 # ``py.typed``, django-stubs, or the typeshed stubs in the ``dev`` group).
 # ``pythonVersion`` is the lowest Python the installed stubs support (they import
 # ``typing.Self``); a lower one would read every ``Self`` return as ``Any``. The
-# package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10, not
-# by the checker. The one suppression is ``# pyright: ignore[<rule>]``, always
-# rule-scoped: ``# type: ignore`` is not read at all, and a suppression the run does not
-# need is itself an error.
+# package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10, and
+# ``pyrightconfig.floor.json`` (which extends this table) re-checks the package at 3.10
+# so a 3.11+ stdlib or ``typing`` name fails when it is written. The one suppression is
+# ``# pyright: ignore[<rule>]``, always rule-scoped: ``# type: ignore`` is not read at
+# all, and a suppression the run does not need is itself an error.
 [tool.basedpyright]
 include = [
     "django_strawberry_framework",

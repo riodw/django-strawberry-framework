@@ -110,12 +110,12 @@ from .utils.typing import is_async_callable
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from collections.abc import Coroutine, Mapping
-    from typing import Never
 
     from django.db.models.expressions import Expression
     from django.db.models.options import Options
     from django.db.models.sql.query import Query
     from graphql import GraphQLArgument
+    from typing_extensions import Never
 
     from .orders.sets import OrderSet
     from .types.definition import DjangoTypeDefinition

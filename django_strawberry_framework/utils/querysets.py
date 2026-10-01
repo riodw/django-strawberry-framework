@@ -4325,6 +4325,24 @@ def _captured_model(
     return model_for(type_cls) if model is None else model
 
 
+@overload
+def _prepared_visibility_source(
+    type_cls: type[DjangoType],
+    queryset: models.QuerySet[_ModelT, _RowT],
+    *,
+    model: type[models.Model] | None = ...,
+    render_error: Callable[[str, str], str] | None = ...,
+    policy: _SealPolicy[object] = ...,
+) -> tuple[models.QuerySet[_ModelT, _RowT], str | None]: ...
+@overload
+def _prepared_visibility_source(
+    type_cls: type[DjangoType],
+    queryset: object,
+    *,
+    model: type[models.Model] | None = ...,
+    render_error: Callable[[str, str], str] | None = ...,
+    policy: _SealPolicy[object] = ...,
+) -> tuple[models.QuerySet[models.Model, object], str | None]: ...
 def _prepared_visibility_source(
     type_cls: type[DjangoType],
     queryset: object,
@@ -4375,6 +4393,13 @@ def _prepared_visibility_source(
     framework-created seeds are querysets by construction. Preparation composes
     lazy query state only; it executes zero SQL.
 
+    A source typed ``QuerySet[M, R]`` seals to ``QuerySet[M, R]`` (the first
+    overload): ``_seal_or_defect`` rebuilds over the source's own ``model``
+    class (a proxy stays that proxy) with its own Django row iterable, and its
+    combinator rewrite yields model rows only from a model-row combinator (a
+    projected one fails closed with the ``combined`` defect), so neither the
+    model nor the row type changes. Only the trusted rebuild of an untyped
+    ``object`` source is typed ``QuerySet[Model, object]``.
     """
     model = _captured_model(type_cls, model)
     candidate, defect = _seal_or_defect(queryset, model, None, policy)

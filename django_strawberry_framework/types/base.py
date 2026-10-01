@@ -910,14 +910,15 @@ class DjangoType:
         cls,
         queryset: models.QuerySet[Any, Any],
         info: Any,  # noqa: ARG003
-        **kwargs: Any,
     ) -> models.QuerySet[Any, Any]:
         """Default identity hook.
 
         Subclasses override this to scope visibility (permissions,
         multi-tenancy, soft-delete). The optimizer detects overrides via
         ``has_custom_get_queryset`` and downgrades ``select_related`` to
-        ``Prefetch`` so visibility filters apply across joins.
+        ``Prefetch`` so visibility filters apply across joins. The package
+        calls it as ``get_queryset(queryset, info)`` and passes nothing
+        else, so an override declares exactly those two parameters.
         """
         return queryset
 

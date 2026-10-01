@@ -11,7 +11,7 @@ test_library_books_order_by_subtitle_null_positioning``.
 
 The sections below cover ``convert_order_field_to_input_annotation`` /
 ``normalize_input_value`` / ``clear_order_input_namespace`` /
-``order_input_type``.
+``order_input_type`` / ``OrderInput``.
 """
 
 from __future__ import annotations
@@ -660,6 +660,73 @@ def test_order_input_type_is_idempotent_under_repeated_calls():
     # The set grew by exactly 1 (set semantics dedup repeat adds).
     assert len(_helper_referenced_ordersets) == initial_size + 1
     _helper_referenced_ordersets.discard(HelperOrderC)
+
+
+# ---------------------------------------------------------------------------
+# OrderInput[...] (the type-checkable spelling of order_input_type)
+# ---------------------------------------------------------------------------
+
+
+def test_order_input_subscript_returns_the_order_input_type_element_annotation():
+    """``OrderInput[MyOrder]`` is the same lazy ``Annotated`` element the call form returns."""
+    from typing import Annotated, ForwardRef, get_args, get_origin
+
+    from django_strawberry_framework.orders import OrderInput, OrderSet, order_input_type
+
+    class HelperOrderD(OrderSet):
+        pass
+
+    subscripted = OrderInput[HelperOrderD]
+    called = order_input_type(HelperOrderD)
+    assert get_origin(subscripted) is Annotated
+    forward = get_args(subscripted)[0]
+    assert isinstance(forward, ForwardRef)
+    assert forward.__forward_arg__ == "HelperOrderDInputType"
+    assert forward == get_args(called)[0]
+    assert [getattr(marker, "module", None) for marker in subscripted.__metadata__] == [
+        INPUTS_MODULE_PATH,
+    ]
+
+
+def test_order_input_subscript_records_orderset_into_helper_referenced_set():
+    """The subscript feeds the one ledger the finalizer's orphan check reads."""
+    from django_strawberry_framework.orders import (
+        OrderInput,
+        OrderSet,
+        _helper_referenced_ordersets,
+        order_input_type,
+    )
+
+    class HelperOrderE(OrderSet):
+        pass
+
+    initial = set(_helper_referenced_ordersets)
+    annotation = OrderInput[HelperOrderE]
+    assert annotation is not None
+    assert _helper_referenced_ordersets == initial | {HelperOrderE}
+    order_input_type(HelperOrderE)
+    assert _helper_referenced_ordersets == initial | {HelperOrderE}
+    _helper_referenced_ordersets.discard(HelperOrderE)
+
+
+def test_order_input_subscript_rejects_non_orderset_naming_the_subscript():
+    """A non-``OrderSet`` raises ``TypeError`` worded with the spelling the consumer wrote."""
+    from django_strawberry_framework.orders import (
+        OrderInput,
+        _helper_referenced_ordersets,
+        order_input_type,
+    )
+
+    initial = set(_helper_referenced_ordersets)
+    with pytest.raises(TypeError) as excinfo:
+        OrderInput[int]
+    assert str(excinfo.value) == "OrderInput[...] requires an OrderSet subclass; got <class 'int'>"
+    with pytest.raises(TypeError) as excinfo:
+        order_input_type(int)
+    assert str(excinfo.value) == (
+        "order_input_type() requires an OrderSet subclass; got <class 'int'>"
+    )
+    assert _helper_referenced_ordersets == initial
 
 
 # ---------------------------------------------------------------------------

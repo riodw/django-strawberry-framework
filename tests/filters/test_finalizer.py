@@ -38,6 +38,7 @@ from strawberry import relay
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
+    FilterInput,
     FilterSet,
     GlobalIDFilter,
     RelatedFilter,
@@ -482,6 +483,7 @@ def test_orphan_filter_input_type_reference_raises_at_finalize():
 
     msg = str(exc_info.value)
     assert "StandaloneFilter" in msg
+    assert "is referenced via FilterInput[...] / filter_input_type(...) but never" in msg
     assert "filterset_class = StandaloneFilter" in msg
 
 
@@ -550,8 +552,8 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
     ``test_orphan_filter_input_type_reference_raises_at_finalize``; this
     test pins the multi-orphan arm of
     ``_format_orphan_sets_error``: lead-in
-    ``"FilterSets referenced via filter_input_type(...) but not wired to
-    any DjangoType:"`` followed by ``__module__.__qualname__``-sorted
+    ``"FilterSets referenced via FilterInput[...] / filter_input_type(...)
+    but not wired to any DjangoType:"`` followed by ``__module__.__qualname__``-sorted
     offenders. Without this test the multi-orphan branch could silently
     drift (e.g., inverting the sort key, dropping the lead-in) without
     a regression signal.
@@ -567,7 +569,8 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
             model = Shelf
             fields = {"code": ["exact"]}
 
-    filter_input_type(StandaloneFilterA)
+    # One orphan per helper spelling: both feed the one ledger the check reads.
+    FilterInput[StandaloneFilterA]
     filter_input_type(StandaloneFilterB)
 
     class ShelfType(DjangoType):
@@ -595,7 +598,8 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
     msg = str(exc_info.value)
     # Multi-orphan lead-in (mirrors ``_format_unresolved_targets_error``'s shape).
     assert (
-        "FilterSets referenced via filter_input_type(...) but not wired to any DjangoType:" in msg
+        "FilterSets referenced via FilterInput[...] / filter_input_type(...) but not wired to "
+        "any DjangoType:" in msg
     )
     # Both offenders surface.
     assert "StandaloneFilterA" in msg

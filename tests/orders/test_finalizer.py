@@ -37,6 +37,7 @@ from strawberry import relay
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import (
+    OrderInput,
     OrderSet,
     RelatedOrder,
     _helper_referenced_ordersets,
@@ -365,6 +366,7 @@ def test_orphan_order_input_type_reference_raises_at_finalize():
         finalize_django_types()
     msg = str(exc_info.value)
     assert "StandaloneOrder" in msg
+    assert "is referenced via OrderInput[...] / order_input_type(...) but never" in msg
     assert "orderset_class = StandaloneOrder" in msg
 
 
@@ -418,7 +420,8 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_orderset():
             model = Shelf
             fields = ["code"]
 
-    order_input_type(OrphanA)
+    # One orphan per helper spelling: both feed the one ledger the check reads.
+    OrderInput[OrphanA]
     order_input_type(OrphanB)
 
     class ShelfType(DjangoType):
@@ -434,7 +437,10 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_orderset():
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
     msg = str(exc_info.value)
-    assert "OrderSets referenced via order_input_type(...) but not wired to any DjangoType:" in msg
+    assert (
+        "OrderSets referenced via OrderInput[...] / order_input_type(...) but not wired to "
+        "any DjangoType:" in msg
+    )
     assert "OrphanA" in msg
     assert "OrphanB" in msg
     assert "Add 'orderset_class = <Name>' to the relevant DjangoType's Meta" in msg

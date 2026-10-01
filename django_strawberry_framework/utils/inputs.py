@@ -1582,7 +1582,7 @@ def build_lazy_input_annotation(
     set_class: object,
     *,
     expected_base: type[_FactorySetT],
-    family_name: str,
+    helper_spelling: str,
     expected_label: str,
     ledger: set[type[_FactorySetT]],
     input_type_name_for: Callable[[type[_FactorySetT]], str],
@@ -1591,12 +1591,13 @@ def build_lazy_input_annotation(
     """Return the ``Annotated[..., strawberry.lazy(...)]`` forward-ref for a set's input class.
 
     The spec-027 / spec-028 Decision 11 consumer-helper body shared by
-    ``filters/__init__.py::filter_input_type`` and
-    ``orders/__init__.py::order_input_type``. Validates
-    ``set_class`` is an ``expected_base`` subclass -- raising ``TypeError`` with
-    the family's wording (``family_name`` + ``expected_label``, e.g.
-    ``"filter_input_type() requires a FilterSet subclass; got ..."``) so consumers
-    catch misuse at the resolver-declaration site rather than schema-build time --
+    ``filters/__init__.py::filter_input_type`` / ``filters/__init__.py::FilterInput``
+    and ``orders/__init__.py::order_input_type`` / ``orders/__init__.py::OrderInput``.
+    Validates ``set_class`` is an ``expected_base`` subclass -- raising ``TypeError``
+    worded with the spelling the consumer wrote (``helper_spelling`` +
+    ``expected_label``, e.g. ``"FilterInput[...] requires a FilterSet subclass; got
+    ..."``) so consumers catch misuse at the resolver-declaration site rather than
+    schema-build time --
     records it in the family ``ledger`` (the finalizer's orphan check reads this),
     and builds the canonical Strawberry forward-reference.
 
@@ -1608,7 +1609,7 @@ def build_lazy_input_annotation(
     literal outside the call) so the ForwardRef wrapping holds.
     """
     if not (isinstance(set_class, type) and issubclass(set_class, expected_base)):
-        raise TypeError(f"{family_name}() requires {expected_label} subclass; got {set_class!r}")
+        raise TypeError(f"{helper_spelling} requires {expected_label} subclass; got {set_class!r}")
     ledger.add(set_class)
     return Annotated[input_type_name_for(set_class), strawberry.lazy(module_path)]
 

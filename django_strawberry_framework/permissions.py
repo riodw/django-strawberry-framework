@@ -94,7 +94,7 @@ import dataclasses
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar
 from functools import lru_cache
-from typing import TYPE_CHECKING, NamedTuple, TypeGuard
+from typing import TYPE_CHECKING, NamedTuple, TypeGuard, TypeVar
 
 from django.db import models
 from django.db.models import Q
@@ -140,6 +140,9 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .types.base import DjangoType
     from .utils.typing import ForeignKeyField, ModelField
 
+
+_M = TypeVar("_M", bound=models.Model)
+_R = TypeVar("_R")
 
 _ASYNC_RECOURSE = (
     "apply_cascade_permissions walks target hooks synchronously and "
@@ -568,10 +571,10 @@ def _cycle_error(state: _TraversalState, cls: type[DjangoType]) -> Configuration
 
 def apply_cascade_permissions(
     cls: type[DjangoType],
-    queryset: models.QuerySet[models.Model, object],
+    queryset: models.QuerySet[_M, _R],
     info: object,
     fields: Iterable[str] | None = None,
-) -> models.QuerySet[models.Model, object]:
+) -> models.QuerySet[_M, _R]:
     """Narrow ``queryset`` so each forward relation respects its target visibility.
 
     Call from inside a ``DjangoType.get_queryset`` (Decision 5). Walks ``cls``'s
@@ -583,10 +586,11 @@ def apply_cascade_permissions(
     intersects ``Q(<edge>__in=<visible>)`` (plus ``| Q(<edge>__isnull=True)``
     when the edge is nullable) into ``queryset``. Edges whose target model has
     no registered type are skipped -- there is no visibility policy to apply.
-    Returns a narrowed queryset; never evaluates, reorders, or projects the
-    caller's queryset -- pure ``.filter(...)`` composition, so the ``__in``
-    subqueries compile into the caller's single ``SELECT`` and add zero query
-    round-trips (Decision 7).
+    Returns a narrowed queryset of the same model and row type as ``queryset``
+    (``QuerySet[M, R]`` in, ``QuerySet[M, R]`` out); never evaluates, reorders,
+    or projects the caller's queryset -- pure ``.filter(...)`` composition, so
+    the ``__in`` subqueries compile into the caller's single ``SELECT`` and add
+    zero query round-trips (Decision 7).
 
     Args:
         cls: the owning ``DjangoType`` (its ``.model`` is the walk root).
@@ -684,11 +688,11 @@ def apply_cascade_permissions(
 def _walk(
     cls: type[DjangoType],
     model: type[models.Model],
-    queryset: models.QuerySet[models.Model, object],
+    queryset: models.QuerySet[_M, _R],
     info: object,
     names_to_walk: set[str] | None,
     state: _TraversalState,
-) -> models.QuerySet[models.Model, object]:
+) -> models.QuerySet[_M, _R]:
     """Intersect one visibility constraint per qualifying edge of ``model``.
 
     The caller owns the walk-frame lifecycle (state install / cycle raise /
@@ -732,10 +736,10 @@ def _walk(
 
 async def aapply_cascade_permissions(
     cls: type[DjangoType],
-    queryset: models.QuerySet[models.Model, object],
+    queryset: models.QuerySet[_M, _R],
     info: object,
     fields: Iterable[str] | None = None,
-) -> models.QuerySet[models.Model, object]:
+) -> models.QuerySet[_M, _R]:
     """Async twin of ``apply_cascade_permissions`` -- the same walk, off the event loop.
 
     Wraps the single sync walk in ``run_in_one_sync_boundary`` so blocking

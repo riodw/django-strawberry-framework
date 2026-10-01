@@ -3,7 +3,7 @@
 # `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
 # without importing strawberry directly; this is part of the DRF-shaped public surface.
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Canonical package logger. Declared at the top-level package so the
 # string ``"django_strawberry_framework"`` lives in exactly one source
@@ -93,6 +93,26 @@ _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
     "SerializerHookContext": (".rest_framework.hook_context", "SerializerHookContext"),
     "UploadMetadata": (".rest_framework.hook_context", "UploadMetadata"),
 }
+
+# The same names, imported for the type checker only, so a consumer's
+# ``from django_strawberry_framework import SerializerMutation`` is the real class
+# to it (a typed ``SerializerMutation`` subclass, ``@override`` on its hooks)
+# instead of ``__getattr__``'s ``Any``. Runtime never executes this block: the
+# names still resolve through the lazy guard below, so ``import
+# django_strawberry_framework`` stays DRF-free. The redundant ``as`` aliases mark
+# them re-exported. Each line mirrors one ``_DRF_SOFT_EXPORTS`` entry.
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+    from .rest_framework.hook_context import SerializerHookContext as SerializerHookContext
+    from .rest_framework.hook_context import UploadMetadata as UploadMetadata
+    from .rest_framework.inputs import NestedSerializerConfig as NestedSerializerConfig
+    from .rest_framework.inputs import describe_serializer_input as describe_serializer_input
+    from .rest_framework.serializer_converter import (
+        SerializerFieldConversion as SerializerFieldConversion,
+    )
+    from .rest_framework.serializer_converter import (
+        register_serializer_field_converter as register_serializer_field_converter,
+    )
+    from .rest_framework.sets import SerializerMutation as SerializerMutation
 
 
 def __getattr__(name: str) -> Any:

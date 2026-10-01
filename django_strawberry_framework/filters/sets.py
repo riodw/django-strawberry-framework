@@ -3531,48 +3531,49 @@ class FilterSet(
     def _apply_common_prelude(
         cls,
         input_value: object,
-        queryset: models.QuerySet[models.Model],
+        queryset: models.QuerySet[_M],
         info: object,
         child_qs_by_branch: Mapping[str, models.QuerySet[models.Model]],
-    ) -> tuple[FilterSet, object]:
-        """Build the filterset_instance + request shared by apply_sync / apply_async.
+    ) -> tuple[dict[str, object], object, models.QuerySet[_M]]:
+        """Return the form data, request and constrained queryset shared by both apply paths.
 
-        Captures the verbatim normalize / request / constraints / ctor /
-        ``_apply_info`` stash sequence both apply paths run identically.
-        The async-only ``_nested_qs_by_branch_id`` stash stays inline in
-        ``apply_async`` (no sync analog) - callers attach it on the
-        returned instance.
+        Captures the verbatim normalize / request / related-constraints
+        sequence both apply paths run identically, before the filterset is
+        built by ``_apply_common_finalize``.
         """
         data = cls._normalize_input(input_value)
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
-        # basedpyright: typeshed narrows ``request`` to ``HttpRequest`` (see ``_q_for_branch``); it
-        # rejects ``object`` for ``HttpRequest | None``
-        filterset_instance = cls(
-            data=data,
-            queryset=constrained,
-            request=request,  # pyright: ignore[reportArgumentType]
-        )
-        filterset_instance._apply_info = info
-        return filterset_instance, request
+        return data, request, constrained
 
     @classmethod
     def _apply_common_finalize(
         cls,
-        filterset_instance: FilterSet,
         input_value: object,
+        constrained: models.QuerySet[_M],
+        data: dict[str, object],
         request: object,
+        info: object,
         *,
+        nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
         run_permissions: bool = True,
-    ) -> models.QuerySet[models.Model]:
-        """Run the perm check + form validate + lazy ``.qs`` read trailer.
+    ) -> models.QuerySet[_M]:
+        """Build the filterset, then run the perm check + form validate + lazy ``.qs`` read.
+
+        The filterset is built over ``constrained`` with ``info`` stashed as
+        ``_apply_info`` and the async-only pre-derived
+        ``nested_qs_by_branch_id`` map (``None`` on the sync path) stashed as
+        ``_nested_qs_by_branch_id``. Its ``.qs`` is
+        ``filter_queryset(constrained.all())`` (django-filter's
+        ``BaseFilterSet.qs``), a filtered clone over ``constrained``'s own
+        model, so the result keeps the model of the queryset passed in.
 
         Sync ``apply_sync`` calls this directly; async ``apply_async``
         wraps the single call in ``run_in_one_sync_boundary`` (the neutral
         ``sync_to_async(thread_sensitive=True)`` owner in
-        ``utils/querysets.py``) so a consumer's ``check_*_permission`` hook /
-        custom ``method=`` filter body / leaf-clause ORM evaluation does not
-        block the event loop.
+        ``utils/querysets.py``) so a consumer's filterset constructor /
+        ``check_*_permission`` hook / custom ``method=`` filter body /
+        leaf-clause ORM evaluation does not block the event loop.
 
         ``run_permissions=False`` skips the ``_run_permission_checks`` pass.
         The related-visibility derivation invokes the child filterset's
@@ -3583,6 +3584,15 @@ class FilterSet(
         Form validation still runs so a malformed nested clause still raises
         ``FILTER_INVALID``.
         """
+        # basedpyright: typeshed narrows ``request`` to ``HttpRequest`` (see ``_q_for_branch``); it
+        # rejects ``object`` for ``HttpRequest | None``
+        filterset_instance = cls(
+            data=data,
+            queryset=constrained,
+            request=request,  # pyright: ignore[reportArgumentType]
+        )
+        filterset_instance._apply_info = info
+        filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
         if run_permissions:
             cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
@@ -3592,12 +3602,12 @@ class FilterSet(
     def apply_sync(
         cls,
         input_value: object,
-        queryset: models.QuerySet[models.Model],
+        queryset: models.QuerySet[_M],
         info: object,
         *,
         run_permissions: bool = True,
         _depth: int = 0,
-    ) -> models.QuerySet[models.Model]:
+    ) -> models.QuerySet[_M]:
         """Sync resolver entry point (Decision 8).
 
         Steps run in the pinned order: derive visibility
@@ -3628,16 +3638,18 @@ class FilterSet(
             parent_db=queryset.db,
             _depth=_depth,
         )
-        filterset_instance, request = cls._apply_common_prelude(
+        data, request, constrained = cls._apply_common_prelude(
             input_value,
             queryset,
             info,
             child_qs_by_branch,
         )
         return cls._apply_common_finalize(
-            filterset_instance,
             input_value,
+            constrained,
+            data,
             request,
+            info,
             run_permissions=run_permissions,
         )
 
@@ -3645,12 +3657,12 @@ class FilterSet(
     async def apply_async(
         cls,
         input_value: object,
-        queryset: models.QuerySet[models.Model],
+        queryset: models.QuerySet[_M],
         info: object,
         *,
         run_permissions: bool = True,
         _depth: int = 0,
-    ) -> models.QuerySet[models.Model]:
+    ) -> models.QuerySet[_M]:
         """Async sibling of `apply_sync` awaiting every blocking step.
 
         Steps:
@@ -3664,13 +3676,14 @@ class FilterSet(
                read fans into ``_q_for_branch``. Without this step,
                ``_q_for_branch``'s sync derive would raise
                ``SyncMisuseError`` mid-``.qs``.
-            3. Build the filterset via ``_apply_common_prelude`` (shared
-               with ``apply_sync``) and stash the nested-visibility map
-               on the instance - the async-only step with no sync analog.
-            4. Route ``_apply_common_finalize`` (perm check + form
-               validate + ``.qs`` read) through ``run_in_one_sync_boundary``
-               so a consumer's ``check_*_permission`` hook that performs a
-               blocking ORM read does not block the event loop.
+            3. Normalize the input and apply the related constraints via
+               ``_apply_common_prelude`` (shared with ``apply_sync``).
+            4. Route ``_apply_common_finalize`` (filterset build with the
+               nested-visibility map stashed - the async-only step with no
+               sync analog - then perm check + form validate + ``.qs`` read)
+               through ``run_in_one_sync_boundary`` so a consumer's
+               ``check_*_permission`` hook that performs a blocking ORM read
+               does not block the event loop.
 
         ``run_permissions`` defaults to ``True`` for consumer entry points;
         the related-visibility derivation passes ``False`` so a nested child
@@ -3695,18 +3708,20 @@ class FilterSet(
             parent_db=queryset.db,
             _depth=_depth,
         )
-        filterset_instance, request = cls._apply_common_prelude(
+        data, request, constrained = cls._apply_common_prelude(
             input_value,
             queryset,
             info,
             child_qs_by_branch,
         )
-        filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
         return await run_in_one_sync_boundary(
             cls._apply_common_finalize,
-            filterset_instance,
             input_value,
+            constrained,
+            data,
             request,
+            info,
+            nested_qs_by_branch_id=nested_qs_by_branch_id,
             run_permissions=run_permissions,
         )
 
@@ -3714,9 +3729,9 @@ class FilterSet(
     def apply(
         cls,
         input_value: object,
-        queryset: models.QuerySet[models.Model],
+        queryset: models.QuerySet[_M],
         info: object,
-    ) -> models.QuerySet[models.Model]:
+    ) -> models.QuerySet[_M]:
         """Thin dispatcher - picks `apply_sync` and translates sync-misuse.
 
         Decision 8 - catches the typed ``SyncMisuseError``

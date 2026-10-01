@@ -31,6 +31,7 @@ from strawberry import relay
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
+    FilterInput,
     FilterSet,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
@@ -905,6 +906,60 @@ def test_filter_input_type_rejects_non_filterset():
 
     with pytest.raises(TypeError):
         filter_input_type(None)
+
+
+# ---------------------------------------------------------------------------
+# FilterInput[...] (the type-checkable spelling of filter_input_type)
+# ---------------------------------------------------------------------------
+
+
+def test_filter_input_subscript_returns_the_filter_input_type_annotation():
+    """`FilterInput[MyFilter]` is the same lazy `Annotated` the call form returns."""
+
+    class MyFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    subscripted = FilterInput[MyFilter]
+    called = filter_input_type(MyFilter)
+    assert get_origin(subscripted) is typing.Annotated
+    inner = get_args(subscripted)[0]
+    assert isinstance(inner, typing.ForwardRef)
+    assert inner.__forward_arg__ == "MyFilterInputType"
+    assert inner == get_args(called)[0]
+    assert [getattr(marker, "module", None) for marker in subscripted.__metadata__] == [
+        INPUTS_MODULE_PATH,
+    ]
+
+
+def test_filter_input_subscript_records_filterset_into_helper_referenced_set():
+    """The subscript feeds the one ledger the finalizer's orphan check reads."""
+
+    class MyFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    FilterInput[MyFilter]
+    assert _helper_referenced_filtersets == {MyFilter}
+    filter_input_type(MyFilter)
+    assert _helper_referenced_filtersets == {MyFilter}
+
+
+def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript():
+    """A non-FilterSet raises TypeError worded with the spelling the consumer wrote."""
+
+    class NotAFilter:
+        pass
+
+    with pytest.raises(TypeError) as excinfo:
+        FilterInput[NotAFilter]
+    assert str(excinfo.value).startswith("FilterInput[...] requires a FilterSet subclass; got ")
+    assert "NotAFilter" in str(excinfo.value)
+    with pytest.raises(TypeError, match=r"^filter_input_type\(\) requires a FilterSet subclass"):
+        filter_input_type(NotAFilter)
+    assert _helper_referenced_filtersets == set()
 
 
 # ---------------------------------------------------------------------------

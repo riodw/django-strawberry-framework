@@ -498,7 +498,7 @@ ALLOWED_ANY: tuple[AllowedAny, ...] = (
     ),
     AllowedAny(
         "django_strawberry_framework/types/base.py::DjangoType.get_queryset",
-        6,
+        5,
         "Consumer-overridden hook: an override must accept everything the base does, Info "
         "is invariant, and a TypeVar return forbids non-generic overrides.",
     ),

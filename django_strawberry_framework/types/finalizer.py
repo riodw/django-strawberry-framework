@@ -1615,13 +1615,13 @@ def _format_orphan_sets_error(
     helper: str,
     meta_key: str,
 ) -> str:
-    """Return the canonical orphan-``<helper>_input_type`` error message.
+    """Return the canonical orphan helper-reference error message.
 
     When more than one orphan is present, the message uses the multi-orphan
     lead-in mirroring ``_format_unresolved_targets_error``'s shape; the
     single-orphan branch uses the spec-pinned actionable message (spec-027
     #"Bind the owner." on the filter side, spec-028's on the order side).
-    The family words (``family`` noun, ``helper`` function name, ``meta_key``
+    The family words (``family`` noun, ``helper`` spellings, ``meta_key``
     sidecar key) are the ONLY divergence between the two families, so the
     branch / lead-in logic is spelled once and each ``_SidecarBindingSpec``
     passes its words via ``functools.partial``.
@@ -1629,14 +1629,14 @@ def _format_orphan_sets_error(
     if len(orphans) == 1:
         cls = orphans[0]
         return (
-            f"{family} '{_safe_class_name(cls)}' is referenced via {helper}(...) but "
+            f"{family} '{_safe_class_name(cls)}' is referenced via {helper} but "
             f"never assigned to a DjangoType via Meta.{meta_key}. Add "
             f"'{meta_key} = {_safe_class_name(cls)}' to the relevant DjangoType's Meta."
         )
     lines = [f"  - {_safe_qualified_class_name(cls)}" for cls in orphans]
     body = "\n".join(lines)
     return (
-        f"{family}s referenced via {helper}(...) but not wired to any "
+        f"{family}s referenced via {helper} but not wired to any "
         f"DjangoType:\n{body}\n\n"
         f"Add '{meta_key} = <Name>' to the relevant DjangoType's Meta for each."
     )
@@ -1953,7 +1953,7 @@ def _bind_ordersets() -> None:
             format_orphans=partial(
                 _format_orphan_sets_error,
                 family="OrderSet",
-                helper="order_input_type",
+                helper="OrderInput[...] / order_input_type(...)",
                 meta_key="orderset_class",
             ),
             expand=_expand_orderset,
@@ -2101,7 +2101,7 @@ def _bind_filtersets() -> None:
             format_orphans=partial(
                 _format_orphan_sets_error,
                 family="FilterSet",
-                helper="filter_input_type",
+                helper="FilterInput[...] / filter_input_type(...)",
                 meta_key="filterset_class",
             ),
             expand=_expand_filterset,

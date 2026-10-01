@@ -307,20 +307,22 @@ class ItemType(DjangoType):
 
 `Meta.fields` is a list, or `"__all__"` for every column-backed field (forward FK columns included, reverse relations and M2M managers excluded). The public `Ordering` enum carries six members with NULLS positioning, `RelatedOrder` mirrors `RelatedFilter` (class, import path, or the unqualified name shown above), the `check_<field>_permission` gates apply on the same active-input-only terms, and `Min` / `Max` ordering across a to-many path is row-preserving. Omitted fields and explicit `null` directions contribute no ordering term. See [`GLOSSARY.md#orderset`][glossary-orderset].
 
-Outside a connection field, wire either sidecar onto a hand-written resolver with the argument helpers:
+Outside a connection field, wire either sidecar onto a hand-written resolver with the argument annotations `FilterInput[...]` and `OrderInput[...]` (an `OrderInput` is one element, so the argument is a list of them):
 
 ```python
-from django_strawberry_framework.filters import filter_input_type
-from django_strawberry_framework.orders import order_input_type
+from django.db.models import QuerySet
+
+from django_strawberry_framework.filters import FilterInput
+from django_strawberry_framework.orders import OrderInput
 
 
-@strawberry.field
+@strawberry.field(graphql_type=list[PatronType])
 def all_patrons(
     self,
     info: strawberry.Info,
-    filter: filter_input_type(filters.PatronFilter) | None = None,  # noqa: A002
-    order_by: list[order_input_type(orders.PatronOrder)] | None = None,
-) -> list[PatronType]:
+    filter: FilterInput[filters.PatronFilter] | None = None,  # noqa: A002
+    order_by: list[OrderInput[orders.PatronOrder]] | None = None,
+) -> QuerySet[models.Patron]:
     queryset = PatronType.get_queryset(models.Patron.objects.order_by("id"), info)
     if filter is not None:
         queryset = filters.PatronFilter.apply_sync(filter, queryset, info)
@@ -328,6 +330,8 @@ def all_patrons(
         queryset = orders.PatronOrder.apply_sync(order_by, queryset, info)
     return queryset
 ```
+
+`FilterInput[PatronFilter]` builds the same `filter: PatronFilterInputType` argument as the call form `filter_input_type(PatronFilter)`, but it is a valid type expression, so a type checker accepts it and rejects a non-`FilterSet` subscript; the same holds for `OrderInput` and `order_input_type`. The value the resolver receives is a generated input object whose one use is the `apply_sync` / `apply_async` call. `graphql_type=` states the GraphQL return type, so the Python annotation can say what the resolver actually returns, a `QuerySet` of `Patron` rows; the schema is unchanged. Both `apply_sync` calls return a queryset of the model they were given.
 
 ### Nested connection indexing
 
@@ -373,6 +377,10 @@ The opt-in is per column, so one class shows every path it publishes. The opted-
 Row visibility is one classmethod, and every surface the package ships routes through it: list fields, connections, node refetch, relation traversal, and the mutation `update` / `delete` locate.
 
 ```python
+import strawberry
+from django.db.models import QuerySet
+from typing_extensions import override
+
 from django_strawberry_framework import DjangoType, apply_cascade_permissions
 
 
@@ -383,12 +391,19 @@ class ItemType(DjangoType):
         interfaces = (relay.Node,)
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    @override
+    def get_queryset(
+        cls,
+        queryset: QuerySet[models.Item],
+        info: strawberry.Info,
+    ) -> QuerySet[models.Item]:
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 ```
+
+The framework calls the hook as `get_queryset(queryset, info)` and passes nothing else, so the override declares exactly those two parameters; `apply_cascade_permissions` returns a queryset of the same model and row type it was given.
 
 `apply_cascade_permissions(cls, queryset, info)` (async twin `aapply_cascade_permissions`) cascades this type's visibility across its single-column concrete forward FK and OneToOne edges, dropping parent rows whose targets the target type's own `get_queryset` hides. That is what stops a nested non-null `category { ... }` selection from reaching a row the viewer cannot see, and it adds no round-trips: the `__in` subqueries compile into the caller's single `SELECT`. It fails closed on every boundary that SQL depends on — a recursive graph raises a path-rich `ConfigurationError` (`fields=[]` is the one permitted re-entrant shape), MTI parent links cascade, `GenericForeignKey` and composite forward relations preflight closed. See [`GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 

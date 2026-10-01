@@ -275,12 +275,14 @@ Cascades each [`DjangoType`](#djangotype)'s [`get_queryset`](#get_queryset-visib
 
 ```python
 @classmethod
-def get_queryset(cls, queryset, info):
+def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info) -> QuerySet[Item]:
     user = getattr(getattr(info.context, "request", None), "user", None)
     if user and user.is_staff:
         return queryset
     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 ```
+
+The helper returns a queryset of the model and row type it was given (`QuerySet[M, R]` in, `QuerySet[M, R]` out), so a typed override's return annotation holds.
 
 **The walk.** Per call the helper walks `cls`'s model `_meta` edges and, for each single-column concrete forward relation, resolves the target type through the registry primary lookup and intersects `Q(<fk>__in=<target visible pks>) | Q(<fk>__isnull=True)` into the caller's queryset — the `__isnull=True` disjunct composes only for a nullable edge; a non-nullable edge composes the bare membership test. The target visibility subquery is the target type's own `get_queryset` run against the target model's `_default_manager`, pinned to the caller's resolved DB alias (`queryset.db`). Only an edge whose target model has no registered primary type is skipped. The walk is depth-1; transitive cascade emerges because each target's hook may itself call the helper.
 
@@ -908,21 +910,23 @@ The resolver-facing API is the classmethod pair `FilterSet.apply_sync(input_valu
 
 Consumer helper for resolver-argument annotations. `filter_input_type(BranchFilter)` returns `Annotated["BranchFilterInputType", strawberry.lazy("django_strawberry_framework.filters.inputs")]` — the lazy-resolution shape Strawberry consumes when constructing the schema. The helper validates eagerly (`TypeError` for non-[`FilterSet`](#filterset) arguments) and records the FilterSet against an internal `_helper_referenced_filtersets` ledger so [`finalize_django_types`](#finalize_django_types) can fail loudly for orphans — FilterSets passed to `filter_input_type` but never wired via [`Meta.filterset_class`](#metafilterset_class) — at finalize time.
 
+`FilterInput[BranchFilter]` (also exported from `django_strawberry_framework.filters`) is the type-checkable spelling: a generic class bound to `FilterSet` whose subscript returns this same annotation and records the same ledger entry. A type checker rejects a call inside an annotation but accepts the subscript, and rejects a non-`FilterSet` subscript. The value the resolver receives is the generated input object, an opaque handle passed only to `apply_sync` / `apply_async`.
+
 Consumer usage on a plain `@strawberry.field` resolver:
 
 ```python
-from django_strawberry_framework.filters import filter_input_type
+from django_strawberry_framework.filters import FilterInput
 from apps.library.filters import BranchFilter
 
 
 @strawberry.type
 class Query:
-    @strawberry.field
+    @strawberry.field(graphql_type=list[BranchType])
     def all_library_branches(
         self,
-        info,
-        filter: filter_input_type(BranchFilter) | None = None,
-    ) -> list[BranchType]:
+        info: strawberry.Info,
+        filter: FilterInput[BranchFilter] | None = None,
+    ) -> QuerySet[Branch]:
         queryset = BranchType.get_queryset(Branch.objects.all(), info)
         if filter is not None:
             queryset = BranchFilter.apply_sync(filter, queryset, info)
@@ -1012,7 +1016,7 @@ Cascade hook on [`AggregateSet`](#aggregateset) called when aggregation traverse
 
 **Status:** shipped (`0.0.1`).
 
-`DjangoType.get_queryset(cls, queryset, info, **kwargs)` runs once per type, defaults to identity, and is where permission filters, tenant scoping, soft-delete, staff/public visibility splits, and request-user filters live:
+`DjangoType.get_queryset(cls, queryset, info)` runs once per type, defaults to identity, and is where permission filters, tenant scoping, soft-delete, staff/public visibility splits, and request-user filters live. The framework passes nothing else, so an override declares exactly those two parameters:
 
 ```python
 class ItemType(DjangoType):
@@ -1020,7 +1024,7 @@ class ItemType(DjangoType):
         model = Item
 
     @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info) -> QuerySet[Item]:
         user = getattr(info.context, "user", None)
         if user and user.is_staff:
             return queryset
@@ -1363,7 +1367,7 @@ Validation: hint field names must exist on the model; hint values must be `Optim
 
 References an [`OrderSet`](#orderset) subclass that defines ordering input for this `DjangoType`. Describes the consumer-facing wiring and the promotion-from-`DEFERRED_META_KEYS` gate.
 
-Consumer wiring: declaring `Meta.orderset_class = MyOrder` surfaces an `orderBy: [<T>OrderInputType!]` argument on plain `@strawberry.field` resolvers that opt in via `order_by: list[order_input_type(MyOrder)] | None = None` (and on [`DjangoConnectionField`](#djangoconnectionfield), which resolves ordering from this already-resolved sidecar directly). The argument is list-shaped — list-element order is the multi-field tie-breaker mechanism.
+Consumer wiring: declaring `Meta.orderset_class = MyOrder` surfaces an `orderBy: [<T>OrderInputType!]` argument on plain `@strawberry.field` resolvers that opt in via `order_by: list[OrderInput[MyOrder]] | None = None` (`order_input_type(MyOrder)` is the equivalent call form; and on [`DjangoConnectionField`](#djangoconnectionfield), which resolves ordering from this already-resolved sidecar directly). The argument is list-shaped — list-element order is the multi-field tie-breaker mechanism.
 
 Promotion gate: no longer in `DEFERRED_META_KEYS` since `0.0.8`. Declaring the key against `0.0.7` raised a [`ConfigurationError`](#configurationerror); against `0.0.8` it produces a working order surface. Finalizer phase 2.5 owns the binding via `_bind_ordersets()`: each declared `Meta.orderset_class` value has its `_owner_definition` wired to the owning [`DjangoType`](#djangotype), its `get_fields()` resolved after all owners are bound, and the generated input class materialized as a module global of `django_strawberry_framework.orders.inputs` before `strawberry.Schema(...)` runs.
 
@@ -1495,7 +1499,7 @@ The resolver-facing API is the classmethod pair `OrderSet.apply_sync(input_value
 
 **Status:** shipped (`0.0.8`).
 
-Factory returning the **element type** `Annotated["<Name>OrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]` for resolver-argument annotations; eager validation; consumer usage `order_by: list[order_input_type(BranchOrder)] | None = None` (the list wrap matches the `orderBy: [<T>OrderInputType!]` list-shaped GraphQL argument); orphan validation at finalize.
+Factory returning the **element type** `Annotated["<Name>OrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]` for resolver-argument annotations; eager validation; consumer usage `order_by: list[OrderInput[BranchOrder]] | None = None` (`OrderInput[...]` is the type-checkable subscript spelling, a generic bound to `OrderSet` returning this same element annotation; `order_input_type(...)` is the call form; the list wrap matches the `orderBy: [<T>OrderInputType!]` list-shaped GraphQL argument); orphan validation at finalize.
 
 The helper validates its [`OrderSet`](#orderset) argument eagerly so a typo at the resolver signature site fails loud at module import. Finalize-time orphan validation catches helper-referenced order sets that were never wired through [`Meta.orderset_class`](#metaorderset_class) — tracked via a `_helper_referenced_ordersets` ledger that `registry.clear()` co-clears.
 
@@ -1507,7 +1511,7 @@ The helper validates its [`OrderSet`](#orderset) argument eagerly so a typo at t
 
 The module-level `__getattr__` mechanism (PEP 562) behind every [soft-dependency](#soft-dependency) symbol: the guarded name is materialized on first attribute access instead of at module import, so importing the module never pays for the optional integration, and the install-hint `ImportError` fires at the consumer's own `from ... import` line. Two package instances: the package root's `__getattr__` resolves the DRF names ([`SerializerMutation`](#serializermutation)) — deliberately kept **out** of the root `__all__`, so `from django_strawberry_framework import *` stays DRF-free; and `routers.py`'s resolves [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) (planned `0.0.14`) — deliberately listed **in** the submodule `__all__`, so `from ...routers import *` reaches for the name (star import calls `getattr` per `__all__` entry), fires the guard, and raises the same install hint as the explicit import.
 
-At run time a lazily-exported name is never a module global, so `routers.py` declares `DjangoGraphQLProtocolRouter` under `if TYPE_CHECKING:` as a `ProtocolTypeRouter` subclass with the runtime constructor's signature, which binds the name statically: type checkers and downstream imports see its real type, and ruff's undefined-name-in-`__all__` check is satisfied with no `noqa`. Behavior matrix: `from module import name` triggers `__getattr__` and propagates its `ImportError`; unrelated attribute misses raise plain `AttributeError`, never the install hint.
+At run time a lazily-exported name is never a module global, so `routers.py` declares `DjangoGraphQLProtocolRouter` under `if TYPE_CHECKING:` as a `ProtocolTypeRouter` subclass with the runtime constructor's signature, which binds the name statically: type checkers and downstream imports see its real type, and ruff's undefined-name-in-`__all__` check is satisfied with no `noqa`. Behavior matrix: `from module import name` triggers `__getattr__` and propagates its `ImportError`; unrelated attribute misses raise plain `AttributeError`, never the install hint. The package root does the same for the DRF names: an `if TYPE_CHECKING:` block re-imports each `_DRF_SOFT_EXPORTS` name with a redundant `as` alias, so a consumer's `SerializerMutation` subclass is typed against the real class while the runtime name still resolves through the guarded `__getattr__`.
 
 **See also:** [Soft dependency](#soft-dependency) · [`SerializerMutation`](#serializermutation) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
 

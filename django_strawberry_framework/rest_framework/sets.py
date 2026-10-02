@@ -711,7 +711,7 @@ class SerializerMutation(DjangoMutation):
                     "(Meta.fields / Meta.exclude). Remove it from the input or from "
                     "Meta.injected_fields.",
                 )
-        # ``Meta.select_for_update`` (expanded by the 0.0.14 concurrency hardening):
+        # ``Meta.select_for_update``:
         # validated by the shared model-backed-flavor validator - default TRUE (locked writes are the
         # safe posture; an explicit ``False`` opts into weaker concurrency), applied as
         # a base-manager ``FOR UPDATE`` constrained by the visibility pk subquery on the

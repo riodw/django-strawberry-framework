@@ -214,7 +214,7 @@ class _AuthMutationMetaSnapshot:
     (which would require ``model`` / ``operation`` constructor kwargs a model-less
     session field does not have).
 
-    Sealed once ``__init__`` finishes (0.0.15 authorization hardening), mirroring
+    Sealed once ``__init__`` finishes, mirroring
     ``mutations/sets.py::_ValidatedMutationMeta``: the holder's snapshot is the
     per-request authorization source for the fixed auth surfaces
     (``login`` / ``logout`` / ``current_user`` ride ``DjangoMutation.check_permission``
@@ -270,7 +270,7 @@ else:
 
 
 class _SealedAuthHolderMeta(_AuthHolderAttributes):
-    """Seals the synthesized auth holder's ``_mutation_meta`` head (0.0.15 auth hardening).
+    """Seals the synthesized auth holder's ``_mutation_meta`` head.
 
     Mirrors ``mutations/sets.py::make_meta_validating_metaclass``: a holder's
     ``_mutation_meta`` is stashed exactly once at synthesis; a post-declaration
@@ -446,7 +446,7 @@ def _declare_fixed_auth_surface(
 def _sync_bridged_async_body(
     sync_body: Callable[..., object],
 ) -> Callable[..., Coroutine[object, object, object]]:
-    """Build the interim async resolver body that bridges to ``sync_body`` (spec-040 D17).
+    """Build the async resolver body that runs ``sync_body`` in one sync boundary (spec-040 D17).
 
     ``_make_auth_field`` carries a real sync resolver body and a real *async*
     resolver body as separate seams, so native per-transport async work can be
@@ -545,7 +545,7 @@ def _authenticated_actor_or_none(request: object) -> _User | None:
     (``actor is not None`` / the actor itself) so the classification cannot drift
     between the two fields.
 
-    Exception containment (hunt 0.0.14 + 0.0.15): a hostile ``request.user``
+    Exception containment: a hostile ``request.user``
     descriptor, a hostile ``user.is_authenticated`` read, a hostile legacy
     callable, or a hostile ``is_authenticated`` VALUE whose truthiness
     (``__bool__`` / ``__len__``) raises ``TypeError`` / ``ValueError`` /
@@ -595,12 +595,11 @@ def _authenticated_actor_or_none(request: object) -> _User | None:
     elif inspect.isawaitable(is_authenticated):
         _close_unawaited(is_authenticated)
         return None
-    # Truthiness is the FOURTH hostile surface (hunt 0.0.15): the read and the
+    # Truthiness is the FOURTH hostile surface: the read and the
     # legacy-callable call above are contained, but a value whose ``__bool__``
     # / ``__len__`` raises would escape here. The same five shapes collapse to
-    # anonymous; anything else still propagates (the fail-closed rule is
-    # unchanged - a hostile truthiness classifies as anonymous, never as
-    # authenticated).
+    # anonymous; anything else still propagates (the fail-closed rule holds -
+    # a hostile truthiness classifies as anonymous, never as authenticated).
     try:
         if is_authenticated:
             # The auth middleware's ``user`` is the ``AUTH_USER_MODEL`` instance or
@@ -642,8 +641,8 @@ def _transport_prologue(
 ) -> tuple[object, sessions.Transport, SessionBase]:
     """Resolve + classify the request, enforce transport capability, require a session.
 
-    The ONE shared transport prologue login and logout both open with (auth
-    session-lifecycle hardening): classify the transport, reject an unsupported
+    The ONE shared transport prologue login and logout both open with:
+    classify the transport, reject an unsupported
     transport BEFORE any authentication or session mutation, then run the
     missing-session-middleware guard. ``supported`` is the per-surface capability
     predicate (``sessions.login_supported`` / ``sessions.logout_supported``) and
@@ -665,7 +664,7 @@ def _login_result_payload(payload_cls: type[object], slot: str, user: _User | No
     """Build the failed-login envelope when ``user`` is ``None``, else the success payload.
 
     The shared two-line payload construction both login bodies (sync + async) open
-    their post-authenticate step with (auth session-lifecycle hardening). Building
+    their post-authenticate step with. Building
     the failed envelope is a pure construction with no session mutation, so callers
     build the payload here and THEN early-return on the failed case, preserving both
     the failed-login early return and the payload-before-mutation ordering.
@@ -948,8 +947,8 @@ def _logout_observation(
 ) -> tuple[bool, object]:
     """Capture the pre-teardown ``ok`` observation and build the logout payload from it.
 
-    The shared pair both logout teardowns open their critical section with (auth
-    session-lifecycle hardening): ``ok`` is whether an authenticated actor existed
+    The shared pair both logout teardowns open their critical section with:
+    ``ok`` is whether an authenticated actor existed
     (the ONE anonymity definition shared with ``current_user``) and the
     ``{ ok, errors }`` payload is constructed BEFORE any session mutation, so ``ok``
     describes the state being transitioned and payload construction cannot fail after

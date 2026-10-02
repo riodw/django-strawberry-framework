@@ -13,7 +13,7 @@ Three passes, in the order a request meets them:
    document counts tokens and structural nesting. It must run before the parse
    because graphql-core's parser is recursive-descent: a bound applied after the
    parse cannot stop the parse from exhausting the interpreter's stack.
-2. **Document budget** (``on_validate``, before validation). One iterative,
+2. **Document budget** (``on_parse``, after the parse). One iterative,
    fragment-expanding walk over the parsed AST charges expanded selections,
    aliases, and the multiplicative collection cost. Fragment spreads are charged
    at every spread site and cycle-guarded by the spread path, so neither a
@@ -393,8 +393,8 @@ class _ValueBudget:
     ancestor is not: that object is already accounted for on this path, and
     following it is what would not terminate.
 
-    Why not a request-lifetime set of already-charged ``id()`` values (which is
-    what this walker used to keep): an ``id()`` is only unique among LIVE
+    Why not a request-lifetime set of already-charged ``id()`` values: an
+    ``id()`` is only unique among LIVE
     objects, and the coerced values this walk reads are temporaries. Freeing one
     list lets the next same-sized list reuse its address, so a set of ints keyed
     on ``id()`` silently reports a fresh container as already charged - measured
@@ -1602,9 +1602,8 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         # The absent-vs-``None`` distinction and the put-it-back-on-exception
         # rule are ``utils/context.py``'s (``restored_context_keys``), which is
         # where the ``MISSING`` sentinel that decides "clear" from "restore"
-        # lives. This extension used to mint its own sentinel and hand-roll the
-        # round trip, one ``is`` comparison away from restoring a key that was
-        # never set.
+        # lives. A sentinel minted here with a hand-rolled round trip would be
+        # one ``is`` comparison away from restoring a key that was never set.
         with restored_context_keys(context, DST_RESOURCE_POLICY, DST_RESOURCE_DEADLINE):
             scope = begin_resource_budget(context, policy)
             state = self._operation_state()

@@ -38,17 +38,14 @@ a Relay-Node primary takes a GlobalID, type-checked against the mutation's targe
 model (a malformed / unresolvable / wrong-model id is a ``FieldError`` on ``id``,
 never coerced to a bare pk); a non-Relay primary, which no GlobalID names, takes
 the raw pk (an uncoercible literal is the not-found ``FieldError``). This is
-a single, consistent contract (NOT the headline schema's ``id: GlobalID!``, which
-the spec is reconciled to ``id: ID!`` to match); the relation ``<field>_id`` inputs, by
+a single, consistent contract; the relation ``<field>_id`` inputs, by
 contrast, are typed by their target: ``GlobalID`` for a Relay-Node target (so a malformed
 *relation* id is a Strawberry coercion error while a well-formed-but-invalid one is the
 in-band ``FieldError``) and the raw pk type for a plain target.
 
-Fallback (NOT implemented - spec-036 Decision 5 / Risks): if Strawberry rejects a
-resolver-typed field assigned with no class annotation, the documented fallback is
-a ``.field()`` classmethod (``create_item = CreateItem.field()``, graphene-django's
-shape). This module ships the PRIMARY no-annotation form; if the schema build
-rejects it, that is surfaced rather than silently swapped.
+The field is assigned with no class-attribute annotation
+(``create_item = DjangoMutationField(CreateItem)``); there is no ``.field()``
+classmethod form on the mutation base.
 """
 
 from __future__ import annotations

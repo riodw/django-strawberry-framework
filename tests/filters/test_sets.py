@@ -670,7 +670,7 @@ def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_t
 
     # The finalizer's owner-binding pass is not exercised here; this test only
     # needs `GenreType` to be a subclass of `relay.Node` so `implements_relay_node`
-    # returns `True`. `apply_interfaces` (spec-011) is the helper that injects bases.
+    # returns `True`. `apply_interfaces` (spec-015) is the helper that injects bases.
     apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
     class GenreFilter(FilterSet):

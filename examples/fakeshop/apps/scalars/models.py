@@ -245,7 +245,7 @@ class MediaSpecimen(models.Model):
     nullable in the schema (`DjangoFileType` / `DjangoImageType`, no ``!``) even
     though the Django columns are required, because an empty / absent stored file
     resolves the whole object to ``null``. ``image`` reads ``width`` / ``height``
-    through Pillow (the dev/test-only dependency added with spec-037).
+    through Pillow (a dev/test-only dependency, spec-037).
 
     The two optional columns beside them make the create input's requiredness
     rule observable one arm at a time: ``optional_attachment`` is optional only

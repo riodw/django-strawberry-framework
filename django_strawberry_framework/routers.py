@@ -17,7 +17,7 @@ Django's own ``HttpRequest.get_host()``; spec-046 Decision 19) wrapping
 ``AuthMiddlewareStack`` (sessions + ``scope["user"]``) wrapping a ``URLRouter``
 holding one ``re_path`` onto a GraphQL WebSocket consumer, matched by
 ``websocket_url_pattern`` - exact at both ends by default (spec-046 Decision 4;
-spec-041 Decisions 3 and 5). This module composes those wrappers and names them;
+spec-041 Decision 6). This module composes those wrappers and names them;
 it implements no transport policy of its own - the Host validator lives in
 ``consumers.py`` beside the consumer factory, which is the package's WebSocket
 module.

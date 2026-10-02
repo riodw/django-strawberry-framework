@@ -41,8 +41,9 @@ from django_strawberry_framework.orders import OrderInput
 # Consumer ``resolver=`` helper exercising the shared field-wrapper
 # ``Manager`` coercion line at
 # ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"_coerced_manager_queryset(source)"``.
-# The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
-# coverage lines reachable from a live ``/graphql/`` query to land here. Returns
+# The README rule at
+# ``examples/fakeshop/test_query/README.md #"Live-first, both verdicts, and the must-not."``
+# requires coverage lines reachable from a live ``/graphql/`` query to land here. Returns
 # ``models.Branch.objects`` (a ``Manager``) - NOT ``.all()`` - so the field-
 # wrapper's coercion fires. Both colors of the list field's resolver wrapper
 # share that line; the async color
@@ -204,7 +205,7 @@ class BookType(DjangoType):
         # ``primary = True`` makes ``BookType`` the relation-resolution target
         # for ``library.Book`` so the acceptance-only ``NullabilityOverrideBookType``
         # secondary below can register on the same model without ambiguity
-        # (spec-029 Decision 5 / Edge cases - exactly one type per model is primary).
+        # (spec-029 Edge cases - exactly one type per model is primary).
         primary = True
         fields = (
             "id",
@@ -1311,8 +1312,8 @@ class UpdateBookViaForm(DjangoModelFormMutation):
     ``BookType`` is Relay-Node, so the update ``id`` is a decodable ``GlobalID`` (a
     non-Relay primary takes its raw pk instead). A ``title``-only update OMITS the required
     ``genres`` M2M, so it is reconstructed from the located row
-    (``forms/resolvers.py::_reconstruct_partial_data`` - the M2M branch, previously
-    package-only) rather than cleared. ``permission_classes = []`` keeps write-auth out
+    (``forms/resolvers.py::_reconstruct_partial_data`` - the M2M branch) rather than
+    cleared. ``permission_classes = []`` keeps write-auth out
     of the path under test; ``BookType.get_queryset`` still scopes the located row.
     """
 
@@ -1606,7 +1607,7 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
     non-Relay model with a registered primary ``DjangoType``) via both
     ``get_serializer_for_schema()`` and ``get_serializer_kwargs``. The two generated inputs
     differ ONLY in ``target``'s ``related_model`` - identical ``targetId`` annotations, distinct
-    descriptor-derived names - so the materialize ledger no longer collides on one canonical
+    descriptor-derived names - so the materialize ledger does not collide on one canonical
     name. At runtime ``targetId`` decodes against ``Loan``, so a ``Patron``-only pk is a
     ``targetId`` relation error here (the wrong-model assertion proving each half decodes
     against its OWN target model).
@@ -1807,11 +1808,11 @@ class UpdateBookTitleWithAliasValidator(SerializerMutation):
 
 
 class UpdateBookSubstitutingInstance(SerializerMutation):
-    """A DELIBERATELY-misconfigured update whose hook substitutes the located instance (hardening).
+    """A DELIBERATELY-misconfigured update whose hook substitutes the located instance.
 
     ``get_serializer_kwargs`` returns a DIFFERENT ``Book`` than the located, authorized row -
-    the exact "row A's authorization writes row B" bypass the hardening pass closes. Hooks no
-    longer receive the live instance at all (only ``hook_context.instance_pk``), so ANY
+    the exact "row A's authorization writes row B" bypass the framework refuses. Hooks never
+    receive the live instance at all (only ``hook_context.instance_pk``), so ANY
     returned ``instance`` kwarg is framework-owned territory; the live test proves the
     substitution is a top-level ``ConfigurationError`` over ``/graphql/`` and NEITHER row is
     written.
@@ -1940,7 +1941,7 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
     the input to ``("code", "branch")`` (dropping ``topic``), declares
     ``Meta.injected_fields = ("topic",)``, and supplies the value from the SANCTIONED
     ``get_serializer_injected_data`` hook - the framework merges it into the serializer data
-    itself (a ``get_serializer_kwargs`` override can no longer rewrite ``data``). The
+    itself (a ``get_serializer_kwargs`` override cannot rewrite ``data``). The
     create-required guard SUBTRACTS the declared injected field (so the narrowing does not
     raise), and the resolver enforces the hook's keys EXACTLY match the declaration. The
     live test posts ``{code, branchId}`` (no ``topic`` input) and reads the injected

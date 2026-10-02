@@ -290,8 +290,8 @@ def emit_set_input_field_triples(
 
 
 # The decode-kind vocabulary the write-flavor converters + resolvers share
-#: one conceptual enum, previously declared per-flavor in
-# ``forms/converter.py`` and ``rest_framework/serializer_converter.py``.
+#: one conceptual enum for ``forms/converter.py`` and
+# ``rest_framework/serializer_converter.py`` alike.
 # Single-sourced here next to ``InputFieldSpec`` (their type-level consumer);
 # the serializer flavor extends with its ``NESTED_SINGLE`` / ``NESTED_MULTI``
 # pair (nested writes are DRF-only) and the model flavor with ``EXCLUDED``

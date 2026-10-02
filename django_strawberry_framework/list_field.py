@@ -1631,7 +1631,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     orderset_class = _orderset_class_from_definition(definition)
     directives = validated_field_directives("DjangoListField", directives)
 
-    # Factory-site async commitment (Decision 3; spec-020 Decision 1
+    # Factory-site async commitment (Decision 3; spec-020 Decision 2
     # "Async-detection asymmetry - intentional, not a harmonization candidate"):
     # ``_default`` reads the operation's executor per call
     # (``utils/execution_mode.py::async_execution``) so the same factory output

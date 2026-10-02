@@ -1175,10 +1175,11 @@ def _model_field_for_filter(
 def construct_search(all_filters: Mapping[str, object]) -> dict[str, str]:
     """Translate ``LOOKUP_PREFIXES``-vocabulary keys into a ``{name: lookup}`` map.
 
-    Landed now even though the ``Meta.search_fields`` card is deferred to
-    ``0.1.2`` -- the prefix vocabulary constant ``LOOKUP_PREFIXES`` would
-    otherwise be dead code. The prefix-translation tests in
-    ``tests/filters/test_inputs.py`` exercise the helper directly.
+    No package code calls it yet: the ``Meta.search_fields`` consumer surface is
+    spec-060's, and its wiring point is the ``TODO(spec-060 Slice 1)`` anchor in
+    ``filters/sets.py``. It is the one consumer of ``LOOKUP_PREFIXES``. The
+    prefix-translation tests in ``tests/filters/test_inputs.py`` exercise the
+    helper directly.
     """
     result: dict[str, str] = {}
     for filter_name in all_filters:

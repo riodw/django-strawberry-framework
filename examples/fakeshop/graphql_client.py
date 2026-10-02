@@ -5,13 +5,13 @@ status-code assertions, parsed payload extraction, GraphQL-error rejection, and
 exact-data assertions. Superset signatures keep simple callers terse while
 letting variable-driven and custom-client tests use the same envelope.
 
-The JSON path now routes through the package's own
+The JSON path routes through the package's own
 :class:`django_strawberry_framework.testing.TestClient` (spec-043), so
 every live suite's ordinary GraphQL post shares the one body-builder / decode
 path instead of re-spelling the ``json.dumps`` + content-type + envelope-split
-boilerplate. The functions keep their raw-``HttpResponse`` return contract (the
-client stashes it on ``Response.response``) so the existing ``.status_code`` /
-``.json()`` call sites are unchanged. ``post_graphql_raw`` deliberately stays a
+boilerplate. The functions return the raw ``HttpResponse`` (the client stashes
+it on ``Response.response``), so call sites read ``.status_code`` /
+``.json()`` directly. ``post_graphql_raw`` deliberately stays a
 raw ``client.post`` - its subject is the raw request envelope (malformed bodies,
 content-type negotiation), which ``TestClient`` exists to abstract away.
 """

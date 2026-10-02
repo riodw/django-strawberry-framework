@@ -16,9 +16,8 @@ Multiset contract: attaching an existence test does not multiply outer rows, so
 a caller composing framework-generated relational predicates preserves the outer
 queryset's row multiplicity (no framework fan-out, no injected ``DISTINCT``, and
 no framework dedup of consumer duplicates). That is the production row-semantics
-contract the applicator and live tiers assert. The old accidental global
-deduplication of generated to-many leaves was legacy behavior and has been
-removed.
+contract the applicator and live tiers assert. Generated to-many leaves are
+never globally deduplicated.
 
 ``Exists`` / ``pk__in`` equivalence: ``filters/sets.py::FilterSet.
 _apply_related_constraints`` already expresses the same "outer row has a

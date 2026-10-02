@@ -29,15 +29,14 @@ preparation and result normalization live in exactly one place rather than per
 surface.
 
 The boundary implements a SEALED-EXECUTION-QUERYSET contract
-(``_seal_or_defect``). An earlier design validated a finite inventory of method
-overrides on the consumer ``QuerySet`` *class* and then returned the consumer
-object; the probes recorded by
+(``_seal_or_defect``), not a validated inventory of method overrides on the
+consumer ``QuerySet`` *class* that then returns the consumer object. The zero-SQL
+probes recorded by
 ``docs/SPECS/spec-045-visibility_boundary-0_0_14.md #"## Architectural decisions"``
-disproved that with
-zero-SQL probes -- an instance-shadowed ``.all()``, a replaced instance-level
+show why: an instance-shadowed ``.all()``, a replaced instance-level
 ``Query.chain``, and subclass ``.filter()`` / ``_values`` / ``.first()`` /
-``.__aiter__()`` overrides each erased the visibility predicate or returned
-synthetic rows AFTER a class-level inventory accepted the object. A finite
+``.__aiter__()`` overrides each erase the visibility predicate or return
+synthetic rows AFTER a class-level inventory accepts the object. A finite
 inventory is the wrong abstraction. Instead the boundary treats the consumer
 queryset as untrusted query STATE: it reads that state without dispatching any
 consumer code (every read comes from the instance ``__dict__`` via
@@ -668,10 +667,10 @@ def _type_is_genuinely_django(node_type: type[object]) -> bool:
     nodes -- must be a trusted Django implementation, because ``sql.Query.clone`` and
     the compiler dispatch that node's own ``clone`` / ``as_sql`` /
     ``resolve_expression`` while the seal is still deciding whether the graph is
-    trusted (spec-045 Decision 2). An earlier check trusted
-    ``type(node).__module__.startswith("django.")`` -- but ``__module__`` is a plain
-    writable string, so a consumer class declaring ``__module__ = "django.evil"``
-    spoofed it. Provenance is therefore proven by OBJECT IDENTITY: the type must be the exact
+    trusted (spec-045 Decision 2). A ``type(node).__module__.startswith("django.")``
+    check would not do: ``__module__`` is a plain writable string, so a consumer
+    class declaring ``__module__ = "django.evil"`` spoofs it. Provenance is
+    therefore proven by OBJECT IDENTITY: the type must be the exact
     object Django itself exposes at ``sys.modules[module].<qualname>``. A consumer subclass,
     or a spoofed ``__module__`` / ``__qualname__`` pointing at a genuine name, cannot make
     ``getattr(genuine_django_module, name)`` return the consumer type, so it fails closed. A
@@ -710,7 +709,7 @@ def _type_is_genuinely_django(node_type: type[object]) -> bool:
 # then be dispatched by ``add_q`` / the compiler, so a subclass is NOT inert and must
 # prove genuine-Django provenance like any other object (spec-045 Decision 2).
 # ``datetime.datetime`` is listed explicitly because exact-type
-# membership no longer inherits it from ``datetime.date``.
+# membership does not inherit it from ``datetime.date``.
 _INERT_VALUE_TYPES: frozenset[type[object]] = frozenset(
     {
         str,
@@ -870,7 +869,7 @@ def _node_metadata_defect(node: object, label: str) -> tuple[str, str] | None:
 
     ``get_source_expressions`` enumerates the operand sub-expressions the compiler
     recurses, but ``Func.as_sql`` (and its cousins) ALSO interpolate formatting metadata
-    the old walk never validated (spec-045 Decision 2): each ``_SQL_TEMPLATE_ATTRS``
+    no source-expression walk reaches (spec-045 Decision 2): each ``_SQL_TEMPLATE_ATTRS``
     name present on the instance ``__dict__`` must be
     an exact ``str``, because it is formatted straight into the SQL string (``template %
     data``) or used as a ``.join`` separator, so a non-``str`` override would run that
@@ -1078,9 +1077,9 @@ def _genuine_node_defect(
 # these exact builtins in the slots they appear in; a SUBCLASS is not a container here,
 # it is an object that must prove genuine-Django provenance like any other node.
 # The plain containers the seal walks member-wise (and, having walked, must be
-# able to REBUILD). ONE inventory: the sequence types and ``dict`` used to be
-# declared separately, so every call site re-spelled the union by hand and
-# admitting a new container type meant finding all of them first.
+# able to REBUILD). ONE inventory of the sequence types and ``dict``, so no call
+# site re-spells the union by hand and admitting a new container type is one
+# edit here.
 #
 # The prove side and the rebuild side (``_reconstructed_value``) are two halves of
 # one round trip, and the dangerous direction is prover-accepted /
@@ -1266,9 +1265,9 @@ def _direct_rhs_defect(value: object, walk: _GraphWalk, label: str) -> tuple[str
 
     A direct RHS is never compiled through ``as_sql``; Django binds it as a ``%s``
     parameter and the database adapter converts it. It is nonetheless consumer-controlled
-    state the adapter will touch, and the old walk never validated it at all -- an exact
+    state the adapter will touch, and no source-expression walk reaches it -- an exact
     Django ``Lookup``'s ``get_source_expressions`` returns only ``[lhs]`` when the RHS is
-    direct, so the RHS left the boundary unproven.
+    direct, so without this check the RHS would leave the boundary unproven.
 
     The rule is deliberately the least restrictive one that still rejects dispatchable
     state: an inert leaf or a plain container of them is data; anything else must define
@@ -1333,7 +1332,7 @@ def _expr_graph_defect(node: object, walk: _GraphWalk, label: str) -> tuple[str,
 
     The single recursive, identity-memoized traversal of every compiler-reachable
     node hanging off one expression slot (a ``where`` leaf, an annotation value, an
-    ``order_by`` element). It replaces the old top-level-only inventory
+    ``order_by`` element), never a top-level-only inventory
     (spec-045 Decision 2): each node must be an inert value, a plain
     container walked member-wise, an EXACT ``WhereNode`` subtree, or an EXACT genuine
     Django expression that is unshadowed, whose expression-owned state is exact-builtin
@@ -1432,10 +1431,10 @@ def _raw_sql_sequence_defect(holder: object, label: str) -> tuple[str, str] | No
 
     The ``.extra()`` raw-SQL slots the compiler emits VERBATIM (never compiled through an
     expression's ``as_sql``): ``extra_order_by`` fragments become ``ORDER BY`` text and
-    ``extra_tables`` become ``FROM`` aliases. The old walk never touched them
-    (spec-045 Decision 2), so a non-``str`` element -- an object
+    ``extra_tables`` become ``FROM`` aliases. No source-expression walk reaches them
+    (spec-045 Decision 2), so without this check a non-``str`` element -- an object
     whose ``__str__`` runs at SQL-assembly time -- or a sequence SUBCLASS with a stateful
-    ``__iter__`` escaped. Django only ever stores an exact ``tuple`` / ``list`` of exact
+    ``__iter__`` would escape. Django only ever stores an exact ``tuple`` / ``list`` of exact
     ``str`` here; anything else fails closed.
     """
     if holder is None:
@@ -2929,11 +2928,11 @@ class _SealPolicy(Generic[_RowT_co]):
     otherwise. Each constant below declares it beside the flag it follows.
 
     Every surface that seals a queryset differs from the default on one or two
-    axes, and each axis used to be its own keyword re-declared down the whole
-    boundary chain (source preparation, result normalization, both colored
-    runners). One frozen policy object carries them instead, so a new axis is a
-    field here plus its check in the seal -- never a keyword threaded through
-    five signatures, which is how the async runner came to reach none of them.
+    axes. One frozen policy object carries them down the whole boundary chain
+    (source preparation, result normalization, both colored runners), so a new
+    axis is a field here plus its check in the seal -- never a keyword threaded
+    through five signatures, where a runner that misses the keyword silently
+    reaches none of them.
 
     - ``require_model_rows`` -- the row iterable must be ``ModelIterable``. Off
       only for the cascade, which re-projects the sealed queryset to the edge's
@@ -3827,7 +3826,7 @@ def _seal_or_defect(
     # ``is not None`` -- never truthiness: Django only ever stores ``None`` or the
     # 3-tuple here, and ``if deferred:`` would dispatch a consumer ``__bool__`` on an
     # arbitrary object planted in the slot, letting a
-    # falsy hostile value silently skip the bake. Any non-``None`` value now routes
+    # falsy hostile value silently skip the bake. Any non-``None`` value routes
     # through the bake path, whose exact-shape checks fail a malformed one closed.
     deferred = state.get("_deferred_filter")
     if deferred is not None:
@@ -4212,9 +4211,9 @@ def _defect_message(messages: dict[str, str], defect: tuple[str, str], subject: 
     """Return ``subject``'s wording for a ``(code, detail)`` seal defect.
 
     The seal's defect codes are a closed, canonically ordered set, but each
-    message-building site renders only the subset IT can reach, so every ladder
-    used to end in an unconditional branch for its own last code. That shape
-    cannot fail loudly: a code added to the seal without an arm at a site does
+    message-building site renders only the subset IT can reach, so a ladder
+    ending in an unconditional branch for its own last code is tempting. That
+    shape cannot fail loudly: a code added to the seal without an arm at a site does
     not raise there, it MISLABELS -- the schema author is told about an alias
     mismatch or a wrong table for a rejection that was neither. Dispatch is
     exhaustive instead, and an unrendered code says exactly that, so the defect
@@ -4931,8 +4930,8 @@ def reject_residual_async_source(source: object, type_cls: type[DjangoType]) -> 
 
     Single-sited here, beside ``reject_awaitable_sync_source`` (the sync twin),
     so the list and connection async pipelines cannot drift on the one boundary
-    where a miss skips visibility - the connection pipeline previously lacked
-    this guard, letting a nested async connection resolver bypass the hook.
+    where a miss skips visibility - a connection pipeline without this guard
+    would let a nested async connection resolver bypass the hook.
     """
     if not _disposed_awaitable(source):
         return
@@ -4957,12 +4956,11 @@ def prepared_resolver_source(
     The head every consumer-resolver pipeline runs, in the one order that is
     safe: refuse the wrong async shape FIRST, then normalize, then let the
     surface apply its own guard to whichever branch the value landed in. Both
-    list-field runners and both connection pipelines used to spell this out
-    themselves, and the miss it guards against is not cosmetic - a value that
-    slips past the async refusal reaches the NON-QUERYSET branch and is passed
-    through, skipping the ``get_queryset`` visibility hook entirely. That bug
-    has shipped once (see ``reject_residual_async_source``), which is why the
-    order is fixed here rather than at four call sites.
+    list-field runners and both connection pipelines run it, and the miss it
+    guards against is not cosmetic - a value that slips past the async refusal
+    reaches the NON-QUERYSET branch and is passed through, skipping the
+    ``get_queryset`` visibility hook entirely (see ``reject_residual_async_source``),
+    which is why the order is fixed here rather than at four call sites.
 
     ``async_guard`` is the caller's colored refusal (``reject_awaitable_sync_source``
     on a sync path, ``reject_residual_async_source`` on an already-awaited async

@@ -71,8 +71,8 @@ INSTALLED_APPS = [
     "django_strawberry_framework",
     # NOTE(spec-039): `"rest_framework"` is intentionally NOT installed. The
     # products `ItemSerializer` is a flat `ModelSerializer` whose validation +
-    # `UniqueTogetherValidator` need no DRF app registry (Decision 13 / spec line
-    # 969); DRF being a dev-group dependency keeps it importable in the test context.
+    # `UniqueTogetherValidator` need no DRF app registry (spec-039 Decision 12);
+    # DRF being a dev-group dependency keeps it importable in the test context.
     # Local
     # spec-040: the schema-only accounts app supplies the example
     # ``UserType`` over ``auth.User`` so ``apps.accounts.schema`` can register it

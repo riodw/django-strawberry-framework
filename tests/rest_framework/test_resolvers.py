@@ -2,7 +2,7 @@
 
 System-under-test is `rest_framework/resolvers.py` - but ONLY the residue the live
 products serializer surface (`examples/fakeshop/test_query/test_products_api.py`)
-cannot reach. Per the README "Coverage rule.", every consumer-reachable resolver
+cannot reach. Per the README "Live-first, both verdicts", every consumer-reachable resolver
 branch is earned LIVE; this file holds the genuinely-unreachable internals:
 
 - the recursive `serializer_errors_to_field_errors` flattener over deeply-nested

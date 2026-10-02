@@ -826,7 +826,7 @@ def test_forward_resolver_propagates_consumer_attribute_error():
 
 
 # ---------------------------------------------------------------------------
-# Multi-database cooperation (spec-019)
+# Multi-database cooperation (spec-023)
 # ---------------------------------------------------------------------------
 #
 # Per ``docs/SPECS/spec-023-multi_db-0_0_7.md``.
@@ -849,27 +849,14 @@ def test_forward_resolver_propagates_consumer_attribute_error():
 #         <related_model>, instance=<expected_instance>
 #     )
 #
-# Equivalently::
+# Rebinding the module-local ``router`` name leaves the shared
+# ``django.db.router`` singleton untouched (Decision 5); ``monkeypatch``
+# restores the name at teardown.
 #
-#     monkeypatch.setattr(
-#         resolvers_module.router,
-#         "db_for_read",
-#         Mock(return_value="default"),
-#     )
-#     # ...
-#     resolvers_module.router.db_for_read.assert_called_once_with(
-#         <related_model>, instance=<expected_instance>
-#     )
-#
-# Both shapes are acceptable per Decision 5; the four FK-id tests below use
-# one shape consistently.
-#
-# Fixture row pattern: the FK-id elision path needs a ``root`` with the
-# FK ``attname`` populated (so ``getattr(root, field_meta.attname)`` is
-# non-None). The minimum shape is a ``SimpleNamespace`` or a synthetic
-# Django-model-shaped object - mirror the existing test-double pattern
-# in this file's earlier tests (``test_o4_*`` and friends use
-# ``SimpleNamespace`` constructions).
+# Fixture rows: the FK-id elision path needs a ``root`` with the FK
+# ``attname`` populated (so ``getattr(root, field_meta.attname)`` is
+# non-None). The tests below use an unsaved ``Item`` instance (has
+# ``_state``) or a ``SimpleNamespace`` (no ``_state``).
 
 
 def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(monkeypatch):

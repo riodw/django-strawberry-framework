@@ -87,7 +87,7 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 )
 
 
-# This module's never-raises contract is now a stated MODE of the shared
+# This module's never-raises contract is a stated MODE of the shared
 # relation readers rather than a parallel family beside them: one read body,
 # one truth test, two failure policies. The local names stay so the 22 call
 # sites below read as taxonomy code, and so the lenient policy is declared once

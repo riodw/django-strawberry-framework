@@ -299,8 +299,8 @@ def editable_input_fields(
     sequences the way the metaclass path already did: a bare string and a
     duplicate name are rejected here too. That matters because this is a PUBLIC
     generator the auth and form adapters call directly, bypassing
-    ``mutations/sets.py::DjangoMutation._validate_meta`` - so a malformed
-    declaration reaching it used to iterate as characters or collapse silently.
+    ``mutations/sets.py::DjangoMutation._validate_meta`` - so without this check a
+    malformed declaration reaching it would iterate as characters or collapse silently.
     """
     selected: list[ConcreteField] = []
     for field in model._meta.get_fields():
@@ -365,8 +365,8 @@ def relation_id_scalar(
 
     ``relay.GlobalID`` when the related model's primary ``DjangoType`` is
     Relay-Node-shaped; otherwise the related model's raw pk scalar via
-    ``scalar_for_field``. This is the id-type rule the three write flavors
-    used to re-spell: model-backed ``relation_input_annotation`` and
+    ``scalar_for_field``. This is the one id-type rule the three write flavors
+    share: model-backed ``relation_input_annotation`` and
     column-less ``annotate_queryset_relation`` (form + serializer).
     Primary-required vs raw-pk fallback stays at those call sites (the serializer
     flavor requires a registered primary and raises before calling this, spec-039;
@@ -510,14 +510,14 @@ def _relation_field_index(
     Bind-time helper: the same input-attr-to-relation-field mapping the generator's
     naming scheme implies (``<field>_id`` for forward FK / OneToOne, the plain
     field name for M2M - ``relation_input_annotation``), so spec synthesis reads
-    the same scheme the input was built from. The request-time decode no longer
-    rebuilds this index; it rides the stashed specs + the Django-field map.
+    the same scheme the input was built from. The request-time decode does not
+    rebuild this index; it rides the stashed specs + the Django-field map.
 
     A forward FK / OneToOne is keyed by its ``<field>_id`` input attr. The guard
     requires a **concrete DB column** (``column is not None``) and a non-``None``
     ``related_model`` so a *virtual* relation - a ``GenericForeignKey`` reports
     ``is_relation=True`` with ``column=None`` and ``related_model=None`` - is
-    never indexed as a decode-able FK (spec-036 L3-1). The generator already
+    never indexed as a decode-able FK. The generator already
     excludes virtual relations from the input, so this only hardens the index
     against ever mis-mapping one.
     """
@@ -642,8 +642,7 @@ def model_column_input_annotation(
     ``FileField`` / ``ImageField`` via ``Upload`` (spec-037; a file column is a
     SCALAR input so the python attr is the plain field name, never
     ``<name>_id``). File columns then ride the same override-skip / requiredness
-    / ``| None``-widening tail as any scalar (spec-037 lifted the spec-036
-    ``NotImplementedError`` carve-out). Else
+    / ``| None``-widening tail as any scalar (spec-037). Else
     ``convert_scalar(..., force_nullable=False)`` so the generator owns
     nullability (spec-036 Decision 6). ``primary_of`` is the flavor's
     related-primary lookup (``registry.get`` for model and form). Serializer
@@ -831,8 +830,8 @@ def build_mutation_input(
     python attr is in ``overrides`` is SKIPPED so the consumer-authored field is
     honored, not clobbered. ``mutations/sets.py`` wires it from
     ``Meta.input_class`` / ``Meta.partial_input_class``; a direct caller may pass
-    it explicitly. File/image columns now participate in this skip like any
-    scalar (spec-037 lifted the spec-036 carve-out). A bare ``str`` / ``bytes``
+    it explicitly. File/image columns participate in this skip like any
+    scalar (spec-037). A bare ``str`` / ``bytes``
     is rejected (``ConfigurationError``): a string would iterate as characters,
     silently overriding nothing - and, while non-empty, bypassing the
     empty-input guard below.

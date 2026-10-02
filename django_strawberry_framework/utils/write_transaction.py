@@ -191,7 +191,7 @@ class WriteAliasContext:
     is built by ``authorization_phase``; what is local here is the SCOPE. The
     exception closes the instant authorization returns: decode / hooks /
     validation get the strict single-alias guard (a hook cannot reach the auth
-    alias). This replaces the old pre-guard permission-cache warming.
+    alias), so no pre-guard permission-cache warming is needed.
     """
 
     __slots__ = (
@@ -835,8 +835,9 @@ class _ValueSnapshot:
     """Base for a by-VALUE field snapshot that knows how to re-compare itself.
 
     The capture side and the drift side are two halves of one security check,
-    and they used to be two independent ladders over the same kinds - written in
-    opposite directions, in two functions ~250 lines apart. A fourth snapshot
+    so the compare half is a method on each snapshot kind rather than a second,
+    independent ladder over the same kinds written in the opposite direction.
+    A fourth snapshot
     kind added to one and missed in the other is not a cosmetic bug: miss it on
     the capture side and a mutable value is snapshotted by reference, so the
     drift check compares an object to ITSELF and passes; miss it on the compare

@@ -357,10 +357,10 @@ def _resolve_from_window(
     The single edge / cursor / ``pageInfo`` / ``totalCount`` derivation shared
     by both ``resolve_connection`` paths (spec-033 Decision 5).
 
-    The historically-ambiguous empty shapes (``offset > 0`` overshot ``after:``,
+    The otherwise-ambiguous empty shapes (``offset > 0`` overshot ``after:``,
     ``limit == 0`` ``first: 0``) are served from MARKER rows
     (spec-033 Decision 5): ``apply_window_pagination`` keeps each partition's
-    row 1 for these shapes, so an empty rows list now PROVES the parent has no
+    row 1 for these shapes, so an empty rows list PROVES the parent has no
     children (serve the zero page), and a marker-only list carries the real
     ``_dst_total_count`` (serve the empty page with true count/flags). Markers
     (row 1 when ``offset > 0``; every row when ``limit == 0``) are excluded
@@ -388,10 +388,12 @@ def _resolve_from_window(
     selected); only the SQL cost changes. Unbounded forward pages and reversed
     ``last``-only pages serve ``hasNextPage=False`` as a CONSTANT (they end at the
     partition tail), count-free with no probe. ``split_window_rows``
-    + the ``hasNextPage`` derivation here are the resolve-side surface a future
-    keyset-cursor backend inherits: it makes ``_dst_row_number`` page-relative
-    (so ``row_number < total`` no longer holds) and derives ``hasNextPage`` from
-    this same overfetch, and ``hasPreviousPage`` from "a cursor was supplied".
+    + the ``hasNextPage`` derivation here also serve the keyset-cursor
+    (``Meta.cursor_field``) windows: a counted keyset seek makes
+    ``_dst_row_number`` page-relative (so ``row_number < total`` does not hold)
+    and takes ``hasNextPage`` from the per-partition post-seek count, a count-free
+    keyset seek takes it from this same overfetch, and ``hasPreviousPage`` is
+    "a cursor was supplied".
 
     Returns ``None`` to tell the caller the window cannot be served and must
     fall back to the per-parent pipeline: a count-less window whose selection
@@ -406,8 +408,7 @@ def _resolve_from_window(
     forward row numbers (``[d, e]`` numbered ``4, 5`` for ``last: 2`` of five
     rows). The forward absolute-offset cursor therefore matches the pipeline's
     ``ListConnection`` cursors directly - no ``_dst_total_count - row_number``
-    re-derivation (that is the scheme an earlier spec revision described;
-    neither upstream ``strawberry-django`` nor this package's port overwrites the
+    re-derivation (neither upstream ``strawberry-django`` nor this package's port overwrites the
     forward row number - both keep it forward and use a separate reversed
     annotation only for the plan-time ``__lte`` filter). The cursor
     PREFIX / base64 stay owned by the edge class - the fast path passes only the
@@ -471,7 +472,7 @@ def _resolve_from_window(
     if not rows:
         # With marker rows planned for the ambiguous shapes (spec-033 Decision 5)
         # and the n+1 sentinel for the count-free probe, an empty forward window
-        # now PROVES the parent has no related rows for EVERY shape - a parent with
+        # PROVES the parent has no related rows for EVERY shape - a parent with
         # children would have kept its row 1 or its probe sentinel.
         # ``has_next_page`` False: no row survived the overfetch. A keyset seek
         # page has no offset domain, so its "a cursor was supplied" previous-page
@@ -2206,7 +2207,8 @@ def _window_rows_are_annotated(rows: list[object]) -> bool:
     ``_dst_row_number`` is a consumer's own prefetch write, not the walker's
     window, and must NOT be consumed as one. ``_dst_total_count`` is NOT
     probed: the walker annotates it conditionally (spec-033 Decision 4 - only
-    when ``totalCount`` / ``hasNextPage`` / the window shape needs it), so a
+    when the window's ``utils/connections.py::FetchMode`` is ``COUNTED``:
+    ``totalCount`` observed, or the ``first: 0`` shape), so a
     count-less page is still the walker's window. The collision probe stays
     sound on the row number alone because the ``_dst_``
     namespace is package-reserved (spec-033 Decision 4). An empty list has no
@@ -2295,12 +2297,12 @@ def _build_relation_connection_resolver(
     all come from that one object; the resolver never reads
     ``__django_strawberry_definition__`` off the target class at all.
 
-    Async-``get_queryset`` posture (0.0.9): this is sync-pipeline-only and has
+    Async-``get_queryset`` posture: this is sync-pipeline-only and has
     no ``resolver=`` seam (the documented escape a *root* connection uses for
     an async hook), so a Relay target whose ``get_queryset`` is ``async def``
     raises ``SyncMisuseError`` on every query of its synthesized
     ``<field>Connection``; ``relation_shapes = {"<field>": "list"}`` is the
-    recourse until an async connection pipeline rides the ``033`` work. The
+    recourse. The
     fail-loud ``SyncMisuseError`` is inherited from the pipeline, not new here.
     """
     to_attr = _relation_connection_to_attr(relation_field_name)

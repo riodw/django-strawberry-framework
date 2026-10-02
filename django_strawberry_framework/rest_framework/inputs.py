@@ -1209,12 +1209,11 @@ def _collect_input_attr_collision_messages(
 
     Three ways two serializer fields collapse to one generated input field (or one
     model attr), all of which would otherwise SILENTLY drop / double-write - so all
-    fail loud (the package's fail-loud contract). Formerly this RAISED on the FIRST
-    collision; it now COLLECTS every collision message and returns them, so the caller
+    fail loud (the package's fail-loud contract). It COLLECTS every collision message
+    and returns them rather than raising on the first, so the caller
     (``_walk_serializer_fields``) can aggregate them with the per-field conversion errors
     into ONE ``ConfigurationError`` (report all actionable problems at once,
-    not one-fix-rerun-per-field). The message wording is byte-unchanged, so a consumer
-    (and the tests) still see the same per-collision sentence, now as one bullet in the
+    not one-fix-rerun-per-field); each per-collision sentence is one bullet in the
     aggregate:
 
     * ``input_attr`` clash - a relation field ``category`` remaps to input attr
@@ -1230,8 +1229,8 @@ def _collect_input_attr_collision_messages(
     * ``source`` clash - two WRITABLE fields sharing one one-segment ``source``
       would double-write one model attr. A ``read_only`` field sharing a ``source``
       with a writable one is fine (read-only is dropped before this is reached), so
-      only the writable-vs-writable collision is reported. (The DRF ``source``-collision
-      arm is new - forms have no ``source`` axis.) ``source_of`` uses
+      only the writable-vs-writable collision is reported. (The ``source``-collision
+      arm is DRF-only - forms have no ``source`` axis.) ``source_of`` uses
       ``spec.source or spec.target_name`` so a bare declared name (``source is None``)
       still collides with an alias that names it as ``source`` - the same
       ``source or name`` rule ``writable_source_collisions`` applies at runtime for

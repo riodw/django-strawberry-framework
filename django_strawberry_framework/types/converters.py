@@ -531,9 +531,9 @@ def convert_field_output(
 ) -> object:
     """Map a non-relation Django column to its read-output annotation.
 
-    The read-output entry point ``types/base.py:_build_annotations`` calls for
-    every non-relation column (where it called ``convert_scalar`` directly
-    before spec-037). Routing, not an expansion of ``convert_scalar``:
+    The read-output entry point ``types/base.py::_build_annotations`` calls for
+    every non-relation column (spec-037). Routing, not an expansion of
+    ``convert_scalar``:
 
     - A ``FileField`` / ``ImageField`` resolves through ``FIELD_OUTPUT_TYPE_MAP``
       to ``DjangoFileType`` / ``DjangoImageType``, nullable by DEFAULT as

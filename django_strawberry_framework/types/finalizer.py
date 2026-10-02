@@ -1112,8 +1112,8 @@ def finalize_django_types() -> None:
     # Neither pass can soundly clear them itself because it would wipe the sibling
     # pass's entries.
     # Without this, a re-call after a fixable later-phase failure (the documented
-    # recover-in-place path) hit a spurious distinct-class collision in
-    # ``materialize_generated_input_class`` that masked the original, now-fixed
+    # recover-in-place path) would hit a spurious distinct-class collision in
+    # ``materialize_generated_input_class`` that masks the original, now-fixed
     # error. Parked module globals are overwritten in place by the next ``setattr``
     # (the parked-globals lifecycle), so a ledger-only clear is safe. ``registry``
     # is NOT cleared here - this resets only the emit ledgers, not declarations.
@@ -1231,8 +1231,8 @@ def _bind_set_owner_common(
     order side reads the raw ``Meta`` with no metaclass validation, so the
     Django lazy-ref string idiom reaches here) raises the same family
     mismatch error instead of leaking ``issubclass()``'s raw ``TypeError``.
-    Re-binding the same ``(set_cls, definition)`` pair is idempotent
-    (partial-finalize recovery). A second, distinct owner runs the optional
+    Re-binding the same ``(set_cls, definition)`` pair is a no-op. A second,
+    distinct owner runs the optional
     pre-check then the declared-relation-target agreement walk: every declared
     related target must resolve to the EXACT same ``DjangoTypeDefinition``
     AND ``graphql_type_name`` across both owners.
@@ -1300,8 +1300,7 @@ def _bind_filterset_owner(
 
     First binding writes ``filterset_cls._owner_definition = definition``
     and returns. Re-binding the same ``(filterset_cls, definition)``
-    pair is idempotent (supports partial-finalize recovery per spec-027
-    Decision 9). A second, distinct owner triggers
+    pair is a no-op. A second, distinct owner triggers
     the strict-equality check (``_check_filterset_owner_axes``) across the
     owner-dependent axes:
 
@@ -1680,8 +1679,7 @@ def _bind_orderset_owner(orderset_cls: type[OrderSet], definition: DjangoTypeDef
 
     First binding writes ``orderset_cls._owner_definition = definition``
     and returns. Re-binding the same ``(orderset_cls, definition)``
-    pair is idempotent (supports partial-finalize recovery per
-    spec-028 Decision 6). A second, distinct owner triggers the
+    pair is a no-op. A second, distinct owner triggers the
     related-target-agreement check across every declared
     ``RelatedOrder``.
 
@@ -1923,10 +1921,8 @@ def _bind_ordersets() -> None:
     missing ``orderset_class = <Name>``. Runs BEFORE materialization
     so an orphan failure leaves no partial state in
     ``_materialized_names`` /
-    ``OrderArgumentsFactory.input_object_types``; otherwise a re-run
-    of ``finalize_django_types()`` after fixing the orphan would see
-    stale ledger entries from the prior failed attempt (mirrors the
-    **shipped** filter side's authoritative ordering).
+    ``OrderArgumentsFactory.input_object_types`` (the same ordering as
+    the filter side).
 
     Subpass 4 -- materialize input classes. Reads
     ``OrderArgumentsFactory(orderset_cls).arguments`` to trigger the
@@ -2070,9 +2066,7 @@ def _bind_filtersets() -> None:
     suggestion to add the missing ``filterset_class = <Name>``. Runs
     BEFORE materialization so an orphan failure leaves no partial
     state in ``_materialized_names`` /
-    ``FilterArgumentsFactory.input_object_types``; otherwise a re-run
-    of ``finalize_django_types()`` after fixing the orphan would see
-    stale ledger entries from the prior failed attempt.
+    ``FilterArgumentsFactory.input_object_types``.
 
     Subpass 4 - materialize input classes. Reads the
     ``FilterArgumentsFactory(filterset_cls).arguments`` property

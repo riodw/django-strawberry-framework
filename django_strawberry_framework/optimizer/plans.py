@@ -102,11 +102,11 @@ class _IndexedList(list[_T]):
         *,
         key: Callable[[_T], object] | None = None,
     ) -> None:
-        # ``key=None`` means "index by the value itself". The identity case
-        # previously routed through a ``_identity`` key callable; ``append_unique``
+        # ``key=None`` means "index by the value itself". ``append_unique``
         # is the walker's single hottest call (one per scalar projection, connector
-        # column, and resolver key), so the identity branch is inlined to skip a
-        # Python-level call per append.
+        # column, and resolver key), so the identity branch is inlined rather than
+        # routed through an identity key callable, skipping a Python-level call
+        # per append.
         super().__init__()
         self._key = key
         self._seen: set[object] = set()
@@ -822,8 +822,8 @@ def order_entry_name_and_direction(entry: object) -> tuple[str, bool] | None:
     Shared by the nested planner's order-column projection
     (``nested_planner.py::_order_entry_field_name``), the unique-terminal check
     (``ends_in_unique_column`` below), and the lateral backend's column
-    resolution (``lateral_fetch.py::_order_columns``); historically each
-    spelled its own parse and two disagreed on dash stripping.
+    resolution (``lateral_fetch.py::_order_columns``), so the three cannot
+    disagree on dash stripping.
     """
     if isinstance(entry, str):
         descending = entry.startswith("-")
@@ -996,9 +996,10 @@ def apply_window_pagination(
     selection can observe the count - and, via the count-free ``hasNextPage``
     probe, ALSO when a plain ``first: N`` page selects only ``hasNextPage`` (not
     ``totalCount``), which overfetches an n+1 sentinel instead (``next_page_probe``
-    below). The nested planner computes the ``totalCount`` and ``hasNextPage`` observers
-    SEPARATELY and applies that probe exception rather than gating on their
-    combined observability; the two fetch modes are mutually exclusive by
+    below). The nested planner derives both from the one
+    ``utils/connections.py::FetchMode`` that ``WindowRangePlan.fetch_mode`` computes
+    rather than gating on the observers' combined observability; the two fetch
+    modes are mutually exclusive by
     construction (enforced by
     ``utils/connections.py::assert_window_fetch_mode`` at the window entry). The
     default ``True`` preserves every direct caller; the fast path treats a missing
@@ -1148,10 +1149,10 @@ def apply_window_pagination(
             # windowed prefetch): ``offset > 0`` (overshot
             # ``after:``) and ``limit == 0`` (``first: 0``) produce an empty
             # page for BOTH a parent whose children all sit before the offset
-            # and a parent with no children at all - historically ambiguous,
-            # forcing a per-parent fallback. Keeping each partition's ROW 1
+            # and a parent with no children at all - ambiguous without a marker,
+            # which would force a per-parent fallback. Keeping each partition's ROW 1
             # alongside the page rows disambiguates in the same single query:
-            # an empty ``to_attr`` list now PROVES zero children, while a
+            # an empty ``to_attr`` list PROVES zero children, while a
             # marker-only list disambiguates the empty page. The count is a
             # SEPARATE axis (``utils/connections.py::FetchMode``): only the
             # ``first: 0`` marker shape is ``COUNTED`` (its marker doubles as the

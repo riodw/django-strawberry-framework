@@ -766,7 +766,7 @@ def _make_relation_resolver(
 
     def forward_resolver(root: object, info: Info[object, object]) -> object:
         context = getattr(info, "context", None)
-        # FK-id elision (spec-011 Decision 7) and the N+1 probe both key off the
+        # FK-id elision (spec-015 Decision 7) and the N+1 probe both key off the
         # resolver key, which requires an ``info.path`` walk. Read both sentinels
         # first; when neither is active - the common request shape - skip the walk
         # entirely. When at least one is active, walk once and share the key

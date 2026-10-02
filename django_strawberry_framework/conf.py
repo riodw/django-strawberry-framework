@@ -26,11 +26,11 @@ None`` (this module, treated as "no settings configured") and
 hints configured"). Both behave identically to omitting the value
 entirely. Tightening the ``None`` cases to raise is deferred;
 until then the empty-mapping coercion is the
-documented contract for ``None``. *Other* invalid shapes are no longer
+documented contract for ``None``. *Other* invalid shapes are not
 defensively coerced here: a non-mapping ``DJANGO_STRAWBERRY_FRAMEWORK``
 value raises ``ConfigurationError`` through
-``_normalize_user_settings`` before attribute lookup, rather than the
-old ``or {}`` collapse that silently absorbed every falsy value.
+``_normalize_user_settings`` before attribute lookup, rather than an
+``or {}`` collapse that would silently absorb every falsy value.
 Reflective shape reads off Strawberry / graphql-core / Django
 descriptors (``getattr(obj, name, None) or {}`` and friends in the
 optimizer subpackage) are a *separate* case - there the upstream

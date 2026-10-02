@@ -87,15 +87,14 @@ view.
 Where the strict UTF-8 wire contract lives (and why not here)
 -------------------------------------------------------------
 
-It used to live in this function. It does not any more, and the move is
-the point: the wire contract (spec-046 Decision 9 - a GraphQL-over-HTTP
-request body is UTF-8 or it is a ``400``) is permanent **package
-policy**, while everything else in this module is a temporary workaround
-for an upstream *defect*. Sharing one site meant sharing one lifecycle
-and one kill switch, so ``APPLY_UPSTREAM_PATCHES = False`` - or just
-``{"strawberry": False}`` - silently restored UTF-16 / UTF-32 acceptance,
-and retiring the workarounds once upstream fixes them would have retired
-a security contract along with them. Two owners now:
+Not in this module, and that placement is the point: the wire contract
+(spec-046 Decision 9 - a GraphQL-over-HTTP request body is UTF-8 or it is a
+``400``) is permanent **package policy**, while everything else in this module
+is a temporary workaround for an upstream *defect*. Sharing one site would mean
+sharing one lifecycle and one kill switch, so ``APPLY_UPSTREAM_PATCHES = False``
+- or just ``{"strawberry": False}`` - would silently restore UTF-16 / UTF-32
+acceptance, and retiring the workarounds once upstream fixes them would retire
+a security contract along with them. Two owners:
 
 - the strict decode is enforced at the package's own HTTP-view parsing
   boundary, ``views.py::_RequestBodyBoundaryMixin.parse_json``, for both
@@ -114,7 +113,7 @@ documented behavior, not a defect), and the translation catches the
 undecodable remainder that would otherwise be a ``500``.
 
 The patch wraps the original ``parse_json`` rather than reimplementing
-it: the original is called unchanged and only the previously-uncaught
+it: the original is called unchanged and only the otherwise-uncaught
 ``UnicodeDecodeError`` / ``RecursionError`` are translated to the same
 ``HTTPException(400, ...)`` Strawberry already raises for malformed JSON.
 This keeps the patch robust to upstream changes in the body of
@@ -161,8 +160,8 @@ defined but never called anywhere in the installed package at 0.322.2 or
   correct;
 - the sync and async multipart ``operations`` / ``map`` form fields:
   the guard *widens* behavior beneficially - a scalar ``operations`` or
-  ``map`` previously escaped ``replace_placeholders_with_files`` /
-  ``data.get("query")`` as an unhandled ``500`` and now gets the
+  ``map`` that would otherwise escape ``replace_placeholders_with_files`` /
+  ``data.get("query")`` as an unhandled ``500`` gets the
   controlled ``400``. A well-typed JSON list remains permitted for a
   batched ``operations`` document, so the sync and async multipart
   delegates below separately reject only the map-specific structural
@@ -704,7 +703,7 @@ def _patched_parse_json(
        lists with any non-``dict`` element are rejected here.
 
     **This function does not decode, and must not start.** The strict
-    UTF-8 wire contract that used to live here now belongs to
+    UTF-8 wire contract belongs to
     ``views.py::_RequestBodyBoundaryMixin.parse_json`` (spec-046 Decision
     9; see the module docstring for why the lifecycles had to split).
     Consequently this wrapper preserves upstream's ``bytes`` semantics

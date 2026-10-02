@@ -600,14 +600,6 @@ def _introspect_field_types(type_name: str) -> dict:
 def test_scalar_specimen_introspects_bigint_scalar_for_both_fields():
     """Both halves of the ``BigInt`` converter table entry - signed and unsigned -
     introspect correctly in both shapes (``NON_NULL`` and nullable ``SCALAR``).
-
-    Migrated from these tests in ``tests/types/test_converters.py``:
-    - ``test_big_integer_field_maps_to_bigint_in_schema`` (non-null signed)
-    - ``test_big_integer_field_nullable_in_schema`` (nullable signed)
-    - ``test_positive_big_integer_field_maps_to_bigint_in_schema`` (non-null unsigned)
-
-    All three synthetic ``managed=False`` owner models are superseded by the
-    real ``ScalarSpecimen`` / ``NullableScalarSpecimen`` pair.
     """
     required_fields = _introspect_field_types("ScalarSpecimenType")
     nullable_fields = _introspect_field_types("NullableScalarSpecimenType")

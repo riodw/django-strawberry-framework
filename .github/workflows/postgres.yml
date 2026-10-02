@@ -66,8 +66,8 @@ jobs:
       # mutable, so `postgres:16` silently becomes a different image on every
       # upstream 16.x rebuild and the tier's server is then unreviewed
       # (spec-049 Decision 4). The digest below is `postgres:16` as resolved from
-      # Docker Hub at authoring time; refresh it deliberately, in its own change,
-      # with the registry manifest query recorded in docs/builder/bld-049.md.
+      # the Docker Hub registry manifest API; refresh it deliberately, in its own
+      # change, resolved the same way, never by hand.
       - name: Start tuned throwaway Postgres (digest-pinned)
         run: |
           docker run -d --name postgres \

@@ -17,7 +17,7 @@ The two foundational mixins the shipped ``FilterSet`` / ``OrderSet`` use:
   (``_request_from_info`` / ``_run_permission_checks`` / active-field
   walkers) parameterized by ``ActiveInputPermissionAttrs``. Mechanics live
   in ``utils/permissions.py``; this mixin is the one wrapper layer both
-  families used to copy.
+  families share.
 
 Plus the set-family DECLARATION-LIFECYCLE substrate single-sited here, so a
 future set family does not copy the related-declaration +
@@ -533,14 +533,13 @@ class ActiveInputPermissionAttrs:
     """Per-family configuration for ``ActiveInputPermissionMixin``.
 
     The permission *mechanics* are single-sited in ``utils/permissions.py``.
-    What used to be re-spelled on ``FilterSet`` and ``OrderSet`` as twin
+    What ``FilterSet`` and ``OrderSet`` would otherwise re-spell as twin
     thin wrappers is the family shape.
 
     Five of its axes are not permission axes at all - they are the neutral
     traversal shape ``utils/input_values.py::SetInputTraversal`` already
-    declares, and this class used to re-declare them field-for-field and copy
-    them across in a constructor that called itself "the ONE translation". It
-    CONTAINS that shape instead, so a sixth traversal axis is one edit rather
+    declares. This class CONTAINS that shape rather than re-declaring its axes
+    field-for-field and copying them across, so a sixth traversal axis is one edit rather
     than three plus a declaration per family, and the gate-time and apply-time
     classifications are the same object rather than two objects a copy keeps in
     step.
@@ -586,7 +585,7 @@ class ActiveInputPermissionMixin:
 
         The family's ``_permission`` CONTAINS the ``SetInputTraversal`` that
         ``utils.input_values.iter_active_fields`` consumes, so this is a read
-        rather than the field-for-field copy it used to be. Both family
+        rather than a field-for-field copy. Both family
         normalizers (``FilterSet._normalize_input`` /
         ``orders.inputs.normalize_input_value``) and the permission walkers
         classify input through this one object, so apply-time and gate-time

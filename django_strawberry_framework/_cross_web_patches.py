@@ -65,7 +65,7 @@ which a property is not.
 Who this patch is for
 ---------------------
 
-Consumers who mount **Strawberry's own** view. It is no longer on the
+Consumers who mount **Strawberry's own** view. It is not on the
 package's own request path at all: a package view installs its own
 raw-body adapter (``views.py::_RawBodyRequestAdapter``, a one-property
 subclass of the class patched here) and decodes strictly in its own

@@ -855,7 +855,7 @@ def test_convert_scalar_binary_field_raises_unsupported():
 #
 # Synthetic models live under ``app_label = "test_bigint"`` so they do not
 # collide with the choice-enum fixture's ``app_label = "test_choice_enums"``.
-# ``managed = False`` per Decision 7 spec #"every test model hosting `_FakeArrayField` or `_FakeHStoreField` declares `class Meta: managed = False`":
+# ``managed = False`` per spec-017 Decision 7 #"every test model hosting `_FakeArrayField` or `_FakeHStoreField` declares `class Meta: managed = False`":
 # no migration implication; test rows are instantiated directly when needed.
 # ---------------------------------------------------------------------------
 
@@ -864,7 +864,7 @@ def _walk_introspected_type(type_field: dict) -> dict:
     """Walk a GraphQL introspection ``type`` payload to the terminal scalar.
 
     Wrapping types (``NON_NULL``, ``LIST``) have ``name: None`` per
-    Decision 7's introspection note (spec #"walk it explicitly rather than asserting on `field.type.name`"). Walking the chain
+    spec-017 Decision 7's introspection note (#"walk it explicitly rather than asserting on `field.type.name`"). Walking the chain
     surfaces the inner ``SCALAR { name: "BigInt" }`` regardless of
     nullability / list wrapping.
     """
@@ -994,7 +994,7 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 # not collide with the prior synthetic apps (``test_bigint``,
 # ``test_choice_enums``). Sentinel-branch tests monkey-patch
 # ``converters._ARRAY_FIELD_CLS = _FakeArrayField`` BEFORE declaring the
-# ``DjangoType`` (Decision 7 spec #"calls `monkeypatch.setattr(converters, \"_ARRAY_FIELD_CLS\", _FakeArrayField)` *before* declaring the `DjangoType`"). The
+# ``DjangoType`` (spec-017 Decision 7 #"calls `monkeypatch.setattr(converters, \"_ARRAY_FIELD_CLS\", _FakeArrayField)` *before* declaring the `DjangoType`"). The
 # introspection helpers (``_introspect_field_type`` /
 # ``_walk_introspected_type``) defined in the BigInt section above are
 # reused verbatim by every owner-introspection test below.
@@ -1407,8 +1407,9 @@ def test_real_array_field_compatible_with_strawberry():
 # not collide with the prior synthetic apps (``test_bigint``,
 # ``test_arrayfield``, ``test_choice_enums``). Sentinel-branch tests
 # monkey-patch ``converters._HSTORE_FIELD_CLS = _FakeHStoreField`` BEFORE
-# declaring the ``DjangoType`` (Decision 7 spec #"calls `monkeypatch.setattr(converters, \"_HSTORE_FIELD_CLS\", _FakeHStoreField)` *before* declaring the `DjangoType`"). Helper-resolver
-# tests use ``sys.modules`` manipulation per Decision 7 spec #"Helper-resolver tests".
+# declaring the ``DjangoType`` (spec-017 Decision 7 #"calls `monkeypatch.setattr(converters, \"_HSTORE_FIELD_CLS\", _FakeHStoreField)` *before* declaring the `DjangoType`"). The
+# sentinel's soft-import resolution is covered once in ``tests/utils/test_imports.py``,
+# not here (spec-017 #"**Soft-import branch coverage** is NOT written here.").
 #
 # Same postgres-only constraint as the ArrayField section: ``HStoreField``
 # can never run on the SQLite-backed fakeshop, so the converter-table row

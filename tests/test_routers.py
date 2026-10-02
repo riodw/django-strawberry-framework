@@ -85,7 +85,7 @@ controlled query, and (on a second schema) a gated ``SchemaExtension``. All thre
 are driven through ``_OperationController``: no wall-clock sleeps, no polling on
 real time, and every release is an explicit ``asyncio.Event``.
 
-The WebSocket **Host** boundary (spec-046 Decision 19, Test plan rows 43-47) is
+The WebSocket **Host** boundary (spec-046 Decision 19, Test plan rows 47-51) is
 the module's third subject, and it is deliberately proven by DELEGATION: every
 row that asks "which hosts are allowed" asserts the socket's verdict against
 Django's own answer for the same value over HTTP - ``_django_http_host_verdict``
@@ -2409,7 +2409,7 @@ async def test_schema_object_passes_through_unchanged_with_extensions_intact():
 
 # ---------------------------------------------------------------------------
 # Channels-present: the WebSocket Host boundary (spec-046 Decision 19, Test plan
-# rows 43-47). Channels'
+# rows 47-51). Channels'
 # ``OriginValidator.__call__`` reads the ``Origin`` header and nothing else, so a
 # handshake with an allowed ``Origin`` and a hostile ``Host`` connected - while
 # ``routers.py`` promised an injected consumer "cannot escape Host/Origin
@@ -3128,8 +3128,9 @@ def _recording_websocket_application(reached):
 
 @pytest.mark.django_db(transaction=True)
 async def test_a_hostile_host_is_denied_before_the_auth_stack_and_the_consumer(monkeypatch):
-    """spec-046 Decision 19 #"before authentication": the ordering, with two sentinels.
+    """A hostile ``Host`` is denied before authentication and the consumer (two sentinels).
 
+    spec-046 Decision 19 #"before authentication and before the consumer is constructed**".
     "Outermost" is a structural claim; this is the behavioral one. Two sentinels
     that MUST fire on an allowed ``Host`` and MUST NOT fire on a hostile one:
 

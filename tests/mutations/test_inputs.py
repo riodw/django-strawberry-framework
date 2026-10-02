@@ -13,7 +13,7 @@ Covers the spec-036 generation substrate
   ``materialize_mutation_input_class``;
 - the ``FileField`` / ``ImageField`` -> ``Upload`` input mapping (required /
   optional shapes, ``| None`` widening, ``Meta.fields`` / ``Meta.exclude``
-  narrowing, and the lifted spec-036 merge-override carve-out)
+  narrowing, and a file column riding the merge-override skip like a scalar)
   (spec-037);
 - ``FieldError`` / ``build_payload_type`` envelope shape + the ``node`` / ``result``
   slot;
@@ -1031,11 +1031,11 @@ def test_file_field_narrowed_by_meta_fields_and_exclude():
 
 
 def test_file_field_consumer_override_skips_generated_upload_field():
-    """A file column in ``overrides`` is SKIPPED, lifting the spec-036 carve-out.
+    """A file column in ``overrides`` is SKIPPED, exactly like a scalar column.
 
-    The old staged ``NotImplementedError`` ran BEFORE the override skip, so a file
-    column could not participate in the ``Meta.input_class`` merge override. Now it
-    does, exactly like a scalar - this is the load-bearing carve-out-lift assertion.
+    The file column participates in the ``Meta.input_class`` merge override: the
+    override skip runs for it as for any scalar, so the generator emits no
+    ``Upload`` field for it and the consumer's own definition stands.
     """
 
     cls = build_mutation_input(

@@ -1316,7 +1316,9 @@ def test_apply_interfaces_wraps_typeerror_as_configuration_error():
     rejects with a "Cannot create a consistent MRO" ``TypeError`` because
     ``_BadInterface`` already inherits from ``object`` through a different
     metaclass path. The helper surfaces that as ``ConfigurationError`` naming
-    the interface, per spec-015 #"surface any `TypeError` as a `ConfigurationError`".
+    the interface, per spec-015 Decision 1's rationale
+    (``docs/SPECS/appx/spec-015-relay_interfaces-0_0_5-rationale.md``
+    #"surface any `TypeError` as a `ConfigurationError`").
     """
 
     @strawberry.interface

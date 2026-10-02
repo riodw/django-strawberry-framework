@@ -395,12 +395,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
     # Cache for fully-resolved fields per Layer 4 of spec-028 Decision 3.
     _expanded_fields = None
-    # Recursion guard around ``get_fields`` so a self-referential
-    # ``RelatedOrder`` does not blow the stack. The slot stays in place
-    # for future defensive use even though the expansion removes
-    # the explicit reentry-branch test from ``_expand_meta_fields`` (per
-    # the planning-pass disposition -- the branch was structurally
-    # unreachable through the shipped surface).
+    # Expansion reentry-guard slot (named by ``_lifecycle.guard``):
+    # ``sets_mixins.expanded_once`` sets it around ``get_fields``'s build and
+    # clears it in a ``finally``. No reentry branch reads it, because the
+    # build never re-enters ``get_fields`` -- ``_expand_meta_fields`` expands
+    # this class's own ``Meta.fields`` and never calls ``get_fields`` on a
+    # ``RelatedOrder`` target -- so the order side passes no ``on_reentry``.
     _is_expanding_fields = False
 
     # Family binding-state descriptor: the single source for the lifecycle attr

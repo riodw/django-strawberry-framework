@@ -251,9 +251,9 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
 
     ``offset > 0`` (an overshot ``after:``) and ``limit == 0`` (``first: 0``)
     both yield an empty page for a parent whose children all sit outside the
-    range AND for a parent with no children at all - historically forcing a
-    per-parent fallback. spec-033 Decision 5 disambiguates these shapes with
-    marker rows; reversed (``last``-only) windows never plan markers.
+    range AND for a parent with no children at all, which an unmarked window
+    could only settle with a per-parent fallback. spec-033 Decision 5
+    disambiguates these shapes with marker rows; reversed (``last``-only) windows never plan markers.
 
     The plan-time/resolve-time contract shared - like the sidecar-kwarg family
     above - by everything that must agree on "ambiguous": the window builders
@@ -261,7 +261,7 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
     ``apply_window_pagination`` and the lateral SQL) and the resolver that
     CONSUMES rows as marker-classified (``connection.py::_resolve_from_window``).
     The count decision is a SEPARATE axis owned by ``FetchMode`` /
-    ``WindowRangePlan.fetch_mode`` - these ambiguous shapes are NO LONGER
+    ``WindowRangePlan.fetch_mode`` - these ambiguous shapes are NOT
     shape-forced to a count: the offset page composes the count-free probe
     with its marker, and only the ``first: 0`` marker still serves a count. One
     predicate so the plan side and the consume side cannot drift.
@@ -292,7 +292,7 @@ class WindowRangePlan:
     ``COUNT(1) OVER (PARTITION BY ...)`` that scans the whole partition. It is
     honored on the ``plain_first_page`` shape AND on the bounded forward
     offset page (``offset > 0`` with a positive ``limit``); every OTHER shape
-    leaves the probe off, but that no longer implies a count. Under the
+    leaves the probe off, but that does not imply a count. Under the
     ``FetchMode`` policy a shape needs the ``COUNT(1) OVER`` only when it
     is ``COUNTED`` (``totalCount`` observed, or the ``first: 0`` marker shape) -
     an unbounded forward or reversed ``last``-only page is ``CONSTANT_FALSE``
@@ -301,7 +301,7 @@ class WindowRangePlan:
     count-free. On the offset page the
     probe COMPOSES with ``add_marker_rows`` (the marker keeps each partition's
     row 1 while the sentinel answers ``hasNextPage``), so probe and markers are
-    NO LONGER mutually exclusive - but probe and count still are (probe XOR
+    NOT mutually exclusive - but probe and count are (probe XOR
     count is the standing invariant, enforced by ``assert_window_fetch_mode``).
     The ``+1``
     sentinel arithmetic lives in exactly one place - the ``_probe_increment``
@@ -404,8 +404,8 @@ class WindowRangePlan:
 
         The single source of truth the planner consumes for BOTH
         ``with_total_count`` (``mode is FetchMode.COUNTED``) and
-        ``next_page_probe`` (``mode is FetchMode.PROBED``), replacing the two
-        formerly-independent derivations. Called by
+        ``next_page_probe`` (``mode is FetchMode.PROBED``), so the two cannot
+        be derived independently. Called by
         ``optimizer/nested_planner.py::plan_connection_relation`` with the
         ``totalCount`` / ``hasNextPage`` observers from the merged selection
         (``optimizer/selections.py``). The resolver deliberately does NOT call
@@ -582,7 +582,7 @@ def split_window_rows(
 
     Returns ``(page_rows, probe_row_seen)``. The one home for sentinel-row
     exclusion, owning the sentinel shapes the window may carry. ``add_marker_rows``
-    and ``next_page_probe`` are NO LONGER mutually exclusive: they COMPOSE on the
+    and ``next_page_probe`` are NOT mutually exclusive: they COMPOSE on the
     bounded forward offset page (marker keeps row 1, probe adds the sentinel past
     the page), so the composed case is handled FIRST:
 
@@ -607,9 +607,10 @@ def split_window_rows(
     ``rn`` BEFORE its ``LIMIT`` applies, so the sentinel is always the
     ``rn == upper_bound + 1`` row regardless of which renderer produced it.
     This helper plus the ``hasNextPage`` derivation in
-    ``connection.py::_resolve_from_window`` are the resolve-side surface a
-    future keyset-cursor backend (which makes ``rn`` page-relative) has to
-    touch - everything else consumes ``(page_rows, probe_row_seen)`` unchanged.
+    ``connection.py::_resolve_from_window`` are the resolve-side surface the
+    keyset-cursor windows ride as well (a counted keyset seek numbers ``rn``
+    page-relatively, planned through ``window_range_plan(keyset_counted=...)``) -
+    everything else consumes ``(page_rows, probe_row_seen)`` unchanged.
     """
     row_list = list(rows) if not isinstance(rows, list) else rows
     if range_plan.add_marker_rows and range_plan.next_page_probe:

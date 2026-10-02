@@ -23,13 +23,13 @@ also re-reads a ``SpooledTemporaryFile`` which
 disk past ``FILE_UPLOAD_MAX_MEMORY_SIZE`` - synchronously, on the event loop, for
 the async view.
 
-Django 6.0's own ``HttpRequest.body`` narrows that window: it seeks a *seekable*
-stream to its end and checks the real buffered size against
-``DATA_UPLOAD_MAX_MEMORY_SIZE`` before reading. The **5.2.x series, the oldest
-this package supports, has no such check** - only a ``CONTENT_LENGTH``
-comparison - so an
-absent declaration, an understated one, or ``DATA_UPLOAD_MAX_MEMORY_SIZE = None``
-leaves that read unbounded there. The package cap therefore has to measure the
+Django's own ``HttpRequest.body`` narrows that window on every supported
+release: it compares ``CONTENT_LENGTH``, and seeks a *seekable* stream to its end
+to check the real buffered size, against ``DATA_UPLOAD_MAX_MEMORY_SIZE`` before
+reading; the 5.2.x series also reads at most one byte past that limit from a
+stream it could not size. Every one of those checks is against Django's setting,
+not the package's cap, and ``DATA_UPLOAD_MAX_MEMORY_SIZE = None`` turns all of
+them off, leaving the read unbounded. The package cap therefore has to measure the
 body itself on every supported release, and measuring it means reaching for the
 stream Django keeps private.
 
@@ -37,9 +37,10 @@ The Django contract this module pins
 ------------------------------------
 
 Read out of ``django/http/request.py`` (and the two handler modules) at both
-supported versions - Django 5.2.0 and 6.0.5 - not from memory. The three
+ends of the supported range - the ``Django>=`` floor pinned in ``pyproject.toml``
+and the newest release ``uv.lock`` resolves - not from memory. The three
 attributes behave identically across them; only ``body``'s own size checks
-differ, which is the reason this module exists.
+differ, and none of those checks reads the package's cap.
 
 - ``_body`` is set as an *instance* attribute, once, by ``HttpRequest.body``
   after it has read the stream. Neither release declares a class-level default,
@@ -185,11 +186,11 @@ _UNREADABLE_STREAM_LOG_MESSAGE = (
 class _Probe(Enum):
     """The two non-numeric outcomes of a size probe, kept apart on purpose.
 
-    The probe used to answer with an ``int`` or ``None``, and ``None`` had to
-    carry two incompatible meanings: "measure it by reading instead" and "this
+    A probe answering only with an ``int`` or ``None`` would make ``None`` carry
+    two incompatible meanings: "measure it by reading instead" and "this
     stream is no longer in a state anything can safely read". Collapsing those
-    into one sentinel is what let a failed position-restore fall through to a
-    bounded read that then read from the wrong offset, so the two states are
+    into one sentinel lets a failed position-restore fall through to a
+    bounded read that then reads from the wrong offset, so the two states are
     named.
 
     - :attr:`UNMEASURABLE` - the probe declined or failed, and the stream is
@@ -215,11 +216,11 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
     1. **Already materialized** (``_body`` present, e.g. a urlencoded body some
        consumer middleware read on the way in). The allocation happened before
        the view ran and cannot be undone, so the length is simply measured - the
-       caller must still refuse an over-limit body rather than process it. This
-       rung used to be reached by Django's own ``CsrfViewMiddleware``, which
-       reads ``request.POST`` for every cookie-bearing POST; it no longer is,
-       because ``views.py`` re-enters CSRF from *inside* the view, after this
-       measurement (spec-046 Decision 18). What remains reachable is a
+       caller must still refuse an over-limit body rather than process it.
+       Django's own ``CsrfViewMiddleware``, which reads ``request.POST`` for every
+       cookie-bearing POST, does not reach this rung, because ``views.py``
+       re-enters CSRF from *inside* the view, after this measurement (spec-046
+       Decision 18). What remains reachable is a
        consumer's own inbound body read, which no application-level ordering can
        precede.
     2. **Measurable without reading** (a seekable stream, which is what ASGI's
@@ -349,7 +350,7 @@ def _measured_remaining(stream: Any) -> int | _Probe:
       (a ``tell()`` answering in the coordinates of the whole HTTP message rather
       than of the body it exposes) accepts the restore and still ends up
       somewhere else, and the bounded read would then read the wrong bytes -
-      previously it silently produced an empty body.
+      silently, as an empty body.
     - a position or end that is not exactly a built-in ``int`` (a ``tell()`` or
       ``seek`` that returns ``None``, which is legal for a stream that simply does
       not report positions, or any other object) is ``UNMEASURABLE``: no seek,

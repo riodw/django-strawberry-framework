@@ -3,7 +3,8 @@
 Imported by name from ``tests/types/test_definition_order.py``, which declares a
 relation override annotated ``Annotated[..., strawberry.lazy("<this module>")]``.
 The module exists because that escape hatch resolves through a real importable
-module path rather than the referring module's namespace (spec-010 #"Spike C").
+module path rather than the referring module's namespace
+(spec-010 #"it requires a real importable module path").
 
 Deliberately carries no ``from __future__ import annotations``: stringified
 annotations are a separately supported forward-reference shape, and a module

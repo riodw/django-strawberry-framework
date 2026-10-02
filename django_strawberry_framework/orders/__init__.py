@@ -37,9 +37,9 @@ from .sets import OrderSet, OrderSetMetaclass
 # consumer helper (``OrderInput[...]`` or ``order_input_type(...)``). Cleared via the
 # ``register_subsystem_clear`` row below (owner
 # ``orders.helper_references``) so ``registry.clear()`` replays
-# the callback -- not via a cycle-safe local import inside
-# ``TypeRegistry.clear`` (that shape predates the registration
-# seam). The finalizer's phase 2.5 orphan validation compares
+# the callback; ``TypeRegistry.clear`` imports nothing from this
+# subpackage, so the registry stays free of an import cycle back
+# into ``orders``. The finalizer's phase 2.5 orphan validation compares
 # this set against the set of ``Meta.orderset_class``-wired
 # ordersets and raises ``ConfigurationError`` for orphans.
 _helper_referenced_ordersets: set[type[OrderSet]] = set()

@@ -243,8 +243,9 @@ def _grant_add_item_and_visible_category_gid():
 def _debug(response):
     """Validate-and-return the debug payload for executed-operation happy paths.
 
-    Never used by the absence scenarios (5's unknown-field half, 7, 8's
-    withheld-payload half and 10) - those assert the missing key explicitly.
+    Never used by the absence scenarios (5's unknown-field half, both halves of
+    7, and the spec-048 gate's withheld-payload half) - those assert the
+    missing key explicitly.
     """
     extensions = response.extensions or {}
     assert "debug" in extensions, extensions
@@ -520,12 +521,12 @@ def test_no_sql_operation_carries_both_empty_lists(install_probe_schema):
 def test_off_by_default_publishes_no_debug_key(install_probe_schema):
     """Without any debug entry in ``extensions=``, no key appears and no envelope widens.
 
-    Distinct from scenario 8's withheld payload: there the extension IS listed
-    and refuses; here it was never installed, so nothing runs at all.
+    Distinct from the spec-048 gate's withheld payload: there the extension IS
+    listed and refuses; here it was never installed, so nothing runs at all.
 
-    Asserted on the envelope keys - the honest claim; the release-wide
-    Strawberry-floor raise means "byte-identical to 0.0.13" is deliberately
-    NOT this scenario's contract.
+    Asserted on the envelope keys: byte-identity with an earlier release's
+    response is deliberately NOT this scenario's contract, because a Strawberry
+    floor raise changes the response independently of the debug extension.
     """
     install_probe_schema([lambda: _optimizer])  # the otherwise-equivalent schema
     client = TestClient()
@@ -538,7 +539,7 @@ def test_off_by_default_publishes_no_debug_key(install_probe_schema):
 
 
 # ---------------------------------------------------------------------------
-# Scenario 8 (spec-048 Decision 5) - the fail-closed gate over a real request.
+# spec-048 Decision 5 - the fail-closed gate over a real request.
 # ---------------------------------------------------------------------------
 
 
@@ -638,7 +639,7 @@ def test_acknowledged_factory_keeps_one_instance_per_operation(install_probe_sch
 
 
 # ---------------------------------------------------------------------------
-# Scenario 9 (spec-048 Decision 6) - the caps are wired into a real operation's
+# spec-048 Decision 6 - the caps are wired into a real operation's
 # published payload, not merely available as a helper.
 # ---------------------------------------------------------------------------
 
@@ -660,7 +661,7 @@ def test_over_cap_exception_message_is_truncated_in_the_published_payload(instal
 
 
 # ---------------------------------------------------------------------------
-# Scenario 10 - the shipped aggregate fakeshop schema stays debug-free.
+# Scenario 7, project half - the shipped aggregate fakeshop schema stays debug-free.
 # ---------------------------------------------------------------------------
 
 
@@ -680,7 +681,8 @@ def test_project_graphql_endpoint_publishes_no_debug_key():
 
 
 # ---------------------------------------------------------------------------
-# Scenario 11 - the entry spellings that resolve to ONE object every operation.
+# The payload belongs to the operation - entry spellings that resolve to ONE
+# object every operation (spec-044 Decision 6).
 # ---------------------------------------------------------------------------
 
 

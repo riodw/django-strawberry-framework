@@ -921,7 +921,7 @@ def _injected_serializer_data(
 
     The declared-injection half of the final serializer data:
     the framework builds the authoritative data itself from the DECODED client data
-    plus this hook's return - a ``get_serializer_kwargs`` override can no longer
+    plus this hook's return - a ``get_serializer_kwargs`` override cannot
     replace or extend ``data``. The hook receives the FROZEN view of the decoded
     client data (immutable containers, upload metadata instead of the stateful
     upload objects) plus the frozen ``SerializerHookContext`` - never the live
@@ -982,8 +982,8 @@ def _merged_serializer_kwargs(
     - ``instance`` never reaches the hook (it receives the frozen
       ``SerializerHookContext`` carrying ``instance_pk`` instead of the live,
       mutable row), so ANY returned ``instance`` key is a ``ConfigurationError``
-      (the old substitute-the-target bypass - row A's authorization must never
-      write row B); the framework injects the located, authorized row itself.
+      (returning one would substitute the target - row A's authorization must
+      never write row B); the framework injects the located, authorized row itself.
     - ``partial`` is injected for an UPDATE (``instance is not None``), never for
       create; a hook that set ``partial`` itself is a ``ConfigurationError``.
     - the override's ``context`` dict is merged, then ``context["request"]`` is set
@@ -1403,9 +1403,9 @@ def _scope_relation_querysets_to_visibility(
     (``ManyRelatedField``) to ``original.filter(pk__in=<visibility queryset>)`` - the author's
     OWN queryset restriction AND-ed with the related primary ``DjangoType``'s visibility-scoped
     ``get_queryset``. Visibility is an ADDITIONAL constraint, never a replacement:
-    the earlier version REASSIGNED the field queryset, which erased a serializer author's
-    intentional ``PrimaryKeyRelatedField(queryset=Branch.objects.filter(city="allowed"))`` and
-    could admit a visible-but-serializer-disallowed row. Composing preserves the author's
+    reassigning the field queryset would erase a serializer author's intentional
+    ``PrimaryKeyRelatedField(queryset=Branch.objects.filter(city="allowed"))`` and could
+    admit a visible-but-serializer-disallowed row. Composing preserves the author's
     contract while still ensuring DRF's own ``is_valid()`` lookup can never re-fetch a row the
     visibility check hid (a single ``pk__in`` subquery - no extra round trip). A relation whose
     target has no registered primary (a raw-pk relation with no visibility contract) keeps the
@@ -2378,7 +2378,7 @@ def _guarded_serializer_write(
     frozen_provided = _frozen_hook_view(provided_data)
     # The framework builds the authoritative serializer data ITSELF:
     # decoded client data + the exact-match ``Meta.injected_fields`` injection - a
-    # ``get_serializer_kwargs`` override can no longer replace or extend it.
+    # ``get_serializer_kwargs`` override cannot replace or extend it.
     injected = _injected_serializer_data(
         mutation_cls,
         info,

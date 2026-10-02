@@ -340,7 +340,7 @@ def test_library_patron_bigint_lifetime_fines_over_http():
     proves the converter row keeps working on a real-domain model and not
     just the dedicated coverage app.
     """
-    # 2**53 + 12345 - past JS safe-integer (``2**53 - 1``) so a numeric
+    # 2**53 + 11344 - past JS safe-integer (``2**53 - 1``) so a numeric
     # round-trip would lose precision; the only correct wire format is the
     # decimal string.
     large_value = 9007199254752336
@@ -985,19 +985,19 @@ def test_library_relation_override_shapes_http_response_data():
 def test_library_branches_via_djangolistfield_optimized_nested_selection():
     """End-to-end pipeline coverage for ``DjangoListField`` via ``/graphql/``.
 
-    Pins the end-to-end contract (spec-016 Decision 4,
-    spec-016 #"live HTTP test in `examples/fakeshop/test_query/test_library_api.py` covers"):
+    Pins the end-to-end contract (spec-020 Decision 4,
+    spec-020 #"pins the root-position planning end-to-end with an exact"):
     URL routing + view + schema execution + JSON serialization + optimizer
     cooperation through the real Django + Strawberry HTTP stack.
 
-    Query count derivation (spec-016 #"pin the assertion to exact query count" - exact ``assertNumQueries(N)``):
+    Query count derivation (spec-020 Decision 4 - exact ``assertNumQueries(N)``):
       * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
         default resolver returns ``Branch._default_manager.all()``).
       * 0 SELECTs for a ``shelves`` prefetch: the consumer override on
         ``BranchType.shelves`` OWNS the relation, so the walker leaves it
-        fully unplanned (strawberry-django #697) - the historical speculative
-        ``prefetch_related("shelves")`` query (which the override's
-        ``order_by("-code")`` re-query never consumed) no longer runs.
+        fully unplanned (strawberry-django #697) - no speculative
+        ``prefetch_related("shelves")`` query runs (the override's
+        ``order_by("-code")`` re-query would never consume it).
       * 2 SELECTs (one per seeded ``Branch``) for the consumer-override
         ``BranchType.shelves`` resolver at ``apps/library/schema.py`` (which
         evaluates ``root.shelves.order_by("-code")``). This mirrors the
@@ -1057,8 +1057,9 @@ def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_htt
     ``Branch.objects`` (a ``Manager``, NOT a ``QuerySet``); rows coming
     back through ``/graphql/`` prove the wrapper coerced and applied the
     default-identity ``get_queryset``. The README rule at
-    ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires this coverage
-    to land here, not in the package-internal ``tests/test_list_field.py``.
+    ``examples/fakeshop/test_query/README.md #"Live-first, both verdicts, and the must-not."``
+    requires this coverage to land here, not in the package-internal
+    ``tests/test_list_field.py``.
     """
     _seed_branch_with_two_shelves("ManagerResolver West")
     _seed_branch_with_two_shelves("ManagerResolver East")
@@ -1080,15 +1081,13 @@ def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_htt
 def test_library_branches_via_djangolistfield_nullable_outer_renders_and_resolves():
     """A ``list[BranchType] | None`` DjangoListField renders nullable-outer and still resolves.
 
-    Live-tier coverage promoted per ``test_query/README.md`` (the shape is reachable from a live
-    ``/graphql/`` introspection query). The consumer's ``list[BranchType] | None`` class
+    Live tier per ``test_query/README.md`` (the shape is reachable from a live ``/graphql/``
+    introspection query). The consumer's ``list[BranchType] | None`` class
     annotation - NOT a constructor argument - must drive the rendered GraphQL type to
     ``[BranchType!]`` (a ``LIST`` whose outer ``NON_NULL`` wrapper is ABSENT, vs the sibling
     non-nullable field's ``NON_NULL`` outer). ``DjangoListField`` itself has no
-    outer-nullability branch, so the same ``list_field.py`` lines stay pinned by the
-    package companion ``test_djangolistfield_non_nullable_outer_default_via_consumer_annotation``;
-    this live test adds the real-stack pressure the throwaway-schema package test lacked -
-    introspection over the *composed* schema plus an end-to-end resolve over the wire.
+    outer-nullability branch, so both halves of that contrast are pinned here, over the real
+    stack: introspection over the *composed* schema plus an end-to-end resolve over the wire.
     """
     # Introspection over the real composed schema: outer LIST is nullable (no NON_NULL
     # wrapper); the inner item stays NON_NULL.
@@ -2633,10 +2632,11 @@ def test_relay_global_id_filter_multihop_leaf_validates_against_the_terminal_mod
 
 # ---------------------------------------------------------------------------
 # Live HTTP order coverage (spec-028 test plan), plus the row-preserving
-# to-many aggregate cases from ``spec-030-connection_field-0_0_9`` P1-B.
+# to-many aggregate cases from ``spec-030-connection_field-0_0_9`` Decision 11
+# (aggregate-ordering coexistence).
 # ``test_library_books_order_by_subtitle_null_positioning`` is parametrized
 # over the four NULLS directions.
-# The two out-of-card additions are
+# The spec-030 Decision 11 aggregate cases are
 # ``test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplication``
 # and ``test_library_genres_connection_pages_by_to_many_aggregate``.
 # ---------------------------------------------------------------------------
@@ -2646,7 +2646,7 @@ def _seed_branches_with_varying_shelves():
     """Seed Alpha (shelves A, C, E) + Beta (shelf B), both ``city="Boston"``.
 
     Load-bearing for the row-preserving reverse-FK ordering contract
-    (``spec-030-connection_field-0_0_9`` P1-B): ordering by ``shelves: { code: ASC }``
+    (``spec-030-connection_field-0_0_9`` Decision 11): ordering by ``shelves: { code: ASC }``
     orders each Branch by an AGGREGATE of its shelf codes (``Min`` for ASC), so a
     Branch with N shelves appears ONCE -- Alpha (min code A) then Beta (min code
     B) -- not N times.
@@ -2787,9 +2787,9 @@ def test_library_branches_order_by_reverse_fk_relation():
     shelves appears ONCE, not N times: Alpha (min code A) then Beta (min code
     B).
 
-    The old raw ``order_by("shelves__code")`` multiplied parent rows (one per
-    child), which silently corrupted cursors / ``totalCount`` on a connection. ``OrderSet``
-    now orders to-many paths by ``Min`` / ``Max`` of the child column so the
+    A raw ``order_by("shelves__code")`` would multiply parent rows (one per
+    child), silently corrupting cursors / ``totalCount`` on a connection. ``OrderSet``
+    orders to-many paths by ``Min`` / ``Max`` of the child column so the
     parent row is not multiplied; ``DjangoListField`` (this field) and
     ``DjangoConnectionField`` both get the row-preserving result.
 
@@ -5044,16 +5044,16 @@ def test_genre_connection_two_aliases_independent_total_counts():
 
 @pytest.mark.django_db
 def test_genre_connection_order_by_to_many_no_node_multiplication():
-    """Ordering the connection by a to-many relation does not multiply nodes (P1-B).
+    """Ordering the connection by a to-many relation does not multiply nodes.
 
     ``GenreOrder.books`` is a reverse-M2M ``RelatedOrder``; ordering the genre
     connection by ``books: { title: ASC }`` orders each Genre by an AGGREGATE of
     its book titles (``Min`` for ASC) rather than a fan-out JOIN. A Genre with
     several books therefore appears in ``edges`` exactly ONCE (no duplicate node,
     no skipped distinct node under the positional cursors), and ``totalCount``
-    counts DISTINCT genres -- the ``spec-030-connection_field-0_0_9`` P1-B contract.
-    The old raw ``order_by("books__title")`` form would have listed ``Fiction``
-    twice (one row per book) and inflated ``totalCount``.
+    counts DISTINCT genres -- the ``spec-030-connection_field-0_0_9`` Decision 11
+    aggregate-ordering contract. A raw ``order_by("books__title")`` would list
+    ``Fiction`` twice (one row per book) and inflate ``totalCount``.
     """
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="S-1", topic="general", branch=branch)
@@ -8558,8 +8558,7 @@ def test_periodical_issues_list_is_not_selectable_live():
 def test_branches_via_list_field_default_resolver_applies_get_queryset_live():
     """``allLibraryBranchesViaListField`` applies ``BranchType.get_queryset`` over HTTP.
 
-    The live twin of ``test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset``:
-    the ``DjangoListField`` default resolver routes the queryset through
+    The ``DjangoListField`` default resolver routes the queryset through
     ``BranchType.get_queryset`` (``apply_type_visibility_sync``), which hides
     ``city="restricted"`` branches from the anonymous client - so the seeded
     restricted branch is absent from the field output while the visible one

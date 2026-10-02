@@ -342,7 +342,7 @@ def iter_active_fields(
 ) -> Iterator[ActiveField]:
     """Yield one ``ActiveField`` per supplied, active top-level field of ``input_value``.
 
-    Owns the mechanics every consumer previously re-spelled:
+    Owns the mechanics every consumer would otherwise re-spell:
 
     * the ``None`` / ``unset_sentinel`` inactive-value skip (via
       ``is_inactive_value``), applied to the whole input and to each field;

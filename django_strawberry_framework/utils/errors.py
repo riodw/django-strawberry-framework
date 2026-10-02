@@ -13,9 +13,9 @@ flavors):
   flatteners;
 - ``null_field_error`` / ``empty_validation_error`` - the two leaves whose
   message + code pair was being re-typed by consumers of the module;
-- ``FIELD_ERROR_CODE_*`` - the ``FieldError.codes`` vocabulary, which is a
-  public wire contract that previously existed only as the union of string
-  literals at 19 raise sites;
+- ``FIELD_ERROR_CODE_*`` - the ``FieldError.codes`` vocabulary, a public wire
+  contract named once here rather than left as the union of string literals at
+  its raise sites;
 - ``coded_error_extensions`` + ``*_ERROR_CODE`` - the ``extensions={"code": ...}``
   shape and code vocabulary every framework ``GraphQLError`` carries.
 
@@ -77,9 +77,9 @@ _TEXT_ATOM_TYPES = (
 # ---------------------------------------------------------------------------
 # ``FieldError.codes`` vocabulary
 # ---------------------------------------------------------------------------
-# The codes the framework itself emits on the write envelope. This is derived
-# knowledge with no other home: the vocabulary is what a client branches on, yet
-# it used to exist only as the union of string literals across three subsystems.
+# The codes the framework itself emits on the write envelope, named once here:
+# the vocabulary is what a client branches on, so it has one home rather than
+# being the union of string literals across the subsystems that emit it.
 #
 # Framework ``"invalid"`` deliberately COLLIDES with Django's and DRF's own
 # ``"invalid"`` on the wire - a client cannot tell a framework relation-decode

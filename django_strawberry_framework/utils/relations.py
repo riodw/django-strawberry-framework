@@ -584,30 +584,29 @@ def _path_traverses_to_many_cached(model: type[models.Model], field_path: str) -
 def path_traverses_to_many(model: type[models.Model], field_path: str) -> bool:
     """Return whether an ORM ``field_path`` traverses a to-many relation.
 
-    Reimplemented on ``classify_path``: the strict classifier is the single
+    Built on ``classify_path``: the strict classifier is the single
     site of the relation taxonomy, and this helper answers
     ``classify_path(...).first_many_index is not None``. When strict
     classification raises ``PathResolutionError`` (an unresolvable head, a
-    garbage tail, a forward ``GenericForeignKey``) it falls back to the legacy
+    garbage tail, a forward ``GenericForeignKey``) it falls back to the
     lenient walk (``_lenient_traverses_to_many``) rather than a bare ``False``.
 
     That fallback keeps the resolvable-vs-unresolvable boundary faithful: the
-    old walk returned ``True`` the instant it reached a many-side hop and never
-    saw a garbage tail beyond it, while ``classify_path`` raises on that tail. A
-    32-path matrix (``tests/utils/test_relations.py``) confirms the
-    fallback reproduces the pre-refactor answers on the raise paths, including
+    lenient walk returns ``True`` the instant it reaches a many-side hop and never
+    sees a garbage tail beyond it, while ``classify_path`` raises on that tail. A
+    32-path matrix (``tests/utils/test_relations.py``) pins the
+    fallback's answers on the raise paths, including
     ``genres__nonexistent`` -> ``True`` and ``genres__name__icontains`` ->
-    ``True`` (many-then-garbage), where a plain ``False`` would have diverged.
+    ``True`` (many-then-garbage), where a plain ``False`` would diverge.
 
-    One DELIBERATE divergence remains on the RESOLVED path: the pre-refactor
-    walk read cardinality from ``relation_kind`` (every ``ManyToOneRel`` is
-    ``reverse_many_to_one`` -> many-side), whereas the strict classifier reads
-    ``PathInfo.m2m`` (``not field.unique``). The reverse side of a
-    ``ForeignKey(unique=True)`` is therefore reported single-valued here
-    (-> ``False``) where the old walk answered ``True``. This is a correction,
-    not a regression: a unique reverse FK is genuinely single-valued, so it
-    neither fans out nor needs the ``distinct`` stamp / order aggregate the old
-    ``True`` triggered.
+    One DELIBERATE divergence from ``relation_kind`` holds on the RESOLVED path:
+    ``relation_kind`` reads every ``ManyToOneRel`` as ``reverse_many_to_one``
+    (many-side), whereas the strict classifier reads ``PathInfo.m2m``
+    (``not field.unique``). The reverse side of a ``ForeignKey(unique=True)`` is
+    therefore reported single-valued here (-> ``False``) where a
+    ``relation_kind``-based walk would answer ``True``. That is the correct
+    answer: a unique reverse FK is genuinely single-valued, so it neither fans
+    out nor needs the ``distinct`` stamp / order aggregate a ``True`` would trigger.
 
     Filter generation uses the result to set ``distinct=True`` on plain
     generated leaf filters; order resolution uses it to replace a fan-out
@@ -680,7 +679,7 @@ def is_forward_concrete_relation(field: ModelField) -> TypeGuard[ConcreteField]:
 @overload
 def is_forward_concrete_relation(field: _RelationFieldLike) -> bool: ...
 def is_forward_concrete_relation(field: object) -> bool:
-    """Return whether ``field`` is a forward FK / OneToOne with a real DB column (spec-036 L3-1).
+    """Return whether ``field`` is a forward FK / OneToOne with a real DB column.
 
     Cardinality is decided by ``relation_kind`` - this module's single site of
     the relation taxonomy - so the predicate is exactly "the kind is

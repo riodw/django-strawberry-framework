@@ -1,7 +1,7 @@
 """The frozen serializer-hook context + upload metadata.
 
 The consumer hooks (``get_serializer_kwargs`` / ``get_serializer_injected_data`` /
-``get_serializer_save_kwargs``) no longer receive the LIVE located model instance:
+``get_serializer_save_kwargs``) never receive the LIVE located model instance:
 a mutable target in consumer hands before the write is an attack surface (an
 override could ``setattr`` unvalidated values that ``serializer.save()`` then
 persists, or re-point ``pk`` at a row the caller was never authorized for). They

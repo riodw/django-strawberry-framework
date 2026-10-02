@@ -532,8 +532,8 @@ def test_interfaces_rejects_relay_pageinfo_named():
 def test_interfaces_rejects_non_interface_class_named():
     """Re-affirmation pin: a plain ``@strawberry.type`` class takes the generic branch.
 
-    No behavior change (spec-011-era rejection); pins the documented message
-    naming the offending class (spec-032).
+    Pins spec-015 Decision 4's generic non-interface rejection and its
+    documented message naming the offending class (spec-032).
     """
 
     @strawberry.type
@@ -2421,7 +2421,7 @@ def test_exclude_accepts_a_frozenset_too():
 
 
 def test_meta_cursor_field_in_allowed_meta_keys():
-    """``Meta.cursor_field`` is a net-new ALLOWED key (the ``stable_cursor_field`` card).
+    """``Meta.cursor_field`` is a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion - the feature ships in
     the same change that adds the key (the ``Meta.connection`` precedent).

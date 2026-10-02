@@ -244,8 +244,8 @@ def _globalid_multiple_choice_values(value: object) -> list[object]:
 
     Django's ``MultipleChoiceField`` normally supplies a list, but callers can
     invoke a filter directly (and a malformed raw filter mapping can bypass
-    form coercion) with an arbitrary object.  The old ``len(value)`` call in
-    ``GlobalIDMultipleChoiceFilter.filter`` leaked ``TypeError`` for an
+    form coercion) with an arbitrary object.  A bare ``len(value)`` in
+    ``GlobalIDMultipleChoiceFilter.filter`` would leak ``TypeError`` for an
     iterator or scalar before it could produce the package's coded GraphQL
     error.  Only the list/tuple shapes accepted by the form contract are
     meaningful here; all other shapes fail closed with the same invalid-ID
@@ -799,7 +799,7 @@ def _decode_and_validate_global_id(
     spec-027 #"Accepts both raw". The accepted `type_name` payload(s) are
     strategy-aware (spec-031 Decision 13): under the resolved owner/target
     definition's recorded `effective_globalid_strategy`, an emitted model-label
-    ID round-trips while the old bare GraphQL type name is rejected (and vice
+    ID round-trips while the bare GraphQL type name is rejected (and vice
     versa for the `type` strategy). Raises `GraphQLError("GlobalID type
     mismatch: filter expects <expected> but received <actual>")` when the
     decoded `type_name` is not in the accepted set for the three framework

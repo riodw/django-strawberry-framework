@@ -6,12 +6,12 @@ The shape-agnostic read / write / delete dispatch lives in
 start-of-execution reset, and the per-execution frame every other module in the
 subpackage reads its own scratch out of. ``get_context_value`` and
 ``stash_on_context`` are re-exported here because the optimizer subpackage and
-its tests have always reached for them at this path.
+its tests reach for them at this path.
 
 The frame is here rather than in ``extension.py`` because its readers cannot
 import that module: the walker, the selection adapter and the nested-fetch
-strategy are all below the extension in the dependency order, and each used to
-own a ``ContextVar`` of its own for state whose lifetime was the extension's to
+strategy are all below the extension in the dependency order, and none owns a
+``ContextVar`` of its own for state whose lifetime is the extension's to
 decide. One frame, opened and closed at ``on_execute``, is that lifetime written
 once.
 """
@@ -89,13 +89,12 @@ DST_OPTIMIZER_STRICTNESS = "dst_optimizer_strictness"
 
 #: One managed execution's scratch, and the lease every reader reaches it through.
 #:
-#: Eight per-execution values used to be eight ``ContextVar`` entries, each set
-#: at ``on_execute`` entry and reset on the way out. Reset is the wrong
-#: instrument for every one of them: ``asyncio.create_task`` copies the whole
-#: context, a token rewrites only the context that created it, and so a
-#: resolver's background task kept reading - and keeping alive - a completed
-#: operation's plans, converted selections, cache keys and stashes for as long
-#: as it ran. One frame behind one lease
+#: The per-execution values are not ``ContextVar`` entries set at ``on_execute``
+#: entry and reset on the way out. Reset is the wrong instrument for every one
+#: of them: ``asyncio.create_task`` copies the whole context, a token rewrites
+#: only the context that created it, and so a resolver's background task would
+#: keep reading - and keeping alive - a completed operation's plans, converted
+#: selections, cache keys and stashes for as long as it ran. One frame behind one lease
 #: (``utils/operation_lease.py::OperationLease``) is the same state with an end:
 #: closing it at the end of the execution is observable from every context
 #: copied before, so a stale copy answers exactly as a context with no optimizer

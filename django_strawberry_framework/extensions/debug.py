@@ -11,7 +11,7 @@ native response-extensions seam.
 Off by default, and **fails closed under ``settings.DEBUG = False``**: an
 instance constructed without the ``allow_unsafe_production=True``
 acknowledgement withholds the whole payload on a non-debug deployment and logs
-the misconfiguration, so a single production schema-list entry can no longer
+the misconfiguration, so a single production schema-list entry cannot
 silently publish the disclosure. The payload is also capped - bounded row
 counts and a bounded serialized size, with deterministic marked truncation - so
 the diagnostic cannot amplify a large operation into an enormous response.
@@ -477,8 +477,8 @@ def _serialized_sql_row_or_dropped(
     The per-ROW half of the SQL degrade, and a named function rather than a
     ``try`` inside ``_build_payload``'s entry loop for two reasons. The
     containment MUST be per row - a guard wrapping the whole loop (or sitting
-    outside a generator expression feeding ``list.extend``, which is what it
-    used to be) abandons the generator on the first refusal and so drops every
+    outside a generator expression feeding ``list.extend``) abandons the
+    generator on the first refusal and so drops every
     remaining entry along with the offending one, turning "this row is not
     JSON-encodable" into "the diagnostic stops here". And a refusal is one
     hostile row in an otherwise healthy log, so the surviving rows must keep

@@ -119,8 +119,8 @@ jobs:
         # `compatibility_only: "1"` marks the exact-Django-5.2.16 nodes. They
         # prove the ADVERTISED API FLOOR still imports and behaves -- a
         # compatibility contract. 5.2.16 is itself a patched release -- it
-        # carries the security fixes that the superseded 5.2.0 floor predated --
-        # so this cell installs nothing under a published advisory today. That
+        # carries the security fixes the earlier 5.2.x releases lack -- so this
+        # cell installs nothing under a published advisory today. That
         # does NOT make the cell a secure-deployment statement: a floor is a
         # point-in-time API claim, and the next Django security release makes it
         # older than the newest patch again. So the label stays -- this cell must
@@ -190,8 +190,8 @@ jobs:
         # ``--upgrade-package Django`` is not redundant with the pin beside it:
         # a bare constraint is a no-op whenever the synced version already
         # satisfies it, so ``Django==5.2.*`` resolves to the newest 5.2 patch on
-        # Python 3.12+ (where uv.lock gives 6.0.x) but leaves 3.11 on the locked
-        # 5.2.16 -- one matrix label, two versions under test. Scoping the
+        # Python 3.12+ (where uv.lock gives 6.x) but leaves 3.11 on its locked
+        # 5.2 patch -- one matrix label, two versions under test. Scoping the
         # upgrade to Django alone, rather than a bare ``--upgrade``, keeps every
         # transitive pin at its uv.lock version.
         run: |

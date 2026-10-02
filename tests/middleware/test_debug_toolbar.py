@@ -88,7 +88,7 @@ def middleware(toolbar_leaf):
 def _simulated_toolbar_absence():
     """Simulate toolbar absence with the shared ``sys.modules["debug_toolbar"] = None`` sentinel.
 
-    Importlib-compatible by construction (spec-042 Revision 5):
+    Importlib-compatible by construction (spec-042 Decision 9):
     ``require_debug_toolbar()`` imports via ``importlib.import_module``, which never
     consults ``builtins.__import__`` - so the ``None`` sentinel, not an
     ``__import__`` block, is the technique that makes ``import_module`` raise

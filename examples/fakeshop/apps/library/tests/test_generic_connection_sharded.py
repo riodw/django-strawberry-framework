@@ -1,16 +1,16 @@
 """Sharded (``FAKESHOP_SHARDED=1``) GenericRelation connection alias-late morph test.
 
-Pins the P1 fix: the GenericRelation content-type predicate is resolved
-alias-LATE by Django's ``GenericRelatedObjectManager.get_prefetch_querysets``
-at fetch time (against the parent instances' database), NEVER baked as a
-plan-time constant. The old planner resolved ``ContentType`` on the unrouted
-child queryset (``.db`` -> ``default``) and embedded that pk; when the parents
-live on ``shard_b`` and ``shard_b``'s ``Branch`` content-type pk DIFFERS from
-``default``'s, the baked constant contradicted Django's own fetch-time morph
-predicate and the connection silently returned zero rows.
+Pins that the GenericRelation content-type predicate is resolved alias-LATE by
+Django's ``GenericRelatedObjectManager.get_prefetch_querysets`` at fetch time
+(against the parent instances' database), NEVER baked as a plan-time constant.
+A plan-time ``ContentType`` lookup on the unrouted child queryset (``.db`` ->
+``default``) would embed that alias's pk; when the parents live on ``shard_b``
+and ``shard_b``'s ``Branch`` content-type pk DIFFERS from ``default``'s, the
+baked constant would contradict Django's own fetch-time morph predicate and the
+connection would silently return zero rows.
 
 This test deliberately forces the two aliases' ``Branch`` content-type pks
-apart (manipulating the ``django_content_type`` rows in setup, per the finding),
+apart (manipulating the ``django_content_type`` rows in setup),
 seeds the branch and its tags on ``shard_b`` under ``shard_b``'s pk, and proves
 the generic connection returns the correct rows on the non-default alias.
 
@@ -96,13 +96,13 @@ def test_generic_connection_uses_shard_b_content_type_pk_not_default():
     """The GFK connection over ``shard_b`` parents returns rows under ``shard_b``'s ct pk.
 
     The default-alias ``Branch`` content-type pk and the ``shard_b`` one are
-    forced apart. A plan-time constant (the old bug) would bake the default pk
+    forced apart. A plan-time constant would bake the default pk
     and, contradicting Django's fetch-time ``shard_b`` morph predicate, return
     zero rows; the alias-late design resolves the ct against ``shard_b`` and the
     branch's own three tags come back.
     """
-    # Resolve the default-alias Branch content-type pk (what the removed
-    # plan-time lookup on the unrouted child queryset would have baked).
+    # Resolve the default-alias Branch content-type pk (what a plan-time
+    # lookup on the unrouted child queryset would bake).
     default_branch_ct = ContentType.objects.db_manager("default").get_for_model(Branch)
 
     # Force ``shard_b``'s Branch content-type onto a DIFFERENT pk. Migrations

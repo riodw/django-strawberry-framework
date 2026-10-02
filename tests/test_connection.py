@@ -590,7 +590,7 @@ def test_connection_field_requires_relay_node():
 def test_connection_field_accepts_direct_relay_node_inheritance():
     """A direct ``class Foo(DjangoType, relay.Node)`` (no ``Meta.interfaces``) is accepted.
 
-    ``spec-030-connection_field-0_0_9`` Open Question: direct ``relay.Node``
+    ``spec-030-connection_field-0_0_9`` Decision 5: direct ``relay.Node``
     inheritance is a supported, fully-finalizable Relay shape (the finalizer keys
     Relay wiring off ``implements_relay_node``, not a non-empty
     ``Meta.interfaces``). The connection guard reuses the canonical
@@ -1661,8 +1661,9 @@ def test_apply_connection_optimization_short_circuits_without_optimizer():
     """With no optimizer installed, the cooperation point returns the qs unchanged.
 
     The connection field does NOT fabricate a throwaway optimizer to
-    self-optimize; outside an execution the ``_active_optimizer`` ``ContextVar``
-    is ``None`` so the helper short-circuits (``spec-030-connection_field-0_0_9`` P3a).
+    self-optimize; outside an execution no execution frame is open, so
+    ``active_optimizer()`` returns ``None`` and the helper short-circuits
+    (``spec-030-connection_field-0_0_9`` Decision 11).
     """
     from django_strawberry_framework.optimizer.extension import apply_connection_optimization
 

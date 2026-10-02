@@ -4712,7 +4712,7 @@ async def test_submit_contact_plain_form_over_graphql_async():
 # Serializer-mutation live surface (spec-039 / Decision 13)
 # ===========================================================================
 # Every consumer-reachable resolver branch is earned HERE over real `/graphql/`
-# (the README "Coverage rule."); `tests/rest_framework/
+# (the README "Live-first, both verdicts"); `tests/rest_framework/
 # test_resolvers.py` holds ONLY the genuinely-unreachable residue. Each test's
 # first line is `create_users(N)` / `seed_data(N)` (AGENTS.md). The serializer
 # wire envelope is `{ node { ... } errors { field messages } }` (the same

@@ -17,11 +17,11 @@ depends on:
   ASGI, and the async variant's ``sync_to_async`` worker sees a *copied*
   context whose install/reset never leaks back into the event-loop task.
 - **Cycles fail closed.** Re-entry into a type already on the active tuple
-  raises a path-rich ``ConfigurationError`` (``AType.b -> BType.a -> AType``).
-  The previous re-entry contract returned the queryset un-narrowed, which let
-  a recursive graph skip the re-entered type's *outgoing* visibility edges --
-  a root row whose hidden relation was only reachable through the re-entry
-  could survive. Recursive graphs are a consumer error; the recourse is
+  raises a path-rich ``ConfigurationError`` (``AType.b -> BType.a -> AType``),
+  because returning the queryset un-narrowed on re-entry would let a recursive
+  graph skip the re-entered type's *outgoing* visibility edges -- a root row
+  whose hidden relation was only reachable through the re-entry could
+  survive. Recursive graphs are a consumer error; the recourse is
   ``fields=`` scoping on one participating hook. The one permitted re-entrant
   shape is an explicit zero-edge scope (``fields=[]``): it walks nothing and
   composes nothing, so a self-referential type's hook can cascade with
@@ -30,8 +30,8 @@ depends on:
 - **Every registered target composes.** Each edge whose target model has a
   registered primary type contributes a subquery built from the target's
   ``_default_manager`` on the root alias and run through its ``get_queryset``
-  -- *including* identity hooks. An identity-hook target used to be skipped as
-  "nothing to narrow", which silently bypassed a registered proxy type whose
+  -- *including* identity hooks, because skipping an identity-hook target as
+  "nothing to narrow" would silently bypass a registered proxy type whose
   filtered ``_default_manager`` IS its visibility policy. Only an edge whose
   target model has no registered type is outside the visibility contract.
 - **Hook returns are validated, then normalized.** A target hook must return
@@ -50,17 +50,17 @@ depends on:
   The accepted queryset is re-projected to ``.values(target_field.attname)``
   so the ``__in`` comparison always binds the FK's actual target column --
   a consumer ``.values("name")`` / ``.values_list(...)`` projection (or a
-  ``ForeignKey(to_field=...)`` edge fed a pk projection) can no longer compare
-  the wrong column.
+  ``ForeignKey(to_field=...)`` edge fed a pk projection) cannot compare the
+  wrong column.
 - **One database.** The root call pins ``queryset.db``; every nested cascade
   application and every hook return must stay on that alias, raising
   ``ConfigurationError`` before Django would attempt (or silently mis-compose)
   a cross-database subquery.
 - **MTI parent links cascade.** The auto-generated ``<parent>_ptr``
   ``OneToOneField(parent_link=True)`` is a real single-column concrete forward
-  edge; a child row whose MTI parent the parent type hides is dropped. (The
-  previous contract excluded parent links, leaving a hidden parent reachable
-  through its child type.)
+  edge; a child row whose MTI parent the parent type hides is dropped
+  (excluding parent links would leave a hidden parent reachable through its
+  child type).
 - **Unsupported forward relations preflight.** A ``GenericForeignKey`` (or any
   future composite / multi-column forward relation) can neither be composed as
   a single-column subquery nor safely skipped, so a full walk (``fields=None``)
@@ -69,7 +69,7 @@ depends on:
   FK is an ordinary single-column edge and may be selected explicitly;
   ``object_id`` is a scalar and never an edge. Reverse FK / reverse OneToOne,
   M2M, and ``GenericRelation`` stay outside parent-row cascade semantics and
-  are skipped as before.
+  are skipped.
 - **Nullable edges only get the ``__isnull`` disjunct.** ``| Q(<edge>__isnull
   =True)`` is added only when the Django field is nullable; a non-nullable
   edge composes the bare membership test.
@@ -111,7 +111,7 @@ from .registry import registry
 # coercion, sealing into a framework-owned plain QuerySet rebuilt from validated
 # query state, alias pinned at construction, explicit cross-alias rejection),
 # rendered through the cascade's per-edge error seam (``_edge_error_renderer``);
-# because the boundary now returns a SEALED queryset, the cascade's
+# because the boundary returns a SEALED queryset, the cascade's
 # ``.values(...)`` re-projection runs on a genuine ``QuerySet.values`` (never a
 # consumer ``_values`` override), and only the RE-PROJECTION battery -- the
 # rejections that exist because the cascade calls ``.values(...)`` -- stays

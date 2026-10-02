@@ -32,13 +32,13 @@ package keeps importing submodules directly (``from ..utils.querysets import
   the filter / order normalizers and the permission walkers all consume. It
   single-sites the dict-vs-dataclass walk, the
   ``None`` / ``UNSET`` active-input rule, and the leaf / related / logic
-  classification each surface previously spelled inline.
+  classification each surface would otherwise spell inline.
 - ``querysets`` - the query-source + ``DjangoType.get_queryset`` visibility
   contract (``initial_queryset`` / ``normalize_query_source`` /
   ``apply_type_visibility_*`` / ``SyncMisuseError``). It consolidates the
   Manager-coercion and sync/async visibility routing
-  each resolver surface previously spelled inline (so each subsystem no longer
-  keeps its own).
+  each resolver surface would otherwise spell inline (so no subsystem keeps its
+  own).
 """
 
 from .relations import RelationKind, is_many_side_relation_kind, relation_kind

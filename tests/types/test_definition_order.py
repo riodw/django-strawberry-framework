@@ -87,8 +87,9 @@ def test_reverse_fk_resolves_when_parent_declared_before_child():
             fields = ("id", "name", "category")
 
     # Pre-finalize: every auto-synthesized relation is the pending sentinel
-    # under spec-014's always-defer contract, regardless of whether
-    # the target type happens to already be registered.
+    # under the spec-010 collection-phase always-defer contract
+    # (spec-010 #"The unconditional deferral at step 7 is the load-bearing part"),
+    # regardless of whether the target type happens to already be registered.
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
 
@@ -112,7 +113,7 @@ def test_reverse_fk_resolves_when_child_declared_before_parent():
             fields = ("id", "name", "items")
 
     # Pre-finalize: every auto-synthesized relation is the pending sentinel
-    # under spec-014's always-defer contract.
+    # under the spec-010 collection-phase always-defer contract.
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
 
@@ -1088,7 +1089,7 @@ def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
 
 
 def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
-    """``id: "MissingType"`` (unresolved, non-NodeID) raises via the fail-soft regex reject."""
+    """``id: "MissingType"`` (unresolved, non-NodeID) raises: the string-form token regex rejects it."""
     with pytest.raises(ConfigurationError) as exc_info:
 
         class CategoryNode(DjangoType):
@@ -1221,9 +1222,9 @@ def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is
             fields = ("id", "name", "items")
             interfaces = (relay.Node,)
 
-    # Class creation succeeded - the fail-soft annotation walk accepts the
-    # directly-resolved NodeID-marked id even when another annotation on
-    # the same class fails to resolve.
+    # Class creation succeeded - the id check reads ``cls.__annotations__["id"]``
+    # directly, so an unresolvable sibling annotation on the same class cannot
+    # mask the directly-resolved NodeID-marked id.
     assert CategoryNode is not None
 
 

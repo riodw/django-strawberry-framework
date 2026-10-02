@@ -7,7 +7,7 @@ The write-side runtime: one pipeline per operation, in a sync and an async form
 
 and the load-bearing invariants this module owns:
 
-- **One ``transaction.atomic()`` boundary** wraps authorize -> snapshot, and the
+- **One ``transaction.atomic()`` boundary** wraps (update) locate -> snapshot, and the
   **async path runs the whole sync ORM pipeline in a single**
   ``sync_to_async(thread_sensitive=True)`` **call**: the write,
   its M2M ``.set(...)`` calls, and the payload snapshot are atomic and never
@@ -306,7 +306,7 @@ def run_write_pipeline_sync(
             )
             if id_error is not None:
                 return _error_payload([id_error])
-            # ``Meta.select_for_update`` (default True since the 0.0.14 concurrency hardening): a
+            # ``Meta.select_for_update`` (default True): a
             # base-manager ``SELECT ... FOR UPDATE`` on the update/delete locate, constrained by the
             # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
@@ -713,7 +713,7 @@ def locate_instance(
     raises ``SyncMisuseError`` (``apply_type_visibility_sync`` closes the
     coroutine first).
 
-    **Row lock (``Meta.select_for_update``, default True since the 0.0.14 concurrency hardening).**
+    **Row lock (``Meta.select_for_update``, default True).**
     The lock is a base-manager ``SELECT ... FOR UPDATE`` constrained by the visibility queryset reduced to a
     pk subquery (``base_locked_queryset``) - never ``select_for_update()`` attached to the
     consumer's own queryset, whose joins / unions / annotations a ``FOR UPDATE`` cannot legally
@@ -757,9 +757,8 @@ def _provided_attr_names(
     (``attr[:-3] if attr.endswith("_id")``) would mangle
     ``library.TaggedItem.object_id`` to ``object``, so the real scalar field would
     read as unprovided, be added to the ``full_clean(exclude=...)`` set, and skip
-    validation - surfacing later as a mis-labeled ``IntegrityError`` (spec-036
-    M3-1). Scalar attrs (including any ending in ``_id``) therefore stay under
-    their real name.
+    validation - surfacing later as a mis-labeled ``IntegrityError``. Scalar attrs
+    (including any ending in ``_id``) therefore stay under their real name.
     """
     names: set[str] = set()
     for attr in scalar_and_fk_attrs:
@@ -1053,7 +1052,7 @@ def _model_write_step(
         if instance is None:
             write_error = save_or_field_errors(target.save)
         else:
-            # A direct model UPDATE saves with ``force_update=True`` (0.0.14 concurrency hardening): a
+            # A direct model UPDATE saves with ``force_update=True``: a
             # located row a concurrent transaction deleted would otherwise be
             # silently re-INSERTed by ``save()``'s update-else-insert fallback,
             # reporting success for a write the deleter never sees. The zero-row
@@ -1071,7 +1070,7 @@ def _model_write_step(
 def forced_save_or_field_errors(target: models.Model) -> list[FieldError] | None:
     """Run ``target.save(force_update=True)``; map races to the envelope else ``None``.
 
-    The update-side counterpart of ``save_or_field_errors`` (0.0.14 concurrency hardening), with the
+    The update-side counterpart of ``save_or_field_errors``, with the
     disappearing-row contract on top: a constraint race is the ``"__all__"``
     ``IntegrityError`` envelope (the standing mapping, checked FIRST -
     ``IntegrityError`` is itself a ``DatabaseError``, so the order matters under
@@ -1199,7 +1198,7 @@ def _delete_or_field_errors(instance: models.Model) -> list[FieldError] | None:
     it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
     is about OTHER rows referencing this one, not about the ``id`` input.
 
-    **Zero-target-row delete is a ``conflict`` (0.0.14 concurrency hardening).** ``Model.delete()``
+    **Zero-target-row delete is a ``conflict``.** ``Model.delete()``
     reports how many rows each model lost; the TARGET model's own count being
     zero means a concurrent transaction removed the row between the locate and
     the ``DELETE`` (unreachable while the default locate lock holds, reachable

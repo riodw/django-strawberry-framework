@@ -17,7 +17,7 @@ DRF is INSTALLED in the test env, so absence is SIMULATED via the shared
 raises ``ImportError`` for ``require_drf()``'s import. The eviction discipline is strict -
 both ``rest_framework*`` AND ``django_strawberry_framework.rest_framework*`` are evicted
 and restored (the two-sided restore) so this test does not poison sibling tests that DO
-use DRF (the spec-037 ``pillow``-absent-path precedent) - and the fixture defensively
+use DRF - and the fixture defensively
 clears the root ``SerializerMutation`` binding state. The initial root-import contract runs
 in a fresh subprocess, because re-importing the already-loaded test-process module cannot
 detect a newly introduced eager DRF import.

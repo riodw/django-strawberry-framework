@@ -28,7 +28,8 @@ The shape is the ``036`` discipline adapted to forms (spec-038 Decision 7):
   (``forms.Field`` / ``models.Field``) stay strictly separate: the column is
   resolved first, then handed to the ``models.Field``-keyed converters.
 - Shape identity is ``(form_class, operation_kind, frozenset(effective field
-  names))`` keyed on the FORM CLASS OBJECT (not its ``__name__``); the canonical
+  names), basis content projection)`` keyed on the FORM CLASS OBJECT (not its
+  ``__name__``; the projection is :func:`_form_basis_content_identity`); the canonical
   ``<FormClass>Input`` / ``<FormClass>PartialInput`` name for the full shape and
   a deterministic shape-derived name for a narrowing. Identical shapes dedupe;
   two distinct shapes on one name raise ``ConfigurationError`` at finalization -
@@ -111,7 +112,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.forms.inputs"
 # ``mutations.inputs``) drive the create-vs-partial GENERATOR split; ``FORM`` is
 # the shape-identity component a plain ``DjangoFormMutation`` carries in place of
 # a ``"create"`` / ``"update"`` model operation, so a plain form's input cache
-# key ``(form_class, "form", effective set)`` is well-defined (spec-038
+# key ``(form_class, "form", effective set, basis content)`` is well-defined (spec-038
 # Decision 7). The bind keys on it; the generators here do not branch on it.
 FORM: str = "form"
 
@@ -393,8 +394,7 @@ def resolve_effective_form_fields(
     The narrowing spine + the pinned error wording are single-sited in
     ``utils/inputs.py::resolve_effective_fields``, shared with the
     serializer flavor; this thin wrapper supplies the form basis (``base_fields``)
-    and the form-flavor message knobs (the old ``normalize_form_field_sequence``
-    re-binding wrapper folds into the ``seq_flavor`` arg - spec-039).
+    and the form-flavor message knobs (the ``seq_flavor`` arg - spec-039).
     """
     return resolve_effective_fields(
         _form_field_basis(form_class, form_fields),
@@ -426,9 +426,13 @@ def form_input_type_name(
     to the same effective set produce the same name (dedupe via the materialize
     ledger) while a different shape produces a different name.
 
-    Identity is ``(form_class, operation_kind, frozenset(effective_field_names))``.
-    Token concatenation, full-vs-narrowed comparison, and the
-    ``PartialInput`` / ``Input`` suffix ride
+    The shape identity is the 4-tuple ``(form_class, operation_kind,
+    frozenset(effective_field_names), _form_basis_content_identity(...))`` the
+    build cache keys on (``forms/sets.py::_cached_build_form_input``). The name
+    reads only the form class's ``__name__``, the operation kind and the field
+    sets, so two shapes that differ in basis content alone share a name and
+    collide loudly at the materialize ledger. Token concatenation,
+    full-vs-narrowed comparison, and the ``PartialInput`` / ``Input`` suffix ride
     ``utils/inputs.py::name_set_input_type_name`` (the name-set owner shared
     with model ``mutation_input_type_name``). This wrapper supplies the
     form-class base name and the create-vs-partial decision

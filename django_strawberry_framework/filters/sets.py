@@ -1901,8 +1901,8 @@ class FilterSet(
         # ``filter_overrides`` entry -- e.g. a ``OneToOneField`` selection keeps the
         # base ``OneToOneField`` default even when ``filter_overrides`` supplies a
         # ``ForeignKey`` entry, since ``OneToOneField`` is nearer on the MRO than its
-        # ``ForeignKey`` base. Walking ``filter_overrides`` ALONE (an earlier revision)
-        # mis-selected that shadowed override and mis-classified the leaf
+        # ``ForeignKey`` base. Walking ``filter_overrides`` ALONE would mis-select
+        # that shadowed override and mis-classify the leaf
         # ``override_generated`` -- declining a legitimate Relay conversion (wire-shape
         # regression) and dropping a genuine framework leaf from routing (false-closed).
         #
@@ -2658,10 +2658,10 @@ class FilterSet(
         # must NOT be conflated:
         #   * an operator bag - ``{"i_contains": "x", "gt": 3}`` - whose
         #     keys are per-field lookup attrs; this is the shape that, when
-        #     passed as a dict, used to fall through to the scalar branch
-        #     where ``normalize_input_value`` splatted the raw dict into
-        #     the form data as unknown keys the form silently ignored (the
-        #     explicit-filter-applies-nothing bug);
+        #     passed as a dict, must not fall through to the scalar branch,
+        #     where ``normalize_input_value`` would splat the raw dict into
+        #     the form data as unknown keys the form silently ignores (an
+        #     explicit filter that applies nothing);
         #   * a multi-key filter VALUE - a ``RangeFilter``'s
         #     ``{"start": 1, "end": 5}`` - whose keys are NOT lookup attrs
         #     and which the scalar branch must hand to
@@ -2866,7 +2866,7 @@ class FilterSet(
         ``cls._MAX_LOGIC_DEPTH`` and surface the identical typed error. The
         sentence and the defensive class-label read are
         ``utils/input_values.py::raise_set_traversal_depth_exceeded``, shared with
-        the permission walk's related-branch cap so one budget is no longer
+        the permission walk's related-branch cap so one budget is never
         enforced in two vocabularies.
         """
         raise_set_traversal_depth_exceeded(
@@ -3359,7 +3359,7 @@ class FilterSet(
         pre-derived via ``_collect_nested_visibility_querysets_async`` and
         threaded through ``_nested_qs_by_branch_id`` keyed by
         ``id(child_input)``; that stash is consumed by ``.get(id(...))``
-        here so an async-only target ``get_queryset`` no longer raises
+        here so an async-only target ``get_queryset`` does not raise
         ``SyncMisuseError`` mid-``.qs``. Under ``apply_sync`` the stash is
         ``None`` and the helper falls back to the sync derive, which keeps
         the documented sync-misuse error on the pure-sync path.

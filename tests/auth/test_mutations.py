@@ -353,7 +353,7 @@ def test_registry_clear_drains_ledger_and_resets_conflict_state():
 
 
 def test_auth_permission_holder_snapshot_is_sealed():
-    """A fixed-surface holder's validated snapshot refuses writes and deletes (0.0.15).
+    """A fixed-surface holder's validated snapshot refuses writes and deletes.
 
     The holder's duck-typed snapshot IS the fixed auth surface's per-request
     authorization source (``login`` / ``logout`` / ``current_user`` ride
@@ -380,7 +380,7 @@ def test_auth_permission_holder_snapshot_is_sealed():
 
 
 def test_auth_permission_holder_head_is_sealed():
-    """A synthesized holder's ``_mutation_meta`` head is write-once (0.0.15 hardening).
+    """A synthesized holder's ``_mutation_meta`` head is write-once.
 
     ``_SealedAuthHolderMeta`` mirrors the write-flavor metaclass guard: a
     ``has_permission`` hook receives the holder, so an unguarded head would let
@@ -597,7 +597,7 @@ def test_logout_with_lazy_none_or_modeless_actor_is_anonymous():
     assert custom_res.data["logout"] == {"ok": False, "errors": []}
 
 
-# --- Hostile is_authenticated VALUE truthiness (hunt 0.0.15) -------------------
+# --- Hostile is_authenticated VALUE truthiness -----------------------------------
 
 
 class _BoolRaisingValue:
@@ -647,10 +647,10 @@ class _HostileValueUser:
 def test_hostile_is_authenticated_value_truthiness_collapses_to_anonymous(raised):
     """A hostile is_authenticated VALUE whose truthiness raises collapses to anonymous.
 
-    The FOURTH hostile surface (hunt 0.0.15): the 0.0.14 containment covered the
-    descriptor read and the legacy-callable call, but the final truthiness
-    evaluation was unguarded - a value whose ``__bool__`` / ``__len__`` raises
-    escaped as a top-level error out of the logout ``ok`` capture AND ``me``.
+    The fourth hostile surface beside the descriptor read and the legacy-callable
+    call: the final truthiness evaluation is contained too, so a value whose
+    ``__bool__`` / ``__len__`` raises never escapes as a top-level error out of
+    the logout ``ok`` capture or ``me``.
     The same five shapes collapse to anonymous (fail-closed), while any other
     exception still propagates (the documented asymmetry: a DatabaseError is
     never hidden as anonymous).
@@ -668,7 +668,7 @@ def test_hostile_is_authenticated_value_truthiness_collapses_to_anonymous(raised
 def test_logout_with_hostile_is_authenticated_value_never_false_success():
     """A hostile is_authenticated VALUE on the LIVE logout surface: contained capture, fail-closed teardown.
 
-    Two layers on the live logout surface (hunt 0.0.15): the ``ok`` CAPTURE is
+    Two layers on the live logout surface: the ``ok`` CAPTURE is
     contained by ``_authenticated_actor_or_none`` (the hostile truthiness
     collapses to anonymous, so ``ok`` is False - never a false ``ok: true``),
     but Django's native ``auth.logout`` re-reads ``user.is_authenticated``
@@ -1726,18 +1726,13 @@ def _auth_router_schema():
 def _channels_router(schema):
     """Compose GraphQL on BOTH Channels protocols - this suite's own transport harness.
 
-    Through ``0.0.14`` this borrowed the package's ``DjangoGraphQLProtocolRouter``,
-    whose HTTP branch was exactly the composition below. spec-046 Decision 2 gave
-    HTTP to the consumer's own Django ASGI application, so the router no longer
-    serves GraphQL over HTTP and cannot be the harness for a Channels-HTTP auth
-    round trip.
+    The package's ``DjangoGraphQLProtocolRouter`` hands HTTP to the consumer's own
+    Django ASGI application (spec-046 Decision 2), so it serves GraphQL over
+    WebSocket only and cannot be the harness for a Channels-HTTP auth round trip.
 
-    The Channels-HTTP auth surface itself is unchanged and still shipped:
-    ``auth/sessions.py``'s ``Transport.CHANNELS_HTTP`` arm serves any consumer who
-    mounts Strawberry's ``GraphQLHTTPConsumer`` themselves, which is precisely the
-    shape composed here. Every assertion in the tests below therefore keeps its
-    original subject; only the harness that supplies the transport moved from the
-    package into this file.
+    The Channels-HTTP auth surface is shipped: ``auth/sessions.py``'s
+    ``Transport.CHANNELS_HTTP`` arm serves any consumer who mounts Strawberry's
+    ``GraphQLHTTPConsumer`` themselves, which is precisely the shape composed here.
     """
     from channels.auth import AuthMiddlewareStack
     from channels.routing import ProtocolTypeRouter, URLRouter

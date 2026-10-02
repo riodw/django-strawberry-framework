@@ -305,9 +305,9 @@ def resolve_auth_aliases() -> frozenset[str]:
     model, ``auth.Permission`` / ``auth.Group``, and
     ``contenttypes.ContentType`` - so it tracks whatever alias each deployment
     routes auth to (``default`` in the common single-database case). A model the
-    deployment does not install is skipped; an empty result grants nothing. This
-    replaces the old pre-guard permission-cache warming: the authorization phase
-    now does its real work on the auth alias directly, which fills the same
+    deployment does not install is skipped; an empty result grants nothing. No
+    pre-guard permission-cache warming is needed: the authorization phase
+    does its real work on the auth alias directly, which fills the same
     per-user cache as a side effect, so later ``has_perm`` reads stay cache-only.
     """
     from django.conf import settings
@@ -741,7 +741,7 @@ def run_active_input_permission_checks(
     class_fired = fired.setdefault(cls, set())
 
     # ONE active-input traversal yields both the per-field gate paths and the
-    # related branches for this level; the two used to be separate
+    # related branches for this level, rather than two separate
     # full walks of the same input. Gates key on the SOURCE FIELD (one fire per
     # field across all its lookups).
     field_paths, related_branches = cls._active_permission_targets(input_value)

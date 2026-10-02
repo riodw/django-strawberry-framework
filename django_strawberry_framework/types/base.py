@@ -128,7 +128,7 @@ RELATION_SHAPE_VALUES: frozenset[str] = frozenset({"list", "connection", "both"}
 # ``"connection"`` is the secure default (spec-047 Decision 5): a raw many-side
 # list has no cursor and therefore no page of its own, so emitting one BESIDE the
 # bounded connection hands a client a way around the connection's cap by
-# selecting the sibling. A raw many-side list is now an explicit
+# selecting the sibling. A raw many-side list is an explicit
 # ``Meta.relation_shapes`` opt-in, and the one it opts into is row-bounded
 # (``resource_policy.py::bounded_rows``) rather than unbounded.
 DEFAULT_RELATION_SHAPE = "connection"
@@ -565,9 +565,8 @@ def _id_annotation_is_relay_node_id(cls: "type[DjangoType]") -> bool:
     ``tests/types/test_definition_order.py::test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted``),
     and the function's behavior is identical on every supported Python
     version (``typing.get_type_hints`` handles nested forward references
-    differently across 3.10 vs 3.11+, which previously left a code branch
-    reachable only on the newer interpreter - the no-``get_type_hints``
-    rewrite eliminated the divergence).
+    differently across 3.10 vs 3.11+, so calling it would leave a code branch
+    reachable only on the newer interpreter).
 
     Two annotation forms are accepted:
 
@@ -928,15 +927,17 @@ class DjangoType:
         Used by ``DjangoOptimizerExtension`` to decide whether a related-
         field traversal should be downgraded to a ``Prefetch``.
 
-        Implementation: ``__init_subclass__`` flips
-        ``_is_default_get_queryset`` to ``False`` at class-creation time
-        when the subclass declares its own ``get_queryset``; this method
-        returns the negated flag for a constant-time attribute read.
-        Inheritance walks naturally - a subclass without its own
-        ``get_queryset`` whose parent declared one inherits the parent's
-        ``False`` sentinel through the class hierarchy.
+        Implementation: ``__init_subclass__`` stamps
+        ``_is_default_get_queryset`` on every subclass at class-creation
+        time, ``False`` when the subclass or any base between it and
+        ``DjangoType`` declares ``get_queryset`` (``_detect_custom_get_queryset``
+        walks the MRO), so a subclass without its own ``get_queryset`` whose
+        parent declared one answers ``True``. This method reads the
+        definition's copy of that answer, or the negated flag on a class with
+        no definition, for a constant-time attribute read.
         """
-        # The ``ClassVar`` is stamped only on subclasses that declare ``Meta``.
+        # Only a subclass that declares ``Meta`` carries a definition; an
+        # abstract base without one answers from its own stamped ``ClassVar``.
         definition = cast(
             "DjangoTypeDefinition | None",
             getattr(cls, "__django_strawberry_definition__", None),
@@ -1206,9 +1207,9 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
     Returns a normalized ``tuple[type[object], ...]`` ready to pass through to
     ``DjangoTypeDefinition.interfaces``. Returns ``()`` when the key is
     absent or set to an empty tuple/list (Decision 4,
-    spec-011 #"An empty tuple is the same as not declaring").
+    spec-015 #"An empty tuple is the same as not declaring").
 
-    Validation rules (spec-011 #"may be a tuple/list of interface classes"):
+    Validation rules (spec-015 #"may be a tuple/list of interface classes"):
 
     - Accepts a tuple/list of interface classes, or a single real
       Strawberry interface class (e.g. ``interfaces = relay.Node``).
@@ -1343,7 +1344,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
        declaration shapes before field selection or hint validation uses
        them.
     6. If ``Meta.interfaces`` is declared, validate it per
-       ``_validate_interfaces`` (spec-011 Decision 4).
+       ``_validate_interfaces`` (spec-015 Decision 4).
     7. ``Meta.connection`` (if declared) is shape-checked and gated to
        Relay-Node-shaped types via the ``relay_shaped`` bool derived from
        ``cls`` + the validated interfaces, so the
@@ -1972,7 +1973,7 @@ def _build_annotations(
     Strawberry's interface-supplied ``id: GlobalID!`` is not shadowed by a
     Django ``int`` field. The pk field stays in ``fields`` so the
     optimizer's ``DjangoTypeDefinition.field_map`` continues to see it as a
-    connector column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
+    connector column (spec-015 Decision 7 #"keeps every selected Django field including the primary key").
 
     Args:
         cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
@@ -2091,7 +2092,7 @@ def _build_annotations(
                 # dropping the synthesized scalar annotation here keeps the
                 # Strawberry surface clean. The pk field stays in ``fields``
                 # so the optimizer's field map still sees it as a connector
-                # column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
+                # column (spec-015 Decision 7 #"keeps every selected Django field including the primary key").
                 continue
             # Per-field nullability override tri-state (spec-029 Decision 7):
             # membership in ``nullable_overrides`` forces nullable, membership in

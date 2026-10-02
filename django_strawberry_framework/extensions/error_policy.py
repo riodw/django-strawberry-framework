@@ -51,15 +51,16 @@ result object untouched: the extensions that read ``GraphQLError.original_error`
 object the engine assigned to ``execution_context.result``, exactly as the LIFO
 teardown ordering promises them.
 
-**Install position is load-bearing, and it is the FRONT of the extensions
-list.** Strawberry's ``on_operation`` teardowns unwind LIFO, so the
+**Install position is load-bearing, and it is the FRONT of the extension
+chain.** Strawberry's ``on_operation`` teardowns unwind LIFO, so the
 first-listed extension tears down LAST. Masking must happen after every
 extension that reads ``original_error`` has had its turn - in particular
 ``debug.py::DjangoDebugExtension``, which is documented to run after any
-masking extension - so the policy is inserted at index 0 rather than appended.
-That is the exact inverse of the resource-policy extension's append, and for a
-symmetric reason: the resource policy gates BEFORE execution, so it wants to
-run first; the error policy rewrites AFTER it, so it wants to finish last.
+masking extension - so ``schema.py::_admitted_chain`` lists the policy ahead
+of every consumer extension. The resource policy goes behind them for the
+mirror-image reason: it gates BEFORE execution, so it sets up last, with its
+budget armed around every consumer hook; the error policy rewrites AFTER
+execution, so it finishes last.
 
 Sync and async execution share one implementation. The teardown is a plain
 synchronous generator - the engine enters sync generator hooks on the async

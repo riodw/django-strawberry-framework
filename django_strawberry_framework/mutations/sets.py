@@ -385,7 +385,7 @@ def require_model_class(name: str, model: object, *, base_label: str) -> type[mo
 
     The class-creation type-gate ``DjangoMutation._validate_meta`` runs after
     resolving ``Meta.model``. ModelForm / serializer ``_validate_meta``
-    override the whole matrix and previously skipped this gate, so a
+    override the whole matrix and would otherwise skip this gate, so a
     non-model ``Meta.model`` would snapshot and crash at bind. One helper
     keeps the fail-loud on every model-backed flavor. ``base_label`` names
     the offending base so the model flavor's pinned
@@ -952,7 +952,7 @@ class _ValidatedMutationMeta:
         # subtracted from the create-required guard AND verified present at runtime. The model +
         # form flavors leave it ``None``.
         self.injected_fields: tuple[str, ...] | None = injected_fields
-        # ``Meta.select_for_update`` (expanded by the 0.0.14 concurrency hardening): the
+        # ``Meta.select_for_update``: the
         # base-manager ``SELECT ... FOR UPDATE`` row lock on the update / delete
         # locate AND every relation-target check, constrained by the visibility pk
         # subquery inside the write transaction. Every model-backed flavor (model /
@@ -1059,7 +1059,7 @@ def _validate_permission_classes(
 
 
 def validate_select_for_update(flavor: str, mutation_name: str, meta: type[object]) -> bool:
-    """Validate ``Meta.select_for_update`` for a model-backed flavor (0.0.14 concurrency hardening).
+    """Validate ``Meta.select_for_update`` for a model-backed flavor.
 
     Every model-backed write flavor (model / ``ModelForm`` / serializer) shares
     this ONE validator so the key's contract cannot drift: the update / delete
@@ -1375,7 +1375,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             # The decode's bind-time hand-off: total-coverage specs (merged
             # dataclass, consumer overrides included) + the Django-field index
             # (``relation_field.null`` and the ``_provided_attr_names``
-            # FK-to-field-name reversal, spec-036 M3-1).
+            # FK-to-field-name reversal).
             cls._input_field_specs, cls._model_fields_by_attr = mutation_input_field_specs(
                 backing_model_of(meta),
                 input_cls,
@@ -1394,9 +1394,9 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         with the class the bind pins. The form flavors override it with
         ``forms/inputs.py::form_input_type_name``.
 
-        Spec-038 rewired ``mutations/fields.py::_synthesized_mutation_signature``
-        to consult this seam (deleting the transient ``_input_type_name`` twin), so
-        this is now the single source for the model ``data:`` lazy-ref name.
+        ``mutations/fields.py::_synthesized_mutation_signature`` consults this
+        seam (spec-038), so this is the single source for the model ``data:``
+        lazy-ref name.
 
         A validated ``delete`` raises the typed ``ConfigurationError`` (never the
         raw ``KeyError`` a direct index leaked): a delete is id-only and

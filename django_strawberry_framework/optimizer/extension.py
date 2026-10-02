@@ -154,9 +154,9 @@ _M = TypeVar("_M", bound=models.Model)
 # The selection-traversal primitives live in ``optimizer/selections.py``.
 # The underscore aliases keep this module's bodies - and the tests
 # that import ``_named_children`` / ``_node_children_with_runtime_prefix`` from
-# ``optimizer.extension`` - working unchanged. ``extension`` no longer imports the
-# converted-selection helpers back from ``walker`` (the reverse dependency the
-# substrate removes); both modules now source them from ``selections``.
+# ``optimizer.extension`` - working. ``extension`` does not import the
+# converted-selection helpers back from ``walker`` (that would be a reverse
+# dependency); both modules source them from ``selections``.
 _child_selections = ast_child_selections
 _unvisited_fragment_definition = resolve_unvisited_fragment
 _named_children = named_children
@@ -235,11 +235,10 @@ _SAFE_CACHE_SCALAR_TYPES = frozenset(
     },
 )
 
-# Re-export the stash helper under its original underscore-prefixed name so
-# existing tests that import ``from ...extension import _stash_on_context``
-# keep working without a churn pass.  Canonical implementation lives in
-# ``optimizer/_context.py`` for cross-subpackage reuse with the read-side
-# ``get_context_value`` (consumed by ``types/resolvers.py``).
+# ``_stash_on_context`` is ``utils/context.py::stash_on_context`` (re-exported
+# through ``optimizer/_context.py``) under an underscore-prefixed name. The
+# shared read / write / delete dispatch lives in ``utils/context.py``; resolvers
+# read the optimizer's stash through ``optimizer/_context.py::optimizer_value``.
 __all__ = (
     "CacheInfo",
     "DjangoOptimizerExtension",
@@ -286,11 +285,11 @@ def _walk_cache_relevant_vars(
     optimizer runs, and a defensive cycle that does not cross a field node keeps
     depth constant, so ``(name, depth)`` repeats and the descent stops.
 
-    Replaces the previously separate ``_walk_directives`` / ``_walk_pagination_vars``
-    walkers: the two collection RULES differ but the child-traversal,
-    fragment-spread descent, and cycle-guard plumbing were identical, and keeping
-    them apart risked a future fragment-depth or cycle fix landing on only one
-    path.
+    One walker for both families rather than a directive walker and a
+    pagination-variable walker: the two collection RULES differ but the
+    child-traversal, fragment-spread descent, and cycle-guard plumbing are
+    identical, and keeping them apart would risk a future fragment-depth or cycle
+    fix landing on only one path.
     """
     # Directive variables: collected on every node, depth-independent. The
     # ``@skip`` / ``@include`` variable extraction is the shared AST-adapter
@@ -536,7 +535,7 @@ def _print_operation_with_reachable_fragments(
     newlines. This is the load-bearing distinction from a bare
     ``print_ast(operation)``: two operations with identical bodies
     but different reachable fragment bodies render to different
-    strings, so they no longer share a cached plan that was built for
+    strings, so they never share a cached plan that was built for
     the wrong fragment shape. Order is deterministic (selection-set
     order with a visited guard), so the same operation + fragments
     always produce the same string and the cache key is stable across

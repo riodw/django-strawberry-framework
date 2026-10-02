@@ -972,8 +972,8 @@ def _resolve_node_default(
     ``classmethod`` binding: ``(cls, node_id, *, info, required=False)``.
     ``info`` is keyword-only so Strawberry's runtime call shape
     (``cls.resolve_node(node_id, info=info, required=...)``) lands
-    correctly. An earlier draft used ``(cls, info, node_id, ...)`` which
-    Strawberry's machinery turned into ``TypeError: got multiple values
+    correctly. A ``(cls, info, node_id, ...)`` signature would make
+    Strawberry's machinery raise ``TypeError: got multiple values
     for argument 'info'``.
 
     Returns the single matching row (``qs.get()`` when ``required``,

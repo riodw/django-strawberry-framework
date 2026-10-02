@@ -573,8 +573,7 @@ class Card(TimeStampedModel):
     def dependency_cards(self) -> models.QuerySet[Card]:
         """Cards this card depends on, over ``dependency``/``blocked_by`` references.
 
-        Replaces the former ``dependencies`` M2M: ``CardReference`` is now the
-        single source of truth for card-to-card edges.
+        ``CardReference`` is the single source of truth for card-to-card edges.
         """
         return Card.objects.filter(
             incoming_references__source_card=self,

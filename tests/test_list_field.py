@@ -157,13 +157,15 @@ def test_djangolistfield_rejects_non_djangotype_class() -> None:
 
 
 def test_djangolistfield_rejects_djangotype_without_definition() -> None:
-    """An abstract ``DjangoType`` base without ``Meta`` is rejected (spec #"is not a registered DjangoType (no __django_strawberry_definition__)").
+    """An abstract ``DjangoType`` base without ``Meta`` is rejected.
 
+    spec-020 Decision 5 #"is not a registered DjangoType. This usually means".
     Per ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"if meta is None:"``, the absence of a ``Meta`` makes
     ``__init_subclass__`` return early WITHOUT setting
     ``__django_strawberry_definition__`` (assigned at
-    ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"cls.__django_strawberry_definition__ = definition"``), so ``hasattr(..., "__django_strawberry_definition__")``
-    is the discriminator the guard relies on.
+    ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"cls.__django_strawberry_definition__ = definition"``), so the
+    guard's ``getattr(..., None)`` read finds no definition and the target is
+    rejected as not registered.
     """
 
     class AbstractBase(DjangoType):

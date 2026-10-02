@@ -388,8 +388,8 @@ class _RawBodyRequestAdapter(DjangoHTTPRequestAdapter):
     bug, so it is gated by ``APPLY_UPSTREAM_PATCHES`` and it retires when upstream
     stops decoding eagerly. This class is the package view's own body source, and
     it is what makes the wire contract hold on a package mount in **every** patch
-    state - including the broad ``APPLY_UPSTREAM_PATCHES = False``, where the sync
-    transport used to answer ``500`` for a BOM'd UTF-16 / UTF-32 body. Ownership follows
+    state - including the broad ``APPLY_UPSTREAM_PATCHES = False``, where upstream's sync
+    adapter answers ``500`` for a BOM'd UTF-16 / UTF-32 body. Ownership follows
     lifecycle here exactly as it does for the decode itself: permanent package policy must not
     be reachable only through a switchable workaround.
 
@@ -827,28 +827,28 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         ``request.encoding``, not a body, and upstream's ``json.loads`` is their
         only parser here.
 
-        **Why the policy lives here and not in the patch module.** It used to
-        live in ``_strawberry_patches.py::_patched_parse_json``, which made a
-        permanent package security contract share the lifecycle - and the
+        **Why the policy lives here and not in the patch module.** In
+        ``_strawberry_patches.py::_patched_parse_json`` a permanent package
+        security contract would share the lifecycle - and the
         ``APPLY_UPSTREAM_PATCHES`` kill switch - of temporary workarounds for
-        upstream bugs. A consumer disabling those workarounds (or a later change
-        deleting them once upstream fixes them) silently restored
-        multi-encoding request bodies. Ownership now follows lifecycle: the patch
-        module keeps translating the ``UnicodeDecodeError`` upstream's own
+        upstream bugs, so a consumer disabling those workarounds (or a change
+        deleting them once upstream fixes them) would silently restore
+        multi-encoding request bodies. Ownership follows lifecycle: the patch
+        module translates the ``UnicodeDecodeError`` upstream's own
         ``except json.JSONDecodeError`` misses, which is a bug fix and stays
         opt-out-able, while the narrowing of the success set is enforced here, for
         every consumer who mounts a package view, whatever that switch says. A
         consumer who deliberately mounts Strawberry's own view keeps Strawberry's
-        own semantics - that is their choice to make, and it is no longer made for
-        them by an unrelated setting.
+        own semantics - that is their choice to make, and no unrelated setting
+        makes it for them.
 
         That claim needs a second owner to be true on the sync transport, and it
         has one: a decode the bytes never reach is not an enforcement, and
         upstream's sync request adapter decodes inside a *property* before this
         method is entered. The view supplies its own body source instead
         (:class:`_RawBodyRequestAdapter`), so ``bytes`` arrive here on both
-        transports in every patch state - see that class for the ``500`` the
-        missing half used to produce.
+        transports in every patch state - see that class for the ``500``
+        upstream's eager decode answers without it.
 
         Both package views inherit this one method, so sync and async cannot
         diverge; ``super()`` keeps delegating to upstream's ``parse_json`` rather
@@ -879,9 +879,9 @@ def _run_after_csrf_check(
     even one that will end up authenticating with the ``X-CSRFToken`` header, and
     on a multipart request that single read is what invokes ``MultiPartParser``
     and the project's upload handlers. Because ``process_view`` runs *before* the
-    view, the package's declared-size gate used to be reached only after Django
-    had already parsed - and possibly spooled to disk - the very body the gate
-    exists to refuse.
+    view, under a global ``CsrfViewMiddleware`` the package's declared-size gate is
+    reached only after Django has already parsed - and possibly spooled to disk -
+    the very body the gate exists to refuse.
 
     This function is the fallback arrangement, and what it costs is the reason
     ``middleware/request_body.py::GraphQLRequestBodyBoundaryMiddleware`` exists:
@@ -970,12 +970,13 @@ async def _async_run_after_csrf_check(
     to be handled correctly. Wrapping the sync one instead would hand a coroutine
     to ``process_response`` in place of a response. That branch exists in
     ``django/utils/decorators.py::make_middleware_decorator`` on the oldest
-    supported 5.2.x series as well as on current, and it was confirmed by EXECUTION at
-    the floor - Python 3.10 / Django 5.2.0, both views, the full CSRF matrix and
-    the untouched-parser witness - rather than by reading current and assuming
-    backwards. ``examples/fakeshop/test_query/test_transport_api.py``'s async CSRF
-    rows are the standing regression, and test-plan row 18 is the same file
-    re-invoked at the floor.
+    supported 5.2.x series as well as on current, and it is confirmed by EXECUTION
+    at the package floor - the ``requires-python`` and ``Django>=`` pins in
+    ``pyproject.toml``, both views, the full CSRF matrix and the untouched-parser
+    witness - rather than by reading current and assuming backwards.
+    ``examples/fakeshop/test_query/test_transport_api.py``'s async CSRF rows are the
+    standing regression, and test-plan row 18 is the same file re-invoked at the
+    floor.
 
     One consequence of ``decorator_from_middleware``'s shape is worth naming here
     rather than leaving for a reader to find: ``_pre_process_request`` is
@@ -985,8 +986,7 @@ async def _async_run_after_csrf_check(
     request has passed the declared-size gate, so the parse is bounded by the
     consumer's own cap and by Django's upload settings rather than by whatever the
     client sent. It is the same synchronous read Django's global middleware
-    performed before this fix, moved behind the gate, which is precisely the
-    mitigation.
+    performs, moved behind the gate, which is precisely the mitigation.
     """
     return await delegate(request, *args, **kwargs)
 
@@ -1083,9 +1083,9 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):  # py
     shared mixin, so the two transports cannot diverge. The cap check itself is
     synchronous on both because ``request.META`` is a dict and, once the cap has
     run, the bytes are either already in memory or bounded to at most
-    ``limit + 1``: the unbounded synchronous disk read this view used to perform
-    on the event loop (``len(request.body)``) is gone, which is the async half of
-    what the bounded measurement bought.
+    ``limit + 1``: the view never performs an unbounded synchronous disk read on
+    the event loop (``len(request.body)``), which is the async half of what the
+    bounded measurement buys.
 
     It carries the same ``csrf_exempt``-then-``csrf_protect`` ordering as its sync
     twin, through the async continuation ``csrf_protect`` awaits; see

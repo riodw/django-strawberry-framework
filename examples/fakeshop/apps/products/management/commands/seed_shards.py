@@ -47,8 +47,8 @@ Stress testing
 --------------
 Once shard_b is materialized you can point a stress harness directly
 at it under the same env var.  The committed shard file is not touched
-by the **test suite** (Django creates a separate
-``test_db_shard_b.sqlite3`` file during pytest), so growing it with
+by the **test suite** (``shard_b`` sets no ``TEST`` name, so Django gives
+it an in-memory SQLite test database during pytest), so growing it with
 millions of rows for load testing is safe from a pytest-isolation
 standpoint::
 

@@ -145,7 +145,7 @@ def _seed_medtrics_loan_graph() -> _MedtricsLoanGraph:
     )
 
 
-def _field_type(type_info: dict, field_name: str) -> dict:
+def _field_type(type_info: dict[str, Any], field_name: str) -> dict[str, Any]:
     return next(field["type"] for field in type_info["fields"] if field["name"] == field_name)
 
 
@@ -167,7 +167,7 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
-def _input_field_type(type_name: str, field_name: str) -> dict:
+def _input_field_type(type_name: str, field_name: str) -> dict[str, Any]:
     """Return an input object field's TYPE tree (``kind`` / ``name`` / ``ofType``) via introspection.
 
     Used to assert an input field's GraphQL nullability: a ``NON_NULL`` wrapper (``kind ==
@@ -4498,7 +4498,7 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
     still holds.
     """
 
-    def _edge_pks(conn: dict) -> list[int]:
+    def _edge_pks(conn: dict[str, Any]) -> list[int]:
         # ``LoanType`` is a Relay Node under the flag, so ``node { id }`` is a
         # model-anchored GlobalID (``base64("library.loan:<pk>")``); decode it
         # back to the raw pk.
@@ -5090,7 +5090,7 @@ def test_genre_connection_order_by_to_many_no_node_multiplication():
     assert conn["totalCount"] == 2
 
 
-def _genres_connection(args: str, selection: str) -> dict:
+def _genres_connection(args: str, selection: str) -> dict[str, Any]:
     """Post one ``allLibraryGenresConnection`` query; return the connection dict.
 
     Asserts the no-error envelope (HTTP 200, no ``errors`` entry) so every
@@ -5345,7 +5345,7 @@ def _seed_shelf() -> models.Shelf:
     return models.Shelf.objects.create(code="R-1", topic="Relay fixtures", branch=branch)
 
 
-def _post_node(global_id: str, selection: str = "__typename") -> dict:
+def _post_node(global_id: str, selection: str = "__typename") -> dict[str, Any]:
     """Post one bare ``node(id:)`` query; return the full response payload.
 
     Returns the whole payload (not ``data.node``) so callers can assert the
@@ -5517,7 +5517,7 @@ def test_generic_relation_tags_resolve_over_http_with_optimizer():
     assert len(tag_sql) == 1, tag_sql
 
 
-async def _post_async_shipped(query: str, *, variables=None) -> dict:
+async def _post_async_shipped(query: str, *, variables=None) -> dict[str, Any]:
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
         result = await AsyncTestClient().query(
@@ -5530,7 +5530,7 @@ async def _post_async_shipped(query: str, *, variables=None) -> dict:
     return result.response.json()
 
 
-class _HostileBookQuerySet(QuerySet):
+class _HostileBookQuerySet(QuerySet[models.Book]):
     """Would leak if dispatched: ``filter`` drops the predicate; terminals synthesize rows."""
 
     @override
@@ -6072,7 +6072,7 @@ def test_genre_books_connection_behavior():
     )
     hidden.genres.add(genre)
 
-    def _books_page(args: str) -> dict:
+    def _books_page(args: str) -> dict[str, Any]:
         response = _post_graphql(
             f"""
             query {{
@@ -7315,7 +7315,7 @@ def test_genre_books_connection_after_last_page_info_matches_per_parent():
         book = models.Book.objects.create(title=title, shelf=shelf)
         book.genres.add(genre)
 
-    def _books_page(args: str) -> dict:
+    def _books_page(args: str) -> dict[str, Any]:
         response = _post_graphql(
             f"""
             query {{
@@ -7675,7 +7675,7 @@ def test_nested_books_connection_fixed_query_count():
     ``BookType`` has no ``Meta.connection`` opt-in, so the field does not exist.
     """
 
-    def _run(genre_count: int) -> tuple[int, dict]:
+    def _run(genre_count: int) -> tuple[int, dict[str, Any]]:
         shelf = _seed_shelf()
         for index in range(genre_count):
             # Per-genre unique titles keep the (shelf, title) unique
@@ -7996,7 +7996,7 @@ def test_nested_window_respects_book_visibility():
             )
             repair.genres.add(genre)
 
-    def _nested_titles_by_genre(payload: dict) -> list[list[str]]:
+    def _nested_titles_by_genre(payload: dict[str, Any]) -> list[list[str]]:
         edges = payload["data"]["allLibraryGenresConnection"]["edges"]
         return [
             [book_edge["node"]["title"] for book_edge in edge["node"]["booksConnection"]["edges"]]
@@ -8085,7 +8085,7 @@ def test_list_relation_and_connection_sibling_coexist_live():
     per-parent fallback.
     """
 
-    def _run(genre_count: int) -> tuple[int, dict]:
+    def _run(genre_count: int) -> tuple[int, dict[str, Any]]:
         shelf = _seed_shelf()
         for index in range(genre_count):
             # >2 books per genre so ``first: 2`` leaves a meaningful hasNextPage
@@ -8252,7 +8252,7 @@ def test_nested_empty_parent_serves_zero_total_count_no_fallback_live():
     scale with it).
     """
 
-    def _run(book_count: int) -> tuple[int, dict]:
+    def _run(book_count: int) -> tuple[int, dict[str, Any]]:
         shelf = _seed_shelf()
         # Each book carries ZERO genres: the genuinely-empty window shape.
         for index in range(book_count):
@@ -8420,7 +8420,7 @@ def test_related_filter_identical_direct_and_inside_logic_tree_live():
 # ---------------------------------------------------------------------------
 
 
-def _introspect_type(type_name: str) -> dict:
+def _introspect_type(type_name: str) -> dict[str, Any]:
     """Return the ``__type`` payload (interfaces + fields with nested type tree)."""
     response = _post_graphql(
         f"""
@@ -8735,7 +8735,7 @@ def _seed_genre_book_loan_graph() -> None:
     models.Loan.objects.create(book=b2a, patron=reader_two, note="L3")
 
 
-def _assert_genre_book_loan_shape(rows: list) -> None:
+def _assert_genre_book_loan_shape(rows: list[dict[str, Any]]) -> None:
     """Assert the seeded Genre -> books -> loans graph renders intact."""
     by_name = {genre["name"]: genre for genre in rows}
     assert set(by_name) == {"G1", "G2"}
@@ -9142,7 +9142,7 @@ def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_
 # ---------------------------------------------------------------------------
 
 
-def _input_fields_by_name(type_name: str) -> dict:
+def _input_fields_by_name(type_name: str) -> dict[str, dict[str, Any]]:
     """Introspect a generated input type and index its inputFields by GraphQL name."""
     response = _post_graphql(
         'query { __type(name: "'
@@ -11064,7 +11064,7 @@ def test_nested_shelf_validation_error_flattens_to_structured_path_over_http():
 # ---------------------------------------------------------------------------
 
 
-def _render_gql_type(type_dict: dict) -> str:
+def _render_gql_type(type_dict: dict[str, Any]) -> str:
     """Render an introspected GraphQL type tree to its SDL string (``String!`` / ``[FieldError!]!``)."""
     kind = type_dict["kind"]
     if kind == "NON_NULL":
@@ -11074,7 +11074,7 @@ def _render_gql_type(type_dict: dict) -> str:
     return type_dict["name"]
 
 
-def _input_fields_sdl(type_name: str) -> list[tuple]:
+def _input_fields_sdl(type_name: str) -> list[tuple[str, str, str | None]]:
     """Return an input object's ``[(field, rendered_type, description)]`` via introspection."""
     response = _post_graphql(
         'query { __type(name: "' + type_name + '") { inputFields { name description '
@@ -11087,7 +11087,7 @@ def _input_fields_sdl(type_name: str) -> list[tuple]:
     return [(f["name"], _render_gql_type(f["type"]), f["description"]) for f in fields]
 
 
-def _type_fields_sdl(type_name: str) -> list[tuple]:
+def _type_fields_sdl(type_name: str) -> list[tuple[str, str, str | None]]:
     """Return an object type's ``[(field, rendered_type, description)]`` via introspection."""
     response = _post_graphql(
         'query { __type(name: "' + type_name + '") { fields { name description '

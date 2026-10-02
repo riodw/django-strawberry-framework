@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import strawberry
@@ -303,7 +304,7 @@ class _Nester(SchemaExtension):
     def __init__(self) -> None:
         super().__init__()
         self.ran = False
-        self.published: list[dict] = []
+        self.published: list[dict[str, object]] = []
 
     @override
     def on_operation(self):
@@ -321,7 +322,7 @@ class _Nester(SchemaExtension):
         self.published.append(_published(context))
 
     @override
-    def get_results(self) -> dict:
+    def get_results(self) -> dict[str, object]:
         """Report the comparison where a client can read it."""
         if len(self.published) != 2:
             return {}
@@ -334,7 +335,7 @@ class _Nester(SchemaExtension):
         }
 
 
-def _published(context) -> dict:
+def _published(context) -> dict[str, object]:
     """Every optimizer stash currently readable off a request context object."""
     return {key: get_context_value(context, key) for key in DST_OPTIMIZER_KEYS}
 
@@ -417,7 +418,7 @@ _NESTER = _Nester()
 
 #: What the worker records between the request that started it and the one that
 #: reads it back.
-_SURVIVOR: dict = {}
+_SURVIVOR: dict[str, Any] = {}
 
 #: The operation the worker runs for itself, on a context of its own.
 SURVIVOR_QUERY = "{ allItems(first: 1) { edges { node { name category { name } } } } }"
@@ -472,7 +473,7 @@ def _survivor_schema():
                 _SURVIVOR["rows_bound"] = policy_from_info(
                     SimpleNamespace(context={}),
                 ).max_list_rows
-                context: dict = {}
+                context: dict[str, object] = {}
                 result = await schema.execute(SURVIVOR_QUERY, context_value=context)
                 _SURVIVOR["errors"] = result.errors
                 _SURVIVOR["plan_published"] = (

@@ -18,6 +18,7 @@ content-type negotiation), which ``TestClient`` exists to abstract away.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from django.test import Client
@@ -29,7 +30,7 @@ def post_graphql(
     query: str,
     *,
     client: Client | None = None,
-    variables: dict | None = None,
+    variables: Mapping[str, object] | None = None,
     url: str | None = None,
 ):
     """POST one GraphQL document through the shared package ``TestClient``.
@@ -70,7 +71,7 @@ def graphql_payload(
     query: str,
     *,
     client: Client | None = None,
-    variables: dict | None = None,
+    variables: Mapping[str, object] | None = None,
     url: str | None = None,
 ) -> dict[str, Any]:
     """POST ``query`` to the configured or one-call ``url`` and return parsed JSON."""
@@ -83,7 +84,7 @@ def assert_graphql_success(
     query: str,
     *,
     client: Client | None = None,
-    variables: dict | None = None,
+    variables: Mapping[str, object] | None = None,
     url: str | None = None,
 ) -> dict[str, Any]:
     """POST ``query``, assert HTTP 200 and no GraphQL errors, then return ``data``."""
@@ -94,10 +95,10 @@ def assert_graphql_success(
 
 def assert_graphql_data(
     query: str,
-    expected: dict,
+    expected: Mapping[str, object],
     *,
     client: Client | None = None,
-    variables: dict | None = None,
+    variables: Mapping[str, object] | None = None,
     url: str | None = None,
 ):
     """POST ``query`` and assert a 200, no ``errors``, and exact ``data`` equality.

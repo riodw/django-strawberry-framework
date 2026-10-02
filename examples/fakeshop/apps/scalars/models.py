@@ -207,7 +207,7 @@ class NullableScalarSpecimen(models.Model):
         return self.label or f"NullableScalarSpecimen#{self.pk}"
 
 
-class Base36Field(models.Field):
+class Base36Field(models.Field[str, str]):
     """A deliberately *unsupported* scalar column - no ``SCALAR_MAP`` entry.
 
     Subclasses ``models.Field`` directly (not ``CharField`` / ``TextField``), so

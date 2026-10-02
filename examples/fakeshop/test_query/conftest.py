@@ -29,7 +29,7 @@ from schema_reload import (
 )
 
 
-def _registry_registration_identity() -> tuple:
+def _registry_registration_identity() -> tuple[object, ...]:
     """Fingerprint every registration map plus contributing module identities."""
     from django_strawberry_framework.registry import registry
 

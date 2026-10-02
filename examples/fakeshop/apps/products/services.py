@@ -149,7 +149,7 @@ def discover_providers(fake: Faker) -> dict[str, list[str]]:
 
 def _fake_value(fake: Faker, method_name: str) -> str:
     """Call a Faker method and return its result as a string."""
-    fn: Callable = getattr(fake, method_name)
+    fn: Callable[[], object] = getattr(fake, method_name)
     result = fn()
     return str(result)
 

@@ -1,6 +1,7 @@
 """Library GraphQL relation, optimizer, Relay/keyset, and model/form/serializer mutation surface."""
 
 from collections.abc import Mapping
+from typing import Any
 
 import strawberry
 from django.conf import settings
@@ -1463,7 +1464,7 @@ class CreateShelfViaSchemaHookSerializer(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
         # The stable, request-independent schema-time field map: construct WITH a
         # placeholder tenant (the field SET does not depend on the tenant value).
         return dict(serializers.TenantShelfSerializer(tenant="__schema__").fields)
@@ -1581,7 +1582,7 @@ class CreateShelfViaHookTargetingPatron(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
         return serializers.shelf_collision_schema_field_map(models.Patron)
 
     @override
@@ -1620,7 +1621,7 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
         return serializers.shelf_collision_schema_field_map(models.Loan)
 
     @override
@@ -1655,7 +1656,7 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
         # Default no-arg discovery succeeds, so construct once and DROP the unsupported
         # alt_branches from its bound .fields - leaving the supported (code + branch) subset.
         fields = dict(serializers.HookNarrowedShelfSerializer().fields)
@@ -1687,7 +1688,7 @@ class CreateShelfViaHookNonNullNote(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
         return serializers.nullability_schema_field_map(allow_null=False)
 
     @override
@@ -1724,7 +1725,7 @@ class CreateShelfViaHookNullableNote(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField]:
+    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
         return serializers.nullability_schema_field_map(allow_null=True)
 
     @override

@@ -15,7 +15,7 @@ from django import forms
 from apps.scalars import models
 
 
-class MediaSpecimenImageForm(forms.ModelForm):
+class MediaSpecimenImageForm(forms.ModelForm[models.MediaSpecimen]):
     """A ``MediaSpecimen`` ``ModelForm`` carrying the ``image`` ``ImageField``.
 
     For the spec's named ``ImageField -> Upload`` case over the FORM path: the converter

@@ -23,7 +23,7 @@ from django import forms
 from apps.library import models
 
 
-class ShelfRelationsForm(forms.ModelForm):
+class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
     """A ``Shelf`` ``ModelForm`` whose relations target the non-Relay ``BranchType``.
 
     ``branch`` (FK) and ``alt_branches`` (M2M) both point at ``Branch``, a non-Relay
@@ -60,7 +60,7 @@ class ShelfRelationsForm(forms.ModelForm):
         branch.queryset = models.Branch.objects.all()
 
 
-class BookGenresModelForm(forms.ModelForm):
+class BookGenresModelForm(forms.ModelForm[models.Book]):
     """A ``Book`` ``ModelForm`` carrying the required ``genres`` M2M + optional
     ``subtitle``, for the live FORM partial-update preservation cases.
 

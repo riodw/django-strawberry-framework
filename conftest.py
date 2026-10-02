@@ -48,7 +48,7 @@ import pytest
 #: event loop - the handles main-thread ``close_all()`` can never reach.
 #: ``list.append`` is GIL-atomic, so cross-thread appends need no lock; the
 #: drain runs single-threaded at session teardown.
-_stray_postgres_connections: list = []
+_stray_postgres_connections: list[Any] = []
 
 #: Attribute of ``django.db.backends.postgresql.base`` that holds
 #: ``_stray_postgres_connections``: pg-tier tests read the registry there without
@@ -157,7 +157,7 @@ def _uses_db_and_is_transactional(item: Any) -> tuple[bool, bool]:
     return uses_db, transactional
 
 
-def _refuse_nontransactional_async_db_tests(items: list) -> None:
+def _refuse_nontransactional_async_db_tests(items: list[pytest.Item]) -> None:
     """Fail collection for an ``async`` test that uses the database non-transactionally.
 
     An async test reaches the ORM through ``sync_to_async`` (or Django's ``a*`` methods),
@@ -201,7 +201,7 @@ def _refuse_nontransactional_async_db_tests(items: list) -> None:
         )
 
 
-def _skip_pg_tests_off_postgres(items: list) -> None:
+def _skip_pg_tests_off_postgres(items: list[pytest.Item]) -> None:
     """Skip ``pg``-marked tests when the default DB vendor is not Postgres.
 
     ``connection.vendor`` is a static attribute of the configured backend -
@@ -218,7 +218,7 @@ def _skip_pg_tests_off_postgres(items: list) -> None:
             item.add_marker(skip_pg)
 
 
-def pytest_collection_modifyitems(config: Any, items: list) -> None:  # noqa: ARG001 - pytest hookspec
+def pytest_collection_modifyitems(config: Any, items: list[pytest.Item]) -> None:  # noqa: ARG001 - pytest hookspec
     """Apply the collection rules to every collected item, whichever tree it came from."""
     _refuse_nontransactional_async_db_tests(items)
     _skip_pg_tests_off_postgres(items)
@@ -279,7 +279,7 @@ def _deepcopy_overflow_depth() -> int:
     """The shallowest probed depth whose copy overflows ``copy.deepcopy``."""
     depth = 64
     while depth <= _MAX_NESTING_PROBE_DEPTH:
-        nested: list = []
+        nested: list[object] = []
         for _ in range(depth):
             nested = [nested]
         try:

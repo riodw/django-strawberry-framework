@@ -19,7 +19,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 ``UniqueTogetherValidator``.
 """
 
-from typing import NoReturn
+from typing import Any, NoReturn
 
 from django.db.models import Model
 from rest_framework import serializers
@@ -194,7 +194,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
         fields = ("code", "branch")
 
     @override
-    def get_fields(self) -> dict[str, serializers.Field]:
+    def get_fields(self) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
         fields = super().get_fields()
         if self._target_model is not None:
             fields["target"] = serializers.PrimaryKeyRelatedField(
@@ -212,7 +212,9 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
         return super().create(validated_data)
 
 
-def shelf_collision_schema_field_map(target_model: type[Model]) -> dict[str, serializers.Field]:
+def shelf_collision_schema_field_map(
+    target_model: type[Model],
+) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
     """Schema-time field map of ``code`` + ``branch`` + the write-only ``target`` relation at ``target_model`` (spec-039).
 
     The two collision mutations' ``get_serializer_for_schema()`` hooks call this with two
@@ -259,7 +261,7 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
         fields = ("code", "branch")
 
     @override
-    def get_fields(self) -> dict[str, serializers.Field]:
+    def get_fields(self) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
         fields = super().get_fields()
         if self._note_allow_null is not None:
             fields["note"] = serializers.CharField(
@@ -277,7 +279,10 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
         return super().create(validated_data)
 
 
-def nullability_schema_field_map(*, allow_null: bool) -> dict[str, serializers.Field]:
+def nullability_schema_field_map(
+    *,
+    allow_null: bool,
+) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
     """Schema-time field map of ``code`` + ``branch`` + a ``note`` differing ONLY in ``allow_null``.
 
     The two nullability mutations' ``get_serializer_for_schema()`` hooks call this with

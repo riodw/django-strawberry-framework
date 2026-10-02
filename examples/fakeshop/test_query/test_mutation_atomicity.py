@@ -127,7 +127,7 @@ def _global_id(type_name: str, pk: int) -> str:
 _VALID_DATE = "2026-01-02 03:04:05"
 
 
-def _execute_raw(sql: str, params: tuple = ()) -> int:
+def _execute_raw(sql: str, params: tuple[str | int | None, ...] = ()) -> int:
     """Run a raw ``INSERT ... RETURNING id`` (bypassing the ORM) and return the new pk.
 
     ``RETURNING`` keeps the pk read vendor-neutral: DB-API ``lastrowid`` is a

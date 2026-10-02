@@ -9,7 +9,7 @@ from django.contrib import admin
 from apps.kanban import models
 
 
-class _LookupAdmin(admin.ModelAdmin):
+class _LookupAdmin(admin.ModelAdmin[models.LookupBase]):
     list_display = ("key", "label", "order")
     search_fields = ("key", "label")
     ordering = ("order",)
@@ -32,7 +32,7 @@ for _model in (
 
 
 @admin.register(models.Actor)
-class ActorAdmin(admin.ModelAdmin):
+class ActorAdmin(admin.ModelAdmin[models.Actor]):
     list_display = (
         "key",
         "label",
@@ -45,7 +45,7 @@ class ActorAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.CardTransition)
-class CardTransitionAdmin(admin.ModelAdmin):
+class CardTransitionAdmin(admin.ModelAdmin[models.CardTransition]):
     list_display = (
         "card",
         "from_status",
@@ -59,7 +59,7 @@ class CardTransitionAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.WorkAttempt)
-class WorkAttemptAdmin(admin.ModelAdmin):
+class WorkAttemptAdmin(admin.ModelAdmin[models.WorkAttempt]):
     list_display = (
         "card",
         "actor",
@@ -73,7 +73,7 @@ class WorkAttemptAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.Decision)
-class DecisionAdmin(admin.ModelAdmin):
+class DecisionAdmin(admin.ModelAdmin[models.Decision]):
     list_display = (
         "question",
         "choice",
@@ -92,38 +92,38 @@ class DecisionAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.TargetVersion)
-class TargetVersionAdmin(admin.ModelAdmin):
+class TargetVersionAdmin(admin.ModelAdmin[models.TargetVersion]):
     list_display = ("number", "milestone")
     list_filter = ("milestone",)
     search_fields = ("number",)
 
 
 @admin.register(models.SpecDoc)
-class SpecDocAdmin(admin.ModelAdmin):
+class SpecDocAdmin(admin.ModelAdmin[models.SpecDoc]):
     list_display = ("name", "card", "url")
     search_fields = ("name", "url", "card__title")
     autocomplete_fields = ("card",)
 
 
 @admin.register(models.TrackedPath)
-class TrackedPathAdmin(admin.ModelAdmin):
+class TrackedPathAdmin(admin.ModelAdmin[models.TrackedPath]):
     list_display = ("path", "state", "is_directory")
     list_filter = ("state", "is_directory")
     search_fields = ("path",)
 
 
-class CardItemInline(admin.TabularInline):
+class CardItemInline(admin.TabularInline[models.CardItem, models.Card]):
     model = models.CardItem
     extra = 0
     show_change_link = True
 
 
-class ParityClaimInline(admin.TabularInline):
+class ParityClaimInline(admin.TabularInline[models.ParityClaim, models.Card]):
     model = models.ParityClaim
     extra = 0
 
 
-class CardReferenceInline(admin.TabularInline):
+class CardReferenceInline(admin.TabularInline[models.CardReference, models.Card]):
     model = models.CardReference
     fk_name = "source_card"
     extra = 0
@@ -131,14 +131,14 @@ class CardReferenceInline(admin.TabularInline):
     autocomplete_fields = ("target_card", "kind")
 
 
-class CardGlossaryTermInline(admin.TabularInline):
+class CardGlossaryTermInline(admin.TabularInline[models.CardGlossaryTerm, models.Card]):
     model = models.CardGlossaryTerm
     extra = 0
     show_change_link = True
     autocomplete_fields = ("term",)
 
 
-class CardPathLinkInline(admin.TabularInline):
+class CardPathLinkInline(admin.TabularInline[models.CardPathLink, models.Card]):
     model = models.CardPathLink
     extra = 0
     show_change_link = True
@@ -146,7 +146,7 @@ class CardPathLinkInline(admin.TabularInline):
 
 
 @admin.register(models.Card)
-class CardAdmin(admin.ModelAdmin):
+class CardAdmin(admin.ModelAdmin[models.Card]):
     list_display = (
         "number",
         "title",
@@ -180,7 +180,7 @@ class CardAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.CardReference)
-class CardReferenceAdmin(admin.ModelAdmin):
+class CardReferenceAdmin(admin.ModelAdmin[models.CardReference]):
     list_display = (
         "source_card",
         "target_card",
@@ -193,7 +193,7 @@ class CardReferenceAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.CardGlossaryTerm)
-class CardGlossaryTermAdmin(admin.ModelAdmin):
+class CardGlossaryTermAdmin(admin.ModelAdmin[models.CardGlossaryTerm]):
     list_display = (
         "card",
         "term",
@@ -205,7 +205,7 @@ class CardGlossaryTermAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.CardItem)
-class CardItemAdmin(admin.ModelAdmin):
+class CardItemAdmin(admin.ModelAdmin[models.CardItem]):
     list_display = (
         "card",
         "section",
@@ -217,7 +217,9 @@ class CardItemAdmin(admin.ModelAdmin):
     search_fields = ("text",)
 
 
-class BoardDocCardReferenceInline(admin.TabularInline):
+class BoardDocCardReferenceInline(
+    admin.TabularInline[models.BoardDocCardReference, models.BoardDoc],
+):
     model = models.BoardDocCardReference
     extra = 0
     show_change_link = True
@@ -225,7 +227,7 @@ class BoardDocCardReferenceInline(admin.TabularInline):
 
 
 @admin.register(models.BoardDoc)
-class BoardDocAdmin(admin.ModelAdmin):
+class BoardDocAdmin(admin.ModelAdmin[models.BoardDoc]):
     list_display = (
         "namespace",
         "key",
@@ -241,7 +243,7 @@ class BoardDocAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.BoardDocCardReference)
-class BoardDocCardReferenceAdmin(admin.ModelAdmin):
+class BoardDocCardReferenceAdmin(admin.ModelAdmin[models.BoardDocCardReference]):
     list_display = (
         "doc",
         "card",
@@ -259,17 +261,17 @@ class BoardDocCardReferenceAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.ParityClaim)
-class ParityClaimAdmin(admin.ModelAdmin):
+class ParityClaimAdmin(admin.ModelAdmin[models.ParityClaim]):
     list_display = ("card", "upstream", "level")
     list_filter = ("upstream", "level")
 
 
 @admin.register(models.Label)
-class LabelAdmin(admin.ModelAdmin):
+class LabelAdmin(admin.ModelAdmin[models.Label]):
     list_display = ("key", "color")
     search_fields = ("key",)
 
 
 @admin.register(models.UUIDModel)
-class UUIDModelAdmin(admin.ModelAdmin):
+class UUIDModelAdmin(admin.ModelAdmin[models.UUIDModel]):
     list_display = ("id",)

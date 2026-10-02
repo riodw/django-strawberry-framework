@@ -195,7 +195,7 @@ def _probe_async_view(**overrides: int):
 HOSTILE_RELATION_ROWS = 1
 
 
-class _EscapingQuerySet(QuerySet):
+class _EscapingQuerySet(QuerySet[library_models.Loan]):
     """A ``QuerySet`` subclass whose slice answers with every row it was asked to drop.
 
     The raw-list ceiling is ``result[:limit]``, and on a subclass that expression
@@ -3376,7 +3376,7 @@ def _seed_carry_relation(patrons: int, loans_each: int) -> None:
 CARRY_RELATION_LOANS = 3
 
 
-def _carry_relation_payload(patrons: int) -> dict:
+def _carry_relation_payload(patrons: int) -> dict[str, object]:
     """The response the public ``LoanQuerySet.as_manager()`` relation must produce."""
     return {
         "patrons": [

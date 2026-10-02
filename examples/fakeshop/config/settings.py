@@ -3,6 +3,13 @@
 import os
 from pathlib import Path
 
+import django_stubs_ext
+
+# Makes the Django classes the stubs declare generic (``ModelAdmin``, ``ModelForm``,
+# ``Field``, ...) subscriptable at runtime, so example code can write the type
+# arguments the checker requires as class bases.
+django_stubs_ext.monkeypatch()
+
 # Build paths inside the example project root like this: BASE_DIR / "subdir"
 BASE_DIR = Path(__file__).resolve().parent.parent
 

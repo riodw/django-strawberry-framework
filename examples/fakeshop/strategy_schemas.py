@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     import strawberry
 
     from django_strawberry_framework.optimizer.nested_fetch import StrategySelection
@@ -25,11 +27,11 @@ if TYPE_CHECKING:
 def make_django_type(
     name: str,
     model: type,
-    fields: tuple,
+    fields: tuple[str, ...],
     *,
     node: bool = True,
-    meta_extra: dict | None = None,
-    namespace_extra: dict | None = None,
+    meta_extra: Mapping[str, object] | None = None,
+    namespace_extra: Mapping[str, object] | None = None,
 ) -> type:
     """Declare a ``DjangoType`` over ``model`` (Relay-Node-shaped by default).
 

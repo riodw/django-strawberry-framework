@@ -1171,7 +1171,7 @@ def _resolve_input_file(
 
 
 def _parse_site(
-    raw: dict,
+    raw: dict[str, object],
     label: str,
     base: Path,
     *,
@@ -1239,7 +1239,7 @@ def _parse_site(
     return (MutationSite(target, ANCHOR_KIND, anchor, replacement),)
 
 
-def _parse_sites(raw_entry: dict, label: str, base: Path) -> tuple[MutationSite, ...]:
+def _parse_sites(raw_entry: dict[str, object], label: str, base: Path) -> tuple[MutationSite, ...]:
     """Return every site an entry mutates, refusing a target two sites cannot share."""
     if "sites" not in raw_entry:
         sites = _parse_site(raw_entry, label, base, entry_label=label)
@@ -1409,31 +1409,31 @@ def _read_hunk(
     """Return the hunk whose header ``match`` read at ``lines[index]``, and the next index."""
     old_count = int(match.group(2)) if match.group(2) is not None else 1
     new_count = int(match.group(4)) if match.group(4) is not None else 1
-    old: list[list] = []
-    new: list[list] = []
-    previous: tuple[list, ...] = ()
+    old: list[PatchLine] = []
+    new: list[PatchLine] = []
+    previous: tuple[list[PatchLine], ...] = ()
     index += 1
     while index < len(lines):
         line = lines[index]
         if line.startswith("\\"):
             # "\ No newline at end of file" qualifies the line before it, on its sides.
-            for side_line in previous:
-                side_line[1] = False
+            for side in previous:
+                side[-1] = (side[-1][0], False)
             index += 1
             continue
         if len(old) >= old_count and len(new) >= new_count:
             break
         tag, content = (line[:1], line[1:]) if line else (" ", "")
         if tag == " ":
-            previous = ([content, True], [content, True])
-            old.append(previous[0])
-            new.append(previous[1])
+            old.append((content, True))
+            new.append((content, True))
+            previous = (old, new)
         elif tag == "-":
-            previous = ([content, True],)
-            old.append(previous[0])
+            old.append((content, True))
+            previous = (old,)
         elif tag == "+":
-            previous = ([content, True],)
-            new.append(previous[0])
+            new.append((content, True))
+            previous = (new,)
         else:
             raise ManifestError(f"{label}: malformed hunk line {line!r} under {match.group(0)!r}")
         index += 1
@@ -1445,8 +1445,8 @@ def _read_hunk(
     return (
         PatchHunk(
             new_start=int(match.group(3)),
-            old_lines=tuple((content, newline) for content, newline in old),
-            new_lines=tuple((content, newline) for content, newline in new),
+            old_lines=tuple(old),
+            new_lines=tuple(new),
         ),
         index,
     )

@@ -32,7 +32,7 @@ import strawberry
 from apps.library import models
 from django.conf import settings
 from django.db import connection
-from django.db.models import Prefetch, Q, QuerySet, Value
+from django.db.models import Model, Prefetch, Q, QuerySet, Value
 from django.db.models.functions import Lower
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
@@ -149,8 +149,8 @@ def _holds(column: str, fragment: str) -> Q:
 class _Shape(NamedTuple):
     """A combined hook body and the uncombined hook that selects the same rows."""
 
-    combined: Callable[[QuerySet, str], QuerySet]
-    uncombined: Callable[[QuerySet, str], QuerySet]
+    combined: Callable[[QuerySet[Model], str], QuerySet[Model]]
+    uncombined: Callable[[QuerySet[Model], str], QuerySet[Model]]
 
 
 _SHAPES = {
@@ -225,7 +225,11 @@ def _visible_genres(shape: str) -> set[str]:
     return {_GENRE_FOR_WORD[word] for word in _VISIBLE[shape]}
 
 
-def _install(monkeypatch, type_name: str, body: Callable[[QuerySet, Any], QuerySet]) -> None:
+def _install(
+    monkeypatch,
+    type_name: str,
+    body: Callable[[QuerySet[Model], Any], QuerySet[Model, object]],
+) -> None:
     """Make ``type_name``'s ``get_queryset`` return ``body(queryset, info)``."""
     from apps.library import schema as library_schema
 
@@ -1040,7 +1044,7 @@ def _b(queryset):
 
 
 class _Refused(NamedTuple):
-    body: Callable[[QuerySet], QuerySet]
+    body: Callable[[QuerySet[Model]], QuerySet[Model]]
     fragments: tuple[str, ...]
 
 
@@ -1239,7 +1243,7 @@ def test_sliced_combined_hook_on_a_nested_connection_is_refused_naming_the_slice
     assert "union: it is sliced" in error["message"]
 
 
-def _hinted_shelf_schema(books: QuerySet) -> DjangoSchema:
+def _hinted_shelf_schema(books: QuerySet[Model]) -> DjangoSchema:
     """A holder shelf type whose ``books`` hint is ``OptimizerHint.prefetch(Prefetch(books))``.
 
     No shipped type can carry a consumer ``Prefetch`` hint without changing the

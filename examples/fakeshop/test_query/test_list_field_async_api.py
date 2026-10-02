@@ -1711,7 +1711,7 @@ _BRANCH_ORDER_ASYNC_SHAPE_PREFIX = (
 )
 
 
-class _AsyncDeferredFilterQuerySet(models.QuerySet):
+class _AsyncDeferredFilterQuerySet(models.QuerySet[library_models.Branch]):
     """A project queryset class, planted with a deferred-filter state Django never writes."""
 
 
@@ -2315,7 +2315,7 @@ async def test_async_iterable_with_awaitable_children_completes_over_http():
     assert payload["data"] == {"children": [{"name": "resolved"}]}
 
 
-class _HostileBranchQuerySet(models.QuerySet):
+class _HostileBranchQuerySet(models.QuerySet[library_models.Branch]):
     """A predicate-erasing subclass: ``__iter__`` yields the raw table.
 
     Hand-copied from ``test_list_field_api.py``; see that copy for why the pair is

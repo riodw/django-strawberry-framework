@@ -3,6 +3,7 @@
 from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.contrib.auth.base_user import AbstractBaseUser
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect
 from typing_extensions import override
@@ -18,7 +19,7 @@ admin.site.unregister(User)
 
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin):
+class UserAdmin(BaseUserAdmin[AbstractBaseUser]):
     list_display = (
         "id",
         "username",
@@ -88,20 +89,20 @@ class UserAdmin(BaseUserAdmin):
         return super().changelist_view(request, extra_context=extra_context)
 
 
-class ItemInline(admin.TabularInline):
+class ItemInline(admin.TabularInline[Item, Category]):
     model = Item
     extra = 0
     show_change_link = True
 
 
-class PropertyInline(admin.TabularInline):
+class PropertyInline(admin.TabularInline[Property, Category]):
     model = Property
     extra = 0
     show_change_link = True
 
 
 @admin.register(Category)
-class CategoryAdmin(admin.ModelAdmin):
+class CategoryAdmin(admin.ModelAdmin[Category]):
     list_display = (
         "name",
         "description",
@@ -112,14 +113,14 @@ class CategoryAdmin(admin.ModelAdmin):
     inlines = [PropertyInline, ItemInline]
 
 
-class EntryInline(admin.TabularInline):
+class EntryInline(admin.TabularInline[Entry, Item]):
     model = Entry
     extra = 1
     autocomplete_fields = ["property"]
 
 
 @admin.register(Item)
-class ItemAdmin(admin.ModelAdmin):
+class ItemAdmin(admin.ModelAdmin[Item]):
     list_display = (
         "name",
         "description",
@@ -193,7 +194,7 @@ class ItemAdmin(admin.ModelAdmin):
 
 
 @admin.register(Property)
-class PropertyAdmin(admin.ModelAdmin):
+class PropertyAdmin(admin.ModelAdmin[Property]):
     list_display = (
         "name",
         "description",
@@ -207,7 +208,7 @@ class PropertyAdmin(admin.ModelAdmin):
 
 
 @admin.register(Entry)
-class EntryAdmin(admin.ModelAdmin):
+class EntryAdmin(admin.ModelAdmin[Entry]):
     list_display = (
         "value",
         "description",

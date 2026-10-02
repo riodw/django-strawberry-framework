@@ -22,6 +22,7 @@ the fresh-account path; no test hand-rolls a ``User``.
 
 import json
 import logging
+from typing import Any
 
 import pytest
 import strawberry
@@ -107,7 +108,7 @@ _NO_AUTHENTICATION_MIDDLEWARE = {
 _MODEL_BACKEND = "django.contrib.auth.backends.ModelBackend"
 
 
-def _login(client: Client, username: str, password: str) -> dict:
+def _login(client: Client, username: str, password: str) -> dict[str, Any]:
     return _graphql_data(_LOGIN, client=client, variables={"u": username, "p": password})["login"]
 
 
@@ -269,7 +270,7 @@ class CrashingBackend:
 class RecordingBackend:
     """Records every ``(username, password)`` pair; authenticates no one."""
 
-    seen: list = []
+    seen: list[tuple[str | None, str | None]] = []
 
     def authenticate(self, request, username=None, password=None, **kwargs):
         type(self).seen.append((username, password))
@@ -780,7 +781,7 @@ def test_complete_reload_preserves_the_auth_surface(reload_all_project_app_schem
     assert _graphql_data(_LOGOUT, client=client)["logout"]["ok"] is True
 
 
-def _introspect_type(name: str) -> dict:
+def _introspect_type(name: str) -> dict[str, Any]:
     query = (
         f'{{ __type(name: "{name}") {{ '
         "fields { name args { name type { kind ofType { kind name } name } } "

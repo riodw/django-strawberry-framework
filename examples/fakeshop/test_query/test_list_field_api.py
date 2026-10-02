@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, SupportsIndex, overload
 
 import pytest
 import strawberry
@@ -1919,9 +1919,18 @@ def test_holder_materialized_sequence_subclass_is_still_row_bounded():
     pagination does not cover.
     """
 
-    class _EscapingRows(list):
+    class _EscapingRows(list[library_models.Branch]):
+        @overload
+        def __getitem__(self, key: SupportsIndex) -> library_models.Branch: ...
+
+        @overload
+        def __getitem__(self, key: slice) -> list[library_models.Branch]: ...
+
         @override
-        def __getitem__(self, key):
+        def __getitem__(
+            self,
+            key: SupportsIndex | slice,
+        ) -> library_models.Branch | list[library_models.Branch]:
             if isinstance(key, slice):
                 return list(self)
             return super().__getitem__(key)
@@ -2405,7 +2414,7 @@ _BRANCH_ORDER_SHAPE_PREFIX = (
 )
 
 
-class _DeferredFilterQuerySet(models.QuerySet):
+class _DeferredFilterQuerySet(models.QuerySet[library_models.Branch]):
     """A project queryset class, used here to carry a deferred filter Django never writes.
 
     A PENDING predicate is ordinary: Django's related-manager machinery leaves
@@ -2893,7 +2902,7 @@ def test_holder_target_without_orderset_or_model_ordering():
 _PARITY_CAPTURE: dict[str, Any] = {}
 
 
-def _query_marks(queryset: models.QuerySet) -> tuple[str, int, int | None]:
+def _query_marks(queryset: models.QuerySet[models.Model]) -> tuple[str, int, int | None]:
     return str(queryset.query), queryset.query.low_mark, queryset.query.high_mark
 
 
@@ -3346,7 +3355,7 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch):
     library_models.Branch.objects.create(name="Alpha", city="Boston")
     library_models.Branch.objects.create(name="Bravo", city="Boston")
 
-    class _CustomBranchQuerySet(models.QuerySet):
+    class _CustomBranchQuerySet(models.QuerySet[library_models.Branch]):
         pass
 
     orig_apply_sync = BranchOrder.apply_sync
@@ -3807,7 +3816,7 @@ def test_holder_sync_http_rejects_an_async_generator_resolver():
     )
 
 
-class _HostileBranchQuerySet(models.QuerySet):
+class _HostileBranchQuerySet(models.QuerySet[library_models.Branch]):
     """A predicate-erasing subclass: ``__iter__`` yields the raw table.
 
     Hand-copied into ``test_list_field_async_api.py``, which seals the same
@@ -3850,7 +3859,7 @@ def _degrading_branch_manager():
 
 
 def _alias_drift_branch_manager():
-    class _DriftManager(models.Manager):
+    class _DriftManager(models.Manager[library_models.Branch]):
         @override
         def get_queryset(self):
             return library_models.Branch.objects.using("elsewhere")

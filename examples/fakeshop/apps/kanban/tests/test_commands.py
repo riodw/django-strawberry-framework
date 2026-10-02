@@ -34,7 +34,7 @@ def beta_version():
     return kf.make_target_version("9.9.9", milestone=kf.make_milestone("beta"))
 
 
-def _write_json(tmp_path, payload: dict) -> str:
+def _write_json(tmp_path, payload: dict[str, object]) -> str:
     path = tmp_path / "cards.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return str(path)

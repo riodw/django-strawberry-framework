@@ -20,7 +20,7 @@ from graphql_client import assert_graphql_success
 _TYPE_REF = "kind name ofType { kind name ofType { kind name ofType { kind name } } }"
 
 
-def _input_fields(type_name: str) -> dict[str, dict]:
+def _input_fields(type_name: str) -> dict[str, dict[str, object]]:
     """Return ``{field name: type tree}`` for the input object ``type_name`` over HTTP."""
     data = assert_graphql_success(
         f'{{ __type(name: "{type_name}") {{ inputFields {{ name type {{ {_TYPE_REF} }} }} }} }}',
@@ -39,15 +39,15 @@ def _mutation_data_input_name(field_name: str) -> str:
     return arg_type["name"] or arg_type["ofType"]["name"]
 
 
-def _non_null(inner: dict) -> dict:
+def _non_null(inner: dict[str, object]) -> dict[str, object]:
     return {"kind": "NON_NULL", "name": None, "ofType": inner}
 
 
-def _scalar(name: str) -> dict:
+def _scalar(name: str) -> dict[str, object]:
     return {"kind": "SCALAR", "name": name, "ofType": None}
 
 
-def _list_of_non_null(name: str) -> dict:
+def _list_of_non_null(name: str) -> dict[str, object]:
     return {
         "kind": "LIST",
         "name": None,
@@ -96,7 +96,7 @@ def test_many_to_many_to_a_plain_primary_is_an_optional_raw_pk_list():
     assert fields["altBranches"] == _list_of_non_null("Int"), fields
 
 
-def _payload_fields(type_name: str) -> dict[str, dict]:
+def _payload_fields(type_name: str) -> dict[str, dict[str, object]]:
     """Return ``{field name: type tree}`` for the payload object ``type_name`` over HTTP."""
     data = assert_graphql_success(
         f'{{ __type(name: "{type_name}") {{ fields {{ name type {{ {_TYPE_REF} }} }} }} }}',

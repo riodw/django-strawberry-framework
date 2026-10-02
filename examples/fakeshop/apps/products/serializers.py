@@ -41,7 +41,7 @@ REJECTED_SERIALIZER_ITEM_NAME = "__serializer_rejected__"
 REJECTED_RENAMED_DISPLAY_NAME = "__renamed_rejected__"
 
 
-class ItemSerializer(serializers.ModelSerializer):
+class ItemSerializer(serializers.ModelSerializer[Item]):
     """``ModelSerializer`` over ``Item`` for the create / update / partial-update live matrix.
 
     ``Meta.fields`` covers ``name`` / ``description`` / ``category`` / ``attachment``.
@@ -84,7 +84,7 @@ class ItemSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class RenamedRelationItemSerializer(serializers.ModelSerializer):
+class RenamedRelationItemSerializer(serializers.ModelSerializer[Item]):
     """``Item`` serializer with RENAMED scalar + relation fields (spec-039 Decision-13 renamed-field live matrix).
 
     Proves the reverse map keys errors to the GraphQL WIRE name - not the serializer

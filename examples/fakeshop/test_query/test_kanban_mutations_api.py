@@ -11,6 +11,8 @@ anonymously and asserts a top-level GraphQL error with no board mutation.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from apps.kanban import factories as kf
 from apps.kanban import models
@@ -56,7 +58,7 @@ def _card_gid(card: models.Card) -> str:
     return str(relay.GlobalID(type_name=models.Card._meta.label_lower, node_id=str(card.pk)))
 
 
-def _run(query: str, variables: dict, *, client: Client) -> dict:
+def _run(query: str, variables: dict[str, object], *, client: Client) -> dict[str, Any]:
     """POST a mutation and return the parsed payload (top-level and envelope both readable)."""
     response = _post_graphql(query, client=client, variables=variables)
     assert response.status_code == 200

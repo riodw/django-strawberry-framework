@@ -44,7 +44,7 @@ from .models import Category, Item
 REJECTED_ITEM_NAME = "__rejected__"
 
 
-class ItemModelForm(forms.ModelForm):
+class ItemModelForm(forms.ModelForm[Item]):
     """``ModelForm`` over ``Item`` for the create / update / partial-update live matrix.
 
     ``Meta.fields`` covers ``name`` / ``description`` / ``category`` - the FK
@@ -98,7 +98,7 @@ class PingForm(forms.Form):
     message = forms.CharField(max_length=200)
 
 
-class StampedItemModelForm(forms.ModelForm):
+class StampedItemModelForm(forms.ModelForm[Item]):
     """``ModelForm`` over ``Item`` whose ``__init__`` REQUIRES a ``user`` kwarg.
 
     Models the construction-hook migration case: the form cannot be instantiated without
@@ -133,7 +133,7 @@ class StampedItemModelForm(forms.ModelForm):
         return item
 
 
-class ItemFileModelForm(forms.ModelForm):
+class ItemFileModelForm(forms.ModelForm[Item]):
     """``ModelForm`` over ``Item`` carrying the nullable ``attachment`` ``FileField``.
 
     The file-form for the raw multipart ``Upload`` test: the converter maps the
@@ -147,7 +147,7 @@ class ItemFileModelForm(forms.ModelForm):
         fields = ("name", "category", "attachment")
 
 
-class DefaultCategoryItemModelForm(forms.ModelForm):
+class DefaultCategoryItemModelForm(forms.ModelForm[Item]):
     """``ModelForm`` over ``Item`` that narrows ``category`` away and takes it as a kwarg.
 
     The write-time ``IntegrityError`` driver, with no mock anywhere in the path.

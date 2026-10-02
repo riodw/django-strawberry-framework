@@ -67,7 +67,7 @@ def _dedupe_and_renumber_references(apps, schema_editor):
 
         # Dedupe (source, target, kind): keep the lowest-order row; record each
         # deleted row's old order -> the kept row's old order.
-        kept_old_order_by_key: dict[tuple, int] = {}
+        kept_old_order_by_key: dict[tuple[int, int], int] = {}
         deleted_old_to_kept_old: dict[int, int] = {}
         survivors = []
         for row in rows:

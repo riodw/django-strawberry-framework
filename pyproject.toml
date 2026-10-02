@@ -96,6 +96,10 @@ dev = [
     # ``[tool.basedpyright]``) checks them, with the Django and DRF stubs so
     # framework types are real rather than ``Any``.
     "django-stubs>=6.0.9",
+    # Runtime half of the stubs: the fakeshop settings call its ``monkeypatch()``
+    # so example classes can subscript bases Django keeps non-generic at runtime
+    # (``admin.ModelAdmin[Card]``, ``forms.ModelForm[Item]``).
+    "django-stubs-ext>=6.0.9",
     "djangorestframework-stubs>=3.18.0",
     "basedpyright>=1.40.1",
     # typeshed stubs for two libraries the package subclasses: django-filter (a hard
@@ -305,7 +309,6 @@ reportUnknownLambdaType = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"
 reportMissingParameterType = "none"
-reportMissingTypeArgument = "none"
 reportUnusedParameter = "none"
 
 [tool.coverage.run]

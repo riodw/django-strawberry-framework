@@ -85,7 +85,7 @@ def _seed_desks() -> None:
     )
 
 
-def _introspect_input_fields(type_name: str) -> dict[str, dict]:
+def _introspect_input_fields(type_name: str) -> dict[str, dict[str, object]]:
     """Return ``{field name: type}`` for the input object ``type_name`` over HTTP."""
     data = assert_graphql_success(
         f'{{ __type(name: "{type_name}") {{ inputFields {{ name type {{ kind name ofType '

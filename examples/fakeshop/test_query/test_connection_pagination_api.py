@@ -72,6 +72,8 @@ that reload, and the slot is cleared when the request ends.
 
 import importlib
 import inspect
+from collections.abc import Coroutine
+from typing import Any
 
 import pytest
 import strawberry
@@ -390,7 +392,7 @@ _GENRE_CONNECTION_ORDER_QUERY = (
 )
 
 
-class _DeferredFilterQuerySet(models.QuerySet):
+class _DeferredFilterQuerySet(models.QuerySet[library_models.Genre]):
     """A project queryset class, used here to carry a deferred filter Django never writes.
 
     A PENDING predicate is ordinary: Django's related-manager machinery leaves
@@ -655,7 +657,7 @@ def test_connection_healthy_apply_sync_override_still_returns_ordered_edges(monk
 #: test holds type objects no longer registered. Each test therefore builds the
 #: schema after that reload, publishes it here for the duration of its request,
 #: and clears the slot in a ``finally``.
-_ASYNC_CURRENT: dict = {"schema": None}
+_ASYNC_CURRENT: dict[str, DjangoSchema | None] = {"schema": None}
 
 
 async def _async_genres_resolver(root, info):
@@ -701,7 +703,7 @@ urlpatterns = [
 ]
 
 
-async def _post_async_genres(query: str) -> dict:
+async def _post_async_genres(query: str) -> dict[str, Any]:
     """POST ``query`` against the async-resolver genre connection over ``/graphql-async/``.
 
     ``graphql_client.py`` is sync-only, so the async rows take the documented
@@ -749,7 +751,7 @@ def _assert_residual_awaitable_disposed(holder, body_ran):
 #: Names of the overrides ``apply_async`` actually entered during one request.
 #: An override that is never called cannot append to it, so an empty list after
 #: a request means the field never took the async pipeline.
-_ASYNC_APPLY_CALLS: list = []
+_ASYNC_APPLY_CALLS: list[str] = []
 
 
 _GENRE_ORDER_ASYNC_SHAPE_PREFIX = (
@@ -865,8 +867,8 @@ def _override_async_non_awaitable(
 #: disposes of a second awaitable instead of awaiting it, so after the request
 #: the coroutine is closed and the sentinel list is still empty - a never-awaited
 #: coroutine and a closed one are only distinguishable by reading that state.
-_ORDER_RESIDUAL_AWAITABLE: dict = {"coro": None}
-_ORDER_RESIDUAL_BODY_RAN: list = []
+_ORDER_RESIDUAL_AWAITABLE: dict[str, Coroutine[object, object, None] | None] = {"coro": None}
+_ORDER_RESIDUAL_BODY_RAN: list[str] = []
 
 
 async def _order_residual_inner():
@@ -1200,8 +1202,8 @@ def _filter_override_async_non_awaitable(
 
 #: The FILTER arm's own residual holder pair; see ``_ORDER_RESIDUAL_AWAITABLE``.
 #: The arms keep separate holders so neither row can read the other's disposal.
-_FILTER_RESIDUAL_AWAITABLE: dict = {"coro": None}
-_FILTER_RESIDUAL_BODY_RAN: list = []
+_FILTER_RESIDUAL_AWAITABLE: dict[str, Coroutine[object, object, None] | None] = {"coro": None}
+_FILTER_RESIDUAL_BODY_RAN: list[str] = []
 
 
 async def _filter_residual_inner():

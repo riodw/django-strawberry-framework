@@ -5,7 +5,7 @@ from django.contrib import admin
 from apps.glossary import models
 
 
-class _LookupAdmin(admin.ModelAdmin):
+class _LookupAdmin(admin.ModelAdmin[models.LookupBase]):
     list_display = ("key", "label", "order")
     search_fields = ("key", "label", "description")
     ordering = ("order", "label")
@@ -16,12 +16,12 @@ admin.site.register(models.GlossaryCategory, _LookupAdmin)
 admin.site.register(models.GlossaryTermLinkKind, _LookupAdmin)
 
 
-class GlossaryAliasInline(admin.TabularInline):
+class GlossaryAliasInline(admin.TabularInline[models.GlossaryAlias, models.GlossaryTerm]):
     model = models.GlossaryAlias
     extra = 0
 
 
-class GlossaryTermLinkInline(admin.TabularInline):
+class GlossaryTermLinkInline(admin.TabularInline[models.GlossaryTermLink, models.GlossaryTerm]):
     model = models.GlossaryTermLink
     fk_name = "source_term"
     extra = 0
@@ -29,27 +29,33 @@ class GlossaryTermLinkInline(admin.TabularInline):
     autocomplete_fields = ("target_term", "kind")
 
 
-class GlossaryCategoryMembershipInline(admin.TabularInline):
+class GlossaryCategoryMembershipInline(
+    admin.TabularInline[models.GlossaryCategoryMembership, models.GlossaryTerm],
+):
     model = models.GlossaryCategoryMembership
     extra = 0
     show_change_link = True
     autocomplete_fields = ("category",)
 
 
-class GlossarySpecMentionInline(admin.TabularInline):
+class GlossarySpecMentionInline(
+    admin.TabularInline[models.GlossarySpecMention, models.GlossaryTerm],
+):
     model = models.GlossarySpecMention
     extra = 0
     show_change_link = True
 
 
-class GlossarySourceLinkInline(admin.TabularInline):
+class GlossarySourceLinkInline(
+    admin.TabularInline[models.GlossarySourceLink, models.GlossaryTerm],
+):
     model = models.GlossarySourceLink
     extra = 0
     show_change_link = True
 
 
 @admin.register(models.GlossaryTerm)
-class GlossaryTermAdmin(admin.ModelAdmin):
+class GlossaryTermAdmin(admin.ModelAdmin[models.GlossaryTerm]):
     list_display = (
         "title",
         "anchor",
@@ -76,14 +82,14 @@ class GlossaryTermAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.GlossaryAlias)
-class GlossaryAliasAdmin(admin.ModelAdmin):
+class GlossaryAliasAdmin(admin.ModelAdmin[models.GlossaryAlias]):
     list_display = ("label", "term", "normalized")
     search_fields = ("label", "normalized", "term__title")
     autocomplete_fields = ("term",)
 
 
 @admin.register(models.GlossaryTermLink)
-class GlossaryTermLinkAdmin(admin.ModelAdmin):
+class GlossaryTermLinkAdmin(admin.ModelAdmin[models.GlossaryTermLink]):
     list_display = (
         "source_term",
         "target_term",
@@ -97,7 +103,7 @@ class GlossaryTermLinkAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.GlossaryCategoryMembership)
-class GlossaryCategoryMembershipAdmin(admin.ModelAdmin):
+class GlossaryCategoryMembershipAdmin(admin.ModelAdmin[models.GlossaryCategoryMembership]):
     list_display = ("category", "term", "order")
     list_filter = ("category",)
     search_fields = ("category__label", "term__title")
@@ -105,7 +111,7 @@ class GlossaryCategoryMembershipAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.GlossarySpecMention)
-class GlossarySpecMentionAdmin(admin.ModelAdmin):
+class GlossarySpecMentionAdmin(admin.ModelAdmin[models.GlossarySpecMention]):
     list_display = (
         "spec_path",
         "term",
@@ -123,7 +129,7 @@ class GlossarySpecMentionAdmin(admin.ModelAdmin):
 
 
 @admin.register(models.GlossarySourceLink)
-class GlossarySourceLinkAdmin(admin.ModelAdmin):
+class GlossarySourceLinkAdmin(admin.ModelAdmin[models.GlossarySourceLink]):
     list_display = (
         "term",
         "label",

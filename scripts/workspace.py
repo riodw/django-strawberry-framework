@@ -148,7 +148,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, TypedDict
+from typing import TYPE_CHECKING, Any, BinaryIO, TypedDict
 
 from typing_extensions import override
 
@@ -454,7 +454,7 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
-def _read_json_object(path: Path, default: dict) -> dict:
+def _read_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
     """Return the JSON object this script wrote at ``path``, or ``default`` when it is absent."""
     if not path.exists():
         return default
@@ -714,7 +714,7 @@ def _prune_empty_dirs(destination: Path, preserved: frozenset[str]) -> None:
             here.rmdir()
 
 
-def tree_digest(entries: dict[str, list]) -> str:
+def tree_digest(entries: dict[str, list[str | int]]) -> str:
     """Return a sha256 over every ``(name, content hash)`` pair, in name order."""
     digest = hashlib.sha256()
     for name in sorted(entries):
@@ -728,7 +728,7 @@ def mirror_tree(
     *,
     preserved: frozenset[str] = PRESERVED,
     attempts: int = 3,
-) -> dict[str, list]:
+) -> dict[str, list[str | int]]:
     """Make ``destination`` an exact copy of the shared tree's wanted files.
 
     Returns ``{name: [content hash, size, shared mtime_ns, copy mtime_ns]}``,
@@ -742,7 +742,7 @@ def mirror_tree(
         wanted = wanted_files(repo_root)
         destination.mkdir(parents=True, exist_ok=True)
         _remove_unwanted(destination, wanted, preserved)
-        entries: dict[str, list] = {}
+        entries: dict[str, list[str | int]] = {}
         raced = []
         for name, source in wanted.items():
             before = _stat_key(source)
@@ -820,11 +820,11 @@ def _is_generated(relative: str) -> bool:
 
 def copy_edits(
     destination: Path,
-    manifest: dict,
+    manifest: dict[str, Any],
     preserved: frozenset[str] = PRESERVED,
 ) -> list[str]:
     """Return the names a copy changed, added or deleted since its sync, caches excluded."""
-    entries: dict[str, list] = manifest.get("entries", {})
+    entries: dict[str, list[str | int]] = manifest.get("entries", {})
     changed = []
     for name, (
         content_hash,
@@ -852,9 +852,9 @@ def copy_edits(
     return sorted(changed)
 
 
-def shared_moves(repo_root: Path, manifest: dict) -> list[str]:
+def shared_moves(repo_root: Path, manifest: dict[str, Any]) -> list[str]:
     """Return the names the shared tree changed, added or deleted since the copy's sync."""
-    entries: dict[str, list] = manifest.get("entries", {})
+    entries: dict[str, list[str | int]] = manifest.get("entries", {})
     wanted = wanted_files(repo_root)
     moved = sorted(set(wanted) ^ set(entries))
     for name in set(wanted) & set(entries):
@@ -1031,7 +1031,7 @@ def _running_postgres(repo_root: Path) -> Postgres | None:
 # --------------------------------------------------------------------------------------------
 
 
-def _load_state(layout: Layout) -> dict:
+def _load_state(layout: Layout) -> dict[str, Any]:
     return _read_json_object(
         layout.state_path,
         {
@@ -1069,7 +1069,7 @@ def bind(layout: Layout, address: Address, *, fresh: bool = False) -> Binding:
     layout.ensure_marked()
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
-        slots: dict[str, dict | None] = state["slots"]
+        slots: dict[str, dict[str, str] | None] = state["slots"]
         for slot, bound in slots.items():
             if bound and bound["address"] == str(address):
                 needs = fresh or bound.get("status") != "ready"
@@ -1106,7 +1106,7 @@ def _slot_number(name: str) -> int:
     return int(name.rpartition("-")[2])
 
 
-def _mark_synced(layout: Layout, slot: str, manifest: dict) -> None:
+def _mark_synced(layout: Layout, slot: str, manifest: dict[str, object]) -> None:
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
         bound = state["slots"].get(slot)
@@ -1120,7 +1120,7 @@ def _mark_synced(layout: Layout, slot: str, manifest: dict) -> None:
             _write_json(layout.state_path, state)
 
 
-def sync_slot(layout: Layout, slot: str) -> dict:
+def sync_slot(layout: Layout, slot: str) -> dict[str, object]:
     """Resync one copy from the shared tree and drop its Postgres databases."""
     postgres = _running_postgres(layout.repo_root)
     if postgres is not None:
@@ -1150,7 +1150,7 @@ def cell_env(layout: Layout, slot: str, cell: str) -> tuple[dict[str, str], str 
     return clean_env(FAKESHOP_PG_DSN=postgres.dsn(database)), database
 
 
-def probe(directory: Path, env: dict[str, str]) -> dict:
+def probe(directory: Path, env: dict[str, str]) -> dict[str, Any]:
     """Resolve, inside the copy, where the package imports from and each alias's database."""
     command = [
         "uv",
@@ -1180,7 +1180,7 @@ def probe(directory: Path, env: dict[str, str]) -> dict:
 
 
 def provenance_faults(
-    found: dict,
+    found: dict[str, Any],
     directory: Path,
     cell: str,
     database: str | None,
@@ -1269,7 +1269,7 @@ def _short(names: list[str], limit: int = 4) -> str:
     return f"{shown}, +{len(names) - limit} more" if len(names) > limit else shown
 
 
-def render_header(record: dict) -> str:
+def render_header(record: dict[str, Any]) -> str:
     """Return the provenance header a run prints before its output."""
     edits = record["copy_edits"]
     moves = record["shared_moves"]
@@ -1481,7 +1481,7 @@ def status(repo_root: Path, flow: str | None) -> list[str]:
     return lines
 
 
-def load_runs(layout: Layout) -> dict[str, dict]:
+def load_runs(layout: Layout) -> dict[str, dict[str, Any]]:
     """Return every logged run of the flow by id."""
     if not layout.run_log.exists():
         return {}
@@ -1499,7 +1499,7 @@ def audit_record(repo_root: Path, record_path: Path) -> tuple[list[str], bool]:
     cited = list(dict.fromkeys(match.group(0) for match in RUN_ID_PATTERN.finditer(text)))
     lines = [f"{record_path}: {len(cited)} run id(s) cited"]
     base = workspace_base(repo_root)
-    runs: dict[str, dict] = {}
+    runs: dict[str, dict[str, Any]] = {}
     for flow in {match.group(1) for match in RUN_ID_PATTERN.finditer(text)}:
         runs.update(load_runs(Layout(repo_root, base, flow)))
     ok = True
@@ -1711,7 +1711,7 @@ def _append_gate_run(
     layout: Layout,
     entry: _GateRun,
     suite: str,
-    manifest: dict,
+    manifest: dict[str, object],
 ) -> None:
     record = {
         "run_id": entry["run_id"],

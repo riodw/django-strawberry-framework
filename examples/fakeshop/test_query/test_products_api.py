@@ -26,6 +26,7 @@ robust across Faker versions.
 """
 
 import json
+from typing import Any
 
 import pytest
 from apps.products import models
@@ -2629,7 +2630,7 @@ query($after: String, $before: String, $first: Int, $last: Int) {
 """
 
 
-def _items_connection_page(category_name: str, variables: dict) -> dict:
+def _items_connection_page(category_name: str, variables: dict[str, object]) -> dict[str, Any]:
     """Return one seeded category's ``itemsConnection`` page over live /graphql."""
     data = _graphql_data(_ITEMS_CONNECTION_WINDOW_QUERY, variables=variables)
     nodes = [edge["node"] for edge in data["allCategories"]["edges"]]

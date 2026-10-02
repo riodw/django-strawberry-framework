@@ -401,7 +401,7 @@ def _build_list_field_in_place_routing_mutation_schema(
     _current["schema"] = None
 
 
-def _branch_sql(captured: list[dict]) -> list[str]:
+def _branch_sql(captured: list[dict[str, str]]) -> list[str]:
     return [q["sql"] for q in captured if "library_branch" in q["sql"].lower()]
 
 

@@ -1,13 +1,13 @@
 term,anchor,notes
-choice enum,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
-ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
-definition-order independence,definition-order-independence,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
-OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
-schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.
+choice enum,choice-enum-generation,Carried by End-to-end schema and HTTP tests: choice enum wire values are asserted over live HTTP.
+ConfigurationError,configurationerror,"Carried by Where the contract lives and the finalization phase: an unresolved relation target raises it at finalization, never at class creation."
+definition-order independence,definition-order-independence,Carried by the spec title: the capability the foundation layer delivers.
+DjangoConnectionField,djangoconnectionfield,Carried by What does not ship: a later spec's field that does not call the finalizer.
+DjangoNodeField,djangonodefield,Carried by What does not ship: a later spec's field that does not call the finalizer.
+DjangoOptimizerExtension,djangooptimizerextension,Carried by What ships: its check_schema reads the concrete relation metadata finalization leaves.
+DjangoType,djangotype,Carried by What does not ship: choosing among several DjangoTypes per model is spec-018's rule.
+finalize_django_types,finalize_django_types,"Carried by Public API: the one public symbol the layer adds, exported from the package root and the types subpackage."
+Meta.fields,metafields,"Carried by Invariants: Meta.fields = ""__all__"" produces concrete related types regardless of declaration order."
+Meta.primary,metaprimary,Carried by What does not ship: the primary declaration and its audit are spec-018's contract.
+OptimizerHint,optimizerhint,Carried by End-to-end schema and HTTP tests: prefetch_related() and SKIP hints are observable over HTTP.
+schema audit,schema-audit,Carried by Where the contract lives: the audit reads the registered definition's field_map directly.

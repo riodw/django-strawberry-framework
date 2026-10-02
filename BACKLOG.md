@@ -1777,7 +1777,7 @@ Cards in this section are intentionally unscheduled — kept for design context,
 
 **Source**: item 41.
 
-**What we'd do**: a multi-database story beyond the shipped polite cooperation ([019-multi_database_cooperation_contract-0.0.7][card-multi-database-cooperation-contract]) — first-class shard-aware planning.
+**What we'd do**: a multi-database story beyond the shipped polite cooperation ([DONE-023-0.0.7][card-multi-database-cooperation-contract]) — first-class shard-aware planning.
 
 **Spec**:
 - The optimizer detects when a planned join would cross shards and downgrades to a routed `Prefetch` instead of failing or N+1ing.

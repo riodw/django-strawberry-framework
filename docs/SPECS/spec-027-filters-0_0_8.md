@@ -161,7 +161,7 @@ Local source path: `~/projects/strawberry-django-main/strawberry_django/filters.
 - `strawberry_django/filters.py::process_filters` — the runtime side of the pipeline. `FilterSet.apply_sync(input_value, queryset, info)` / `apply_async(...)` is the equivalent consumer-facing entry point (the `django-filter` instance method `filter_queryset(self, queryset)` is the tree-form override, with a different signature).
 - `strawberry_django/filters.py::FILTERS_ARG` (`= "filters"`) — NOT borrowed. The package ships no argument-name constant; Strawberry derives the GraphQL `filter:` argument from the resolver's Python parameter name.
 - `strawberry_django/filters.py::filter_type` decorator — NOT borrowed (the package's `Meta`-driven surface forbids decorator-on-input-type per [`START.md`][start] "Style Rio cares about").
-- The legacy `filter` alias with `DeprecationWarning` (`filters.py #"def __getattr__"`) — NOT borrowed.
+- The legacy `filter` alias with `DeprecationWarning` (`strawberry_django/filters.py #"def __getattr__"`) — NOT borrowed.
 
 ### Explicitly do not borrow
 

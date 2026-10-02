@@ -1,24 +1,24 @@
 term,anchor,notes
-AggregateSet,aggregateset,Backfilled for DONE-card glossary linkage from the shipped spec body.
-apply_cascade_permissions,apply_cascade_permissions,Backfilled for DONE-card glossary linkage from the shipped spec body.
-ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Definition-order independence,definition-order-independence,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoConnection,djangoconnection,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FieldSet,fieldset,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FilterSet,filterset,Backfilled for DONE-card glossary linkage from the shipped spec body.
-finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
-input type,input-type-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Ordering,ordering,Backfilled for DONE-card glossary linkage from the shipped spec body.
-OrderSet,orderset,Backfilled for DONE-card glossary linkage from the shipped spec body.
-RelatedAggregate,relatedaggregate,Backfilled for DONE-card glossary linkage from the shipped spec body.
-RelatedFilter,relatedfilter,Backfilled for DONE-card glossary linkage from the shipped spec body.
-RelatedOrder,relatedorder,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Relay node,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.
-schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.
+AggregateSet,aggregateset,"Carried by Layer 8: the planned aggregate base, owned by TODO-BETA-062-0.1.3."
+apply_cascade_permissions,apply_cascade_permissions,Carried by Target outcome and Layer 10: the cascade visibility helper a get_queryset hook calls.
+ConfigurationError,configurationerror,Carried by Target outcome and Layer 3: deferred Meta keys and unresolved relation targets raise it.
+Definition-order independence,definition-order-independence,Carried by Track annotation provenance and Phase 2: relations resolve at finalization regardless of declaration order.
+DjangoConnection,djangoconnection,Carried by Borrow DjangoListConnection and Phase 4: the generic connection base every generated <TypeName>Connection subclasses.
+DjangoConnectionField,djangoconnectionfield,Carried by Take the connection-field integration point and Layer 5: the root and nested connection factory.
+DjangoNodeField,djangonodefield,"Carried by Phase 1 and Phase 4: the Relay node lookup factory, nullable by contract."
+DjangoOptimizerExtension,djangooptimizerextension,Carried by Local package substrate: the optimizer extension whose check_schema audits relation targets.
+DjangoType,djangotype,Carried by Borrow resolve_type: every exposed relation resolves to a concrete registered DjangoType.
+FieldSet,fieldset,"Carried by Target outcome, Layer 9 and Phase 7: the planned field-level behavior class, owned by TODO-BETA-059-0.1.1."
+FilterSet,filterset,"Carried by Layer 6: the filter base, a subclass of django-filter's BaseFilterSet."
+finalize_django_types,finalize_django_types,"Carried by Layer 3: the public finalizer, triggered only by the consumer's explicit call."
+FK-id elision,fk-id-elision,Carried by Layer 11 among the optimizer features.
+input type,input-type-generation,Carried by Take the connection-field integration point: the generated filter input type the connection binds.
+Meta.fields,metafields,Carried by Take aggregate semantics: the declarative field selection key.
+Meta.primary,metaprimary,"Carried by Open questions: several DjangoTypes per model, exactly one primary."
+Ordering,ordering,Carried by Layer 7: the six-member direction enum.
+OrderSet,orderset,Carried by Layer 7: the order base.
+RelatedAggregate,relatedaggregate,Carried by Take lazy related class references: a planned lazy related-class declaration.
+RelatedFilter,relatedfilter,Carried by Take lazy related class references: a lazy related-class declaration resolved at finalization.
+RelatedOrder,relatedorder,Carried by Take lazy related class references: a lazy related-class declaration resolved at finalization.
+Relay node,relay-node-integration,Carried by Borrow field and connection: DjangoNodeField and DjangoNodesField serve Relay node lookup.
+schema audit,schema-audit,Carried by Borrow StrawberryDjangoDefinition: the audit names relation fields whose target model has no registered type.

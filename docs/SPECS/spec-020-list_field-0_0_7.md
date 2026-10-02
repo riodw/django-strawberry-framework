@@ -47,8 +47,9 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] Optional `description=` / `deprecation_reason=` / `directives=` pass-through into the inner `strawberry.field(...)` call so the symbol is feature-comparable to `strawberry.field(...)` at the metadata level, plus the `max_rows=` / `trusted_max_rows=` row-bound arguments validated per [Decision 5](#decision-5--validation--error-shapes).
   - [ ] `django_strawberry_framework/__init__.py` re-exports `DjangoListField` and lists it in `__all__` ([Decision 1](#decision-1--module-location-mechanism--public-export)); `tests/base/test_init.py` pins `__all__`.
 - [ ] Slice 2: Validation
-  - [ ] Constructor validates that the argument is a class AND is `issubclass(arg, DjangoType)` AND carries its **own** registered definition (`definition.origin is arg` and the definition is the registry's exact object, never `hasattr`) — per [Decision 5](#decision-5--validation--error-shapes). Errors raise `ConfigurationError` with the same `<Symbol> <constraint>; got <repr>.` shape pattern (`django_strawberry_framework/types/base.py::_format_unknown_fields_error` style) reused for consistency.
+  - [ ] Constructor validates that the argument is a class AND is `issubclass(arg, DjangoType)` AND carries its **own** registered definition (`definition.origin is arg` and the definition is the registry's exact object, never `hasattr`) — per [Decision 5](#decision-5--validation--error-shapes). Errors raise `ConfigurationError` with messages that open with the factory name (`DjangoListField ...`).
   - [ ] `resolver=`, when supplied, is callable; otherwise `ConfigurationError`.
+  - [ ] `max_rows=` is a positive integer and `trusted_max_rows=` is exactly a `bool`, checked before the target; `directives=` is a sequence of directive instances, checked after it.
   - [ ] The validation tests live in `tests/test_list_field.py` (construction-time errors never reach a schema).
 - [ ] Slice 3: Optimizer + `get_queryset` cooperation tests
   - [ ] Behavior tests, all at the live tier (`examples/fakeshop/test_query/test_list_field_api.py`, `test_list_field_async_api.py`, `test_library_api.py`) because a real query reaches each: default-resolver `cls.get_queryset` invocation, sync rejection of an async `get_queryset`, async path awaits `get_queryset`, **sync and async consumer `resolver=` returns receive `get_queryset` when they are a `Manager`/`QuerySet`**, Python-`list` consumer returns pass through unchanged, nullable-outer-via-consumer-annotation produces `[T!]`, non-nullable-outer default produces `[T!]!`, `DjangoListField` at root position is optimized, [FK-id elision][glossary-fk-id-elision] survives, `Meta.primary` interaction (explicit primary, explicit secondary). See [Test plan](#test-plan) for the names.
@@ -269,7 +270,7 @@ Public-export surface:
 - `__all__` lists `"DjangoListField"` in alphabetical position.
 - `tests/base/test_init.py`'s pinned `__all__` assertion covers it.
 
-The rejected placement alternatives (bundling into `connection.py`, inlining into `__init__.py`, a `fields/` subpackage), the reasons `list_field.py` won, and the mechanisms the installed Strawberry rules out are in [the rationale companion][spec-020-rationale].
+The rejected placement alternatives (inlining into `__init__.py`, a `fields/` subpackage, relocating the target guards to `utils/`), the reasons `list_field.py` won over bundling into `connection.py`, and the mechanisms the installed Strawberry rules out are in [the rationale companion][spec-020-rationale].
 
 ### Decision 2 — Default resolver shape
 
@@ -328,13 +329,13 @@ Item-level non-null is unconditional — Django ORM never returns `None` rows fr
 
 Outer-level nullability is driven by the **consumer's class-attribute annotation**: `list[T]` → `[T!]!`; `list[T] | None` → `[T!]`. The factory does NOT take a `nullable_list=` constructor argument because Strawberry already reads the class-attribute annotation; a separate kwarg would either fight or silently override it.
 
-The rejected alternatives - a Python-`list` default return, skipping `cls.get_queryset` on consumer-resolver returns, a `nullable_list=` constructor argument, a first-positional `(type_cls, info)` signature, a catch-all `**kwargs`, and `null=True` item types - are in [the rationale companion][spec-020-rationale], each with the reason it lost.
+The rejected alternatives - a Python-`list` default return, skipping `cls.get_queryset` on consumer-resolver returns, a `nullable_list=` constructor argument, a first-positional `(type_cls, info)` signature, a catch-all `**kwargs`, `null=True` item types, and a runtime `inspect.iscoroutine(result)` fallback in the sync wrapper - are in [the rationale companion][spec-020-rationale], each with the reason it lost.
 
 ### Decision 3 — `get_queryset` and async symmetry
 
 The sync + async `cls.get_queryset(...)` cooperation is delegated to the shared sealed-boundary helpers in `django_strawberry_framework/utils/querysets.py`, the single site every recomposing read surface uses — e.g. the Relay node defaults, the connection root, this field, and the cascade:
 
-- `apply_type_visibility_sync(cls, qs, info)` at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` — applies the hook in a sync context; rejects an async hook with `SyncMisuseError`, a `ConfigurationError` subclass that also inherits `RuntimeError`, after closing the unawaited coroutine so no "coroutine was never awaited" warning escapes. Each surface passes its own recourse wording.
+- `apply_type_visibility_sync(cls, qs, info)` at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` — applies the hook in a sync context; rejects an async hook with `SyncMisuseError`, a `ConfigurationError` subclass that also inherits `RuntimeError`, after closing the unawaited coroutine (or cancelling a `Future`) so no "coroutine was never awaited" warning escapes. A caller may pass its own recourse wording; the list field passes none, so its rejection carries the helper's default (Relay node-defaults) recourse text.
 - `apply_type_visibility_async(cls, qs, info)` at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_async` — applies the hook in an async context; awaits awaitables; passes sync returns through.
 
 Async detection re-uses the `django_strawberry_framework/utils/execution_mode.py::async_execution` predicate the Relay defaults use (`django_strawberry_framework/types/relay.py #"from ..utils.execution_mode import async_execution"`). The `list_field.py` module imports it from the same site; no fork.
@@ -343,7 +344,7 @@ Async detection re-uses the `django_strawberry_framework/utils/execution_mode.py
 
 Neither helper is public surface, and the cross-module import is a single line. The helpers live in `utils/querysets.py` rather than in either consuming module precisely because more than one field factory needs them: a helper shared by the list field, the connection field and the Relay node defaults belongs at a neutral site, so a change to the coroutine-in-sync rejection contract touches one body.
 
-The relocation option weighed and deferred here, and the two rejected alternatives (inline copies of the helpers; a `list_field.py`-local async-detection mechanism), are in [the rationale companion][spec-020-rationale].
+The two rejected alternatives (inline copies of the helpers; a `list_field.py`-local async-detection mechanism) are in [the rationale companion][spec-020-rationale].
 
 ### Decision 4 — Optimizer cooperation
 
@@ -351,7 +352,7 @@ The relocation option weighed and deferred here, and the two rejected alternativ
 
 - The default resolver returns a `QuerySet` (not a Python `list`).
 - The root-gated `DjangoOptimizerExtension.resolve` hook (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve`) fires on `info.path.prev is None`; the field site IS a root (top-level `Query` field), so the hook fires.
-- `_optimize` (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`) normalizes its input through the shared `django_strawberry_framework/utils/querysets.py::normalize_query_source` (`Manager` → `QuerySet`, non-queryset iterables short-circuit); the field returns a `QuerySet`, so the normalization is a no-op.
+- `_optimize` (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`) unwraps the async-completion adapter the field returns under async execution (`django_strawberry_framework/utils/querysets.py::unwrap_async_queryset_adapter`), then normalizes its input through the shared `django_strawberry_framework/utils/querysets.py::normalize_query_source` (`Manager` → `QuerySet`, non-queryset iterables short-circuit); the field returns a `QuerySet`, so the normalization is a no-op.
 - The selection-tree walker (`django_strawberry_framework/optimizer/walker.py`) reads the target `DjangoType` from `_resolve_model_from_return_type(info)` — defined at `django_strawberry_framework/optimizer/extension.py::_resolve_model_from_return_type`, called inside `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize #"resolved = _resolve_model_from_return_type(info)"`, and returning an `_OriginAndModel` pair (the resolved Strawberry origin plus its model) or `None`. The return-type machinery already handles `list[T]` annotations.
 - Plan caching, FK-id elision, `only()` projection, [queryset diffing][glossary-queryset-diffing], strictness mode — all shipped, all apply unchanged.
 
@@ -372,11 +373,11 @@ The `DjangoListField(arg, *, resolver=None, description=None, deprecation_reason
 
 The four target checks above are ordered among themselves, and that order is load-bearing — each one assumes the previous passed. They are shared, not local to this factory: see [Decision 1](#decision-1--module-location-mechanism--public-export).
 
-The row-bound guard runs **first**, ahead of all four target checks: a `max_rows` that is not a positive integer is rejected by `django_strawberry_framework/resource_policy.py::validate_collection_bound` before the target is inspected, so a field constructed with both a bad target and a bad `max_rows` reports the `max_rows` error (`tests/test_list_field.py::test_djangolistfield_rejects_a_non_positive_max_rows_at_construction`). What the bound then means is [Row bound](#row-bound); `examples/fakeshop/test_query/test_list_field_api.py::test_holder_untrusted_max_rows_is_the_limit_ceiling` pins the narrowing.
+The row-bound guards run **first**, ahead of all four target checks: a `max_rows` that is not a positive integer is rejected by `django_strawberry_framework/resource_policy.py::validate_collection_bound`, and a `trusted_max_rows` that is not exactly `True` or `False` by `django_strawberry_framework/resource_policy.py::validate_trusted_flag`, before the target is inspected, so a field constructed with both a bad target and a bad `max_rows` reports the `max_rows` error (`tests/test_list_field.py::test_djangolistfield_rejects_a_non_positive_max_rows_at_construction`, `tests/test_list_field.py::test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean`). What the bound then means is [Row bound](#row-bound); `examples/fakeshop/test_query/test_list_field_api.py::test_holder_untrusted_max_rows_is_the_limit_ceiling` pins the narrowing.
 
-Error site count: two error sites in the `DjangoListField` constructor — the shared target-validation guards and the row-bound guard. All errors raise [`ConfigurationError`][glossary-configurationerror] or a subclass of it.
+After the target checks, `directives=` is read through `django_strawberry_framework/utils/directives.py::validated_field_directives`: a bare string or bytes value, or one that cannot be iterated, raises `ConfigurationError` (`tests/test_list_field.py::test_djangolistfield_rejects_bare_string_directives`, `::test_djangolistfield_rejects_non_iterable_directives`).
 
-The error messages follow the same `<Symbol> <constraint>; got <repr>.` shape pattern that `django_strawberry_framework/types/base.py::_format_unknown_fields_error` uses for consistency with the rest of the package's validation surface.
+Error sites in the `DjangoListField` constructor: the row-bound guards, the shared target-validation guards, and the directives guard, in that order. All errors raise [`ConfigurationError`][glossary-configurationerror]. Every message opens with the factory name; the non-class, non-subclass and trusted-flag arms end `; got <repr>.`
 
 Validation fires in the constructor rather than at type-decoration or [`finalize_django_types()`][glossary-finalize-django-types] time: the rules are local to the constructor, no cross-class state is needed, and the error surfaces at the line that wrote `DjangoListField(...)`. This is symmetric with [`OptimizerHint`][glossary-optimizerhint]-related `Meta` validation, which fires at type creation.
 
@@ -509,6 +510,8 @@ Validation tests (Slice 2):
 - `test_djangolistfield_rejects_a_fabricated_same_origin_definition` / `test_djangolistfield_rejects_a_copy_of_the_real_definition` — only the registry's exact definition object is accepted.
 - `test_djangolistfield_rejects_non_callable_resolver` — `resolver="not callable"` raises `ConfigurationError`.
 - `test_djangolistfield_rejects_a_non_positive_max_rows_at_construction` — the row-bound guard runs first.
+- `test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean` — `trusted_max_rows=` accepts only an exact `bool`.
+- `test_djangolistfield_rejects_bare_string_directives` / `test_djangolistfield_rejects_non_iterable_directives` — `directives=` must be a sequence of directive instances.
 
 ### Live tier
 
@@ -517,7 +520,7 @@ Behavior tests (Slice 3), each over `/graphql/` (sync) or `/graphql-async/` (asy
 - `examples/fakeshop/test_query/test_library_api.py::test_branches_via_list_field_default_resolver_applies_get_queryset_live` — the default resolver routes the queryset through `BranchType.get_queryset`, which hides `city="restricted"` branches from the anonymous client.
 - `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_get_queryset_is_awaited` — an `async def get_queryset(...)` is awaited by the default resolver under async execution.
 - `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_queryset_completion_default_resolver` — the default resolver completes under async execution; the sync live suite covers the synchronous side.
-- `examples/fakeshop/test_query/test_list_field_api.py::test_shipped_branches_sync_http_rejects_an_async_get_queryset` — the sync view refuses an async `get_queryset` with `SyncMisuseError` instead of skipping visibility (`django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync #"reject_async_in_sync_context"`).
+- `examples/fakeshop/test_query/test_list_field_api.py::test_shipped_branches_sync_http_rejects_an_async_get_queryset` — the sync view refuses an async `get_queryset` with `SyncMisuseError` instead of skipping visibility (`django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync #"result = reject_async_in_sync_context("`).
 - `examples/fakeshop/test_query/test_list_field_api.py::test_holder_a_query_source_resolver_still_applies_target_visibility` — a **sync** `resolver=` returning a `QuerySet` or a `Manager` still runs `BranchType.get_queryset`.
 - `examples/fakeshop/test_query/test_list_field_api.py::test_holder_a_materialized_list_skips_target_visibility` — a **sync** `resolver=` returning a Python `list` passes through without `get_queryset`.
 - `examples/fakeshop/test_query/test_list_field_async_api.py::test_async_http_classified_resolver_still_applies_visibility` / `::test_async_a_materialized_list_skips_target_visibility` — the async-callable `resolver=` twins: the wrapper awaits the consumer coroutine BEFORE the `isinstance` check, so a queryset return still runs `get_queryset` and a Python-`list` return passes through; `::test_async_a_query_source_resolver_still_applies_target_visibility` covers a sync resolver under async execution.
@@ -560,8 +563,8 @@ The HTTP test files' reload pattern (clear the global registry, reload app schem
 4. `tests/test_list_field.py` contains the validation tests listed in the [Test plan](#test-plan); the behavior tests are at the live tier.
 5. `examples/fakeshop/apps/library/schema.py` carries the root fields named in [Decision 9](#decision-9--example-app-migration-posture) beside the hand-written `all_library_*` resolvers.
 6. `examples/fakeshop/test_query/test_library_api.py` asserts the `DjangoListField`-served field's `/graphql/` response, its exact query count, and its `get_queryset` application.
-7. Constructor-time validation rejects a non-class, a non-`DjangoType`, a subclass carrying no registered definition of its **own** (an inherited, copied or fabricated one does not count), and a non-callable `resolver=`, with `ConfigurationError`s matching the message contract in [Decision 5](#decision-5--validation--error-shapes); a non-positive `max_rows=` is rejected at the same site.
-8. The default resolver returns a `QuerySet` (not a Python `list`) so the root-gated `DjangoOptimizerExtension` plan applies at the root. The queryset is row-bounded per [Row bound](#row-bound), and the bound is applied by slicing after the visibility hook and any consumer post-processing, so a `QuerySet` carries it into SQL as a `LIMIT`.
+7. Constructor-time validation rejects a non-class, a non-`DjangoType`, a subclass carrying no registered definition of its **own** (an inherited, copied or fabricated one does not count), and a non-callable `resolver=`, with `ConfigurationError`s matching the message contract in [Decision 5](#decision-5--validation--error-shapes); a non-positive `max_rows=`, a non-`bool` `trusted_max_rows=` and an unreadable `directives=` are rejected at the same site.
+8. The default resolver returns a `QuerySet` (not a Python `list`; under async execution, the queryset inside the async-completion adapter) so the root-gated `DjangoOptimizerExtension` plan applies at the root. The queryset is row-bounded per [Row bound](#row-bound), and the bound is applied by slicing after the visibility hook and any consumer post-processing, so a `QuerySet` carries it into SQL as a `LIMIT`.
 9. The sync path rejects an async `cls.get_queryset` with `SyncMisuseError`, the `ConfigurationError` subclass that `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` raises for every read surface.
 10. The async path awaits the `get_queryset` coroutine and applies the optimizer through the same root-gated hook.
 11. A consumer-supplied `resolver=` runs in place of the default body. When the consumer return value is a `Manager` or `QuerySet`, `target_type.get_queryset(qs, info)` is applied (graphene-django parity); a Python-`list` return passes through unchanged; an async-only iterable (an async generator, or an `AsyncIterable` from a sync-detected resolver) is bounded under async execution and rejected with `SyncMisuseError` under sync execution. Every path is pinned by tests.

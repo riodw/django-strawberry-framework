@@ -18,12 +18,11 @@ directives on top of a consumer's own (B8).
 
 Bears on [The eight improvements][spec-004-improvements].
 
-The order followed the dependency graph each slice's `**Depends on.**` paragraph states: B5 first,
+The slices build in the dependency order each slice's `**Depends on.**` paragraph states: B5 first,
 because B2's elisions and B3's sentinel ride on its stash; B1 and B7 next, removing per-request
-introspection; B3 and B4 on a well-exercised walker; B2 once resolvers, projection, visibility, field
-metadata, strictness, and hints had settled; B6 once hints existed; B8 last, because it reconciles a
-finished plan against the consumer's queryset. The dependencies themselves are contract and live in
-the spec.
+introspection; B3 and B4 on a well-exercised walker; B2 after resolvers, projection, visibility, field
+metadata, strictness, and hints; B6 after hints; B8 last, because it reconciles a finished plan
+against the consumer's queryset. The dependencies themselves are contract and live in the spec.
 
 ## B1 — AST-cached plans
 
@@ -59,8 +58,8 @@ the spec.
 
 ## B3 — N+1 detection in dev mode
 
-- **A three-valued `strictness` literal, not a boolean.** Mixing `strict=True` with a later
-  `strict="raise"` in one kwarg would force a deprecation cycle when the third level lands.
+- **A three-valued `strictness` literal, not a boolean.** A boolean `strict=True` cannot carry the
+  third level (`"raise"`) without a deprecation cycle.
 - **The resolver rebuilds its path from `info.path`.** A stashed `(parent_type, field_name) -> path`
   mapping would trade bookkeeping for lookup speed; it is not needed, because the forward resolver
   walks `info.path` once per row and shares that walk between the B2 elision test and the B3

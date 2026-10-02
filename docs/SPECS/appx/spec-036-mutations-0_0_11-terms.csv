@@ -1,21 +1,23 @@
 term,anchor,notes
-DjangoMutation,djangomutation,the subject base class — promoted to shipped (0.0.11) in Slice 5
-Input type generation,input-type-generation,auto-generated Input / PartialInput — promoted in Slice 5
-FieldError,fielderror-envelope,shared errors envelope; defined and frozen here for reuse
+DjangoMutation,djangomutation,the subject base class; shipped (0.0.11)
+DjangoMutationField,djangomutationfield,the field factory exposing a mutation on the schema's Mutation type
+DjangoModelPermission,djangomodelpermission,default Meta.permission_classes entry (Django add / change / delete model perms)
+Input type generation,input-type-generation,auto-generated Input / PartialInput from the model's editable fields
+FieldError,fielderror-envelope,shared errors envelope; defined here; grows only by additive default-empty fields
 DjangoType,djangotype,the model-backed type the mutation target rides
-Meta.primary,metaprimary,return type + input target resolve the model's primary type (DONE-018 dep)
+Meta.primary,metaprimary,return type + relation-id strategy resolve the model's primary type (DONE-018 dep)
 Meta.model,metamodel,input generation derives from Meta.model
-Meta.fields,metafields,input field selection follows the primary type's selected set
-Meta.exclude,metaexclude,field selection contract reused on the input side
+Meta.fields,metafields,the mutation's own Meta.fields narrows the editable input columns (not the read type's selection)
+Meta.exclude,metaexclude,the mutation's own Meta.exclude removes editable columns from the input
 get_queryset,get_queryset-visibility-hook,update/delete lookups run through the target get_queryset
 apply_cascade_permissions,apply_cascade_permissions,permission composition seam (DONE-034 dep)
 DjangoOptimizerExtension,djangooptimizerextension,post-write re-fetch is optimizer-planned
 only() projection,only-projection,G2 mutation gate suppresses .only() on the re-fetch
 FK-id elision,fk-id-elision,stays enabled on the mutation re-fetch under the G2 loaded-check
-Queryset diffing,queryset-diffing,consumer-state reconciliation the re-fetch composes with
+Queryset diffing,queryset-diffing,the optimizer reconciles its plan against the re-fetch queryset's existing state
 DjangoConnectionField,djangoconnectionfield,the read-side field-factory sibling of DjangoMutationField
-DjangoListField,djangolistfield,the sync/async construction-time detection pattern reused
-DjangoNodeField,djangonodefield,the no-existence-leak not-found posture mirrored
+DjangoListField,djangolistfield,the runtime async_execution() dispatch the mutation field reuses
+DjangoNodeField,djangonodefield,the id: ID! server-side decode and no-existence-leak not-found posture mirrored
 FilterSet,filterset,prior set-family subsystem whose layout/lifecycle this mirrors
 OrderSet,orderset,prior set-family subsystem whose layout/lifecycle this mirrors
 RelatedFilter,relatedfilter,set-family cross-relation primitive (layout precedent)
@@ -27,13 +29,13 @@ Scalar field conversion,scalar-field-conversion,input scalars reuse the read-sid
 Choice enum generation,choice-enum-generation,choice fields map to the same enum on the input side
 Specialized scalar conversions,specialized-scalar-conversions,BigInt/JSON/etc. carried onto inputs
 auto,auto-typed-annotations,the declare-but-infer marker (converter reuse context)
-Upload scalar,upload-scalar,sibling 0.0.11 card 037 — file/image inputs (out of scope here)
+Upload scalar,upload-scalar,FileField / ImageField columns map to Upload on the generated input (sibling card 037)
 DjangoFileType,djangofiletype,output side of the uploads card (037)
 DjangoImageType,djangoimagetype,output side of the uploads card (037)
 DjangoFormMutation,djangoformmutation,0.0.12 flavor card reusing the base + envelope
 DjangoModelFormMutation,djangomodelformmutation,0.0.12 flavor card reusing the base + envelope
 SerializerMutation,serializermutation,0.0.13 flavor card reusing the base + envelope
 Auth mutations,auth-mutations,0.0.13 cohort reusing the base
-Per-field permission hooks,per-field-permission-hooks,adjacent 0.1.1 design (create-authorization fallback)
-FieldSet,fieldset,0.1.1 host for read gates (create-authorization fallback context)
+Per-field permission hooks,per-field-permission-hooks,planned 0.1.1 field-level read gates; a layer separate from write authorization
+FieldSet,fieldset,planned 0.1.1 host for the field-level read gates
 Cross-subsystem invariants,cross-subsystem-invariants,DEFERRED_META_KEYS promote-only-when-applied rule honored

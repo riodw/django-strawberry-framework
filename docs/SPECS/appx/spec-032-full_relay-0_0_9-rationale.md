@@ -13,7 +13,7 @@ Spec: [Decision 1 — Spec filename and canonical naming][spec-032-d1].
 
 ### Alternatives considered (and rejected)
 
-- **The card's own `docs/spec-relay_connection.md`.** Rejected: the card body predates the structured-filename convention; [`spec-031`][spec-031] Decision 1 set the precedent of preferring the convention, with [the naming alternatives it rejected recorded in its rationale companion][spec-031-rationale-d1]. The card-named file is additionally wrong on substance — the connection field shipped separately under [`spec-030`][spec-030], so `relay_connection` would mislabel this card's actual scope.
+- **The card's own `docs/spec-relay_connection.md`.** Rejected: the structured-filename convention governs, as in [`spec-031`][spec-031] Decision 1 ([its rejected naming alternatives][spec-031-rationale-d1]). The card-named file is also wrong on substance — the connection field shipped separately under [`spec-030`][spec-030], so `relay_connection` would mislabel this card's actual scope.
 - **Topic slug `relay_root` or `node_field`.** Rejected: both under-describe the umbrella (the card also ships the relation-as-Connection upgrade, the diagnostics, and the test helpers).
 
 ## Decision 2 — Card-scope boundary against the 0.0.9 Relay cohort
@@ -23,7 +23,6 @@ Spec: [Decision 2 — Card-scope boundary against the 0.0.9 Relay cohort][spec-0
 ### Justification
 
 The card's own dependency list names `030` as the hard dependency and the rest as soft/parallel; pinning the boundary keeps this spec scoped to its own part of the eight-goal umbrella instead of re-describing the sibling cards' work.
-
 
 ### Alternatives considered (and rejected)
 
@@ -106,7 +105,6 @@ Spec: [Decision 7 — `Meta.relation_shapes` is a net-new `ALLOWED_META_KEYS` ke
 
 The rule `Meta.connection` / `Meta.globalid_strategy` follow — the key's feature ships with it, the finalizer reads definitions (not re-parsed `Meta`), and gating to Relay-Node types keeps the eligibility rule single-sited with those two keys.
 
-
 ### Alternatives considered (and rejected)
 
 - **A `DEFERRED_META_KEYS` promotion.** Rejected: the key is not a reserved placeholder; it ships functional.
@@ -136,7 +134,6 @@ Spec: [Decision 9 — Cursor mechanics stay delegated to Strawberry; this card p
 
 [`spec-030`][spec-030] Decision 9 already delegated cursor mechanics, on the [rationale its companion records][spec-030-rationale-d3] that re-implementing cursor math duplicates correct engine behavior; re-implementing it here to match an illustrative byte format would churn the shipped wire contract for zero consumer value. The conformance suite is the card's actual deliverable ("Cursor pagination math passes the package's hand-authored Relay-spec conformance suite").
 
-
 ### Alternatives considered (and rejected)
 
 **Re-implement cursors as literal `b64("offset:N")`.** Rejected: breaks every cursor minted since [`DONE-030-0.0.9`][kanban], duplicates `ListConnection`, and buys nothing — both formats are equally opaque to a compliant client.
@@ -148,7 +145,6 @@ Spec: [Decision 10 — Public `testing/relay.py` helpers and the export gate][sp
 ### Justification
 
 Consumers writing live tests against the durable ids need to mint expected ids without copy-pasting base64 (`global_id_for`) and to assert what an emitted id resolves to (`decode_global_id`); both upstreams leave this to hand-rolled `to_global_id` calls in consumer tests.
-
 
 ### Alternatives considered (and rejected)
 
@@ -164,7 +160,6 @@ Spec: [Decision 11 — Module and test-file locations][spec-032-d11].
 
 The top-level module matches both the card and the `connection.py` precedent (root-field factories are package-surface modules, not `types/` internals); splitting the two large test surfaces along slice lines keeps each file reviewable for an XL card.
 
-
 ### Alternatives considered (and rejected)
 
 - **Extend `types/relay.py` instead of a new top-level module.** Rejected: `types/relay.py` is the per-type Relay *foundation* (resolver injection, encode/decode); the root fields are consumer-facing schema surface, and `031` already pinned the split.
@@ -178,10 +173,9 @@ Spec: [Decision 12 — Sequencing against the connection-aware optimizer and the
 
 The card binds the products conversion to `033` explicitly; the library suite is the card's named live-coverage home; and promoting one library type is the minimal change that makes every DoD bullet live-provable without touching the optimizer-dogfooding products suite.
 
-
 ### Alternatives considered (and rejected)
 
-- **Hold Slice 3 (relation-as-Connection) until `033` merges.** Rejected: the surfaces are functionally independent; serializing XL-card slices behind a sibling card's schedule risks the joint `0.0.9` cut, and both cards ship in the same `0.0.9` release, so no released version carries an unplanned nested connection.
+- **Hold Slice 3 (relation-as-Connection) until `033` merges.** Rejected: the surfaces are functionally independent, and both cards ship in `0.0.9`, so no released version carries an unplanned nested connection.
 - **Live relation-as-Connection proof in products instead.** Rejected: products' `test_products_optimizer_*` SQL-shape suite is the regression surface `033` owns.
 - **A new fakeshop fixture app instead of promoting `BookType`.** Rejected: a synthetic app exercises nothing real ([`START.md`][start]'s coverage-is-a-feature posture — the example exists to exercise the package via real flows), and the library graph already has the right shapes.
 
@@ -192,7 +186,6 @@ Spec: [Decision 13 — Version bumps are owned by the joint `0.0.9` cut][spec-03
 ### Justification
 
 [`docs/SPECS/NEXT.md`][next] Step 6 requires this Decision whenever another non-Done card shares the target's patch version: the bump belongs to the joint cut, so no single card's slice races its siblings for it.
-
 
 ### Alternatives considered (and rejected)
 

@@ -11,7 +11,7 @@ pip install django-strawberry-framework
 uv add django-strawberry-framework
 ```
 
-Add `"django_strawberry_framework"` to `INSTALLED_APPS` so Django's check and signal hooks resolve through the package's `AppConfig`.
+Add `"django_strawberry_framework"` to `INSTALLED_APPS`: the package's `AppConfig.ready()` applies its upstream-bug patches (all gated by the `APPLY_UPSTREAM_PATCHES` setting), and app registration is what makes the `inspect_django_type` / `export_schema` management commands and the debug-toolbar middleware's app template resolve.
 
 ## Quick start
 
@@ -111,7 +111,7 @@ Calling `finalize_django_types()` after the `DjangoSchema(...)` construction ins
 A schema exposing any generated mutation (`DjangoMutationField` over a `DjangoMutation` / `DjangoModelFormMutation` / `DjangoFormMutation` / `SerializerMutation`) must be constructed as `DjangoSchema`:
 
 ```python
-from django_strawberry_framework import DjangoSchema
+from django_strawberry_framework import DjangoSchema, strawberry_config
 
 schema = DjangoSchema(
     query=Query,
@@ -125,7 +125,7 @@ schema = DjangoSchema(
 
 ### Production error policy
 
-`DjangoSchema` also resolves a production error policy once at construction and installs the extension that applies it. Under `settings.DEBUG = False` an **unexpected** resolver or hook exception no longer puts its own message on the wire: the client gets `"message": "An unexpected error occurred."` plus an identifier under `extensions.correlationId`, and the original exception and traceback are logged under that identifier through the `django_strawberry_framework` logger at `ERROR`. Deliberate client-facing errors keep their contract, and the rule that decides is structural rather than an allowlist of codes:
+`DjangoSchema` also resolves a production error policy once at construction and installs the extension that applies it. Under `settings.DEBUG = False` an **unexpected** resolver or hook exception never puts its own message on the wire: the client gets `"message": "An unexpected error occurred."` plus an identifier under `extensions.correlationId`, and the original exception and traceback are logged under that identifier through the `django_strawberry_framework` logger at `ERROR`. Deliberate client-facing errors keep their contract, and the rule that decides is structural rather than an allowlist of codes:
 
 | Error shape | Reaches the client as |
 |---|---|
@@ -137,8 +137,11 @@ schema = DjangoSchema(
 A validation envelope (`FieldError` rows on a mutation payload) is `data`, not an error, and is untouched. Under `settings.DEBUG` the policy is a pass-through. Configure it with `DjangoSchema(error_policy=...)` or the `DJANGO_STRAWBERRY_FRAMEWORK["ERROR_POLICY"]` mapping (the constructor argument wins), and opt out explicitly:
 
 ```python
+from django_strawberry_framework import DjangoSchema, strawberry_config
+
 schema = DjangoSchema(
     query=Query,
+    config=strawberry_config(),
     error_policy={
         "message": "Something went wrong. Quote the correlation id when you report it.",
         "correlation_extension_key": "traceId",
@@ -146,7 +149,7 @@ schema = DjangoSchema(
 )
 
 # Opt-out, for a consumer who owns their own masking:
-schema = DjangoSchema(query=Query, error_policy={"enabled": False})
+schema = DjangoSchema(query=Query, config=strawberry_config(), error_policy={"enabled": False})
 ```
 
 The extension runs **first** in every operation's chain, because Strawberry unwinds teardowns LIFO and masking must happen after every extension that reads `GraphQLError.original_error` has had its turn; your own extensions keep their order behind it. Subscriptions served through the package's ASGI router are covered per event rather than per operation, so every event carries the policy message and its own `correlationId`. An exception escaping a **hook** — yours or the package's — is masked by `DjangoSchema` itself rather than by the extension, because Strawberry turns such an exception into a response only after every teardown has already unwound; that seam is on the schema, so a plain `strawberry.Schema` you assembled around the exported extension yourself does not have it.

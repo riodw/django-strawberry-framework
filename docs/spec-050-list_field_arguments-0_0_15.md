@@ -1,34 +1,18 @@
 # Spec: `DjangoListField` argument surface (`offset`, `limit`, and `orderBy`)
 
 Target card: [`DONE-050-0.0.15`][kanban]
-Status: **Shipped — closed; release pending.** Card 050 closed under Decision 22 on
-2026-09-22. The gated candidate is `2c66416e`: the default, sharded and supported-floor suites
-with the structural, link, citation and tracked-path checks ran against that exact tree, one
-review under Decision 20 admitted no finding, and the evidence-only follow-up `b38184b3`, whose
-parent is `2c66416e`, records the figures, the parent chain and the review in
-[`build-050`][build-050]. The `0.0.15` version cut belongs to
+Status: **Shipped — closed; release pending.** Card 050 closed under Decision 22; the gate
+record and the review live in [`build-050`][build-050]. The `0.0.15` version cut belongs to
 [`TODO-ALPHA-053-0.0.15`][kanban]. This `Status:` line is the lifecycle source of truth.
 Following the repository's shipped-card convention, the Slice checklist remains the contract
-ledger rather than implementation-history evidence, and its boxes stay unticked.
-Revision: 2026-09-17 - the completion contract is specified in Decisions 20-22 and drawn
-into the Definition of done: application Python is trusted and its documented result contracts
-are validated mechanically, wire input and configuration are the bounded parties, and a finding
-is admitted against this card only by reachability through a feasible project shape (Decision
-20); the extension contract is upstream's class-or-factory spelling with per-operation
-isolation stated as the guarantee this package adds (Decision 21); and the card closes on one
-recorded gate, after which a new finding opens a new card (Decision 22). Decision 8 carries
-evaluation state through the raw-list seam and admits the pending reverse-relation predicate
-Django leaves on every relation queryset, so a project queryset class costs what Django's
-manager costs. The enforcement, operation-state and execution-mode architecture is Decisions
-14-19 (revision history in
-[`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale]).
+ledger and its boxes stay unticked.
 
-Deliberation, rejected alternatives, and this spec's change record live in its companion
+Deliberation and rejected alternatives live in its companion
 [`spec-050-list_field_arguments-0_0_15-rationale.md`][rationale].
 
 Predecessors: [`spec-020`][spec-020] (the shipped non-Relay list field),
-[`spec-028`][spec-028] (the shipped ordering subsystem and its explicit list-field
-deferral), [`spec-030`][spec-030] (the connection field's Meta-derived sidecar signature),
+[`spec-028`][spec-028] (the shipped ordering subsystem the list field's `orderBy`
+reuses), [`spec-030`][spec-030] (the connection field's Meta-derived sidecar signature),
 and [`spec-047`][spec-047] (the shipped execution resource policy and raw-list bound).
 
 Version boundary: this card does **not** move
@@ -73,12 +57,12 @@ the release wording.
 - [Joint version cut][glossary-joint-version-cut] - why card 053, not this card, owns the
   `0.0.15` release state.
 - The [visibility boundary][glossary-visibility-boundary] and its
-  [sealed execution queryset][glossary-sealed-execution-queryset] - the shared seam this card
-  extends with the reject-combined and require-unevaluated options.
+  [sealed execution queryset][glossary-sealed-execution-queryset] - the shared seam whose
+  `require_unevaluated` and `carry_result_cache` options this card's seals use.
 - [`ListArgumentError`][glossary-listargumenterror], the
   [list offset order precondition][glossary-list-offset-order-precondition], and the
   [async queryset completion adapter][glossary-async-queryset-completion-adapter] - this
-  card's three planned glossary concepts, `shipped` at the joint cut.
+  card's three glossary concepts.
 
 ## Slice checklist
 
@@ -115,9 +99,9 @@ the release wording.
   - [ ] Sync and async paths run visibility, then `OrderSet`, then the offset/order guard,
         then the one raw-list slice.
   - [ ] The result of a public `OrderSet.apply_*` override is validated as an unevaluated,
-        unsliced, non-projection, non-combined model queryset before the final window; the
-        seal gains the new `require_unevaluated` option, reuses the shipped `reject_combined` one,
-        and both new-to-this-boundary codes gain arms at the two visibility message sites.
+        unsliced, non-projection model queryset, a combinator served as its primary-key set,
+        before the final window; the seal's `require_unevaluated` option carries the
+        `evaluated` defect, and the post-sidecar message site arms every code it can reach.
   - [ ] Nonzero offset requires a materially active `orderBy` or still-effective model
         `Meta.ordering` on the post-visibility queryset; no pk tiebreaker and no `DISTINCT`
         are injected.
@@ -192,18 +176,17 @@ the release wording.
         `extensions=[lambda: _optimizer]` is rewritten onto `DjangoSchema`, which is the only
         schema the isolation guarantee holds for.
   - [ ] Update the KANBAN database and the current-checkout statements in [`TODAY.md`][today]
-        when the candidate implementation commit carries the final board transition; the
-        pre-candidate generated outputs and milestone statements remain WIP.
+        in the candidate implementation commit that carries the final board transition.
   - [ ] Leave the version literal, version assertion, package-version glossary row, release
         wording, and [`CHANGELOG.md`][changelog] to card 053's joint cut; `pyproject.toml`
         and `uv.lock` have no duplicate root-package version to bump.
 
 ## Problem statement
 
-`DjangoListField` is the package's bounded non-Relay collection field, but clients cannot
-select an ordered subset of its result. A schema author can manually write a Strawberry
-resolver accepting `orderBy`, can manually slice a queryset, or can change the field into a
-Relay connection. None is the DRF-shaped answer expected from the package's public field
+`DjangoListField` is the package's bounded non-Relay collection field. Without package-owned
+arguments, letting clients select an ordered subset of its result means manually writing a
+Strawberry resolver accepting `orderBy`, manually slicing a queryset, or changing the field into
+a Relay connection. None is the DRF-shaped answer expected from the package's public field
 factory. The first duplicates the shipped sidecar machinery, the second moves resource
 validation into consumer code, and the third changes the response shape rather than adding
 a list argument.
@@ -220,31 +203,30 @@ windowed relation pagination in
 This package keeps its existing `list[T]` response and adds bounded list arguments; nested
 pagination remains a connection concern.
 
-The same field seam also owes an older debt. [`spec-028`][spec-028] shipped `OrderSet` but
-explicitly deferred `DjangoListField` argument injection because the field wrapper then
-exposed only `(root, info)`. `DjangoConnectionField` later proved the signature-synthesis
-approach for Meta-derived sidecars. Opening the list wrapper once for pagination and once
-later for ordering would create two signature builders and two subtly different pipelines.
-This card closes both gaps together.
+Pagination and ordering share one wrapper seam. [`spec-028`][spec-028] ships `OrderSet`
+without a `DjangoListField` argument, and `DjangoConnectionField` proves the signature-synthesis
+approach for Meta-derived sidecars. Opening the list wrapper once for pagination and once for
+ordering would create two signature builders and two subtly different pipelines, so one
+signature builder and one pipeline carry both.
 
 ## Current state
 
-At `0.0.14`,
 [`django_strawberry_framework/list_field.py::DjangoListField`][list-field] creates either a
-default resolver or a consumer-resolver wrapper and hands it directly to `strawberry.field`.
-The wrapper has no synthesized `__signature__`, so its GraphQL field has no package-owned
-arguments. Every resolver shape applies `get_queryset` before
-[`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy], giving
+default resolver or a consumer-resolver wrapper, assigns it the synthesized `__signature__` and
+`__annotations__` that publish the package-owned arguments, and hands it to `strawberry.field`.
+Every resolver shape applies `get_queryset` before the one raw-list window
+([`django_strawberry_framework/resource_policy.py::_windowed_rows`][resource-policy], the body
+[`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy] runs), giving
 the request policy the final raw-list slice.
 
-That final slice is already visible in SQL. With no client arguments, the default policy
-produces a queryset high mark and therefore a `LIMIT`; `max_rows` narrows it, and
-`trusted_max_rows=True` may deliberately widen past the request policy. The new design must
-not remove, duplicate, or move that slice. "No arguments means unchanged SQL" therefore
-means the same low mark, high mark, ordering, and parameters as `0.0.14` - not an absence of
-`LIMIT`, which is not today's behavior.
+That final slice is visible in SQL. With no client arguments, the default policy produces a
+queryset high mark and therefore a `LIMIT`; `max_rows` narrows it, and `trusted_max_rows=True`
+may deliberately widen past the request policy. The client window rides on that same slice; it
+is not removed, duplicated, or moved. "No arguments means unchanged SQL" therefore means the
+same low mark, high mark, ordering, and parameters as the coordinate-free bound - not an absence
+of `LIMIT`.
 
-Ordering already has a complete public and runtime pipeline. `Meta.orderset_class` is
+Ordering has a complete public and runtime pipeline. `Meta.orderset_class` is
 validated and bound at finalization, [`order_input_type`][glossary-order_input_type] creates
 the lazy Strawberry input annotation and records its orphan reference, and
 [`django_strawberry_framework/orders/sets.py::OrderSet.apply_sync`][orders-sets] /
@@ -437,11 +419,10 @@ A target without `Meta.orderset_class` publishes only `offset` and `limit`. With
 Strawberry name converter may rename all three arguments. The examples in this document use
 the default spelling, while runtime error payloads always report the active schema spelling.
 This is the one
-necessary qualification to the card body's "three arguments on every field" sentence:
+necessary qualification to "three arguments on every field", and the card's Scope states it:
 GraphQL arguments require a concrete input type, and the package has deliberately refused
 both untyped JSON ordering and automatic `OrderSet` generation. Publishing a dummy or
-always-rejected `orderBy` would make SDL introspection lie. Slice 5 amends that Scope
-sentence in the card rather than leaving the board demanding a different surface.
+always-rejected `orderBy` would make SDL introspection lie.
 
 `offset` is published universally, and that has an honest cost this spec states rather than
 buries. On a target with neither `Meta.orderset_class` nor still-effective model
@@ -476,20 +457,17 @@ The client shape is direct:
 }
 ```
 
-`offset: 0` is valid and WINDOW-identical to omission - the same rows in the same order -
-but it is not MODE-identical. Any non-null argument, `offset: 0` and `limit: 0` and
-`orderBy: []` included, selects the argument-bearing pipeline, whose source seal rejects a
-combined queryset that the omitted/all-null legacy branch still accepts (Decision 5). The
-identity claim therefore holds for ordinary composable querysets and for every non-queryset
-source, and fails exactly on a combined source; `limit` equal to the effective ceiling is
-window-identical on the same terms. `limit: 0` is valid and the pagination seam consumes or
-fetches no row from a lazy queryset/iterator; work a consumer resolver already performed to
-build a materialized list cannot be undone. The operation must also pass the independent
-pre-execution document budget before the field runs. `null` and omission are equivalent for
-all three arguments. The consumer `resolver=` is still invoked as `resolver(root, info)`;
-the wrapper owns the new arguments and does not forward them into a consumer function. An
-async consumer return is awaited exactly once; residual awaitables fail closed rather than
-being recursively awaited.
+`offset: 0` is valid and WINDOW-identical to omission - the same rows in the same order - but it
+is not MODE-identical: any non-null argument, `offset: 0` and `limit: 0` and `orderBy: []`
+included, selects the argument-bearing pipeline (Decision 3). `limit` equal to the effective
+ceiling is window-identical on the same terms. `limit: 0` is valid and the pagination seam
+consumes or fetches no row from a lazy queryset/iterator; work a consumer resolver already
+performed to build a materialized list cannot be undone. The operation must also pass the
+independent pre-execution document budget before the field runs. `null` and omission are
+equivalent for all three arguments. The consumer `resolver=` is still invoked as
+`resolver(root, info)`; the wrapper owns the new arguments and does not forward them into a
+consumer function. An async consumer return is awaited exactly once; residual awaitables fail
+closed rather than being recursively awaited.
 
 ## Caps and error table
 
@@ -546,21 +524,20 @@ derivation and is not the precedent.
 
 `ListArgumentError` is PUBLIC and catchable, exported from
 [`django_strawberry_framework/__init__.py`][package-init] beside `ResourceLimitExceeded` and
-`SyncMisuseError`. Calling it internal while giving it a stable name, a glossary entry, a
-pickle contract, and a documented `extensions` payload would be incoherent, because every one
-of those only matters to someone who can name the class. A consumer writing a custom view, an
-error formatter, or middleware that separates an invalid page request from a genuine failure
-needs `except ListArgumentError`, and directing them to string-match `extensions["code"]`
-instead would be a weaker contract than the two shipped precedents already offer. Slice 1
-therefore adds the import and the `__all__` entry and updates the pinned `__all__` tuple in
+`SyncMisuseError`. Calling it internal while giving it a stable name, a glossary entry, a pickle
+contract, and a documented `extensions` payload would be incoherent, because every one of those
+only matters to someone who can name the class. A consumer writing a custom view, an error
+formatter, or middleware that separates an invalid page request from a genuine failure needs
+`except ListArgumentError`, and directing them to string-match `extensions["code"]` instead
+would be a weaker contract than the two shipped precedents already offer. The root module
+therefore imports it and lists it in `__all__`, and the pinned `__all__` tuple in
 [`tests/base/test_init.py`][test-base-init], together with that file's star-import and
-export-identity rows and the stale comment there asserting that the `0.0.15` cut leaves the
-public surface unchanged. That is the `__all__` assertion in that file and is unrelated to its
-VERSION assertion, which stays with card 053's joint cut (see Version boundary). The supported
-catch surface is therefore `ListArgumentError` itself, its `GraphQLError` base, or
+export-identity rows, carries it. That is the `__all__` assertion in that file and is unrelated
+to its VERSION assertion, which stays with card 053's joint cut (see Version boundary). The
+supported catch surface is therefore `ListArgumentError` itself, its `GraphQLError` base, or
 `extensions["code"] == "LIST_ARGUMENT_INVALID"` - all three deliberately. The package's
-`DjangoStrawberryFrameworkError` base is a second base rather than a supported root import;
-this card does not export it.
+`DjangoStrawberryFrameworkError` base is a second base rather than a supported root import; this
+card does not export it.
 
 Its `extensions` are stable:
 
@@ -714,21 +691,20 @@ never imports the connection module merely to avoid a few `inspect.Parameter` ca
 
 ### Decision 2 — sidecar-conditional `orderBy` is the only truthful Meta-first surface
 
-The card asks for three optional arguments on every `DjangoListField`, but its same Scope
-section says ordering comes from the target's `orderset_class`. Those requirements cannot
-both hold for a type without that sidecar. This spec resolves the collision in favor of the
-package's DRF-first public API and [`spec-028`][spec-028] Decision 12: `offset` and `limit`
-are universal; `orderBy` is present exactly when `Meta.orderset_class` supplies its type and
-semantics.
+Three optional arguments on every `DjangoListField` and ordering from the target's
+`orderset_class` cannot both hold for a type without that sidecar. This spec resolves the
+collision in favor of the package's DRF-first public API and [`spec-028`][spec-028] Decision 12:
+`offset` and `limit` are universal; `orderBy` is present exactly when `Meta.orderset_class`
+supplies its type and semantics.
 
 *Alternatives rejected: see the [rationale][rationale-d2] (auto-generating OrderSets, JSON
-argument, dummy input, mandatory orderset_class, conditional offset publication).*
+argument, dummy input, mandatory orderset_class, conditional offset publication, a
+resolver's own `.order_by(...)` as the offset contract).*
 
-The card body's universal-three-argument sentence is amended by this card rather than
-reinterpreted around it: Slice 5 rewrites that Scope bullet in the KANBAN database to state
-that `offset` and `limit` are universal, `orderBy` is sidecar-conditional, and a published
-`offset` is a runtime-precondition coordinate. This qualification is recorded again under
-Risks so implementation review cannot mistake it for an accidental omission.
+The card body's Scope states the same surface: `offset` and `limit` are universal, `orderBy` is
+sidecar-conditional, and a published `offset` is a runtime-precondition coordinate. This
+qualification is recorded again under Risks so implementation review cannot mistake it for an
+accidental omission.
 
 ### Decision 3 — one validation record computes both window and errors
 
@@ -746,19 +722,18 @@ repr, so an integer CPython refuses to stringify cannot replace the typed error 
 `offset` before `limit`, matching the synthesized signature and SDL order, so a direct call
 with both values invalid has one deterministic first failure.
 
-The record answers distinct questions with distinct fields, and no consumer of one
-may read another as a proxy for it. `any_argument_supplied` is true when any of the three
-arrived non-null; it selects the argument-bearing pipeline and nothing else, which is also
-what turns on reject-combined source admissibility. The `window` fields (`offset`, `limit`)
-say which rows are returned, and `offset: 0` with an omitted limit
-produces the same window as omission - which is why Decision 9's fast path is a MODE decision
-and never a window comparison. `order_by_supplied` says whether an order argument arrived at
-all, and it, never material activity, drives the `queryset_required` source check, because an
-empty list is still a supplied order argument. Material order activity is the fourth question
-and is answered only after public apply succeeds. Collapsing any pair of these into one bit is
-precisely what makes `offset: 0` look identical to omission while behaving differently, so the
-record keeps them apart by construction and the package tier pins each field's independent
-effect.
+The record answers distinct questions with distinct fields, and no consumer of one may read
+another as a proxy for it. `any_argument_supplied` is true when any of the three arrived
+non-null; it selects the argument-bearing pipeline and nothing else. The `window` fields
+(`offset`, `limit`) say which rows are returned, and `offset: 0` with an omitted limit produces
+the same window as omission - which is why Decision 9's fast path is a MODE decision and never a
+window comparison. `order_by_supplied` says whether an order argument arrived at all, and it,
+never material activity, drives the `queryset_required` source check, because an empty list is
+still a supplied order argument. Material order activity is the fourth question and is answered
+only after public apply succeeds. Collapsing any pair of these into one bit would let one
+question answer another - `orderBy: []` is a supplied order argument with no material activity -
+so the record keeps them apart by construction and the package tier pins each field's
+independent effect.
 
 Argument wire names are resolved LAZILY, only while constructing a `ListArgumentError`, and
 never by running the converter again.
@@ -850,86 +825,74 @@ For a request carrying any non-null list argument, the color-specific queryset p
    Preserve the existing guards: a sync resolver returning an awaitable is disposed and
    rejected, while an async resolver is awaited once and a residual awaitable is disposed
    and rejected rather than recursively awaited.
-3. Apply the target's `get_queryset` visibility hook through the shared sealed boundary. Its
-   source seal rejects an already-sliced queryset before the consumer hook runs, and its
-   result seal rejects a hook-returned sliced queryset before later ordering or pagination.
-   In the argument-bearing mode, the same source/result seal also rejects a combined queryset
-   (`union`, `intersection`, or `difference`) with `ConfigurationError`: source rejection
-   occurs before invoking a hook that may illegally filter the combination; result rejection
-   occurs before OrderSet/optimizer operations. The all-null/omitted fast path keeps the
-   existing combined-query behavior. The caller selects the `reject_combined` seal option,
-   which already ships on
-   [`django_strawberry_framework/utils/querysets.py::_SealPolicy`][querysets] and emits the
-   `combined` defect inside `_seal_or_defect` as part of the existing pre-clone and post-bake
-   `_combined_query_table_defect` proof passes, not by a list-field pre-check. The seal is a
-   rebuild boundary whose complete combined-branch proof runs twice when deferred filters are
-   baked, so argument mode must not weaken it into a one-off validator.
-
-   The option exists but has never been reachable from this boundary, and that is the card's
-   actual work here. `combined` is set today only by `_CASCADE_SEAL_POLICY`, and the cascade
-   always supplies its own `render_error`, so the code's two visibility message sites render
-   every defect EXCEPT `combined` - a reachability invariant
-   [`django_strawberry_framework/utils/querysets.py::_visibility_result_error`][querysets]
-   states outright in its own docstring. Selecting `reject_combined` for list-field
-   visibility makes `combined` reachable at both sites for the first time, so this card owes
-   a `combined` arm at each of them and a correction to that docstring's reachability
-   sentence, exactly as the new `evaluated` code below owes its own arms. Without them the
-   rejection still fails closed - `_defect_message` dispatches exhaustively and an unrendered
-   code names itself as a framework defect - but the schema author is told a code is
-   unhandled instead of being told their source is a `union` / `intersection` / `difference`.
+3. Apply the target's `get_queryset` visibility hook through the shared sealed boundary,
+   under the one default seal policy whether or not arguments are supplied. Its source seal
+   rejects an already-sliced queryset before the consumer hook runs, and its result seal
+   rejects a hook-returned sliced queryset before later ordering or pagination. A combined
+   queryset (`union`, `intersection`, or `difference`) is served at both seals as the set of
+   primary keys it selects (the `rewrite_combined` axis of
+   [`django_strawberry_framework/utils/querysets.py::_SealPolicy`][querysets], built by
+   `utils/querysets.py::_pk_membership_query_or_defect`), so the hook, `OrderSet` and the
+   optimizer narrow, order and window a query Django can compose; a combined shape that rewrite
+   would change fails closed with the `combined` defect's `ConfigurationError`, which both
+   visibility message sites render. The rewrite runs inside `_seal_or_defect`, after the
+   pre-clone and post-bake `_combined_query_table_defect` proof passes, not in a list-field
+   pre-check. The seal is a rebuild boundary whose complete combined-branch proof runs twice
+   when deferred filters are baked, and the list field does not weaken it into a one-off
+   validator.
 4. If supplied, run the canonical public `OrderSet.apply_sync` / `apply_async` path. The
    async wrapper calls `apply_async` without assuming that an override retained `async def`:
    a non-awaitable return is a schema-author defect and raises the same actionable
    `ConfigurationError` naming `OrderSet.apply_async`; an awaitable is awaited exactly once,
    and a residual awaitable is disposed and rejected rather than recursively awaited.
    Validate the resulting value before consulting active order state through the shared
-   queryset sealing machinery, with surface-specific error text and an added
-   require-unevaluated option. The requirement is on the SEALED OUTPUT, never on the
+   queryset sealing machinery, with surface-specific error text, under the post-sidecar policy
+   that sets the require-unevaluated option. The requirement is on the SEALED OUTPUT, never on the
    candidate's class. The shared seal accepts a sealable `QuerySet` SUBCLASS and rebuilds it
    into a framework-owned plain `models.QuerySet` - a central architectural feature of that
    boundary, not an accident, and not narrowed here. A custom `OrderSet.apply_*` returning a
    project's own `QuerySet` subclass is therefore accepted, and what the pipeline carries
    forward is the plain sealed rebuild rather than the subclass itself. That sealed output
-   must be unevaluated, unsliced, non-projection, non-combined, and over the same model and
-   concrete table, preserving the input's effective database routing. A `Manager`, list,
+   must be unevaluated, unsliced, non-projection, and over the same model and concrete table,
+   preserving the input's effective database routing; a combined result is served as its
+   primary-key set, as a combined source is. A `Manager`, list,
    `None`, wrong-model queryset, values/values-list queryset, populated `_result_cache`, or
    malformed query state is a schema-author defect and raises an actionable
    `ConfigurationError` naming the public apply method. A pending `_deferred_filter` is not a
    failure on any class: the seal bakes it onto the detached clone for a subclass exactly as for
    an exact queryset, and what fails closed as `untrusted` is a deferred-filter STATE that is not
    the exact shape Django writes (Decision 8). A sync-path
-   awaitable is likewise disposed and rejected under the existing one-await policy. Like
-   `reject_combined`, the require-unevaluated option is enforced inside
-   [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets] and emits the
-   `evaluated` defect rather than a reuse of an existing code: no seal that recomposes onto its
+   awaitable is likewise disposed and rejected under the existing one-await policy. The
+   require-unevaluated option is enforced inside
+   [`django_strawberry_framework/utils/querysets.py::_seal_or_defect`][querysets] and emits its
+   own `evaluated` defect rather than a reuse of an existing code: no seal that recomposes onto its
    result carries `_result_cache` forward, so without the option an evaluated candidate is
    silently normalized into a fresh unevaluated queryset - an override that ran its own SQL and
    returned rows would be turned into a second identical query instead of rejected. The raw-list
-   row source is the one policy that does carry it, and it recomposes nothing (Decision 8). Both
-   options default off, so no shipped seal verdict changes.
+   row source is the one policy that does carry it, and it recomposes nothing (Decision 8). The
+   option defaults off; `_SIDECAR_RESULT_POLICY` is the one policy that sets it.
 
-   A new code owes two things the shipped codes already have. First, a fixed position in the
-   seal's documented canonical ordering, which today runs `type`, `table`, `untrusted`,
-   `sliced`, `combined`, `projection`, `alias`. `evaluated` is taken immediately before
-   `sliced` so the trust-family proofs still run first and the two execution-state rejections
-   sit together. Decision 13's routing check is the third new code and takes the position
-   immediately after `untrusted`, so every trust-family proof still runs first and no
-   reconstructed queryset is returned before routing intent is proven, making the shipped
-   order `type`, `table`, `untrusted`, `routing`, `evaluated`, `sliced`, `combined`,
-   `projection`, `alias`. Second, its own arm at both message-building
-   sites,
+   Every seal code holds a fixed position in the seal's documented canonical ordering: `type`,
+   `table`, `untrusted`, `routing`, `evaluated`, `sliced`, `projection`, `combined`, `alias`.
+   `routing` follows `untrusted`, so every trust-family proof runs first and no reconstructed
+   queryset is returned before routing intent is proven; `evaluated` sits immediately before
+   `sliced`, so the two execution-state rejections sit together. Each message-building site
+   renders only the subset it can reach: the post-sidecar site,
+   `utils/querysets.py::_validate_post_orderset_result`, arms `evaluated`, `routing` and
+   `combined` beside one shape wording, while the two visibility sites,
    [`django_strawberry_framework/utils/querysets.py::_visibility_result_error`][querysets] and
    [`django_strawberry_framework/utils/querysets.py::_prepared_visibility_source`][querysets],
-   each of which renders only the subset it can reach. Neither ladder ends in an
-   unconditional branch for its last code - `_defect_message` dispatches exhaustively, so a
-   code added without an arm self-names as a framework defect rather than mislabelling an
-   evaluated-result rejection as an alias mismatch or a wrong-table error. The failure is
-   therefore legible rather than silent, but an unarmed code still reaches the schema author
-   as an unactionable message, so both new codes owe both arms. The retained-state
-   helper `_queryset_state_defect` is not its home: that helper pins the `QuerySet.__dict__`
-   fields every seal carries forward (`_db`, `_hints`, `_fields`, `_sticky_filter`,
-   `_for_write`) and emits only `untrusted`, and `_result_cache` is not among them - the one
-   policy that carries it pins its exact `list` shape in the seal itself (Decision 8).
+   reach neither `evaluated` nor `routing`, because no `get_queryset` seal sets
+   `require_unevaluated` or carries a frozen routing record. No ladder ends in an unconditional
+   branch for its last code - `_defect_message` dispatches exhaustively, so a code added without
+   an arm self-names as a framework defect rather than mislabelling an evaluated-result
+   rejection as an alias mismatch or a wrong-table error. The failure is therefore legible
+   rather than silent, but an unarmed code still reaches the schema author as an unactionable
+   message, so every code a site can reach owes that site an arm. The retained-state helper
+   `_queryset_state_defect` is not its home: that helper pins the `QuerySet.__dict__` fields
+   every seal carries forward (`_db`, `_hints`, `_fields`, `_sticky_filter`, `_for_write`) and
+   emits only `untrusted`, and `_result_cache` is not among them - the one policy that carries
+   it pins its exact `list` shape in the seal itself (Decision 8).
 
    Same-route needs its own definition, because `_db` equality alone is not it. Django
    resolves an unrouted queryset's alias through the database router using both the model and
@@ -1280,7 +1243,7 @@ The rejection is
 same stable code and no ceiling. Offset zero never requires ordering. Omitted offset does not
 require ordering even when a limit is supplied.
 
-*Alternatives rejected: see the [rationale][rationale-d6] (unordered offset as shipped in
+*Alternatives rejected: see the [rationale][rationale-d6] (among them unordered offset as shipped in
 Graphene-Django, primary-key tiebreaker injection as shipped in
 Strawberry-GraphQL-Django).*
 
@@ -1374,30 +1337,31 @@ resolver normalizes the cached source before reading the rows it already fetched
 is Django's own slot on an object the package owns rather than an attribute lookup the subclass
 answers. *Derivation and rejected alternatives: see the [rationale][rationale-d8].*
 
-Evaluation state travels with the source. A queryset that reaches the seam already evaluated -
-a warm prefetch cache, a manager result a resolver iterated before returning it - is windowed
-from the rows it holds, with no further query, for the exact type and for a rebuilt subclass
-alike: the rows are read through Django's own slot on the instance state (the same
-`object.__getattribute__` read the sealer takes), and the window over them is the package's
-own list slice. Re-querying a project queryset class for rows it had already fetched would
-make `Manager.from_queryset` cost one query per parent row more than Django's manager at every
+Evaluation state travels with the source. A queryset that reaches the seam already evaluated - a
+warm prefetch cache, a manager result a resolver iterated before returning it - is windowed from
+the rows it holds, with no further query, for the exact type and for a rebuilt subclass alike:
+the rows are read through Django's own slot on the instance state (the same
+`object.__getattribute__` read the sealer takes), and the window over them is the package's own
+list slice. Re-querying a project queryset class for rows it had already fetched would make
+`Manager.from_queryset` cost one query per parent row more than Django's manager at every
 relation it is used on, and on the prefetched branch of the generated many-side resolver it
 would hand graphql-core an unevaluated rebuilt source that is iterated on the event loop under
-async, where Django raises `SynchronousOnlyOperation`. The rebuild therefore carries the fetched rows forward when the
-source it rebuilt held them, and drops nothing but the subclass's own methods. That carry
-belongs to the raw-list seam alone, the one place where nothing is composed after the rebuild.
-No other seal carries it, and what the others do with an evaluated source is two rules, not one.
-`require_unevaluated` - the axis that refuses an evaluated candidate outright - is on for the
-post-sidecar result seal (`utils/querysets.py #"_SIDECAR_RESULT_POLICY = _SealPolicy("`) alone,
-which seals every public `FilterSet.apply_*` and `OrderSet.apply_*` return; a `DjangoListField`
-reaches it through `orderBy` alone. The field invoked that method one step earlier and takes its
-window on what comes back, so rows already fetched mean the override filtered, ordered or paged
-something other than the query about to run. A visibility seal ADMITS an evaluated source
-and drops its `_result_cache` in the rebuild, on the hook's input and on the hook's result
-alike, so no cached or injected row crosses the boundary and a consumer that evaluates inside
-the hook pays one extra query - a cost, not a broken seal. That hook's contract is shared with
-the Relay node, connection and relation surfaces, so holding it to the stricter rule here would
-make one hook's verdict depend on which field called it.
+async, where Django raises `SynchronousOnlyOperation`. The rebuild therefore carries the fetched
+rows forward when the source it rebuilt held them, and drops nothing but the subclass's own
+methods. That carry belongs to the raw-list seam alone, the one place where nothing is composed
+after the rebuild. No other seal carries it, and what the others do with an evaluated source is
+two rules, not one. `require_unevaluated` - the axis that refuses an evaluated candidate
+outright - is on for the post-sidecar result seal
+(`utils/querysets.py #"_SIDECAR_RESULT_POLICY: _SealPolicy[models.Model]"`) alone, which seals
+every public `FilterSet.apply_*` and `OrderSet.apply_*` return; a `DjangoListField` reaches it
+through `orderBy` alone. The field invoked that method one step earlier and takes its window on
+what comes back, so rows already fetched mean the override filtered, ordered or paged something
+other than the query about to run. A visibility seal ADMITS an evaluated source and drops its
+`_result_cache` in the rebuild, on the hook's input and on the hook's result alike, so no cached
+or injected row crosses the boundary and a consumer that evaluates inside the hook pays one
+extra query - a cost, not a broken seal. That hook's contract is shared with the Relay node,
+connection and relation surfaces, so holding it to the stricter rule here would make one hook's
+verdict depend on which field called it.
 
 That lower-level arithmetic remains shape-complete and is
 unit-pinned, but it does not widen the list field's order precondition, and the two tiers must
@@ -1435,11 +1399,11 @@ errors, propagating through whichever nullability the consumer annotation declar
 Error precedence follows the pipeline rather than incidental exception timing. Numeric
 validation (`offset`, then `limit`) runs before the consumer resolver. After source
 normalization, a supplied `orderBy` over a non-queryset raises `queryset_required` before a
-nonzero-offset `order_required` check. On a queryset, the argument-aware source seal rejects a
-combined/sliced source before invoking visibility; the hook and result seal then run;
-`OrderSet` permission/application and its result validation follow; the offset guard is last
-before the window. Thus an argument-bearing combined source wins over a simultaneous hook or
-order-permission failure, a hook-returned combination wins before OrderSet, and malformed
+nonzero-offset `order_required` check. On a queryset, the source seal rejects a sliced source,
+or a combined one its primary-key rewrite cannot represent, before invoking visibility; the hook
+and result seal then run; `OrderSet` permission/application and its result validation follow;
+the offset guard is last before the window. Thus a rejected source wins over a simultaneous hook
+or order-permission failure, a rejected hook result wins before OrderSet, and malformed
 post-apply output wins over offset rejection. Tests with two simultaneously-invalid
 conditions pin these boundaries so later refactors cannot reverse them accidentally. This is
 resolver-local precedence after GraphQL validation and the schema's pre-execution
@@ -1506,30 +1470,27 @@ source-dependent and could bypass visibility.
 
 ### Decision 9 — no-argument sync behavior takes the old branch; async only adapts completion
 
-When all three arguments are omitted or null, the resolver executes the same visibility and
-`bounded_rows(result, info, max_rows, trusted=trusted_max_rows)` logic as `0.0.14`. The new
-normalizer must have an explicit fast path that delegates there; it must not calculate
-`offset=0` and rebuild an equivalent slice. The sync branch returns that result exactly as
-before. The async branch wraps a final queryset in Decision 5's async-only completion adapter,
-including when arguments are omitted; that intentional representation change fixes the
-existing event-loop-unsafe graphql-core completion and cannot honestly be called byte-for-byte
-resolver parity. Tests compare `str(queryset.query)`, `query.low_mark`, `query.high_mark`,
-result data, and query count against the pre-card baseline, and separately prove the new
+When all three arguments are omitted or null, the resolver executes visibility and the
+coordinate-free raw-list window,
+`_windowed_rows(result, info, max_rows, trusted=trusted_max_rows)` - the body `bounded_rows`
+runs. The normalizer has an explicit fast path that delegates there; it does not calculate
+`offset=0` and rebuild an equivalent slice. The sync branch returns that result unchanged. The
+async branch wraps a final queryset in Decision 5's async-only completion adapter, including
+when arguments are omitted; that intentional representation change fixes the existing
+event-loop-unsafe graphql-core completion and cannot honestly be called byte-for-byte resolver
+parity. Tests compare `str(queryset.query)`, `query.low_mark`, `query.high_mark`, result data,
+and query count against a pre-argument reference field (live row 22), and separately prove the
 adapter's safe transport.
 
 The SDL necessarily changes by adding optional arguments. Sync resolver behavior, SQL,
 ordering, nullability, and response data do not; async response data/SQL stay the same while
-the unsafe raw-queryset result representation changes. The card's phrase "LIMIT/OFFSET present
-exactly when supplied" is FALSE against shipped behavior: no-argument raw lists already carry
-a policy `LIMIT` through
-[`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy], and have
-since [`spec-047`][spec-047]. A spec may not silently redefine its parent Definition of done
-while the board still demands the opposite result, so Slice 5 AMENDS that card DoD row in the
-KANBAN database to the shipped contract: omission preserves the existing policy `LIMIT`
-unchanged, a smaller client limit lowers the high mark, and a positive offset raises the low
-mark (*card amendment derivation: see the [rationale][rationale-d9]*). Tests pin exactly those
-three. The neighbouring Scope claim that no-argument SQL is byte-for-byte today's survives
-the amendment unchanged and stays a live assertion.
+the unsafe raw-queryset result representation changes. No-argument raw lists carry a policy
+`LIMIT` through [`django_strawberry_framework/resource_policy.py::bounded_rows`][resource-policy]
+([`spec-047`][spec-047]), so the card's Definition of done states the window contract as:
+omission preserves the existing policy `LIMIT` unchanged, a smaller client limit lowers the high
+mark, and a positive offset raises the low mark (*derivation: see the
+[rationale][rationale-d9]*). Tests pin exactly those three. The card's Scope claim that
+no-argument SQL is byte-for-byte unchanged stays a live assertion.
 
 ### Decision 10 — coercion errors stay GraphQL-owned; runtime domain errors are package-owned
 
@@ -1578,7 +1539,7 @@ editing the card body or future guide now.
 
 ### Decision 12 — the version bump belongs to the `0.0.15` joint cut
 
-Cards 050, 051, 052, and 053 are all non-Done at the target patch version. Under the joint
+Cards 050, 051, 052, and 053 share the `0.0.15` patch version. Under the joint
 version-cut rule the last card owns the single
 [`django_strawberry_framework.__version__`][package-init] literal, the
 [`tests/base/test_init.py`][test-base-init] assertion, glossary package-version state, and
@@ -1652,7 +1613,7 @@ A factory cannot be typed without calling it, and calling it at construction wou
 fresh-per-operation lifecycle, so what a factory PRODUCES can only be admitted at resolution -
 which is why that boundary is one transaction: the factories run once, through upstream, and
 every check reads the members that came back. See the [rationale][rationale-d15] for the
-rejected identity-deduplication and subclass-admission designs.
+rejected identity-deduplication, subclass-admission and construction-time factory-call designs.
 
 ### Decision 16 — the runner owns every binding, for the operation's whole lifetime
 
@@ -1694,7 +1655,7 @@ Three values are replaced together, because replacing one leaves the others auth
    twice. It is never asked whether it is empty: truthiness is consumer code.
 
 See the [rationale][rationale-d17] for the rejected post-parse publication, name-copying,
-per-request parse, and truthiness-normalization designs.
+per-request parse, policy-read-at-selection, and truthiness-normalization designs.
 
 ### Decision 18 — the refusal is stable, and the transport's own policy is the one exception
 
@@ -1711,7 +1672,7 @@ And a transport policy that genuinely allows nothing stays a policy that allows 
 upstream refuses that operation type as it would on a healthy schema. Widening the policy,
 appending a default, or swallowing that refusal would make a broken configuration the one shape
 that accepts what the transport forbids. See the [rationale][rationale-d18] for the rejected
-unbounded-refusal and policy-widening designs.
+unbounded-refusal, policy-widening and detail-interpolating designs.
 
 ### Decision 19 — execution mode is operation state; the ambient event loop is a different fact
 
@@ -1719,9 +1680,9 @@ Which GraphQL executor is driving a resolver decides what that resolver may hand
 NOT the same question as whether an event loop is running in this thread. `Schema.execute_sync`
 is callable under a running loop - most directly from a resolver inside an asynchronous
 operation, a nesting shape the runner supports - and there the loop says "async" while the
-synchronous executor holds the operation. A field that read the loop there returned a coroutine
-or an async-only adapter to an executor that cancels top-level awaitables, and the client got a
-generic completion failure while the inner coroutines went unawaited.
+synchronous executor holds the operation. A field reading the loop there would return a
+coroutine or an async-only adapter to an executor that cancels top-level awaitables, and the
+client would get a generic completion failure while the inner coroutines went unawaited.
 
 So the mode is carried rather than sampled.
 [`django_strawberry_framework/schema.py::DjangoSchema.get_extensions`][schema] receives the
@@ -1734,21 +1695,22 @@ disagreement with `SyncMisuseError` - naming `await schema.execute(...)` and a w
 rather than building a value the executor cannot complete or driving the ORM on the event-loop
 thread.
 
-The whole census is classified, not just the list field. Every site that asked the loop -
-`auth/mutations.py`, `mutations/fields.py`, `relay.py`, `types/relay.py`, `types/resolvers.py`,
-`connection.py`, `list_field.py` and `schema.py` - asks the same question: may this resolver
-hand the executor an awaitable or an async-only value? None of them is an ORM-safety read; the
-ORM safety lives inside the branches each one picks, and every one is wrong in the same way
-when the loop and the executor disagree. So all of them read the canonical helper and
-`strawberry.utils.inspect.in_async_context` has exactly one caller left in the package: the
-module that owns the fallback. Where the conjunction also carries a cheaper question - a
-relation that is already loaded needs no query whatever executor is driving - that question is
-asked FIRST, so the executor is consulted only where a coroutine would actually be built.
+The whole census is classified, not just the list field. Every site that dispatches on execution
+color - `auth/mutations.py`, `mutations/fields.py`, `relay.py`, `types/relay.py`,
+`types/resolvers.py`, `connection.py`, `list_field.py` and `schema.py` - asks the same question:
+may this resolver hand the executor an awaitable or an async-only value? None of them is an
+ORM-safety read; the ORM safety lives inside the branches each one picks, and every one is wrong
+in the same way when the loop and the executor disagree. So all of them read the canonical
+helper and `strawberry.utils.inspect.in_async_context` has exactly one caller left in the
+package: the module that owns the fallback. Where the conjunction also carries a cheaper
+question - a relation that is already loaded needs no query whatever executor is driving - that
+question is asked FIRST, so the executor is consulted only where a coroutine would actually be
+built.
 
 A plain `strawberry.Schema` binds no mode, both readers fall back to ambient dispatch, and the
 disagreement stays reachable there exactly as upstream leaves it. `DjangoSchema` is the spelling
 that makes execution mode authoritative. See the [rationale][rationale-d19] for the rejected
-ambient-predicate, field-local, and loop-blocking designs.
+ambient-predicate, field-local, loop-blocking, and silent-sync-fallback designs.
 
 ### Decision 20 — application code is trusted, the wire is not; a finding is admitted by reachability
 
@@ -1847,40 +1809,20 @@ instance semantics.
 
 ### Decision 22 — the card closes on one recorded gate; a closed contract reopens only for a broken row
 
-The close is one sequence, in this order and no other:
+The card closed on one gated candidate commit. That commit carries the production and test
+changes, the shipped docs including the [`TODAY.md`][today] statements, the final board/database
+transition, the spec status, and every generated output. The gate - the full default suite at
+`fail_under = 100`, the sharded suite, the complete declared supported-floor scope, and the
+formatting, lint, structural, link, citation and tracked-path checks - ran on that exact tree;
+one review read each finding against Decision 20's three conditions and admitted none. An
+evidence-only follow-up commit whose parent is the candidate and whose only file change is
+[`build-050`][build-050] records the candidate, the exact commands and results, and the review
+conclusion; it is not itself the suite tree, and no record names its own commit. Figures from
+any other tree are not evidence for the candidate.
 
-1. Finish the owed work. It is finite and this is the list: the evaluation-state carry of
-   Decision 8 with its query-count controls at both tiers; the docs statements of Decisions 20
-   and 21 in Slice 5, including correcting the shipped examples that pair a plain
-   `strawberry.Schema` with the singleton optimizer recipe; the floor scope of
-   [`build-050`][build-050] widened to the suites the architecture of Decisions 14-19 added.
-   Nothing else is owed to this card. While this pre-candidate working tree is being assembled,
-   the card remains WIP. Its final status and generated board views move to their shipped state
-   in the candidate commit described below, and in no earlier one.
-2. Create one candidate implementation commit containing the production and test changes, the
-   shipped docs including the [`TODAY.md`][today] statements the transition falsifies, the final
-   board/database transition, the spec status, and every generated output. This commit is the tree
-   to be gated; it must exist before any gate result or review conclusion is recorded.
-3. Run the gate on that exact candidate commit: the full default suite at `fail_under = 100`, the
-   sharded suite, the complete declared supported-floor scope, and the formatting, lint,
-   structural, link, citation and tracked-path checks.
-4. Review that exact candidate tree once, reading each finding against Decision 20's three
-   conditions. A finding meeting them is fixed and steps 2 and 3 repeat on the new tree; a
-   review that admits none ends the loop.
-5. Write an evidence-only follow-up commit whose parent is the gated candidate commit and whose
-   only file change is [`build-050`][build-050]. The record names the candidate commit, the exact
-   commands and results, and the review conclusion. Run the structural, link, citation and
-   tracked-path checks on this follow-up as well, and state plainly that its parent is the full
-   suite's tree and that the follow-up itself is not the suite tree. Figures from any other tree
-   are not evidence for the candidate, and a run carrying a failing test is not recorded as green.
-   The candidate carries the board's final DONE transition, and card closure is recognized only
-   after this evidence-only follow-up is recorded; the follow-up itself changes no board state,
-   and no record names its own commit.
-
-After step 5 the spec moves under the [`NEXT.md`][next] sweep, and a later finding that meets
-the three conditions opens a new card against the row it breaks; a security finding that meets
-them is release-blocking for that new card exactly as it would have been here, so the close
-weakens no obligation, it only names which card carries it. See the
+A later finding that meets the three conditions opens a new card against the row it breaks; a
+security finding that meets them is release-blocking for that new card exactly as it would have
+been here, so the close weakens no obligation, it only names which card carries it. See the
 [rationale][rationale-d22] for the rejected per-remediation gate record.
 
 ## Implementation plan
@@ -1890,7 +1832,7 @@ weakens no obligation, it only names which card carries it. See the
 | 1 | [`django_strawberry_framework/list_field.py`][list-field], [`django_strawberry_framework/resource_policy.py`][resource-policy], [`django_strawberry_framework/__init__.py`][package-init] | Synthesized list signature; error-lazy schema-derived wire names; normalized list arguments with independent supplied/window/order fields; `ListArgumentError` plus its root export; a package-private window seam beneath the one exported raw-list bound; shared async-iterator cleanup that keeps control signals out of its note path; no-argument fast path. |
 | 2 | [`django_strawberry_framework/list_field.py`][list-field], [`django_strawberry_framework/orders/sets.py`][orders-sets], [`django_strawberry_framework/utils/querysets.py`][querysets], [`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`][optimizer-extension] | Sync/async Meta-order pipeline, OrderSet-owned active-term detection, post-apply and combined-query guards, async-only queryset completion adapter, optimizer preservation, combined offset/limit application. |
 | 3 | [`tests/test_list_field.py`][test-list-field], [`tests/test_resource_policy.py`][test-resource-policy], [`tests/orders/test_sets.py`][test-orders-sets], [`tests/base/test_init.py`][test-base-init] | Construction/direct-call mechanics, naming fallback, `ListArgumentError` pickle round trip, active-term/override call-count, post-apply validator arms, exact iterator consumption/cleanup precedence, model-order state, query low/high marks, and removal of adapter-masking async-unsafe setup where HTTP cannot isolate the mechanic. |
-| 4 | Planned `examples/fakeshop/test_query/test_list_field_api.py` and `examples/fakeshop/test_query/test_list_field_async_api.py`, [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy], [`examples/fakeshop/test_query/test_multi_db.py`][fakeshop-test-multi-db], [`examples/fakeshop/apps/kanban/constants.py`][fakeshop-kanban-constants] | Dogfood arguments on the three existing shipped Branch list fields from a dedicated sync suite, mount exceptional fields only in test-local schemas, cover ordered pages/visibility/caps/errors/naming/sync-async shapes/routing/SQL, and regenerate tracked paths after both new files enter the index. No new field is added to the shipped library schema. |
+| 4 | `examples/fakeshop/test_query/test_list_field_api.py` and [`examples/fakeshop/test_query/test_list_field_async_api.py`][fakeshop-test-list-field-async], [`examples/fakeshop/test_query/test_resource_policy_api.py`][fakeshop-test-resource-policy], [`examples/fakeshop/test_query/test_multi_db.py`][fakeshop-test-multi-db], [`examples/fakeshop/apps/kanban/constants.py`][fakeshop-kanban-constants] | Dogfood arguments on the three existing shipped Branch list fields from a dedicated sync suite, mount exceptional fields only in test-local schemas, cover ordered pages/visibility/caps/errors/naming/sync-async shapes/routing/SQL, and regenerate tracked paths after both new files enter the index. No new field is added to the shipped library schema. |
 | 5 | [`django_strawberry_framework/resource_policy.py`][resource-policy], [`docs/GLOSSARY.md`][glossary] (DB), [`docs/README.md`][docs-readme], [`docs/TREE.md`][tree], [`README.md`][readme], [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme], KANBAN DB/exports | Fold in the shipped argument/returned-row/skip semantics, add the new async suite and its shared-helper exemption to the live-tier guide, include the new async test in the generated tree, and carry the candidate's board/`TODAY.md` transition; no version or changelog edit. |
 
 ## Helper-reuse obligations (DRY)
@@ -2006,12 +1948,11 @@ weakens no obligation, it only names which card carries it. See the
   does not reimplement wrapped/direct schema traversal.
 - Manager-to-queryset coercion and visibility stay in
   [`django_strawberry_framework/utils/querysets.py`][querysets]; pagination does not grow
-  another source classifier. Post-OrderSet validation extends/reuses the same hardened seal
-  with a new require-unevaluated option and the shipped `_SealPolicy.reject_combined` one,
-  plus a surface-specific `ConfigurationError` renderer; argument-bearing visibility uses
-  reject-combined at both source and result seals - which makes `combined` reachable outside
-  the cascade for the first time and so owes a message arm at each visibility site - and list
-  code never reads hostile queryset state itself.
+  another source classifier. Post-OrderSet validation reuses the same hardened seal under
+  `_SIDECAR_RESULT_POLICY` (require-unevaluated, a combinator served as its primary-key set),
+  plus a surface-specific `ConfigurationError` renderer; visibility runs the default policy at
+  both source and result seals in every argument mode, and list code never reads hostile
+  queryset state itself.
   That module also owns the internal async-only queryset-row adapter shared with the
   optimizer; the optimizer side of that pair is one unwrap/rewrap arm inside
   [`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`][optimizer-extension],
@@ -2119,16 +2060,17 @@ weakens no obligation, it only names which card carries it. See the
 - The shared [visibility boundary][glossary-visibility-boundary] rejects a pre-sliced source
   before the hook and a sliced hook result afterward, under active and omitted arguments alike; the list field adds no
   parallel slice-state classifier.
-- A combined queryset is rejected for any non-null argument, including `offset: 0`,
-  `limit: 0`, and `orderBy: []`; the omitted/all-null legacy branch is unchanged.
+- A combined queryset is served as its primary-key set under every argument shape, omitted
+  and all-null included; a combined shape that rewrite would change (`union(all=True)`, for
+  one) fails closed with the `combined` defect.
 - A custom `OrderSet.apply_*` result must SEAL to a lazy, unsliced, model-row-shaped,
-  non-combined, same-model, same-route plain queryset. A sealable `QuerySet` SUBCLASS is
-  accepted and normalized into that plain rebuild rather than rejected for its class.
-  Same-route is a claim about the CONNECTION: the candidate's `_db` must equal the sealed
-  source's (`None` included) and every hint value must be the same OBJECT, and the accepted
-  rebuild is pinned to the effective alias resolved before the override ran, so a hint object
-  mutated behind a preserved identity cannot move the read. Arbitrary custom code is trusted
-  to preserve the sealed source predicates.
+  same-model, same-route plain queryset, a combinator served as its primary-key set. A sealable
+  `QuerySet` SUBCLASS is accepted and normalized into that plain rebuild rather than rejected
+  for its class. Same-route is a claim about the CONNECTION: the candidate's `_db` must equal
+  the sealed source's (`None` included) and every hint value must be the same OBJECT, and the
+  accepted rebuild is pinned to the effective alias resolved before the override ran, so a hint
+  object mutated behind a preserved identity cannot move the read. Arbitrary custom code is
+  trusted to preserve the sealed source predicates.
 - An async-only iterable's iterator is closed when it exposes `aclose` and consumption does
   not reach natural exhaustion: the accepted exclusive stop (`offset + effective_limit`) is
   reached, iteration errors, or the source is otherwise stopped/rejected early. A naturally
@@ -2247,7 +2189,7 @@ the shipped SDL.
     omitted and active arguments retain the shared visibility boundary's actionable
     `ConfigurationError` before the hook runs. A separate test-local conforming custom
     `OrderSet` override proves public dispatch; malformed overrides returning sliced,
-    evaluated, projection, combined, wrong-model, non-queryset, sync-awaitable,
+    evaluated, projection, `union(all=True)`, wrong-model, non-queryset, sync-awaitable,
     async-method-non-awaitable, or residual-async-awaitable results prove post-apply
     `ConfigurationError` and disposal. The
     wrong-route override runs in the established `FAKESHOP_SHARDED=1`
@@ -2263,17 +2205,17 @@ the shipped SDL.
     offset over the materialized-list field reports `queryset_required`; order input over the
     pre-sliced field reports the visibility-boundary error. These are the wire-reachable
     precedence pairs from Decision 8.
-17. `branches_combined` preserves the omitted/all-null legacy behavior but every non-null
-    argument, including zero/empty values, rejects at the source seal before the visibility
-    hook, OrderSet permission, or windowing; a hook-returned combination rejects at the result
-    seal.
+17. `branches_combined` serves a `union` source under a non-null argument as the rows it
+    selects - the source seal rewrites it to its primary-key set, the visibility hook runs once
+    over it, and the window applies - and an `OrderSet.apply_*` override returning a `union` is
+    served the same way at the post-sidecar seal.
 18. Test-local schemas using `strawberry_config(auto_camel_case=False)` and a custom
     `NameConverter` prove SDL/query spelling and `ListArgumentError.argument` follow the
     active converter for all three Python parameters rather than hard-coded literals.
 19. The accepting half of Decision 6's model-default branch is wire-reachable and is earned
-    here rather than in the package tier. A holder-mounted `branches_default_ordered` field
-    targets a registered type whose model declares a stable non-random `Meta.ordering` - the
-    kanban and glossary apps both ship such models, while `Branch` declares none - and proves
+    here rather than in the package tier. A holder-mounted `terms_default_ordered` field
+    targets the glossary app's `GlossaryTermType`, whose model declares a stable non-random
+    `Meta.ordering` (`Branch` declares none), and proves
     nonzero offset succeeds with no `orderBy` and with no injected pk term. A sibling field
     whose consumer resolver calls `.order_by()` on the same model clears that default and
     flips the identical request to `order_required`, so both verdicts of the predicate are
@@ -2285,7 +2227,7 @@ the shipped SDL.
     type that declares neither `Meta.orderset_class` nor model default ordering publishes
     `offset` and `limit` and NO `orderBy` in introspection, and every positive offset on it
     returns `order_required` - the permanently-unusable coordinate Decision 2 accepts, proven
-    rather than merely conceded. Its counterpart is row 19's `branches_default_ordered`, whose
+    rather than merely conceded. Its counterpart is row 19's `terms_default_ordered`, whose
     target publishes no `orderBy` either yet accepts a positive offset from model
     `Meta.ordering` alone. Together they show that a published `offset` is a runtime
     precondition, not a capability claim.
@@ -2300,7 +2242,7 @@ the shipped SDL.
     pipeline from the already-shipped public primitives alone (the source queryset,
     `apply_type_visibility_sync`, one `bounded_rows` call with no client window) and records
     its final queryset's `str(query)`, `low_mark`, and `high_mark` before returning; the
-    current field's final marks are recorded at its one `bounded_rows` call. Both schemas
+    current field's final marks are recorded at its one `_windowed_rows` call. Both schemas
     publish the reference under the SAME GraphQL field name, so one request envelope reaches
     both and every legacy row - the combined-source one included - asserts equality of the RAW
     `HttpResponse.content` bytes, the captured `library_branch` SQL, the marks, and the
@@ -2502,10 +2444,9 @@ tier may assert internal identity and exact call counts for any of these, but th
 of each of the following must also be reachable live and must stay live: every public
 `ListArgumentError.reason`; custom name-converter spelling; both verdicts of the model-default
 order predicate; order permission denial preceding offset rejection; combined-source and
-hook-result rejections; post-order evaluated / projection / combined / wrong-model result
-classification; and optimizer-on and optimizer-off async queryset completion. Each test TODO
-names its tier explicitly so coverage cannot migrate back into package-only execution during
-implementation.
+combined-result service as primary-key sets; post-order evaluated / projection / combined /
+wrong-model result classification; and optimizer-on and optimizer-off async queryset
+completion.
 
 The supported-version matrix is part of this test plan, not an afterthought. The
 implementation reads private or semi-private behavior in three dependencies - Django query
@@ -2513,7 +2454,8 @@ state (`default_ordering`, `order_by`, `extra_order_by`, `group_by`, `combinator
 `_result_cache`, `_hints`), Strawberry argument definitions and name conversion, and
 graphql-core list completion - while this document's source links point at one local Python
 3.14 environment. That is evidence, not the contract. The new async completion rows, the
-model-order predicate, the two new seal axes, and the argument-signature tests must pass on
+model-order predicate, the `require_unevaluated` and `carry_result_cache` seal axes, and the
+argument-signature tests must pass on
 the repository's existing CI matrix from the declared Django and Python floors through latest;
 a local proof on one interpreter does not discharge the requirement.
 
@@ -2550,17 +2492,16 @@ appears here only as the `order_required` rejection Decision 8 requires; its acc
 arithmetic is pinned against the bounding helper in
 [`tests/test_resource_policy.py`][test-resource-policy].
 
-Finalization assertions must respect Python's async-generator semantics, and an earlier draft
-of this plan did not. `aclose()` on an async generator that has never been advanced does NOT
-enter its body: neither its setup nor its `finally` block runs, so a body-level `finally`
-witness after zero advances is unobservable, and advancing the generator to make it observable
-would destroy the zero-consumption guarantee those same rows exist to prove. The plan therefore
-separates two different facts. That `aclose()` WAS INVOKED is proven with a custom async
-iterator whose own externally implemented `aclose()` increments a counter, and that is what the
-`limit: 0` and pre-bound-rejection rows assert beside zero `__anext__` calls. That a generator
-BODY FINALIZED is proven with a real async generator only after at least one item has been
-requested, which is the accepted-stop row. Each test's prose states which of the two it
-asserts, and neither wording is used for the other.
+Finalization assertions must respect Python's async-generator semantics. `aclose()` on an async
+generator that has never been advanced does NOT enter its body: neither its setup nor its
+`finally` block runs, so a body-level `finally` witness after zero advances is unobservable, and
+advancing the generator to make it observable would destroy the zero-consumption guarantee those
+same rows exist to prove. The plan therefore separates two different facts. That `aclose()` WAS
+INVOKED is proven with a custom async iterator whose own externally implemented `aclose()`
+increments a counter, and that is what the `limit: 0` and pre-bound-rejection rows assert beside
+zero `__anext__` calls. That a generator BODY FINALIZED is proven with a real async generator
+only after at least one item has been requested, which is the accepted-stop row. Each test's
+prose states which of the two it asserts, and neither wording is used for the other.
 
 Cleanup diagnostics stay out of the HTTP assertions. The production GraphQL JSON error envelope
 does not serialize `BaseException.__notes__`, so exact note content and precedence are
@@ -2637,10 +2578,9 @@ sync or async HTTP request cannot isolate:
 - exact no-argument/null-argument `str(qs.query)`, `low_mark`, and `high_mark` parity;
 - supplied limit changing only `high_mark`, and supplied offset changing `low_mark` plus the
   corresponding high mark;
-- an explicit sweep of existing adapter-relevant `DJANGO_ALLOW_ASYNC_UNSAFE` setup: queryset
-  completion tests run with the variable absent once the adapter ships, while any retained
-  setup names the unrelated behavior that still needs it so it cannot silently mask this
-  regression class;
+- no adapter-relevant `DJANGO_ALLOW_ASYNC_UNSAFE` setup: queryset completion tests run with
+  the variable absent, and any retained setup names the unrelated behavior that still needs it
+  so it cannot silently mask this regression class;
 - the four normalized-record fields' independent effects: `any_argument_supplied` selecting
   argument mode (and only that), the window fields producing an omission-identical window for
   `offset: 0`, `order_by_supplied` driving `queryset_required` for an empty list, and material
@@ -2684,25 +2624,22 @@ sync or async HTTP request cannot isolate:
   threshold-less benchmark cannot fail and a thresholded one is a flake, and `fail_under = 100`
   is the only performance gate the suite carries.
 
-[`tests/test_resource_policy.py`][test-resource-policy] already pins the generic sequence,
+[`tests/test_resource_policy.py`][test-resource-policy] pins the generic sequence,
 non-subscriptable iterable, and async-iterable behavior at the one raw-list seam: sequence
 slicing, the non-subscriptable-iterable bound, trusted widening, `None` preservation on both
 colors, `aclose` after the effective prefix, an exhausted iterator that is left untruncated,
-and the two cleanup-failure precedence arms. This card adds the window arms that seam has
-never had, and they are new pins rather than an audit of existing ones: no zero-length window
-is reachable today, because
+and the two cleanup-failure precedence arms. It also pins the window arms. An accepted client
+`limit: 0` is the only spelling that produces a zero-length window, because
 [`django_strawberry_framework/resource_policy.py::validate_collection_bound`][resource-policy]
-and `ResourcePolicy` construction both reject a bound below `1`, so an accepted client
-`limit: 0` is the first spelling that can produce one. The new rows therefore pin
+and `ResourcePolicy` construction both reject a bound below `1`, so those rows pin
 zero-limit/no-consumption on sequence, non-subscriptable, and async-only sources - no
 `islice`, no `__next__`, no `__anext__` - with the optional `aclose` still invoked on the
 async source, plus nonzero-offset window arithmetic at the same seam. That arithmetic is
 pinned here for every shape INCLUDING async iterators, which is where positive-offset async
 behavior belongs: the public field refuses it, the helper supports it, and the two facts live
 in different tiers on purpose. The offset-only window (`limit` omitted, so the stop is
-`offset + effective_ceiling`) is pinned here as well as live. Existing relation resolver tests
-remain unchanged and prove callers without client windows still receive their old prefix
-bound.
+`offset + effective_ceiling`) is pinned here as well as live. Relation resolver tests prove
+callers without client windows still receive the coordinate-free prefix bound.
 [`tests/orders/test_sets.py`][test-orders-sets] pins that the active-term helper shares the
 canonical normalization/flat-order rules, reports false for empty/all-null input, and does
 not replace either public apply method. List-field tests use instrumented sync and async
@@ -2794,23 +2731,15 @@ policy is bypassed, or a pk/`DISTINCT` clause is injected. Each error row assert
 through [`original_error`][glossary-structural-error-classification] where available and the
 complete extension payload over HTTP.
 
-The implementation card runs the repository-required full suite when the maintainer requests
-it. This spec-authoring correction does not run pytest; it runs the repository-required ruff
-format/check pair plus the [`scripts/check_spec_glossary.py`][check-spec-glossary] checker,
-structural checks, and link/kanban verification prescribed by
-[`docs/SPECS/NEXT.md`][next].
-
 ## Doc updates
 
-- [`django_strawberry_framework/list_field.py::DjangoListField`][list-field] - replace the
-  entire present-tense ordering-contract paragraph: before this card it falsely promises an
-  `orderBy` argument the field cannot accept, and its unconditional claim that an unordered
-  flat-list sequence is acceptable becomes true only for offset-free requests. Document the
-  shipped argument and nonzero-offset precondition, conditional default-named `orderBy`
-  publication, active name conversion, cap behavior, no pk append, and the recommendation for
-  a unique final order term. It must state the contract as ORDERED OFFSET rather than stable
-  or repeatable pagination, and must say that a published `offset` is a runtime precondition -
-  usable only where an order source exists - not a promise that the field can page.
+- [`django_strawberry_framework/list_field.py::DjangoListField`][list-field] - the
+  ordering-contract paragraph documents the shipped argument and nonzero-offset precondition,
+  conditional default-named `orderBy` publication, active name conversion, cap behavior, no pk
+  append, and the recommendation for a unique final order term. It must state the contract as
+  ORDERED OFFSET rather than stable or repeatable pagination, and must say that a published
+  `offset` is a runtime precondition - usable only where an order source exists - not a promise
+  that the field can page.
 - [`django_strawberry_framework/resource_policy.py`][resource-policy] - correct
   `ResourcePolicy` and bounding-helper docstrings so returned/accepted-skip ceilings are not
   described as a total database scan guarantee. That rewrite must preserve the
@@ -2818,61 +2747,45 @@ structural checks, and link/kanban verification prescribed by
   `bounded_rows` in both raw-list spellings; the client coordinates this card adds land on the
   private seam beneath them and neither helper stops being a deadline seam, so the enumeration
   stays true rather than being rewritten around.
-- [`docs/GLOSSARY.md`][glossary] (DB-backed) - update `DjangoListField`, `OrderSet`, and
-  execution resource policy bodies. The card's three planned entries -
+- [`docs/GLOSSARY.md`][glossary] (DB-backed) - the `DjangoListField`, `OrderSet`, and
+  execution resource policy bodies carry the argument surface. The card's three entries -
   [`ListArgumentError`][glossary-listargumenterror], the
   [list offset order precondition][glossary-list-offset-order-precondition], and the
-  [async queryset completion adapter][glossary-async-queryset-completion-adapter] - already
-  exist in the glossary DB with `planned for 0.0.15` status; their flip to `shipped` belongs
-  to the joint cut, and Slice 5 only reconciles their bodies against the built behavior.
-  Three reconciliations are already known. The adapter entry must scope its safety claim to
-  framework-owned final queryset completion rather than to async safety generally. The
-  `DjangoListField` entry gains the argument surface and the ordered-offset contract, and
-  must not acquire stable/repeatable wording; its shipped nested-usage sentence stays.
-  The offset-precondition entry states that a published `offset` is a runtime precondition
-  rather than a per-field capability claim.
-- [`docs/README.md`][docs-readme] - add the direct list pagination/order capability to the
-  current shipped surface after the implementation lands.
+  [async queryset completion adapter][glossary-async-queryset-completion-adapter] - describe
+  the built behavior. The adapter entry scopes its safety claim to framework-owned final
+  queryset completion rather than to async safety generally. The `DjangoListField` entry
+  carries the argument surface and the ordered-offset contract with no stable/repeatable
+  wording, and keeps its nested-usage sentence. The offset-precondition entry states that a
+  published `offset` is a runtime precondition rather than a per-field capability claim.
+- [`docs/README.md`][docs-readme] - the direct list pagination/order capability is part of the
+  shipped surface it describes.
 - [`docs/TREE.md`][tree] - regenerate for any test-layout changes.
 - [`examples/fakeshop/apps/kanban/constants.py`][fakeshop-kanban-constants] - regenerate after
   the new async live-test path is tracked; the card's predicted-path rows name that file.
-- [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme] - add BOTH new
-  suites to the tier guide's suite enumeration and record the async module's shared-helper
-  exemption, which that guide requires be stated outright rather than inferred from a missing
-  row. The guide's GOVERNING paragraph must also be widened, not merely appended to: it
-  currently says the only reason to leave
-  [`examples/fakeshop/graphql_client.py`][fakeshop-graphql-client] is a raw request-envelope
-  subject, and this card's async suite leaves it for EXECUTION COLOR instead. The rule becomes
-  "use the shared helper unless the test specifically requires an async view/client boundary
-  or a raw transport shape the helper cannot express", so future async feature suites inherit
-  it rather than each arguing its own exception. This card adds its own rows only; the guide's
-  pre-existing omission of ten other shipped suites is standing tier debt and is not silently
-  absorbed here.
+- [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme] - the tier guide's
+  suite map indexes BOTH suites, and its clients section lists execution color (an
+  `AsyncDjangoGraphQLView` mount) beside the raw request envelope as a reason to leave
+  [`examples/fakeshop/graphql_client.py`][fakeshop-graphql-client], with the exemption declared
+  in the exempt module's docstring, so future async feature suites inherit the rule rather than
+  each arguing its own exception.
 - [`README.md`][readme] - update the collection-field example if it enumerates list arguments.
-- [`TODAY.md`][today] - the current checkout already records the list-field argument work as
-  WIP and keeps the card out of the shipped surface. Preserve that present-tense statement
-  through the pre-candidate slices; when the candidate implementation commit carries the
-  final board transition, update the matching current-checkout and release statements in the
-  same generated-output cycle. A Slice 5 executor must not claim closure before the candidate,
-  gate, review, and evidence-only follow-up sequence is recorded. The separate waiting list
-  remains [`Meta.fields_class`][glossary-metafields-class],
-  [`Meta.search_fields`][glossary-metasearch-fields], and
-  [`Meta.aggregate_class`][glossary-metaaggregate-class]; this card does not move those
-  capabilities.
+- [`TODAY.md`][today] - records the `DjangoListField` `offset` / `limit` / `orderBy` arguments
+  as available and live-tested. This card does not move
+  [`Meta.fields_class`][glossary-metafields-class],
+  [`Meta.search_fields`][glossary-metasearch-fields], or
+  [`Meta.aggregate_class`][glossary-metaaggregate-class].
 - [`django_strawberry_framework/__init__.py`][package-init] and
   [`tests/base/test_init.py`][test-base-init] - the `ListArgumentError` root export and the
-  pinned `__all__` tuple, star-import, and export-identity rows, plus the stale comment there
-  asserting that the `0.0.15` cut leaves the public surface unchanged. The version literal and
-  the version assertion in that same file are untouched and belong to card 053.
-- KANBAN DB and generated exports - card 050's Scope sentence on universal argument
-  publication and its `LIMIT`/`OFFSET` Definition-of-done row are AMENDED here (Decisions 2 and
-  9), alongside ordinary card/spec state.
+  pinned `__all__` tuple, star-import, and export-identity rows. The version literal and the
+  version assertion in that same file belong to card 053.
+- KANBAN DB and generated exports - card 050's Scope states the conditional `orderBy` surface
+  and its Definition of done states the `LIMIT`/`OFFSET` window contract (Decisions 2 and 9).
 - [`CHANGELOG.md`][changelog] - not touched; card 053 and the maintainer own the joint
   release wording.
 
 ## Risks and open questions
 
-*Preferred answers stay in the spec; fallbacks moved to the companion [rationale][rationale-risks].*
+*Preferred answers are in the spec; fallbacks are in the companion [rationale][rationale-risks].*
 
 - **The card's universal-three-argument sentence conflicts with its Meta-derived-order
   requirement.** Preferred answer for `0.0.15`: the truthful conditional `orderBy` surface
@@ -2907,8 +2820,9 @@ structural checks, and link/kanban verification prescribed by
   schema-author boundary that must transform the supplied sealed queryset. *Fallback: see the
   [rationale][rationale-risks].*
 - **Django combined querysets do not compose uniformly with order and optimizer operations.**
-  Preferred answer: reject every non-null argument on a combined source while preserving the
-  all-null/omitted legacy branch. *Fallback: see the [rationale][rationale-risks].*
+  Preferred answer: serve a combined source or result as the set of primary keys it selects
+  under every argument shape, and fail closed on a combined shape that rewrite would change.
+  *Fallback: see the [rationale][rationale-risks].*
 - **A review with no admission criterion has no last round.** Each repair of an in-process
   construction exposes the next construction, and a package that treats its own consumer's
   Python as an adversary grows a refusal vocabulary faster than a feature. Preferred answer:
@@ -2939,11 +2853,10 @@ structural checks, and link/kanban verification prescribed by
 - [ ] Every `DjangoListField` publishes nullable optional `offset` and `limit`; targets with
       `Meta.orderset_class` also publish the shipped typed `orderBy` input.
 - [ ] With all arguments omitted/null, sync resolver behavior, queryset low/high marks, SQL,
-      query count, ordering, and response bytes match `0.0.14` - the byte claim proven against
-      a pre-argument reference resolver mounted under the SAME GraphQL field name in its own
-      schema, so one request envelope reaches both and raw `HttpResponse.content` is what is
-      compared; async data/query shape also matches while its result uses the required safe
-      completion adapter; SDL gains arguments.
+      query count, ordering, and response bytes match a pre-argument reference resolver mounted
+      under the SAME GraphQL field name in its own schema, so one request envelope reaches both
+      and raw `HttpResponse.content` is what is compared; async data/query shape also matches
+      while its result uses the required safe completion adapter; SDL gains arguments.
 - [ ] Limit is accepted through the effective policy/field/trusted ceiling and rejected
       above it; offset is accepted through request `max_list_rows` and rejected above it.
 - [ ] The ceiling both of those read is the budget the operation started with, not a value
@@ -3037,7 +2950,8 @@ structural checks, and link/kanban verification prescribed by
 - [ ] Visibility runs before order; order runs before one combined slice; order permission
       failures occur before slicing.
 - [ ] Public `OrderSet.apply_*` results are mechanically validated as unevaluated, unsliced,
-      non-projection, non-combined, same-model/same-route plain querysets, with the accepted
+      non-projection, same-model/same-route plain querysets, a combinator served as its
+      primary-key set, with the accepted
       result pinned to the effective alias frozen before the override ran; custom overrides
       are documented as trusted to preserve the sealed input's predicates.
 - [ ] The shared visibility boundary rejects a pre-sliced source before the hook and a sliced
@@ -3188,7 +3102,6 @@ structural checks, and link/kanban verification prescribed by
 [glossary-structural-error-classification]: GLOSSARY.md#structural-error-classification
 [glossary-testclient]: GLOSSARY.md#testclient
 [glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary
-[next]: SPECS/NEXT.md
 [rationale]: spec-050-list_field_arguments-0_0_15-rationale.md
 [rationale-borrowing]: spec-050-list_field_arguments-0_0_15-rationale.md#borrowing-posture--what-was-deliberately-not-borrowed-and-why
 [rationale-d1]: spec-050-list_field_arguments-0_0_15-rationale.md#decision-1--synthesize-one-resolver-signature-do-not-widen-consumer-resolvers
@@ -3265,7 +3178,6 @@ structural checks, and link/kanban verification prescribed by
 
 <!-- scripts/ -->
 [build-kanban-tracked-paths]: ../scripts/build_kanban_tracked_path_constants.py
-[check-spec-glossary]: ../scripts/check_spec_glossary.py
 
 <!-- .venv/ -->
 [django-compiler]: ../.venv/lib/python3.14/site-packages/django/db/models/sql/compiler.py

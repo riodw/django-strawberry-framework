@@ -48,7 +48,7 @@ Slice 2 the `SerializerMutation` base + `Meta` validation + the phase-2.5 bind
 [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven));
 Slice 3 the resolver pipeline together with the products live serializer surface,
 whose live `/graphql/` tests are the **primary** coverage harness (the
-[`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule." /
+[`examples/fakeshop/test_query/README.md`][test-query-readme] #"Live-first, both verdicts, and the must-not." /
 [`docs/TREE.md`][tree] #"Coverage priority." live-first mandate;
 [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
 /
@@ -237,7 +237,7 @@ Project conventions that shape the flavor:
 generation (Slice 1), the base class (Slice 2), the resolver pipeline **+ the products
 live serializer surface, together** (Slice 3), and docs (Slice 4).** Slices 1–2 are
 package-internal; **Slice 3 pairs the resolver with its live consumer surface** — the
-[`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule."
+[`examples/fakeshop/test_query/README.md`][test-query-readme] #"Live-first, both verdicts, and the must-not."
 live-first mandate, so the resolver's reachable lines are covered by a real
 `/graphql/` request, not a package test.
 
@@ -531,7 +531,7 @@ live-first mandate, so the resolver's reachable lines are covered by a real
   [Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation)).
   **The resolver code and its consumer surface go together** so every
   consumer-reachable resolver line is covered by a real `/graphql/` request — the
-  [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule."
+  [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Live-first, both verdicts, and the must-not."
   live-first mandate.
   - [ ] [`rest_framework/resolvers.py`][rf-resolvers]: the sync + async pipeline, in
     the **locate → authorize → decode → construct → validate → write → re-fetch** order
@@ -659,7 +659,7 @@ live-first mandate, so the resolver's reachable lines are covered by a real
     `get_serializer_kwargs` / constructor seams not observable over HTTP. **No
     create/update happy path, envelope, reverse-map, partial-update, visibility, or
     write-auth test is duplicated here** — those are owned by the live suite above
-    (the [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule.").
+    (the [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Live-first, both verdicts, and the must-not.").
   - [ ] **DRY / reuse** ([Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)):
     the sync pipeline rides the shared `run_write_pipeline_sync(...)` skeleton — the ONE
     write orchestration every flavor rides (model create / update / delete, `ModelForm`,
@@ -2169,9 +2169,11 @@ The coverage tension is the load-bearing constraint: the package gates **100%
 coverage** (`fail_under = 100`, `source = ["django_strawberry_framework"]`), and the
 flavor carries package tests **and** a live `ModelSerializer` test — both of which need
 DRF *present* to exercise the `rest_framework/` code, while the DRF-absent guard path
-needs DRF *absent* to cover its raise. The resolution (the [`spec-037`][spec-037]
-`pillow` precedent — `pillow` is the `ImageField` soft dep, kept out of runtime deps
-but added to the dev group so the suite covers the image path):
+needs DRF *absent* to cover its raise. The resolution (points 1–2 are the
+[`spec-037`][spec-037] `pillow` posture: kept out of runtime deps, in the dev group so
+the suite covers the image path; point 3 is the guard pattern `require_drf()` shares
+with `require_channels()` and `require_debug_toolbar()`, each delegating to
+`utils/imports.py::require_optional_module`):
 
 1. **DRF stays out of `[project].dependencies`** — it remains a soft runtime dep. A
    consumer who never writes a serializer mutation never needs DRF.
@@ -2225,7 +2227,7 @@ Products carries a [`serializers.py`][products-serializers] with an `ItemSeriali
 (`serializers.ModelSerializer` over `Item`, with a `validate_name` / `validate()`) and a
 `RenamedRelationItemSerializer`, and [`products/schema.py`][products-schema] carries
 `CreateItemViaSerializer` / `UpdateItemViaSerializer` / `CreateItemViaRenamedSerializer`.
-The [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule." /
+The [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Live-first, both verdicts, and the must-not." /
 [`docs/TREE.md`][tree] #"Coverage priority." mandate is absolute: a
 `django_strawberry_framework/` line reachable by a real fakeshop `/graphql/` request
 **must** be covered in [`test_products_api.py`][test-products-api] (or another live
@@ -2668,7 +2670,7 @@ co-clear block) — `clear_serializer_input_namespace` registers through the
 ## Test plan
 
 Test placement obeys the [`examples/fakeshop/test_query/README.md`][test-query-readme]
-#"Coverage rule." / [`docs/TREE.md`][tree] #"Coverage priority." **live-first** mandate,
+#"Live-first, both verdicts, and the must-not." / [`docs/TREE.md`][tree] #"Coverage priority." **live-first** mandate,
 not just the mirror rule: **any `django_strawberry_framework/` line a real fakeshop
 `/graphql/` request can reach is earned in [`test_products_api.py`][test-products-api]
 first**, and `tests/rest_framework/` carries **only** the residue a live query cannot
@@ -3073,7 +3075,7 @@ The completion contract.
    `examples/fakeshop/test_query/` module and not `test_products_api.py` alone (the
    library app hosts the fixtures those improvement rows need)
    ([Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation),
-   the [`test_query/README.md`][test-query-readme] #"Coverage rule.").
+   the [`test_query/README.md`][test-query-readme] #"Live-first, both verdicts, and the must-not.").
 
 **Cross-cutting**
 
@@ -3106,26 +3108,25 @@ The completion contract.
 ## Improvements over graphene-django's DRF integration
 
 Seventeen improvements make the serializer lane stricter, safer, and more
-diagnosable than graphene-django's DRF integration, and all seventeen ship in
-`0.0.13` (none is backlog). Each keeps the existing wins (fail-loud unmapped fields,
-visibility-checked relations, authorize-before-decode, framework-owned
-`context["request"]` / `partial`, recursive error flattening, transaction boundary,
-descriptor-based input identity, DRF-soft-dep root). The subsections run in capability
-order — input and type construction, then schema-time and runtime diagnostics, then the
-write-time contracts, then the error envelope, then nested inputs — and each is addressed
-by its own title. Each subsection below states the shipped contract; how the set was
-arrived at is in the rationale companion under
+diagnosable than graphene-django's DRF integration. Each keeps the existing wins
+(fail-loud unmapped fields, visibility-checked relations, authorize-before-decode,
+framework-owned `context["request"]` / `partial`, recursive error flattening,
+transaction boundary, descriptor-based input identity, DRF-soft-dep root). The
+subsections run in capability order — input and type construction, then schema-time and
+runtime diagnostics, then the write-time contracts, then the error envelope, then nested
+inputs — and each is addressed by its own title. Each subsection states the contract; the
+reasons are in the rationale companion under
 [Improvements over graphene-django's DRF integration][rationale-improvements].
 
 ### Public serializer-field converter registry
 
-The scalar-dispatch table `rest_framework/serializer_converter.py::_SERIALIZER_FIELD_CONVERTERS`
-is now a `serializers.Field` class → converter-callable registry (each returns a
-`SerializerFieldConversion`), seeded from `_BUILTIN_SCALAR_CONVERTERS`, still walked by the
-shared `convert_with_mro` MRO skeleton with NO base-`Field` catch-all.
+`rest_framework/serializer_converter.py::_SERIALIZER_FIELD_CONVERTERS` is a
+`serializers.Field` class → converter-callable registry (each returns a
+`SerializerFieldConversion`), seeded from `_BUILTIN_SCALAR_CONVERTERS` and walked by the
+shared `utils/converters.py::convert_with_mro` MRO skeleton with NO base-`Field` catch-all.
 `register_serializer_field_converter(FieldClass, converter, *, override=False)` is the
-sanctioned public extension (resolved by name through the root `__getattr__` under the DRF
-guard, like `SerializerMutation`; also exports `SerializerFieldConversion`): a consumer maps
+public extension (resolved by name through the root `__getattr__` under the DRF guard, like
+`SerializerMutation`; `SerializerFieldConversion` is exported the same way): a consumer maps
 their OWN DRF field without patching the framework, while an unregistered custom field still
 hits the raising fallthrough. Mirrors the read-side `SCALAR_MAP` mutable-module-dict hook
 (persists for the process, not reset by `registry.clear()`; a re-registration without
@@ -3137,10 +3138,10 @@ Each mapping is an EXPLICIT registry entry, never a base-`Field` catch-all: `Dic
 `HStoreField` → `strawberry.scalars.JSON` (`HStoreField` via the MRO walk under `DictField`);
 `IPAddressField` / `FilePathField` → `str`; `DurationField` → `str` (a DELIBERATE scalar —
 DRF renders a duration as an ISO-8601-ish string on the wire and parses it back at
-validation, not an accidental fallthrough); `ModelField` routes through its wrapped
-`model_field` via the read-side `scalar_for_field` (a `ModelField` over an unsupported column,
-or with no wrapped field, fails loud). Each has a package converter test; the live matrix is
-earned by `createShelfViaMetadataSerializer` (`DictField` → `JSON`).
+validation); `ModelField` routes through its wrapped `model_field` via the read-side
+`scalar_for_field` (a `ModelField` over an unsupported column, or with no wrapped field,
+fails loud). Each has a package converter test; the live matrix is earned by
+`createShelfViaMetadataSerializer` (`DictField` → `JSON`).
 
 ### Generated enums for serializer-only `ChoiceField`
 
@@ -3157,10 +3158,11 @@ excluded — it stays `str`. Earned live by `createShelfViaMetadataSerializer` (
 
 **Declared choices survive on a model-backed scalar too.** A CONSUMER-DECLARED
 `ChoiceField` / `MultipleChoiceField` — even one `source`-mapped to a plain (non-choice) model
-column — emits the SAME generated serializer-only enum (via the shared `_serializer_choice_annotation`),
-rather than collapsing back to the column's `String` scalar. The declared choices are part of the
-public mutation contract, so they are never silently lost. Package-regression-tested with
-`ChoiceField(source="name", choices=...)` over a non-choice column.
+column — emits the SAME generated serializer-only enum (via the shared
+`_serializer_choice_annotation`), rather than collapsing back to the column's `String` scalar.
+The declared choices are part of the public mutation contract, so they are never silently
+lost. Package-regression-tested with `ChoiceField(source="name", choices=...)` over a
+non-choice column.
 
 ### Model-backed serializer type-override conflict policy
 
@@ -3173,36 +3175,35 @@ silently picking the model column (the graphene-django trap). A benign rename
 (`display_name = CharField(source="name")` — str vs str) agrees and resolves to the model
 scalar; a `choices` column keeps the enum symmetry (the check is skipped there); a
 consumer-declared `ChoiceField` is handled by the declared-choices rule (it emits the
-serializer-only enum, above) BEFORE this scalar-disagreement check. This is a class-creation / bind-time raise (an
-invalid configuration), so it is package-tested, not live.
+serializer-only enum, above) BEFORE this scalar-disagreement check. This is a class-creation /
+bind-time raise (an invalid configuration), so it is package-tested, not live.
 
 ### Thread DRF field metadata into the SDL
 
-`serializer_converter.py::serializer_field_description(field)` builds a GraphQL input-field
-description from a DRF field's metadata — `help_text` heads it, then a coherent constraint
-summary (`min_length` / `max_length` / `min_value` / `max_value`, plus `allow_blank` when
-permitted and `allow_empty` when forbidden). `_walk_serializer_fields` threads it into each
-triple's `description=` (which `build_strawberry_input_class` already supports). This is
-documentation / introspection only — DRF still owns runtime validation, and the field's TYPE
-is unchanged. The description is a deterministic function of the field, so it never varies
-independently of the descriptor identity (identical descriptors share identical descriptions;
-no identity axis added). Graphene-django threads only `help_text`; this surfaces the DRF
-validation summary too. Earned live by `createShelfViaMetadataSerializer`'s `label` field.
+`rest_framework/serializer_converter.py::serializer_field_description(field)` builds a
+GraphQL input-field description from a DRF field's metadata — `help_text` heads it, then a
+constraint summary (`min_length` / `max_length` / `min_value` / `max_value`, plus
+`allow_blank` when permitted and `allow_empty` when forbidden). `_walk_serializer_fields`
+threads it into each triple's `description=` (which `build_strawberry_input_class`
+supports). This is documentation / introspection only — DRF still owns runtime validation,
+and the field's TYPE is unchanged. The description is a deterministic function of the field,
+so identical descriptors share identical descriptions (no identity axis added).
+Graphene-django threads only `help_text`; this surfaces the DRF validation summary too.
+Earned live by `createShelfViaMetadataSerializer`'s `label` field.
 
 ### Aggregate schema-time diagnostics
 
-`_walk_serializer_fields` now COLLECTS every per-field conversion error (unsupported field,
-non-PK relation, missing relation-primary, dotted / `source="*"`, the type-override
-conflict) instead of raising on the first, folds in the input-attr / GraphQL-name / source
-collision messages (the former `_guard_serializer_input_attr_collisions`, refactored to a
-message collector `_collect_input_attr_collision_messages`), and raises ONE
-`ConfigurationError`. A SINGLE problem is raised verbatim (so the precise per-field wording
-and every `pytest.raises(match=...)` substring are preserved); TWO OR MORE are grouped under a
-`… has N schema-time problem(s):` header with one bullet each, so a consumer with several bad
-fields fixes them all in one pass. The aggregate is still a `ConfigurationError`, so the
-canonical-name gate's `_default_full_shape_identity` keeps swallowing it (an unbuildable
-default shape simply does not reserve the canonical name). Package-tested (it is a
-configuration-time raise).
+`rest_framework/inputs.py::_walk_serializer_fields` COLLECTS every per-field conversion error
+(unsupported field, non-PK relation, missing relation-primary, dotted / `source="*"`, the
+type-override conflict) instead of raising on the first, folds in the input-attr /
+GraphQL-name / source collision messages (`_collect_input_attr_collision_messages`), and
+raises ONE `ConfigurationError` (`_aggregate_field_problems`). A SINGLE problem is raised
+verbatim (so the precise per-field wording and every `pytest.raises(match=...)` substring
+hold); TWO OR MORE are grouped under a `… has N schema-time problem(s):` header with one
+bullet each, so a consumer with several bad fields fixes them all in one pass. The aggregate
+is a `ConfigurationError`, so the canonical-name gate's `_default_full_shape_identity`
+swallows it (an unbuildable default shape simply does not reserve the canonical name).
+Package-tested (it is a configuration-time raise).
 
 ### Runtime schema/runtime serializer agreement guard
 
@@ -3220,72 +3221,78 @@ mismatch). It additionally holds two drift arms the coarse checks cannot see: th
 field's **requiredness** must match what the schema emitted (given the operation and
 `Meta.optional_fields`), and its emitted **annotation `repr`** must match the one the
 descriptor recorded. Any divergence is a framework `ConfigurationError` at the boundary, NOT a
-silent DRF-ignores-the-unknown-key ambiguity — the schema hook becomes a VERIFIED contract
-rather than a trust point. A runtime serializer with EXTRA fields the schema omits is fine
-(never provided).
+silent DRF-ignores-the-unknown-key ambiguity — the schema hook is a VERIFIED contract rather
+than a trust point. A runtime serializer with EXTRA fields the schema omits is fine (never
+provided).
 
 **Reaching the requiredness / annotation arms without a validated `Meta` snapshot is itself a
-raise, not a stop.** Those arms need the operation and the normalized `optional_fields`, so the
-guard states the requirement as a contract: any object reaching them carries a `_mutation_meta`
-snapshot exposing `operation` **and** `optional_fields`. Both incoherent spellings — the
-attribute absent, and the attribute present but `None` — raise one `ConfigurationError` naming
-the field, so a future flavor reusing a duck-typed snapshot cannot slip past the arms
-unnoticed. Returning early there would have been a fail-open: the guard would report agreement
-it never checked.
+raise, not a stop.** Those arms need the operation and the normalized `optional_fields`, so
+any class reaching them must carry a `_mutation_meta` snapshot. Both incoherent spellings —
+the attribute absent, and the attribute present but `None` — raise one `ConfigurationError`
+naming the field; returning early there would be a fail-open (the guard would report
+agreement it never checked).
 
-Consequence: a schema-only field the runtime serializer does not declare (the old
-decode-then-drop pattern) is now forbidden, so the fakeshop nullability fixtures were
-redesigned — `NoteShelfSerializer(note_allow_null=...)` declares `note` as a REAL write-only
-runtime field (popped in `create()`), and each mutation's `get_serializer_kwargs` constructs it
-with the same `note_allow_null` its schema hook used, so schema and runtime agree while the two
-still differ only in `note`'s emitted nullability. Happy path is live-covered (every serializer
-mutation now passes the guard); the raise cases are package-tested.
+A schema-only field the runtime serializer does not declare (decode-then-drop) is therefore
+forbidden. The fakeshop nullability fixture `NoteShelfSerializer(note_allow_null=...)`
+declares `note` as a REAL write-only runtime field (popped in `create()`), and each
+mutation's `get_serializer_kwargs` constructs it with the same `note_allow_null` its schema
+hook used, so schema and runtime agree while the two mutations still differ only in `note`'s
+emitted nullability. Happy path is live-covered (every serializer mutation passes the
+guard); the raise cases are package-tested.
 
 ### Golden SDL coverage for representative serializer inputs
 
 A narrow golden-SDL snapshot (NOT a whole-schema dump) pins the serializer input lane against
 cross-field drift: one library schema-hook mutation (`ShelfMetadataSerializerInput` +
 `CreateShelfViaMetadataSerializerPayload` + the shared `FieldError`) and one products serializer
-mutation (`ItemSerializerInput` + `CreateItemViaSerializerPayload`). Introspecting the ONE
-aggregate `/graphql/` schema, the tests assert generated input names, field names, nullability,
-descriptions, the serializer-only enum, the JSON / registry-mapped scalars, the file
-(`Upload`) + Relay-`GlobalID` (`ID!`) / raw-pk relation id scalars, the
-payload object slot (`node` for Relay `Item`, `result` for non-Relay `Shelf`), and the additive
-`codes` / `path` on `FieldError`. Especially valuable now that enums, descriptions,
-error metadata, and custom converters are in play.
+mutation (`ItemSerializerInput` + `CreateItemViaSerializerPayload`)
+(`examples/fakeshop/test_query/test_library_api.py::test_golden_sdl_library_schema_hook_serializer_input`
+and `examples/fakeshop/test_query/test_library_api.py::test_golden_sdl_products_serializer_input`). Introspecting the ONE aggregate `/graphql/`
+schema, the tests assert generated input names, field names, nullability, descriptions, the
+serializer-only enum, the JSON / registry-mapped scalars, the file (`Upload`) +
+Relay-`GlobalID` (`ID!`) / raw-pk relation id scalars, the payload object slot (`node` for
+Relay `Item`, `result` for non-Relay `Shelf`), and the additive `codes` / `path` on
+`FieldError`.
 
 ### Schema-shape debug/introspection registry
 
-`inputs.py::_SERIALIZER_SHAPE_REGISTRY` maps each generated input class name to its
-`SerializerInputShape` (recorded by `build_serializer_input_class`, reset by
+`rest_framework/inputs.py::_SERIALIZER_SHAPE_REGISTRY` maps each generated input class name to
+its `SerializerInputShape` (recorded by `build_serializer_input_class`, reset by
 `clear_serializer_input_namespace`). `describe_serializer_input(name)` (a public debug helper,
-resolved by name through the root `__getattr__`) formats a shape: backing serializer, operation,
-per-field (declared name -> GraphQL name, emitted annotation, kind, source, relation target,
-requiredness), and whether the CANONICAL name was used or a descriptor-derived one. The
-descriptor-derived names are deliberately opaque (hash-bearing), so this makes the package's
-stronger descriptor-based identity inspectable - and the materialize-collision
-`ConfigurationError` is ENRICHED with the registered shape's description, so a name clash is
-diagnosable rather than cryptic. Package-tested (describe reports a shape / `None` for unknown;
-the collision message carries the shape).
+resolved by name through the root `__getattr__`) formats a shape: backing serializer,
+operation, per-field (declared name -> GraphQL name, emitted annotation, kind, source,
+relation target, description, requiredness, nested child names), and whether the CANONICAL
+name was used or a descriptor-derived one. The descriptor-derived names are deliberately
+opaque (hash-bearing), so this makes the descriptor-based identity inspectable — and
+`materialize_serializer_input_class` ENRICHES its collision `ConfigurationError` with the
+registered shape's description, so a name clash is diagnosable rather than cryptic.
+Package-tested (describe reports a shape / `None` for unknown; the collision message carries
+the shape).
 
 ### Row locking for model-backed write mutations (`Meta.select_for_update`)
 
 `Meta.select_for_update` is a **shared model-backed write key, defaulting to `True`**: every
 model-backed flavor — model `DjangoMutation`, `DjangoModelFormMutation`, and
 `SerializerMutation` — takes a `SELECT ... FOR UPDATE` row lock on the update / delete locate
-unless the mutation opts out with an explicit `select_for_update = False`. Locked writes are
-the safe posture, so the key is an **opt-out**, and one shared validator
-(`mutations/sets.py::validate_select_for_update`) owns its contract for all three flavors so
-it cannot drift; the validated value is stored on the `_ValidatedMutationMeta` snapshot and
-`run_write_pipeline_sync` passes it through. `locate_instance(target_type, node_id, info, *,
-alias, select_for_update=True)` wraps the visible queryset in `.select_for_update()`, so the
-lock is acquired AFTER visibility filtering and INSIDE the pipeline's write transaction, and
-every relation-target check under the same write acquires it too. On a backend without
+and every relation-target check unless the mutation opts out with an explicit
+`select_for_update = False`. Locked writes are the safe posture, so the key is an
+**opt-out**, and one shared validator (`mutations/sets.py::validate_select_for_update`, a
+non-bool is a class-creation error) owns its contract for all three flavors so it cannot
+drift; the validated value is stored on the `_ValidatedMutationMeta` snapshot, and
+`utils/write_transaction.py::open_write_pipeline` opens the pipeline's `write_pipeline`
+context with it. The lock is a base-manager `FOR UPDATE` constrained by the visibility
+queryset reduced to a pk subquery (`utils/write_transaction.py::base_locked_queryset`, used by
+`mutations/resolvers.py::locate_instance(target_type, node_id, info, *, alias,
+select_for_update=True)` and the relation-target checks) — never `select_for_update()`
+attached to the consumer's own queryset, whose joins / unions / annotations a `FOR UPDATE`
+cannot legally carry. A hidden row is absent from the subquery (not locked, not found), and
+the lock is acquired INSIDE the pipeline's write transaction. On a backend without
 `FOR UPDATE` support (e.g. sqlite) Django silently skips the clause, so the key is safe to
-declare regardless of backend and needs no framework-side backend check. Live-tested
-(`updateBookViaSerializerWithLock` updates a Relay-Node `Book` cleanly under the lock);
-package-tested (`Meta` validation; `locate_instance` applies `.select_for_update()` only when
-asked).
+declare regardless of backend. Live-tested
+(`examples/fakeshop/test_query/test_library_api.py::test_serializer_update_with_select_for_update_over_http`:
+`updateBookViaSerializerWithLock` updates a Relay-Node `Book` cleanly under the lock);
+package-tested (`Meta` validation in `tests/rest_framework/test_sets.py`; the locate lock and
+its opt-out in `tests/mutations/test_resolvers.py`).
 
 ### `get_serializer_save_kwargs` (a save-time hook, separate from constructor kwargs)
 
@@ -3295,7 +3302,7 @@ the DRF-native customization point for request-derived data DRF expects at
 Like every consumer hook it receives the frozen `SerializerHookContext` plus an immutable data
 view, never the live instance. The resolver calls it INSIDE the value-preserving `save()`
 closure — `saved = serializer.save(**save_kwargs)` — so the transaction boundary,
-`ValidationError` / `IntegrityError` mapping, and optimizer re-fetch are all preserved (unlike
+`ValidationError` / `IntegrityError` mapping, and optimizer re-fetch all apply (unlike
 graphene-django's `perform_mutate`, which bypasses framework-owned behavior). Default `{}`.
 
 **Two guards, and together they confine the hook to non-model custom arguments.**
@@ -3307,7 +3314,7 @@ value). `_assert_save_kwargs_not_model_fields` then rejects a save kwarg naming 
 field at all, whether or not it was validated: model-field injection goes exclusively through
 the audited `Meta.injected_fields` channel, so an `owner=request.user` style save
 kwarg is a `ConfigurationError` and its `Meta.injected_fields` equivalent is the supported
-spelling. The hook's remaining, intended use is a **custom argument the serializer's own
+spelling. The hook's intended use is a **custom argument the serializer's own
 `create()` / `update()` consumes**: the live fixture stamps a non-model `stamp` kwarg that
 `create()` pops and writes into `topic`. Live-tested (`createShelfWithSaveKwargs`, and the
 model-field rejection over `/graphql/`); package-tested (shadow raises, model-field raises,
@@ -3318,21 +3325,22 @@ non-shadow allowed).
 Two moves keep the security win (authorize-before-decode + visibility-checked ids) while cutting
 the query cost. (a) A batched `utils/querysets.py::visible_related_objects(related_model, pks,
 info)` confirms a MULTI relation's whole set in ONE visibility-scoped `pk__in` query instead of
-one per id: the serializer multi decoder now type-checks + coerces every id first (the shared
-`utils/write_values.py::type_check_relation_id`, no DB), then batch-confirms visibility, preserving the uniform
-no-existence-leak relation error (a hidden / missing member is the same field-keyed error). (b)
-`_scope_relation_querysets_to_visibility` COMPOSES each runtime relation field's `queryset`
-(`PrimaryKeyRelatedField`) / `child_relation.queryset` (`ManyRelatedField`) WITH the
-visibility-scoped queryset before `is_valid()` — `original.filter(pk__in=<visibility queryset>)`,
-an ADDITIONAL constraint (a `pk__in` subquery, still one lookup), never a REPLACEMENT
-(a reassignment would erase a serializer author's own
-`PrimaryKeyRelatedField(queryset=...)` restriction and could admit a visible-but-disallowed row).
-So DRF's own re-validation honors BOTH the author's queryset AND visibility, and can never
-re-fetch a row the decode hid. Package-tested with `assertNumQueries`-style
+one per id: the multi decoder (shared with the model FK / M2M set decoder) type-checks +
+coerces every id first (`utils/write_values.py::type_check_relation_id`, no DB), then
+batch-confirms visibility, preserving the uniform no-existence-leak relation error (a hidden /
+missing member is the same field-keyed error). (b) `_scope_relation_querysets_to_visibility`
+COMPOSES each runtime relation field's `queryset` (`PrimaryKeyRelatedField`) /
+`child_relation.queryset` (`ManyRelatedField`) WITH the visibility-scoped queryset before
+`is_valid()` — `original.filter(pk__in=<visibility queryset>)`, an ADDITIONAL constraint (a
+`pk__in` subquery, still one lookup), never a REPLACEMENT (a reassignment would erase a
+serializer author's own `PrimaryKeyRelatedField(queryset=...)` restriction and could admit a
+visible-but-disallowed row). So DRF's own re-validation honors BOTH the author's queryset AND
+visibility, and can never re-fetch a row the decode hid. Package-tested with
 `CaptureQueriesContext` (the batched multi decode is exactly ONE query), a hidden-member
 rejection, and a visible-but-author-disallowed single + many relation (the compose preserves the
 author's filter); live-tested by `createShelfViaAltBranchesSerializer` (a raw-pk M2M writes
-visible branches, a hidden branch is a `altBranches` relation error over `/graphql/`).
+visible branches in one visibility query, a hidden branch is an `altBranches` relation error
+over `/graphql/`).
 
 ### Explicit injection contract (`Meta.injected_fields`)
 
@@ -3340,81 +3348,87 @@ visible branches, a hidden branch is a `altBranches` relation error over `/graph
 `Meta` key, normalized like `optional_fields`, stored on the snapshot): the create-required
 guard always runs and subtracts only the declared injected fields, so a dropped required field
 not declared injected still raises. Each injected name is validated at class creation against
-the same writable schema-time field basis as generated input: typos, `read_only` fields, and
-`HiddenField` instances fail loud. The schema-time spec is stashed in
-`_injected_field_specs`.
+the same writable schema-time field basis as generated input (typos, `read_only` fields, and
+`HiddenField` instances fail loud) and must be narrowed out of the generated input (a name
+still exposed there fails loud, so a client value and an injected value never compete for one
+key). The schema-time specs are stashed in `_injected_field_specs`.
 
 The framework builds serializer `data` itself from decoded client data plus the values supplied
 exclusively by `get_serializer_injected_data(self, info, *, data, hook_context)`, whose keys
 must exactly match `Meta.injected_fields`. Runtime acceptance rides the ONE unified
-`_write_surface_specs` walk through `_assert_schema_runtime_agreement`, so an
-injected field receives exactly the same present / writable / `source` / kind / relation-model
-checks an input field does — there is no separate injected-field guard to keep in step. Live-tested (`createShelfWithInjectedTopic`
-narrows away a required `topic` and injects it); package-tested (subtraction / still-raise /
-writable class validation / exact keys / runtime agreement).
+`_write_surface_specs` walk through `_assert_schema_runtime_agreement`, so an injected field
+receives exactly the same present / writable / `source` / kind / relation-model checks an input
+field does. Live-tested (`createShelfWithInjectedTopic` narrows away a required `topic` and
+injects it); package-tested (subtraction / still-raise / writable class validation / exact keys
+/ runtime agreement).
 
 ### Fingerprint `get_serializer_for_schema()` for determinism
 
-The spec requires the schema hook to return a STABLE, request-independent field shape, but the
-hook runs at class validation AND again at the phase-2.5 bind — a nondeterministic hook could
-validate one shape and bind another. `inputs.py::serializer_schema_fingerprint(field_map)`
-computes a digest of EVERY SDL-affecting axis: ordered field names, classes,
-sources, read/write flags, `required`, `allow_null`, relation target models, PLUS the description
-inputs (`help_text` + the constraint summary), the enumerable choice MEMBERS, and the converter
-discriminants (`ModelField` wrapped field / `ListField` child) — so a hook that changes a
-description, enum members, or converter behavior without changing the coarse identity still trips
-the guard. `_validate_meta` captures it on `_ValidatedMutationMeta.schema_fingerprint` at class
-validation; both `build_input` AND `input_type_name` read the hook through the ONE guarded path
-`_checked_schema_field_map` (the type-name derivation never reads an unguarded
-field map behind the fingerprint's back), raising `ConfigurationError` on drift. This turns the
-spec's stable-shape promise into an enforced contract (graphene-django has no equivalent — no
-schema/runtime hook split). Package-tested (drift raises at bind AND via `input_type_name`; the
-fingerprint is sensitive to choices / help_text / converter extras; a stable hook binds cleanly).
+The schema hook must return a STABLE, request-independent field shape, but it runs at class
+validation AND again at the phase-2.5 bind — a nondeterministic hook could validate one shape
+and bind another. `rest_framework/inputs.py::serializer_schema_fingerprint(field_map, *,
+nested_configs=None)` returns an ordered, hashable tuple over EVERY SDL-affecting axis of each
+writable field: name, class, source, write-only flag, `required`, `allow_null`, relation
+target model, the description inputs (`help_text` + the constraint summary), the enumerable
+choice MEMBERS, and the converter discriminants (`ModelField` wrapped field / `ListField`
+child) — so a hook that changes a description, enum members, or converter behavior without
+changing the coarse identity still trips the guard. `_validate_meta` captures it on
+`_ValidatedMutationMeta.schema_fingerprint` at class validation; both `build_input` AND
+`input_type_name` read the hook through the ONE guarded path
+`rest_framework/sets.py::_checked_schema_field_map` (the type-name derivation never reads an
+unguarded field map), raising `ConfigurationError` on drift. graphene-django has no
+equivalent (no schema/runtime hook split). Package-tested (drift raises at bind AND via
+`input_type_name`; the fingerprint is sensitive to choices / help_text / converter extras; a
+stable hook binds cleanly).
 
 ### Preserve DRF `ErrorDetail.code` in the error envelope
 
-The shared `FieldError` (`mutations/inputs.py`) gains an additive, default-empty
-`codes: [String!]` alongside the intact `field` / `messages`. The single leaf ctor
-`field_error(path, messages, *, codes=None)` (still the one both flatteners call) populates
-it: the DRF flattener passes each leaf `ErrorDetail.code` (`_error_detail_codes`), the Django
-flat mapper passes each `ValidationError.code` (via `error.error_list`), and the
-framework-generated errors pass a deliberate code (`invalid` for a bad relation id / bad
-lookup id / unstorable text, `null` for an explicit null, `not_found` for a locate miss,
-`constraint` for the `IntegrityError` fallback). A client branches on `required` / `invalid`
-/ `unique` / … without parsing localized text. Uniform across all three write flavors (the
-leaf is shared). Live-tested (`createShelfViaMetadataSerializer`: a `max_length` DRF code).
+The shared `FieldError` (`mutations/inputs.py`) carries an additive, default-empty
+`codes: [String!]` alongside `field` / `messages`. The single leaf ctor
+`utils/errors.py::field_error(path, messages, *, codes=None)` (the one both flatteners call)
+populates it: the DRF flattener passes each leaf `ErrorDetail.code`
+(`rest_framework/resolvers.py::_error_detail_codes`), the Django flat mapper passes each
+`ValidationError.code` (read off `error.error_list`), and framework-generated errors pass a
+code from the `utils/errors.py` `FIELD_ERROR_CODE_*` vocabulary (`invalid` for a bad relation
+id / bad lookup id / unstorable text, `null` for an explicit null, `not_found` for a locate
+miss, `constraint` for the `IntegrityError` fallback, `protected` for a protected delete,
+`conflict` for a row that vanished under a forced update, `truncated` when the DRF error
+flattening hits its node budget). A client branches on `required` / `invalid` / `unique` / …
+without parsing localized text. Uniform across all three write flavors (the leaf is shared).
+Live-tested (`createShelfViaMetadataSerializer`: a `max_length` DRF code).
 
 ### Structured error `path` in addition to the dotted `field`
 
-`FieldError` also gains an additive, default-empty `path: [String!]` — the dotted `field`
+`FieldError` also carries an additive, default-empty `path: [String!]` — the dotted `field`
 string split into SEGMENTS, derived inside `field_error` so it cannot drift from `field`.
-`items.0.name` → `["items", "0", "name"]`. Documented ROOT rule: a model-wide / non-field
-error is `field="__all__"` with an EMPTY `path` (`[]`) — whether it arrives as an empty path
-(the Django mapper) or as the bare `"__all__"` sentinel (the DRF flattener's top-level
-non-field bucket), so the two flavors agree; a NESTED non-field error keeps the sentinel as
-its final segment (`["items", "0", "__all__"]`). Additive (a client selecting only `field` /
-`messages` is unaffected); pairs with the preserved `ErrorDetail.code` above. Live- and package-tested.
+`items.0.name` → `["items", "0", "name"]`. ROOT rule: a model-wide / non-field error is
+`field="__all__"` with an EMPTY `path` (`[]`) — whether it arrives as an empty path (the
+Django mapper) or as the bare `"__all__"` sentinel (the DRF flattener's top-level non-field
+bucket), so the two flavors agree; a NESTED non-field error keeps the sentinel as its final
+segment (`["items", "0", "__all__"]`). Additive (a client selecting only `field` / `messages`
+is unaffected); pairs with the preserved `ErrorDetail.code` above. Live- and package-tested.
 
 ### Explicit opt-in nested serializer input support
 
 graphene-django converts a nested `ModelSerializer` / `ListSerializer` field automatically,
 caching the generated input by the serializer's CLASS NAME (silently conflating two shapes of
-one class) with little write-contract validation. The package's default is the OPPOSITE (safer
-but less capable): a nested serializer field fails loud. This adds the CAPABILITY with the
-package's fail-loud architecture — a DRF-first, EXPLICIT, opt-in contract:
+one class) with little write-contract validation. The package's default is the OPPOSITE: a
+nested serializer field fails loud. The capability exists as a DRF-first, EXPLICIT, opt-in
+contract:
 
 - **Opt-in only, descriptor-keyed.** `Meta.nested_fields = {"items": NestedSerializerConfig(...)}`
   names the nested field(s) that build a nested input RECURSIVELY. A nested field NOT named
-  still fails loud (`serializer_converter.py::_reject_nested_serializer`, now the FIRST check in
-  `resolve_serializer_field` so a nested field over a reverse-relation column can never be
-  misrouted as a relation-id input). `NestedSerializerConfig` (a frozen dataclass, exported from
-  the root by name under the DRF guard like `SerializerMutation`) carries `fields` / `exclude` /
-  `optional_fields` (narrow the nested input via the SAME machinery the top level uses) and a
-  recursive `nested_fields` map (the deeper opt-in — each level names its own children). A nested
-  field with a DRF `source=` records the same normalized one-segment source axis scalar / relation
-  fields do, so the runtime schema/runtime agreement guard's source comparison matches
-  instead of failing every invocation; a dotted source / `source="*"` fails loud in
-  `_resolve_nested_field` (the model-column-path fail-loud source policy).
+  fails loud (`rest_framework/serializer_converter.py::_reject_nested_serializer`, the FIRST
+  check in `resolve_serializer_field` so a nested field over a reverse-relation column can never
+  be misrouted as a relation-id input). `rest_framework/inputs.py::NestedSerializerConfig` (a
+  frozen dataclass, exported from the root by name under the DRF guard like
+  `SerializerMutation`) carries `fields` / `exclude` / `optional_fields` (narrow the nested
+  input via the SAME machinery the top level uses) and a recursive `nested_fields` map (the
+  deeper opt-in — each level names its own children). A nested field with a DRF `source=`
+  records the same normalized one-segment source axis scalar / relation fields do, so the
+  runtime schema/runtime agreement guard's source comparison matches; a dotted source /
+  `source="*"` fails loud in `_resolve_nested_field` (via `require_one_segment_source`, the
+  model-column path's detection).
 - **Recursively fingerprinted, scoped to the writable set, gated on the opt-in tree.**
   `serializer_schema_fingerprint` folds an OPTED-IN nested serializer's own field map into the
   determinism fingerprint (bounded by an on-path cycle guard), so a nondeterministic hook that
@@ -3424,34 +3438,35 @@ package's fail-loud architecture — a DRF-first, EXPLICIT, opt-in contract:
   a context-sensitive nested OUTPUT serializer whose `.fields` cannot materialize no-arg) is NEVER
   descended into and cannot break class creation; a residual reachable nested-`.fields` failure is
   wrapped as `ConfigurationError`. The recursion is ALSO gated on the `Meta.nested_fields` opt-in
-  tree, threaded into the fingerprint at BOTH class validation and bind: an
-  UNOPTED nested field records a shallow marker (class name + many-ness) WITHOUT reading its
-  `.fields` — nesting is opt-in only, so it produces no nested input and its child shape cannot
-  affect the SDL, and the field walk raises the canonical `_reject_nested_serializer` opt-in error.
-  Descending into an unopted, context-sensitive nested child would otherwise surface a misleading
+  tree, threaded into the fingerprint at BOTH class validation and bind: an UNOPTED nested field
+  records a shallow marker (class name + many-ness) WITHOUT reading its `.fields` — nesting is
+  opt-in only, so it produces no nested input and its child shape cannot affect the SDL, and the
+  field walk raises the canonical `_reject_nested_serializer` opt-in error. Descending into an
+  unopted, context-sensitive nested child would otherwise surface a misleading
   "opted in via Meta.nested_fields..." materialization error at class validation, shadowing the
   canonical opt-in error.
 - **Depth / cycle guarded.** Recursion is bounded by the finite, immutable `NestedSerializerConfig`
   tree; a serializer class that reappears on the recursion path is a fail-loud cycle, and a
-  path beyond `_NESTED_MAX_DEPTH` is a fail-loud depth cap.
+  path at or beyond `_NESTED_MAX_DEPTH` is a fail-loud depth cap (`guard_nested_recursion`).
 - **The framework NEVER auto-saves the nested relation.** A NON-EMPTY `Meta.nested_fields`
   REQUIRES the serializer to override `create()` (create op) / `update()` (update op) —
   checked at class creation, because DRF's default `ModelSerializer.create/update` `assert`s
   on writable nested data (a raw `AssertionError` that would escape the envelope). An EMPTY
   declaration (`Meta.nested_fields = {}`) opts nothing in, passes no nested data, and so
-  demands no override. The framework decodes + validates
-  the nested data (visibility-checking each nested relation, recursively, and scoping the runtime
-  nested serializer's relation querysets) and hands it to the serializer's OWN `create()` /
-  `update()`, which owns the write, inside the pipeline transaction.
+  demands no override. The framework decodes + validates the nested data (visibility-checking
+  each nested relation, recursively, and scoping the runtime nested serializer's relation
+  querysets) and hands it to the serializer's OWN `create()` / `update()`, which owns the
+  write, inside the pipeline transaction.
 - **Errors route through the structured `path` / `codes` envelope, re-keyed at every depth.** A
-  nested DRF validation error flattens through the recursive `serializer_errors_to_field_errors`,
-  which RE-KEYS each path segment to its GraphQL name as it descends — not only the
-  root — driven by a recursive reverse map built from `InputFieldSpec.nested_specs`: a nested child
-  field / alias / relation suffix reports its SDL name (`shelves.0.altBranches`, not
-  `shelves.0.alt_branches`), while numeric indexes and the `__all__` non-field sentinel are
-  preserved. A nested framework decode error (a hidden relation id) is keyed to the same FULL
-  nested path with the `invalid` code and rolls the write back. The runtime schema/runtime
-  agreement guard recurses into the nested serializer too.
+  nested DRF validation error flattens through the recursive
+  `rest_framework/resolvers.py::serializer_errors_to_field_errors`, which RE-KEYS each path
+  segment to its GraphQL name as it descends — not only the root — driven by a recursive
+  reverse map built from `InputFieldSpec.nested_specs`: a nested child field / alias / relation
+  suffix reports its SDL name (`shelves.0.altBranches`, not `shelves.0.alt_branches`), while
+  numeric indexes and the `__all__` non-field sentinel are preserved. A nested framework decode
+  error (a hidden relation id) is keyed to the same FULL nested path with the `invalid` code
+  and rolls the write back. The runtime schema/runtime agreement guard recurses into the nested
+  serializer too.
 
 The nested input dedupes on its `SerializerInputShape` descriptor (folded into the parent
 descriptor identity + the per-shape build cache, so two nested shapes never collide on one name)
@@ -3519,7 +3534,6 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[spec-040]: spec-040-auth_mutations-0_0_13.md
 [next]: NEXT.md
 [rationale-d10]: appx/spec-039-serializer_mutations-0_0_13-rationale.md#decision-10--operations-create--update-no-serializer-delete
 [rationale-d11]: appx/spec-039-serializer_mutations-0_0_13-rationale.md#decision-11--write-authorization-reuse-the-036-seam-djangomodelpermission-for-the-modelserializer
@@ -3545,6 +3559,7 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 [spec-037]: spec-037-upload_file_image_mapping-0_0_11.md
 [spec-038]: spec-038-form_mutations-0_0_12.md
 [spec-039-rationale]: appx/spec-039-serializer_mutations-0_0_13-rationale.md
+[spec-040]: spec-040-auth_mutations-0_0_13.md
 
 <!-- docs/builder/ -->
 

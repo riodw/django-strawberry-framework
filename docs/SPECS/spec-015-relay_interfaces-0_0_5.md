@@ -4,11 +4,10 @@ Status: shipped. Primary spec for the `0.0.5` Relay foundation and the single so
 Owner: package maintainer.
 Predecessors: `docs/GLOSSARY.md`, `GOAL.md`, `KANBAN.md` card `DONE-015-0.0.5`.
 Influences: the local checkouts referenced from `docs/TREE.md` — `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` and `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.
-Rationale companion: [`docs/SPECS/appx/spec-015-relay_interfaces-0_0_5-rationale.md`][spec-015-rationale] carries this spec's deliberative layer — the borrowing posture and its per-borrow justifications, the pre-implementation spike, the risk register, every rejected alternative, and the record of what later cards changed and why.
+Rationale companion: [`docs/SPECS/appx/spec-015-relay_interfaces-0_0_5-rationale.md`][spec-015-rationale] carries the borrowing posture and its per-borrow justifications, the evidence for mutating `__bases__`, and every rejected alternative.
 ## Slice checklist
-Each top-level item maps to one of the five commits in the "Implementation plan" section. Indented items are the discrete sub-parts to complete inside that slice.
+Each top-level item maps to one of the five steps in the "Implementation plan" section. Indented items are the discrete sub-parts to complete inside that slice.
 - [ ] Slice 1: Validation + storage
-  - [ ] Keep `"interfaces"` in `DEFERRED_META_KEYS` (`django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"`); promotion deferred to Slice 5
   - [ ] Extend `_validate_meta` (`django_strawberry_framework/types/base.py::_validate_meta`) with the interface validator (Decision 4)
     - [ ] Normalize tuple/list input and a single real Strawberry interface class; reject strings, sets, generators, and other invalid non-sequence values
     - [ ] Each entry satisfies `hasattr(entry, "__strawberry_definition__") and entry.__strawberry_definition__.is_interface`
@@ -29,7 +28,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `test_class_already_inherits_relay_node_directly`
     - [ ] `test_relay_node_with_composite_pk_raises`
 - [ ] Slice 2: `is_type_of` injection
-  - [ ] Add `install_is_type_of` helper in new `django_strawberry_framework/types/relay.py`
+  - [ ] `install_is_type_of` helper in `django_strawberry_framework/types/relay.py`
   - [ ] Invoke from `DjangoType.__init_subclass__` (`django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`) for every `DjangoType` subclass
   - [ ] Preserve consumer-declared `is_type_of` (do not overwrite when present)
   - [ ] Test: `test_is_type_of_injected_for_all_djangotypes`
@@ -61,7 +60,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `test_resolve_id_uses_dict_cache`
     - [ ] `test_resolve_id_falls_back_to_getattr`
     - [ ] `test_resolve_node_applies_get_queryset`
-    - [ ] `test_resolve_nodes_preserves_order_and_missing`
+    - [ ] `test_resolve_nodes_accepts_generator_node_ids`
     - [ ] `test_resolve_nodes_required_raises_for_missing`
     - [ ] `test_resolve_node_async_context`
     - [ ] `test_resolve_nodes_async_context`
@@ -73,57 +72,46 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `test_node_id_annotation_overrides_default_id_attr`
     - [ ] `test_non_relay_interface_works`
   - [ ] Optimizer / projection tests (`tests/optimizer/test_relay_id_projection.py`, Decision 7)
-    - [ ] `test_relay_id_only_projection_includes_pk_attname`
+    - [ ] `test_relay_id_with_custom_pk_attname_avoids_lazy_load`
     - [ ] Lazy-load-free `{ id name }` under `strictness="raise"` and `resolve_id` reading the loaded pk, both live in `examples/fakeshop/test_query/test_products_visibility_api.py` (`::test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http`, `::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids`)
     - [ ] Relation traversal across Relay-declared targets, pinned live in `examples/fakeshop/test_query/test_products_api.py`
   - [ ] Schema-construction coverage, live in `examples/fakeshop/test_query/test_library_api.py`
     - [ ] Schema includes the `Node` interface and the GlobalID-scalar `id` on Relay-declared types
     - [ ] Mixed Relay / non-Relay types introspect cleanly (no interface bleed)
-  - [ ] Registry idempotency extension (`tests/test_registry.py`): redefining a Relay-declared `DjangoType` after `registry.clear()` works
-  - [ ] HTTP test in `examples/fakeshop/test_query/test_library_api.py` (one `library` model declares `interfaces = (relay.Node,)`; `/graphql/` query selects `id` and a scalar; assert GlobalID round-trip)
-- [ ] Slice 5: Promotion + docs + version
-  - [ ] Move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` (`django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"` and `django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`)
-  - [ ] Doc updates
-    - [ ] `docs/GLOSSARY.md` — move `Meta.interfaces` and Relay GlobalID mapping from deferred to shipped; add the "[Relay Node integration][glossary-relay-node-integration]" subsection; update version mention
-    - [ ] `docs/README.md` — add the gated "Relay Node" subsection with a short example next to the quick start
-    - [ ] `TODAY.md` — drop `Meta.interfaces` and `Relay node` from the "wait for" list; update fakeshop guidance if a `library` schema starts using `relay.Node`
-    - [ ] `KANBAN.md` — move this card to Done as `DONE-015-0.0.5` with shipped scope, borrowed patterns, and test-file evidence; advance the recommended hybrid sequence past Relay
-    - [ ] `CHANGELOG.md` — `[0.0.5]` Added/Changed entries (see Doc updates section); version bump line
-  - [ ] Version bump
-    - [ ] `pyproject.toml #"version ="`
-    - [ ] `django_strawberry_framework/__init__.py #"__version__ ="`
-    - [ ] `tests/base/test_init.py` assertion
-    - [ ] Regenerate `uv.lock` via `uv lock`
+  - [ ] Registry idempotency extension (`tests/test_registry.py::test_registry_clear_allows_fresh_relay_declared_type_to_finalize`): redefining a Relay-declared `DjangoType` after `registry.clear()` works
+  - [ ] HTTP test `examples/fakeshop/test_query/test_library_api.py::test_library_relay_node_global_id_round_trips` (a Relay-declared `library` type; `/graphql/` query selects `id` and a scalar; GlobalID round-trip)
+- [ ] Slice 5: Promotion + docs
+  - [ ] `"interfaces"` sits in `ALLOWED_META_KEYS` (`django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`), not `DEFERRED_META_KEYS` (`django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"`)
+  - [ ] Doc homes (see "Doc updates")
+    - [ ] `docs/GLOSSARY.md` — the `Meta.interfaces` and "[Relay Node integration][glossary-relay-node-integration]" entries
+    - [ ] `docs/README.md` — the "Relay Node" subsection next to the quick start
+    - [ ] `KANBAN.md` — the Done card `DONE-015-0.0.5`
+    - [ ] `CHANGELOG.md` — the `[0.0.5]` Added/Changed entries
   - [ ] Final gates
     - [ ] `uv run ruff format .` passes
     - [ ] `uv run ruff check --fix .` passes
     - [ ] `uv run pytest` passes with 100% package coverage (`fail_under = 100`)
-    - [ ] No new [public exports][glossary-public-exports] (Definition of done item 11)
+    - [ ] No new [public exports][glossary-public-exports] (Definition of done, the no-new-public-exports item)
 ## Problem statement
-The problem this slice exists to solve, as it stood at `0.0.4`: a `DjangoType` user cannot declare GraphQL interfaces (Relay `Node` or otherwise) through `class Meta`, because `Meta.interfaces` is a deferred key rejected with `ConfigurationError` — the package does not apply it end-to-end. The consequences were:
-- `GOAL.md`'s target API (`interfaces = (relay.Node,)`) is unreachable today.
-- `TODAY.md` lists Relay node and connection support as a hard blocker for the rich fakeshop schema.
-- `docs/GLOSSARY.md` lists `Meta.interfaces` and `GlobalID` mapping in the deferred set.
-- The Relay-shaped cards on `KANBAN.md` cannot land without a Relay foundation.
-- [`DjangoConnectionField`][glossary-djangoconnectionfield] and the permissions subsystem cannot start a stable design until interface application is decided.
+A `DjangoType` user declares GraphQL interfaces (Relay `Node` or otherwise) through `class Meta`, and the package must apply them end to end: `GOAL.md`'s target API is `interfaces = (relay.Node,)`, and [`DjangoConnectionField`][glossary-djangoconnectionfield], node lookup and the permissions subsystem all build on a model-backed Relay node type existing.
 
-`0.0.4` shipped the architectural seam this slice needs: `DjangoTypeDefinition.interfaces`, the three-phase `finalize_django_types()` finalizer, and the consumer-override contract for relation fields. `0.0.5` should populate and apply that seam.
+The foundation layer supplies the seam: `DjangoTypeDefinition.interfaces`, the phased `finalize_django_types()` finalizer, and the consumer-override contract for relation fields. This slice populates and applies that seam.
 
-The target is not a full connection/query-field release. The target is to make model-backed Relay node types possible in the package's `class Meta` style, while preserving the existing manual list-query surface and optimizer behavior.
+The target is not a full connection/query-field release. The target is model-backed Relay node types in the package's `class Meta` style, preserving the manual list-query surface and optimizer behavior.
 ## Current state
 - `"interfaces"` is an accepted `Meta` key: it sits in `django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`, validated by `django_strawberry_framework/types/base.py::_validate_interfaces` and stored on the definition. `DEFERRED_META_KEYS` holds only `aggregate_class`, `fields_class`, and `search_fields`.
-- `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type, ...] = ()"` declares `interfaces: tuple[type, ...] = ()` on `DjangoTypeDefinition`. The `0.0.4` foundation slice reserved this slot specifically for this work; this slice fills it and adds no other.
-- `django_strawberry_framework/types/finalizer.py::finalize_django_types` runs Phase 1 (resolve pending relations), Phase 2 (`_attach_relation_resolvers`), the Phase 2.5 interface pass this spec adds, and Phase 3 (`strawberry.type(cls, name=..., description=...)`, then mark the definition finalized).
-- `django_strawberry_framework/types/converters.py::convert_scalar` synthesizes `id` from `AutoField` / `BigAutoField` / `SmallAutoField` (`django_strawberry_framework/types/converters.py #"SCALAR_MAP: dict[type[models.Field], Any]"`, applied via `django_strawberry_framework/types/converters.py::convert_scalar`), so a non-Relay `DjangoType` produces a GraphQL `id: Int!`. On a Relay-shaped type that annotation would collide with Strawberry's `Node._id -> id: GlobalID!`, which is what Decision 2 suppresses.
-- `DjangoType.get_queryset(cls, queryset, info)` (`django_strawberry_framework/types/base.py::DjangoType.get_queryset`) is the shipped visibility hook, documented in `docs/README.md #"visibility hook (cooperates with the optimizer"`. Every framework-owned invocation of it — the Relay node resolvers included — runs through the shared hardened boundary at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` / `::apply_type_visibility_async`, so the Relay resolvers call into it through that seam rather than directly.
+- `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type[object], ...] = ()"` declares the `interfaces` slot on `DjangoTypeDefinition`. This slice fills it and adds no other.
+- `django_strawberry_framework/types/finalizer.py::finalize_django_types` runs Phase 1 (resolve pending relations), Phase 2 (`_attach_relation_resolvers`), the Phase 2.5 interface pass this spec owns, and Phase 3 (`strawberry.type(cls, name=..., description=...)`, then mark the definition finalized).
+- `django_strawberry_framework/types/converters.py::convert_scalar` synthesizes `id` from `AutoField` / `BigAutoField` / `SmallAutoField` (`django_strawberry_framework/types/converters.py #"SCALAR_MAP: "`, applied via `django_strawberry_framework/types/converters.py::convert_scalar`), so a non-Relay `DjangoType` produces a GraphQL `id: Int!`. On a Relay-shaped type that annotation would collide with Strawberry's `Node._id -> id: GlobalID!`, which is what Decision 2 suppresses.
+- `DjangoType.get_queryset(cls, queryset, info)` (`django_strawberry_framework/types/base.py::DjangoType.get_queryset`) is the shipped visibility hook, documented in `docs/README.md` `## Visibility and permissions`. Every framework-owned invocation of it — the Relay node resolvers included — runs through the shared hardened boundary at `django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` / `::apply_type_visibility_async`, so the Relay resolvers call into it through that seam rather than directly.
 - [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] is consultable through `info.context` (`optimizer/extension.py`), and root-level list resolvers receive full optimizer treatment. Per-node optimizer cooperation inside `resolve_node` / `resolve_nodes` is deliberately not wired (Decision 3).
-- The `0.0.4` lifecycle contract is pinned in `docs/GLOSSARY.md #"Declaring a new concrete"`: "Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests that need a new registry lifecycle should use `registry.clear()` and fresh type classes." The Relay slice preserves this contract bit-for-bit.
+- The finalization lifecycle contract is pinned in `docs/GLOSSARY.md #"Declaring a new concrete"`: declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`, and tests that need a new registry lifecycle use `registry.clear()` and fresh type classes. The Relay slice preserves this contract unchanged.
 ## Goals
 1. Accept `Meta.interfaces` end-to-end so a `DjangoType` can declare any Strawberry-compatible interface (Relay `Node` or otherwise).
 2. Make `interfaces = (relay.Node,)` produce a working Relay-node-shaped GraphQL type with `id: GlobalID!`, `resolve_id`, `resolve_id_attr`, `resolve_node`, and `resolve_nodes` wired to Django's ORM and our existing `get_queryset` / optimizer surfaces.
-3. Preserve the existing relation-finalization, optimizer, and override contracts shipped in `0.0.4`. Nothing about Phase 1/2/3 lifecycle changes for non-Relay types.
+3. Preserve the foundation layer's relation-finalization, optimizer, and override contracts. Nothing about the Phase 1/2/3 lifecycle changes for non-Relay types.
 4. Stay tight: no `DjangoConnectionField`, no cascade permissions, no FK redaction sentinels, no node-aware filters, and no broad node-aware optimizer feature work beyond preserving primary-key projection for Relay `id`.
-5. Promote `Meta.interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when each behavior listed here is implemented and tested.
+5. `Meta.interfaces` is an allowed key only because each behavior listed here is applied end to end and tested; a deferred key is never promoted earlier.
 ## Non-goals
 - `DjangoConnectionField` and [`DjangoNodeField`][glossary-djangonodefield]; this spec only lays the groundwork they build on.
 - `Prefetch`-aware Relay edge planning.
@@ -131,9 +119,9 @@ The target is not a full connection/query-field release. The target is to make m
 - Connection-field-driven auto-upgrade of reverse FK / M2M fields.
 - Stable `GlobalID`-typed filter inputs; that surface belongs to the filters slice.
 - Multiple `DjangoType`s per Django model / [`Meta.primary`][glossary-metaprimary], a separate slice.
-- Composite-primary-key support for Relay node mapping (Django 5.2+); explicitly rejected with `ConfigurationError` for `0.0.5` and tracked as future work.
+- Composite-primary-key support for Relay node mapping (Django 5.2+); rejected with `ConfigurationError` and parked as `BACKLOG.md` `composite_pk_globalid`.
 ## User-facing API
-The shipped consumer surface in `0.0.5` is still `class DjangoType` + `class Meta`. No new public exports are added.
+The consumer surface is `class DjangoType` + `class Meta`. The slice adds no public export.
 ### Basic Relay node type
 
 ```python path=null start=null
@@ -204,7 +192,7 @@ class BookType(DjangoType):
 
 Node lookups that filter the row out via `get_queryset` return `None` (or raise when `required=True`), matching strawberry-django's documented behavior. The hook is not invoked directly: both defaults route it through the shared visibility boundary (`django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync` and `::apply_type_visibility_async`), which is what makes an `async def get_queryset` work on the async path and raise `SyncMisuseError` on the sync one (Decision 9).
 ### Non-Relay interface classes
-`Meta.interfaces` may contain any real Strawberry interface class. `0.0.5` applies those interfaces as Python bases before Strawberry decoration; it does not generate extra fields or resolvers for non-Relay interfaces.
+`Meta.interfaces` may contain any real Strawberry interface class. The finalizer applies those interfaces as Python bases before Strawberry decoration; it does not generate extra fields or resolvers for non-Relay interfaces.
 
 ```python path=null start=null
 from datetime import datetime
@@ -237,16 +225,16 @@ A `TypeError` from the base assignment — Python rejecting the resulting MRO or
 
 `Meta.interfaces` is the declared path, not the only one. A consumer who writes `class ItemType(DjangoType, relay.Node):` directly reaches the same Relay wiring, because the Phase 2.5 Relay steps gate on the resolved MRO (`implements_relay_node`) rather than on the `Meta` tuple.
 
-The spike that established `cls.__bases__` mutation is safe here, and the alternative designs this Decision rejected, are in the [rationale companion][spec-015-rationale].
+The evidence that `cls.__bases__` mutation is safe here, and the alternative designs this Decision rejected, are in the [rationale companion][spec-015-rationale].
 ### Decision 2: id field handling
 Suppression is keyed to a single predicate, `django_strawberry_framework/types/base.py::_is_relay_shaped`, which is true when any entry of the validated `Meta.interfaces` tuple is a `relay.Node` subclass **or** the class itself already subclasses `relay.Node`. So it fires for `interfaces = (relay.Node,)`, for a consumer `@strawberry.interface` that extends `relay.Node`, and for direct `class Foo(DjangoType, relay.Node)` inheritance alike. For such a type:
 
 - The **primary-key field's name** (`model._meta.pk.name`, not the literal `"id"`) is removed from synthesized scalar annotations during `_build_annotations`, so the Relay-supplied `id: GlobalID!` is not shadowed by a Django scalar field. Using the field name rather than the column attname is what makes a renamed pk and a relation primary key (`OneToOneField(primary_key=True)`, whose `name` is `user` while its `attname` is `user_id`) suppress correctly.
 - The primary-key column itself is still selected for ORM/optimizer purposes (it is the connector column the optimizer relies on); only the Strawberry annotation is suppressed.
-- If the consumer includes the pk in [`Meta.fields`][glossary-metafields] while declaring `relay.Node`, the slice does not raise — the field is simply not generated on the GraphQL side. Document this clearly in `docs/GLOSSARY.md`.
-- If the type is not Relay-shaped, behavior is unchanged from `0.0.4`: `id: int!` is generated as before.
+- If the consumer includes the pk in [`Meta.fields`][glossary-metafields] while declaring `relay.Node`, the slice does not raise — the field is simply not generated on the GraphQL side. `docs/GLOSSARY.md` `## Relay Node integration` states it.
+- A type that is not Relay-shaped keeps its synthesized `id: Int!`.
 
-This mirrors strawberry-django's `MAP_AUTO_ID_AS_GLOBAL_ID` behavior but is opt-in per type rather than a global setting. A global setting can be added later if real-world adopters need it.
+This mirrors strawberry-django's `MAP_AUTO_ID_AS_GLOBAL_ID` behavior but is opt-in per type rather than a global setting.
 
 Composite primary keys (Django 5.2+) are explicitly out of scope for Relay node mapping. When a Relay-shaped type's model has a composite primary key, finalization raises `ConfigurationError` naming the model and recommending either an explicit `id: relay.NodeID[...]` annotation or removing `relay.Node` from `Meta.interfaces` — and it **honors the first of those remediations**: a type declaring an explicit `relay.NodeID[...]` attribute passes the gate, since it has named a single-column node id. Only the no-annotation case raises. Detection is `isinstance(model._meta.pk, CompositePrimaryKey)`, Django's native composite-pk type.
 
@@ -259,8 +247,8 @@ After interface injection, and before `strawberry.type(cls, ...)`, the finalizer
 ```python path=null start=null
 if issubclass(cls, relay.Node):
     for attr, default_impl in (
-        ("resolve_id_attr", _resolve_id_attr_default),
         ("resolve_id", _resolve_id_default),
+        ("resolve_id_attr", _resolve_id_attr_default),
         ("resolve_node", _resolve_node_default),
         ("resolve_nodes", _resolve_nodes_default),
     ):
@@ -278,11 +266,11 @@ The identity test is a direct copy of strawberry-django's check at `strawberry_d
 
 Injection is preceded by one Phase-2.5 step, `_stamp_relay_id_attr`, which resolves the type's Relay id attribute **once** and pins it on the class's own `__dict__`. It seeds `_id_attr = None` on the class first so Strawberry's inherited-cache read cannot answer with a parent's value, then calls Strawberry's scan and records either the declared `relay.NodeID[...]` attribute name or `"pk"`. Without the stamp the `"pk"` fallback re-runs a full MRO annotation scan on every `resolve_id` call — once per row of every result set — because upstream caches only on success.
 
-The four default implementations live in a new module `django_strawberry_framework/types/relay.py`. Their shapes port strawberry-django's `relay/utils.py`; we do not import strawberry-django at runtime, we copy the patterns and cite the source at the implementation site.
+The four default implementations live in `django_strawberry_framework/types/relay.py`. Their shapes port strawberry-django's `relay/utils.py`; we do not import strawberry-django at runtime, we copy the patterns and cite the source at the implementation site.
 
 - `_resolve_id_attr_default(cls) -> str` — read the `_stamp_relay_id_attr` slot from `cls.__dict__`; when absent (a subclass defined after finalization, or a direct unit call) ask Strawberry's scan directly via `relay.Node.resolve_id_attr.__func__(cls)` and map `NodeIDAnnotationError` to `"pk"`. Behavioral port of `strawberry_django/relay/utils.py::resolve_model_id_attr`. **Not** `super(cls, cls).resolve_id_attr()`: with `cls` bound at runtime, a Relay-shaped `DjangoType` subclassing another Relay-shaped `DjangoType` inherits the parent's installed copy of this default and the MRO walk lands back on it re-bound to the child — infinite recursion. No `DjangoTypeDefinition.id_attr` slot is added; Strawberry owns the detection and the stamp owns the caching.
 - `_resolve_id_default(cls, root, *, info) -> str` — `id_attr = cls.resolve_id_attr(); if id_attr == "pk": id_attr = root.__class__._meta.pk.attname; try: return str(root.__dict__[id_attr]) except KeyError: return str(getattr(root, id_attr))`. Port of `strawberry_django/relay/utils.py::resolve_model_id`. The `"pk"` → concrete `attname` coercion is load-bearing: Django stores the pk under its column attname (`"id"`, `"uuid_id"`, …), never under the literal `"pk"`, so without it `root.__dict__["pk"]` always misses and Decision 7's "no avoidable lazy loads on `resolve_id`" invariant is violated. The key is read off `root.__class__`, not off the definition's model, so a proxy-model row is not mis-keyed.
-- `_resolve_node_default(cls, node_id, *, info, required=False)` — seed the queryset with `initial_queryset(cls)` (the model's `_default_manager.all()`, resolved through the definition), apply the type's visibility through `apply_type_visibility_sync`, filter on the resolved id attribute, and return `qs.get()` when `required` else `qs.first()`. Port of `strawberry_django/relay/utils.py::resolve_model_node`. The optimizer-extension consultation step upstream performs (`ext = optimizer extension on info.context; if ext: qs = ext.optimize(qs, info=info)`) is **deliberately not wired**: Decision 7's list-path invariants are exercised through the root-gated `DjangoOptimizerExtension`, and node-lookup optimizer cooperation becomes load-bearing only when a node field ships. The seam stays open at the same site.
+- `_resolve_node_default(cls, node_id, *, info, required=False)` — coerce `node_id` (a raw id string or a `relay.GlobalID`) to the id column's type, where an id the column rejects identifies no row; seed the queryset with `initial_queryset(cls)` (the model's `_default_manager.all()`, resolved through the definition), apply the type's visibility through `apply_type_visibility_sync`, filter on the resolved id attribute, and return `qs.get()` when `required` else `qs.first()`. Port of `strawberry_django/relay/utils.py::resolve_model_node`. The optimizer-extension consultation step upstream performs (`ext = optimizer extension on info.context; if ext: qs = ext.optimize(qs, info=info)`) is **not wired**: Decision 7's list-path invariants are exercised through the root-gated `DjangoOptimizerExtension`, and `DjangoNodeField` / `DjangoNodesField` dispatch into these defaults without an optimizer pass. The seam stays open at the same site.
 - `_resolve_nodes_default(cls, *, info, node_ids=None, required=False)` — same seed and visibility step, optionally filtering on `node_ids` via `id_attr__in`. `node_ids=None` returns the visibility-filtered queryset; a supplied sequence returns a list whose indexes correspond 1:1 with the input, materialized once so a one-shot iterable survives both the `IN` filter and the ordering pass. `required=False` yields `None` for a missing id; `required=True` raises the model's `DoesNotExist`, homogeneous with `_resolve_node_default`'s `qs.get()` so consumers write a single `except Model.DoesNotExist:` clause. Port of `strawberry_django/relay/utils.py::resolve_model_nodes`, its `map_results` ordering pass included. The same optimizer deferral applies.
 
 `info` is keyword-only on all three resolvers that take it. Strawberry's Relay machinery calls `cls.resolve_node(node_id, info=info, required=...)`, so a positional `info` slot raises `TypeError: got multiple values for argument 'info'`.
@@ -291,14 +279,14 @@ Neither node default calls `cls.get_queryset` directly. Both route it through th
 
 The rejected alternatives, the upstream borrow justifications, and the recursion the `super()` spelling would have shipped are in the [rationale companion][spec-015-rationale].
 ### Decision 4: validation
-`_validate_meta` (in `django_strawberry_framework/types/base.py::_validate_meta`) gains an interface validator that runs when `interfaces` is declared. Reference: the existing `_format_unknown_fields_error` helper at `django_strawberry_framework/types/base.py::_format_unknown_fields_error` is the canonical error-shape pattern; new errors here reuse the same `model.Meta.<key> ...` shape so consumer-visible failures stay consistent.
+`_validate_meta` (in `django_strawberry_framework/types/base.py::_validate_meta`) gains an interface validator that runs when `interfaces` is declared. Reference: the `_format_unknown_fields_error` helper at `django_strawberry_framework/types/base.py::_format_unknown_fields_error` is the canonical error-shape pattern; new errors here reuse the same `model.Meta.<key> ...` shape so consumer-visible failures stay consistent.
 
 Validation rules:
 
 - `interfaces` may be a tuple/list of interface classes or a single real Strawberry interface class. Tuple/list values are normalized to a tuple as-is; a single interface class such as `interfaces = relay.Node` (or the common missing-comma spelling `interfaces = (relay.Node)`) is normalized to `(relay.Node,)`. Strings, sets, generators, and other invalid non-sequence values raise `ConfigurationError`.
-- An empty tuple is the same as not declaring the key at all (no-op, identical to `0.0.4` behavior bit-for-bit).
+- An empty tuple is the same as not declaring the key at all (a true no-op).
 - Each entry must satisfy `hasattr(entry, "__strawberry_definition__") and entry.__strawberry_definition__.is_interface`. `relay.Node` already satisfies this — it is decorated with `@interface(...)` upstream — so no special-casing is required.
-- String entries (e.g. `interfaces = ("Node",)`) raise `ConfigurationError`. Lazy/forward-reference interface lookup is out of scope for `0.0.5`.
+- String entries (e.g. `interfaces = ("Node",)`) raise `ConfigurationError`. Lazy/forward-reference interface lookup is out of scope.
 - The six `strawberry.relay` non-interface helpers — `GlobalID`, `NodeID`, `Connection`, `ListConnection`, `Edge`, `PageInfo` — are rejected by name, with a message saying what each one actually is. The check matches by object identity and runs **before** the non-class branch, because `relay.NodeID` is a `typing.Annotated` alias rather than a class and would otherwise die unnamed in the generic rejection.
 - Passing `DjangoType` itself (or another consumer `DjangoType` subclass) as an interface entry raises `ConfigurationError`. `DjangoType` is not a Strawberry interface.
 - Duplicates raise `ConfigurationError`. The `__bases__` injection step can no-op idempotently, but tolerating duplicates here would let typos hide.
@@ -308,22 +296,22 @@ Validation rules:
 Composition with [`Meta.optimizer_hints`][glossary-metaoptimizer-hints]: the two keys are independent. `optimizer_hints` continues to apply unchanged. Suppressing the synthesized primary-key annotation on a Relay-shaped type has no effect on the optimizer field map (`FieldMeta` is keyed off Django's field selection, not Strawberry's annotations) — the pk is still selected as the connector column.
 ### Decision 5: lifecycle and idempotency
 - Calling `finalize_django_types()` twice is still a no-op via the existing short-circuit at `django_strawberry_framework/types/finalizer.py::finalize_django_types #"if registry.is_finalized():"`.
-- `registry.clear()` (`django_strawberry_framework/registry.py::TypeRegistry.clear`) already drops `_definitions`, `_pending`, `_finalized`, `_types`, `_models`, and `_enums`. Test isolation continues to require **fresh class objects** after `clear()`, exactly as documented in `docs/GLOSSARY.md #"Declaring a new concrete"`. No new tracking state is added on `DjangoTypeDefinition` for the Relay slice — the source of truth is `cls.__bases__` itself for interface injection and the `relay.Node` MRO check for resolver injection.
-- New finalizer step ordering relative to the existing three-loop structure at `django_strawberry_framework/types/finalizer.py::finalize_django_types`:
-  - Phase 1 unchanged (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"for pending in registry.iter_pending_relations():"`): resolve pending relations.
-  - Phase 2 unchanged (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"_attach_relation_resolvers"`): `_attach_relation_resolvers` for every non-finalized definition.
-  - **NEW** Phase 2.5: for each non-finalized definition, if `definition.interfaces` is non-empty, inject those interfaces into `cls.__bases__` (only those not already present in `cls.__mro__`); if the resolved class is Relay-Node-shaped, run the composite-pk check (Decision 2) and inject the four `resolve_*` defaults using the `__func__` identity test from Decision 3. Gating the Relay half on the resolved MRO rather than on the `Meta` tuple is what makes a directly-inheriting `class Foo(DjangoType, relay.Node)` reach the same wiring. Later cards add further steps to this same window (the GlobalID type-name resolver, `Meta.cursor_field` validation); they run after this slice's and change nothing here.
-  - Phase 3 unchanged (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"strawberry.type(type_cls, name=definition.name"`): `strawberry.type(cls, name=definition.name, description=definition.description)`; mark `definition.finalized = True`.
+- `registry.clear()` (`django_strawberry_framework/registry.py::TypeRegistry.clear`) drops every registry map, `_definitions`, `_pending` and `_finalized` included. Test isolation continues to require **fresh class objects** after `clear()`, exactly as documented in `docs/GLOSSARY.md #"Declaring a new concrete"`. No new tracking state is added on `DjangoTypeDefinition` for the Relay slice — the source of truth is `cls.__bases__` itself for interface injection and the `relay.Node` MRO check for resolver injection.
+- Finalizer step ordering at `django_strawberry_framework/types/finalizer.py::finalize_django_types`:
+  - Phase 1 (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"for pending in registry.iter_pending_relations():"`): resolve pending relations.
+  - Phase 2 (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"_attach_relation_resolvers"`): `_attach_relation_resolvers` for every non-finalized definition.
+  - Phase 2.5: for each non-finalized definition, if `definition.interfaces` is non-empty, inject those interfaces into `cls.__bases__` (only those not already present in `cls.__mro__`); if the resolved class is Relay-Node-shaped, run the composite-pk check (Decision 2) and inject the four `resolve_*` defaults using the `__func__` identity test from Decision 3. Gating the Relay half on the resolved MRO rather than on the `Meta` tuple is what makes a directly-inheriting `class Foo(DjangoType, relay.Node)` reach the same wiring. Later specs own further steps in this same window (the GlobalID type-name resolver, `Meta.cursor_field` validation, relation-as-Connection synthesis, sidecar and mutation binding); they run after this slice's and change nothing here.
+  - Phase 3 (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"strawberry.type(type_cls, name=definition.name"`): `strawberry.type(cls, name=definition.name, description=definition.description)`; mark `definition.finalized = True`.
 
 The primary-key annotation suppression in Decision 2 happens earlier — during `__init_subclass__` collection (`django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`, inside `_build_annotations`) — because that is where the synthesized annotation map is assembled. The split between suppression (collection-time) and base injection (finalization-time) is deliberate and constrains the implementation: collection is where `cls.__annotations__` is written, so keeping suppression beside annotation synthesis keeps that data flow local; base injection has to wait for finalization because Phase 1 relation resolution still mutates `cls.__annotations__`, and a partially-finalized class must not also be a partially-interface-injected one.
 ### Decision 6: compatibility with the override contract
-The `0.0.4` relation-field consumer-override contract (`DjangoTypeDefinition.consumer_annotated_relation_fields` and `consumer_assigned_relation_fields`, see `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__` and `django_strawberry_framework/types/finalizer.py::finalize_django_types`) is preserved unchanged.
+The foundation layer's relation-field consumer-override contract (`DjangoTypeDefinition.consumer_annotated_relation_fields` and `consumer_assigned_relation_fields`, see `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__` and `django_strawberry_framework/types/finalizer.py::finalize_django_types`) is preserved unchanged.
 
 The new `Meta.interfaces` consumer-override contract is:
 
 - Annotations and fields the interface itself declares (e.g. `Node._id`, which renders as the `id: GlobalID!` field) are owned by the interface. Consumers must not shadow them on the `DjangoType` subclass; doing so will produce a Strawberry-level error at decoration time, which the spec leaves to Strawberry rather than re-implementing.
 - `resolve_id_attr` / `resolve_id` / `resolve_node` / `resolve_nodes` declared anywhere in the consumer's MRO above `relay.Node` take precedence over framework defaults via the `__func__` identity test, matching strawberry-django's semantics so migration from that package does not surprise consumers.
-- Setting `interfaces = ()` or omitting the key keeps `0.0.4` behavior bit-for-bit: Decision 4's validation makes the empty/absent case a true no-op, the primary-key suppression step included.
+- Setting `interfaces = ()` or omitting the key changes nothing: Decision 4's validation makes the empty/absent case a true no-op, the primary-key suppression step included.
 - `is_type_of` injection (Decision-1 borrow) is added unconditionally for every `DjangoType`, not only Relay-declared ones. If the consumer declares their own `is_type_of` we do not overwrite it, matching `strawberry_django/type.py::_process_type #"is_type_of"`; the discriminator here is `cls.__dict__` membership, not the `__func__` test, because there is no inherited framework default to distinguish.
 
 Why unconditional injection was chosen over Relay-only injection is in the [rationale companion][spec-015-rationale].
@@ -332,30 +320,27 @@ Relay node support must not regress shipped optimizer behavior. Required invaria
 
 - **Primary-key projection.** When GraphQL selects Relay `id` on a Relay-declared `DjangoType`, the optimizer's [`only()`][glossary-only-projection] projection must include the concrete primary-key attname. Reference: `django_strawberry_framework/optimizer/walker.py::_walk_selections` (where scalar selections are appended to `only_fields`), and `django_strawberry_framework/optimizer/walker.py::_plan_select_relation` (relation select planning). Strawberry resolves Relay `id` via `_resolve_id_default`, which reads `root.__dict__[attname]` first, so the only way that path produces no extra query is if the optimizer kept `attname` in `only()`.
 - **Connector-column preservation.** Existing connector-column behavior (`docs/GLOSSARY.md #"Connector columns required for"`) for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths is unchanged. The Relay slice does not modify the walker.
-- **[FK-id elision][glossary-fk-id-elision] scoping.** B2 FK-id elision (`django_strawberry_framework/types/resolvers.py::_build_fk_id_stub`, `django_strawberry_framework/optimizer/field_meta.py::FieldMeta` #"fk_id_elision_eligible") is scoped to forward relation selections. The Relay slice does not introduce a code path where `GlobalID` is fed into FK-id elision logic: GlobalID handling lives entirely in the Relay resolvers (`django_strawberry_framework/types/relay.py`) and the walker continues to see the Django primary-key column it always saw.
+- **[FK-id elision][glossary-fk-id-elision] scoping.** FK-id elision (`django_strawberry_framework/types/resolvers.py::_build_fk_id_stub`, `django_strawberry_framework/optimizer/field_meta.py::FieldMeta` #"fk_id_elision_eligible: bool = False") is scoped to forward relation selections. The Relay slice does not introduce a code path where `GlobalID` is fed into FK-id elision logic: GlobalID handling lives entirely in the Relay resolvers (`django_strawberry_framework/types/relay.py`) and the walker continues to see the Django primary-key column it always saw.
 - **No avoidable lazy loads on `resolve_id`.** `_resolve_id_default` reads from `root.__dict__` first; if the optimizer kept the pk in `only()`, the `__dict__` cache hit avoids any lazy load. That cache-then-`getattr` order is the reason the resolver is written the way it is, and reversing it silently costs a query per row.
 - **Relation traversal across Relay node targets.** Declaring a relation's target `DjangoType` Relay-shaped does not change how that relation is planned. The optimizer reads target metadata from `DjangoTypeDefinition`, not from the Strawberry `__strawberry_definition__`, so suppressing the synthesized scalar primary-key annotation is invisible to it; planning for a Relay-declared target is decided by exactly the rules that decide it for any other target, the `get_queryset` → `Prefetch` downgrade included. This slice does not modify the walker.
 
 Implementation note: `DjangoTypeDefinition.field_map` (`django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"field_map: dict[str, FieldMeta]"`) keeps every selected Django field including the primary key, regardless of whether the Strawberry annotation was suppressed — the field map is the optimizer's source of truth and suppression happens later in the data flow, in `_build_annotations`.
 ### Decision 8: registry implications and one-type-per-model
-[`Meta.primary`][glossary-metaprimary] is out of scope for `0.0.5`.
+This slice resolves a node lookup's model through the type's own `DjangoTypeDefinition`, so `_resolve_node_default` and `_resolve_nodes_default` never consult the model-to-type map and are unambiguous whatever else is registered against the model.
 
-Consequences for `0.0.5`:
+Which of several types per model a GlobalID decodes to is not this slice's contract: [`Meta.primary`][glossary-metaprimary] (`spec-018-meta_primary-0_0_6.md`) selects the primary type `registry.get(model)` returns, and `spec-031-globalid_encoding-0_0_9.md` owns the payload strategies that decide whether a GlobalID names the model (decoding to the primary) or the GraphQL type. The [rationale companion][spec-015-rationale] records why this slice left the question to them.
 
-- Node lookup remains one `DjangoType` per Django model (`django_strawberry_framework/registry.py::TypeRegistry.register`). `_resolve_node_default` and `_resolve_nodes_default` look up the model through the type's `DjangoTypeDefinition`; with one type per model that resolution is unambiguous.
-- Multiple `DjangoType`s per model still raise `ConfigurationError` (`django_strawberry_framework/registry.py::TypeRegistry.register`). The Relay slice does not change that contract.
-- Which of several types per model owns Relay node lookup is left to the slice that lands `Meta.primary`; deferring it keeps `0.0.5` tight. The [rationale companion][spec-015-rationale] records the answer that slice and its successors gave.
-- `registry.clear()` continues to reset definitions and pending relations only; tests that need a clean lifecycle still create fresh class objects after clearing.
+`registry.clear()` resets the registry only; tests that need a clean lifecycle still create fresh class objects after clearing.
 ### Decision 9: async resolver support
 The four `resolve_*` defaults must work in both sync and async resolver contexts because Strawberry permits either at every field, and a consumer's `DjangoType.get_queryset` may itself be sync or async. Without explicit async coverage, the Relay borrow ports only half of strawberry-django's resolver shape and forces every async consumer to re-implement the four defaults.
 
 - `_resolve_id_attr_default(cls)` and `_resolve_id_default(cls, root, *, info)` are sync. They touch no database; they read class state, `root.__dict__`, and `getattr`. Promoting them to async would force `await` plumbing through every Relay node serialization for no benefit.
-- `_resolve_node_default` and `_resolve_nodes_default` execute querysets and ship both paths. Context detection is `strawberry.utils.inspect.in_async_context()`; on the async branch each returns a coroutine that awaits the visibility hook, applies the id filter, and materializes through Django's native async ORM — `aget` / `afirst` for the singular path, `async for` for the plural one. No path wraps a sync call in `sync_to_async`.
+- `_resolve_node_default` and `_resolve_nodes_default` execute querysets and ship both paths. The executor driving the operation is read from `django_strawberry_framework/utils/execution_mode.py::async_execution`; on the async branch each returns a coroutine that awaits the visibility hook, applies the id filter, and materializes through Django's native async ORM — `aget` / `afirst` for the singular path, `async for` for the plural one. No path wraps a sync call in `sync_to_async`.
 - The seam between the two colors is the shared visibility boundary, not the resolvers: the async branch awaits `apply_type_visibility_async`, so a consumer's `async def get_queryset` is honored, and the sync branch calls `apply_type_visibility_sync`, which **rejects** a coroutine return with `SyncMisuseError` rather than letting it surface as `AttributeError: 'coroutine' object has no attribute 'filter'`. `SyncMisuseError` multiple-inherits `ConfigurationError` and `RuntimeError` so a consumer catching either base class still matches, and the unawaited coroutine is closed before the raise.
 - Optimizer cooperation is not part of this contract on either color: per Decision 3 the node defaults consult no optimizer extension. The root-gated optimizer's own async support is unaffected because these resolvers do not call into it.
 - A consumer-authored `async def resolve_node(...)` overrides the framework default per Decision 6's `__func__` identity test, exactly the same way a sync override does. The override discriminator does not care about the function's awaitability.
 ## Internal helper surface
-The Relay machinery lives in a new module, `django_strawberry_framework/types/relay.py`. Its surface is internal — none of these helpers are re-exported from the top-level package, and the public surface (item 11 of the Definition of done) is unchanged.
+The Relay machinery lives in `django_strawberry_framework/types/relay.py`. Its surface is internal — none of these helpers is re-exported from the top-level package (Definition of done, the no-new-public-exports item).
 
 ```python path=null start=null
 def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
@@ -410,43 +395,38 @@ def _resolve_nodes_default(
     """Default ``Node.resolve_nodes``; order-preserving and missing-aware."""
 ```
 
-`info` is keyword-only on every resolver that takes it, and `node_id` is positional on `_resolve_node_default`, because that is the shape Strawberry's Relay machinery calls (Decision 3). The signatures attached to the class must match Strawberry's `relay.Node` expectations as they exist in the `strawberry-graphql>=0.316.0` lower bound declared in `pyproject.toml #"strawberry-graphql>=0.316.0"`; the Django floor is `Django>=5.2.16`.
+`info` is keyword-only on every resolver that takes it, and `node_id` is positional on `_resolve_node_default`, because that is the shape Strawberry's Relay machinery calls (Decision 3). The signatures attached to the class must match Strawberry's `relay.Node` expectations as they exist at the `strawberry-graphql>=0.322.2` lower bound declared in `pyproject.toml #"strawberry-graphql>=0.322.2"`; the Django floor is `pyproject.toml #"Django>=5.2.16"`.
 ## Implementation plan
-The slice is small enough to implement as a single PR but easier to review as five commits. Each commit cites the exact symbol touched.
+The slice is five steps, each naming the symbols it owns.
 1. **Validation + storage**
-   - `django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"`: keep `"interfaces"` in `DEFERRED_META_KEYS` for now (promotion is the last step).
-   - `django_strawberry_framework/types/base.py::_validate_meta`: add the interface normalization / duplicate / Strawberry-interface check from Decision 4, including support for a single real interface class (`interfaces = relay.Node` or `interfaces = (relay.Node)`), string-entry rejection, and `DjangoType` self-reference rejection. The composite-pk check is **not** done here — it lives in Phase 2.5 (Slice 4) so a single check site catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly.
-   - `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"definition = DjangoTypeDefinition("` (the `DjangoTypeDefinition(...)` construction): pass the normalized interfaces tuple through to the existing `interfaces` slot at `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type, ...] = ()"`.
-   No new slot on `DjangoTypeDefinition`: Decision 3 relies on Strawberry's `NodeID` annotation rather than a per-type `id_attr` Meta key, so the slot would be dead state.
+   - `django_strawberry_framework/types/base.py::_validate_meta` calls `_validate_interfaces` for the normalization / duplicate / Strawberry-interface checks of Decision 4, including a single real interface class (`interfaces = relay.Node` or `interfaces = (relay.Node)`), string-entry rejection, and `DjangoType` self-reference rejection. The composite-pk check is **not** done here — it lives in Phase 2.5 (step 4) so a single check site catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly.
+   - `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"definition = DjangoTypeDefinition("` passes the normalized interfaces tuple to the `interfaces` slot at `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type[object], ...] = ()"`.
+   No other slot on `DjangoTypeDefinition`: Decision 3 relies on Strawberry's `NodeID` annotation rather than a per-type `id_attr` Meta key, so the slot would be dead state.
 
 2. **`is_type_of` injection**
-   - New helper in `django_strawberry_framework/types/relay.py` invoked from the existing `__init_subclass__` flow at `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__`, applied to every `DjangoType` subclass (Relay or not, per Decision 6) that does not declare its own `is_type_of`. Direct port of `strawberry_django/type.py::_process_type #"is_type_of"`.
+   - `install_is_type_of` in `django_strawberry_framework/types/relay.py`, invoked from `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__` for every `DjangoType` subclass (Relay or not, per Decision 6) that does not declare its own `is_type_of`. Port of `strawberry_django/type.py::_process_type #"is_type_of"`.
 
 3. **Primary-key annotation suppression**
-   - `django_strawberry_framework/types/base.py::_build_annotations`: when the class is Relay-shaped per Decision 2's predicate, drop the primary-key field's name from the synthesized annotations dict before assignment. The selected-field list itself is unchanged so `FieldMeta` and the optimizer still see the pk as a connector column.
-   - Preserve the primary-key field in metadata for optimizer/projection use (Decision 7).
+   - `django_strawberry_framework/types/base.py::_build_annotations`: when the class is Relay-shaped per Decision 2's predicate, the primary-key field's name is dropped from the synthesized annotations dict. The selected-field list itself is unchanged so `FieldMeta` and the optimizer still see the pk as a connector column (Decision 7).
 
 4. **Interface base-class injection + Relay resolver defaults**
-   - New module `django_strawberry_framework/types/relay.py` containing `_resolve_id_attr_default`, `_resolve_id_default`, `_resolve_node_default`, `_resolve_nodes_default`, `apply_interfaces`, `implements_relay_node`, `install_relay_node_resolvers`, `install_is_type_of`, `_check_composite_pk_for_relay_node`, and `_stamp_relay_id_attr` per Decision 3 and the helper surface above.
+   - `django_strawberry_framework/types/relay.py` holds `_resolve_id_attr_default`, `_resolve_id_default`, `_resolve_node_default`, `_resolve_nodes_default`, `apply_interfaces`, `implements_relay_node`, `install_relay_node_resolvers`, `install_is_type_of`, `_check_composite_pk_for_relay_node`, and `_stamp_relay_id_attr` per Decision 3 and the helper surface above.
    - `_resolve_node_default` and `_resolve_nodes_default` ship sync and async paths per Decision 9; the two ID-shape defaults stay sync.
-   - `django_strawberry_framework/types/finalizer.py::finalize_django_types`: insert the new Phase 2.5 step from Decision 5 between the existing `_attach_relation_resolvers` loop and the `strawberry.type(...)` loop. The new step uses `registry.iter_definitions()` exactly the same way the existing loops do (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"_attach_relation_resolvers"` and `django_strawberry_framework/types/finalizer.py::finalize_django_types #"strawberry.type(type_cls, name=definition.name"`), so the change is structural rather than algorithmic. The composite-pk check fires here when `relay.Node` is in the resolved bases; it surfaces a `ConfigurationError` that names the model.
-   - Add optimizer/projection tests for Relay `id` so Decision 7 is verified before promotion.
+   - `django_strawberry_framework/types/finalizer.py::finalize_django_types` runs the Phase 2.5 step from Decision 5 between the `_attach_relation_resolvers` loop and the `strawberry.type(...)` loop, iterating `registry.iter_definitions()` the same way those loops do (`django_strawberry_framework/types/finalizer.py::finalize_django_types #"_attach_relation_resolvers"` and `django_strawberry_framework/types/finalizer.py::finalize_django_types #"strawberry.type(type_cls, name=definition.name"`). The composite-pk check fires here when `relay.Node` is in the resolved bases; it surfaces a `ConfigurationError` that names the model.
+   - Optimizer/projection tests for Relay `id` verify Decision 7.
 
-5. **Promotion + docs + version**
-   - `django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"` and `django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`: move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`. The promotion is last because a deferred key may only be promoted once every behavior it enables is applied end-to-end (Goal 5).
-   - Doc updates as listed in the "Doc updates" section.
-   - Version bump in `pyproject.toml #"version ="` and `django_strawberry_framework/__init__.py #"__version__ ="`; update `tests/base/test_init.py` assertion; regenerate `uv.lock` via `uv lock`.
-
-The five commits can be squashed into a single PR; the per-commit breakdown exists for review legibility.
+5. **Promotion + docs**
+   - `"interfaces"` sits in `django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`, not `django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"`. Promotion is the last step because a deferred key is promoted only once every behavior it enables is applied end to end (Goal 5).
+   - The doc homes listed in "Doc updates".
 ## Edge cases and constraints
-- **Composite primary keys (Django 5.2+).** A Relay-shaped type over a composite-pk model raises `ConfigurationError` at finalization unless it declares an explicit `id: relay.NodeID[...]` annotation, which the gate accepts (Decision 2). The error names the model and points to that annotation or to removing `relay.Node` from `Meta.interfaces`. Deterministic composite-key encoding is future work, tracked for once Django stabilizes the composite-pk API.
+- **Composite primary keys (Django 5.2+).** A Relay-shaped type over a composite-pk model raises `ConfigurationError` at finalization unless it declares an explicit `id: relay.NodeID[...]` annotation, which the gate accepts (Decision 2). The error names the model and points to that annotation or to removing `relay.Node` from `Meta.interfaces`. Deterministic composite-key encoding is parked as `BACKLOG.md` `composite_pk_globalid`.
 - **Models without an `AutoField`/`BigAutoField`/`SmallAutoField` primary key.** The default `_resolve_id_attr_default` returns `"pk"`; Django resolves that to the actual primary-key attname (`UUIDField`, custom-typed pk, etc.). No special-casing is required as long as the column has a single-column pk.
 - **Nullable primary keys.** Not supported by Django for normal models; out of scope.
 - **Inherited interfaces via parent `DjangoType`.** A subclass of a Relay-declared `DjangoType` inherits `relay.Node` through `__bases__`. The validation rule in Decision 4 accepts this case as a no-op when the subclass also declares `Meta.interfaces = (relay.Node,)`.
-- **Schema reload during tests.** `registry.clear()` plus fresh class definitions remains the only supported reset path. Any HTTP-level test that imports a Relay-declared `DjangoType` must follow the reload pattern documented in `docs/TREE.md` "What each folder holds" for `examples/fakeshop/test_query/`.
+- **Schema reload during tests.** `registry.clear()` plus fresh class definitions is the only supported reset path. Any HTTP-level test that rebuilds a schema holding a Relay-declared `DjangoType` goes through the shared complete-reload helper `examples/fakeshop/schema_reload.py`.
 ## Test plan
 Tests are placed by the tree rules in `docs/TREE.md` and `AGENTS.md`: package-internal behavior in `tests/`, and anything reachable from a real GraphQL query in the live `examples/fakeshop/test_query/` tier. Test-tree placement is mandatory; the spec's pinning is a deliberate copy of that rule. Coverage: the slice must keep the package coverage gate at 100% (`fail_under = 100`).
-### `tests/types/test_relay_interfaces.py` (new)
+### `tests/types/test_relay_interfaces.py`
 Package-internal tests, system-under-test is `django_strawberry_framework`.
 
 Validation and lifecycle:
@@ -458,7 +438,7 @@ Validation and lifecycle:
 - `test_meta_interfaces_rejects_non_interface_classes` — passing a plain class raises `ConfigurationError`.
 - `test_meta_interfaces_rejects_djangotype_self_reference` — passing `DjangoType` (or another `DjangoType` subclass) raises `ConfigurationError`.
 - `test_meta_interfaces_rejects_duplicates` — `(Node, Node)` raises `ConfigurationError`.
-- `test_meta_interfaces_empty_tuple_treated_as_unset` — `interfaces = ()` produces unchanged `0.0.4` behavior bit-for-bit.
+- `test_meta_interfaces_empty_tuple_treated_as_unset` — `interfaces = ()` behaves exactly as an undeclared key.
 - `test_meta_interfaces_stored_on_definition` — accepted interfaces tuple is stored on `DjangoTypeDefinition.interfaces`.
 - `test_class_already_inherits_relay_node_directly` — `class Foo(DjangoType, relay.Node): class Meta: interfaces = (relay.Node,)` is a no-op duplicate, no error.
 - `test_relay_node_with_composite_pk_raises` — composite primary key combined with `relay.Node` raises `ConfigurationError` at finalization.
@@ -466,13 +446,13 @@ Validation and lifecycle:
 Relay Node behavior:
 
 - `test_relay_node_strips_django_id_annotation` — on a Relay-shaped type the synthesized primary-key annotation is absent from the built annotation map (the Relay-supplied `id: GlobalID!` field is owned by the interface).
-- `test_non_relay_type_keeps_id_int` — control test: a `DjangoType` without `relay.Node` still produces `id: int!` (no regression vs `0.0.4`).
+- `test_non_relay_type_keeps_id_int` — control test: a `DjangoType` without `relay.Node` still produces `id: int!`.
 - `test_relay_node_injects_default_resolvers` — after finalization the type has classmethods `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes`.
 - `test_resolve_id_attr_falls_back_to_pk` — with no `relay.NodeID[...]` annotation the default returns the literal `"pk"` (the coercion to the concrete attname happens one layer later, in `resolve_id`).
 - `test_resolve_id_uses_dict_cache` — when the row is already loaded into `root.__dict__`, `resolve_id` returns the str without an extra query.
 - `test_resolve_id_falls_back_to_getattr` — when the pk is not in `root.__dict__`, `resolve_id` reads via `getattr` and coerces to `str`.
 - `test_resolve_node_applies_get_queryset` — a custom `get_queryset` filtering `is_private=False` is applied during node lookup; rows that the filter excludes return `None` (or raise when `required=True`).
-- `test_resolve_nodes_preserves_order_and_missing` — passing `node_ids=[a, missing, b]` returns `[obj_a, None, obj_b]` when `required=False`.
+- `test_resolve_nodes_accepts_generator_node_ids` — passing a one-shot generator of `[a, missing, b]` returns `[obj_a, None, obj_b]` when `required=False`.
 - `test_resolve_nodes_required_raises_for_missing` — `required=True` raises the model's `DoesNotExist` for a missing id, the same exception the singular path raises.
 - `test_resolve_node_async_context` — when invoked from an async resolver, `_resolve_node_default` resolves through Django's async ORM API (`afirst`, or `aget` under `required=True`) and returns the matching row.
 - `test_resolve_nodes_async_context` — same for `_resolve_nodes_default`, including the order-preserving / missing-id behavior.
@@ -492,42 +472,25 @@ Two assertions, both earned over live `/graphql/` HTTP against the `library` app
 ### `tests/optimizer/test_relay_id_projection.py`
 These pin Decision 7's projection invariants:
 
-- `test_relay_id_only_projection_includes_pk_attname` — selecting `{ allCategories { id } }` on a Relay-declared type produces an `only()` projection that includes the model's concrete pk attname.
+- `test_relay_id_with_custom_pk_attname_avoids_lazy_load` — a Relay type whose pk attname is not `id` (`apps/library/models.py::PatronProfile`, keyed by its one-to-one `patron_id`) answers `{ id postalCode }` in one query, so the `only()` projection carries the concrete pk attname.
 - `examples/fakeshop/test_query/test_products_visibility_api.py::test_relay_id_and_name_selection_is_clean_under_strictness_raise_over_http` — selecting `{ categories { id name } }` on the shipped `CategoryType` completes without error under `strictness="raise"`, so Relay `id` never lazy-loads the pk.
 - `examples/fakeshop/test_query/test_products_visibility_api.py::test_relay_id_only_connection_page_costs_one_query_and_emits_decodable_ids` — an id-only page costs one query and every emitted GlobalID decodes, so `resolve_id` read the loaded primary-key value.
 
 Decision 7's relation-traversal invariant is pinned live instead, across the four Relay-declared `products` types: `examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_selects_nested_forward_fk_depth_2_over_http` (depth-2 forward FK) and `::test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http` (depth-2 reverse FK) each pin a deterministic query count for a nested traversal whose targets are Relay-declared.
-### `tests/test_registry.py` (extend)
-- After `registry.clear()`, redefining a Relay-declared `DjangoType` and finalizing again works (idempotency / clean-state). The redefined class must produce a fresh `Node` interface registration.
-### `examples/fakeshop/test_query/test_library_api.py` (extend)
-- Add one HTTP test where a `library` model declares `interfaces = (relay.Node,)` and a `/graphql/` query selects `id` (`GlobalID`) and a scalar field. Assert the response decodes the GlobalID back to the expected database id. Follow the existing reload pattern at the top of `test_library_api.py` (clear the global registry, reload app schema modules, then reload the project schema and URLconf).
+### `tests/test_registry.py`
+- `test_registry_clear_allows_fresh_relay_declared_type_to_finalize` — after `registry.clear()`, redefining a Relay-declared `DjangoType` and finalizing again works, and the redefined class carries `relay.Node` in its MRO.
+### `examples/fakeshop/test_query/test_library_api.py`
+- `test_library_relay_node_global_id_round_trips` — a Relay-declared `library` type answers a `/graphql/` query selecting `id` (`GlobalID`) and a scalar field, and the GlobalID decodes back to the expected database id.
 ## Doc updates
-- `docs/GLOSSARY.md`
-  - Move `Meta.interfaces` and `Relay GlobalID mapping for auto IDs` from deferred to shipped.
-  - Add a "Relay Node integration" subsection under "DRF-shaped GraphQL API" describing the four `resolve_*` methods, the id suppression behavior, and the composite-pk constraint.
-  - Update the `0.0.5` version mention.
-
-- `docs/README.md`
-  - Add a short Node example next to the quick start, gated behind a "Relay Node" subsection so the simple example stays simple.
-
-- `TODAY.md`
-  - Drop `Meta.interfaces` and `Relay node` from the "wait for" list once Node-only support ships. Connection support stays on the list.
-  - Update the fakeshop guidance if any library schema starts using `relay.Node`.
-
-- `KANBAN.md`
-  - Move this card to Done as `DONE-015-0.0.5`, describing the shipped scope, the borrowed patterns, and the test files.
-  - Advance the recommended hybrid sequence past Relay; the sidecar line ([`FieldSet`][glossary-fieldset] and filters) is what follows it.
-
-- `CHANGELOG.md`
-  - `[0.0.5]` `### Added`: Relay Node interface support, `Meta.interfaces` accepted for any Strawberry interface, default `resolve_id_attr` / `resolve_id` / `resolve_node` / `resolve_nodes` for Relay-declared types, automatic id suppression when `relay.Node` is declared, `is_type_of` injection for all `DjangoType`s.
-  - `### Changed`: `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
-  - `### Fixed` / `### Removed`: as needed by the implementation.
-  - Version bump.
+- `docs/GLOSSARY.md` — `Meta.interfaces` and "Relay Node integration" entries: the four `resolve_*` methods, the id suppression behavior, and the composite-pk constraint.
+- `docs/README.md` — a short Node example in the "Relay Node" subsection next to the quick start, so the simple example stays simple.
+- `KANBAN.md` — the Done card `DONE-015-0.0.5`, describing the shipped scope, the borrowed patterns, and the test files.
+- `CHANGELOG.md` — `[0.0.5]` `### Added`: Relay Node interface support, `Meta.interfaces` accepted for any Strawberry interface, default `resolve_id_attr` / `resolve_id` / `resolve_node` / `resolve_nodes` for Relay-declared types, automatic id suppression when `relay.Node` is declared, `is_type_of` injection for all `DjangoType`s; `### Changed`: `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
 ## Out of scope (owned elsewhere)
-Each item below is outside the `0.0.5` slice and owned by its own card. `docs/GLOSSARY.md` is the durable catalog for whether one has since shipped; `KANBAN.md` carries the sequencing.
+Each item below is outside this slice and owned by its own card. `docs/GLOSSARY.md` is the durable catalog for whether one has since shipped; `KANBAN.md` carries the sequencing.
 
 - `DjangoConnectionField` and `DjangoNodeField`.
-- Cascade permissions and field-level permissions.
+- Cascade permissions and field-level permissions ([`FieldSet`][glossary-fieldset]).
 - [Connection-aware optimizer planning][glossary-connection-aware-optimizer-planning].
 - `Meta.primary` / multiple types per model.
 - Stable consumer override semantics for scalar fields.
@@ -535,22 +498,21 @@ Each item below is outside the `0.0.5` slice and owned by its own card. `docs/GL
 - Stable [choice enum][glossary-choice-enum-generation] naming.
 - Layered manual override-test policy.
 - Migration and adoption guides.
-- Composite-primary-key Relay node encoding.
+- Composite-primary-key Relay node encoding (`BACKLOG.md` `composite_pk_globalid`).
 ## Definition of done
-The `0.0.5` slice is complete when all of the following are true:
+The slice is complete when all of the following are true:
 
-1. `"interfaces"` is in `ALLOWED_META_KEYS` (`django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`), validated by `_validate_meta` per Decision 4, and stored on the existing `DjangoTypeDefinition.interfaces` slot at `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type, ...] = ()"`. No new fields are added to `DjangoTypeDefinition`.
-2. `finalize_django_types()` (`django_strawberry_framework/types/finalizer.py::finalize_django_types`) injects declared interfaces into `cls.__bases__` and runs the `relay.Node` resolver injection (Decision 3) before the existing `strawberry.type(cls, ...)` Phase 3 loop. `0.0.4` behavior is preserved bit-for-bit for types that omit `Meta.interfaces`, verified by the existing test suite passing unchanged.
+1. `"interfaces"` is in `ALLOWED_META_KEYS` (`django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`), validated by `_validate_meta` per Decision 4, and stored on the `DjangoTypeDefinition.interfaces` slot at `django_strawberry_framework/types/definition.py::DjangoTypeDefinition #"interfaces: tuple[type[object], ...] = ()"`. The slice adds no other field to `DjangoTypeDefinition`.
+2. `finalize_django_types()` (`django_strawberry_framework/types/finalizer.py::finalize_django_types`) injects declared interfaces into `cls.__bases__` and runs the `relay.Node` resolver injection (Decision 3) before the `strawberry.type(cls, ...)` Phase 3 loop. Types that omit `Meta.interfaces` take no Relay or interface step.
 3. Declaring `interfaces = (relay.Node,)` produces a working Relay-Node GraphQL type with `id: GlobalID!`, the four injected `resolve_*` methods, the `is_type_of` virtual subclass behavior, and consumer override support per Decision 6. The single-interface forms `interfaces = relay.Node` and `interfaces = (relay.Node)` normalize to the same stored tuple.
 4. A Relay-shaped type over a composite-pk model raises `ConfigurationError` at finalization with a message that names the model and proposes a remediation path, unless the type declares an explicit `id: relay.NodeID[...]` annotation — the first remediation the message proposes, which the gate honors (Decision 2).
 5. Optimizer invariants in Decision 7 hold: `only()` includes the pk attname when Relay `id` is selected, `resolve_id` does not trigger an avoidable lazy load, and a target type's Relay declaration does not change how relations to it are planned.
-6. Tests in `tests/types/test_relay_interfaces.py` (new), plus the extensions to `tests/optimizer/test_relay_id_projection.py`, `tests/test_registry.py`, `examples/fakeshop/test_query/test_library_api.py`, and `examples/fakeshop/test_query/test_products_api.py` listed in the Test plan all pass.
+6. Tests in `tests/types/test_relay_interfaces.py`, plus the rows in `tests/optimizer/test_relay_id_projection.py`, `tests/test_registry.py`, `examples/fakeshop/test_query/test_library_api.py`, and `examples/fakeshop/test_query/test_products_api.py` listed in the Test plan all pass.
 7. Package coverage stays at 100% (`pyproject.toml [tool.coverage.report] fail_under = 100`).
-8. `docs/GLOSSARY.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md` reflect the shipped state per the "Doc updates" section.
-9. Version bumped to `0.0.5` in `pyproject.toml #"version ="`, `django_strawberry_framework/__init__.py #"__version__ ="`, and the assertion in `tests/base/test_init.py`; `uv.lock` regenerated by running `uv lock`.
-10. `KANBAN.md` carries this work as the Done card `DONE-015-0.0.5` describing the shipped scope, and the recommended hybrid sequence advances past Relay/`Meta.interfaces`.
-11. No new public exports. The public surface stays `DjangoType`, `DjangoOptimizerExtension`, [`OptimizerHint`][glossary-optimizerhint], [`finalize_django_types`][glossary-finalize-django-types], `auto`, `__version__` (`django_strawberry_framework/__init__.py #"__all__ = ("`). `README.md #"The public names are stable"` is the promise this holds to; `0.0.5` only changes what `Meta.interfaces` enables, not the import surface.
-12. `_resolve_node_default` and `_resolve_nodes_default` work in both sync and async resolver contexts per Decision 9. A consumer-authored `async def resolve_node(...)` is preserved by the override contract.
+8. `docs/GLOSSARY.md`, `docs/README.md`, `KANBAN.md`, and `CHANGELOG.md` carry the shipped state per the "Doc updates" section.
+9. `KANBAN.md` carries this work as the Done card `DONE-015-0.0.5` describing the shipped scope.
+10. No new public exports. Every Relay helper stays internal to `django_strawberry_framework/types/relay.py`; nothing it defines appears in `django_strawberry_framework/__init__.py #"__all__ = ("`, beside [`OptimizerHint`][glossary-optimizerhint], [`finalize_django_types`][glossary-finalize-django-types] and the rest of the root surface. The slice changes what `Meta.interfaces` enables, not the import surface.
+11. `_resolve_node_default` and `_resolve_nodes_default` work in both sync and async resolver contexts per Decision 9. A consumer-authored `async def resolve_node(...)` is preserved by the override contract.
 
 <!-- LINK DEFINITIONS -->
 

@@ -66,8 +66,9 @@ appear, are:
   future product requires enforcement against consumer code itself: redesign `OrderSet` to return
   a declarative order plan; do not claim predicate-lineage proof from arbitrary Python.
 - **Django combined querysets do not compose uniformly with order and optimizer operations:**
-  Fallback after Django/optimizer support exists: card the combinator-aware behavior and SQL
-  matrix explicitly.
+  Fallback for a combined shape the primary-key rewrite cannot represent, should a real consumer
+  need it: card that combinator-aware behavior and its SQL matrix explicitly; until then the shape
+  fails closed.
 - **A review with no admission criterion has no last round:** Fallback if the maintainer wants a
   stricter posture for one surface: card it under the adversarial suite [`GOAL.md`][goal] names
   for `0.1.x`, with its own threat model and its own evidence; a DONE card is not reopened for it.
@@ -547,10 +548,12 @@ adversary it imagines steps around, and each one costs a real consumer a refusal
 
 *Rejected:* An architectural rewrite - one `ContextVar`, fresh adapters per
 operation, a separately shared optimizer cache, deletion of the membership and refusal
-machinery - judged by how much it deletes. The four new modules each carry a guarantee ordinary
-code needs (nesting, concurrency, streaming resumption, masking the right operation), the
-regression suite holds those guarantees, and a rewrite would spend the suite to reach a shape
-that is smaller by assertion rather than by evidence. Consolidation follows the DRY flow where
+machinery - judged by how much it deletes. The four operation-state modules
+(`extensions/operation_state.py`, `utils/private_state.py`, `utils/execution_mode.py`,
+`utils/operation_lease.py`) each carry a guarantee ordinary code needs (nesting, concurrency,
+streaming resumption, masking the right operation), the regression suite holds those
+guarantees, and a rewrite would spend the suite to reach a shape that is smaller by assertion
+rather than by evidence. Consolidation follows the DRY flow where
 duplication is demonstrated; it is not mandated by line count.
 
 *Rejected:* Dropping the shipped hardening back to a simpler first implementation. It is
@@ -574,7 +577,8 @@ Both sidecar returns run one seal.
 `django_strawberry_framework/utils/querysets.py::_apply_sidecar_sync` or its async twin under the
 one `_SIDECAR_RESULT_POLICY`. Both fields therefore freeze the same routing intent before the
 consumer override receives the queryset and validate what it hands back on the same result
-axes - lazy, model rows of the captured model, unsliced, uncombined, same routing - before any
+axes - lazy, model rows of the captured model, unsliced, a combinator served as its primary-key
+set, same routing - before any
 later step, including the Relay window, sees it. The visibility seal runs under the one default
 policy on both fields, whether or not a sidecar input is supplied.
 

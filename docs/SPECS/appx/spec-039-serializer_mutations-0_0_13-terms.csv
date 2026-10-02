@@ -1,39 +1,39 @@
 term,anchor,notes
-SerializerMutation,serializermutation,the card subject; planned for 0.0.13 -> shipped at Slice 4
+SerializerMutation,serializermutation,the ModelSerializer mutation base this spec defines; shipped (0.0.13)
 DjangoMutation,djangomutation,the 036 base SerializerMutation subclasses (rides the seams)
-DjangoMutationField,djangomutationfield,reused unchanged (038 already generalized the factory)
+DjangoMutationField,djangomutationfield,the generic write-family factory that exposes SerializerMutation (no serializer-specific factory)
 DjangoModelFormMutation,djangomodelformmutation,the structural twin SerializerMutation mirrors
-DjangoFormMutation,djangoformmutation,the model-less form sibling; the fallback shape for a plain-Serializer flavor
+DjangoFormMutation,djangoformmutation,the model-less form sibling; the shape a plain-Serializer flavor would take (not supported)
 DjangoModelPermission,djangomodelpermission,inherited write-auth default for the ModelSerializer flavor
-FieldError,fielderror-envelope,the frozen 036 envelope serializer.errors maps onto
+FieldError,fielderror-envelope,the shared additive envelope (codes / path members) serializer.errors flattens onto
 DjangoType,djangotype,the primary type the payload node/result slot resolves
-DjangoOptimizerExtension,djangooptimizerextension,the post-save re-fetch rides the 036 G2 path
-FilterSet,filterset,prior set-family precedent for the subpackage layout
-OrderSet,orderset,prior set-family precedent for the subpackage layout
-FieldSet,fieldset,0.1.1 field-level read gates (out of scope, composes on top)
+DjangoOptimizerExtension,djangooptimizerextension,plans the post-save re-fetch (the 036 refetch_optimized path under the spec-035 G2 gate)
+FilterSet,filterset,a sibling class Meta consumer surface the serializer mutation is declared like (Decision 3)
+OrderSet,orderset,a sibling class Meta consumer surface the serializer mutation is declared like (Decision 3)
+FieldSet,fieldset,planned 0.1.1 field-level read gates; out of scope and composing on top of write authorization
 finalize_django_types,finalize_django_types,phase 2.5 bind via bind_mutations()
 ConfigurationError,configurationerror,raised at serializer-mutation-class creation / finalization
 SyncMisuseError,syncmisuseerror,sync pipeline meeting an async get_queryset
 Upload,upload-scalar,serializer FileField/ImageField input scalar
-apply_cascade_permissions,apply_cascade_permissions,the visibility seam the update locate composes with
+apply_cascade_permissions,apply_cascade_permissions,the cascade a type's get_queryset applies; the update locate and relation decode honor it through get_queryset
 get_queryset,get_queryset-visibility-hook,the visibility hook the update locate / relation decode run through
 Input type generation,input-type-generation,the 036 model-column generator (serializer generator is separate)
-Auth mutations,auth-mutations,the sibling 0.0.13 card sharing the joint cut
-TestClient,testclient,0.0.14 ergonomic multipart helper (out of scope)
+Auth mutations,auth-mutations,the sibling write flavor (spec-040) on the same envelope; shipped in the same 0.0.13 release
+TestClient,testclient,the ergonomic test client (multipart files= included); out of scope for this flavor
 only() projection,only-projection,suppressed under the mutation operation (G2)
 Scalar field conversion,scalar-field-conversion,read-side converters reused where the serializer field overlaps a column
 Choice enum generation,choice-enum-generation,a ModelSerializer choices column routes through the read-side enum
-Per-field permission hooks,per-field-permission-hooks,0.1.1 read gates, distinct from write authorization
-Cross-subsystem invariants,cross-subsystem-invariants,the 1.0.0 deferred-Meta-key invariant this card does not touch
+Per-field permission hooks,per-field-permission-hooks,planned 0.1.1 read gates; distinct from write authorization
+Cross-subsystem invariants,cross-subsystem-invariants,the deferred-Meta-key invariant; the flavor adds no DjangoType Meta key
 Meta.model,metamodel,resolved via _resolve_model -> serializer_class.Meta.model
 Meta.primary,metaprimary,the return-payload type resolves the model's primary DjangoType
 Meta.fields,metafields,narrows which serializer fields become input fields
 Meta.exclude,metaexclude,narrows which serializer fields become input fields
-DjangoNodeField,djangonodefield,the server-side GlobalID decode the update id: locate and the relation decoder reuse (GlobalID or raw pk)
+DjangoNodeField,djangonodefield,shares its id coercer with decode_model_global_id; the update id: locate and the relation decoder ride that decode (GlobalID or raw pk)
 Relay Node integration,relay-node-integration,the GlobalID encode/decode subsystem the relation decode and update locate run through
 RELAY_GLOBALID_STRATEGY,relay_globalid_strategy,the strategy fixing whether a relation id is a Relay GlobalID or a raw pk
 Meta.globalid_strategy,metaglobalid_strategy,per-type GlobalID strategy; sets the id form a serializer relation field maps to
 Relation handling,relation-handling,read-side FK/O2O/M2M conversion the PrimaryKeyRelatedField/ManyRelatedField mapping mirrors
 Specialized scalar conversions,specialized-scalar-conversions,Decimal/UUID/date/JSON conversions reused where a serializer field overlaps a column
-BigInt scalar,bigint-scalar,a serializer IntegerField over a BigIntegerField column resolves to BigInt via read-side reuse
+BigInt scalar,bigint-scalar,a ModelSerializer-generated IntegerField over a BigIntegerField column resolves to BigInt via the read-side column converter
 Definition-order independence,definition-order-independence,the finalize/materialize-before-Schema discipline the serializer input bind rides (phase 2.5)

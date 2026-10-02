@@ -1,19 +1,19 @@
 term,anchor,notes
-apply_cascade_permissions,apply_cascade_permissions,Backfilled for DONE-card glossary linkage from the shipped spec body.
-choice enum,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
-ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Connection-aware optimizer planning,connection-aware-optimizer-planning,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
-DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FieldSet,fieldset,Backfilled for DONE-card glossary linkage from the shipped spec body.
-finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
-FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.interfaces,metainterfaces,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.optimizer_hints,metaoptimizer_hints,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
-only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
-OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
-Relay Node integration,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.
+apply_cascade_permissions,apply_cascade_permissions,Carried by Non-goals: cascade permissions are the permissions subsystem's surface.
+choice enum,choice-enum-generation,Carried by Out of scope: stable choice enum naming is owned by its own card.
+ConfigurationError,configurationerror,"Carried by the slice checklist and Decisions 1, 2 and 4: malformed Meta.interfaces, a rejected base assignment and an unremediated composite pk raise it."
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Carried by Out of scope: connection-aware planning is owned elsewhere.
+DjangoConnectionField,djangoconnectionfield,Carried by Problem statement: the connection field builds on model-backed Relay node types.
+DjangoNodeField,djangonodefield,Carried by Non-goals: a later spec's node field that dispatches into these resolver defaults.
+DjangoOptimizerExtension,djangooptimizerextension,Carried by Current state: root-level list resolvers get full optimizer treatment; the node defaults consult none.
+DjangoType,djangotype,Carried by the slice checklist and Decision 4: a DjangoType is rejected as a Meta.interfaces entry.
+FieldSet,fieldset,Carried by Out of scope: field-level permissions are owned elsewhere.
+finalize_django_types,finalize_django_types,Carried by Definition of done: part of the root import surface the slice leaves unchanged.
+FK-id elision,fk-id-elision,Carried by Decision 7: GlobalID handling never feeds FK-id elision.
+Meta.fields,metafields,Carried by Decision 2: a pk listed in Meta.fields on a Relay-shaped type is simply not generated.
+Meta.interfaces,metainterfaces,Carried by the slice checklist: the key this slice applies end to end.
+Meta.optimizer_hints,metaoptimizer_hints,Carried by Decision 4: independent of Meta.interfaces; pk suppression leaves the optimizer field map untouched.
+Meta.primary,metaprimary,Carried by Non-goals and Decision 8: which type per model a GlobalID decodes to is spec-018's and spec-031's.
+only(),only-projection,Carried by Decision 7: the projection keeps the concrete pk attname when Relay id is selected.
+OptimizerHint,optimizerhint,Carried by Definition of done: part of the root import surface the slice leaves unchanged.
+Relay Node integration,relay-node-integration,Carried by the slice checklist: the glossary entry that documents the shipped Relay surface.

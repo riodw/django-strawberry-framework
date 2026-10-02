@@ -1,6 +1,6 @@
 # Rich schema architecture
 
-Deliberation, rejected alternatives, and this spec's change record live in the companion file [`spec-009-rich_schema_architecture-0_0_4-rationale.md`][spec-009-rationale]: why the auto-triggering finalization direction was rejected and what replaced it, the four sites that direction was stated at, the open questions shipped work has since settled, the reasoning behind anchoring the package baseline and the migration path to `0.0.4` rather than rewriting them to the present, and why six upstream mechanisms this document once named — a custom field class, a field-level optimizer store with request-scoped callable hints, an annotation-namespace collector, a decorator-style advanced-field factory, a generic model placeholder, and DISTINCT-flavored order directives — lost to designs the package chose instead.
+Rejected alternatives live in the companion file [`spec-009-rich_schema_architecture-0_0_4-rationale.md`][spec-009-rationale]: why finalization is triggered only by the explicit consumer call, and why the package uses none of six upstream mechanisms — a custom field class, a field-level optimizer store with request-scoped callable hints, an annotation-namespace collector, a decorator-style advanced-field factory, a generic model placeholder, and DISTINCT-flavored order directives.
 
 ## Purpose
 This spec defines the long-term architecture for building a Strawberry-based package that can expose the same practical schema shape as the feature-complete Graphene reference implementation in `django-graphene-filters`, while avoiding the parts of Graphene-Django that are old, unmaintained, and less aligned with Strawberry's execution model.
@@ -134,9 +134,9 @@ Important source references:
 - `FilterArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/filter_arguments_factory.py#L98`
 - `OrderArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/order_arguments_factory.py#L78`
 - `AggregateArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregate_arguments_factory.py#L89`
-- `Advanced[AggregateSet][glossary-aggregateset].compute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L440`
+- `AdvancedAggregateSet.compute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L440`
 - `AdvancedAggregateSet.acompute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L474`
-- `Advanced[FieldSet][glossary-fieldset]`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/fieldset.py#L80`
+- `AdvancedFieldSet`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/fieldset.py#L80`
 - `apply_cascade_permissions`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/permissions.py#L19`
 
 ### What to take from django-graphene-filters
@@ -182,11 +182,11 @@ Take the concept and adapt it:
 - bind each related declaration to its owning class
 - resolve only when the factory/finalizer needs the target
 
-This pattern is separate from model relation type finalization. It should be reused for:
+This pattern is separate from model relation type finalization. `sets_mixins.py::LazyRelatedClassMixin` carries it for:
 
 - [`RelatedFilter`][glossary-relatedfilter]
 - [`RelatedOrder`][glossary-relatedorder]
-- [`RelatedAggregate`][glossary-relatedaggregate]
+- [`RelatedAggregate`][glossary-relatedaggregate], when aggregates ship
 - future related fieldset or permission declarations if needed
 
 #### Take BFS graph factories
@@ -250,7 +250,7 @@ Take the semantics. Implement the output type generation in Strawberry-native te
 - computed field declarations
 - wrapper order: check, custom resolve, default resolve
 
-Take the behavior, but implement it by wrapping the generated resolver rather than by mutating Graphene fields. Wrapping is what keeps the gate/override cascade ordering expressible and costs nothing on unmanaged fields; `spec-059-fieldset-0_1_1.md` #"resolver wrapping" owns that mechanism.
+Take the behavior, but implement it by wrapping the generated resolver rather than by mutating Graphene fields. Wrapping is what keeps the gate/override cascade ordering expressible and costs nothing on unmanaged fields; `spec-059-fieldset-0_1_1.md` #"Custom field class vs `permission_classes` vs resolver wrapping" owns that mechanism.
 
 ### What to scrap from django-graphene-filters
 Do not port Graphene-specific internals.
@@ -348,20 +348,18 @@ Important source references:
 7. replace plain Strawberry fields with Django-aware fields
 8. attach origin metadata
 
-This package should borrow that lifecycle, but not the decorator API.
+This package borrows that lifecycle, but not the decorator API:
 
-Recommended adaptation:
-
-- split current `DjangoType.__init_subclass__` into collection and finalization
-- collect `DjangoTypeDefinition` during class creation
-- pre-register model-to-type immediately
-- defer `strawberry.type` until relation targets are known
-- keep the field metadata on the definition object rather than on per-field objects, so one lookup answers every question about a generated field
+- `DjangoType.__init_subclass__` collects and `finalize_django_types()` finalizes
+- `DjangoTypeDefinition` is built during class creation
+- model-to-type registration happens immediately
+- `strawberry.type` is deferred until relation targets are known
+- field metadata lives on the definition object rather than on per-field objects, so one lookup answers every question about a generated field
 
 This gives us Strawberry-Django's stable field metadata model without adopting its decorator-first public API.
 
 ### Borrow `StrawberryDjangoDefinition`
-Create a package equivalent:
+The package equivalent:
 
 ```python
 @dataclass
@@ -378,9 +376,9 @@ class DjangoTypeDefinition:
     finalized: bool = False
 ```
 
-That is the load-bearing subset: `types/definition.py::DjangoTypeDefinition` also carries the selection and field-map slots, the consumer-provenance frozensets, the Relay and connection sidecars, and three lookup methods. A sidecar slot is a plain `type | None`, validated to a concrete class at class creation (`types/base.py::_validate_filterset_class`). `aggregate_class` and `search_fields` have **no slot at all**: their `Meta` keys sit in `types/base.py::DEFERRED_META_KEYS` and are rejected at class creation, so each slot lands with the card that promotes its key (`TODO-BETA-062-0.1.3`, `TODO-BETA-060-0.1.2`). `fields_class` alone is reserved ahead of its key, for `TODO-BETA-059-0.1.1`.
+That is the load-bearing subset: `types/definition.py::DjangoTypeDefinition` also carries the selection and field-map slots, the consumer-provenance frozensets, the Relay and connection sidecars, a GraphQL-type-name property, and two memoized lookup methods. A sidecar slot is a plain `type | None`, validated to a concrete class at class creation (`types/base.py::_validate_filterset_class`). `aggregate_class` and `search_fields` have **no slot at all**: their `Meta` keys sit in `types/base.py::DEFERRED_META_KEYS` and are rejected at class creation, so each slot lands with the card that promotes its key (`TODO-BETA-062-0.1.3`, `TODO-BETA-060-0.1.2`). `fields_class` alone is reserved ahead of its key, for `TODO-BETA-059-0.1.1`.
 
-Store it on the class as `__django_strawberry_definition__`. This mirrors Strawberry-Django's `__strawberry_django_definition__`, but keeps this package's namespace distinct.
+It is stored on the class as `__django_strawberry_definition__`. This mirrors Strawberry-Django's `__strawberry_django_definition__`, but keeps this package's namespace distinct.
 
 Benefits:
 
@@ -424,17 +422,15 @@ Strawberry-Django's default relation fallback maps:
 - `ForeignKey` -> `DjangoModelType`
 - reverse FK -> `list[DjangoModelType]`
 
-That is useful for Strawberry-Django's goals, but it is too weak for this package. This package should resolve relations to concrete registered [`DjangoType`][glossary-djangotype]s whenever the relation field is exposed.
+That is useful for Strawberry-Django's goals, but it is too weak for this package. This package resolves every exposed relation field to a concrete registered [`DjangoType`][glossary-djangotype]:
 
-Recommended behavior:
+1. scalar fields use a local `resolve_model_field_type`-style map
+2. every auto-synthesized relation field records a pending relation at collection
+3. finalization asks the package registry for the concrete target type
+4. a target still missing at finalization raises [`ConfigurationError`][glossary-configurationerror]
+5. no generic model placeholder ever substitutes for a concrete target type
 
-1. scalar fields may use a local `resolve_model_field_type`-style map
-2. relation fields should first ask the package registry for the concrete target type
-3. if the target is missing during collection, create a pending relation record
-4. if the target is still missing during finalization, raise [`ConfigurationError`][glossary-configurationerror]
-5. never substitute a generic model placeholder for a concrete target type
-
-There is no placeholder tier in this architecture — not as a default, not as an internal reserve, not as an opt-in. A relation either resolves to a concrete registered `DjangoType` or finalization fails; `### The unresolved-relation contract is error-only` states the contract and `### Decision 6: fail loudly` states why a weaker schema is not an acceptable answer to a missing type.
+There is no placeholder tier in this architecture — not as a default, not as an internal reserve, not as an opt-in. A relation either resolves to a concrete registered `DjangoType` or finalization fails; `### The unresolved-relation contract is error-only` states the contract and Decision 6 states why a weaker schema is not an acceptable answer to a missing type.
 
 ### Borrow `resolve_model_field_type`, `get_model_field`, `resolve_model_field_name`, and `is_optional`
 These functions encode many Django edge cases:
@@ -449,8 +445,7 @@ Borrow the shape, but align it with this package's public contract.
 
 Recommended adaptation:
 
-- keep this package's existing `SCALAR_MAP` as the initial supported set
-- add Strawberry-Django's richer scalar coverage over time
+- `types/converters.py #"SCALAR_MAP: "` is the supported scalar set, grown toward Strawberry-Django's coverage one field family at a time
 - use `get_model_field` logic for reverse relation lookup
 - use `resolve_model_field_name` to normalize Django names
 - use `is_optional` to centralize nullability
@@ -463,11 +458,11 @@ Do not expose Strawberry-Django's decorator-first API as the main API, but borro
 - `connection(...)` creates a Django-aware field with a connection extension
 - extensions add arguments and resolve pagination
 
-This package can expose:
+This package exposes:
 
 - `DjangoListField(...)` for a non-Relay `list[T]` field, keeping graphene-django's symbol so that migration site needs no shape change
 - `DjangoConnectionField(...)` for root and nested connections
-- `DjangoNodeField(...)` for [Relay node][glossary-relay-node-integration] lookup
+- `DjangoNodeField(...)` and `DjangoNodesField(...)` for [Relay node][glossary-relay-node-integration] lookup
 
 Each is a **factory returning a Strawberry field**, so a consumer's class-body annotation stays the source of the schema type and no consumer-facing class carries a stacked decorator.
 
@@ -489,7 +484,7 @@ The generated subclass is not a naming convenience — a bare generic alias lose
 **`aggregates` is the Graphene reference's shape and is still owed.** It belongs on the connection, computed from the filtered, searched, ordered queryset before pagination. It is unbuilt: `TODO-BETA-062-0.1.3` owns it, and it lands through the same generated-subclass mechanism `totalCount` uses rather than by widening the generic base.
 
 ### Keep the current optimizer's strengths, and borrow its nested-prefetch lessons
-The current package already has an optimizer that:
+The package's optimizer:
 
 - root-gates query optimization
 - plans `select_related`, `prefetch_related`, and `only`
@@ -498,15 +493,13 @@ The current package already has an optimizer that:
 - supports strictness warnings/errors
 - supports plan caching
 
-Keep that.
-
-Borrow from Strawberry-Django:
+Borrowed from Strawberry-Django:
 
 - `_must_use_prefetch_related` logic for custom queryset/polymorphic/annotation cases
-- `_get_prefetch_queryset` and `_optimize_prefetch_queryset` concepts for nested connection prefetches
+- `_get_prefetch_queryset` and `_optimize_prefetch_queryset` concepts for nested connection prefetches, which `optimizer/nested_planner.py` carries
 - connection-aware optimization for `edges.node` and total count
 
-Do not blindly copy Strawberry-Django's optimizer wholesale. This package's current optimizer is simpler and tuned to the package's generated `DjangoType` maps. Add the nested-connection lessons; leave the per-field metadata model alone.
+Strawberry-Django's optimizer is not copied wholesale. This package's optimizer plans against the generated `DjangoType` maps on `DjangoTypeDefinition`, not against a per-field metadata store.
 
 **A hint must be a value, not a callable.** Strategy selection is schema-static, so the cross-request plan cache is not keyed on it; a hint that could consult the request would make every cached plan unsound. `Meta.optimizer_hints` therefore carries frozen directives (`optimizer/hints.py::OptimizerHint`), and request-varying shaping belongs to `get_queryset`, which already runs per request.
 
@@ -551,7 +544,6 @@ Scrap or avoid as default:
 - implicit relation fallback that silently gives weaker nested query capabilities
 - broad monkey-patching like `QuerySet._clone` unless there is no safer alternative
 - deprecated filter APIs
-- mutation/input complexity until the read/query surface is stable
 
 Keep as references:
 
@@ -583,9 +575,9 @@ Class-creation responsibilities:
 7. record pending relation metadata
 8. mark the class as unfinalized
 
-Do not call `strawberry.type(cls)` until finalization.
+`strawberry.type(cls)` is not called until finalization.
 
-The registry should distinguish:
+The registry distinguishes:
 
 - registered but unfinalized types
 - finalized types
@@ -593,7 +585,7 @@ The registry should distinguish:
 - unresolved target errors
 
 ### Layer 2: Pending relation registry
-Add a pending relation record:
+The pending relation record (`types/relations.py::PendingRelation`):
 
 ```python
 @dataclass
@@ -605,7 +597,7 @@ class PendingRelation:
     related_model: type[models.Model]
 ```
 
-The record carries no cardinality or nullability: `field_name` is the raw Django field name that keys `DjangoTypeDefinition.field_map`, and finalization reads both from that map (`types/relations.py::PendingRelation`).
+The record carries no cardinality or nullability: `field_name` is the raw Django field name that keys `DjangoTypeDefinition.field_map`, and finalization reads both from that map.
 
 During collection:
 
@@ -634,7 +626,7 @@ The requirement the trigger has to satisfy:
 - a schema extension cannot be the trigger, because extensions run after the schema is already built
 - an unusual import layout, a test, or a cookbook-shaped schema all reach the same single entry point rather than depending on which package object they happened to construct first
 
-The registry is deliberately lockless and finalization is a process-global mutation, so any future helper that auto-triggers it must also enforce the single-threaded setup window — either by being constrained to schema-construction time or by acquiring a real lock around the finalizer. The rationale companion's `### Layer 3: Finalization trigger` entry carries the constructor-triggered alternative and why it lost.
+The registry is deliberately lockless and finalization is a process-global mutation, so any future helper that auto-triggers it must also enforce the single-threaded setup window — either by being constrained to schema-construction time or by acquiring a real lock around the finalizer. The rationale companion's Layer 3 entry carries the constructor-triggered alternative and why it lost.
 
 ### Layer 4: Generated relation fields
 Generated relation fields are produced by the finalizer, and their responsibilities are distributed across four named seams rather than gathered into one field object:
@@ -649,24 +641,22 @@ Generated relation fields are produced by the finalizer, and their responsibilit
 The load-bearing constraint on this layer: **generation happens at finalization and nowhere else.** A relation field cannot be generated at class creation, because its target may not exist yet, and it cannot be generated after `strawberry.type`, because the type is frozen by then. Phase 2 is the only window, which is why it is a permanent mechanism rather than a transitional one.
 
 ### Layer 5: Connection field
-Implement `DjangoConnectionField`.
+`DjangoConnectionField`:
 
-It should:
+1. accepts a target `DjangoType`
+2. derives model and default queryset from the target type
+3. reads `filterset_class` and `orderset_class` from the target definition, and `aggregate_class` and `search_fields` once their subsystems ship
+4. adds `filter` and `orderBy` arguments, and `search` with `TODO-BETA-060-0.1.2`
+5. applies row-level `get_queryset`
+6. applies filters
+7. applies search (`TODO-BETA-060-0.1.2`)
+8. applies ordering
+9. computes aggregates from the filtered pre-pagination queryset (`TODO-BETA-062-0.1.3`)
+10. paginates as a Relay connection
+11. exposes `totalCount` when `Meta.connection` opts in, and `aggregates` with `TODO-BETA-062-0.1.3`
+12. cooperates with `DjangoOptimizerExtension`
 
-1. accept a target `DjangoType`
-2. derive model and default queryset from the target type
-3. read default `filterset_class`, `orderset_class`, `aggregate_class`, and `search_fields` from the target definition
-4. add `filter`, `orderBy`, and `search` arguments
-5. apply row-level `get_queryset`
-6. apply filters
-7. apply search
-8. apply ordering
-9. compute or defer aggregates from the filtered pre-pagination queryset
-10. paginate as a Relay connection
-11. expose `aggregates` and `totalCount`
-12. cooperate with `DjangoOptimizerExtension`
-
-It does **not** finalize. Constructing a connection field must not trigger finalization, for the reasons `### Layer 3: Finalization trigger` gives; a connection field constructed before every `DjangoType` module is imported would otherwise silently fix the schema's shape to whatever had been imported by then.
+It does **not** finalize. Constructing a connection field does not trigger finalization, for the reasons Layer 3 gives; a connection field constructed before every `DjangoType` module is imported would otherwise silently fix the schema's shape to whatever had been imported by then.
 
 This is the Strawberry equivalent of `AdvancedDjangoFilterConnectionField`.
 
@@ -692,7 +682,7 @@ The base is named [`FilterSet`][glossary-filterset] rather than borrowing the Gr
 
 Implementation:
 
-- `[FilterSet][glossary-filterset]Metaclass` collects `RelatedFilter`
+- `FilterSetMetaclass` collects `RelatedFilter`
 - `RelatedFilter` uses lazy class refs
 - `FilterArgumentsFactory` BFS-builds Strawberry input types
 - generated types use class-based names
@@ -728,7 +718,7 @@ Borrow from Strawberry-Django:
 Prefer the Graphene package's list-of-order-objects semantics if matching existing clients matters.
 
 ### Layer 8: Aggregate system
-Use `django-graphene-filters` aggregate semantics.
+Use `django-graphene-filters` aggregate semantics through an [`AggregateSet`][glossary-aggregateset] base. `TODO-BETA-062-0.1.3` owns the layer.
 
 Public API:
 
@@ -778,12 +768,12 @@ Keep computed fields support.
 ### Layer 10: Row permissions and cascade visibility
 Keep the Graphene package's row/cascade model.
 
-Implement:
+The layer consists of:
 
 - `DjangoType.get_queryset`
-- `apply_cascade_permissions`
-- optional sentinel redaction support for Relay node types
-- `is_redacted` generated field or mixin
+- `permissions.py::apply_cascade_permissions`
+- optional sentinel redaction support for Relay node types (`TODO-BETA-064-0.1.4`)
+- an `is_redacted` generated field or mixin (`TODO-BETA-064-0.1.4`)
 
 Open design point:
 
@@ -794,7 +784,7 @@ Open design point:
 ### Layer 11: Optimizer integration
 The optimizer must remain a first-class part of this package.
 
-Keep current features:
+Its features:
 
 - root-gated optimization
 - plan caching
@@ -802,15 +792,11 @@ Keep current features:
 - [FK-id elision][glossary-fk-id-elision]
 - existing queryset reconciliation
 - `get_queryset`-aware prefetch downgrade
+- nested connection prefetch handling and connection-aware `edges.node` traversal (`optimizer/nested_planner.py`)
+- per-field opt-out (`OptimizerHint.SKIP`)
+- aggregate pre-pagination query reuse, with `TODO-BETA-062-0.1.3`
 
-Add Strawberry-Django lessons:
-
-- nested connection prefetch handling
-- connection-aware `edges.node` traversal
-- aggregate pre-pagination query reuse
-- opt-out per field
-
-Do not make optimization depend on Graphene-style connection internals.
+Optimization does not depend on Graphene-style connection internals.
 
 ## Definition-order strategy in this architecture
 The best approach is neither pure Graphene nor pure Strawberry-Django.
@@ -827,7 +813,7 @@ The finalization pass, whose phases `spec-010-foundation-0_0_4.md` owns:
 2. classify every pending relation, raising `ConfigurationError` for any target with no registered type before any class is mutated
 3. rewrite each resolved relation's annotation to its concrete target type
 4. attach the generated relation resolvers
-5. apply interfaces, synthesize relation connections, and bind the filter and order sidecars, resolving their lazy related-class references against bound owners
+5. apply interfaces, synthesize relation connections, bind generated mutations, and bind the filter and order sidecars, resolving their lazy related-class references against bound owners
 6. call `strawberry.type` once per type
 
 Aggregate and fieldset class references bind in the same window when those subsystems ship.
@@ -864,53 +850,42 @@ A `Meta.unresolved_relations` opt-in (with values such as `"generic"` or `"error
 
 If a real project surfaces a use case where error-only is too strict, relaxing it is a design change that earns its own card and design doc — not an assumption baked into Layer 3 work. No subsystem in this architecture may be designed against `Meta.unresolved_relations`.
 
-## Proposed module layout
-Future modules. Layer 3 subsystems use the **package** layout from `KANBAN.md` and `docs/TREE.md` (e.g., `filters/` not `filters.py`); the package layout is canonical because it determines import paths, public-surface promotion, and test-tree mirroring.
+## Module layout
+The layers live in **packages** where a subsystem spans more than one module (`filters/`, not `filters.py`); the package layout is canonical because it determines import paths, public-surface promotion, and test-tree mirroring. `docs/TREE.md` is the rendered map of the whole tree.
 
-- `django_strawberry_framework/types/definition.py`
-- `django_strawberry_framework/types/finalizer.py`
-- `django_strawberry_framework/types/relations.py`
-- `django_strawberry_framework/schema.py`
-- `django_strawberry_framework/relay.py`
-- `django_strawberry_framework/connection.py`
-- `django_strawberry_framework/filters/` — `base.py` (Filter classes), `sets.py` (FilterSet), `factories.py` (filterset + GraphQL-arguments factories), `inputs.py` (input types + adapters)
+- `django_strawberry_framework/types/base.py` — collection only (Layer 1)
+- `django_strawberry_framework/types/definition.py` — `DjangoTypeDefinition`
+- `django_strawberry_framework/types/relations.py` — the pending relation record and its sentinel annotation (Layer 2)
+- `django_strawberry_framework/types/finalizer.py` — `finalize_django_types()`
+- `django_strawberry_framework/types/converters.py` — scalar conversion and relation annotation helpers
+- `django_strawberry_framework/types/resolvers.py` — generation and attachment of the relation resolvers (Layer 4)
+- `django_strawberry_framework/registry.py` — type definitions, finalization state, pending relations
+- `django_strawberry_framework/schema.py` — `DjangoSchema`
+- `django_strawberry_framework/relay.py` — `DjangoNodeField`, `DjangoNodesField`
+- `django_strawberry_framework/connection.py` — `DjangoConnection`, `DjangoConnectionField` (Layer 5)
+- `django_strawberry_framework/filters/` — `base.py` (Filter classes), `sets.py` (FilterSet), `factories.py` (GraphQL-arguments factory), `inputs.py` (input types + adapters)
 - `django_strawberry_framework/orders/` — `base.py` (Order classes), `sets.py` (OrderSet), `factories.py` (GraphQL-arguments factory), `inputs.py` (input types + the direction enum + adapters)
+- `django_strawberry_framework/permissions.py` — cascade visibility; migrating to a `permissions/` package at `TODO-BETA-064-0.1.4`, when opt-in node-sentinel redaction joins the cascade helpers
+- `django_strawberry_framework/optimizer/` — the root optimizer and nested-connection planning (Layer 11)
+- `django_strawberry_framework/management/commands/export_schema.py`
 - `django_strawberry_framework/aggregates/` — `base.py` (Sum/Count/Avg/Min/Max/GroupBy result types), `sets.py` (AggregateSet), `factories.py` (GraphQL-arguments factory) — planned by `TODO-BETA-062-0.1.3`
 - `django_strawberry_framework/fieldset/` — planned by `TODO-BETA-059-0.1.1`
-- `django_strawberry_framework/permissions.py` — migrating to a `permissions/` package at `TODO-BETA-064-0.1.4`, when opt-in node-sentinel redaction joins the cascade helpers
-- `django_strawberry_framework/management/commands/export_schema.py`
 
-This matches the target layout in `docs/TREE.md`.
+## Build order
+The phases below are the order in which the layers depend on one another. Each phase's own spec owns its contract; an unshipped phase names the card that owns it.
 
-Existing modules to evolve:
-
-- `types/base.py`: collection only, not full finalization
-- `types/converters.py`: scalar conversion and relation annotation helpers
-- `types/resolvers.py`: generation and attachment of the relation resolvers, for every cardinality
-- `registry.py`: type definitions, finalization state, pending relations, generated type registries
-- `optimizer/*`: keep current root optimizer, add nested-connection awareness
-
-## Migration path from the 0.0.4 baseline
-The phases below are the sequencing plan drawn from the baseline snapshot above, in the order the layers depend on one another. They are a dependency order, not a schedule, and this spec does not track which of them have since shipped — the board and each phase's own spec carry that.
-
-### Phase 1: Foundation (== 0.0.4 foundation slice)
-This phase is the foundation slice defined in [`spec-010-foundation-0_0_4.md`][spec-010]. It ships:
+### Phase 1: Foundation
+The foundation slice, [`spec-010-foundation-0_0_4.md`][spec-010]:
 
 - `DjangoTypeDefinition`
-- pending relation registry
-- `finalize_django_types()` (the only new public symbol)
-- the cardinality fixture, cyclic acceptance tests, end-to-end schema tests, and idempotency / failure-atomicity tests
+- the pending relation registry
+- `finalize_django_types()`, the only public symbol the layer adds
+- cardinality coverage through the `library` example app, cyclic acceptance tests, end-to-end schema tests, and idempotency / failure-atomicity tests
 
-It does **not** ship:
-
-- `DjangoSchema` — a later wrapper phase owns it
-- `DjangoConnectionField`, [`DjangoNodeField`][glossary-djangonodefield]
-- any Layer 3 subsystem
-
-Keep current behavior for acyclic simple types if possible.
+`DjangoSchema`, `DjangoConnectionField`, [`DjangoNodeField`][glossary-djangonodefield] and every Layer 6+ subsystem sit on top of it and do not change it.
 
 ### Phase 2: [Definition-order independence][glossary-definition-order-independence]
-Relation conversion records a pending relation instead of looking the target up eagerly.
+Relation conversion records a pending relation for every auto-synthesized relation; no target is looked up at class creation.
 
 Acceptance tests:
 
@@ -920,7 +895,7 @@ Acceptance tests:
 - unresolved target raises at finalization
 
 ### Phase 3: Generated relation fields
-Generate the annotation and resolver for every exposed relation at finalization, in the cardinality-correct spelling — Layer 4.
+The finalizer generates the annotation and resolver for every exposed relation, in the cardinality-correct spelling — Layer 4.
 
 Acceptance tests:
 
@@ -931,18 +906,16 @@ Acceptance tests:
 - field metadata points back to `DjangoTypeDefinition`
 
 ### Phase 4: Connection field
-Add:
-
 - [`DjangoConnection`][glossary-djangoconnection]
 - `DjangoConnectionField`
 - `DjangoNodeField`
 - Relay node support
 - `totalCount`
 
-Acceptance tests should mirror the cookbook root shape.
+Acceptance tests mirror the cookbook root shape.
 
 ### Phase 5: Filters and ordering
-Port the Graphene package's filter/order APIs to Strawberry input types.
+The Graphene package's filter/order APIs, as Strawberry input types.
 
 Acceptance tests:
 
@@ -967,29 +940,27 @@ Acceptance tests:
 - permission hooks
 
 ### Phase 7: FieldSet and permissions
-Add:
-
 - [`FieldSet`][glossary-fieldset] and `fields_class` — owned by `TODO-BETA-059-0.1.1`
 - `apply_cascade_permissions`
 - optional sentinel redaction and `is_redacted` — owned by `TODO-BETA-064-0.1.4`, as an explicit opt-in tier rather than a default
 
-Acceptance tests should port the field permission and nested permission tests from the Graphene package.
+Acceptance tests port the field permission and nested permission tests from the Graphene package.
 
 ### Phase 8: Optimizer integration
-Expand optimizer to understand:
+The optimizer understands:
 
 - generated connection fields
 - `edges.node`
-- aggregate querysets
 - nested connection prefetch
 - custom queryset hooks
+- aggregate querysets, with `TODO-BETA-062-0.1.3`
 
 ## Recommended decisions
 ### Decision 1: concrete relation target by default
 Use concrete registered `DjangoType`s for relations. Do not default to generic `DjangoModelType`.
 
 ### Decision 2: explicit package finalizer
-Add `finalize_django_types()` and make the consumer's explicit call the only thing that triggers it. Package-owned schema and field helpers do not call it; see `### Layer 3: Finalization trigger`.
+`finalize_django_types()` is public, and the consumer's explicit call is the only thing that triggers it. Package-owned schema and field helpers do not call it; see Layer 3.
 
 ### Decision 3: generated field behavior belongs to the finalizer
 Generate a relation field's annotation and resolver at finalization, from one `DjangoTypeDefinition`; the visibility and argument seams belong instead to the queryset-owning components `### Layer 4: Generated relation fields` names. Composability comes from that single definition being readable by every seam, not from a per-field object carrying its own copy.
@@ -1005,16 +976,16 @@ Never silently skip exposed fields whose target type is missing. Raise at finali
 
 ## Open questions
 ### Should plain `strawberry.Schema` remain fully supported?
-**Settled: yes, fully, for every schema.** Plain `strawberry.Schema` is supported without qualification, because the finalization trigger does not live in any schema or field object — the consumer calls `finalize_django_types()` before schema construction and every shape of schema then works identically. Using `DjangoSchema` or package-owned fields is a richness choice, never a finalization requirement; `### Layer 3: Finalization trigger` above states the trigger contract, and the rationale companion carries the auto-triggering alternative that lost to it.
+**Settled: for the read surface, yes; generated mutations require `DjangoSchema`.** Finalization does not live in any schema or field object — the consumer calls `finalize_django_types()` before schema construction — so types, connection fields and node fields build and resolve the same under a plain `strawberry.Schema`. What only `schema.py::DjangoSchema` carries is execution-time: the mutation transaction held open through response completion (`schema.py::DjangoMutationExecutionContext`), without which the generated write pipeline raises `ConfigurationError` before any database work; the execution resource policy and the production error policy, built per operation from the schema's own record; and per-operation isolation of the package's own extensions. Layer 3 above states the trigger contract.
 
 ### Should multiple `DjangoType`s per model be allowed?
-**Settled: yes, with exactly one primary per model.** [`Meta.primary`][glossary-metaprimary] shipped in `0.0.6`; multiple `DjangoType`s may register against the same model, and relation auto-resolution binds to the primary. Ambiguity is refused rather than guessed: duplicate-primary and flipped-primary-on-re-register are rejected at registration, and ambiguity-by-omission is caught at finalization. `spec-018-meta_primary-0_0_6.md` owns the contract and the error wording.
+**Settled: yes, with exactly one primary per model.** Under [`Meta.primary`][glossary-metaprimary], multiple `DjangoType`s may register against the same model, and relation auto-resolution binds to the primary. Ambiguity is refused rather than guessed: duplicate-primary and flipped-primary-on-re-register are rejected at registration, and ambiguity-by-omission is caught at finalization. `spec-018-meta_primary-0_0_6.md` owns the contract and the error wording.
 
 ### Should sentinel redaction be required?
-No. It should be available for Relay node types, but cascade filtering should remain the recommended privacy-first path.
+No. It is an opt-in tier for Relay node types (`TODO-BETA-064-0.1.4`); cascade filtering stays the recommended privacy-first path.
 
 ### Should filters/orders/aggregates copy Graphene names exactly?
-**Settled for filters and orders, still open for aggregates.** Both shipped in `0.0.8` following the rule stated here — keep the Graphene name unless a Strawberry idiom forces a change, and document any change as a deliberate migration break. `spec-027-filters-0_0_8.md` and `spec-028-orders-0_0_8.md` own their naming decisions. Aggregates have not shipped, so the rule stands for them as guidance rather than record.
+**Settled for filters and orders, still open for aggregates.** Both follow the rule stated here — keep the Graphene name unless a Strawberry idiom forces a change, and document any change as a deliberate migration break. `spec-027-filters-0_0_8.md` and `spec-028-orders-0_0_8.md` own their naming decisions. For aggregates (`TODO-BETA-062-0.1.3`) the rule is the guidance.
 
 ## Success criteria
 The architecture is successful when the fakeshop and cookbook-shaped examples can express:

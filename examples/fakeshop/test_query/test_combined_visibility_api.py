@@ -25,7 +25,8 @@ under a nested connection, whose seal licenses a slice the rewrite cannot carry.
 
 import json
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 import strawberry
@@ -146,7 +147,8 @@ def _holds(column: str, fragment: str) -> Q:
     return Q(**{f"{column}__contains": fragment})
 
 
-class _Shape(NamedTuple):
+@dataclass(frozen=True)
+class _Shape:
     """A combined hook body and the uncombined hook that selects the same rows."""
 
     combined: Callable[[QuerySet[Model], str], QuerySet[Model]]
@@ -1043,7 +1045,8 @@ def _b(queryset):
     return queryset.filter(_starts("name", "B"))
 
 
-class _Refused(NamedTuple):
+@dataclass(frozen=True)
+class _Refused:
     body: Callable[[QuerySet[Model]], QuerySet[Model]]
     fragments: tuple[str, ...]
 

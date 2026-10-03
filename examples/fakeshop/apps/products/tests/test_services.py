@@ -167,7 +167,11 @@ def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch):
 
     Pin a minimal provider shape so this test isolates shortfall behavior.
     """
-    monkeypatch.setattr(services, "discover_providers", lambda _fake: {"person": ["name"]})
+
+    def discover_person_name(_fake: Faker) -> dict[str, list[str]]:
+        return {"person": ["name"]}
+
+    monkeypatch.setattr(services, "discover_providers", discover_person_name)
 
     services.seed_data(1)
     cat_count = Category.objects.count()

@@ -72,7 +72,8 @@ that reload, and the slot is cleared when the request ends.
 
 import importlib
 import inspect
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
+from typing import TypeAlias
 
 import pytest
 import strawberry
@@ -90,6 +91,16 @@ from graphql_client import JSONObject, assert_graphql_success, graphql_payload
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
+
+_ApplySyncOverride: TypeAlias = Callable[
+    [
+        type[GenreOrder],
+        object,
+        models.QuerySet[library_models.Genre],
+        object,
+    ],
+    object,
+]
 
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
@@ -405,7 +416,9 @@ class _DeferredFilterQuerySet(models.QuerySet[library_models.Genre]):
     _deferred_filter: tuple[object, tuple[object, ...], dict[str, object]] | None
 
 
-async def _awaitable_queryset(queryset):
+async def _awaitable_queryset(
+    queryset: models.QuerySet[library_models.Genre],
+) -> models.QuerySet[library_models.Genre]:
     return queryset
 
 
@@ -515,7 +528,10 @@ def _assert_async_rejection_message(message, message_start, substrings):
 #: ``evaluated`` and ``materialized-list`` rows, which issue exactly one
 #: statement (the override's own evaluation), prove the count is measured rather
 #: than assumed.
-_CONNECTION_MALFORMED_APPLY_SYNC_ROWS = (
+_CONNECTION_MALFORMED_APPLY_SYNC_ROWS: tuple[
+    tuple[str, _ApplySyncOverride, str, tuple[str, ...], int],
+    ...,
+] = (
     (
         "evaluated",
         _override_evaluated,

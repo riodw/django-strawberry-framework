@@ -18,6 +18,9 @@ narrows still serves its scoped page. A list-returning root with the optimizer
 installed still pays ``1 + N`` for a nested connection.
 """
 
+from collections.abc import Callable
+from typing import TypeAlias
+
 import pytest
 import strawberry
 from apps.products import services
@@ -35,12 +38,17 @@ from strawberry import relay
 from strawberry.django.views import GraphQLView
 from typing_extensions import override
 
-from django_strawberry_framework import finalize_django_types, strawberry_config
+from django_strawberry_framework import DjangoType, finalize_django_types, strawberry_config
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
+
+_ItemGetQueryset: TypeAlias = Callable[
+    [type[DjangoType], QuerySet[Item], strawberry.Info[object, object]],
+    QuerySet[Item],
+]
 
 _CURRENT: dict[str, object | None] = {"schema": None}
 
@@ -397,6 +405,13 @@ def _strictness_armed_nullable_fk_schema():
     """
     from apps.library.models import Genre, PatronProfile
 
+    def hide_marked(
+        cls: type[DjangoType],
+        queryset: QuerySet[Genre],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[Genre]:
+        return queryset.exclude(name__startswith="HIDDEN")
+
     registry.clear()
     make_django_type(
         "HolderFavoriteGenreType",
@@ -404,9 +419,7 @@ def _strictness_armed_nullable_fk_schema():
         ("id", "name"),
         node=False,
         namespace_extra={
-            "get_queryset": classmethod(
-                lambda cls, queryset, info: queryset.exclude(name__startswith="HIDDEN"),
-            ),
+            "get_queryset": classmethod(hide_marked),
         },
     )
     profile_type = make_django_type(
@@ -1046,7 +1059,7 @@ def test_staff_planned_relation_connection_window_keeps_every_row():
     assert pages[hidden_parent] == hidden_names
 
 
-def _child_routing_schema(child_hook):
+def _child_routing_schema(child_hook: _ItemGetQueryset):
     """A live ``categories { items }`` schema whose CHILD type carries ``child_hook``.
 
     The root hands back a queryset under a mounted optimizer, so the walker plans

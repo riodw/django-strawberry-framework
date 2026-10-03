@@ -129,6 +129,10 @@ class NullableScalarSpecimenType(DjangoType):
         orderset_class = orders.NullableScalarSpecimenOrder
 
 
+def _override_specimen_score(root: strawberry.Parent[models.OverrideSpecimen]):
+    return root.score
+
+
 class OverriddenScalarSpecimenType(DjangoType):
     """Demonstrates the consumer-authored field corners (spec-029) plus ``auto``.
 
@@ -163,7 +167,7 @@ class OverriddenScalarSpecimenType(DjangoType):
 
     quantity: float | None
     token: str
-    score: int = strawberry.field(resolver=lambda root: root.score)
+    score: int = strawberry.field(resolver=_override_specimen_score)
     note: auto
 
     @strawberry.field

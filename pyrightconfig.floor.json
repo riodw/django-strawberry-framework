@@ -1,5 +1,10 @@
 {
   "extends": "pyproject.toml",
   "pythonVersion": "3.10",
-  "reportUnnecessaryTypeIgnoreComment": "none"
+  "reportUnnecessaryTypeIgnoreComment": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownLambdaType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownVariableType": "none"
 }

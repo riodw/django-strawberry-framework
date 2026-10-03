@@ -10,8 +10,9 @@ instead of lazy-loading it.
 from __future__ import annotations
 
 import datetime
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, SupportsIndex, overload
+from typing import TYPE_CHECKING, Any, SupportsIndex, TypeAlias, overload
 
 import pytest
 import strawberry
@@ -62,6 +63,22 @@ if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
     from django.http import HttpResponse
 
+_ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
+_ShelfCarry: TypeAlias = Callable[
+    [models.QuerySet[library_models.Shelf]],
+    models.QuerySet[library_models.Shelf],
+]
+# ``BranchOrder.apply_sync`` replaced by a classmethod whose result the seal must refuse.
+_ApplySyncOverride: TypeAlias = Callable[
+    [
+        type[BranchOrder],
+        object,
+        models.QuerySet[library_models.Branch],
+        object,
+    ],
+    object,
+]
+
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
     "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
@@ -80,6 +97,10 @@ def _graphql_view(request):
 urlpatterns = [
     path("graphql-test/", _graphql_view),
 ]
+
+
+def _list_resolver(resolver: _ListResolver) -> _ListResolver:
+    return resolver
 
 
 def _staff_client() -> Client:
@@ -511,7 +532,7 @@ def _shelf_offset_page(
     monkeypatch,
     shelf_ordering,
     branch_ordering,
-    resolver=None,
+    resolver: _ListResolver | None = None,
 ):
     """Post the shelf page under the two ``Meta.ordering`` values and return it with its SQL.
 
@@ -636,13 +657,22 @@ def _coin_case_ordering(lookup: str = "coin__gt", threshold: object = 0.5):
     )
 
 
+_RANDOM_CARRIES: list[_ShelfCarry] = [
+    lambda qs: qs.alias(coin=Random()),
+    lambda qs: qs.annotate(coin=Random()),
+]
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     "carry",
-    [lambda qs: qs.alias(coin=Random()), lambda qs: qs.annotate(coin=Random())],
+    _RANDOM_CARRIES,
     ids=["alias", "annotate"],
 )
-def test_holder_offset_rejects_a_conditional_order_over_a_random_predicate(monkeypatch, carry):
+def test_holder_offset_rejects_a_conditional_order_over_a_random_predicate(
+    monkeypatch,
+    carry: _ShelfCarry,
+):
     """A predicate compares two sides, and the side it compares FROM is ordering SQL too.
 
     A ``Case`` picking its value by ``coin__gt`` orders the rows by whatever
@@ -1940,7 +1970,9 @@ def test_holder_materialized_sequence_subclass_is_still_row_bounded():
         branches_escaping: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
             max_rows=2,
-            resolver=lambda root, info: _EscapingRows(library_models.Branch.objects.all()),
+            resolver=_list_resolver(
+                lambda root, info: _EscapingRows(library_models.Branch.objects.all()),
+            ),
         )
 
     schema = DjangoSchema(query=_EscapeQuery, config=strawberry_config())
@@ -1966,11 +1998,11 @@ def test_holder_materialized_and_nullable_none_fields():
     class _NonQsQuery:
         branches_materialized: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: list(library_models.Branch.objects.all()),
+            resolver=_list_resolver(lambda root, info: list(library_models.Branch.objects.all())),
         )
         branches_nullable_none: list[library_schema.BranchType] | None = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: None,
+            resolver=_list_resolver(lambda root, info: None),
         )
 
     schema = DjangoSchema(query=_NonQsQuery, config=strawberry_config())
@@ -2016,8 +2048,8 @@ def test_holder_materialized_and_nullable_none_fields():
 @pytest.mark.parametrize(
     "resolver",
     [
-        lambda root, info: library_models.Branch.objects.all(),
-        lambda root, info: library_models.Branch.objects,
+        _list_resolver(lambda root, info: library_models.Branch.objects.all()),
+        _list_resolver(lambda root, info: library_models.Branch.objects),
     ],
     ids=["queryset", "manager"],
 )
@@ -2052,7 +2084,9 @@ def test_holder_a_materialized_list_skips_target_visibility():
     class _ListQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: list(library_models.Branch.objects.order_by("name")),
+            resolver=_list_resolver(
+                lambda root, info: list(library_models.Branch.objects.order_by("name")),
+            ),
         )
 
     payload = _post_sync(
@@ -2070,7 +2104,7 @@ def test_holder_presliced_configuration_error_under_pass_through():
     class _PreslicedQuery:
         branches_presliced: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: library_models.Branch.objects.all()[:5],
+            resolver=_list_resolver(lambda root, info: library_models.Branch.objects.all()[:5]),
         )
 
     schema = DjangoSchema(query=_PreslicedQuery, config=strawberry_config())
@@ -2181,7 +2215,7 @@ def test_shipped_branches_a_materialized_source_is_named_before_the_order_requir
     class _MatQuery:
         branches_materialized: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: list(library_models.Branch.objects.all()),
+            resolver=_list_resolver(lambda root, info: list(library_models.Branch.objects.all())),
         )
 
     payload = _post_sync(
@@ -2199,7 +2233,7 @@ def test_shipped_branches_a_presliced_source_is_named_before_the_ordering_runs()
     class _PreQuery:
         branches_presliced: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: library_models.Branch.objects.all()[:2],
+            resolver=_list_resolver(lambda root, info: library_models.Branch.objects.all()[:2]),
         )
 
     payload = _post_sync(
@@ -2249,8 +2283,10 @@ def test_holder_branches_serve_a_combined_source_and_result_as_their_primary_key
     class _CombinedQuery:
         branches_combined: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: library_models.Branch.objects.filter(name="A").union(
-                library_models.Branch.objects.filter(name="B"),
+            resolver=_list_resolver(
+                lambda root, info: library_models.Branch.objects.filter(name="A").union(
+                    library_models.Branch.objects.filter(name="B"),
+                ),
             ),
         )
 
@@ -2424,7 +2460,9 @@ class _DeferredFilterQuerySet(models.QuerySet[library_models.Branch]):
     """
 
 
-async def _awaitable_queryset(queryset):
+async def _awaitable_queryset(
+    queryset: models.QuerySet[library_models.Branch],
+) -> models.QuerySet[library_models.Branch]:
     return queryset
 
 
@@ -2467,7 +2505,10 @@ def _override_untrusted(
 #: The query count is the must-not half - a defect the seal catches before the
 #: window is taken must leave the database untouched, and the two rows that do
 #: issue one prove the count is measured rather than assumed.
-_MALFORMED_APPLY_SYNC_ROWS = (
+_MALFORMED_APPLY_SYNC_ROWS: tuple[
+    tuple[str, _ApplySyncOverride, str, tuple[str, ...], int],
+    ...,
+] = (
     (
         "evaluated",
         _override_evaluated,
@@ -2610,10 +2651,16 @@ def test_holder_branches_hostile_normalized_term_is_rejected_before_it_can_run(m
         def __format__(self, spec):
             raise RuntimeError("hostile format ran")
 
+    def _hostile_terms(
+        cls: type[BranchOrder],
+        input_value: object,
+    ) -> list[tuple[str, Ordering | None]]:
+        return [(_HostileStr("city"), Ordering.ASC)]
+
     monkeypatch.setattr(
         BranchOrder,
         "_normalize_input",
-        classmethod(lambda cls, input_value: [(_HostileStr("city"), Ordering.ASC)]),
+        classmethod(_hostile_terms),
     )
     with override_settings(**_ERROR_POLICY_PASS_THROUGH), CaptureQueriesContext(connection) as ctx:
         payload = graphql_payload(
@@ -2738,7 +2785,9 @@ def test_holder_model_default_ordering_verdicts():
         )
         terms_cleared_ordering: list[glossary_schema.GlossaryTermType] = DjangoListField(
             glossary_schema.GlossaryTermType,
-            resolver=lambda root, info: glossary_models.GlossaryTerm.objects.all().order_by(),
+            resolver=_list_resolver(
+                lambda root, info: glossary_models.GlossaryTerm.objects.all().order_by(),
+            ),
         )
 
     schema = DjangoSchema(query=_GlossaryOrderingQuery, config=strawberry_config())
@@ -2799,7 +2848,9 @@ def test_holder_reversed_model_default_ordering_still_pages():
     class _ReversedQuery:
         terms_reversed: list[glossary_schema.GlossaryTermType] = DjangoListField(
             glossary_schema.GlossaryTermType,
-            resolver=lambda root, info: glossary_models.GlossaryTerm.objects.all().reverse(),
+            resolver=_list_resolver(
+                lambda root, info: glossary_models.GlossaryTerm.objects.all().reverse(),
+            ),
         )
 
     schema = DjangoSchema(query=_ReversedQuery, config=strawberry_config())
@@ -2843,7 +2894,9 @@ def test_holder_empty_model_ordered_queryset_still_pages():
     class _EmptyQuery:
         rows: list[glossary_schema.GlossaryTermType] = DjangoListField(
             glossary_schema.GlossaryTermType,
-            resolver=lambda root, info: glossary_models.GlossaryTerm.objects.none(),
+            resolver=_list_resolver(
+                lambda root, info: glossary_models.GlossaryTerm.objects.none(),
+            ),
         )
 
     payload = _post_sync(
@@ -2862,7 +2915,9 @@ def test_holder_empty_unordered_queryset_still_requires_order():
     class _EmptyQuery:
         rows: list[library_schema.MembershipCardType] = DjangoListField(
             library_schema.MembershipCardType,
-            resolver=lambda root, info: library_models.MembershipCard.objects.none(),
+            resolver=_list_resolver(
+                lambda root, info: library_models.MembershipCard.objects.none(),
+            ),
         )
 
     payload = _post_sync(
@@ -2925,14 +2980,16 @@ def _legacy_reference_resolver(source_factory):
     return resolver
 
 
-def _build_current_parity_schema(source_factory) -> DjangoSchema:
+def _build_current_parity_schema(
+    source_factory: Callable[[], models.QuerySet[library_models.Branch]],
+) -> DjangoSchema:
     """The card's field, published under the GraphQL name ``branches``."""
 
     @strawberry.type
     class _CurrentParityQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: source_factory(),
+            resolver=_list_resolver(lambda root, info: source_factory()),
         )
 
     optimizer = DjangoOptimizerExtension()
@@ -3327,11 +3384,11 @@ def test_holder_nullability_propagation_over_none_source():
     class _NullabilityQuery:
         nullable_none: list[library_schema.BranchType] | None = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: None,
+            resolver=_list_resolver(lambda root, info: None),
         )
         non_null_none: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: None,
+            resolver=_list_resolver(lambda root, info: None),
         )
 
     schema = DjangoSchema(query=_NullabilityQuery, config=strawberry_config())
@@ -3715,15 +3772,31 @@ def test_holder_list_field_uses_the_named_targets_queryset(monkeypatch, field_na
     library_models.Patron.objects.create(name="from-secondary", email="b@example.com")
     library_models.Patron.objects.create(name="kept", email="c@example.com")
 
+    def _hide_primary(
+        cls: type[library_schema.PatronType],
+        queryset: models.QuerySet[library_models.Patron],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ) -> models.QuerySet[library_models.Patron]:
+        return queryset.exclude(name="from-primary")
+
+    def _hide_secondary(
+        cls: type[library_schema.PublicPatronType],
+        queryset: models.QuerySet[library_models.Patron],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ) -> models.QuerySet[library_models.Patron]:
+        return queryset.exclude(name="from-secondary")
+
     monkeypatch.setattr(
         library_schema.PatronType,
         "get_queryset",
-        classmethod(lambda cls, queryset, info, **kwargs: queryset.exclude(name="from-primary")),
+        classmethod(_hide_primary),
     )
     monkeypatch.setattr(
         library_schema.PublicPatronType,
         "get_queryset",
-        classmethod(lambda cls, queryset, info, **kwargs: queryset.exclude(name="from-secondary")),
+        classmethod(_hide_secondary),
     )
 
     @strawberry.type
@@ -3777,10 +3850,18 @@ def test_shipped_branches_sync_http_rejects_an_awaitable_get_queryset(monkeypatc
             yield from ()
             return library_models.Branch.objects.all()
 
+    def _deferred_hook(
+        cls: type[library_schema.BranchType],
+        queryset: models.QuerySet[library_models.Branch],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ) -> _DeferredQueryset:
+        return _DeferredQueryset()
+
     monkeypatch.setattr(
         library_schema.BranchType,
         "get_queryset",
-        classmethod(lambda cls, queryset, info, **kwargs: _DeferredQueryset()),
+        classmethod(_deferred_hook),
     )
     with override_settings(**_ERROR_POLICY_PASS_THROUGH):
         payload = graphql_payload("{ allLibraryBranchesViaListField { name } }")
@@ -3852,7 +3933,10 @@ def _hostile_branch_hook(cls, queryset, info, **kwargs):
 
 
 def _degrading_branch_manager():
-    manager = type("ListManager", (models.Manager,), {"all": lambda self: ["secret"]})()
+    def _all(self: models.Manager[library_models.Branch]) -> list[str]:
+        return ["secret"]
+
+    manager = type("ListManager", (models.Manager,), {"all": _all})()
     manager.model = library_models.Branch
     manager._db = None
     return manager
@@ -3896,7 +3980,7 @@ def test_holder_manager_that_degrades_to_a_list_is_rejected():
     class _DegradeQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: _degrading_branch_manager(),
+            resolver=_list_resolver(lambda root, info: _degrading_branch_manager()),
         )
 
     payload = _post_sync(
@@ -3916,7 +4000,7 @@ def test_holder_manager_that_drifts_alias_is_rejected():
     class _DriftQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: _alias_drift_branch_manager(),
+            resolver=_list_resolver(lambda root, info: _alias_drift_branch_manager()),
         )
 
     payload = _post_sync(

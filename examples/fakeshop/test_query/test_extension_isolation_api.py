@@ -30,7 +30,8 @@ has.
 import asyncio
 import json
 import logging
-from types import SimpleNamespace
+from collections.abc import Callable
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -202,11 +203,17 @@ class _ReplacementConsumerFactory:
         return _ConsumerExtension()
 
 
+def _rebuild_the_box(box: MethodType, replacement: _ReplacementConsumerFactory) -> None:
+    # basedpyright: typeshed declares object.__init__ argument-free, but CPython's accepts
+    # arguments on a type overriding __new__, as MethodType does: the primitive aimed at here
+    box.__init__(replacement)  # pyright: ignore[reportCallIssue]
+
+
 #: Every way there is to aim at the binding inside the box the schema holds. A
 #: Python object's own ``__setattr__`` cannot refuse the last two - the
 #: primitive its constructor writes its slot with is one a resolver can call -
 #: which is why the box is the interpreter's own binding instead.
-TAMPERS = {
+TAMPERS: dict[str, Callable[[MethodType, _ReplacementConsumerFactory], None]] = {
     "assign-the-binding": lambda box, replacement: setattr(box, "__self__", replacement),
     "assign-past-the-descriptor": lambda box, replacement: object.__setattr__(
         box,
@@ -218,7 +225,7 @@ TAMPERS = {
         replacement,
     ),
     "delete-the-binding": lambda box, replacement: delattr(box, "__self__"),
-    "rebuild-the-box": lambda box, replacement: box.__init__(replacement),
+    "rebuild-the-box": _rebuild_the_box,
 }
 
 

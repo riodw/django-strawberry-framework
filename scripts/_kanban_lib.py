@@ -25,7 +25,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Container, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
@@ -151,7 +151,8 @@ def placeholder_defects(
     return defects
 
 
-SortKey = Callable[[dict[str, Any]], Any]
+_JSONRow: TypeAlias = dict[str, Any]
+SortKey = Callable[[_JSONRow], Any]
 
 # Every per-card child list ``STATIC_KANBAN_QUERY`` selects, as
 # ``payload key -> (ORM accessor, deterministic sort key)``. One table drives both the
@@ -977,7 +978,7 @@ def compute_progress_metrics(
             bucket["done"] += 1
             bucket["rank_done"] += rank(card)
 
-    def scope(predicate: Any) -> dict[str, Any]:
+    def scope(predicate: Callable[[_JSONRow], bool]) -> dict[str, Any]:
         members = [card for card in universe if predicate(card)]
         done = [card for card in members if card["status"]["key"] == "done"]
         rank_total = sum(rank(card) for card in members)
@@ -1123,16 +1124,20 @@ def build_dashboard_snapshot(dashboard_data: dict[str, Any]) -> dict[str, Any]:
     build over build, and so the markdown renderer can rely on the same order (items
     grouped by section, claims by upstream, paths by path) without re-sorting.
     """
-    for card in dashboard_data["cards"]:
+    cards: list[_JSONRow] = dashboard_data["cards"]
+    for card in cards:
         for payload_key, (_accessor, sort_key) in CARD_CHILD_LISTS.items():
             card.get(payload_key, []).sort(key=sort_key)
-    dashboard_data["cards"].sort(key=lambda card: card["number"])
+    cards.sort(key=lambda card: card["number"])
 
-    for doc in dashboard_data["boardDocs"]:
-        doc.get("cardReferences", []).sort(key=lambda ref: (ref["order"], ref["id"]))
-    dashboard_data["boardDocs"].sort(key=lambda doc: (doc["order"], doc["key"]))
+    board_docs: list[_JSONRow] = dashboard_data["boardDocs"]
+    for doc in board_docs:
+        references: list[_JSONRow] = doc.get("cardReferences", [])
+        references.sort(key=lambda ref: (ref["order"], ref["id"]))
+    board_docs.sort(key=lambda doc: (doc["order"], doc["key"]))
 
-    for name, rows in dashboard_data["lookups"].items():
+    lookups: dict[str, list[_JSONRow]] = dashboard_data["lookups"]
+    for name, rows in lookups.items():
         if name == "trackedPaths":
             rows.sort(key=lambda row: row["path"])
         else:

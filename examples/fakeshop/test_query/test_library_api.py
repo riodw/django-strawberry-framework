@@ -9,16 +9,18 @@ holder at ``/graphql-test/`` because the shipped query exposes typed
 
 import base64
 import sys
-from typing import Any, NamedTuple
+from collections.abc import Callable
+from typing import Any, NamedTuple, TypeAlias
 
 import pytest
 import strawberry
 from apps.library import models
+from apps.library.filters_genre import GenreFilter
 from apps.products.services import create_users
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection
-from django.db.models import QuerySet
+from django.db.models import Model, QuerySet
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
@@ -3935,6 +3937,17 @@ query {
 """
 
 
+_GenreFilterOverride: TypeAlias = Callable[
+    [
+        type[GenreFilter],
+        object,
+        QuerySet[models.Genre],
+        object,
+    ],
+    QuerySet[Model, object] | None,
+]
+
+
 def _genre_filter_in_place_routing(
     cls,
     input_value,
@@ -3950,7 +3963,10 @@ def _genre_filter_in_place_routing(
 #: genre queries)``. The query count is the must-not half: a defect the seal
 #: catches before the window is taken leaves ``library_genre`` untouched, and
 #: the one row that evaluates inside the override proves the count is measured.
-_MALFORMED_GENRE_FILTER_ROWS = (
+_MALFORMED_GENRE_FILTER_ROWS: tuple[
+    tuple[str, _GenreFilterOverride, str, tuple[str, ...], int],
+    ...,
+] = (
     (
         "evaluated",
         lambda cls, input_value, queryset, info: (list(queryset), queryset)[1],
@@ -4029,7 +4045,6 @@ def test_genre_connection_a_malformed_filter_apply_sync_result_names_its_own_def
     pre-evaluates its result is rejected before the Relay window is taken. SQL
     is captured so a row that must not reach the database proves it did not.
     """
-    from apps.library.filters_genre import GenreFilter
 
     _seed_genres("Gamma", "Alpha")
     monkeypatch.setattr(GenreFilter, "apply_sync", classmethod(override))
@@ -4053,7 +4068,6 @@ def test_genre_connection_a_malformed_filter_apply_sync_result_names_its_own_def
 @pytest.mark.django_db
 def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
     """A ``super()`` pass-through ``GenreFilter`` override is admitted and the filter applies."""
-    from apps.library.filters_genre import GenreFilter
 
     def _passthrough(
         cls: type[GenreFilter],
@@ -4078,7 +4092,6 @@ def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
 @pytest.mark.django_db
 def test_genre_connection_serves_a_combined_filter_result_as_its_primary_key_set(monkeypatch):
     """A ``GenreFilter.apply_sync`` returning a union is windowed as the rows it selects."""
-    from apps.library.filters_genre import GenreFilter
 
     def _combined(
         cls,

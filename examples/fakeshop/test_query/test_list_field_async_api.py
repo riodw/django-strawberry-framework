@@ -16,8 +16,9 @@ import functools
 import inspect
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import pytest
 import strawberry
@@ -65,12 +66,18 @@ if TYPE_CHECKING:
 
     from django.db.models.sql.compiler import _AsSqlType
 
+_ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
+
 _CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
 
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
     "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
 }
+
+
+def _list_resolver(resolver: _ListResolver) -> _ListResolver:
+    return resolver
 
 
 async def _async_graphql_view(request):
@@ -194,7 +201,7 @@ async def test_async_queryset_completion_sync_manager_resolver():
     class _ManagerQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: library_models.Branch.objects,
+            resolver=_list_resolver(lambda root, info: library_models.Branch.objects),
         )
 
     schema = DjangoSchema(query=_ManagerQuery, config=strawberry_config())
@@ -224,7 +231,7 @@ async def test_async_queryset_completion_sync_queryset_resolver():
     class _QsQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: library_models.Branch.objects.all(),
+            resolver=_list_resolver(lambda root, info: library_models.Branch.objects.all()),
         )
 
     schema = DjangoSchema(query=_QsQuery, config=strawberry_config())
@@ -312,8 +319,8 @@ async def test_async_get_queryset_is_awaited(monkeypatch):
 @pytest.mark.parametrize(
     "resolver",
     [
-        lambda root, info: library_models.Branch.objects.all(),
-        lambda root, info: library_models.Branch.objects,
+        _list_resolver(lambda root, info: library_models.Branch.objects.all()),
+        _list_resolver(lambda root, info: library_models.Branch.objects),
     ],
     ids=["queryset", "manager"],
 )
@@ -789,7 +796,7 @@ async def test_async_generator_cleanup_and_finally_witness():
     class _GenQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: _gen(),
+            resolver=_list_resolver(lambda root, info: _gen()),
         )
 
     schema = DjangoSchema(query=_GenQuery, config=strawberry_config())
@@ -1113,7 +1120,7 @@ async def test_async_a_failing_aclose_does_not_displace_the_argument_rejection()
     class _CleanupFailQuery:
         branches: list[library_schema.BranchType] = DjangoListField(
             library_schema.BranchType,
-            resolver=lambda root, info: _FailingAcloseIterator(branches),
+            resolver=_list_resolver(lambda root, info: _FailingAcloseIterator(branches)),
         )
 
     payload = await _post_async(
@@ -1227,7 +1234,7 @@ async def _seed_three_shelves_async():
         )
 
 
-def _shelf_offset_schema(resolver=None):
+def _shelf_offset_schema(resolver: _ListResolver | None = None):
     @strawberry.type
     class _ShelfQuery:
         shelves: list[library_schema.ShelfType] = DjangoListField(
@@ -2349,7 +2356,10 @@ def _hostile_branch_hook(cls, queryset, info, **kwargs):
 
 
 def _degrading_branch_manager():
-    manager = type("ListManager", (models.Manager,), {"all": lambda self: ["secret"]})()
+    def _all(self: models.Manager[library_models.Branch]) -> list[str]:
+        return ["secret"]
+
+    manager = type("ListManager", (models.Manager,), {"all": _all})()
     manager.model = library_models.Branch
     manager._db = None
     return manager

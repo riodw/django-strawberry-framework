@@ -57,6 +57,7 @@ Critical contract pins (do not violate without an explicit spec revision):
 # ``os`` owns the import-time environment gate below.
 
 import os
+from collections.abc import Callable
 
 import pytest
 
@@ -158,11 +159,14 @@ def _build_list_field_routing_mismatch_schema(
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_apply_sync))
 
+    def _shard_b_branches(root: object, info: Info[object, object]) -> QuerySet[models.Branch]:
+        return models.Branch.objects.using("shard_b")
+
     @strawberry.type
     class _RoutingQuery:
         branches_shard_b: list[BranchType] = DjangoListField(
             BranchType,
-            resolver=lambda root, info: models.Branch.objects.using("shard_b"),
+            resolver=_shard_b_branches,
         )
 
     _current["schema"] = DjangoSchema(
@@ -228,11 +232,14 @@ def _build_connection_routing_mismatch_schema(
 
     monkeypatch.setattr(GenreOrder, "apply_sync", classmethod(_malicious_apply_sync))
 
+    def _shard_b_genres(root: object, info: Info[object, object]) -> QuerySet[models.Genre]:
+        return models.Genre.objects.using("shard_b")
+
     @strawberry.type
     class _ConnectionRoutingQuery:
         genres_shard_b: DjangoConnection[GenreType] = DjangoConnectionField(
             GenreType,
-            resolver=lambda root, info: models.Genre.objects.using("shard_b"),
+            resolver=_shard_b_genres,
         )
 
     _current["schema"] = DjangoSchema(
@@ -1529,7 +1536,14 @@ def test_serializer_mutation_envelope_rolls_back_on_the_write_alias(_project_sch
 # ---------------------------------------------------------------------------
 
 
-def _prefetch_alias_schema(child_hook, *, root_alias=None):
+def _prefetch_alias_schema(
+    child_hook: Callable[
+        [type[DjangoType], QuerySet[models.Book], Info[object, object]],
+        QuerySet[models.Book],
+    ],
+    *,
+    root_alias=None,
+):
     """A ``shelves { books }`` schema whose CHILD type carries ``child_hook``.
 
     The root resolver hands back a queryset (pinned to ``root_alias`` when one is

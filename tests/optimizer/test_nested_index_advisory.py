@@ -4,41 +4,47 @@ Pins ``nested_planner.py``'s dev-mode advisory: it prefix-matches a child
 model's REPRESENTED physical index shapes - unconditional field-based
 ``Meta.indexes`` / ``UniqueConstraint`` / legacy ``unique_together``, plus
 single-column ``db_index`` / ``unique`` / FK auto-index - against a nested
-window's leading ``(content_type_id?, connector, order terms..., pk)`` shape,
-warns only under ``settings.DEBUG``, and - the fail-soft contract - stays SILENT
-unless absence is PROVEN from fully-inspectable metadata. That tri-state spans
-BOTH ends of the comparison. Index side: an expression index, a PARTIAL index /
-unique constraint (a ``condition``), or a migration-lagged field name leaves
-coverage UNKNOWN (never falsely covered). Order side: an effective ORDER term
-that is not a local concrete column (a related span, a ``Lower(...)`` expression,
-an alias, an unresolvable name) OR that carries explicit ``NULLS FIRST`` /
-``LAST`` leaves the SQL order only partially understood - either UNKNOWN keeps
-the advisory silent (never a false-positive warning, never a suffix-only coverage
-claim). Access method is load-bearing: only a plain ``models.Index`` or the
-PostgreSQL ``BTreeIndex`` builds the ordinary ordered B-tree the advisory reasons
-about, so a ``GinIndex`` / ``GistIndex`` / ``HashIndex`` / ``BrinIndex`` /
-``SpGistIndex``, a custom ``Index`` subclass, a non-default opclass, or a
-descending column on a backend without index-column ordering all leave coverage
-UNKNOWN (never falsely covered). Equality-constrained columns (the connector / morph prefix) are STRIPPED
+window's leading ``(content_type_id?, partition column, order terms..., pk)``
+shape, warns only under ``settings.DEBUG``, and - the fail-soft contract - stays
+SILENT unless absence is PROVEN from fully-inspectable metadata. That tri-state
+spans BOTH ends of the comparison. Index side: an expression index, a PARTIAL
+index / unique constraint (a ``condition``), or a migration-lagged field name
+leaves coverage UNKNOWN (never falsely covered). Order side: an effective ORDER
+term that is not a local concrete column (a related span, a ``Lower(...)``
+expression, an alias, an unresolvable name) OR that carries explicit ``NULLS
+FIRST`` / ``LAST`` leaves the SQL order only partially understood - either
+UNKNOWN keeps the advisory silent (never a false-positive warning, never a
+suffix-only coverage claim). Access method is load-bearing: only a plain
+``models.Index`` or the PostgreSQL ``BTreeIndex`` builds the ordinary ordered
+B-tree the advisory reasons about, so a ``GinIndex`` / ``GistIndex`` /
+``HashIndex`` / ``BrinIndex`` / ``SpGistIndex``, a custom ``Index`` subclass, a
+non-default opclass, or a descending column on a backend without index-column
+ordering all leave coverage UNKNOWN (never falsely covered).
+Equality-constrained columns (the partition column / morph prefix) are STRIPPED
 from the within-partition order before comparison, so an order led by (or
-threading) the partition key is not falsely reported absent or recommended with a
-duplicated column. Direction is carried through the comparison so a mixed
-``title ASC, id DESC`` is served only by the requested order or its FULL reverse,
-and a ``GenericRelation`` window recommends the ``content_type_id``-prefixed
-composite. The advisory is deferred until a strategy ACCEPTS a window (a refusing
-custom strategy advises nothing), and a bounded, strategy- and
+threading) the partition key is not falsely reported absent or recommended with
+a duplicated column. Direction is carried through the comparison so a mixed
+``title ASC, id DESC`` is served only by the requested order or its FULL
+reverse, and a ``GenericRelation`` window recommends the
+``content_type_id``-prefixed composite. The partition column is the window's
+own: ``_window_partition_field`` resolves ``partition_expr`` as ``PARTITION BY``
+does, and when that column lives off the child's table (an M2M through table, a
+multi-table-inheritance parent that declares a ``GenericRelation`` child's
+generic foreign key) no single child-table index serves the page, so every such
+shape stays silent. The advisory is deferred until a strategy ACCEPTS a window
+(a refusing custom strategy advises nothing), and a bounded, strategy- and
 request-independent dedup makes one plan shape warn at most once even when a
 custom-``get_queryset`` plan is rebuilt every request. Package tier: the helpers
 operate on model ``_meta`` and a strategy-agnostic join descriptor, unreachable
-from a live /graphql query (no observable schema surface); the deferral is driven
-through an in-process schema.
+from a live /graphql query (no observable schema surface); the deferral is
+driven through an in-process schema.
 
 The unmanaged ``_Idx*`` models exist because a model carries exactly one index
 set, so each index variant (bare, composite, expression, partial, reversed,
 constraint, migration-lagged, opclass, GIN) needs a model of its own, and the
 opclass / GIN variants are PostgreSQL-only DDL no SQLite-migrated fakeshop model
-can declare; they pin the covered / absent / unknown
-tri-state in
+can declare; ``_IdxMtiTag*`` is the multi-table-inheritance generic shape no
+fakeshop model carries; they pin the covered / absent / unknown tri-state in
 ``django_strawberry_framework/optimizer/nested_planner.py::_index_coverage`` and
 the warning it gates in
 ``django_strawberry_framework/optimizer/nested_planner.py::_advise_composite_index``.
@@ -47,7 +53,10 @@ the warning it gates in
 from types import SimpleNamespace
 
 import pytest
-from apps.library.models import Branch, TaggedItem
+from apps.glossary.models import GlossaryTerm
+from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.indexes import (
     BrinIndex,
     BTreeIndex,
@@ -57,7 +66,9 @@ from django.contrib.postgres.indexes import (
     SpGistIndex,
 )
 from django.db import models
+from django.db.models.expressions import Col
 from django.db.models.functions import Lower
+from django.db.models.sql.query import Query
 from django.test import override_settings
 
 from django_strawberry_framework.optimizer import logger as optimizer_logger
@@ -74,6 +85,8 @@ from django_strawberry_framework.optimizer.nested_planner import (
     clear_index_advisory_dedup,
 )
 from django_strawberry_framework.utils.imports import import_attr_if_importable
+
+from ._link_models import LnkParent, LnkTag
 
 
 @pytest.fixture(autouse=True)
@@ -349,6 +362,46 @@ class _IdxChildGin(models.Model):
         managed = False
         ordering = ("title", "id")
         indexes = [GinIndex(fields=["parent", "title", "id"], name="idx_gin_cover")]
+
+
+class _IdxMtiTagBase(models.Model):
+    """Unmanaged multi-table-inheritance parent declaring a generic foreign key."""
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
+    object_id = models.PositiveIntegerField()
+    content_object = GenericForeignKey("content_type", "object_id")
+    label = models.TextField()
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+
+
+class _IdxMtiTag(_IdxMtiTagBase):
+    """Multi-table child inheriting the generic link columns, which stay on the parent table."""
+
+    tag_base = models.OneToOneField(
+        _IdxMtiTagBase,
+        on_delete=models.CASCADE,
+        parent_link=True,
+        primary_key=True,
+    )
+    rank = models.IntegerField(default=0)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+        ordering = ("label", "tag_base")
+
+
+class _IdxMtiTagHolder(models.Model):
+    """Parent whose ``GenericRelation`` targets the multi-table child."""
+
+    tags = GenericRelation(_IdxMtiTag)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
 
 
 class TestIndexLeadingTerms:
@@ -787,7 +840,7 @@ class TestAdviseCompositeIndex:
     @staticmethod
     def _join(column: str | None, content_type_column: str | None = None) -> SimpleNamespace:
         return SimpleNamespace(
-            parent_join_columns=(column,) if column is not None else (),
+            partition_expr=column,
             content_type_column=content_type_column,
         )
 
@@ -828,8 +881,8 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_no_connector_returns_early(self, caplog) -> None:
-        """No resolvable connector column -> nothing to advise, no crash."""
+    def test_no_partition_expr_returns_early(self, caplog) -> None:
+        """No partition expression -> nothing to advise, no crash."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join(None), ["title", "id"])
         assert not self._warnings(caplog)
@@ -1057,6 +1110,219 @@ class TestAdviseCompositeIndex:
         assert (
             emitted(b) is False
         )  # B was the evicted LRU -> re-emits (bounded, not silent forever)
+
+    @override_settings(DEBUG=True)
+    def test_unresolvable_partition_expr_is_silent(self, caplog) -> None:
+        """A partition expression naming no column leaves nothing to advise -> silent."""
+        caplog.set_level("WARNING", logger=optimizer_logger.name)
+        _advise_composite_index(_IdxChildBare, self._join("ghost"), ["title", "id"])
+        assert not self._warnings(caplog)
+
+
+def _relation(model: type[models.Model], name: str):
+    """The raw relation field (or reverse rel) the planner classifies for ``model.name``."""
+    return model._meta.get_field(name)
+
+
+class TestWindowPartitionField:
+    """``_window_partition_field`` resolves the window's own partition column and its table.
+
+    Each row classifies a real relation and resolves its ``partition_expr``
+    against the child model the way the window's ``PARTITION BY`` does; the
+    owning table is what decides whether one index can serve the page.
+    """
+
+    @pytest.mark.parametrize(
+        (
+            "model",
+            "name",
+            "owner_table",
+            "attname",
+        ),
+        [
+            pytest.param(Shelf, "books", "library_book", "shelf_id", id="reverse-fk"),
+            pytest.param(
+                LnkParent,
+                "slug_children",
+                "products_lnkslugchild",
+                "parent_id",
+                id="reverse-fk-to-field",
+            ),
+            pytest.param(
+                LnkParent,
+                "column_children",
+                "products_lnkcolumnchild",
+                "p_id",
+                id="reverse-one-column-foreign-object",
+            ),
+            pytest.param(Branch, "tags", "library_taggeditem", "object_id", id="generic"),
+            pytest.param(
+                _IdxMtiTagHolder,
+                "tags",
+                "tests__idxmtitagbase",
+                "object_id",
+                id="generic-mti-child",
+            ),
+            pytest.param(Book, "genres", "library_book_genres", "book_id", id="forward-m2m"),
+            pytest.param(Genre, "books", "library_book_genres", "genre_id", id="reverse-m2m"),
+            pytest.param(
+                GlossaryTerm,
+                "categories",
+                "glossary_glossarycategorymembership",
+                "term_id",
+                id="explicit-through-m2m",
+            ),
+            pytest.param(
+                GlossaryTerm,
+                "related_terms",
+                "glossary_glossarytermlink",
+                "source_term_id",
+                id="self-m2m-forward",
+            ),
+            pytest.param(
+                GlossaryTerm,
+                "related_from",
+                "glossary_glossarytermlink",
+                "target_term_id",
+                id="self-m2m-reverse",
+            ),
+            pytest.param(
+                LnkParent,
+                "tags",
+                "products_lnktagging",
+                "parent_id",
+                id="to-field-through-forward",
+            ),
+            pytest.param(
+                LnkTag,
+                "parents",
+                "products_lnktagging",
+                "tag_id",
+                id="to-field-through-reverse",
+            ),
+        ],
+    )
+    def test_partition_column_and_owner_table(
+        self,
+        model,
+        name,
+        owner_table,
+        attname,
+    ) -> None:
+        """The resolved column is a ``Col`` target on the table that holds it."""
+        field = _relation(model, name)
+        join = classify_relation_join(field)
+        assert join.windowable
+        assert isinstance(Query(field.related_model).resolve_ref(join.partition_expr), Col)
+        partition_field = nested_planner._window_partition_field(
+            field.related_model,
+            join.partition_expr,
+        )
+        assert partition_field is not None
+        assert partition_field.model._meta.db_table == owner_table
+        assert partition_field.attname == attname
+
+    def test_unresolvable_expression_is_none(self) -> None:
+        """A name the child model cannot resolve returns ``None`` instead of raising."""
+        assert nested_planner._window_partition_field(Book, "no_such_relation") is None
+
+
+class TestAdvisoryReadsThePartitionColumn:
+    """The advisory's equality prefix is the window's partition column, on the child's table.
+
+    Same-table shapes recommend ``(content_type_id?, partition column, order
+    terms...)`` on the child model. A partition column on another table (an M2M
+    through table, a multi-table-inheritance parent) leaves no child-table index
+    that serves the page, so the advisory stays silent there.
+    """
+
+    @staticmethod
+    def _advisories(caplog) -> list[str]:
+        return [r.getMessage() for r in caplog.records if "composite index" in r.getMessage()]
+
+    @override_settings(DEBUG=True)
+    @pytest.mark.parametrize(
+        (
+            "model",
+            "name",
+            "order_by",
+            "columns",
+        ),
+        [
+            pytest.param(
+                Shelf,
+                "books",
+                ["title", "id"],
+                "(shelf_id, title, id)",
+                id="reverse-fk",
+            ),
+            pytest.param(
+                LnkParent,
+                "slug_children",
+                ["name", "id"],
+                "(parent_id, name, id)",
+                id="reverse-fk-to-field",
+            ),
+            pytest.param(
+                LnkParent,
+                "column_children",
+                ["name", "id"],
+                "(p_id, name, id)",
+                id="reverse-one-column-foreign-object",
+            ),
+            pytest.param(
+                Branch,
+                "tags",
+                ["tag", "id"],
+                "(content_type_id, object_id, tag, id)",
+                id="generic",
+            ),
+        ],
+    )
+    def test_same_table_partition_recommends_exact_columns(
+        self,
+        model,
+        name,
+        order_by,
+        columns,
+        caplog,
+    ) -> None:
+        """A partition column on the child's table leads the recommended composite."""
+        caplog.set_level("DEBUG", logger=optimizer_logger.name)
+        field = _relation(model, name)
+        _advise_composite_index(field.related_model, classify_relation_join(field), order_by)
+        advisories = self._advisories(caplog)
+        assert len(advisories) == 1
+        assert f"composite index on {columns} " in advisories[0]
+
+    @override_settings(DEBUG=True)
+    @pytest.mark.parametrize(
+        ("model", "name", "order_by"),
+        [
+            pytest.param(Book, "genres", ["name", "id"], id="forward-m2m"),
+            pytest.param(Book, "genres", ["-name", "-id"], id="forward-m2m-desc"),
+            pytest.param(Book, "genres", ["id"], id="forward-m2m-pk-only"),
+            pytest.param(Genre, "books", ["title", "id"], id="reverse-m2m"),
+            pytest.param(GlossaryTerm, "categories", ["label", "id"], id="explicit-through-m2m"),
+            pytest.param(GlossaryTerm, "related_terms", ["title", "id"], id="self-m2m-forward"),
+            pytest.param(GlossaryTerm, "related_from", ["title", "id"], id="self-m2m-reverse"),
+            pytest.param(LnkParent, "tags", ["name", "id"], id="to-field-through-forward"),
+            pytest.param(LnkTag, "parents", ["label", "id"], id="to-field-through-reverse"),
+            pytest.param(_IdxMtiTagHolder, "tags", ["label", "rank"], id="generic-mti-child"),
+        ],
+    )
+    def test_cross_table_partition_is_silent(
+        self,
+        model,
+        name,
+        order_by,
+        caplog,
+    ) -> None:
+        """A partition column off the child's table: no child-table index serves the page."""
+        caplog.set_level("DEBUG", logger=optimizer_logger.name)
+        field = _relation(model, name)
+        _advise_composite_index(field.related_model, classify_relation_join(field), order_by)
+        assert not self._advisories(caplog)
 
 
 @pytest.mark.django_db

@@ -47,17 +47,24 @@ windowed default.
 
 Nested connection indexing
 --------------------------
-Both the windowed and lateral strategies partition each parent's children by
-the child connector column and order them by the deterministic connection order,
-so the database serves each page fastest from a composite index whose leading
-columns mirror ``(parent_fk, order columns..., pk)``. For a keyset connection
-the composite mirrors ``keyset.py::keyset_seek_q``'s redundant-leading-bound
-design (the same leading columns the seek predicate compares). The planner emits
-a dev-mode advisory (``optimizer/nested_planner.py::_advise_composite_index``,
-``WARNING`` only under ``settings.DEBUG``) when no such index is found; it is
-advisory only - DBAs own index creation, and expression indexes never trigger a
-false positive. A per-field override
-(``OptimizerHint.strategy("windowed" | "lateral" | "auto")`` in
+Both the windowed and lateral strategies partition each parent's children by the
+window's partition column and order them by the deterministic connection order,
+so when the partition column lives on the child's own table the database serves
+each page fastest from a composite index whose leading columns mirror
+``(partition column, order columns..., pk)``. An M2M partitions by the through
+table's parent foreign key while ordering by the related model's columns, so no
+single index serves a page whose order names a related-model column besides the
+pk (a pk-only order is the link itself, which a through-table index leading
+``(parent_fk, child_fk)`` can serve); a multi-table-inheritance child that
+inherits its partition column from a parent table is cross-table the same way.
+For a keyset connection the composite mirrors ``keyset.py::keyset_seek_q``'s
+redundant-leading-bound design (the same leading columns the seek predicate
+compares). The planner emits a dev-mode advisory
+(``optimizer/nested_planner.py::_advise_composite_index``, ``WARNING`` only
+under ``settings.DEBUG``) when no such index is found on a same-table shape and
+stays silent on a cross-table one; it is advisory only - DBAs own index
+creation, and expression indexes never trigger a false positive. A per-field
+override (``OptimizerHint.strategy("windowed" | "lateral" | "auto")`` in
 ``Meta.optimizer_hints``) selects which strategy fetches one connection field;
 it is schema-static and needs no plan-cache-key change.
 """

@@ -18,8 +18,9 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.conf import settings
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, FieldError
 from django.db import models
+from django.db.models.sql.query import Query
 from graphql import GraphQLError
 
 from ..keyset import (
@@ -79,6 +80,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 
     from django.contrib.postgres.indexes import BTreeIndex
     from django.db.models import QuerySet
+    from django.db.models.expressions import Col
     from django.db.models.options import Options
     from graphql.type.definition import GraphQLResolveInfo
     from strawberry.types.nodes import Arguments
@@ -280,6 +282,34 @@ def _concrete_order_terms(
     return terms
 
 
+def _window_partition_field(
+    related_model: type[models.Model],
+    partition_expr: str,
+) -> ConcreteField | None:
+    """The concrete column a nested window's ``PARTITION BY`` resolves to, or ``None``.
+
+    Resolved exactly as the window resolves it:
+    ``plans.py::apply_window_pagination`` hands ``partition_expr`` to
+    ``Window(partition_by=...)``, whose ``ExpressionList`` wraps the string in
+    ``F(partition_expr)``, and ``F.resolve_expression`` is
+    ``Query.resolve_ref`` against the child model's query. The returned field's
+    ``model`` owns the column: the child table for a reverse ``ForeignKey``
+    carrier, a one-column reverse ``ForeignObject`` carrier or a
+    ``GenericRelation``'s ``object_id``; the M2M through table for an M2M,
+    whose relation hop ``resolve_ref`` trims to the through table's parent-side
+    foreign key; a multi-table-inheritance parent table when the child inherits
+    the column (a ``GenericRelation`` to a child model whose generic foreign
+    key the parent declares). ``None`` when the expression does not resolve to
+    one column (``resolve_ref`` raises ``FieldError``).
+    """
+    try:
+        resolved = Query(related_model).resolve_ref(partition_expr)
+    except FieldError:
+        return None
+    # A plain field path with no transform resolves to the target column's ``Col``.
+    return cast("Col", resolved).target
+
+
 def _index_leading_terms(
     meta: Options[models.Model],
     index: object,
@@ -381,9 +411,9 @@ def _index_serves_window(
 ) -> bool:
     """Whether one index's leading terms cover the window's equality prefix + order.
 
-    The window equality-constrains the ``equality`` columns (the connector, and
-    for a ``GenericRelation`` the ``content_type_id`` morph column), so any
-    permutation of them at the index head is acceptable; direction on an
+    The window equality-constrains the ``equality`` columns (the partition
+    column, and for a ``GenericRelation`` the ``content_type_id`` morph column),
+    so any permutation of them at the index head is acceptable; direction on an
     equality column is irrelevant. The index's terms AFTER that prefix must then
     serve the requested order (``_terms_serve_order``).
     """
@@ -432,7 +462,7 @@ def _model_index_shapes(meta: Options[models.Model]) -> tuple[list[list[tuple[st
       ``unique_together`` (a unique btree is a usable ascending composite);
     - single-field ``primary_key`` / ``unique`` / ``db_index`` columns (one
       shared field-index predicate - this is what makes the FK auto-index cover
-      the connector-only window).
+      the partition-column-only window).
 
     A conditional/partial or expression ``Index``/``UniqueConstraint``, or a
     name that no longer resolves, is counted as UNINSPECTABLE (``saw_uninspectable
@@ -538,11 +568,11 @@ def _describe_index_columns(
 # AND request-INDEPENDENT: ``(model label, equality-prefix columns, order
 # terms)`` is the entire input that determines the recommended index, so two
 # rebuilds of one shape collapse while genuinely different shapes (a different
-# model, connector, morph prefix, or order) each still warn once - the strategy
-# is deliberately excluded so switching strategies never re-emits. Bounded LRU
-# (cap ``_MAX_INDEX_ADVISORY_KEYS``) so a pathological variety of plan shapes
-# cannot grow the process's memory without limit; eviction only re-emits a
-# long-cold advisory, never a wrong one. Reset between tests via
+# model, partition column, morph prefix, or order) each still warn once - the
+# strategy is deliberately excluded so switching strategies never re-emits.
+# Bounded LRU (cap ``_MAX_INDEX_ADVISORY_KEYS``) so a pathological variety of
+# plan shapes cannot grow the process's memory without limit; eviction only
+# re-emits a long-cold advisory, never a wrong one. Reset between tests via
 # ``clear_index_advisory_dedup`` - the same module-cache reset seam the suite
 # uses for the registry / connection-type caches (this is DEBUG-toggle sensitive
 # under ``override_settings``, so advisory tests must clear it per test).
@@ -584,16 +614,24 @@ def _advise_composite_index(
 ) -> None:
     """Emit a dev-mode advisory when no index covers a nested window's leading columns.
 
-    A windowed or lateral nested connection equality-constrains the child
-    connector columns (``join.parent_join_columns``) - and, for a
-    ``GenericRelation``, the ``content_type_id`` morph column
-    (``join.content_type_column``) ahead of it - then orders by the deterministic
-    order terms, so a composite index whose leading columns mirror
-    ``(content_type_id?, connector, order terms..., pk)`` lets the database serve
-    each partition's page from the index instead of sorting per partition (the
-    keyset composite mirrors ``keyset.py::keyset_seek_q``'s redundant-leading-bound
-    design). Direction is load-bearing: a B-tree serves only the requested order
-    or its FULL reverse after the equality prefix.
+    A windowed or lateral nested connection equality-constrains its partition
+    column (``join.partition_expr``, resolved to its concrete column by
+    ``_window_partition_field``) - and, for a ``GenericRelation``, the
+    ``content_type_id`` morph column (``join.content_type_column``) ahead of it -
+    then orders by the deterministic order terms, so a composite index whose
+    leading columns mirror ``(content_type_id?, partition column, order terms...,
+    pk)`` lets the database serve each partition's page from the index instead of
+    sorting per partition (the keyset composite mirrors
+    ``keyset.py::keyset_seek_q``'s redundant-leading-bound design). Direction is
+    load-bearing: a B-tree serves only the requested order or its FULL reverse
+    after the equality prefix.
+
+    One index can serve the page only when the partition column and the order
+    columns share the child's table. When the partition column lives on another
+    table - an M2M's through table, or a multi-table-inheritance parent table
+    holding a column the child inherits - the window's ``PARTITION BY`` and
+    ``ORDER BY`` span two tables, no single B-tree holds both, and the advisory
+    stays silent, as it does when the partition expression does not resolve.
 
     Coverage is inspected against every physical index shape Django model
     metadata REPRESENTS, not only ``Meta.indexes``: unconditional field-based
@@ -624,12 +662,17 @@ def _advise_composite_index(
     cache, so a given ``(model, equality prefix, order terms)`` shape warns at
     most once.
     """
-    if not join.parent_join_columns:
+    if join.partition_expr is None:
+        return
+    partition_field = _window_partition_field(related_model, join.partition_expr)
+    if partition_field is None:
+        return
+    if partition_field.model._meta.db_table != related_model._meta.db_table:
         return
     equality: list[str] = []
     if join.content_type_column is not None:
         append_unique(equality, join.content_type_column)
-    append_unique_many(equality, join.parent_join_columns)
+    append_unique(equality, partition_field.attname)
     order_terms = _concrete_order_terms(order_by, related_model)
     if order_terms is None:
         # Order-parsing UNKNOWN dominates: some effective ordering term is not a
@@ -638,14 +681,14 @@ def _advise_composite_index(
         # rather than claim a false coverage or recommend an index that omits the
         # unrepresented term.
         return
-    # The window equality-constrains every ``equality`` column (the connector,
-    # and for a ``GenericRelation`` the ``content_type_id`` morph column), so each
-    # is CONSTANT within a partition and contributes nothing to the
-    # within-partition order. Strip them to the EFFECTIVE order before comparison
-    # and rendering, or an order like ``parent_id, title, id`` would be checked
-    # against - and recommended as - ``(parent_id, parent_id, title, id)``,
-    # falsely reporting the real ``(parent_id, title, id)`` index absent and
-    # naming a duplicated column (the P2-3 defect).
+    # The window equality-constrains every ``equality`` column (the partition
+    # column, and for a ``GenericRelation`` the ``content_type_id`` morph
+    # column), so each is CONSTANT within a partition and contributes nothing to
+    # the within-partition order. Strip them to the EFFECTIVE order before
+    # comparison and rendering, or an order like ``parent_id, title, id`` would
+    # be checked against - and recommended as - ``(parent_id, parent_id, title,
+    # id)``, falsely reporting the real ``(parent_id, title, id)`` index absent
+    # and naming a duplicated column (the P2-3 defect).
     equality_columns = set(equality)
     effective_order = [term for term in order_terms if term[0] not in equality_columns]
     if _index_coverage(related_model, equality, effective_order) != _INDEX_ABSENT:

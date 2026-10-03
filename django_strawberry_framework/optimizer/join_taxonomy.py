@@ -30,8 +30,9 @@ fact the fetch strategies need:
 
 - ``windowable`` + ``partition_expr`` - the windowed-prefetch strategy's
   ``PARTITION BY`` input.
-- ``parent_join_columns`` - the child-side columns Django needs loaded to
-  attach prefetched rows to parents.
+- ``parent_join_columns`` - the child columns a prefetch ``.only()`` must
+  load so Django can attach prefetched rows to parents (the window's
+  ``PARTITION BY`` column is ``partition_expr``, not this slot).
 - ``through_model`` + ``lateral_shape`` - the Postgres LATERAL strategy's
   join-SQL selector (``optimizer/lateral_fetch.py``: a ``DIRECT_FK`` shape
   correlates the child table directly; a ``THROUGH_TABLE`` shape joins the
@@ -130,11 +131,13 @@ class RelationJoinDescriptor:
     """Everything join-shaped one relation field implies for fetch planning.
 
     ``partition_expr`` is the parent-side partition the windowed strategy
-    hands to ``PARTITION BY`` (``None`` when not ``windowable``);
-    ``parent_join_columns`` are the child-side connector columns the prefetch
-    attach reads (one per link carrier; ``()`` when none resolves - the caller
-    logs and degrades); ``through_model`` is the M2M join table when
-    ``lateral_shape`` is ``THROUGH_TABLE``.
+    hands to ``PARTITION BY`` (``None`` when not ``windowable``) and the one
+    column the composite-index advisory equality-constrains;
+    ``parent_join_columns`` are the child columns a prefetch ``.only()`` must
+    load for the attach (one per link carrier for a reverse link, the related
+    pk for an M2M, the link's target columns for a forward relation; ``()``
+    when none resolves - the caller logs and degrades); ``through_model`` is
+    the M2M join table when ``lateral_shape`` is ``THROUGH_TABLE``.
 
     ``parent_link_field`` / ``through_child_field`` are the resolved LINK
     FIELD OBJECTS a correlated fetch joins on (the lateral backend today;
@@ -150,12 +153,12 @@ class RelationJoinDescriptor:
     resolve them (synthetic doubles - the classifier never raises).
 
     ``content_type_column`` is the child ``content_type_id`` attname a
-    ``GenericRelation`` needs alongside the ``object_id`` connector: Django's
-    prefetch attach key is ``(object_id, content_type_id)``, and the composite-
-    index advisory recommends ``(content_type_id, object_id, ...)`` because
-    every generic query also carries a constant morph WHERE. ``None`` for every
-    non-generic shape and for a synthetic generic double that cannot resolve
-    it - the classifier never raises.
+    ``GenericRelation`` needs alongside the ``object_id`` partition column:
+    Django's prefetch attach key is ``(object_id, content_type_id)``, and the
+    composite-index advisory recommends ``(content_type_id, object_id, ...)``
+    because every generic query also carries a constant morph WHERE. ``None``
+    for every non-generic shape and for a synthetic generic double that cannot
+    resolve it - the classifier never raises.
 
     ``prefetch_attach_columns`` is the derived attach-complete set projection
     writers must ``.only()`` (every connector, plus morph when present) so
@@ -174,15 +177,14 @@ class RelationJoinDescriptor:
 
     @property
     def prefetch_attach_columns(self) -> tuple[str, ...]:
-        """Child columns Django's prefetch attach reads on each related row.
+        """Child columns a prefetch ``.only()`` must load for the attach.
 
         Every ``parent_join_columns`` entry (a multi-column ``ForeignObject``
         attaches on all of its carriers); for a ``GenericRelation`` also
         ``content_type_column`` - ``GenericRelatedObjectManager.
         get_prefetch_querysets`` builds ``rel_obj_attr`` as
         ``(object_id, content_type_id)``. Empty when neither resolves (callers
-        log and degrade). Order matches the attach key, not the index-advisory
-        equality prefix (morph-first there).
+        log and degrade). Order matches the attach key.
         """
         if self.content_type_column is None:
             return self.parent_join_columns
@@ -251,7 +253,14 @@ def _forward_join_columns(field: object) -> tuple[str, ...]:
 
 
 def _m2m_join_columns(field: object) -> tuple[str, ...]:
-    """The related model's pk attname: the join table owns an M2M attach."""
+    """The related model's pk attname, the only child column an M2M prefetch needs.
+
+    Django selects the attach key itself from the through table
+    (``ManyRelatedManager.get_prefetch_querysets`` adds one
+    ``_prefetch_related_val_<attname>`` select per through-table source column
+    and keys ``rel_obj_attr`` on those), so the related row contributes no link
+    column of its own.
+    """
     related_model: Any = _safe_getattr(field, "related_model")
     if related_model is None:
         return ()

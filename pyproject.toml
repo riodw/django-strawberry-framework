@@ -270,16 +270,19 @@ max-line-length = 110
 # ``# pyright: ignore[<rule>]``, always rule-scoped: ``# type: ignore`` is not read at
 # all, and a suppression the run does not need is itself an error.
 [tool.basedpyright]
-include = [
-    "django_strawberry_framework",
-    "scripts",
-    "examples",
-    "conftest.py",
-    "line_count.py",
-    # The one tracked module under docs/; docs/shadow/ holds untracked generated copies.
-    "docs/dry/export_dry_review.py",
+# Every Python file in the repository except the package tests under tests/. The other
+# excludes are git-ignored scratch trees: generated source copies (docs/shadow/) and the
+# throwaway files a review, build, DRY or bug-hunt cycle creates and deletes at closeout.
+include = ["."]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "tests",
+    "docs/shadow",
+    "docs/*/temp-tests",
+    "docs/*/worker-memory",
 ]
-exclude = ["**/node_modules", "**/__pycache__", "**/.*"]
 executionEnvironments = [
     { root = "scripts", extraPaths = ["examples/fakeshop", "."] },
     { root = "examples/fakeshop" },

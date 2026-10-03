@@ -52,15 +52,14 @@ repos:
         require_serial: true
 
       - id: basedpyright
-        name: basedpyright (package + scripts + examples + root modules + DRY exporter types)
+        name: basedpyright (every Python file outside tests/)
         entry: uv run basedpyright
         language: system
         # `pass_filenames: false`: `[tool.basedpyright]` owns the scope, and a file
         # list would check only the staged files, missing the callers whose types a
-        # signature change breaks. Fires on any package, script, examples, root-module or DRY
-        # exporter source, config or lock change (the lock pins the checker and every stub and
-        # annotated package it reads).
-        files: ^(django_strawberry_framework/.*\.py|scripts/.*\.py|examples/.*\.py|conftest\.py|line_count\.py|docs/dry/export_dry_review\.py|pyproject\.toml|uv\.lock)$
+        # signature change breaks. Fires on any staged `.py` outside tests/, the config or
+        # the lock (the lock pins the checker and every stub and annotated package it reads).
+        files: ^((?!tests/).*\.py|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
 
@@ -72,7 +71,7 @@ repos:
         # the `requires-python` floor: catches a 3.11+ stdlib or `typing` name the 3.11
         # pass reads as valid. Fires on the same files as `basedpyright` plus its own
         # config.
-        files: ^(django_strawberry_framework/.*\.py|scripts/.*\.py|examples/.*\.py|conftest\.py|line_count\.py|docs/dry/export_dry_review\.py|pyrightconfig\.floor\.json|pyproject\.toml|uv\.lock)$
+        files: ^((?!tests/).*\.py|pyrightconfig\.floor\.json|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
 

@@ -43,8 +43,8 @@ jobs:
       - name: Ruff Format Check
         run: uv run ruff format --check .
       - name: Type check (basedpyright)
-        # `[tool.basedpyright]` in pyproject.toml owns the scope (the package,
-        # scripts/, examples/, the root modules and the DRY exporter), the Python it
+        # `[tool.basedpyright]` in pyproject.toml owns the scope (every Python file
+        # outside tests/ and the git-ignored scratch trees), the Python it
         # checks against (the lowest its stubs support; the floor cells prove the
         # package's own floor) and the strictness rules, with warnings failing the
         # run; it never imports the fakeshop settings.

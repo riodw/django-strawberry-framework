@@ -9,9 +9,11 @@ does not exist yet). The backfill maps ``is_current=True`` -> ``current`` and
 """
 
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 
-def _backfill_state(apps, schema_editor):
+def _backfill_state(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Derive ``state`` from the old ``is_current`` boolean and card links."""
     TrackedPath = apps.get_model("kanban", "TrackedPath")
     manager = TrackedPath.objects.using(schema_editor.connection.alias)
@@ -25,7 +27,7 @@ def _backfill_state(apps, schema_editor):
         manager.filter(pk=row.pk).update(state=state)
 
 
-def _restore_is_current(apps, schema_editor):
+def _restore_is_current(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Reverse: ``is_current`` = whether ``state`` is ``current``."""
     TrackedPath = apps.get_model("kanban", "TrackedPath")
     manager = TrackedPath.objects.using(schema_editor.connection.alias)

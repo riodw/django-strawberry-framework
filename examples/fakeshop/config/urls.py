@@ -3,7 +3,7 @@
 from debug_toolbar.toolbar import debug_toolbar_urls
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
-from django.http import HttpResponse
+from django.http import HttpRequest, HttpResponse
 from django.urls import path
 from django.views.decorators.csrf import ensure_csrf_cookie
 
@@ -11,7 +11,7 @@ from config.schema import schema
 from django_strawberry_framework.views import DjangoGraphQLView
 
 
-def index(request):
+def index(request: HttpRequest) -> HttpResponse:
     """Landing page with quick links to all dev actions."""
     return HttpResponse("""
         <h2>Fakeshop Dev Links</h2>

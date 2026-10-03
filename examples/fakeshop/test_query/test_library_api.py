@@ -9,7 +9,7 @@ holder at ``/graphql-test/`` because the shipped query exposes typed
 
 import base64
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, TypeAlias
 
 import pytest
@@ -21,6 +21,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection
 from django.db.models import Model, QuerySet
+from django.http import HttpRequest
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
@@ -30,7 +31,7 @@ from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoNodesField, strawberry_config
+from django_strawberry_framework import DjangoNodesField, DjangoType, strawberry_config
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
@@ -739,7 +740,7 @@ def test_library_optimizer_reverse_o2o_card_joins_in_root_sql():
 
 @pytest.mark.django_db
 def test_library_force_select_book_hint_still_prefetches_when_book_is_hooked(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """``OptimizerHint.select_related()`` on ``Loan.book`` does not JOIN past ``BookType.get_queryset``.
 
@@ -826,14 +827,20 @@ query {
 """
 
 
-def _sliced_book_hook(cls, queryset, info):
+def _sliced_book_hook(
+    cls: type[DjangoType],
+    queryset: QuerySet[models.Book],
+    info: strawberry.Info[object, object],
+) -> QuerySet[models.Book]:
     """A ``BookType.get_queryset`` that returns a sliced top-N queryset."""
     return queryset.order_by("pk")[:1]
 
 
 @pytest.mark.django_db
 @override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_sliced_book_hook_on_plain_list_relation_is_refused_over_http(monkeypatch):
+def test_sliced_book_hook_on_plain_list_relation_is_refused_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A sliced hook result reached through a plain list relation fails closed, named.
 
     ``shelves { books }`` is the list shape of ``ShelfType.Meta.relation_shapes``, so
@@ -864,7 +871,9 @@ def test_sliced_book_hook_on_plain_list_relation_is_refused_over_http(monkeypatc
 
 @pytest.mark.django_db
 @override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_sliced_book_hook_on_nested_connection_is_refused_at_resolve_time(monkeypatch):
+def test_sliced_book_hook_on_nested_connection_is_refused_at_resolve_time(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The same sliced hook on the CONNECTION shape is still admitted by the walker.
 
     ``allLibraryGenres { booksConnection }`` is the connection half of
@@ -1258,7 +1267,7 @@ def test_library_loans_filter_by_deep_to_many_email_is_row_preserving_over_http(
 
 
 def test_hide_flat_filters_changes_library_filter_input_shape_over_http(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """``HIDE_FLAT_FILTERS`` changes the real GraphQL input shape exposed at ``/graphql/``."""
     with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"HIDE_FLAT_FILTERS": False}):
@@ -1275,7 +1284,7 @@ def test_hide_flat_filters_changes_library_filter_input_shape_over_http(
 
 
 def test_hide_flat_filters_hides_deep_relatedfilter_flat_on_loan_input(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """``HIDE_FLAT_FILTERS=True`` hides a multi-hop flat leaf of a RelatedFilter.
 
@@ -2726,7 +2735,10 @@ def test_library_branches_order_by_name_asc():
     ],
 )
 @pytest.mark.django_db
-def test_library_books_order_by_subtitle_null_positioning(direction, expected_subtitles):
+def test_library_books_order_by_subtitle_null_positioning(
+    direction: str,
+    expected_subtitles: list[str | None],
+):
     """Spec-028 test plan - NULLS positioning through real ``/graphql/``."""
     _seed_books_with_nullable_subtitles()
 
@@ -3637,7 +3649,7 @@ def test_nullability_override_acceptance_api_is_queryable():
 
 @pytest.mark.django_db
 def test_secondary_book_global_id_refetches_as_primary_book_type_over_http(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """A Node-shaped secondary Book still emits ``library.book:<pk>``; ``node(id:)`` is BookType.
 
@@ -3949,12 +3961,13 @@ _GenreFilterOverride: TypeAlias = Callable[
 
 
 def _genre_filter_in_place_routing(
-    cls,
-    input_value,
-    queryset,
-    info,
-):
-    queryset._hints = {"tenant": 2}
+    cls: type[GenreFilter],
+    input_value: object,
+    queryset: QuerySet[models.Genre],
+    info: object,
+) -> QuerySet[models.Genre]:
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
     return queryset
 
 
@@ -4032,11 +4045,11 @@ _MALFORMED_GENRE_FILTER_ROWS: tuple[
     ids=[row[0] for row in _MALFORMED_GENRE_FILTER_ROWS],
 )
 def test_genre_connection_a_malformed_filter_apply_sync_result_names_its_own_defect(
-    monkeypatch,
-    override,
-    message_start,
-    substrings,
-    genre_queries,
+    monkeypatch: pytest.MonkeyPatch,
+    override: _GenreFilterOverride,
+    message_start: str,
+    substrings: tuple[str, ...],
+    genre_queries: int,
 ):
     """Each malformed ``GenreFilter.apply_sync`` result is refused by name over ``/graphql/``.
 
@@ -4066,15 +4079,15 @@ def test_genre_connection_a_malformed_filter_apply_sync_result_names_its_own_def
 
 
 @pytest.mark.django_db
-def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
+def test_genre_connection_healthy_filter_override_still_filters(monkeypatch: pytest.MonkeyPatch):
     """A ``super()`` pass-through ``GenreFilter`` override is admitted and the filter applies."""
 
     def _passthrough(
         cls: type[GenreFilter],
-        input_value,
-        queryset,
-        info,
-    ):
+        input_value: object,
+        queryset: QuerySet[models.Genre],
+        info: object,
+    ) -> QuerySet[models.Genre]:
         return super(GenreFilter, cls).apply_sync(input_value, queryset, info)
 
     _seed_genres("Gamma", "Alpha", "Echo")
@@ -4090,15 +4103,17 @@ def test_genre_connection_healthy_filter_override_still_filters(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_genre_connection_serves_a_combined_filter_result_as_its_primary_key_set(monkeypatch):
+def test_genre_connection_serves_a_combined_filter_result_as_its_primary_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A ``GenreFilter.apply_sync`` returning a union is windowed as the rows it selects."""
 
     def _combined(
-        cls,
-        input_value,
-        queryset,
-        info,
-    ):
+        cls: type[GenreFilter],
+        input_value: object,
+        queryset: QuerySet[models.Genre],
+        info: object,
+    ) -> QuerySet[models.Genre]:
         return queryset.filter(name="Alpha").union(queryset.filter(name="Echo"))
 
     _seed_genres("Gamma", "Alpha", "Echo")
@@ -4114,7 +4129,7 @@ def test_genre_connection_serves_a_combined_filter_result_as_its_primary_key_set
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("as_staff", [False, True], ids=["anonymous", "staff"])
-def test_genre_connection_filter_order_and_slice_compose(as_staff):
+def test_genre_connection_filter_order_and_slice_compose(as_staff: bool):
     """Filter then order then slice: one edge, ``totalCount`` is the post-filter set.
 
     Insert order is Gamma, Alpha, Echo. ``iContains: "a"`` drops Echo (``totalCount``
@@ -4494,7 +4509,7 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
 
 @pytest.mark.django_db
 def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_http(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """A test-scoped live Loan CONNECTION paginates the mixed-OR row-preserved roots.
 
@@ -5270,7 +5285,10 @@ _CAP_BOUNDED_SELECTION = (
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(("shape", "start"), _CAP_BOUNDED_BEFORE_SHAPES)
-def test_genre_connection_before_without_page_argument_serves_one_capped_page(shape, start):
+def test_genre_connection_before_without_page_argument_serves_one_capped_page(
+    shape: str,
+    start: int,
+):
     """A ``before:`` with no ``first`` / ``last`` serves the page ``first: <cap>`` serves.
 
     Every offset page is bounded by the effective cap. A ``before`` cursor with
@@ -5310,7 +5328,7 @@ def _last_zero_cursor(after: bool) -> str:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("after", _LAST_ZERO_CURSOR_SHAPES)
-def test_genre_connection_last_zero_serves_the_first_zero_page(after):
+def test_genre_connection_last_zero_serves_the_first_zero_page(after: bool):
     """``last: 0`` is the page ``first: 0`` serves over the same cursors.
 
     No edges and ``first: 0``'s ``pageInfo`` (rows exist past the page, so
@@ -5388,13 +5406,13 @@ def _nodes_query(ids: tuple[str, ...]) -> str:
 _CURRENT: dict[str, Any] = {"schema": None}
 
 
-def _holder_graphql_view(request):
+def _holder_graphql_view(request: HttpRequest):
     schema = _CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
 
 
-async def _async_shipped_graphql_view(request):
+async def _async_shipped_graphql_view(request: HttpRequest):
     from config.schema import schema
 
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -5406,7 +5424,12 @@ urlpatterns = [
 ]
 
 
-def _post_holder(schema, query, *, variables=None):
+def _post_holder(
+    schema: strawberry.Schema,
+    query: str,
+    *,
+    variables: Mapping[str, object] | None = None,
+):
     """POST ``query`` against a holder schema mounted at ``/graphql-test/``."""
     _CURRENT["schema"] = schema
     try:
@@ -5531,7 +5554,11 @@ def test_generic_relation_tags_resolve_over_http_with_optimizer():
     assert len(tag_sql) == 1, tag_sql
 
 
-async def _post_async_shipped(query: str, *, variables=None) -> JSONObject:
+async def _post_async_shipped(
+    query: str,
+    *,
+    variables: Mapping[str, object] | None = None,
+) -> JSONObject:
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
         result = await AsyncTestClient().query(
@@ -5548,7 +5575,7 @@ class _HostileBookQuerySet(QuerySet[models.Book]):
     """Would leak if dispatched: ``filter`` drops the predicate; terminals synthesize rows."""
 
     @override
-    def filter(self, *args, **kwargs):
+    def filter(self, *args: object, **kwargs: object):
         return models.Book.objects.all()
 
     @override
@@ -5556,7 +5583,7 @@ class _HostileBookQuerySet(QuerySet[models.Book]):
         return models.Book(title="secret-from-first")
 
     @override
-    def get(self, *args, **kwargs):
+    def get(self, *args: object, **kwargs: object):
         return models.Book(title="secret-from-get")
 
     @override
@@ -5564,7 +5591,7 @@ class _HostileBookQuerySet(QuerySet[models.Book]):
         return models.Book(title="secret-from-afirst")
 
     @override
-    async def aget(self, *args, **kwargs):
+    async def aget(self, *args: object, **kwargs: object):
         return models.Book(title="secret-from-aget")
 
     @override
@@ -5572,7 +5599,12 @@ class _HostileBookQuerySet(QuerySet[models.Book]):
         yield models.Book(title="secret-from-aiter")
 
 
-def _hostile_book_hook(cls, queryset, info, **kwargs):
+def _hostile_book_hook(
+    cls: type[DjangoType],
+    queryset: QuerySet[models.Book],
+    info: strawberry.Info[object, object],
+    **kwargs: object,
+) -> QuerySet[models.Book]:
     """Seed the real repair-exclusion through unbound ``QuerySet.filter``."""
     return QuerySet.filter(_HostileBookQuerySet(model=models.Book)).exclude(
         circulation_status=models.Book.CirculationStatus.REPAIR,
@@ -5590,13 +5622,18 @@ def _typed_genre_nodes_schema():
     return strawberry.Schema(query=Query, config=strawberry_config())
 
 
-def _patch_book_cascade(monkeypatch) -> None:
+def _patch_book_cascade(monkeypatch: pytest.MonkeyPatch) -> None:
     """Compose ``BookType.get_queryset`` with ``apply_cascade_permissions`` (shelf visibility)."""
     from apps.library.schema import BookType
 
     original = BookType.get_queryset.__func__
 
-    def _cascading(cls, queryset, info, **kwargs):
+    def _cascading(
+        cls: type[BookType],
+        queryset: QuerySet[models.Book],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ) -> QuerySet[models.Book]:
         del kwargs
         return apply_cascade_permissions(cls, original(cls, queryset, info), info)
 
@@ -5691,7 +5728,7 @@ def test_typed_node_field_mismatch_live():
     ],
     ids=["malformed-base64", "unknown-model-label", "type-name-at-model-strategy"],
 )
-def test_node_malformed_id_live(bad_id):
+def test_node_malformed_id_live(bad_id: str):
     """Each malformed/forbidden id surfaces ``GLOBALID_INVALID`` in-band, with ``node: null``.
 
     Reachable because the field argument is ``strawberry.ID`` (Decision 5): a
@@ -6726,7 +6763,10 @@ def test_genre_books_connection_backward_pagination_last_before():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(("shape", "start"), _CAP_BOUNDED_BEFORE_SHAPES)
-def test_genre_books_connection_before_without_page_argument_serves_one_capped_page(shape, start):
+def test_genre_books_connection_before_without_page_argument_serves_one_capped_page(
+    shape: str,
+    start: int,
+):
     """A nested ``before:`` with no ``first`` / ``last`` is one capped planned window.
 
     The relation-seeded colour of
@@ -6761,7 +6801,7 @@ def test_genre_books_connection_before_without_page_argument_serves_one_capped_p
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("after", _LAST_ZERO_CURSOR_SHAPES)
-def test_genre_books_connection_last_zero_serves_the_first_zero_window(after):
+def test_genre_books_connection_last_zero_serves_the_first_zero_window(after: bool):
     """Nested ``last: 0`` is the planned ``first: 0`` window over the same cursors.
 
     The relation-seeded colour of
@@ -6794,7 +6834,7 @@ def test_genre_books_connection_last_zero_serves_the_first_zero_window(after):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("cursor", ["before", "after"])
-def test_genre_books_connection_last_with_empty_cursor_is_the_planned_tail(cursor):
+def test_genre_books_connection_last_with_empty_cursor_is_the_planned_tail(cursor: str):
     """``last: 2`` beside an empty-string cursor is the backward tail, served by the window.
 
     The offset engine reads an empty cursor as absent, so ``last: 2, before: ""``
@@ -7475,7 +7515,7 @@ def test_node_hidden_row_null_live():
 
 
 @pytest.mark.django_db
-def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch):
+def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch: pytest.MonkeyPatch):
     """Sync ``node(id:)`` of a hostile-subclass hook serves only the visible book.
 
     A repair (hidden) pk refetches null and a public pk resolves - the
@@ -7503,7 +7543,7 @@ def test_node_hostile_subclass_hook_is_sealed_sync(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_node_hostile_subclass_hook_is_sealed_async(monkeypatch):
+async def test_node_hostile_subclass_hook_is_sealed_async(monkeypatch: pytest.MonkeyPatch):
     """Async single-node refetch over ``/graphql-async/`` ignores synthetic ``.afirst()``."""
     from apps.library.schema import BookType
 
@@ -7535,7 +7575,7 @@ async def test_node_hostile_subclass_hook_is_sealed_async(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter(monkeypatch):
+async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter(monkeypatch: pytest.MonkeyPatch):
     """Async ``nodes(ids:)`` ignores the synthetic ``.__aiter__()`` override.
 
     The hidden pk becomes a positional ``null`` hole and the visible pk
@@ -7565,7 +7605,7 @@ async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_node_refetch_of_cascade_hidden_row_returns_null(monkeypatch):
+def test_node_refetch_of_cascade_hidden_row_returns_null(monkeypatch: pytest.MonkeyPatch):
     """``node(id:)`` of a book on a secret shelf is ``null`` once cascade is composed.
 
     ``BookType.get_queryset`` is wrapped with ``apply_cascade_permissions`` so
@@ -7595,7 +7635,7 @@ def test_node_refetch_of_cascade_hidden_row_returns_null(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_nodes_batch_holes_for_cascade_hidden_rows(monkeypatch):
+def test_nodes_batch_holes_for_cascade_hidden_rows(monkeypatch: pytest.MonkeyPatch):
     """``nodes(ids:)`` leaves a positional ``null`` for a cascade-hidden book.
 
     Staff filling that hole on the same document proves the null is visibility,
@@ -9372,7 +9412,10 @@ def test_update_book_via_custom_input_saves_circulation_status_choice_value():
     [({}, {"KeepGenre"}), ({"genres": []}, set())],
     ids=["omit", "empty-list"],
 )
-def test_update_book_via_custom_input_genres_omit_vs_empty_list(data_extra, expected_names):
+def test_update_book_via_custom_input_genres_omit_vs_empty_list(
+    data_extra: dict[str, list[str]],
+    expected_names: set[str],
+):
     """Omitting ``genres`` leaves membership; ``genres: []`` clears it.
 
     Both arms send the required ``title`` (the merged partial input pins it).
@@ -10457,7 +10500,7 @@ def test_serializer_m2m_alt_branches_visibility_is_one_batched_query_over_http()
     home = models.Branch.objects.create(name="BatchHome", city="Boston")
     alts = [models.Branch.objects.create(name=f"BatchAlt{i}", city="Boston") for i in range(5)]
 
-    def _create(code, members):
+    def _create(code: str, members: list[models.Branch]) -> list[str]:
         with CaptureQueriesContext(connection) as captured:
             response = _post_graphql(
                 "mutation($d: AltBranchesShelfSerializerInput!) { "
@@ -10724,7 +10767,7 @@ def test_serializer_update_omitted_genres_leaves_relation_unchanged_over_http():
 
 @pytest.mark.django_db
 def test_unauthorized_book_genres_update_never_queries_m2m_membership_over_http(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """An unauthorized ``updateBookGenresViaSerializer`` never snapshots ``library_book_genres``.
 
@@ -10839,7 +10882,9 @@ def test_serializer_update_genres_empty_and_duplicates_have_set_semantics_over_h
 
 
 @pytest.mark.django_db
-def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http(monkeypatch):
+def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Invalid and visibility-hidden members fail before M2M mutation, preserving the prior set."""
     from apps.library.schema import BookType, GenreType
 
@@ -10867,7 +10912,11 @@ def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http
     assert invalid_result["errors"][0]["field"] == "genres"
     assert list(book.genres.values_list("pk", flat=True)) == [kept.pk]
 
-    def _hide_genre(cls, queryset, info):
+    def _hide_genre(
+        cls: type[GenreType],
+        queryset: QuerySet[models.Genre],
+        info: strawberry.Info[object, object],
+    ) -> QuerySet[models.Genre]:
         del cls, info
         return queryset.exclude(pk=hidden.pk)
 
@@ -10979,7 +11028,7 @@ def test_nested_shelf_alt_branches_visibility_is_one_batched_query_over_http():
     alts = [models.Branch.objects.create(name=f"NestBatchAlt{i}", city="Boston") for i in range(5)]
     top_input = _mutation_data_input_type_name("createBranchWithNestedShelves")
 
-    def _create(name, members):
+    def _create(name: str, members: list[models.Branch]) -> list[str]:
         with CaptureQueriesContext(connection) as captured:
             response = _post_graphql(
                 "mutation($d: " + top_input + "!) { createBranchWithNestedShelves(data: $d) { "
@@ -11392,7 +11441,7 @@ def test_nested_cheap_page_window_omits_total_count_annotation():
     "args",
     ["first: 0", 'first: 2, after: "YXJyYXljb25uZWN0aW9uOjk5"'],
 )
-def test_nested_ambiguous_empty_served_from_marker_in_fixed_queries(args):
+def test_nested_ambiguous_empty_served_from_marker_in_fixed_queries(args: str):
     """``first: 0`` / overshot ``after:`` serve true counts in TWO queries live.
 
     The marker-row disambiguation (spec-033 Decision 5)
@@ -11586,7 +11635,7 @@ def _seed_branch_notes():
     ["allLibraryBranchNotesOverProxyChild", "allLibraryBranchNotesOverConcreteChild"],
     ids=["proxy-child", "concrete-child"],
 )
-def test_library_prefetch_child_of_proxy_targeted_relation_resolves_over_http(field):
+def test_library_prefetch_child_of_proxy_targeted_relation_resolves_over_http(field: str):
     """A consumer ``Prefetch`` over a relation declared TO a proxy survives the seal.
 
     ``apps/library/schema.py::BranchNoteType`` parents a foreign key whose

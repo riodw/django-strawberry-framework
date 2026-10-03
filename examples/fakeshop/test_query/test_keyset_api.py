@@ -36,6 +36,7 @@ because the payload is authenticated-encrypted opaque bytes (the codec contract)
 """
 
 import base64
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
@@ -45,9 +46,12 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
+from graphql_client import JSONObject
 from graphql_client import assert_graphql_success as _assert_graphql_success
 from graphql_client import graphql_payload as _graphql_payload
 from graphql_client import post_graphql as _post_graphql
@@ -60,13 +64,13 @@ from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGrap
 _CURRENT: dict[str, Any] = {"schema": None}
 
 
-def _holder_view(request):
+def _holder_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
 
 
-async def _async_holder_view(request):
+async def _async_holder_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -75,7 +79,7 @@ async def _async_holder_view(request):
 urlpatterns = [path("graphql-test/", _holder_view), path("graphql-async/", _async_holder_view)]
 
 
-def _issue_holder_schema(resolver):
+def _issue_holder_schema(resolver: Callable[..., object]) -> strawberry.Schema:
     from apps.library.schema import IssueType
 
     @strawberry.type
@@ -85,7 +89,12 @@ def _issue_holder_schema(resolver):
     return strawberry.Schema(query=Query, config=strawberry_config())
 
 
-def _post_holder(schema, query, *, variables=None):
+def _post_holder(
+    schema: strawberry.Schema,
+    query: str,
+    *,
+    variables: Mapping[str, object] | None = None,
+) -> JSONObject:
     _CURRENT["schema"] = schema
     try:
         with override_settings(ROOT_URLCONF=__name__):
@@ -96,7 +105,12 @@ def _post_holder(schema, query, *, variables=None):
         clear_url_caches()
 
 
-async def _post_async_holder(schema, query, *, variables=None):
+async def _post_async_holder(
+    schema: strawberry.Schema,
+    query: str,
+    *,
+    variables: Mapping[str, object] | None = None,
+) -> JSONObject:
     _CURRENT["schema"] = schema
     try:
         with override_settings(ROOT_URLCONF=__name__):
@@ -153,12 +167,12 @@ query ($first: Int, $last: Int, $after: String, $before: String) {
 """
 
 
-def _root_page(**variables):
+def _root_page(**variables: object) -> JSONObject:
     data = _assert_graphql_success(ROOT_PAGE_QUERY, variables=variables)
     return data["allLibraryIssuesConnection"]
 
 
-def _titles(connection_payload):
+def _titles(connection_payload: JSONObject) -> list[str]:
     return [edge["node"]["title"] for edge in connection_payload["edges"]]
 
 
@@ -238,7 +252,7 @@ def test_root_keyset_page_survives_inserts_and_deletes_before_cursor():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("kind", ["tampered", "offset"], ids=["tampered", "offset"])
-def test_root_keyset_rejects_tampered_and_offset_cursors(kind):
+def test_root_keyset_rejects_tampered_and_offset_cursors(kind: str) -> None:
     """Tampered bytes and offset-vocabulary cursors both get the uniform rejection."""
     _seed_periodicals()
     minted = _root_page(first=1)["pageInfo"]["endCursor"]
@@ -368,7 +382,7 @@ query ($first: Int, $last: Int, $after: String) {
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("with_after", [False, True], ids=["no-cursor", "after"])
-def test_nested_keyset_last_zero_serves_the_first_zero_window(with_after):
+def test_nested_keyset_last_zero_serves_the_first_zero_window(with_after: bool) -> None:
     """Nested ``last: 0`` is the planned ``first: 0`` keyset window over the same cursor.
 
     The same payload ``first: 0`` returns, served by the one batched window
@@ -511,7 +525,7 @@ query ($first: Int, $after: String) {
 """
 
 
-def _nested_by_periodical(**variables):
+def _nested_by_periodical(**variables: object) -> dict[str, JSONObject]:
     data = _assert_graphql_success(NESTED_QUERY, variables=variables)
     return {
         edge["node"]["name"]: edge["node"]["issuesConnection"]
@@ -732,7 +746,7 @@ def test_nested_keyset_before_pages_backward_per_parent():
     ]
     cursors = {edge["node"]["title"]: edge["cursor"] for edge in forward["edges"]}
 
-    def _astro(**variables):
+    def _astro(**variables: object) -> JSONObject:
         data = _assert_graphql_success(NESTED_BACKWARD_QUERY, variables=variables)
         return next(
             edge["node"]["issuesConnection"]
@@ -980,7 +994,7 @@ query ($first: Int, $after: String) {
 def test_keyset_list_source_is_rejected_over_http():
     """A keyset connection resolver that returns a list is refused on the wire."""
 
-    def _list_resolver(root, info):
+    def _list_resolver(root: object, info: strawberry.Info[object, object]):
         return list(models.Issue.objects.all())
 
     _seed_three_issues()
@@ -997,7 +1011,7 @@ def test_keyset_list_source_is_rejected_over_http():
 def test_keyset_pre_sliced_source_is_rejected_over_http():
     """A keyset connection resolver that returns an already-sliced QuerySet is refused."""
 
-    def _sliced_resolver(root, info):
+    def _sliced_resolver(root: object, info: strawberry.Info[object, object]):
         return models.Issue.objects.all()[:5]
 
     payload = _post_holder(
@@ -1013,7 +1027,7 @@ def test_keyset_pre_sliced_source_is_rejected_over_http():
 async def test_async_keyset_first_page_slices_and_counts():
     """An async keyset field slices the first page through the async engine and ``acount``."""
 
-    async def _async_resolver(root, info):
+    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1033,7 +1047,7 @@ async def test_async_keyset_first_page_slices_and_counts():
 async def test_async_keyset_after_cursor_continues_the_page():
     """A minted async keyset cursor round-trips on the same async field."""
 
-    async def _async_resolver(root, info):
+    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1054,7 +1068,7 @@ async def test_async_keyset_after_cursor_continues_the_page():
 async def test_async_keyset_total_count_only():
     """A totalCount-only async keyset query counts via ``acount`` and fetches no edges."""
 
-    async def _async_resolver(root, info):
+    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
         return models.Issue.objects.all()
 
     await sync_to_async(_seed_three_issues)()
@@ -1070,7 +1084,7 @@ async def test_async_keyset_total_count_only():
 async def test_async_keyset_deferred_cursor_column_is_loaded():
     """Cursor minting on an async keyset field must not lazy-load a deferred order column."""
 
-    async def _async_resolver(root, info):
+    async def _async_resolver(root: object, info: strawberry.Info[object, object]):
         return models.Issue.objects.defer("number", "title")
 
     await sync_to_async(_seed_three_issues)()

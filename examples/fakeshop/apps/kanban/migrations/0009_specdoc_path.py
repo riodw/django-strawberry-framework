@@ -9,11 +9,13 @@ from the path so the migration round-trips.
 import warnings
 
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 SPEC_URL_PREFIX = "https://github.com/riodw/django-strawberry-framework/blob/main"
 
 
-def _backfill_path_from_url(apps, schema_editor):
+def _backfill_path_from_url(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Set ``path`` = ``url`` with the known GitHub blob prefix stripped.
 
     URLs that do not carry the expected GitHub blob prefix (a live-DB surprise --
@@ -41,7 +43,7 @@ def _backfill_path_from_url(apps, schema_editor):
         )
 
 
-def _rebuild_url_from_path(apps, schema_editor):
+def _rebuild_url_from_path(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Reverse: reconstruct the full GitHub URL from the repo-relative path."""
     SpecDoc = apps.get_model("kanban", "SpecDoc")
     manager = SpecDoc.objects.using(schema_editor.connection.alias)

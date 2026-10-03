@@ -34,6 +34,7 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from graphql_client import JSONObject
 from graphql_client import post_graphql as _post_graphql
 
 from django_strawberry_framework.testing import TestClient
@@ -105,7 +106,7 @@ def _child_sql(captured: CaptureQueriesContext, table: str) -> list[str]:
     return [entry["sql"] for entry in captured.captured_queries if table in entry["sql"]]
 
 
-def _periodicals(payload):
+def _periodicals(payload: JSONObject) -> list[JSONObject]:
     """The parent edges of the ``allLibraryPeriodicalsConnection`` root."""
     return payload["data"]["allLibraryPeriodicalsConnection"]["edges"]
 

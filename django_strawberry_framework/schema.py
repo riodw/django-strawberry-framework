@@ -1181,7 +1181,8 @@ class DjangoSchema(strawberry.Schema):
             return degraded_result(policy)
 
     @override
-    def _stream(
+    # basedpyright: StreamResult names graphql-core 3.3 frame types the <3.3 pin lacks.
+    def _stream(  # pyright: ignore[reportUnknownParameterType]
         self,
         execution_context: StrawberryExecutionContext,
         extensions_runner: SchemaExtensionsRunner,

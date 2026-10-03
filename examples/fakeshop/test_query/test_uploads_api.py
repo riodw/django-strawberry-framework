@@ -30,6 +30,8 @@ operation is exactly the envelope the engine base's map builder cannot produce.
 
 import io
 import os
+from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from apps.scalars import models
@@ -186,7 +188,7 @@ def test_filesystem_path_opt_in_is_absent_unless_declared_over_http():
 
 
 @pytest.mark.django_db
-def test_opted_in_filesystem_path_resolves_over_http(tmp_path):
+def test_opted_in_filesystem_path_resolves_over_http(tmp_path: Path) -> None:
     """The declared column serves its real absolute path; the default type still cannot.
 
     Both halves matter: the opt-in has to actually work (or a consumer who needs
@@ -229,7 +231,7 @@ def test_opted_in_filesystem_path_resolves_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
+def test_populated_file_and_image_resolve_subfields_over_http(tmp_path: Path) -> None:
     """A populated FileField / ImageField resolves name/size/url (+ width/height) over HTTP."""
     image_bytes = _png_bytes()
     with override_settings(MEDIA_ROOT=str(tmp_path)):
@@ -270,7 +272,7 @@ def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_empty_required_file_resolves_to_null_over_http(tmp_path):
+def test_empty_required_file_resolves_to_null_over_http(tmp_path: Path) -> None:
     """An empty value on a required FileField / ImageField resolves the object to ``null``.
 
     A row created with no files stores ``""`` (the legacy / direct-create edge);
@@ -293,7 +295,9 @@ def test_empty_required_file_resolves_to_null_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_empty_image_beside_populated_file_resolves_only_the_image_to_null_over_http(tmp_path):
+def test_empty_image_beside_populated_file_resolves_only_the_image_to_null_over_http(
+    tmp_path: Path,
+) -> None:
     """The empty-file guard is per column: an unset image is ``null`` beside a resolved file.
 
     Both columns are required, so a row stored with only the attachment leaves
@@ -321,9 +325,9 @@ def test_empty_image_beside_populated_file_resolves_only_the_image_to_null_over_
 
 @pytest.mark.django_db
 def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
-    tmp_path,
-    monkeypatch,
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A backend that cannot produce a path nulls ``path`` alone; ``name`` / ``url`` resolve.
 
     ``types/converters.py::_safe_file_attr`` guards each subfield, not the parent
@@ -338,7 +342,7 @@ def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
         specimen.save()
 
-        def _no_absolute_path(self, name):
+        def _no_absolute_path(self: FileSystemStorage, name: str) -> NoReturn:
             raise NotImplementedError("This backend doesn't support absolute paths.")
 
         monkeypatch.setattr(FileSystemStorage, "path", _no_absolute_path)
@@ -357,7 +361,7 @@ def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
 
 
 @pytest.mark.django_db
-def test_vanished_file_resolves_size_to_null_over_http(tmp_path):
+def test_vanished_file_resolves_size_to_null_over_http(tmp_path: Path) -> None:
     """A file gone from storage nulls ``size``; the stored ``name`` still resolves.
 
     ``FieldFile.size`` raises ``FileNotFoundError`` (an ``OSError``) once the
@@ -381,7 +385,7 @@ def test_vanished_file_resolves_size_to_null_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_corrupt_image_resolves_width_and_height_to_null_over_http(tmp_path):
+def test_corrupt_image_resolves_width_and_height_to_null_over_http(tmp_path: Path) -> None:
     """Unparseable image bytes resolve ``width`` / ``height`` to ``null``; ``name`` survives.
 
     Django answers a dimension read on bytes Pillow cannot parse with ``None``
@@ -410,7 +414,10 @@ def test_corrupt_image_resolves_width_and_height_to_null_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_suspicious_file_operation_is_reported_not_nulled_over_http(tmp_path, monkeypatch):
+def test_suspicious_file_operation_is_reported_not_nulled_over_http(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A ``SuspiciousFileOperation`` on a subfield is reported, never a silent ``null``.
 
     It is a ``SuspiciousOperation`` - not one of the storage-shaped exceptions
@@ -425,7 +432,7 @@ def test_suspicious_file_operation_is_reported_not_nulled_over_http(tmp_path, mo
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
         specimen.save()
 
-        def _suspicious_path(self, name):
+        def _suspicious_path(self: FileSystemStorage, name: str) -> NoReturn:
             raise SuspiciousFileOperation("escaped media root")
 
         monkeypatch.setattr(FileSystemStorage, "path", _suspicious_path)
@@ -474,7 +481,7 @@ def test_media_specimen_input_exposes_upload_over_http():
 
 
 @pytest.mark.django_db
-def test_multipart_create_uploads_real_files_over_http(tmp_path):
+def test_multipart_create_uploads_real_files_over_http(tmp_path: Path) -> None:
     """A real GraphQL multipart request creates a ``MediaSpecimen`` with uploaded files.
 
     Exercises the full transport the resolver-level ``SimpleUploadedFile`` tests
@@ -542,7 +549,7 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
+def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path: Path) -> None:
     """The spec-038 FORM path maps an ``ImageField`` to ``Upload`` over a live multipart request.
 
     The form-mutation twin of ``test_multipart_create_uploads_real_files_over_http`` (the
@@ -612,12 +619,12 @@ def _stored_specimen(label: str) -> models.MediaSpecimen:
 
 
 def _update_specimen(
-    specimen,
-    data,
-    files=None,
+    specimen: models.MediaSpecimen,
+    data: dict[str, object],
+    files: dict[str, object] | None = None,
     *,
-    lookup_id=None,
-):
+    lookup_id: str | None = None,
+) -> JSONObject:
     """Post ``updateMediaSpecimen`` as a superuser and return its payload.
 
     ``MediaSpecimenType`` is not a Relay node, so the ``id:`` is the raw pk
@@ -653,7 +660,7 @@ def test_media_specimen_partial_input_makes_the_required_file_an_optional_upload
 
 
 @pytest.mark.django_db
-def test_update_omitting_the_file_keeps_the_stored_file_over_http(tmp_path):
+def test_update_omitting_the_file_keeps_the_stored_file_over_http(tmp_path: Path) -> None:
     """An update that leaves ``attachment`` out keeps the stored file byte-identical.
 
     ``UNSET`` is stripped in ``django_strawberry_framework/mutations/resolvers.py``
@@ -673,7 +680,7 @@ def test_update_omitting_the_file_keeps_the_stored_file_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_update_with_a_new_upload_replaces_the_stored_file_over_http(tmp_path):
+def test_update_with_a_new_upload_replaces_the_stored_file_over_http(tmp_path: Path) -> None:
     """A multipart update carrying a new ``attachment`` replaces the stored file."""
     with override_settings(MEDIA_ROOT=str(tmp_path)):
         specimen = _stored_specimen("replace-file")
@@ -697,7 +704,9 @@ def test_update_with_a_new_upload_replaces_the_stored_file_over_http(tmp_path):
 
 
 @pytest.mark.django_db
-def test_update_explicit_null_on_the_required_file_is_a_field_error_over_http(tmp_path):
+def test_update_explicit_null_on_the_required_file_is_a_field_error_over_http(
+    tmp_path: Path,
+) -> None:
     """An explicit ``attachment: null`` on the ``null=False`` column is a ``null`` field error.
 
     ``django_strawberry_framework/mutations/resolvers.py::_explicit_null_error``
@@ -728,9 +737,9 @@ def test_update_explicit_null_on_the_required_file_is_a_field_error_over_http(tm
     ids=["non-numeric", "past-the-column-range", "globalid-is-just-a-literal"],
 )
 def test_update_with_an_uncoercible_raw_pk_is_the_not_found_field_error_over_http(
-    tmp_path,
-    raw_id,
-):
+    tmp_path: Path,
+    raw_id: str,
+) -> None:
     """An ``id:`` the ``MediaSpecimen`` pk field cannot coerce is the not-found ``FieldError``.
 
     ``MediaSpecimenType`` is not a Relay node, so
@@ -752,7 +761,9 @@ def test_update_with_an_uncoercible_raw_pk_is_the_not_found_field_error_over_htt
 
 
 @pytest.mark.django_db
-def test_update_with_a_missing_raw_pk_is_the_not_found_field_error_over_http(tmp_path):
+def test_update_with_a_missing_raw_pk_is_the_not_found_field_error_over_http(
+    tmp_path: Path,
+) -> None:
     """A well-formed raw pk naming no row reaches the locate and returns the same not-found error.
 
     ``MediaSpecimenType`` declares no ``get_queryset``, so no row is hidden from

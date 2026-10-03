@@ -29,11 +29,15 @@ is sync-only).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pytest
 from apps.products.services import create_users
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import Permission, User
 from django.db import connection
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import AsyncClient, Client, override_settings
 from django.urls import path
 from strawberry import relay
@@ -399,7 +403,7 @@ def test_serial_top_level_mutations_keep_independent_transactions():
     assert _stored_item_name(second_pk) == "serial-second-item"
 
 
-async def _async_shipped_graphql_view(request):
+async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
     from config.schema import schema
 
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -408,7 +412,12 @@ async def _async_shipped_graphql_view(request):
 urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]
 
 
-async def _post_async(query, *, variables=None, client=None):
+async def _post_async(
+    query: str,
+    *,
+    variables: Mapping[str, object] | None = None,
+    client: AsyncClient | None = None,
+):
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
         result = await AsyncTestClient(client=client).query(
@@ -420,7 +429,7 @@ async def _post_async(query, *, variables=None, client=None):
     return result.response
 
 
-async def _async_client_with_perm(username, *codenames):
+async def _async_client_with_perm(username: str, *codenames: str) -> AsyncClient:
     def _login():
         return _login_with_perm(username, *codenames)
 

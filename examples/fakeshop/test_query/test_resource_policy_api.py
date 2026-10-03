@@ -68,9 +68,10 @@ from __future__ import annotations
 import json
 import threading
 import warnings
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import contextmanager
 from functools import cache
-from typing import NewType
+from typing import TYPE_CHECKING, NewType
 
 import pytest
 import strawberry
@@ -82,11 +83,12 @@ from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.db.models import QuerySet
+from django.http import HttpRequest
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
-from graphql_client import graphql_payload
+from graphql_client import JSONObject, graphql_payload
 from strawberry.extensions import ValidationCache
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.validation_cache import _get_validate_cache
@@ -110,8 +112,11 @@ from django_strawberry_framework.resource_policy import (
     ResourcePolicy,
     bounded_rows,
 )
-from django_strawberry_framework.testing import AsyncTestClient, TestClient
+from django_strawberry_framework.testing import AsyncTestClient, Response, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
+
+if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import RelatedManager
 
 pytestmark = pytest.mark.urls(__name__)
 
@@ -155,7 +160,7 @@ def _probe_view(**overrides: float):
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_probe_schema(frozen))
         return built(request, *args, **kwargs)
 
@@ -167,7 +172,7 @@ def _probe_upload_view(**overrides: int):
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(
             schema=_probe_schema(frozen),
             multipart_uploads_enabled=True,
@@ -182,7 +187,7 @@ def _probe_async_view(**overrides: int):
     frozen = tuple(sorted(overrides.items()))
 
     @csrf_exempt
-    async def view(request, *args, **kwargs):
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
         built = AsyncDjangoGraphQLView.as_view(schema=_probe_schema(frozen))
         return await built(request, *args, **kwargs)
 
@@ -207,7 +212,7 @@ class _EscapingQuerySet(QuerySet[library_models.Loan]):
 
     @override
     # basedpyright: deliberately answers a slice with a list, the shape the ceiling must not trust
-    def __getitem__(self, key):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __getitem__(self, key: int | slice):  # pyright: ignore[reportIncompatibleMethodOverride]
         return list(library_models.Loan.objects.all())
 
 
@@ -223,7 +228,7 @@ def _hostile_relation_manager():
     manager_cls = library_models.Patron.loans.related_manager_cls
     original = manager_cls.all
 
-    def escaping_all(self):
+    def escaping_all(self: RelatedManager[library_models.Loan]):
         source = original(self)
         return _EscapingQuerySet(
             model=library_models.Loan,
@@ -278,14 +283,14 @@ def _hostile_relation_schema(patron_type: type) -> DjangoSchema:
 
 
 @csrf_exempt
-def _hostile_relation_view(request, *args, **kwargs):
+def _hostile_relation_view(request: HttpRequest, *args: object, **kwargs: object):
     """Mount the package view over the hostile-relation probe schema."""
     schema = _hostile_relation_schema(library_schema.PatronType)
     return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
 
 @csrf_exempt
-async def _hostile_relation_async_view(request, *args, **kwargs):
+async def _hostile_relation_async_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async twin, so the bound is proven on a real event loop too."""
     schema = _hostile_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
@@ -337,14 +342,14 @@ def _carry_relation_schema(patron_type: type) -> DjangoSchema:
 
 
 @csrf_exempt
-def _carry_relation_view(request, *args, **kwargs):
+def _carry_relation_view(request: HttpRequest, *args: object, **kwargs: object):
     """Mount the public project-manager relation over the synchronous view."""
     schema = _carry_relation_schema(library_schema.PatronType)
     return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
 
 
 @csrf_exempt
-async def _carry_relation_async_view(request, *args, **kwargs):
+async def _carry_relation_async_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async twin, so the rebuilt relation is proven on a real event loop too."""
     schema = _carry_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
@@ -393,7 +398,7 @@ _VALUE_BOUNDS = {
 _scalar_parses: list[object] = []
 
 
-def _record_parse(value):
+def _record_parse(value: object) -> object:
     """Parse a scalar argument by recording it and handing it back unchanged."""
     _scalar_parses.append(value)
     return value
@@ -531,7 +536,7 @@ def _authority_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _authority_view(request, *args, **kwargs):
+def _authority_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_authority_schema())
     return built(request, *args, **kwargs)
 
@@ -547,7 +552,7 @@ def _entry_rows_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _entry_rows_view(request, *args, **kwargs):
+def _entry_rows_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_entry_rows_schema())
     return built(request, *args, **kwargs)
 
@@ -565,7 +570,7 @@ class _EqualSchema(DjangoSchema):
         return 1
 
     @override
-    def __eq__(self, other):
+    def __eq__(self, other: object):
         return isinstance(other, _EqualSchema)
 
 
@@ -582,7 +587,7 @@ def _equal_view(rows: int):
     """One mount per equal-but-distinct schema, so two live requests can differ."""
 
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_equal_schema(rows))
         return built(request, *args, **kwargs)
 
@@ -654,7 +659,9 @@ class _AcceptedInstanceQuery:
         return list(bounded_rows(["a", "b", "c"], info, None))
 
 
-def _accepted_resource_entry(info):
+def _accepted_resource_entry(
+    info: strawberry.Info[object, object],
+) -> DjangoResourcePolicyExtension | None:
     """The resource extension a resolver reaches through ``info.schema.extensions``.
 
     ``None`` is the ordinary answer: the extension that bounds an operation is
@@ -700,7 +707,7 @@ def _accepted_instance_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _accepted_instance_view(request, *args, **kwargs):
+def _accepted_instance_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_accepted_instance_schema())
     return built(request, *args, **kwargs)
 
@@ -727,7 +734,7 @@ def _inherited_instance_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _inherited_instance_view(request, *args, **kwargs):
+def _inherited_instance_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_inherited_instance_schema())
     return built(request, *args, **kwargs)
 
@@ -791,7 +798,10 @@ class _MembershipQuery:
         return written
 
 
-def _write_entries(info, entries):
+def _write_entries(
+    info: strawberry.Info[object, object],
+    entries: tuple[Callable[[], SchemaExtension], ...],
+) -> list[str]:
     """Write ``entries`` over every private name the schema carries."""
     written = []
     for name in sorted(vars(info.schema)):
@@ -810,7 +820,7 @@ def _membership_schema(mount: str) -> DjangoSchema:
 
 def _membership_view(mount: str):
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_membership_schema(mount))
         return built(request, *args, **kwargs)
 
@@ -856,7 +866,7 @@ def _factory_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _factory_view(request, *args, **kwargs):
+def _factory_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_factory_schema())
     return built(request, *args, **kwargs)
 
@@ -902,7 +912,7 @@ def _droppable_schema(mount: str) -> DjangoSchema:
 
 def _droppable_view(mount: str):
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             schema = _droppable_schema(mount)
@@ -923,7 +933,7 @@ def _census_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _census_view(request, *args, **kwargs):
+def _census_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_census_schema())
     return built(request, *args, **kwargs)
 
@@ -982,7 +992,7 @@ def _witness_schema(order: str) -> DjangoSchema:
 
 def _witness_view(order: str):
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_witness_schema(order))
         return built(request, *args, **kwargs)
 
@@ -991,7 +1001,7 @@ def _witness_view(order: str):
 
 def _witness_async_view(order: str):
     @csrf_exempt
-    async def view(request, *args, **kwargs):
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
         built = AsyncDjangoGraphQLView.as_view(schema=_witness_schema(order))
         return await built(request, *args, **kwargs)
 
@@ -1042,7 +1052,7 @@ def _cache_schema(order: str) -> DjangoSchema:
 
 def _cache_view(order: str):
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_cache_schema(order))
         return built(request, *args, **kwargs)
 
@@ -1051,7 +1061,7 @@ def _cache_view(order: str):
 
 def _cache_async_view(order: str):
     @csrf_exempt
-    async def view(request, *args, **kwargs):
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
         built = AsyncDjangoGraphQLView.as_view(schema=_cache_schema(order))
         return await built(request, *args, **kwargs)
 
@@ -1072,13 +1082,13 @@ def _retained_schema() -> DjangoSchema:
 
 
 @csrf_exempt
-def _retained_view(request, *args, **kwargs):
+def _retained_view(request: HttpRequest, *args: object, **kwargs: object):
     built = DjangoGraphQLView.as_view(schema=_retained_schema())
     return built(request, *args, **kwargs)
 
 
 @csrf_exempt
-def _unconfigured_view(request, *args, **kwargs):
+def _unconfigured_view(request: HttpRequest, *args: object, **kwargs: object):
     """Mount a schema that configures NO resource policy at all, built per request.
 
     Deliberately not cached, unlike every other schema factory here: the row this
@@ -1189,7 +1199,7 @@ def _entry_view(spelling: str):
     """Mount the synchronous package view over one entry spelling."""
 
     @csrf_exempt
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_entry_schema(spelling))
         return built(request, *args, **kwargs)
 
@@ -1200,7 +1210,7 @@ def _entry_async_view(spelling: str):
     """Mount the asynchronous package view over one entry spelling."""
 
     @csrf_exempt
-    async def view(request, *args, **kwargs):
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
         built = AsyncDjangoGraphQLView.as_view(schema=_entry_schema(spelling))
         return await built(request, *args, **kwargs)
 
@@ -1297,11 +1307,11 @@ urlpatterns = [
 
 
 def _post(
-    mount,
-    query,
-    variables=None,
+    mount: str,
+    query: str,
+    variables: Mapping[str, object] | None = None,
     *,
-    client=None,
+    client: Client | None = None,
 ):
     """POST one GraphQL document to a probe mount and return the parsed envelope."""
     return graphql_payload(
@@ -1312,7 +1322,7 @@ def _post(
     )
 
 
-def _rejection(payload):
+def _rejection(payload: JSONObject):
     """Return the single resource rejection in ``payload``, asserting its shape.
 
     Every row funnels through here, so "the request was rejected" always means
@@ -1328,7 +1338,7 @@ def _rejection(payload):
     return extensions
 
 
-def _no_rejection(payload):
+def _no_rejection(payload: JSONObject):
     """Assert ``payload`` carries no resource rejection (it may carry other errors).
 
     The under/at-boundary half of each pair. It deliberately does NOT demand a
@@ -1360,7 +1370,7 @@ def test_document_over_the_token_bound_is_rejected():
     assert extensions["charged"] == MAX_TOKENS + 1
 
 
-def _post_named(mount, query, operation_name):
+def _post_named(mount: str, query: str, operation_name: str):
     """POST a document with an ``operationName``, which the shared client cannot express.
 
     The raw-envelope exemption (spec-043): the subject IS the wire field, so the
@@ -1544,7 +1554,7 @@ _SHAPE_ANON_OVERSIZE_CASES = [
     [_SHAPE_NAMED_ALIAS_DOCUMENT, _SHAPE_NAMED_SPREAD_DOCUMENT],
     ids=["oversized-aliases", "oversized-fragment-spreads"],
 )
-def test_naming_the_small_operation_does_not_charge_the_oversized_sibling(document):
+def test_naming_the_small_operation_does_not_charge_the_oversized_sibling(document: str):
     """Post-parse bounds charge only the operation ``operationName`` names.
 
     ``Big`` is over the alias or selection ceiling; ``Small`` is not. Naming
@@ -1561,7 +1571,11 @@ def test_naming_the_small_operation_does_not_charge_the_oversized_sibling(docume
     ("document", "bound", "charged"),
     _SHAPE_OVERSIZE_CASES,
 )
-def test_naming_the_oversized_operation_rejects_on_its_own_shape(document, bound, charged):
+def test_naming_the_oversized_operation_rejects_on_its_own_shape(
+    document: str,
+    bound: str,
+    charged: int,
+):
     """The must-not: naming the oversized sibling still charges it."""
     extensions = _rejection(_post_named("/rp-shape/", document, "Big"))
     assert extensions["bound"] == bound
@@ -1572,7 +1586,11 @@ def test_naming_the_oversized_operation_rejects_on_its_own_shape(document, bound
     ("document", "bound", "charged"),
     _SHAPE_ANON_OVERSIZE_CASES,
 )
-def test_an_unnamed_multi_operation_document_is_charged_in_full(document, bound, charged):
+def test_an_unnamed_multi_operation_document_is_charged_in_full(
+    document: str,
+    bound: str,
+    charged: int,
+):
     """With no ``operationName``, every operation in the document is charged.
 
     The leading operation is anonymous so the engine cannot infer a name from
@@ -2172,21 +2190,21 @@ def test_total_input_nodes_are_bounded_across_several_arguments():
 _OVER_BYTES = "x" * (MAX_SCALAR_BYTES + 1)
 
 
-def _assert_over_bytes(payload):
+def _assert_over_bytes(payload: JSONObject):
     """Assert ``payload`` is the scalar-byte rejection of exactly ``_OVER_BYTES``."""
     extensions = _rejection(payload)
     assert extensions["bound"] == "max_scalar_bytes"
     assert extensions["charged"] == MAX_SCALAR_BYTES + 1
 
 
-def _assert_over_nodes(payload):
+def _assert_over_nodes(payload: JSONObject):
     """Assert ``payload`` is the input-node rejection one node past ``MAX_INPUT_NODES``."""
     extensions = _rejection(payload)
     assert extensions["bound"] == "max_input_nodes"
     assert extensions["charged"] == MAX_INPUT_NODES + 1
 
 
-def _included_fields(count):
+def _included_fields(count: int):
     """``count`` aliased ``__typename`` selections, each carrying one ``@include`` value."""
     return " ".join(f"f{index}: __typename @include(if: true)" for index in range(count))
 
@@ -2331,7 +2349,7 @@ def test_an_unselected_mutation_is_classified_by_its_write_bind_specs():
     assert extensions["charged"] == MAX_RELATION_IDS + 1
 
 
-def _genre_or_filter(branches, *, extra=""):
+def _genre_or_filter(branches: int, *, extra: str = ""):
     """A genre filter literal: one ``or`` list of ``branches`` single-name rows.
 
     It is ``2 + 3 * branches`` input nodes (the object, the list, and per row
@@ -2637,7 +2655,7 @@ def test_the_connection_only_default_leaves_no_raw_list_sibling():
 # ---------------------------------------------------------------------------
 
 
-def _deadline_rejection(payload):
+def _deadline_rejection(payload: JSONObject):
     """Return the deadline rejection in ``payload``, asserting it is the only error.
 
     Separate from ``_rejection`` because a deadline fires from inside a resolver
@@ -2834,7 +2852,7 @@ def test_a_written_exported_default_cannot_widen_an_unconfigured_schema():
     assert control["data"]["manyRows"] == widened["data"]["manyRows"]
 
 
-def _opaque_request(source, width):
+def _opaque_request(source: str, width: int):
     """One request carrying ``width`` members to the scalar argument, by ``source``.
 
     The three places a value enters an operation. A supplied variable arrives
@@ -2856,7 +2874,7 @@ def _opaque_request(source, width):
     ["variable", "literal", "default"],
     ids=["supplied-variable", "inline-literal", "variable-default"],
 )
-def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source):
+def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source: str):
     """The value budget charges the RAW argument, before any scalar converts it.
 
     The walk reads the variables the request supplied and the argument ASTs the
@@ -2881,7 +2899,7 @@ def test_a_scalar_argument_is_bounded_by_the_shape_the_request_carried(source):
     ["variable", "literal", "default"],
     ids=["supplied-variable", "inline-literal", "variable-default"],
 )
-def test_a_scalar_argument_within_the_bound_reaches_its_parser(source):
+def test_a_scalar_argument_within_the_bound_reaches_its_parser(source: str):
     """The control, and the other half of the boundary: an admitted argument converts.
 
     One member under the bound the same request runs, and the parser sees the
@@ -2913,7 +2931,7 @@ def test_no_name_on_a_schema_answers_with_the_policy_enforcing_it():
 
 
 @pytest.mark.parametrize("attempt", ["before", "after"])
-def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt):
+def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt: str):
     """The record that settles the budget settles masking, and neither is reachable.
 
     Under ``DEBUG=False`` an unexpected resolver exception reaches the client as
@@ -2938,7 +2956,7 @@ def test_a_resolver_cannot_put_raw_exception_text_on_the_wire(attempt):
     ["/rp-accepted-instance/", "/rp-inherited-instance/"],
     ids=["explicit-policy", "inherited-policy"],
 )
-def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mount):
+def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mount: str):
     """The same question of the entry a schema was configured WITH.
 
     Both configurations of that entry are asked: one that carries a policy, and
@@ -2960,9 +2978,9 @@ def test_no_name_on_an_accepted_extension_answers_with_the_policy_it_enforces(mo
     ids=["schema", "accepted-extension", "accepted-extension-inheriting"],
 )
 def test_rerunning_a_constructor_over_the_wire_does_not_widen_a_later_request(
-    mount,
-    field,
-    reported,
+    mount: str,
+    field: str,
+    reported: str,
 ):
     """An object a resolver reaches is one whose ``__init__`` a resolver can call.
 
@@ -2999,9 +3017,9 @@ def test_rerunning_a_constructor_over_the_wire_does_not_widen_a_later_request(
     ids=["empty-the-entries", "replace-the-entries", "rewrite-behind-the-names"],
 )
 def test_writing_the_accepted_extensions_does_not_choose_what_runs_the_next_request(
-    mount,
-    field,
-    written,
+    mount: str,
+    field: str,
+    written: list[str],
 ):
     """Membership is what decides whether an operation is bounded and masked at all.
 
@@ -3055,7 +3073,7 @@ def test_an_extension_factory_still_builds_one_per_operation():
     [("/rp-forged-entries/", "forge"), ("/rp-dropped-entries/", "drop")],
     ids=["forge-the-accepted-entries", "delete-the-accepted-entries"],
 )
-def test_losing_the_accepted_extensions_does_not_widen_the_next_request(mount, field):
+def test_losing_the_accepted_extensions_does_not_widen_the_next_request(mount: str, field: str):
     """A bound is not held in anything a resolver can forge or delete.
 
     Every private name a schema carries is replaced with an empty value of the
@@ -3083,7 +3101,10 @@ def test_losing_the_accepted_extensions_does_not_widen_the_next_request(mount, f
     [("rebind", "unreachable"), ("overwrite", "unreachable"), ("emptyTheEntry", [])],
     ids=["rebind", "overwrite", "empty-the-instance-dictionary"],
 )
-def test_an_accepted_extension_instance_cannot_widen_a_later_request(field, reported):
+def test_an_accepted_extension_instance_cannot_widen_a_later_request(
+    field: str,
+    reported: str | list[str],
+):
     """A declaration is read once and does not travel, so there is nothing left to write.
 
     Strawberry hands back an accepted instance unchanged and
@@ -3140,7 +3161,10 @@ CACHE_MOUNTS = {
 
 @pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
 @pytest.mark.parametrize("cache_state", ["cold", "warm"])
-def test_an_alias_rejection_survives_an_installed_validation_extension(order, cache_state):
+def test_an_alias_rejection_survives_an_installed_validation_extension(
+    order: str,
+    cache_state: str,
+):
     """A rejection is not the mutable field it is published in.
 
     A validation extension that runs the pass itself assigns its own result over
@@ -3168,7 +3192,10 @@ def test_an_alias_rejection_survives_an_installed_validation_extension(order, ca
     ["variable", "literal", "default"],
     ids=["supplied-variable", "inline-literal", "variable-default"],
 )
-def test_an_over_bound_argument_is_refused_before_any_installed_validation_runs(order, source):
+def test_an_over_bound_argument_is_refused_before_any_installed_validation_runs(
+    order: str,
+    source: str,
+):
     """Admission precedes the validation stage, whatever position the consumer chose.
 
     An installed validation extension runs the pass itself, and that pass parses
@@ -3192,7 +3219,10 @@ def test_an_over_bound_argument_is_refused_before_any_installed_validation_runs(
     ["variable", "literal", "default"],
     ids=["supplied-variable", "inline-literal", "variable-default"],
 )
-def test_an_argument_within_the_bound_still_executes_beside_a_validation_extension(order, source):
+def test_an_argument_within_the_bound_still_executes_beside_a_validation_extension(
+    order: str,
+    source: str,
+):
     """The other verdict, which is what keeps the rejecting row from being vacuous."""
     _scalar_parses.clear()
     query, variables, members = _opaque_request(source, MAX_CONTAINER_WIDTH)
@@ -3209,7 +3239,7 @@ def test_an_argument_within_the_bound_still_executes_beside_a_validation_extensi
     ids=["cache-before-the-witness", "cache-after-the-witness", "cache-after-the-witness-async"],
 )
 @pytest.mark.parametrize("verdict", ["rejected", "admitted"])
-def test_a_rejected_operation_never_enters_the_executing_stage(mount, verdict):
+def test_a_rejected_operation_never_enters_the_executing_stage(mount: str, verdict: str):
     """Asked from outside the guard, on a schema carrying a validation cache.
 
     Upstream decides whether to execute from inside the validation stage, so
@@ -3239,7 +3269,7 @@ def test_a_rejected_operation_never_enters_the_executing_stage(mount, verdict):
 
 
 @pytest.mark.parametrize("order", CACHE_ORDERS, ids=CACHE_ORDER_IDS)
-def test_ordinary_validation_still_answers_beside_the_admission_stage(order):
+def test_ordinary_validation_still_answers_beside_the_admission_stage(order: str):
     """Admission stands down a document's validation only when it refused it.
 
     Emptying an admitted operation's validation rules would turn every schema
@@ -3257,7 +3287,10 @@ def test_ordinary_validation_still_answers_beside_the_admission_stage(order):
     [("cache-first", "/rp-cache-first-async/"), ("cache-last", "/rp-cache-last-async/")],
     ids=["cache-before-its-neighbour", "cache-after-its-neighbour"],
 )
-def test_the_composed_admission_stage_answers_the_same_on_the_async_transport(order, mount):
+def test_the_composed_admission_stage_answers_the_same_on_the_async_transport(
+    order: str,
+    mount: str,
+):
     """One verdict per request, whichever transport carried it."""
     _scalar_parses.clear()
     query, variables, _ = _opaque_request("literal", MAX_CONTAINER_WIDTH + 1)
@@ -3394,7 +3427,7 @@ def _carry_relation_payload(patrons: int) -> dict[str, object]:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("patrons", [2, 3], ids=["two-parents", "three-parents"])
-def test_a_project_queryset_class_relation_costs_two_prefetch_queries(patrons):
+def test_a_project_queryset_class_relation_costs_two_prefetch_queries(patrons: int):
     """The real project manager is windowed from the rows prefetch already fetched.
 
     Two parent cardinalities pin batching rather than merely one request's shape:
@@ -3482,18 +3515,18 @@ def test_sync_and_async_transports_share_one_typed_error_code():
     assert _rejection(async_payload) == sync_extensions
 
 
-def _await_response(coroutine):
+def _await_response(coroutine: Coroutine[object, object, Response]):
     """Run one ``AsyncTestClient.query`` coroutine to completion on a fresh event loop."""
     import asyncio
 
     return asyncio.run(_resolve(coroutine))
 
 
-async def _resolve(coroutine):
+async def _resolve(coroutine: Coroutine[object, object, Response]):
     return await coroutine
 
 
-def _entry_request(entry, query):
+def _entry_request(entry: tuple[str, str], query: str):
     """POST one document to a shared-entry mount through that entry's own view color.
 
     ``entry`` is the ``(spelling, color)`` key rather than the mount, because the
@@ -3512,7 +3545,7 @@ def _entry_request(entry, query):
 
 
 @pytest.fixture
-def _reset_overlap_state():
+def _reset_overlap_state() -> Iterator[None]:
     """Give each parametrized case fresh coordinator and witness state."""
     _ExecutionWitness.entered.clear()
     _OverlapCoordinator.parked = threading.Event()
@@ -3532,9 +3565,9 @@ def _reset_overlap_state():
     ids=ENTRY_IDS,
 )
 def test_an_overlapping_request_does_not_admit_an_oversized_one(
-    spelling,
-    color,
-    _reset_overlap_state,
+    spelling: str,
+    color: str,
+    _reset_overlap_state: None,
 ):
     """Whichever object a consumer entry resolves to, the charge lands on its own document.
 

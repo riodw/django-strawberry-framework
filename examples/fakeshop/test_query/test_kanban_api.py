@@ -20,6 +20,7 @@ directly (not via the importer, so assertions stay independent of how the real
 """
 
 from datetime import timedelta
+from typing import NoReturn
 
 import pytest
 from apps.glossary import models as glossary_models
@@ -256,7 +257,9 @@ def test_filter_cards_by_status_key_via_related_filter():
 
 
 @pytest.mark.django_db
-def test_flat_composite_milestone_filter_fires_target_permission_gate(monkeypatch):
+def test_flat_composite_milestone_filter_fires_target_permission_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A flat composite relation path cannot bypass the target filter gate.
 
     ``CardFilter.milestone`` maps the one GraphQL branch onto the composite ORM
@@ -268,7 +271,7 @@ def test_flat_composite_milestone_filter_fires_target_permission_gate(monkeypatc
     from apps.kanban.filters import MilestoneFilter
     from graphql import GraphQLError
 
-    def deny_key(self, request):
+    def deny_key(self: MilestoneFilter, request: object) -> NoReturn:
         raise GraphQLError("milestone key denied")
 
     # ``raising=False``: the gate is an opt-in hook the fixture filter does not

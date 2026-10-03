@@ -10,6 +10,8 @@ custom-scalar variable that still shares one plan-cache identity across
 requests.
 """
 
+from collections.abc import Callable, Iterator
+
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Shelf
@@ -17,6 +19,9 @@ from apps.products import services
 from apps.products.models import Category
 from debug_toolbar.toolbar import debug_toolbar_urls
 from django.db import connection
+from django.db.models import QuerySet
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from strategy_schemas import build_strategy_schema, make_django_type
@@ -31,6 +36,11 @@ from django_strawberry_framework import (
     finalize_django_types,
     strawberry_config,
 )
+from django_strawberry_framework.optimizer.nested_fetch import (
+    NestedConnectionRequest,
+    StrategySelection,
+)
+from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import TestClient
 
@@ -39,7 +49,7 @@ pytestmark = pytest.mark.urls(__name__)
 _current: dict[str, object | None] = {"schema": None}
 
 
-def _graphql_view(request):
+def _graphql_view(request: HttpRequest) -> HttpResponseBase:
     """Serve the probe schema installed by the current test's holder fixture."""
     schema = _current["schema"]
     assert schema is not None
@@ -50,7 +60,9 @@ urlpatterns = [path("graphql/", _graphql_view), *debug_toolbar_urls()]
 
 
 @pytest.fixture
-def install_auto_strategy_schema(_reload_project_schema_for_acceptance_tests):
+def install_auto_strategy_schema(
+    _reload_project_schema_for_acceptance_tests: None,
+) -> Iterator[None]:
     """Install a minimal library graph whose nested queryset is lateral-capable."""
     registry.clear()
     make_django_type(
@@ -78,8 +90,8 @@ def install_auto_strategy_schema(_reload_project_schema_for_acceptance_tests):
 
 @pytest.mark.django_db
 def test_auto_strategy_picks_the_vendor_body_and_pages_truthfully_over_http(
-    install_auto_strategy_schema,
-):
+    install_auto_strategy_schema: None,
+) -> None:
     """Auto runs LATERAL on Postgres, the windowed body elsewhere, with truthful page metadata."""
     branch = Branch.objects.create(name="Auto strategy", city="Boston")
     shelf = Shelf.objects.create(code="AUTO", topic="Routing", branch=branch)
@@ -127,7 +139,9 @@ def test_auto_strategy_picks_the_vendor_body_and_pages_truthfully_over_http(
 
 
 @pytest.fixture
-def install_hashable_scalar_cache_schema(_reload_project_schema_for_acceptance_tests):
+def install_hashable_scalar_cache_schema(
+    _reload_project_schema_for_acceptance_tests: None,
+) -> Iterator[DjangoOptimizerExtension]:
     """Install a live schema whose custom scalar returns hostile hashable values."""
     from typing import NewType
 
@@ -144,7 +158,7 @@ def install_hashable_scalar_cache_schema(_reload_project_schema_for_acceptance_t
             return 1
 
         @override
-        def __eq__(self, _other):
+        def __eq__(self, _other: object) -> bool:
             raise RuntimeError("custom scalar equality must not run in cache lookup")
 
     BombValue = NewType("BombValue", object)
@@ -181,8 +195,8 @@ def install_hashable_scalar_cache_schema(_reload_project_schema_for_acceptance_t
 
 @pytest.mark.django_db
 def test_repeated_live_query_survives_hashable_custom_scalar_equality(
-    install_hashable_scalar_cache_schema,
-):
+    install_hashable_scalar_cache_schema: DjangoOptimizerExtension,
+) -> None:
     """A hostile custom scalar cannot abort a repeated optimizer cache lookup."""
     services.seed_data(1)
     query = """
@@ -204,7 +218,9 @@ def test_repeated_live_query_survives_hashable_custom_scalar_equality(
 
 
 @pytest.fixture
-def install_unhashable_set_scalar_cache_schema(_reload_project_schema_for_acceptance_tests):
+def install_unhashable_set_scalar_cache_schema(
+    _reload_project_schema_for_acceptance_tests: None,
+) -> Iterator[DjangoOptimizerExtension]:
     """Install a live schema whose custom scalar parser returns a ``set``."""
     from typing import NewType
 
@@ -249,8 +265,8 @@ def install_unhashable_set_scalar_cache_schema(_reload_project_schema_for_accept
 
 @pytest.mark.django_db
 def test_repeated_live_query_shares_plan_cache_for_unhashable_set_scalar(
-    install_unhashable_set_scalar_cache_schema,
-):
+    install_unhashable_set_scalar_cache_schema: DjangoOptimizerExtension,
+) -> None:
     """A ``set``-valued custom scalar is frozen structurally, so two requests share one plan.
 
     The sibling ``EqualityBomb`` row is the opaque-identity miss; this is the
@@ -330,16 +346,18 @@ def _seed_hint_shelf():
     Book.objects.create(title="b0", shelf=shelf_b)
 
 
-def _book_sql(captured):
+def _book_sql(captured: CaptureQueriesContext) -> list[str]:
     """Captured statements that touch ``library_book`` (the nested child table)."""
     return [entry["sql"] for entry in captured.captured_queries if "library_book" in entry["sql"]]
 
 
 @pytest.fixture
-def install_hinted_strategy_schema(_reload_project_schema_for_acceptance_tests):
+def install_hinted_strategy_schema(
+    _reload_project_schema_for_acceptance_tests: None,
+) -> Iterator[Callable[[StrategySelection, OptimizerHint], None]]:
     """Install a library graph whose ``booksConnection`` carries a strategy hint."""
 
-    def _install(default_strategy, books_hint):
+    def _install(default_strategy: StrategySelection, books_hint: OptimizerHint) -> None:
         registry.clear()
         make_django_type(
             "HintBookType",
@@ -379,14 +397,14 @@ class _RefusingNestedStrategy:
 
     name = "refusing"
 
-    def plan(self, _request, _plan):
+    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         return False
 
 
 @pytest.mark.django_db
 def test_per_field_strategy_hint_windowed_emits_over_when_the_default_refuses(
-    install_hinted_strategy_schema,
-):
+    install_hinted_strategy_schema: Callable[[StrategySelection, OptimizerHint], None],
+) -> None:
     """``OptimizerHint.strategy("windowed")`` plans ``ROW_NUMBER() OVER`` on SQLite.
 
     Postgres HTTP rows pin the same branch against LATERAL; this row is the
@@ -409,8 +427,8 @@ def test_per_field_strategy_hint_windowed_emits_over_when_the_default_refuses(
 @pytest.mark.django_db
 @pytest.mark.pg
 def test_per_field_strategy_hint_windowed_under_lateral_default_skips_lateral_over_http(
-    install_hinted_strategy_schema,
-):
+    install_hinted_strategy_schema: Callable[[StrategySelection, OptimizerHint], None],
+) -> None:
     """``OptimizerHint.strategy("windowed")`` wins over a lateral extension default."""
     _seed_hint_shelf()
     install_hinted_strategy_schema("lateral", OptimizerHint.strategy("windowed"))
@@ -428,8 +446,8 @@ def test_per_field_strategy_hint_windowed_under_lateral_default_skips_lateral_ov
 @pytest.mark.django_db
 @pytest.mark.pg
 def test_per_field_strategy_hint_lateral_under_windowed_default_emits_lateral_over_http(
-    install_hinted_strategy_schema,
-):
+    install_hinted_strategy_schema: Callable[[StrategySelection, OptimizerHint], None],
+) -> None:
     """``OptimizerHint.strategy("lateral")`` wins over a windowed extension default."""
     _seed_hint_shelf()
     install_hinted_strategy_schema("windowed", OptimizerHint.strategy("lateral"))
@@ -445,10 +463,17 @@ def test_per_field_strategy_hint_lateral_under_windowed_default_emits_lateral_ov
 
 
 @pytest.fixture
-def install_distinct_child_schema(_reload_project_schema_for_acceptance_tests):
+def install_distinct_child_schema(
+    _reload_project_schema_for_acceptance_tests: None,
+) -> Iterator[None]:
     """Install a library graph whose nested book queryset is ``.distinct()``."""
 
-    def _distinct(cls, queryset, info, **kwargs):
+    def _distinct(
+        cls: type[DjangoType],
+        queryset: QuerySet[Book],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ) -> QuerySet[Book]:
         return queryset.distinct()
 
     registry.clear()
@@ -477,7 +502,9 @@ def install_distinct_child_schema(_reload_project_schema_for_acceptance_tests):
 
 
 @pytest.mark.django_db
-def test_distinct_child_queryset_never_windows_over_http(install_distinct_child_schema):
+def test_distinct_child_queryset_never_windows_over_http(
+    install_distinct_child_schema: None,
+) -> None:
     """A target ``get_queryset`` returning ``.distinct()`` leaves the nested page unplanned.
 
     The nested planner refuses the whole relation (Decision 6), so each parent

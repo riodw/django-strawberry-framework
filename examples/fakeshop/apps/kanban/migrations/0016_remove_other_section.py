@@ -8,9 +8,11 @@ a no-op: a retired lookup is not recreated.
 """
 
 from django.db import migrations
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 
-def _remove(apps, schema_editor):
+def _remove(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     alias = schema_editor.connection.alias
     Section = apps.get_model("kanban", "Section")
     CardItem = apps.get_model("kanban", "CardItem")

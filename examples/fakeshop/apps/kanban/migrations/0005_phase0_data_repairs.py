@@ -22,6 +22,8 @@ the pre-repair duplicates / drift are not worth reconstructing.
 import re
 
 from django.db import migrations
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
 
@@ -45,7 +47,10 @@ def _remap_card_ref_placeholders(text: str, old_to_new: dict[int, int]) -> str:
     return CARD_REF_RE.sub(replace, text)
 
 
-def _dedupe_and_renumber_references(apps, schema_editor):
+def _dedupe_and_renumber_references(
+    apps: StateApps,
+    schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
     """0.1 -- drop duplicate references, renumber per source card, and move the
     card-prose ``{{card_ref:N}}`` placeholders to match the new numbering.
 
@@ -110,7 +115,7 @@ def _dedupe_and_renumber_references(apps, schema_editor):
                 manager.filter(pk=reference.pk).update(raw_text=new_raw)
 
 
-def _repair_milestone_drift(apps, schema_editor):
+def _repair_milestone_drift(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """0.2 -- align each card's milestone with its target version's milestone."""
     Card = apps.get_model("kanban", "Card")
     manager = Card.objects.using(schema_editor.connection.alias)
@@ -120,7 +125,7 @@ def _repair_milestone_drift(apps, schema_editor):
             manager.filter(pk=card.pk).update(milestone_id=target_milestone_id)
 
 
-def _retype_done_done_blocked_by(apps, schema_editor):
+def _retype_done_done_blocked_by(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """0.3 -- retype done->done ``blocked_by`` edges to ``dependency``."""
     CardReference = apps.get_model("kanban", "CardReference")
     CardReferenceKind = apps.get_model("kanban", "CardReferenceKind")

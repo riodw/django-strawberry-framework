@@ -31,8 +31,8 @@ _TIME = datetime.time(9, 30)
 _UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 
-def _seed_specimen(label: str, **overrides):
-    defaults = {
+def _seed_specimen(label: str, **overrides: object) -> models.ScalarSpecimen:
+    defaults: dict[str, object] = {
         "label": label,
         "flag": False,
         "score": 1.0,

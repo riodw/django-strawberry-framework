@@ -35,6 +35,7 @@ from django.conf import settings
 from django.db import connection
 from django.db.models import Model, Prefetch, Q, QuerySet, Value
 from django.db.models.functions import Lower
+from django.http import HttpRequest
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
@@ -66,7 +67,7 @@ _ERROR_POLICY_PASS_THROUGH = {
 _CURRENT: dict[str, Any] = {"schema": None}
 
 
-def _graphql_view(request):
+def _graphql_view(request: HttpRequest):
     schema = _CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
@@ -228,14 +229,19 @@ def _visible_genres(shape: str) -> set[str]:
 
 
 def _install(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     type_name: str,
     body: Callable[[QuerySet[Model], Any], QuerySet[Model, object]],
 ) -> None:
     """Make ``type_name``'s ``get_queryset`` return ``body(queryset, info)``."""
     from apps.library import schema as library_schema
 
-    def _hook(cls, queryset, info, **kwargs):
+    def _hook(
+        cls: type[DjangoType],
+        queryset: QuerySet[Model],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ):
         del cls, kwargs
         return body(queryset, info)
 
@@ -243,7 +249,7 @@ def _install(
 
 
 def _install_shape(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     type_name: str,
     shape: str,
     column: str,
@@ -254,7 +260,14 @@ def _install_shape(
     _install(monkeypatch, type_name, lambda queryset, info: chosen(queryset, column))
 
 
-def _both_hooks(monkeypatch, type_name, shape, column, query, **kwargs) -> JSONObject:
+def _both_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+    type_name: str,
+    shape: str,
+    column: str,
+    query: str,
+    **kwargs: object,
+) -> JSONObject:
     """The data the combined hook serves, after asserting the uncombined hook serves the same rows.
 
     The two payloads are compared order-free (``_order_free``); a caller whose query
@@ -341,7 +354,11 @@ def _seed_genres() -> None:
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_root_list_without_arguments_serves_the_combined_rows(monkeypatch, shape, optimizer):
+def test_root_list_without_arguments_serves_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``allLibraryGenresViaListField`` with no arguments serves exactly the hook's genres."""
     _seed_genres()
 
@@ -361,7 +378,11 @@ def test_root_list_without_arguments_serves_the_combined_rows(monkeypatch, shape
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_root_list_orders_the_combined_rows_by_order_by(monkeypatch, shape, optimizer):
+def test_root_list_orders_the_combined_rows_by_order_by(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``orderBy:`` on the root list orders the combined set, descending here."""
     _seed_genres()
 
@@ -381,7 +402,11 @@ def test_root_list_orders_the_combined_rows_by_order_by(monkeypatch, shape, opti
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_root_list_limits_the_ordered_combined_rows(monkeypatch, shape, optimizer):
+def test_root_list_limits_the_ordered_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``limit:`` takes the first rows of the ordered combined set, not of the table."""
     _seed_genres()
 
@@ -401,7 +426,11 @@ def test_root_list_limits_the_ordered_combined_rows(monkeypatch, shape, optimize
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_root_connection_pages_the_combined_rows(monkeypatch, shape, optimizer):
+def test_root_connection_pages_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``allLibraryGenresConnection(first: 2)`` pages the ordered combined set."""
     _seed_genres()
 
@@ -430,7 +459,11 @@ def test_root_connection_pages_the_combined_rows(monkeypatch, shape, optimizer):
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_root_connection_filters_the_combined_rows(monkeypatch, shape, optimizer):
+def test_root_connection_filters_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``filter:`` narrows the combined set: a hidden genre never matches."""
     _seed_genres()
 
@@ -476,7 +509,11 @@ query ($after: String) {
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_keyset_connection_seeks_through_the_combined_rows(monkeypatch, shape, optimizer):
+def test_keyset_connection_seeks_through_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """The ``cursor_field = ("-number", "id")`` connection pages the combined set by value cursor.
 
     The second page is fetched from the first page's ``endCursor``, so the seek
@@ -510,7 +547,11 @@ def test_keyset_connection_seeks_through_the_combined_rows(monkeypatch, shape, o
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_reverse_foreign_key_list_child_serves_the_combined_rows(monkeypatch, shape, optimizer):
+def test_reverse_foreign_key_list_child_serves_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``shelves { books }`` serves each shelf's books that the combined hook keeps."""
     _seed_books()
 
@@ -536,7 +577,11 @@ def test_reverse_foreign_key_list_child_serves_the_combined_rows(monkeypatch, sh
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_many_to_many_list_child_serves_the_combined_rows(monkeypatch, shape, optimizer):
+def test_many_to_many_list_child_serves_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``genres { books }`` serves each genre's books that the combined hook keeps."""
     _seed_books()
 
@@ -570,7 +615,11 @@ def _seed_venues() -> None:
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_downgraded_to_one_resolves_only_combined_targets(monkeypatch, shape, optimizer):
+def test_downgraded_to_one_resolves_only_combined_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``leadTicket`` resolves a ticket the combined hook keeps and ``null`` for one it hides.
 
     ``RepairTicketType`` declares a hook, so the nullable ``lead_ticket`` forward key
@@ -631,7 +680,10 @@ def _nested_pages(data: JSONObject) -> dict[str, dict[str, Any]]:
 
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_nested_connection_windows_the_combined_rows_in_one_prefetch(monkeypatch, shape):
+def test_nested_connection_windows_the_combined_rows_in_one_prefetch(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+):
     """Under the optimizer ``booksConnection(first: 2)`` stays one ``ROW_NUMBER`` window query.
 
     The window is taken over the combined set: two library statements (the genre
@@ -654,7 +706,11 @@ def test_nested_connection_windows_the_combined_rows_in_one_prefetch(monkeypatch
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_nested_connection_serves_the_combined_rows(monkeypatch, shape, optimizer):
+def test_nested_connection_serves_the_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``booksConnection(first: 2)`` serves the same page windowed and per parent."""
     _seed_books()
 
@@ -678,7 +734,11 @@ def test_nested_connection_serves_the_combined_rows(monkeypatch, shape, optimize
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_nodes_refetch_only_combined_rows(monkeypatch, shape, optimizer):
+def test_nodes_refetch_only_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``nodes(ids:)`` over every book returns the combined hook's books and ``null`` elsewhere."""
     from apps.library.schema import BookType
 
@@ -702,7 +762,11 @@ def test_nodes_refetch_only_combined_rows(monkeypatch, shape, optimizer):
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_node_refetches_a_combined_row_and_hides_an_excluded_one(monkeypatch, shape, optimizer):
+def test_node_refetches_a_combined_row_and_hides_an_excluded_one(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``node(id:)`` resolves a book the combined hook keeps and ``null`` for one it excludes."""
     from apps.library.schema import BookType
 
@@ -729,7 +793,11 @@ def test_node_refetches_a_combined_row_and_hides_an_excluded_one(monkeypatch, sh
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_related_filter_matches_only_through_combined_rows(monkeypatch, shape, optimizer):
+def test_related_filter_matches_only_through_combined_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``shelves(filter: { books: ... })`` matches a shelf only through a book the hook keeps."""
     _seed_books()
 
@@ -773,9 +841,9 @@ _DESKS = "{ allLibraryCirculationDesks(orderBy: [{ name: ASC }]) { name shelf { 
 @_EVERY_SHAPE
 @pytest.mark.django_db
 def test_cascade_through_a_combined_target_hides_desks_on_excluded_shelves(
-    monkeypatch,
-    shape,
-    optimizer,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
 ):
     """``CirculationDeskType``'s cascade over ``shelf`` binds to the combined ``ShelfType`` set.
 
@@ -794,7 +862,11 @@ def test_cascade_through_a_combined_target_hides_desks_on_excluded_shelves(
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_cascade_narrows_a_combined_root(monkeypatch, shape, optimizer):
+def test_cascade_narrows_a_combined_root(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """``apply_cascade_permissions`` handed a combined root narrows that set by the cascade.
 
     The desk hook combines over desk names, then cascades over ``branch`` and
@@ -808,7 +880,11 @@ def test_cascade_narrows_a_combined_root(monkeypatch, shape, optimizer):
     for combined in (True, False):
         chosen = _SHAPES[shape].combined if combined else _SHAPES[shape].uncombined
 
-        def _body(queryset, info, chosen=chosen):
+        def _body(
+            queryset: QuerySet[Model],
+            info: strawberry.Info[object, object],
+            chosen: Callable[[QuerySet[Model], str], QuerySet[Model]] = chosen,
+        ):
             from apps.library.schema import CirculationDeskType
 
             return apply_cascade_permissions(
@@ -857,10 +933,10 @@ _EXCLUDED_UPDATE_ENVELOPE = {
 @pytest.mark.parametrize("combined", [True, False], ids=["combined", "uncombined"])
 @pytest.mark.django_db
 def test_mutation_locates_and_updates_only_a_combined_row(
-    monkeypatch,
-    shape,
-    optimizer,
-    combined,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+    combined: bool,
 ):
     """``updateBookViaCustomInput`` locates its row through the combined ``BookType`` hook.
 
@@ -901,9 +977,9 @@ def test_mutation_locates_and_updates_only_a_combined_row(
 @_EVERY_SHAPE
 @pytest.mark.django_db
 def test_mutation_payload_resolves_its_relation_through_the_combined_hook(
-    monkeypatch,
-    shape,
-    optimizer,
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
 ):
     """The payload's ``node { shelf }`` resolves through the combined ``ShelfType`` hook."""
     from apps.library.schema import BookType
@@ -945,14 +1021,22 @@ def test_mutation_payload_resolves_its_relation_through_the_combined_hook(
 @_OPTIMIZER
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_consumer_prefetch_of_a_combined_queryset_serves_its_rows(monkeypatch, shape, optimizer):
+def test_consumer_prefetch_of_a_combined_queryset_serves_its_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    shape: str,
+    optimizer: bool,
+):
     """A hook's ``Prefetch("books", queryset=<combined>)`` serves each genre's kept books."""
     _seed_books()
     results = {}
     for combined in (True, False):
         chosen = _SHAPES[shape].combined if combined else _SHAPES[shape].uncombined
 
-        def _body(queryset, info, chosen=chosen):
+        def _body(
+            queryset: QuerySet[Model],
+            info: strawberry.Info[object, object],
+            chosen: Callable[[QuerySet[Model], str], QuerySet[Model]] = chosen,
+        ):
             del info
             books = chosen(models.Book.objects.all(), "title")
             return queryset.prefetch_related(Prefetch("books", queryset=books))
@@ -976,7 +1060,7 @@ def test_consumer_prefetch_of_a_combined_queryset_serves_its_rows(monkeypatch, s
 
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_strictness_raise_plans_a_combined_child(monkeypatch, shape):
+def test_strictness_raise_plans_a_combined_child(monkeypatch: pytest.MonkeyPatch, shape: str):
     """Under ``strictness="raise"`` a combined ``books`` child is planned: nothing lazy-loads."""
     _seed_books()
     _install_shape(monkeypatch, "BookType", shape, "title", combined=True)
@@ -1010,7 +1094,10 @@ def test_strictness_raise_plans_a_combined_child(monkeypatch, shape):
 
 @_OPTIMIZER
 @pytest.mark.django_db
-def test_reversed_outer_ordering_of_a_combined_hook_is_served_reversed(monkeypatch, optimizer):
+def test_reversed_outer_ordering_of_a_combined_hook_is_served_reversed(
+    monkeypatch: pytest.MonkeyPatch,
+    optimizer: bool,
+):
     """``union(...).order_by("name").reverse()`` serves the combined genres in descending order."""
     _seed_genres()
     results = {}
@@ -1037,11 +1124,11 @@ def test_reversed_outer_ordering_of_a_combined_hook_is_served_reversed(monkeypat
 # ---------------------------------------------------------------------------
 
 
-def _a(queryset):
+def _a(queryset: QuerySet[Model]):
     return queryset.filter(_starts("name", "A"))
 
 
-def _b(queryset):
+def _b(queryset: QuerySet[Model]):
     return queryset.filter(_starts("name", "B"))
 
 
@@ -1096,7 +1183,10 @@ _REFUSED = {
 
 @pytest.mark.parametrize("refused", list(_REFUSED))
 @pytest.mark.django_db
-def test_combined_shape_the_key_set_cannot_carry_is_refused_at_the_field(monkeypatch, refused):
+def test_combined_shape_the_key_set_cannot_carry_is_refused_at_the_field(
+    monkeypatch: pytest.MonkeyPatch,
+    refused: str,
+):
     """A combined hook result whose rows the primary-key set would change fails closed, named.
 
     The refusal is the field's own GraphQL error: ``data`` is ``null`` for the
@@ -1123,7 +1213,7 @@ def test_combined_shape_the_key_set_cannot_carry_is_refused_at_the_field(monkeyp
 
 
 @pytest.mark.django_db
-def test_sliced_combined_hook_is_refused_as_sliced(monkeypatch):
+def test_sliced_combined_hook_is_refused_as_sliced(monkeypatch: pytest.MonkeyPatch):
     """A sliced union on the root list is refused by the ``sliced`` defect."""
     _seed_genres()
     _install(
@@ -1141,7 +1231,9 @@ def test_sliced_combined_hook_is_refused_as_sliced(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_refused_combined_shape_is_masked_by_the_production_error_policy(monkeypatch):
+def test_refused_combined_shape_is_masked_by_the_production_error_policy(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Without ``DEBUG`` the refusal reaches the client as the masked error at the same field."""
     _seed_genres()
     _install(
@@ -1161,14 +1253,16 @@ def test_refused_combined_shape_is_masked_by_the_production_error_policy(monkeyp
     assert "union" not in str(error)
 
 
-def _outer_values(queryset):
+def _outer_values(queryset: QuerySet[Model]):
     return (
         queryset.filter(_holds("name", "i")).intersection(queryset.exclude(_starts("name", "Q")))
     ).values("pk")
 
 
 @pytest.mark.django_db
-def test_outer_values_projection_after_a_combinator_is_refused_as_a_projection(monkeypatch):
+def test_outer_values_projection_after_a_combinator_is_refused_as_a_projection(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """On a model-row surface ``intersection(...).values("pk")`` is refused as a projection.
 
     The projection check runs before the combined rewrite, so the rewrite never turns a
@@ -1186,7 +1280,9 @@ def test_outer_values_projection_after_a_combinator_is_refused_as_a_projection(m
 
 
 @pytest.mark.django_db
-def test_outer_values_projection_through_the_cascade_is_refused_as_combined(monkeypatch):
+def test_outer_values_projection_through_the_cascade_is_refused_as_combined(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A cascade target's ``intersection(...).values("pk")`` is refused as ``combined``.
 
     The cascade accepts a ``.values()`` projection of an uncombined target, so this
@@ -1219,7 +1315,9 @@ def test_outer_values_projection_through_the_cascade_is_refused_as_combined(monk
 
 
 @pytest.mark.django_db
-def test_sliced_combined_hook_on_a_nested_connection_is_refused_naming_the_slice(monkeypatch):
+def test_sliced_combined_hook_on_a_nested_connection_is_refused_naming_the_slice(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A sliced union under ``booksConnection`` is refused at plan time as ``combined``.
 
     The nested-connection child's seal licenses a slice of an uncombined queryset,
@@ -1276,7 +1374,7 @@ def _hinted_shelf_schema(books: QuerySet[Model]) -> DjangoSchema:
 
 @_EVERY_SHAPE
 @pytest.mark.django_db
-def test_hinted_prefetch_of_a_combined_queryset_serves_its_rows(shape):
+def test_hinted_prefetch_of_a_combined_queryset_serves_its_rows(shape: str):
     """``OptimizerHint.prefetch(Prefetch("books", queryset=<combined>))`` serves the kept books."""
     _seed_books()
     results = {}

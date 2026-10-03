@@ -25,28 +25,35 @@ The ``UUIDModel`` side-table is intentionally not factoried - the
 
 from __future__ import annotations
 
+import enum
 import itertools
+from typing import TYPE_CHECKING, Literal, TypeVar
 
-from django.db.models import Max
+from django.db.models import Manager, Max, Model
 from faker import Faker
 
 from apps.kanban import models
 
+if TYPE_CHECKING:
+    from apps.glossary.models import GlossaryTerm
+
 fake = Faker()
 _seq = itertools.count(1).__next__
+
+_Lookup = TypeVar("_Lookup", bound=models.LookupBase)
 
 
 def _label(key: str) -> str:
     return key.replace("_", " ").replace("-", " ").title()
 
 
-def _lookup(model, key: str, **defaults):
+def _lookup(model: type[_Lookup], key: str, **defaults: object) -> _Lookup:
     """get_or_create a LookupBase-style row by ``key`` (label defaults from key)."""
     obj, _ = model.objects.get_or_create(key=key, defaults={"label": _label(key), **defaults})
     return obj
 
 
-def _next_order(manager, **scope) -> int:
+def _next_order(manager: Manager[Model], **scope: object) -> int:
     current = manager.filter(**scope).aggregate(top=Max("order"))["top"]
     return 0 if current is None else current + 1
 
@@ -56,43 +63,53 @@ def _next_order(manager, **scope) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def make_milestone(key: str = "alpha", **defaults):
+def make_milestone(key: str = "alpha", **defaults: object) -> models.Milestone:
     return _lookup(models.Milestone, key, **defaults)
 
 
-def make_status(key: str = "todo", **defaults):
+def make_status(key: str = "todo", **defaults: object) -> models.Status:
     return _lookup(models.Status, key, **defaults)
 
 
-def make_priority(key: str = "medium", **defaults):
+def make_priority(key: str = "medium", **defaults: object) -> models.Priority:
     return _lookup(models.Priority, key, **defaults)
 
 
-def make_relative_size(key: str = "m", *, order: int = 2, **defaults):
+def make_relative_size(
+    key: str = "m",
+    *,
+    order: int = 2,
+    **defaults: object,
+) -> models.RelativeSize:
     return _lookup(models.RelativeSize, key, order=order, **defaults)
 
 
-def make_upstream(key: str = "graphene_django", *, emoji: str = "⚛️", **defaults):
+def make_upstream(
+    key: str = "graphene_django",
+    *,
+    emoji: str = "⚛️",
+    **defaults: object,
+) -> models.Upstream:
     return _lookup(models.Upstream, key, emoji=emoji, **defaults)
 
 
-def make_parity_level(key: str = "required", **defaults):
+def make_parity_level(key: str = "required", **defaults: object) -> models.ParityLevel:
     return _lookup(models.ParityLevel, key, **defaults)
 
 
-def make_section(key: str = "scope", **defaults):
+def make_section(key: str = "scope", **defaults: object) -> models.Section:
     return _lookup(models.Section, key, **defaults)
 
 
-def make_card_reference_kind(key: str = "related", **defaults):
+def make_card_reference_kind(key: str = "related", **defaults: object) -> models.CardReferenceKind:
     return _lookup(models.CardReferenceKind, key, **defaults)
 
 
-def make_board_doc_kind(key: str = "column", **defaults):
+def make_board_doc_kind(key: str = "column", **defaults: object) -> models.BoardDocKind:
     return _lookup(models.BoardDocKind, key, **defaults)
 
 
-def make_label(key: str | None = None, **defaults):
+def make_label(key: str | None = None, **defaults: object) -> models.Label:
     key = key or f"label-{_seq()}"
     obj, _ = models.Label.objects.get_or_create(key=key, defaults=defaults)
     return obj
@@ -103,7 +120,12 @@ def make_label(key: str | None = None, **defaults):
 # --------------------------------------------------------------------------- #
 
 
-def make_target_version(number: str | None = None, *, milestone=None, **defaults):
+def make_target_version(
+    number: str | None = None,
+    *,
+    milestone: models.Milestone | None = None,
+    **defaults: object,
+) -> models.TargetVersion:
     number = number or f"0.0.{_seq()}"
     milestone = milestone or make_milestone()
     obj, _ = models.TargetVersion.objects.get_or_create(
@@ -113,14 +135,14 @@ def make_target_version(number: str | None = None, *, milestone=None, **defaults
     return obj
 
 
-def make_spec_doc(*, card=None, **fields):
+def make_spec_doc(*, card: models.Card | None = None, **fields: object) -> models.SpecDoc:
     card = card or make_card()
     fields.setdefault("name", f"spec-{card.number:03d}-{fake.slug()}")
     fields.setdefault("path", f"docs/SPECS/spec-{card.number:03d}-{fake.slug()}.md")
     return models.SpecDoc.objects.create(card=card, **fields)
 
 
-def make_tracked_path(path: str | None = None, **fields):
+def make_tracked_path(path: str | None = None, **fields: object) -> models.TrackedPath:
     """Create a TrackedPath (``current`` by default) under the package root."""
     path = path or f"django_strawberry_framework/factory_{_seq()}.py"
     fields.setdefault("state", models.TRACKED_PATH_CURRENT)
@@ -139,7 +161,7 @@ def _next_card_number() -> int:
     return 1 if current is None else current + 1
 
 
-def make_card(**fields):
+def make_card(*, status: models.Status | None = None, **fields: object) -> models.Card:
     """Create a Card, auto-filling every required FK and unique field.
 
     The card's milestone is derived from its target version (no stored FK).
@@ -148,17 +170,16 @@ def make_card(**fields):
     """
     target_version = fields.pop("target_version", None) or make_target_version()
     fields.setdefault("target_version", target_version)
-    fields.setdefault("status", make_status())
+    default_status = make_status()
     fields.setdefault("priority", make_priority())
     fields.setdefault("relative_size", make_relative_size())
     fields.setdefault("number", _next_card_number())
     fields.setdefault("title", f"Card {_seq()}: {fake.sentence(nb_words=4).rstrip('.')}")
-    requested_status = fields["status"]
+    requested_status = status or default_status
     if requested_status.key != "done":
-        return models.Card.objects.create(**fields)
+        return models.Card.objects.create(status=requested_status, **fields)
 
-    fields["status"] = make_status("todo")
-    card = models.Card.objects.create(**fields)
+    card = models.Card.objects.create(status=make_status("todo"), **fields)
     make_spec_doc(card=card)
     make_card_glossary_term(card=card)
     # The status state machine forbids a direct todo -> done move; bridge through
@@ -172,7 +193,12 @@ def make_card(**fields):
     return card
 
 
-def make_card_item(*, card=None, section=None, **fields):
+def make_card_item(
+    *,
+    card: models.Card | None = None,
+    section: models.Section | None = None,
+    **fields: object,
+) -> models.CardItem:
     card = card or make_card()
     section = section or make_section()
     fields.setdefault("text", fake.sentence())
@@ -180,7 +206,13 @@ def make_card_item(*, card=None, section=None, **fields):
     return models.CardItem.objects.create(card=card, section=section, **fields)
 
 
-def make_card_reference(*, source_card=None, target_card=None, kind=None, **fields):
+def make_card_reference(
+    *,
+    source_card: models.Card | None = None,
+    target_card: models.Card | None = None,
+    kind: models.CardReferenceKind | None = None,
+    **fields: object,
+) -> models.CardReference:
     """Create a CardReference (the single source of truth for card edges).
 
     Defaults to a side-effect-free ``related`` reference. A ``dependency`` /
@@ -200,7 +232,12 @@ def make_card_reference(*, source_card=None, target_card=None, kind=None, **fiel
     )
 
 
-def make_card_path_link(*, card=None, path=None, **fields):
+def make_card_path_link(
+    *,
+    card: models.Card | None = None,
+    path: models.TrackedPath | None = None,
+    **fields: object,
+) -> models.CardPathLink:
     """Create a CardPathLink through row directly (``predicted`` kind by default).
 
     Creating the through row via ``.objects.create()`` (rather than an M2M
@@ -214,7 +251,12 @@ def make_card_path_link(*, card=None, path=None, **fields):
     return models.CardPathLink.objects.create(card=card, path=path, **fields)
 
 
-def make_parity_claim(*, card=None, upstream=None, level=None):
+def make_parity_claim(
+    *,
+    card: models.Card | None = None,
+    upstream: models.Upstream | None = None,
+    level: models.ParityLevel | None = None,
+) -> models.ParityClaim:
     return models.ParityClaim.objects.create(
         card=card or make_card(),
         upstream=upstream or make_upstream(),
@@ -222,7 +264,12 @@ def make_parity_claim(*, card=None, upstream=None, level=None):
     )
 
 
-def make_card_glossary_term(*, card=None, term=None, **fields):
+def make_card_glossary_term(
+    *,
+    card: models.Card | None = None,
+    term: GlossaryTerm | None = None,
+    **fields: object,
+) -> models.CardGlossaryTerm:
     """Link a kanban Card to a glossary term (creates both ends if omitted)."""
     from apps.glossary.factories import make_glossary_term
 
@@ -238,15 +285,20 @@ def make_card_glossary_term(*, card=None, term=None, **fields):
 # --------------------------------------------------------------------------- #
 
 
-def make_attempt_outcome(key: str = "succeeded", **defaults):
+def make_attempt_outcome(key: str = "succeeded", **defaults: object) -> models.AttemptOutcome:
     return _lookup(models.AttemptOutcome, key, **defaults)
 
 
-def make_verification_kind(key: str = "test_run", **defaults):
+def make_verification_kind(key: str = "test_run", **defaults: object) -> models.VerificationKind:
     return _lookup(models.VerificationKind, key, **defaults)
 
 
-def make_actor(key: str = "maintainer", *, kind: str = models.ACTOR_HUMAN, **defaults):
+def make_actor(
+    key: str = "maintainer",
+    *,
+    kind: str = models.ACTOR_HUMAN,
+    **defaults: object,
+) -> models.Actor:
     obj, _ = models.Actor.objects.get_or_create(
         key=key,
         defaults={"label": _label(key), "kind": kind, **defaults},
@@ -254,7 +306,14 @@ def make_actor(key: str = "maintainer", *, kind: str = models.ACTOR_HUMAN, **def
     return obj
 
 
-def make_card_transition(*, card=None, from_status=None, to_status=None, actor=None, **fields):
+def make_card_transition(
+    *,
+    card: models.Card | None = None,
+    from_status: models.Status | None = None,
+    to_status: models.Status | None = None,
+    actor: models.Actor | None = None,
+    **fields: object,
+) -> models.CardTransition:
     card = card or make_card()
     actor = actor or make_actor()
     to_status = to_status or make_status("wip")
@@ -267,16 +326,30 @@ def make_card_transition(*, card=None, from_status=None, to_status=None, actor=N
     )
 
 
-def make_work_attempt(*, card=None, actor=None, **fields):
+def make_work_attempt(
+    *,
+    card: models.Card | None = None,
+    actor: models.Actor | None = None,
+    **fields: object,
+) -> models.WorkAttempt:
     card = card or make_card()
     actor = actor or make_actor()
     return models.WorkAttempt.objects.create(card=card, actor=actor, **fields)
 
 
-_UNSET = object()
+class _Unset(enum.Enum):
+    UNSET = enum.auto()
 
 
-def make_decision(*, card=_UNSET, actor=None, **fields):
+_UNSET = _Unset.UNSET
+
+
+def make_decision(
+    *,
+    card: models.Card | Literal[_Unset.UNSET] | None = _UNSET,
+    actor: models.Actor | None = None,
+    **fields: object,
+) -> models.Decision:
     """Create a Decision.
 
     A card is auto-created when omitted; pass ``card=None`` explicitly for a
@@ -289,7 +362,11 @@ def make_decision(*, card=_UNSET, actor=None, **fields):
     return models.Decision.objects.create(card=card, actor=actor, **fields)
 
 
-def make_board_doc(*, kind=None, **fields):
+def make_board_doc(
+    *,
+    kind: models.BoardDocKind | None = None,
+    **fields: object,
+) -> models.BoardDoc:
     kind = kind or make_board_doc_kind()
     fields.setdefault("namespace", "kanban")
     fields.setdefault("key", f"doc-{_seq()}")
@@ -298,7 +375,12 @@ def make_board_doc(*, kind=None, **fields):
     return models.BoardDoc.objects.create(kind=kind, **fields)
 
 
-def make_board_doc_card_reference(*, doc=None, card=None, **fields):
+def make_board_doc_card_reference(
+    *,
+    doc: models.BoardDoc | None = None,
+    card: models.Card | None = None,
+    **fields: object,
+) -> models.BoardDocCardReference:
     doc = doc or make_board_doc()
     card = card or make_card()
     fields.setdefault("raw_text", "")

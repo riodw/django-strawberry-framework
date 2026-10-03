@@ -38,6 +38,8 @@ import pytest
 import strawberry
 from apps.products.services import seed_data
 from asgiref.sync import sync_to_async
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import AsyncClient, Client
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
@@ -69,7 +71,12 @@ from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 
-async def _post_async(client, document, mount="/iso-survivor/", **body):
+async def _post_async(
+    client: AsyncClient,
+    document: str,
+    mount: str = "/iso-survivor/",
+    **body: str,
+):
     """Post one document to an async mount and return the decoded payload."""
     response = await client.post(
         mount,
@@ -80,7 +87,7 @@ async def _post_async(client, document, mount="/iso-survivor/", **body):
     return json.loads(response.content)
 
 
-def _post_sync(client, document, mount, **body):
+def _post_sync(client: Client, document: str, mount: str, **body: str):
     """Post one document to a sync mount and return ``(response, decoded payload)``."""
     response = client.post(
         mount,
@@ -230,10 +237,10 @@ TAMPERS: dict[str, Callable[[MethodType, _ReplacementConsumerFactory], None]] = 
 
 
 def _swap(
-    schema,
-    tamper,
-    accepted_type,
-    replacement,
+    schema: strawberry.Schema,
+    tamper: str,
+    accepted_type: type[_AcceptedConsumerFactory],
+    replacement: _ReplacementConsumerFactory,
 ) -> str:
     """Aim one write at the box holding this schema's accepted entry, and say what happened."""
     box = next(
@@ -342,7 +349,7 @@ class _Nester(SchemaExtension):
         }
 
 
-def _published(context) -> dict[str, object]:
+def _published(context: object) -> dict[str, object]:
     """Every optimizer stash currently readable off a request context object."""
     return {key: get_context_value(context, key) for key in DST_OPTIMIZER_KEYS}
 
@@ -367,7 +374,7 @@ def _error_schema():
 _HELD: dict[str, object] = {}
 
 
-def _held(name, build):
+def _held(name: str, build: Callable[[], DjangoSchema]) -> object:
     """One schema per mount, held for the life of the process.
 
     A schema rebuilt per request would answer every tamper with a fresh
@@ -379,17 +386,17 @@ def _held(name, build):
     return _HELD[name]
 
 
-def _view(name, build):
+def _view(name: str, build: Callable[[], DjangoSchema]):
     """Mount the package's synchronous view over one held schema."""
 
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=_held(name, build))
         return built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _fresh_view(build):
+def _fresh_view(build: Callable[[], DjangoSchema]):
     """Mount the package's synchronous view over a schema built per request.
 
     The optimizer row needs the project's own generated types, which the
@@ -397,7 +404,7 @@ def _fresh_view(build):
     requests is the module-level optimizer, which is the shipped spelling.
     """
 
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         built = DjangoGraphQLView.as_view(schema=build())
         return built(request, *args, **kwargs)
 
@@ -453,7 +460,7 @@ def _ambiguous_schema():
     )
 
 
-def _ladder_schema(factory):
+def _ladder_schema(factory: Callable[[], object]) -> DjangoSchema:
     """A schema whose one entry is ``factory``, accepted at construction."""
     return DjangoSchema(query=_ResourceQuery, extensions=[factory])
 
@@ -510,20 +517,20 @@ def _survivor_schema():
     )
 
 
-def _async_view(build):
+def _async_view(build: Callable[[], DjangoSchema]):
     """Mount the package's asynchronous view over a schema built per request."""
 
-    async def view(request, *args, **kwargs):
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
         built = AsyncDjangoGraphQLView.as_view(schema=build())
         return await built(request, *args, **kwargs)
 
     return csrf_exempt(view)
 
 
-def _held_async_view(name, build):
+def _held_async_view(name: str, build: Callable[[], DjangoSchema]):
     """Mount the asynchronous view over one held schema."""
 
-    async def view(request, *args, **kwargs):
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
         built = AsyncDjangoGraphQLView.as_view(schema=_held(name, build))
         return await built(request, *args, **kwargs)
 
@@ -564,7 +571,7 @@ TAMPER_OUTCOMES = {
 
 
 @pytest.mark.parametrize("tamper", sorted(TAMPER_OUTCOMES), ids=sorted(TAMPER_OUTCOMES))
-def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_entry(tamper):
+def test_a_resolver_cannot_widen_the_next_requests_bound_through_the_accepted_entry(tamper: str):
     """The bound the SCHEMA was configured with is the bound the next request is held to.
 
     The resolver does everything a resolver can do to the configuration it can
@@ -607,7 +614,7 @@ async def test_a_resolver_cannot_widen_the_next_requests_bound_on_the_async_view
 
 
 @pytest.mark.parametrize("tamper", sorted(TAMPER_OUTCOMES), ids=sorted(TAMPER_OUTCOMES))
-def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_entry(tamper):
+def test_a_resolver_cannot_unmask_the_next_requests_errors_through_the_accepted_entry(tamper: str):
     """Masking is the amplifier: an unmasked response carries whatever was raised.
 
     The masking extension is built per operation from the schema's own error
@@ -678,7 +685,7 @@ def test_an_operation_a_consumer_extension_starts_leaves_the_request_its_optimiz
     ["{ hello }", "{ a: hello }", "{"],
     ids=["valid", "aliased", "malformed"],
 )
-def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(document):
+def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(document: str):
     """A factory cannot be an enforcement authority, and the wire says so identically.
 
     The factory is opaque until it runs, so what it produces is typed at
@@ -702,8 +709,8 @@ def test_a_schema_whose_factory_claims_an_authority_refuses_every_request(docume
 
 @pytest.mark.parametrize("shape", _LADDER_IDS, ids=_LADDER_IDS)
 def test_a_factory_resolving_to_anything_but_an_ordinary_extension_refuses_every_request(
-    shape,
-    caplog,
+    shape: str,
+    caplog: pytest.LogCaptureFixture,
 ):
     """What a factory returns is typed by its real type, and every miss is one refusal.
 
@@ -734,7 +741,7 @@ def test_a_factory_resolving_to_anything_but_an_ordinary_extension_refuses_every
     ["{ a: hello b: hello c: hello }", "{ nested { hello } }"],
     ids=["over-token-budget", "over-depth-budget"],
 )
-def test_a_refused_schema_still_bounds_the_document_it_refuses(document):
+def test_a_refused_schema_still_bounds_the_document_it_refuses(document: str):
     """A broken configuration is not the one shape with no parsing ceiling.
 
     The refusal chain keeps the package's own resource extension, reading the
@@ -766,7 +773,7 @@ _REFUSED_OPERATION_NAMES = {
 _REFUSED_NAME_IDS = sorted(_REFUSED_OPERATION_NAMES)
 
 
-def _assert_refused_envelope(response, body):
+def _assert_refused_envelope(response: HttpResponseBase, body: bytes):
     """One JSON envelope carrying the configuration code, and nothing about the request."""
     assert response.status_code == 200, body
     assert response.headers["Content-Type"].startswith("application/json"), response.headers
@@ -779,7 +786,7 @@ def _assert_refused_envelope(response, body):
 
 
 @pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
-def test_a_refused_schema_answers_every_operation_name_the_same_way(name):
+def test_a_refused_schema_answers_every_operation_name_the_same_way(name: str):
     """A name no document can carry is refused like every other request.
 
     Upstream selects the operation to run by looking the requested name up in
@@ -799,7 +806,7 @@ def test_a_refused_schema_answers_every_operation_name_the_same_way(name):
 
 
 @pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
-def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(name):
+def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(name: str):
     """The ceiling is charged before the name is looked at, and still outranks the refusal.
 
     Normalizing the selector must not move the pre-parse scan: an oversized
@@ -822,7 +829,7 @@ def test_a_refused_schema_still_bounds_a_document_sent_under_any_operation_name(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("name", _REFUSED_NAME_IDS, ids=_REFUSED_NAME_IDS)
-async def test_a_refused_schema_answers_every_operation_name_asynchronously_too(name):
+async def test_a_refused_schema_answers_every_operation_name_asynchronously_too(name: str):
     """The asynchronous view answers hostile request metadata identically.
 
     Sync and async are separate code paths through the same schema, and the

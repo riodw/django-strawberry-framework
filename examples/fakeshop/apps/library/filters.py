@@ -17,6 +17,8 @@ filter graph.
 
 from __future__ import annotations
 
+from typing import Any
+
 from django import forms
 from django.db.models import QuerySet
 from django.http import HttpRequest
@@ -188,7 +190,7 @@ class PatronFilter(FilterSet):
         model = models.Patron
         fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # Wire the validator on the underlying ``forms.CharField`` so
         # ``form.is_valid()`` fires the "missing @" gate on inputs without

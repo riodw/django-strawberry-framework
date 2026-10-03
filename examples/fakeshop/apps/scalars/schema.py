@@ -129,7 +129,7 @@ class NullableScalarSpecimenType(DjangoType):
         orderset_class = orders.NullableScalarSpecimenOrder
 
 
-def _override_specimen_score(root: strawberry.Parent[models.OverrideSpecimen]):
+def _override_specimen_score(root: strawberry.Parent[models.OverrideSpecimen]) -> int:
     return root.score
 
 

@@ -31,7 +31,7 @@ SECRET_KEY = "_$=$%eqxk$8ss4n7mtgarw^5$8^d5+c83!vwatr@i_81myb=e4"
 DEBUG = True
 
 
-def _require_development_settings(debug):
+def _require_development_settings(debug: bool) -> None:
     """Refuse to load as anything but the development fixture this module is."""
     if not debug:
         from django.core.exceptions import ImproperlyConfigured

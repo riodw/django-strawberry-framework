@@ -5,11 +5,16 @@ import uuid
 import django.db.models.deletion
 import django.db.models.lookups
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 import apps.kanban.constraints
 
 
-def copy_target_version_milestones(apps, schema_editor):
+def copy_target_version_milestones(
+    apps: StateApps,
+    schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
     Card = apps.get_model("kanban", "Card")
     db_alias = schema_editor.connection.alias
     for card in (
@@ -21,7 +26,7 @@ def copy_target_version_milestones(apps, schema_editor):
         card.save(update_fields=["milestone"])
 
 
-def move_spec_links_to_spec_docs(apps, schema_editor):
+def move_spec_links_to_spec_docs(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     Card = apps.get_model("kanban", "Card")
     SpecDoc = apps.get_model("kanban", "SpecDoc")
     db_alias = schema_editor.connection.alias

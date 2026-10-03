@@ -427,7 +427,7 @@ def test_circulation_desk_publishes_children_and_profile_under_a_scoped_cascade(
     ["BookInput", "BookPartialInput"],
     ids=["create", "partial"],
 )
-def test_book_write_inputs_omit_the_non_editable_archive_genres(input_name):
+def test_book_write_inputs_omit_the_non_editable_archive_genres(input_name: str) -> None:
     """``archiveGenres`` is absent from the generated ``Book`` input; ``genres`` is present.
 
     ``Book.archive_genres`` is a forward many-to-many declared
@@ -441,7 +441,9 @@ def test_book_write_inputs_omit_the_non_editable_archive_genres(input_name):
 
 
 @pytest.mark.parametrize("name", ["optionalAttachment", "spareImage"], ids=["blank", "null"])
-def test_media_specimen_create_input_requiredness_reads_blank_and_null_separately(name):
+def test_media_specimen_create_input_requiredness_reads_blank_and_null_separately(
+    name: str,
+) -> None:
     """Each optional file column is optional through its own arm of the requiredness rule.
 
     ``optionalAttachment`` is ``blank=True`` only and ``spareImage`` is

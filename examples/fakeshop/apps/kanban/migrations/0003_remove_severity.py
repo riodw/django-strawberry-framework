@@ -14,11 +14,13 @@ keeps the ``exactly one non-null link`` invariant satisfied on the existing boar
 
 import django.db.models.lookups
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 import apps.kanban.constraints
 
 
-def _delete_severity_data(apps, schema_editor):
+def _delete_severity_data(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Delete the ``Severity`` seed rows, cascading their UUID side-rows."""
     Severity = apps.get_model("kanban", "Severity")
     Severity.objects.using(schema_editor.connection.alias).all().delete()

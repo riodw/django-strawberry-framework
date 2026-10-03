@@ -29,10 +29,12 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.db.models import QuerySet
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
-from graphql_client import assert_graphql_success, post_graphql
+from graphql_client import JSONObject, assert_graphql_success, post_graphql
 from strategy_schemas import make_django_type
 from strawberry import relay
 from strawberry.django.views import GraphQLView
@@ -53,13 +55,13 @@ _ItemGetQueryset: TypeAlias = Callable[
 _CURRENT: dict[str, object | None] = {"schema": None}
 
 
-def _graphql_view(request):
+def _graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     return GraphQLView.as_view(schema=schema)(request)
 
 
-async def _async_graphql_view(request):
+async def _async_graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -68,7 +70,7 @@ async def _async_graphql_view(request):
 urlpatterns = [path("graphql/", _graphql_view), path("graphql-async/", _async_graphql_view)]
 
 
-def test_unoptimized_relation_hides_private_child_over_http(db):
+def test_unoptimized_relation_hides_private_child_over_http(db: None) -> None:
     services.seed_data(1)
     category = Category.objects.first()
     assert category is not None
@@ -148,7 +150,12 @@ async def test_async_unoptimized_relation_hides_private_child_over_http():
     assert payload["data"] == {"categories": [{"items": []}]}
 
 
-def _post_visibility_query(schema, query, *, client=None):
+def _post_visibility_query(
+    schema: strawberry.Schema,
+    query: str,
+    *,
+    client: Client | None = None,
+) -> JSONObject:
     """POST ``query`` against ``schema`` over live HTTP and return the JSON payload.
 
     ``client`` carries a logged-in session when the row's subject is which viewer
@@ -166,7 +173,7 @@ def _post_visibility_query(schema, query, *, client=None):
         clear_url_caches()
 
 
-def test_consumer_prefetch_cache_is_rescoped_with_the_optimizer_installed(db):
+def test_consumer_prefetch_cache_is_rescoped_with_the_optimizer_installed(db: None) -> None:
     """A cache the CONSUMER prefetched is unscoped even while the optimizer runs.
 
     ``prefetch_related`` on a consumer-owned root queryset never passes through
@@ -203,7 +210,7 @@ def test_consumer_prefetch_cache_is_rescoped_with_the_optimizer_installed(db):
     assert optimized["data"] == unoptimized["data"]
 
 
-def test_forward_fk_target_visibility_holds_with_the_optimizer_installed(db):
+def test_forward_fk_target_visibility_holds_with_the_optimizer_installed(db: None) -> None:
     """A hidden forward-FK target stays hidden for a relation the walker never planned.
 
     The optimizer cannot plan a root that hands back a plain list, so the FK
@@ -298,7 +305,7 @@ async def test_async_forward_fk_target_visibility_hides_a_private_target_over_ht
 _STRICT_LOADED_FK_QUERY = "{ items { name category { name } } }"
 
 
-def _strictness_armed_loaded_fk_schema(item_pk):
+def _strictness_armed_loaded_fk_schema(item_pk: int) -> strawberry.Schema:
     """Holder arming ``strictness="raise"`` over a root the walker cannot plan.
 
     Three things have to hold at once for the forward resolver's SLOW-path sync
@@ -330,7 +337,7 @@ def _strictness_armed_loaded_fk_schema(item_pk):
     return strawberry.Schema(query=Query, extensions=[lambda: optimizer])
 
 
-def _hide_the_seeded_items_category():
+def _hide_the_seeded_items_category() -> tuple[int, str]:
     """Hide the seeded item's FK target; return the item's pk and the hidden name."""
     item = Item.objects.first()
     assert item is not None
@@ -338,7 +345,7 @@ def _hide_the_seeded_items_category():
     return item.pk, Category.objects.get(pk=item.category_id).name
 
 
-def test_anonymous_is_refused_a_joined_forward_fk_target_the_hook_hides(db):
+def test_anonymous_is_refused_a_joined_forward_fk_target_the_hook_hides(db: None) -> None:
     """A JOINed hidden target is hidden from an anonymous viewer under armed strictness.
 
     Neither sibling row reaches this arm. The sync
@@ -365,7 +372,7 @@ def test_anonymous_is_refused_a_joined_forward_fk_target_the_hook_hides(db):
     ]
 
 
-def test_staff_is_served_the_same_joined_forward_fk_target(db):
+def test_staff_is_served_the_same_joined_forward_fk_target(db: None) -> None:
     """The control: the same row is served once the viewer is one the hook admits.
 
     Without it the row above would be satisfied by a resolver that hid every
@@ -442,7 +449,9 @@ def _strictness_armed_nullable_fk_schema():
     return strawberry.Schema(query=Query, extensions=[lambda: optimizer])
 
 
-def test_a_nullable_joined_forward_fk_collapses_to_null_only_for_the_hidden_target(db):
+def test_a_nullable_joined_forward_fk_collapses_to_null_only_for_the_hidden_target(
+    db: None,
+) -> None:
     """The hidden target nulls its own field; the admitted one on the next row is served.
 
     Same armed-but-unplanned slow path as the two rows above, over a nullable
@@ -486,7 +495,7 @@ _NESTED_CONNECTION_QUERY = (
 )
 
 
-def _nested_connection_item_queries(parent_count):
+def _nested_connection_item_queries(parent_count: int) -> list[str]:
     """Post ``_NESTED_CONNECTION_QUERY`` at ``parent_count`` parents; return the item SQL.
 
     The holder schema installs NO ``DjangoOptimizerExtension``, so the nested
@@ -512,7 +521,7 @@ def _nested_connection_item_queries(parent_count):
     return [entry["sql"] for entry in captured.captured_queries if "products_item" in entry["sql"]]
 
 
-def test_nested_connection_costs_one_query_per_parent_without_the_optimizer(db):
+def test_nested_connection_costs_one_query_per_parent_without_the_optimizer(db: None) -> None:
     """With no optimizer installed a nested connection costs one window query per parent.
 
     A relation-seeded connection is served from each parent's own relation
@@ -528,7 +537,9 @@ def test_nested_connection_costs_one_query_per_parent_without_the_optimizer(db):
     assert len(_nested_connection_item_queries(5)) == 5
 
 
-def _nested_connection_item_queries_with_optimizer_on_a_list(parent_count):
+def _nested_connection_item_queries_with_optimizer_on_a_list(
+    parent_count: int,
+) -> tuple[list[str], list[str]]:
     """Same document as ``_nested_connection_item_queries``, optimizer installed, list root.
 
     A materialized list is not a ``QuerySet``, so the installed optimizer cannot
@@ -576,8 +587,8 @@ def _nested_connection_item_queries_with_optimizer_on_a_list(parent_count):
 
 
 def test_nested_connection_still_costs_one_query_per_parent_when_the_optimizer_gets_a_list(
-    db,
-):
+    db: None,
+) -> None:
     """An installed optimizer does not plan a list-returning root: cost still grows with N.
 
     The root itself is read exactly once at both cardinalities: an optimizer that
@@ -594,7 +605,7 @@ def test_nested_connection_still_costs_one_query_per_parent_when_the_optimizer_g
     assert len(item_sql_five) == 5
 
 
-def _list_relation_item_queries(parent_count):
+def _list_relation_item_queries(parent_count: int) -> list[str]:
     """Post a raw-list ``items`` selection at ``parent_count`` parents; return item SQL.
 
     Holder installs no optimizer. The root returns a queryset so an installed
@@ -628,7 +639,7 @@ def _list_relation_item_queries(parent_count):
     ]
 
 
-def test_unoptimized_list_relation_costs_one_query_per_parent(db):
+def test_unoptimized_list_relation_costs_one_query_per_parent(db: None) -> None:
     """With no optimizer a many-side list selection costs one item query per parent.
 
     Measured at two cardinalities so a fixed count cannot satisfy it.
@@ -639,7 +650,7 @@ def test_unoptimized_list_relation_costs_one_query_per_parent(db):
     assert len(_list_relation_item_queries(5)) == 5
 
 
-def _holder_patron_card_schema(*, optimizer):
+def _holder_patron_card_schema(*, optimizer: bool) -> strawberry.Schema:
     """Throwaway reverse-O2O types: card hook hides ``HIDDEN*`` barcodes.
 
     Shipped ``MembershipCardType`` has no ``get_queryset``; adding one there
@@ -688,7 +699,7 @@ def _holder_patron_card_schema(*, optimizer):
     return strawberry.Schema(query=Query, extensions=extensions)
 
 
-def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer(db):
+def test_reverse_one_to_one_custom_visibility_matches_with_and_without_optimizer(db: None) -> None:
     """Hidden reverse-O2O cards collapse to ``null`` whether or not the relation was planned.
 
     The optimizer leg also pins its statement count. The root hands back a
@@ -920,7 +931,7 @@ _PLANNED_CONNECTION_QUERY = (
 )
 
 
-def _hide_one_parents_items():
+def _hide_one_parents_items() -> tuple[str, list[str]]:
     """Pin three public parents, hide every item under ONE of them by name.
 
     Arranges privacy over rows the test has already seeded; returns
@@ -941,7 +952,7 @@ def _hide_one_parents_items():
     return hidden_parent, hidden_names
 
 
-def _expected_item_names(*, include_private):
+def _expected_item_names(*, include_private: bool) -> dict[str, list[str]]:
     """Derive the expected page per parent from the ORM (products rows are Faker-seeded)."""
     rows = Item.objects.all() if include_private else Item.objects.filter(is_private=False)
     parents = Category.objects.order_by("pk")[:3]
@@ -951,7 +962,12 @@ def _expected_item_names(*, include_private):
     }
 
 
-def _planned_item_names(query, *, reader, client=None):
+def _planned_item_names(
+    query: str,
+    *,
+    reader: Callable[[JSONObject], list[str]],
+    client: Client | None = None,
+) -> dict[str, list[str]]:
     """POST ``query``, assert the relation was PLANNED, return ``{parent: sorted names}``.
 
     ONE ``products_item`` query for the whole page is what "planned" means here: a
@@ -977,11 +993,11 @@ def _planned_item_names(query, *, reader, client=None):
     }
 
 
-def _list_page(node):
+def _list_page(node: JSONObject) -> list[str]:
     return [row["name"] for row in node["items"]]
 
 
-def _connection_page(node):
+def _connection_page(node: JSONObject) -> list[str]:
     return [edge["node"]["name"] for edge in node["itemsConnection"]["edges"]]
 
 
@@ -1100,7 +1116,7 @@ def _child_routing_schema(child_hook: _ItemGetQueryset):
 _CHILD_ROUTING_QUERY = "{ categories { name items { name } } }"
 
 
-def test_planned_prefetch_child_may_not_pin_its_own_connection(db):
+def test_planned_prefetch_child_may_not_pin_its_own_connection(db: None) -> None:
     """A child ``get_queryset`` calling ``.using(...)`` fails the planned relation closed.
 
     The walker seeds the prefetch child unrouted and never holds the parent the
@@ -1124,7 +1140,7 @@ def test_planned_prefetch_child_may_not_pin_its_own_connection(db):
     assert "routed to alias 'default'" in message
 
 
-def test_planned_prefetch_child_still_serves_rows_when_the_hook_only_narrows(db):
+def test_planned_prefetch_child_still_serves_rows_when_the_hook_only_narrows(db: None) -> None:
     """The control: an unrouted hook still scopes the planned child and serves its rows."""
     services.seed_data(1)
     Item.objects.update(is_private=False)

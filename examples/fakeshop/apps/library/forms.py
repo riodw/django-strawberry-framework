@@ -18,6 +18,8 @@ required ``genres`` M2M is reconstructed from the located row rather than cleare
 
 from __future__ import annotations
 
+from typing import Any
+
 from django import forms
 
 from apps.library import models
@@ -52,7 +54,7 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
             "alt_branches",
         )
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         branch = self.fields["branch"]
         if not isinstance(branch, forms.ModelChoiceField):

@@ -3,22 +3,24 @@
 import django.db.models.deletion
 import django.db.models.lookups
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 import apps.kanban.constraints
 
 
-def _spec_path_from_url(url):
+def _spec_path_from_url(url: str) -> str:
     marker = "docs/"
     if marker not in url:
         return ""
     return url[url.index(marker) :]
 
 
-def _basename(path):
+def _basename(path: str) -> str:
     return path.rsplit("/", 1)[-1]
 
 
-def backfill_card_glossary_terms(apps, schema_editor):
+def backfill_card_glossary_terms(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     CardGlossaryTerm = apps.get_model("kanban", "CardGlossaryTerm")
     GlossarySpecMention = apps.get_model("glossary", "GlossarySpecMention")
     SpecDoc = apps.get_model("kanban", "SpecDoc")
@@ -60,7 +62,10 @@ def backfill_card_glossary_terms(apps, schema_editor):
             order += 1
 
 
-def _delete_card_reference_source_uuid_rows(apps, schema_editor):
+def _delete_card_reference_source_uuid_rows(
+    apps: StateApps,
+    schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
     """Drop UUID side-rows linked to CardReferenceSource before its field/model go.
 
     Their only link is ``cardreferencesource``, which is about to be removed;

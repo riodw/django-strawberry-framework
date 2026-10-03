@@ -70,7 +70,10 @@ def test_the_manifest_covers_every_app_that_contributes_a_schema_module():
     [(type_name, fields) for _, type_name, fields in _APP_TYPE_CONTRACTS],
     ids=[f"{label}-{type_name}" for label, type_name, _ in _APP_TYPE_CONTRACTS],
 )
-def test_the_composed_schema_publishes_each_apps_types(type_name, expected_fields):
+def test_the_composed_schema_publishes_each_apps_types(
+    type_name: str,
+    expected_fields: set[str],
+) -> None:
     """One type per contributing app is on the shipped endpoint, with the fields a client traverses.
 
     Where the model has relations the set includes one (a forward FK, a reverse

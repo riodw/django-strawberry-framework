@@ -14,6 +14,8 @@ default M2M-alter path -- which would recreate it -- is bypassed).
 import django.db.models.deletion
 import django.db.models.lookups
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 import apps.kanban.constraints
 
@@ -52,7 +54,7 @@ CREATE UNIQUE INDEX "kanban_card_changed_files_card_id_trackedpath_id_uniq"
 """
 
 
-def _copy_links_and_uuid_rows(apps, schema_editor):
+def _copy_links_and_uuid_rows(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Copy old auto-M2M rows into CardPathLink and create their UUID side-rows."""
     Card = apps.get_model("kanban", "Card")
     CardPathLink = apps.get_model("kanban", "CardPathLink")
@@ -73,7 +75,7 @@ def _copy_links_and_uuid_rows(apps, schema_editor):
         UUIDModel.objects.using(alias).create(cardpathlink=link)
 
 
-def _drop_copied_links(apps, schema_editor):
+def _drop_copied_links(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Reverse: copy CardPathLink rows back into the recreated auto M2M table.
 
     On rollback the ``SeparateDatabaseAndState`` reverse_sql (which recreates the

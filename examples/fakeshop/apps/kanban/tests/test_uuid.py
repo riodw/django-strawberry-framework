@@ -12,8 +12,12 @@ Covers three surfaces that the signals/services suites do not:
   ``m2m_changed`` path for ``CardPathLink`` rows added via ``.add()``.
 """
 
+from collections.abc import Callable
+from typing import Protocol
+
 import pytest
 from django.db import IntegrityError, transaction
+from django.db.models import Model
 
 from apps.kanban import factories as kf
 from apps.kanban import models
@@ -71,9 +75,15 @@ def test_uuid_row_with_two_links_violates_constraint():
 # ---------------------------------------------------------------------------
 
 
-def _make_instance(model):
+class _UUIDLinked(Protocol):
+    """A saved linked row, reaching its side-row through the reverse one-to-one."""
+
+    uuid: models.UUIDModel
+
+
+def _make_instance(model: type[Model]) -> _UUIDLinked:
     """Create one saved instance of ``model`` via the kanban factories."""
-    builders = {
+    builders: dict[type[Model], Callable[[], _UUIDLinked]] = {
         models.Milestone: lambda: kf.make_milestone(f"ms-{kf._seq()}"),
         models.Status: lambda: kf.make_status(f"st-{kf._seq()}"),
         models.Priority: lambda: kf.make_priority(f"pr-{kf._seq()}"),
@@ -107,14 +117,16 @@ def _make_instance(model):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("model", UUID_LINKED_MODELS, ids=lambda m: m._meta.model_name)
-def test_create_uuid_row_materializes_side_row_for_every_linked_model(model):
+def test_create_uuid_row_materializes_side_row_for_every_linked_model(model: type[Model]):
     instance = _make_instance(model)
 
     side_row = instance.uuid
     assert side_row is not None
     assert side_row.id is not None
     # The one non-null link on the side-row points back at this instance.
-    assert getattr(side_row, model._meta.model_name) == instance
+    link_name = model._meta.model_name
+    assert link_name is not None
+    assert getattr(side_row, link_name) == instance
 
 
 @pytest.mark.django_db

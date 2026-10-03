@@ -26,6 +26,8 @@ robust across Faker versions.
 """
 
 import json
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 from apps.products import models
@@ -40,6 +42,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
+from django.http import HttpRequest
 from django.test import AsyncClient, Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
@@ -271,7 +274,7 @@ def test_update_item_non_colliding_partial_update():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path):
+def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path: Path):
     """A description-only ``updateItem`` leaves the stored ``attachment`` byte-identical.
 
     Model-flavor counterpart of the form omit row: ``UNSET`` is stripped before
@@ -313,7 +316,7 @@ def test_update_item_omitting_attachment_leaves_stored_file_unchanged(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_with_new_upload_replaces_attachment(tmp_path):
+def test_update_item_with_new_upload_replaces_attachment(tmp_path: Path):
     """A multipart ``updateItem`` providing ``attachment`` replaces the stored file through ``setattr``.
 
     The generic update loop carries the upload; there is no file-specific write branch.
@@ -404,7 +407,7 @@ _CREATE_ITEM_HOLD = (
     ["item", "substitute"],
     ids=["protect", "restrict"],
 )
-def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference):
+def test_delete_item_refused_by_a_hold_returns_the_protected_envelope(reference: str):
     """``deleteItem`` on an item an ``ItemHold`` references returns the envelope; the row survives.
 
     ``ItemHold.item`` is ``on_delete=PROTECT`` and ``ItemHold.substitute`` is
@@ -1715,7 +1718,9 @@ def test_globalid_filter_round_trip():
 
 
 @pytest.mark.django_db
-def test_type_strategy_opt_out_reproduces_type_name(project_schema_override):
+def test_type_strategy_opt_out_reproduces_type_name(
+    project_schema_override: Callable[[], None],
+):
     """``RELAY_GLOBALID_STRATEGY = "type"`` opts back into the GraphQL-type-name payload.
 
     Ordering matters here: the override is applied *before*
@@ -2280,7 +2285,7 @@ def _category_filter_input_field_names() -> set[str]:
 
 
 def test_hide_flat_filters_keeps_explicit_non_relatedfilter_flat_on_category_input(
-    project_schema_override,
+    project_schema_override: Callable[[], None],
 ):
     """``itemsName`` stays published under ``HIDE_FLAT_FILTERS=True``.
 
@@ -2700,7 +2705,7 @@ def test_products_items_connection_inverted_after_before_window_is_empty():
 @pytest.mark.django_db
 @pytest.mark.parametrize("argument", ["after", "before"])
 @pytest.mark.parametrize("index", ["-1", "-2"])
-def test_products_items_connection_negative_cursor_is_a_cursor_error(argument, index):
+def test_products_items_connection_negative_cursor_is_a_cursor_error(argument: str, index: str):
     """A correctly prefixed offset cursor naming a negative index is a cursor error.
 
     No connection mints a negative offset cursor, so
@@ -2872,6 +2877,11 @@ def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
     assert chain["public_cat"].name in category_names
 
 
+#: The model class of one ``_CASCADE_ROOT_FIELDS`` row.
+_CascadeModel = (
+    type[models.Category] | type[models.Item] | type[models.Property] | type[models.Entry]
+)
+
 #: The four products root connection fields, one row per field, shared by both
 #: staff cascade tests so the matrix is named once. Each row carries the model
 #: (the ORM side of the expectation, and the source of the GraphQL type name via
@@ -2887,7 +2897,7 @@ _CASCADE_ROOT_FIELDS = (
 )
 
 
-def _cascade_page_gids(model) -> list[str]:
+def _cascade_page_gids(model: _CascadeModel) -> list[str]:
     """The unfiltered page a root connection returns for ``model``, as wire GlobalIDs.
 
     The ordering and the cap are the CONNECTION's, and they are coupled here so
@@ -2914,7 +2924,7 @@ def _cascade_page_gids(model) -> list[str]:
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("field, model, _view_username", _CASCADE_ROOT_FIELDS)
-def test_cascade_staff_sees_everything(field, model, _view_username):
+def test_cascade_staff_sees_everything(field: str, model: _CascadeModel, _view_username: str):
     """A staff user (``create_users`` makes ``staff_<n>`` is_staff, NOT is_superuser) bypasses the cascade.
 
     Staff hits the ``user.is_staff`` short-circuit in every hook, so the page IS
@@ -2949,7 +2959,11 @@ def test_cascade_staff_sees_everything(field, model, _view_username):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("field, model, view_username", _CASCADE_ROOT_FIELDS)
-def test_cascade_staff_sees_private_rows_hidden_from_non_staff(field, model, view_username):
+def test_cascade_staff_sees_private_rows_hidden_from_non_staff(
+    field: str,
+    model: _CascadeModel,
+    view_username: str,
+):
     """Staff sees a specific private row that BOTH non-staff actors provably cannot.
 
     The differential half of the spec-034 anonymous / ``view_<model>`` / staff
@@ -2972,7 +2986,7 @@ def test_cascade_staff_sees_private_rows_hidden_from_non_staff(field, model, vie
     # half of the assertion would fail for pagination reasons, not permission ones.
     assert hidden_gid in _cascade_page_gids(model), (field, hidden.pk)
 
-    def node_ids(client):
+    def node_ids(client: Client | None) -> list[str]:
         response = _post_graphql(
             f"query {{ {field} {{ edges {{ node {{ id }} }} }} }}",
             client=client,
@@ -3022,7 +3036,7 @@ def test_cascade_query_count_fixed():
 
     # One SELECT per products table: entry slice + item prefetch + category
     # prefetch (forward-FK select_related downgraded to Prefetch by the hooks).
-    def _from(table):
+    def _from(table: str) -> list[str]:
         # Outer FROM only: cascade subqueries alias the table (`FROM "t" "V0"`).
         needle = f'FROM "{table}" WHERE'
         return [query["sql"] for query in captured if needle in query["sql"]]
@@ -3217,7 +3231,7 @@ def test_post_utf8_bom_json_body_is_rejected_as_400():
         pytest.param("utf-32-be", id="utf-32-be-no-bom"),
     ],
 )
-def test_post_multibyte_encoded_json_body_is_rejected_as_400(encoding):
+def test_post_multibyte_encoded_json_body_is_rejected_as_400(encoding: str):
     """The remaining UTF-16 / UTF-32 shapes -> controlled 400, completing the encoding set.
 
     The three rows above carry the history for the encodings that used to
@@ -3287,7 +3301,7 @@ def test_post_multibyte_utf8_json_body_round_trips_the_non_ascii_value():
         pytest.param(b"null", id="json-null"),
     ],
 )
-def test_post_non_object_json_body_returns_400_not_500(body):
+def test_post_non_object_json_body_returns_400_not_500(body: bytes):
     """A valid-JSON-but-non-object body (scalar / null) -> controlled 400, never a 500.
 
     Strawberry's `parse_http_body` handles a JSON object (a single operation) and
@@ -3311,7 +3325,7 @@ def test_post_non_object_json_body_returns_400_not_500(body):
         pytest.param(b'[{"query": "{ __typename }"}, 42]', id="mixed-batch"),
     ],
 )
-def test_post_batch_with_non_object_elements_returns_400_not_500(body):
+def test_post_batch_with_non_object_elements_returns_400_not_500(body: bytes):
     """A JSON array with any non-object element -> controlled 400, never a 500.
 
     Upstream's batch branch validates enablement / size only, then calls
@@ -3332,7 +3346,7 @@ def test_post_batch_with_non_object_elements_returns_400_not_500(body):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_get_query_with_null_param_executes_like_upstream(param):
+def test_get_query_with_null_param_executes_like_upstream(param: str):
     """GET `?query=...&variables=null` (and `extensions=null`) -> 200 with data.
 
     `null` is valid per upstream's own contract (`variables` / `extensions`
@@ -3410,7 +3424,7 @@ def test_get_query_with_scalar_variables_keeps_upstream_message():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_post_pathologically_nested_body_returns_400_not_500(pathological_json_body):
+def test_post_pathologically_nested_body_returns_400_not_500(pathological_json_body: bytes):
     """A valid-JSON body nested past the parser's C stack -> controlled 400.
 
     Upstream's ``parse_json`` catches only ``json.JSONDecodeError``; a
@@ -3429,8 +3443,8 @@ def test_post_pathologically_nested_body_returns_400_not_500(pathological_json_b
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("param", ["variables", "extensions"])
 def test_get_query_with_pathologically_nested_param_returns_400_not_500(
-    param,
-    pathological_json_text,
+    param: str,
+    pathological_json_text: str,
 ):
     """GET ``?<param>=<deep>`` -> the shield translates the same escape.
 
@@ -4142,7 +4156,7 @@ def test_create_item_via_form_authorize_before_decode_anonymous_gets_auth_denial
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
+def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path: Path):
     """A raw `django.test.Client` multipart upload to a form-backed `Upload` field.
 
     Mirrors `test_uploads_api.py::test_multipart_create_uploads_real_files_over_http`'s
@@ -4220,7 +4234,7 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path):
+def test_update_item_with_file_via_form_omitting_the_file_preserves_it(tmp_path: Path):
     """A `name`-only `updateItemWithFileViaForm` leaves the stored file byte-identical.
 
     The preserve half of the file contract, over real HTTP. The row is created with a
@@ -4533,7 +4547,7 @@ def test_create_item_via_form_wrong_type_global_id_on_category_id_is_field_error
     ["not-a-global-id", "raw-pk"],
     ids=["not-a-global-id", "raw-pk"],
 )
-def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_id):
+def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_id: str):
     """A malformed / raw-pk ``id:`` on ``updateItemViaForm`` is a ``FieldError`` on ``id``.
 
     Decided before locate, never coerced to a bare pk that would 500 at ``.get``.
@@ -4560,7 +4574,7 @@ def test_update_item_via_form_malformed_id_is_field_error_no_coercion_crash(bad_
     assert item.name == "FormUntouched"
 
 
-async def _async_shipped_graphql_view(request):
+async def _async_shipped_graphql_view(request: HttpRequest):
     from config.schema import schema
 
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -4569,7 +4583,12 @@ async def _async_shipped_graphql_view(request):
 urlpatterns = [path("graphql-async/", _async_shipped_graphql_view)]
 
 
-async def _post_async_shipped(query, *, variables=None, client=None):
+async def _post_async_shipped(
+    query: str,
+    *,
+    variables: JSONObject | None = None,
+    client: AsyncClient | None = None,
+) -> JSONObject:
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
         result = await AsyncTestClient(client=client).query(
@@ -5177,7 +5196,7 @@ def test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_aut
 
 
 @pytest.mark.django_db(transaction=True)
-def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path):
+def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path: Path):
     """A real multipart `/graphql/` request routes an `Upload` into the serializer's `data`.
 
     Mirrors `test_create_item_with_file_via_form_multipart_upload_over_http`'s

@@ -70,6 +70,8 @@ go through the shared helpers.
 import asyncio
 import contextlib
 import json
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, TypeVar, overload
 
 import pytest
 import strawberry
@@ -80,7 +82,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadhandler import MemoryFileUploadHandler
 from django.core.handlers.asgi import ASGIHandler
-from django.http import HttpResponseForbidden
+from django.http import HttpRequest, HttpResponseBase, HttpResponseForbidden
 from django.middleware.csrf import CsrfViewMiddleware, get_token
 from django.test import AsyncClient, Client, RequestFactory, override_settings
 from django.urls import include, path, resolve
@@ -89,7 +91,7 @@ from graphql_client import assert_graphql_data, post_graphql, post_graphql_raw
 from strawberry.django.views import GraphQLView as UpstreamGraphQLView
 from strawberry.extensions import AddValidationRules
 from strawberry.http.base import BaseView
-from typing_extensions import TypedDict, override
+from typing_extensions import TypedDict, Unpack, override
 
 from django_strawberry_framework import DjangoSchema, strawberry_config
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
@@ -102,6 +104,17 @@ from django_strawberry_framework.views import (
     AsyncDjangoGraphQLView,
     DjangoGraphQLView,
 )
+
+if TYPE_CHECKING:
+    from typing import TypeAlias
+
+    from django.test.client import _MonkeyPatchedASGIResponse, _MonkeyPatchedWSGIResponse
+
+    #: What either test client answers with, once awaited on the async side.
+    _TestResponse: TypeAlias = _MonkeyPatchedWSGIResponse | _MonkeyPatchedASGIResponse
+
+#: A view callback a probe decorator hands back unchanged.
+_ViewT = TypeVar("_ViewT", bound=Callable[..., object])
 
 # ---------------------------------------------------------------------------
 # Operations. ``__typename`` is deliberately DB-free so a row whose subject is a
@@ -139,10 +152,10 @@ _MIDDLEWARE_PATHS: list[str] = []
 class _SentinelMiddleware:
     """Record the request path and stamp a sentinel header on the response."""
 
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponseBase]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: HttpRequest):
         _MIDDLEWARE_PATHS.append(request.path)
         response = self.get_response(request)
         response[_SENTINEL_HEADER] = "1"
@@ -169,10 +182,10 @@ class _LatinOneEncodingMiddleware:
 
     encoding = "iso-8859-1"
 
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponseBase]) -> None:
         self.get_response = get_response
 
-    def __call__(self, request):
+    def __call__(self, request: HttpRequest):
         request.encoding = self.encoding
         return self.get_response(request)
 
@@ -201,7 +214,7 @@ def _with_a_middleware_that_sets_the_encoding():
 # ---------------------------------------------------------------------------
 
 
-def _ide_off_view(request, *args, **kwargs):
+def _ide_off_view(request: HttpRequest, *args: object, **kwargs: object):
     """The package view with the IDE and GET queries both turned off (row 7)."""
     from config.schema import schema
 
@@ -213,7 +226,7 @@ def _ide_off_view(request, *args, **kwargs):
     return view(request, *args, **kwargs)
 
 
-def _production_profile_view(request, *args, **kwargs):
+def _production_profile_view(request: HttpRequest, *args: object, **kwargs: object):
     """The documented production mount, assembled exactly as the guide's recipe.
 
     ``docs/README.md``'s "Production security profile" section tells a deployment
@@ -241,7 +254,7 @@ def _production_profile_view(request, *args, **kwargs):
     return view(request, *args, **kwargs)
 
 
-async def _async_graphql_view(request, *args, **kwargs):
+async def _async_graphql_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async twin, mounted so Django dispatches it on the event loop."""
     from config.schema import schema
 
@@ -286,7 +299,7 @@ class _ParseSpyView(DjangoGraphQLView):
     """
 
     @override
-    def parse_json(self, data):
+    def parse_json(self, data: str | bytes):
         _PARSE_CALLS.append(data)
         return super().parse_json(data)
 
@@ -308,7 +321,7 @@ class _SetupLimitedView(DjangoGraphQLView):
     """Derive the mount's request cap from Django's per-request setup lifecycle."""
 
     @override
-    def setup(self, request, *args, **kwargs):
+    def setup(self, request: HttpRequest, *args: object, **kwargs: int):
         super().setup(request, *args, **kwargs)
         _SETUP_CALLS.append(request.path)
         self.max_request_body_bytes = kwargs["limit"]
@@ -317,7 +330,9 @@ class _SetupLimitedView(DjangoGraphQLView):
 _SETUP_LIMITED_CALLBACK = _SetupLimitedView.as_view(schema=_SETUP_PROBE_SCHEMA)
 
 
-def _carrying_the_packages_csrf_mark(view_class):
+def _carrying_the_packages_csrf_mark(
+    view_class: type[DjangoGraphQLView | AsyncDjangoGraphQLView],
+) -> Callable[[_ViewT], _ViewT]:
     """Copy the package view's ``csrf_exempt`` mark - and only that one - onto a probe wrapper.
 
     Every probe mount in this file resolves its view per request, so the callback
@@ -348,14 +363,15 @@ def _carrying_the_packages_csrf_mark(view_class):
     """
     mark = view_class.as_view().csrf_exempt
 
-    def decorate(view):
-        view.csrf_exempt = mark
+    def decorate(view: _ViewT) -> _ViewT:
+        # basedpyright: ``FunctionType`` declares no ``csrf_exempt``, though a function takes any attribute
+        view.csrf_exempt = mark  # pyright: ignore[reportFunctionMemberAccess]
         return view
 
     return decorate
 
 
-def _capped_view(view_class, limit, *, uploads=False):
+def _capped_view(view_class: type[DjangoGraphQLView], limit: int, *, uploads: bool = False):
     """A request-time-resolving mount of ``view_class`` with the cap pinned.
 
     Resolving the schema per request mirrors ``_ide_off_view`` above: it keeps
@@ -370,7 +386,7 @@ def _capped_view(view_class, limit, *, uploads=False):
     """
 
     @_carrying_the_packages_csrf_mark(view_class)
-    def view(request, *args, **kwargs):
+    def view(request: HttpRequest, *args: object, **kwargs: object):
         from config.schema import schema
 
         built = view_class.as_view(
@@ -384,7 +400,7 @@ def _capped_view(view_class, limit, *, uploads=False):
 
 
 @_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
-async def _async_capped_multipart_view(request, *args, **kwargs):
+async def _async_capped_multipart_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async view with uploads on and a roomy cap, for the async wire rows.
 
     Spelled out rather than produced by ``_capped_view`` for the same reason
@@ -404,7 +420,7 @@ async def _async_capped_multipart_view(request, *args, **kwargs):
 
 
 @_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
-async def _async_cap_misconfigured_view(request, *args, **kwargs):
+async def _async_cap_misconfigured_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async twin of ``cap-misconfigured/``: a cap value the resolver refuses.
 
     Spelled out rather than produced by ``_capped_view`` for the same reason
@@ -417,7 +433,7 @@ async def _async_cap_misconfigured_view(request, *args, **kwargs):
     return await view(request, *args, **kwargs)
 
 
-async def _async_cap_tiny_view(request, *args, **kwargs):
+async def _async_cap_tiny_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async twin under the tiny cap, so the ``async def run`` override is proven live.
 
     Spelled out rather than produced by ``_capped_view`` for the same reason
@@ -431,7 +447,7 @@ async def _async_cap_tiny_view(request, *args, **kwargs):
 
 
 @_carrying_the_packages_csrf_mark(AsyncDjangoGraphQLView)
-async def _async_cap_tiny_multipart_view(request, *args, **kwargs):
+async def _async_cap_tiny_multipart_view(request: HttpRequest, *args: object, **kwargs: object):
     """The async twin under the tiny cap with uploads on, for the ordering rows.
 
     The async colour of ``multipart-tiny/``: an over-cap multipart request has to
@@ -448,7 +464,7 @@ async def _async_cap_tiny_multipart_view(request, *args, **kwargs):
     return await view(request, *args, **kwargs)
 
 
-def _upstream_graphql_view(request, *args, **kwargs):
+def _upstream_graphql_view(request: HttpRequest, *args: object, **kwargs: object):
     """Strawberry's OWN sync view, mounted as the negative witness for the patch gate.
 
     Not a package surface and never recommended - it exists so one row can show
@@ -484,20 +500,54 @@ urlpatterns = [
 ]
 
 
-def _post_bytes(client, raw, path="/graphql/", **extra):
+class _PostExtra(TypedDict, total=False):
+    """The ``Client.post`` keywords a row hands ``_post`` / ``_post_bytes`` to own the envelope."""
+
+    secure: bool
+    CONTENT_LENGTH: str
+    HTTP_HOST: str
+    HTTP_X_CSRFTOKEN: str
+
+
+@overload
+def _post_bytes(
+    client: Client,
+    raw: str | bytes,
+    path: str = "/graphql/",
+    **extra: Unpack[_PostExtra],
+) -> "_MonkeyPatchedWSGIResponse": ...
+@overload
+def _post_bytes(
+    client: AsyncClient,
+    raw: str | bytes,
+    path: str = "/graphql/",
+    **extra: Unpack[_PostExtra],
+) -> "Awaitable[_MonkeyPatchedASGIResponse]": ...
+def _post_bytes(
+    client: Client | AsyncClient,
+    raw: str | bytes,
+    path: str = "/graphql/",
+    **extra: Unpack[_PostExtra],
+) -> "_MonkeyPatchedWSGIResponse | Awaitable[_MonkeyPatchedASGIResponse]":
     """POST an exact byte string, so a row can own the length or a hostile header."""
     return client.post(path, data=raw, content_type="application/json", **extra)
 
 
-def _post(client, query, path="/graphql/", variables=None, **extra):
+def _post(
+    client: Client,
+    query: str,
+    path: str = "/graphql/",
+    variables: Mapping[str, object] | None = None,
+    **extra: Unpack[_PostExtra],
+):
     """Raw JSON GraphQL POST, so a row can own the client, the host, or the scheme."""
-    body = {"query": query}
+    body: dict[str, object] = {"query": query}
     if variables is not None:
         body["variables"] = variables
     return _post_bytes(client, json.dumps(body), path=path, **extra)
 
 
-def _sized_body(size, query=_TYPENAME, variables=None):
+def _sized_body(size: int, query: str = _TYPENAME, variables: Mapping[str, object] | None = None):
     """A valid GraphQL request body of EXACTLY ``size`` bytes.
 
     The padding key is inert - Strawberry ignores unknown top-level members - so
@@ -505,7 +555,7 @@ def _sized_body(size, query=_TYPENAME, variables=None):
     JSON escaping, so one pad character is one byte and the arithmetic is exact,
     which is what lets the below / at / above trio pin ``>`` rather than ``>=``.
     """
-    body = {"query": query, "pad": ""}
+    body: dict[str, object] = {"query": query, "pad": ""}
     if variables is not None:
         body["variables"] = variables
     pad = size - len(json.dumps(body))
@@ -534,7 +584,7 @@ def _user_who_can_add_categories():
     return User.objects.get(pk=user.pk)  # drop the stale per-request perm cache
 
 
-def _assert_body_limit_response(response):
+def _assert_body_limit_response(response: "_TestResponse"):
     """The package's own ``413``: the exact reason, ``text/plain``, no envelope.
 
     Pinning the literal reason is what distinguishes the package's ceiling from
@@ -547,7 +597,11 @@ def _assert_body_limit_response(response):
     _assert_no_graphql_envelope(response)
 
 
-def _asgi_post(path_, fragments, extra_headers=()):
+def _asgi_post(
+    path_: str,
+    fragments: Sequence[bytes],
+    extra_headers: Iterable[tuple[bytes, bytes]] = (),
+) -> tuple[int, dict[str, str], bytes]:
     """Drive Django's own ``ASGIHandler`` in-process; return ``(status, headers, body)``.
 
     Neither ``django.test.Client`` nor ``AsyncClient`` can present the body
@@ -605,7 +659,7 @@ def _asgi_post(path_, fragments, extra_headers=()):
         await asyncio.Event().wait()
         raise AssertionError("unreachable: the handler cancels this await")  # pragma: no cover
 
-    async def send(message):
+    async def send(message: Mapping[str, object]):
         sent.append(message)
 
     async def drive():
@@ -663,19 +717,22 @@ class _RecordingUploadHandler(MemoryFileUploadHandler):
     """
 
     @override
-    def handle_raw_input(self, *args, **kwargs):
+    def handle_raw_input(self, *args: object, **kwargs: object):
         _UPLOAD_EVENTS.append("handle_raw_input")
-        return super().handle_raw_input(*args, **kwargs)
+        # basedpyright: the hook args are forwarded blind by design (class docstring); the base hook is typed
+        return super().handle_raw_input(*args, **kwargs)  # pyright: ignore[reportArgumentType]
 
     @override
-    def new_file(self, *args, **kwargs):
+    def new_file(self, *args: object, **kwargs: object):
         _UPLOAD_EVENTS.append("new_file")
-        return super().new_file(*args, **kwargs)
+        # basedpyright: the hook args are forwarded blind by design (class docstring); the base hook is typed
+        return super().new_file(*args, **kwargs)  # pyright: ignore[reportArgumentType]
 
     @override
-    def receive_data_chunk(self, *args, **kwargs):
+    def receive_data_chunk(self, *args: object, **kwargs: object):
         _UPLOAD_EVENTS.append("receive_data_chunk")
-        return super().receive_data_chunk(*args, **kwargs)
+        # basedpyright: the hook args are forwarded blind by design (class docstring); the base hook is typed
+        return super().receive_data_chunk(*args, **kwargs)  # pyright: ignore[reportArgumentType]
 
 
 def _recording_upload_handlers():
@@ -690,12 +747,12 @@ def _recording_upload_handlers():
     )
 
 
-def _csrf_failure_probe(request, reason=""):
+def _csrf_failure_probe(request: HttpRequest, reason: str = ""):
     """A custom ``CSRF_FAILURE_VIEW``, so one row can prove the setting still fires."""
     return HttpResponseForbidden(b"probe-csrf-failure")
 
 
-def _csrf_token(path="/graphql/"):
+def _csrf_token(path: str = "/graphql/"):
     """A usable CSRF token, minted the way Django mints one for a real client.
 
     The same round trip ``_asgi_post`` performs: the value goes into the
@@ -705,7 +762,7 @@ def _csrf_token(path="/graphql/"):
     return get_token(RequestFactory().get(path))
 
 
-def _multipart_content_type(charset=None):
+def _multipart_content_type(charset: str | None = None):
     """The declared ``Content-Type`` for a hand-built multipart body."""
     content_type = f"multipart/form-data; boundary={_MULTIPART_BOUNDARY}"
     if charset is not None:
@@ -713,7 +770,10 @@ def _multipart_content_type(charset=None):
     return content_type
 
 
-def _multipart_bytes(fields, files=()):
+def _multipart_bytes(
+    fields: Iterable[tuple[str, bytes]],
+    files: Iterable[tuple[str, str, bytes]] = (),
+):
     """A multipart body over exactly the given raw bytes.
 
     ``fields`` and ``files`` are ``(name, raw)`` / ``(name, filename, raw)``
@@ -741,17 +801,50 @@ def _multipart_bytes(fields, files=()):
     return b"".join(parts)
 
 
+class _MultipartExtra(TypedDict, total=False):
+    """The request keyword ``_post_multipart`` forwards to the client beside its own."""
+
+    secure: bool
+
+
+@overload
 def _post_multipart(
-    client,
-    path,
-    fields,
+    client: Client,
+    path: str,
+    fields: Iterable[tuple[str, bytes]],
     *,
-    files=(),
-    charset=None,
-    token=None,
-    send_header=True,
-    **extra,
-):
+    files: Iterable[tuple[str, str, bytes]] = (),
+    charset: str | None = None,
+    token: str | None = None,
+    send_header: bool = True,
+    headers: Mapping[str, str] | None = None,
+    **extra: Unpack[_MultipartExtra],
+) -> "_MonkeyPatchedWSGIResponse": ...
+@overload
+def _post_multipart(
+    client: AsyncClient,
+    path: str,
+    fields: Iterable[tuple[str, bytes]],
+    *,
+    files: Iterable[tuple[str, str, bytes]] = (),
+    charset: str | None = None,
+    token: str | None = None,
+    send_header: bool = True,
+    headers: Mapping[str, str] | None = None,
+    **extra: Unpack[_MultipartExtra],
+) -> "Awaitable[_MonkeyPatchedASGIResponse]": ...
+def _post_multipart(
+    client: Client | AsyncClient,
+    path: str,
+    fields: Iterable[tuple[str, bytes]],
+    *,
+    files: Iterable[tuple[str, str, bytes]] = (),
+    charset: str | None = None,
+    token: str | None = None,
+    send_header: bool = True,
+    headers: Mapping[str, str] | None = None,
+    **extra: Unpack[_MultipartExtra],
+) -> "_MonkeyPatchedWSGIResponse | Awaitable[_MonkeyPatchedASGIResponse]":
     """POST a hand-built multipart body; return whatever the client returns.
 
     Sync callers get a response, async callers get an awaitable - both clients
@@ -770,7 +863,7 @@ def _post_multipart(
     would put ``HTTP_X_CSRFTOKEN`` on the wire as a header literally named
     ``http-x-csrftoken``.
     """
-    headers = dict(extra.pop("headers", {}))
+    headers = dict(headers or {})
     if token is not None:
         client.cookies["csrftoken"] = token
         if send_header:
@@ -785,7 +878,7 @@ def _post_multipart(
     )
 
 
-def _operations_bytes(*, note=b"plain", operation_name=None):
+def _operations_bytes(*, note: bytes = b"plain", operation_name: bytes | None = None):
     """A serialized ``operations`` control document with two byte-exact slots.
 
     ``note`` is an inert top-level member - Strawberry ignores unknown members,
@@ -802,7 +895,7 @@ def _operations_bytes(*, note=b"plain", operation_name=None):
     return document + b"}"
 
 
-def _assert_multipart_control_document_refused(response):
+def _assert_multipart_control_document_refused(response: "_TestResponse"):
     """The package's refusal for a control document it will not read as JSON.
 
     Pinning the reason is what makes the row a statement about the wire contract:
@@ -817,7 +910,7 @@ def _assert_multipart_control_document_refused(response):
     _assert_no_graphql_envelope(response)
 
 
-def _assert_no_graphql_envelope(response):
+def _assert_no_graphql_envelope(response: "_TestResponse"):
     """The response is Django's own, produced BEFORE the schema ever ran.
 
     The load-bearing half of every row whose subject is a boundary Django owns -
@@ -925,7 +1018,10 @@ def test_a_hostile_host_header_is_rejected_before_the_schema_runs():
     ],
 )
 @pytest.mark.django_db(transaction=True)
-def test_csrf_is_enforced_on_a_cookie_authenticated_graphql_mutation(token_mode, expected_status):
+def test_csrf_is_enforced_on_a_cookie_authenticated_graphql_mutation(
+    token_mode: str,
+    expected_status: int,
+):
     """Row 4: all three CSRF directions on a real write, under a cookie session.
 
     ``Client(enforce_csrf_checks=True)`` turns off the test client's usual CSRF
@@ -1264,7 +1360,7 @@ def test_the_package_view_serves_an_ordinary_graphql_response():
     ],
 )
 @pytest.mark.django_db
-def test_a_declared_body_is_capped_at_the_configured_limit(size, expected_status):
+def test_a_declared_body_is_capped_at_the_configured_limit(size: int, expected_status: int):
     """Row 13/14: a valid JSON operation below and AT the cap runs; above it gets ``413``.
 
     The ``at`` and ``one-byte-above`` rows are the pair that pins the comparison
@@ -1295,7 +1391,7 @@ def test_a_declared_body_is_capped_at_the_configured_limit(size, expected_status
 )
 @pytest.mark.django_db
 def test_on_wsgi_a_missing_or_understated_content_length_shrinks_the_body_it_cannot_grow_it(
-    content_length,
+    content_length: str,
 ):
     """Row 13, WSGI colour: the declared length cannot UNDERSTATE what the app receives.
 
@@ -1330,8 +1426,8 @@ def test_on_wsgi_a_missing_or_understated_content_length_shrinks_the_body_it_can
     ],
 )
 def test_on_asgi_an_absent_or_lying_content_length_cannot_buy_a_larger_body(
-    extra_headers,
-    case_id,
+    extra_headers: tuple[tuple[bytes, bytes], ...],
+    case_id: str,
 ):
     """Row 13, ASGI colour: the COUNTED check is what bounds an undeclared body.
 
@@ -1738,7 +1834,10 @@ async def test_the_async_mount_fails_loud_on_a_bodyless_request_too():
         pytest.param("/async-cap-tiny/", True, id="async"),
     ],
 )
-async def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length(path, is_async):
+async def test_the_cap_is_a_no_op_on_get_even_with_a_hostile_content_length(
+    path: str,
+    is_async: bool,
+):
     """GET carries no body the view reads, so a lying ``Content-Length`` cannot ``413`` it.
 
     The declared gate would otherwise fire on a header that describes nothing and
@@ -1838,7 +1937,7 @@ def _strawberry_patch_opted_out():
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
 @pytest.mark.django_db
-def test_the_utf8_wire_contract_survives_the_upstream_patch_kill_switch(body):
+def test_the_utf8_wire_contract_survives_the_upstream_patch_kill_switch(body: bytes):
     """The finding, over the wire: a non-UTF-8 body still 400s with the patch opted out.
 
     Before this change the strict decode lived inside
@@ -1868,7 +1967,7 @@ def test_the_utf8_wire_contract_survives_the_upstream_patch_kill_switch(body):
 
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
-async def test_the_async_view_keeps_the_utf8_wire_contract_with_the_patch_opted_out(body):
+async def test_the_async_view_keeps_the_utf8_wire_contract_with_the_patch_opted_out(body: bytes):
     """The async colour: one shared mixin method, so neither transport can drift.
 
     Worth its own row for the same reason the patch-on async row is: the
@@ -1942,7 +2041,7 @@ def _every_upstream_patch_opted_out():
 
 @pytest.mark.parametrize("body", _NON_UTF8_BODIES)
 @pytest.mark.django_db
-def test_the_sync_wire_contract_holds_with_every_upstream_patch_opted_out(body):
+def test_the_sync_wire_contract_holds_with_every_upstream_patch_opted_out(body: bytes):
     """The wire contract on the sync transport with the WHOLE kill switch thrown.
 
     ``{"strawberry": False}`` leaves the ``cross_web`` half routing the sync
@@ -2079,7 +2178,7 @@ _UNDECODABLE_BODIES = (
 
 @pytest.mark.parametrize("body", _UNDECODABLE_BODIES)
 @pytest.mark.django_db
-def test_the_cross_web_half_turns_upstreams_own_500_into_a_400(body):
+def test_the_cross_web_half_turns_upstreams_own_500_into_a_400(body: bytes):
     """What the ``cross_web`` patch buys, on the only mount that can show it.
 
     The rows above prove the package mount is indifferent to this switch, which is
@@ -2192,7 +2291,7 @@ _NON_ASCII_JSON_BODY = json.dumps(
 ).encode("utf-8")
 
 
-async def _declared_json_response(charset, is_async):
+async def _declared_json_response(charset: str | None, is_async: bool):
     """POST the non-ASCII document with ``charset`` declared, over the real endpoint.
 
     The bytes go on the wire untouched, which is the only way to express the shape
@@ -2227,9 +2326,9 @@ async def _declared_json_response(charset, is_async):
     [pytest.param(False, id="sync"), pytest.param(True, id="async")],
 )
 async def test_the_endpoint_refuses_a_json_charset_it_will_not_decode_with(
-    is_async,
-    charset,
-    status,
+    is_async: bool,
+    charset: str | None,
+    status: int,
 ):
     """A declared charset is part of the wire boundary, not decoration.
 
@@ -2283,7 +2382,7 @@ _LOSSY_CONTROL_DOCUMENTS = (
 )
 
 
-def _multipart_fields(field, raw):
+def _multipart_fields(field: str, raw: bytes):
     """The two control fields, with ``field`` replaced by ``raw`` bytes."""
     documents = {"operations": _operations_bytes(), "map": b"{}"}
     documents[field] = raw
@@ -2331,7 +2430,7 @@ async def test_the_async_view_rejects_the_same_multipart_map_shape():
 
 @pytest.mark.django_db(transaction=True)
 async def test_post_pathologically_nested_body_returns_400_on_the_async_view_too(
-    pathological_json_body,
+    pathological_json_body: bytes,
 ):
     """Async transport: a body nested past the parser's C stack -> controlled 400.
 
@@ -2352,7 +2451,7 @@ async def test_post_pathologically_nested_body_returns_400_on_the_async_view_too
 
 @pytest.mark.django_db(transaction=True)
 def test_a_multipart_operations_document_nested_past_the_c_stack_is_refused(
-    deepcopy_overflow_operations_text,
+    deepcopy_overflow_operations_text: str,
 ):
     """Valid-JSON ``operations`` whose depth overflows the upload utility.
 
@@ -2377,7 +2476,7 @@ def test_a_multipart_operations_document_nested_past_the_c_stack_is_refused(
 
 
 async def test_the_async_view_refuses_the_same_deep_operations_document(
-    deepcopy_overflow_operations_text,
+    deepcopy_overflow_operations_text: str,
 ):
     """The async delegate scopes the deepcopy recursion identically."""
     with override_settings(ROOT_URLCONF=__name__):
@@ -2394,7 +2493,10 @@ async def test_the_async_view_refuses_the_same_deep_operations_document(
 
 @pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
 @pytest.mark.django_db
-def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refused(field, raw):
+def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refused(
+    field: str,
+    raw: bytes,
+):
     """The bodies that used to answer ``200`` now answer ``400``.
 
     An ``operations`` field carrying a malformed UTF-8 byte used to be
@@ -2420,7 +2522,7 @@ def test_a_multipart_control_document_that_lost_bytes_to_djangos_decode_is_refus
 
 
 @pytest.mark.parametrize(("field", "raw"), _LOSSY_CONTROL_DOCUMENTS)
-async def test_the_async_view_refuses_the_same_lossy_control_documents(field, raw):
+async def test_the_async_view_refuses_the_same_lossy_control_documents(field: str, raw: bytes):
     """The async colour: one shared mixin method, two ``parse_multipart`` overrides.
 
     Upstream's ``parse_multipart`` is a coroutine on the async base view and a plain
@@ -2449,7 +2551,7 @@ _NON_UTF8_FORM_CHARSETS = (
 
 @pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
 @pytest.mark.django_db
-def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(charset):
+def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(charset: str):
     """An explicit ``charset`` the package will not honour.
 
     A Latin-1 form declaration used to execute with ``200``, and Django's behaviour is why:
@@ -2482,7 +2584,7 @@ def test_a_multipart_request_declaring_a_non_utf8_form_encoding_is_refused(chars
 
 
 @pytest.mark.parametrize("charset", _NON_UTF8_FORM_CHARSETS)
-async def test_the_async_view_refuses_the_same_non_utf8_form_encodings(charset):
+async def test_the_async_view_refuses_the_same_non_utf8_form_encodings(charset: str):
     """The async colour of the declared-charset refusal, from the shared boundary."""
     with override_settings(ROOT_URLCONF=__name__):
         response = await _post_multipart(
@@ -2891,7 +2993,7 @@ def _csrf_matrix_paths(
     )
 
 
-def _assert_csrf_matrix(answers, custom_failure):
+def _assert_csrf_matrix(answers: Mapping[str, "_TestResponse"], custom_failure: "_TestResponse"):
     """The one set of assertions both transports' rows make."""
     for name in (
         "untokened",
@@ -3020,7 +3122,7 @@ def test_the_endpoint_stays_csrf_protected_with_the_global_middleware_removed():
     wrong = "n0tth3r1ghtt0k3n" * 4
 
     async def async_answers():
-        answers = {}
+        answers: dict[str, _MonkeyPatchedASGIResponse] = {}
         directions: tuple[tuple[str, _MultipartKeywords], ...] = (
             ("untokened", {}),
             (
@@ -3168,10 +3270,10 @@ class _RecordingCsrfMiddleware(CsrfViewMiddleware):
     @override
     def process_view(
         self,
-        request,
-        callback,
-        callback_args,
-        callback_kwargs,
+        request: HttpRequest,
+        callback: Callable[..., HttpResponseBase],
+        callback_args: tuple[object, ...],
+        callback_kwargs: dict[str, object],
     ):
         """Record a checkable callback, then let the base class decide the request."""
         if request.method not in _SAFE_METHODS and not getattr(callback, "csrf_exempt", False):

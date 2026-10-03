@@ -11,6 +11,8 @@ unconditionally -- rows edited after seeding are removed all the same.
 """
 
 from django.db import migrations
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 ATTEMPT_OUTCOMES = (
     ("succeeded", "Succeeded"),
@@ -27,7 +29,7 @@ VERIFICATION_KINDS = (
 MAINTAINER_ACTOR = ("maintainer", "Maintainer", "human")
 
 
-def _seed(apps, schema_editor):
+def _seed(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     alias = schema_editor.connection.alias
     AttemptOutcome = apps.get_model("kanban", "AttemptOutcome")
     VerificationKind = apps.get_model("kanban", "VerificationKind")
@@ -59,7 +61,7 @@ def _seed(apps, schema_editor):
         UUIDModel.objects.using(alias).create(actor=actor)
 
 
-def _unseed(apps, schema_editor):
+def _unseed(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     alias = schema_editor.connection.alias
     AttemptOutcome = apps.get_model("kanban", "AttemptOutcome")
     VerificationKind = apps.get_model("kanban", "VerificationKind")

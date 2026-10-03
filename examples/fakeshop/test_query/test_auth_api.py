@@ -22,6 +22,7 @@ the fresh-account path; no test hand-rolls a ``User``.
 
 import json
 import logging
+from collections.abc import Callable, Mapping
 
 import pytest
 import strawberry
@@ -33,12 +34,16 @@ from django.contrib.auth import signals as auth_signals
 from django.contrib.auth.models import Group, User
 from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
+from django.db.models import QuerySet
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import AsyncClient, Client, override_settings
 from django.urls import clear_url_caches, path
 from graphql_client import JSONObject, graphql_payload
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
+from typing_extensions import TypedDict, Unpack
 
 from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
 from django_strawberry_framework.auth import current_user, login_mutation
@@ -105,6 +110,12 @@ _NO_AUTHENTICATION_MIDDLEWARE = {
 }
 
 _MODEL_BACKEND = "django.contrib.auth.backends.ModelBackend"
+
+
+class _CsrfHeader(TypedDict, total=False):
+    """The one WSGI header the CSRF test passes through ``Client.post``'s ``**extra``."""
+
+    HTTP_X_CSRFTOKEN: str
 
 
 def _login(client: Client, username: str, password: str) -> JSONObject:
@@ -231,10 +242,16 @@ class PermissionDeniedBackend:
     import path (the ``DictFormPasswordValidator`` precedent above).
     """
 
-    def authenticate(self, request, username=None, password=None, **kwargs):
+    def authenticate(
+        self,
+        request: HttpRequest | None,
+        username: str | None = None,
+        password: str | None = None,
+        **kwargs: object,
+    ) -> User | None:
         raise PermissionDenied
 
-    def get_user(self, user_id):
+    def get_user(self, user_id: int) -> User | None:
         return None
 
 
@@ -246,23 +263,35 @@ class AllowInactiveBackend:
     (``test_query/`` is on ``pythonpath``).
     """
 
-    def authenticate(self, request, username=None, password=None, **kwargs):
+    def authenticate(
+        self,
+        request: HttpRequest | None,
+        username: str | None = None,
+        password: str | None = None,
+        **kwargs: object,
+    ) -> User | None:
         user = User.objects.filter(username=username).first()
         if user is not None and user.check_password(password):
             return user
         return None
 
-    def get_user(self, user_id):
+    def get_user(self, user_id: int) -> User | None:
         return User.objects.filter(pk=user_id).first()
 
 
 class CrashingBackend:
     """A backend whose ``authenticate`` raises a non-``PermissionDenied`` error."""
 
-    def authenticate(self, request, username=None, password=None, **kwargs):
+    def authenticate(
+        self,
+        request: HttpRequest | None,
+        username: str | None = None,
+        password: str | None = None,
+        **kwargs: object,
+    ) -> User | None:
         raise RuntimeError("backend boom")
 
-    def get_user(self, user_id):
+    def get_user(self, user_id: int) -> User | None:
         return None
 
 
@@ -271,11 +300,17 @@ class RecordingBackend:
 
     seen: list[tuple[str | None, str | None]] = []
 
-    def authenticate(self, request, username=None, password=None, **kwargs):
+    def authenticate(
+        self,
+        request: HttpRequest | None,
+        username: str | None = None,
+        password: str | None = None,
+        **kwargs: object,
+    ) -> User | None:
         type(self).seen.append((username, password))
         return None
 
-    def get_user(self, user_id):
+    def get_user(self, user_id: int) -> User | None:
         return None
 
 
@@ -398,7 +433,7 @@ def test_login_backend_crash_propagates_and_leaves_session_untouched():
         "unicode",
     ],
 )
-def test_storable_weird_credentials_reach_the_backend_unchanged(weird):
+def test_storable_weird_credentials_reach_the_backend_unchanged(weird: str):
     """Storable weird strings are passed to ``authenticate`` verbatim (no trim/normalize/truncate)."""
     create_users(1)
     RecordingBackend.seen = []
@@ -410,7 +445,9 @@ def test_storable_weird_credentials_reach_the_backend_unchanged(weird):
 
 
 @pytest.mark.django_db
-def test_login_password_never_appears_in_logs_or_error_text(caplog):
+def test_login_password_never_appears_in_logs_or_error_text(
+    caplog: pytest.LogCaptureFixture,
+):
     """A wrong-password login never leaks the submitted password into logs or error text."""
     create_users(1)
     secret = "sup3r-secret-verboten-42"
@@ -543,7 +580,7 @@ def test_weak_password_register_envelope_keys_to_password_not_all():
 # ``leaf.code`` walk still sees only scalar leaves - pinned here so the manual
 # walk's reliance on that upstream normalization is explicit (hunt 0.0.15).
 class DictFormPasswordValidator:
-    def validate(self, password, user=None):
+    def validate(self, password: str, user: User | None = None) -> None:
         from django.core.exceptions import ValidationError
 
         raise ValidationError({"password": ["Password policy violated."]})
@@ -762,7 +799,9 @@ def test_anonymous_me_is_null_not_an_error():
 
 
 @pytest.mark.django_db
-def test_complete_reload_preserves_the_auth_surface(reload_all_project_app_schemas):
+def test_complete_reload_preserves_the_auth_surface(
+    reload_all_project_app_schemas: Callable[[], None],
+):
     """A ``registry.clear()`` + full reload rebuilds ``login`` / ``logout`` / ``me``.
 
     Pins the ``"apps.accounts.schema"`` ``_PROJECT_APP_SCHEMA_MODULES`` row:
@@ -878,7 +917,11 @@ def test_login_and_logout_face_djangos_real_csrf_check():
     client.get("/graphql/", HTTP_ACCEPT="text/html")  # sets the csrftoken cookie
     token = client.cookies["csrftoken"].value
 
-    def _raw_post(query, variables=None, **extra):
+    def _raw_post(
+        query: str,
+        variables: Mapping[str, object] | None = None,
+        **extra: Unpack[_CsrfHeader],
+    ):
         return client.post(
             "/graphql/",
             data=json.dumps({"query": query, "variables": variables or {}}),
@@ -914,13 +957,13 @@ def test_login_and_logout_face_djangos_real_csrf_check():
 _CURRENT: dict[str, object | None] = {"schema": None}
 
 
-async def _async_shipped_graphql_view(request):
+async def _async_shipped_graphql_view(request: HttpRequest) -> HttpResponseBase:
     from config.schema import schema
 
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
 
 
-def _holder_graphql_view(request):
+def _holder_graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
@@ -932,7 +975,12 @@ urlpatterns = [
 ]
 
 
-async def _post_async_shipped(query, *, variables=None, client=None):
+async def _post_async_shipped(
+    query: str,
+    *,
+    variables: Mapping[str, object] | None = None,
+    client: AsyncClient | None = None,
+) -> JSONObject:
     """POST ``query`` against the shipped schema over ``/graphql-async/``."""
     with override_settings(ROOT_URLCONF=__name__):
         result = await AsyncTestClient(client=client).query(
@@ -955,7 +1003,9 @@ def test_user_type_omits_last_login_by_default():
 
 
 @pytest.mark.django_db
-def test_login_payload_exposes_the_post_login_last_login(project_schema_override):
+def test_login_payload_exposes_the_post_login_last_login(
+    project_schema_override: Callable[[], None],
+):
     """Under the last-login flag, the payload object carries the post-login ``lastLogin``.
 
     A user seeded with ``last_login=None`` whose login response's nested
@@ -1001,12 +1051,17 @@ def test_me_without_authentication_middleware_is_null_not_a_crash():
 
 
 @pytest.mark.django_db
-def test_login_and_me_skip_user_type_visibility(monkeypatch):
+def test_login_and_me_skip_user_type_visibility(monkeypatch: pytest.MonkeyPatch):
     """``login`` / ``me`` return the session actor even when ``UserType.get_queryset`` hides everyone."""
     create_users(1)
     from apps.accounts.schema import UserType
 
-    def _hide_everyone(cls, queryset, info, **kwargs):
+    def _hide_everyone(
+        cls: type[UserType],
+        queryset: QuerySet[User],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ) -> QuerySet[User]:
         return queryset.none()
 
     monkeypatch.setattr(UserType, "get_queryset", classmethod(_hide_everyone))
@@ -1024,7 +1079,7 @@ def test_login_signal_failure_compensates_and_leaves_the_caller_anonymous():
     create_users(1)
     client = Client()
 
-    def _boom(sender, **kwargs):
+    def _boom(sender: type[User], **kwargs: object) -> None:
         raise RuntimeError("login-signal boom")
 
     auth_signals.user_logged_in.connect(_boom)
@@ -1059,7 +1114,7 @@ def test_logout_signal_failure_is_an_error_and_keeps_the_durable_session():
     key = client.session.session_key
     assert Session.objects.filter(session_key=key).exists()
 
-    def _boom(sender, **kwargs):
+    def _boom(sender: type[User], **kwargs: object) -> None:
         raise RuntimeError("logout-signal boom")
 
     auth_signals.user_logged_out.connect(_boom)
@@ -1121,7 +1176,9 @@ async def test_async_register_stores_only_the_hashed_password():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_login_payload_exposes_the_post_login_last_login(project_schema_override):
+async def test_async_login_payload_exposes_the_post_login_last_login(
+    project_schema_override: Callable[[], None],
+):
     """The async colour of the post-login ``lastLogin`` payload object."""
     await sync_to_async(create_users)(1)
 
@@ -1194,12 +1251,12 @@ def _unplanned_auth_holder_schema():
 
 
 def _post_auth_holder(
-    schema,
-    query,
+    schema: DjangoSchema,
+    query: str,
     *,
-    client=None,
-    variables=None,
-):
+    client: Client | None = None,
+    variables: Mapping[str, object] | None = None,
+) -> JSONObject:
     """POST ``query`` against the holder schema over ``/graphql-test/``."""
     _CURRENT["schema"] = schema
     try:

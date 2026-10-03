@@ -85,8 +85,8 @@ _JSON_PAYLOAD = {
 }
 
 
-def _seed_specimen(**overrides):
-    defaults = {
+def _seed_specimen(**overrides: object) -> models.ScalarSpecimen:
+    defaults: dict[str, object] = {
         "label": "demo",
         "flag": True,
         "score": 1.5,
@@ -103,7 +103,7 @@ def _seed_specimen(**overrides):
     return models.ScalarSpecimen.objects.create(**defaults)
 
 
-def _seed_nullable_specimen(**overrides):
+def _seed_nullable_specimen(**overrides: object) -> models.NullableScalarSpecimen:
     """Seed a ``NullableScalarSpecimen`` with every field defaulting to ``None``.
 
     Pass field values explicitly via ``**overrides`` when a test needs a non-
@@ -417,7 +417,11 @@ def test_filter_specimens_by_bigint_range_out_of_range_bound_no_overflow():
         "float-negative",
     ],
 )
-def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(field, literal, reason):
+def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(
+    field: str,
+    literal: str,
+    reason: str,
+) -> None:
     """A ``bool`` / ``float`` literal in a ``BigInt`` filter argument is refused outright.
 
     Both halves of the converter table entry take their literal through
@@ -449,7 +453,7 @@ def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(field, lit
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("field", ["signedBig", "unsignedBig"], ids=["signed", "unsigned"])
-def test_filter_specimens_by_bigint_exact_accepts_decimal_string_literal(field):
+def test_filter_specimens_by_bigint_exact_accepts_decimal_string_literal(field: str) -> None:
     """The same filter shape accepts a decimal-string literal past the JS safe integer.
 
     The acceptance half of the rejection row above, on the identical
@@ -484,7 +488,10 @@ def test_filter_specimens_by_bigint_exact_accepts_decimal_string_literal(field):
     list(_BIGINT_STRING_REJECTIONS.values()),
     ids=list(_BIGINT_STRING_REJECTIONS),
 )
-def test_filter_specimens_by_bigint_exact_rejects_malformed_decimal_string(field, literal):
+def test_filter_specimens_by_bigint_exact_rejects_malformed_decimal_string(
+    field: str,
+    literal: str,
+) -> None:
     """A malformed decimal-string ``BigInt`` filter argument is refused outright.
 
     GraphQL can feed every spelling here as a string literal (or the equivalent
@@ -523,7 +530,11 @@ def test_filter_specimens_by_bigint_exact_rejects_malformed_decimal_string(field
         "int64-max",
     ],
 )
-def test_scalar_specimen_by_signed_big_accepts_canonical_literals(argument, column, wire):
+def test_scalar_specimen_by_signed_big_accepts_canonical_literals(
+    argument: str,
+    column: int,
+    wire: str,
+) -> None:
     """Canonical ``BigInt`` spellings parse over HTTP and serialize as the same decimal string."""
     _seed_specimen(label="keep", signed_big=column)
     _seed_specimen(label="other", signed_big=7)

@@ -15,7 +15,7 @@ from apps.kanban import models, services
 
 
 @pytest.fixture(autouse=True)
-def _worklog_lookups(db):
+def _worklog_lookups(db: None) -> None:
     kf.make_status("backlog")
     kf.make_status("todo")
     kf.make_status("wip")
@@ -170,7 +170,7 @@ def test_card_item_verification_fields():
 # ---------------------------------------------------------------------------
 
 
-def _make_done(card, actor):
+def _make_done(card: models.Card, actor: models.Actor):
     """Satisfy the done-card guards (spec + glossary) then flip wip -> done."""
     kf.make_spec_doc(card=card)
     kf.make_card_glossary_term(card=card)

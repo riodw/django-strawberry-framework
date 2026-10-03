@@ -59,7 +59,7 @@ class TenantShelfSerializer(serializers.ModelSerializer[Shelf]):
         model = Shelf
         fields = ("code", "branch")
 
-    def __init__(self, *args, tenant: str | None = None, **kwargs) -> None:
+    def __init__(self, *args: Any, tenant: str | None = None, **kwargs: Any) -> None:
         # ``tenant`` is required: a no-arg construction (DRF's default ``.fields``
         # discovery) raises here, forcing the get_serializer_for_schema() override.
         if tenant is None:
@@ -188,7 +188,12 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
     shapes.
     """
 
-    def __init__(self, *args, target_model: type[Model] | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        target_model: type[Model] | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._target_model = target_model
         super().__init__(*args, **kwargs)
 
@@ -255,7 +260,12 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
     away from the two hook shapes.
     """
 
-    def __init__(self, *args, note_allow_null: bool | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        note_allow_null: bool | None = None,
+        **kwargs: Any,
+    ) -> None:
         self._note_allow_null = note_allow_null
         super().__init__(*args, **kwargs)
 

@@ -33,12 +33,15 @@ Django's 404 handler and needs no database.
 """
 
 import io
+from pathlib import Path
 
 import pytest
 from apps.products.models import Category
 from apps.products.services import create_users, seed_data
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import override_settings
 from django.urls import include, path, resolve
 from strawberry import relay
@@ -68,7 +71,7 @@ _PROBE_MARKER_HEADER = "X-Probe-Endpoint"
 _PROBE_MARKER_VALUE = "alt"
 
 
-def _alt_graphql_view(request, *args, **kwargs):
+def _alt_graphql_view(request: HttpRequest, *args: object, **kwargs: object) -> HttpResponseBase:
     """Delegate ``/alt/`` to the view ``/graphql/`` currently resolves to, marked.
 
     Resolving at request time (not import time) keeps the probe pointed at the
@@ -167,13 +170,13 @@ def test_wrong_configured_endpoint_surfaces_django_non_json_decode_error():
 
 
 @pytest.fixture
-def seeded_catalog(transactional_db):
+def seeded_catalog(transactional_db: None) -> None:
     """``seed_data(1)`` in a sync fixture; transactional so the async view's thread sees the rows."""
     seed_data(1)
 
 
 @pytest.fixture
-def permitted_writer(transactional_db):
+def permitted_writer(transactional_db: None) -> tuple[User, str]:
     """A ``create_users`` user granted ``add_item`` + a category GlobalID, for the async bracket.
 
     Seeds first (AGENTS.md seed-helper rule), then grants the explicit
@@ -197,7 +200,7 @@ def permitted_writer(transactional_db):
     return user, category_gid
 
 
-async def test_async_query_happy_path_and_raise_direction(seeded_catalog):
+async def test_async_query_happy_path_and_raise_direction(seeded_catalog: None) -> None:
     """The awaited transport, the async decode, and the package ``Response``.
 
     The same typed-shape assertions as the live sync happy path - ``errors`` /
@@ -224,7 +227,9 @@ async def test_async_wrong_endpoint_surfaces_the_same_non_json_decode_error():
         await AsyncTestClient("/missing-graphql-endpoint/").query("{ __typename }")
 
 
-async def test_async_login_brackets_the_write_authorized_mutation(permitted_writer):
+async def test_async_login_brackets_the_write_authorized_mutation(
+    permitted_writer: tuple[User, str],
+) -> None:
     """The force-login/logout bracket through ``async with client.login(user)``.
 
     The sync bracket's async twin (the live sync bracket lives in
@@ -298,7 +303,9 @@ def test_sync_login_bracket_logs_out_when_the_block_raises():
     assert "Not authorized" in denied.errors[0]["message"]
 
 
-async def test_async_login_bracket_logs_out_when_the_block_raises(permitted_writer):
+async def test_async_login_bracket_logs_out_when_the_block_raises(
+    permitted_writer: tuple[User, str],
+) -> None:
     """A raise inside ``async with client.login(user)`` still clears the session on the wire."""
     user, category_gid = permitted_writer
     variables = {"d": {"name": "AsyncRaiseLogoutWidget", "categoryId": category_gid}}
@@ -324,7 +331,7 @@ async def test_async_login_bracket_logs_out_when_the_block_raises(permitted_writ
 
 
 @pytest.fixture
-def upload_superuser(transactional_db):
+def upload_superuser(transactional_db: None) -> User:
     """A superuser for the async multipart upload, created in a sync fixture.
 
     ``createMediaSpecimen`` is gated by the default ``add_mediaspecimen``
@@ -343,7 +350,10 @@ def upload_superuser(transactional_db):
     )
 
 
-async def test_async_multipart_upload_creates_media_specimen(upload_superuser, tmp_path):
+async def test_async_multipart_upload_creates_media_specimen(
+    upload_superuser: User,
+    tmp_path: Path,
+) -> None:
     """The nested two-file multipart upload through ``AsyncTestClient`` (the DoD's "both clients").
 
     The async color of

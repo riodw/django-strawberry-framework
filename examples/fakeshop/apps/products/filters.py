@@ -52,7 +52,7 @@ class CategoryFilter(FilterSet):
             "items__name": ["icontains"],
         }
 
-    def check_name_permission(self, request):
+    def check_name_permission(self, request: object) -> None:
         """Only staff users may filter by ``Category.name``."""
         user = getattr(request, "user", None)
         if not user or not user.is_staff:

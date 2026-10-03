@@ -20,6 +20,7 @@ the full rebuild under ambient settings, including after an assertion failure.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable, Iterator
 
 import pytest
 from schema_reload import (
@@ -63,22 +64,24 @@ def _registry_registration_identity() -> tuple[object, ...]:
 
 
 @pytest.fixture(scope="module")
-def reload_all_project_app_schemas():
+def reload_all_project_app_schemas() -> Callable[[], None]:
     """Return the :func:`schema_reload.reload_all_project_schemas` callable for an autouse fixture."""
     return reload_all_project_schemas
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
+def _reload_project_schema_for_acceptance_tests(
+    reload_all_project_app_schemas: Callable[[], None],
+) -> None:
     """Rebuild the full project schema once per module on every assigned worker."""
     reload_all_project_app_schemas()
 
 
 @pytest.fixture(autouse=True)
 def _isolate_project_schema_for_acceptance_test(
-    _reload_project_schema_for_acceptance_tests,
-    reload_all_project_app_schemas,
-):
+    _reload_project_schema_for_acceptance_tests: None,
+    reload_all_project_app_schemas: Callable[[], None],
+) -> Iterator[None]:
     """Give each test a fresh shell and fully restore any registration mutation."""
     registration_identity = _registry_registration_identity()
     reload_project_schema_shell()
@@ -92,6 +95,8 @@ def _isolate_project_schema_for_acceptance_test(
 
 
 @pytest.fixture
-def project_schema_override(reload_all_project_app_schemas):
+def project_schema_override(
+    reload_all_project_app_schemas: Callable[[], None],
+) -> Callable[[], None]:
     """Rebuild under temporary settings; the autouse state guard restores afterward."""
     return reload_all_project_app_schemas

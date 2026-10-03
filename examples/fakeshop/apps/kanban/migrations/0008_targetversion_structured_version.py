@@ -7,6 +7,8 @@ Ordering switches to the numeric triple so ``0.0.9`` sorts before ``0.0.16``
 """
 
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 
 def _parse_version(number: str) -> tuple[int, int, int]:
@@ -17,7 +19,7 @@ def _parse_version(number: str) -> tuple[int, int, int]:
     return parts[0], parts[1], parts[2]
 
 
-def _backfill_version_triple(apps, schema_editor):
+def _backfill_version_triple(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Populate ``major``/``minor``/``patch`` from each row's ``number``."""
     TargetVersion = apps.get_model("kanban", "TargetVersion")
     manager = TargetVersion.objects.using(schema_editor.connection.alias)

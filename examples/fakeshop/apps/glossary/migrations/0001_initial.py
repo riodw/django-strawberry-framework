@@ -3,9 +3,14 @@
 import django.db.migrations.operations.special
 import django.db.models.deletion
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 
-def copy_glossary_documents_to_board_docs(apps, schema_editor):
+def copy_glossary_documents_to_board_docs(
+    apps: StateApps,
+    schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
     """Move glossary prose sections into the shared kanban.BoardDoc table."""
     database = schema_editor.connection.alias
     GlossaryDocument = apps.get_model("glossary", "GlossaryDocument")

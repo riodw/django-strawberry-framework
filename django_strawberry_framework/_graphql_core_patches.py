@@ -20,16 +20,39 @@ from .conf import upstream_patches_enabled
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Awaitable, Callable, Iterable
+    from typing import TypeAlias
 
-    from graphql import FieldNode, GraphQLList, GraphQLOutputType, GraphQLResolveInfo
+    from graphql import (
+        FieldNode,
+        GraphQLEnumType,
+        GraphQLInterfaceType,
+        GraphQLList,
+        GraphQLObjectType,
+        GraphQLResolveInfo,
+        GraphQLScalarType,
+        GraphQLType,
+        GraphQLUnionType,
+        GraphQLWrappingType,
+    )
     from graphql.execution.execute import ExecutionContext as _ExecutionContext
     from graphql.pyutils import AwaitableOrValue, Path
     from typing_extensions import TypeIs
 
+    #: graphql-core's ``GraphQLOutputType``, with the wrapping member it leaves bare
+    #: parametrized by ``GraphQLWrappingType``'s own bound.
+    _GraphQLOutputType: TypeAlias = (
+        GraphQLScalarType
+        | GraphQLObjectType
+        | GraphQLInterfaceType
+        | GraphQLUnionType
+        | GraphQLEnumType
+        | GraphQLWrappingType[GraphQLType]
+    )
+
     _CompleteListValue = Callable[
         [
             _ExecutionContext,
-            GraphQLList[GraphQLOutputType],
+            GraphQLList[_GraphQLOutputType],
             list[FieldNode],
             GraphQLResolveInfo,
             Path,
@@ -133,7 +156,7 @@ def _is_awaitable(
 
 def _patched_complete_list_value(
     self: "_ExecutionContext",
-    return_type: "GraphQLList[GraphQLOutputType]",
+    return_type: "GraphQLList[_GraphQLOutputType]",
     field_nodes: "list[FieldNode]",
     info: "GraphQLResolveInfo",
     path: "Path",

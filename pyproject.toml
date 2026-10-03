@@ -82,7 +82,8 @@ dev = [
     # Framework :: Django :: 6.0 classifier the package itself advertises.
     "django-debug-toolbar>=7.0.0",
     "pytest-cov>=7.0.0",
-    "pytest-django>=4.5.2",
+    # 4.13.0 first exports ``pytest_django.Settings``, the settings fixture's type.
+    "pytest-django>=4.13.0",
     "pytest-xdist>=3.8.0",
     # PyYAML is a test-only dependency, and NOT a dependency of the package
     # ([project].dependencies is untouched): tests/test_ci_governance.py parses
@@ -310,10 +311,8 @@ reportExplicitAny = "none"
 reportUnknownMemberType = "none"
 reportUnknownVariableType = "none"
 reportUnknownArgumentType = "none"
-reportUnknownParameterType = "none"
 reportUnannotatedClassAttribute = "none"
 reportUnusedCallResult = "none"
-reportMissingParameterType = "none"
 reportUnusedParameter = "none"
 
 [tool.coverage.run]

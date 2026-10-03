@@ -1,5 +1,7 @@
 """Dormant cookbook-shaped FieldSet examples staged for the planned products fieldset surface."""
 
+from datetime import datetime
+
 import strawberry
 from graphql import GraphQLError
 
@@ -8,12 +10,12 @@ import django_strawberry_framework as fieldsets
 from . import models
 
 
-def _user(info):
+def _user(info: strawberry.Info[object, object]):
     """Extract the user from info.context, or None."""
     return getattr(info.context, "user", None)
 
 
-def _resolve_date(dt, info, perm):
+def _resolve_date(dt: datetime, info: strawberry.Info[object, object], perm: str):
     """Tiered date visibility via truncated datetime objects.
 
     Staff         -> full datetime (as-is)
@@ -42,30 +44,34 @@ class CategoryFieldSet(fieldsets.AdvancedFieldSet):
     class Meta:
         model = models.Category
 
-    def resolve_description(self, root, info):
+    def resolve_description(
+        self,
+        root: models.Category,
+        info: strawberry.Info[object, object],
+    ) -> str:
         """Staff sees description; non-staff gets empty string."""
         user = _user(info)
         if user and user.is_staff:
             return root.description
         return ""
 
-    def resolve_display_name(self, root, info):
+    def resolve_display_name(self, root: models.Category, info: strawberry.Info[object, object]):
         """Computed field: '{id} - {name}'. Visible to all signed-in users."""
         user = _user(info)
         if user and user.is_authenticated:
-            return f"{root.id} - {root.name}"
+            return f"{root.pk} - {root.name}"
         return None
 
-    def resolve_created_date(self, root, info):
+    def resolve_created_date(self, root: models.Category, info: strawberry.Info[object, object]):
         return _resolve_date(root.created_date, info, "products.view_category")
 
-    def check_updated_date_permission(self, info):
+    def check_updated_date_permission(self, info: strawberry.Info[object, object]):
         """Gate: anonymous users cannot see updated_date at all."""
         user = _user(info)
         if not user or not user.is_authenticated:
             raise GraphQLError("Login required to view updated date.")
 
-    def resolve_updated_date(self, root, info):
+    def resolve_updated_date(self, root: models.Category, info: strawberry.Info[object, object]):
         """Tiered updated_date. If gate denied (anonymous), this still runs
         as fallback for non-nullable fields - returns year precision.
         """
@@ -83,30 +89,30 @@ class ItemFieldSet(fieldsets.AdvancedFieldSet):
     class Meta:
         model = models.Item
 
-    def resolve_is_private(self, root, info):
+    def resolve_is_private(self, root: models.Item, info: strawberry.Info[object, object]) -> bool:
         """Staff sees is_private; non-staff gets False."""
         user = _user(info)
         if user and user.is_staff:
             return root.is_private
         return False
 
-    def resolve_display_name(self, root, info):
+    def resolve_display_name(self, root: models.Item, info: strawberry.Info[object, object]):
         """Computed field: '{id} - {name}'. Visible to all signed-in users."""
         user = _user(info)
         if user and user.is_authenticated:
-            return f"{root.id} - {root.name}"
+            return f"{root.pk} - {root.name}"
         return None
 
-    def resolve_created_date(self, root, info):
+    def resolve_created_date(self, root: models.Item, info: strawberry.Info[object, object]):
         return _resolve_date(root.created_date, info, "products.view_item")
 
-    def check_updated_date_permission(self, info):
+    def check_updated_date_permission(self, info: strawberry.Info[object, object]):
         """Gate: anonymous users cannot see updated_date."""
         user = _user(info)
         if not user or not user.is_authenticated:
             raise GraphQLError("Login required to view updated date.")
 
-    def resolve_updated_date(self, root, info):
+    def resolve_updated_date(self, root: models.Item, info: strawberry.Info[object, object]):
         return _resolve_date(root.updated_date, info, "products.view_item")
 
 
@@ -121,23 +127,23 @@ class PropertyFieldSet(fieldsets.AdvancedFieldSet):
     class Meta:
         model = models.Property
 
-    def resolve_display_name(self, root, info):
+    def resolve_display_name(self, root: models.Property, info: strawberry.Info[object, object]):
         """Computed field: '{id} - {name}'. Visible to all signed-in users."""
         user = _user(info)
         if user and user.is_authenticated:
-            return f"{root.id} - {root.name}"
+            return f"{root.pk} - {root.name}"
         return None
 
-    def resolve_created_date(self, root, info):
+    def resolve_created_date(self, root: models.Property, info: strawberry.Info[object, object]):
         return _resolve_date(root.created_date, info, "products.view_property")
 
-    def check_updated_date_permission(self, info):
+    def check_updated_date_permission(self, info: strawberry.Info[object, object]):
         """Gate: anonymous users cannot see updated_date."""
         user = _user(info)
         if not user or not user.is_authenticated:
             raise GraphQLError("Login required to view updated date.")
 
-    def resolve_updated_date(self, root, info):
+    def resolve_updated_date(self, root: models.Property, info: strawberry.Info[object, object]):
         return _resolve_date(root.updated_date, info, "products.view_property")
 
 
@@ -152,14 +158,14 @@ class EntryFieldSet(fieldsets.AdvancedFieldSet):
     class Meta:
         model = models.Entry
 
-    def resolve_display_name(self, root, info):
+    def resolve_display_name(self, root: models.Entry, info: strawberry.Info[object, object]):
         """Computed field: '{id} - {value}'. Visible to all signed-in users."""
         user = _user(info)
         if user and user.is_authenticated:
-            return f"{root.id} - {root.value}"
+            return f"{root.pk} - {root.value}"
         return None
 
-    def resolve_created_date(self, root, info):
+    def resolve_created_date(self, root: models.Entry, info: strawberry.Info[object, object]):
         return _resolve_date(root.created_date, info, "products.view_entry")
 
     # def check_updated_date_permission(self, info):
@@ -168,7 +174,7 @@ class EntryFieldSet(fieldsets.AdvancedFieldSet):
     #     if not user or not user.is_authenticated:
     #         raise GraphQLError("Login required to view updated date.")
 
-    def resolve_updated_date(self, root, info):
+    def resolve_updated_date(self, root: models.Entry, info: strawberry.Info[object, object]):
         """Permission + content in one method (no check_ gate).
 
         Demonstrates that resolve_ can handle denial directly:

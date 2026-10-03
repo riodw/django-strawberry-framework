@@ -31,7 +31,20 @@ from typing_extensions import override
 from .constraints import OneHotLinkCount
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from django.db.models.base import ModelBase
     from django.db.models.fields.related_descriptors import RelatedManager
+    from typing_extensions import TypedDict, Unpack
+
+    class _SaveOptions(TypedDict, total=False):
+        """``Model.save``'s keyword options, as a ``save`` override forwards them."""
+
+        force_insert: bool | tuple[ModelBase, ...]
+        force_update: bool
+        using: str | None
+        update_fields: Iterable[str] | None
+
 
 _M = TypeVar("_M", bound=models.Model)
 
@@ -351,10 +364,10 @@ class TargetVersion(TimeStampedModel):
         return parts[0], parts[1], parts[2]
 
     @override
-    def save(self, *args, **kwargs) -> None:
+    def save(self, **kwargs: Unpack[_SaveOptions]) -> None:
         """Keep the ``major``/``minor``/``patch`` triple in sync with ``number``."""
         self.major, self.minor, self.patch = self.parse_version(self.number or "")
-        super().save(*args, **kwargs)
+        super().save(**kwargs)
 
     @override
     def __str__(self) -> str:
@@ -731,7 +744,7 @@ class CardReference(TimeStampedModel):
         ]
 
     @override
-    def save(self, *args, **kwargs) -> None:
+    def save(self, **kwargs: Unpack[_SaveOptions]) -> None:
         """Assign a per-``source_card`` sequential ``order`` on insert.
 
         Replaces the former ``(source_card, source, order)`` DB unique
@@ -742,13 +755,14 @@ class CardReference(TimeStampedModel):
         """
         if self._state.adding:
             manager = CardReference.objects
-            if kwargs.get("using"):
-                manager = manager.db_manager(kwargs["using"])
+            using = kwargs.get("using")
+            if using:
+                manager = manager.db_manager(using)
             last = manager.filter(source_card=self.source_card).aggregate(
                 models.Max("order"),
             )["order__max"]
             self.order = 0 if last is None else last + 1
-        super().save(*args, **kwargs)
+        super().save(**kwargs)
 
     @override
     def __str__(self) -> str:

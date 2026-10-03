@@ -1,6 +1,8 @@
 """Products service tests for Faker discovery, catalog lifecycle, and user lifecycle."""
 
 import inspect
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -69,12 +71,6 @@ def test_discover_providers_returns_dict_of_methods():
 def test_discover_providers_handles_module_without_provider_class():
     """If a sub-module lacks ``Provider``, discover_providers must skip it gracefully."""
     fake = Faker()
-    real_import = __import__
-
-    def fake_import(name, *args, **kwargs):
-        # Force the very first non-package submodule walked to look like a no-Provider module.
-        mod = real_import(name, *args, **kwargs)
-        return mod
 
     # Use a real provider but stub away its ``Provider`` attribute mid-discovery to hit the branch.
     import faker.providers.bank as bank_module
@@ -93,7 +89,7 @@ def test_discover_providers_handles_import_error():
     fake = Faker()
     real_import = __import__
 
-    def boom_import(name, *args, **kwargs):
+    def boom_import(name: str, *args: Any, **kwargs: Any):
         if name == "faker.providers.bank":
             raise ImportError("synthetic")
         return real_import(name, *args, **kwargs)
@@ -108,7 +104,7 @@ def test_discover_providers_handles_unsignaturable_method():
     fake = Faker()
     real_signature = inspect.signature
 
-    def boom_signature(obj, *args, **kwargs):
+    def boom_signature(obj: Callable[..., object], *args: Any, **kwargs: Any):
         # Trigger only on an arbitrary callable so the rest still runs.
         if getattr(obj, "__name__", "") == "name":
             raise ValueError("synthetic")
@@ -138,14 +134,14 @@ def test_seed_data_creates_expected_counts():
 
 
 @pytest.mark.django_db
-def test_seed_data_idempotent_on_categories_and_properties(monkeypatch):
+def test_seed_data_idempotent_on_categories_and_properties(monkeypatch: pytest.MonkeyPatch):
     """A second seed at the same X creates 0 new categories/properties (and only fills item shortfall).
 
     Pin a minimal provider shape and prove repeated seed calls discover it only once.
     """
     discovery_calls = 0
 
-    def discover_once(_fake):
+    def discover_once(_fake: Faker):
         nonlocal discovery_calls
         discovery_calls += 1
         return {"person": ["name"]}
@@ -162,7 +158,7 @@ def test_seed_data_idempotent_on_categories_and_properties(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch):
+def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch: pytest.MonkeyPatch):
     """Bumping X from 1 to 2 should create exactly one extra item per provider.
 
     Pin a minimal provider shape so this test isolates shortfall behavior.
@@ -309,7 +305,7 @@ def test_delete_users_all_mode_wipes_non_superusers():
 # ---------------------------------------------------------------------------
 
 
-def _named_fixture_helpers():
+def _named_fixture_helpers() -> dict[str, Callable[..., object]]:
     """Discover the named fixture helpers by shape, never from a written list.
 
     A hand-kept roster would be a second definition of the family and would drift
@@ -318,7 +314,7 @@ def _named_fixture_helpers():
     ``seed_``-prefixed, and callable with no arguments (``seed_data`` takes a
     required ``count`` and is a catalog seeder, not a fixture).
     """
-    found = {}
+    found: dict[str, Callable[..., object]] = {}
     for name in dir(services):
         if not name.startswith("seed_"):
             continue

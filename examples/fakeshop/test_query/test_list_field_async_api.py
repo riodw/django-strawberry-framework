@@ -30,15 +30,17 @@ from django.conf import settings
 from django.core.exceptions import EmptyResultSet
 from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.db.models.expressions import Func, OrderBy, RawSQL
+from django.db.models.expressions import Combinable, Func, OrderBy, RawSQL
 from django.db.models.functions import Lower, Random
 from django.db.models.lookups import Transform
 from django.db.models.sql.compiler import SQLCompiler
+from django.http import HttpRequest, HttpResponse
 from django.test import AsyncClient, override_settings
 from django.test.utils import register_lookup
 from django.urls import clear_url_caches, path
 from graphql_client import JSONObject
 from strawberry.django.context import StrawberryDjangoContext
+from strawberry.types.arguments import StrawberryArgument
 from typing_extensions import override
 
 from django_strawberry_framework import (
@@ -62,11 +64,24 @@ from django_strawberry_framework.utils.context import get_context_value, stash_o
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine
+    from collections.abc import Coroutine, Generator
 
     from django.db.models.sql.compiler import _AsSqlType
 
 _ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
+# ``BranchOrder.apply_async`` replaced by a classmethod whose result the seal must judge.
+_ApplyAsyncOverride: TypeAlias = Callable[
+    [
+        type[BranchOrder],
+        object,
+        models.QuerySet[library_models.Branch],
+        object,
+    ],
+    object,
+]
+
+#: A ``Meta.ordering`` value: what ``Options.ordering`` holds, one tuple of terms.
+_ModelOrdering: TypeAlias = tuple[str | Combinable, ...]
 
 _CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
 
@@ -80,7 +95,7 @@ def _list_resolver(resolver: _ListResolver) -> _ListResolver:
     return resolver
 
 
-async def _async_graphql_view(request):
+async def _async_graphql_view(request: HttpRequest):
     schema = _CURRENT["schema"]
     assert schema is not None
     view_class = _CURRENT["view_class"] or AsyncDjangoGraphQLView
@@ -257,7 +272,7 @@ async def test_async_queryset_completion_async_def_queryset_resolver():
     await sync_to_async(library_models.Branch.objects.create)(name="Bravo", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Charlie", city="Boston")
 
-    async def _resolve_branches(root, info):
+    async def _resolve_branches(root: object, info: strawberry.Info[object, object]):
         return library_models.Branch.objects.all()
 
     @strawberry.type
@@ -285,14 +300,19 @@ async def test_async_queryset_completion_async_def_queryset_resolver():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_get_queryset_is_awaited(monkeypatch):
+async def test_async_get_queryset_is_awaited(monkeypatch: pytest.MonkeyPatch):
     """An ``async def get_queryset`` runs under the async view, not the sync skip."""
     await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="hidden-a", city="Boston")
 
     original = library_schema.BranchType.get_queryset
 
-    async def _async_get_queryset(cls, queryset, info, **kwargs):
+    async def _async_get_queryset(
+        cls: type[library_schema.BranchType],
+        queryset: models.QuerySet[library_models.Branch],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ):
         qs = original(queryset, info, **kwargs)
         return qs.exclude(name__startswith="hidden")
 
@@ -324,7 +344,9 @@ async def test_async_get_queryset_is_awaited(monkeypatch):
     ],
     ids=["queryset", "manager"],
 )
-async def test_async_a_query_source_resolver_still_applies_target_visibility(resolver):
+async def test_async_a_query_source_resolver_still_applies_target_visibility(
+    resolver: _ListResolver,
+):
     """Async completion of a ``QuerySet`` or ``Manager`` still runs ``get_queryset``."""
     await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
@@ -351,7 +373,7 @@ async def test_async_a_materialized_list_skips_target_visibility():
     await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
 
-    async def _resolve(root, info):
+    async def _resolve(root: object, info: strawberry.Info[object, object]):
         return await sync_to_async(
             lambda: list(library_models.Branch.objects.order_by("name")),
         )()
@@ -376,7 +398,7 @@ async def test_async_a_materialized_list_skips_target_visibility():
 async def test_async_nullable_none_resolver_returns_null():
     """An async resolver returning ``None`` on a nullable list field renders ``null``."""
 
-    async def _resolve(root, info):
+    async def _resolve(root: object, info: strawberry.Info[object, object]):
         return None
 
     @strawberry.type
@@ -421,7 +443,7 @@ async def test_async_http_rejects_a_sync_resolver_that_returns_a_coroutine():
     async def _inner():
         return library_models.Branch.objects.all()
 
-    def _sync_returning_coroutine(root, info):
+    def _sync_returning_coroutine(root: object, info: strawberry.Info[object, object]):
         return _inner()
 
     @strawberry.type
@@ -447,11 +469,11 @@ async def test_async_http_rejects_a_sync_resolver_that_returns_a_custom_awaitabl
     await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
 
     class _DeferredQueryset:
-        def __await__(self):
+        def __await__(self) -> Generator[None, None, models.QuerySet[library_models.Branch]]:
             yield from ()
             return library_models.Branch.objects.all()
 
-    def _sync_returning_awaitable(root, info):
+    def _sync_returning_awaitable(root: object, info: strawberry.Info[object, object]):
         return _DeferredQueryset()
 
     @strawberry.type
@@ -489,7 +511,7 @@ async def test_async_http_rejects_an_async_resolver_that_resolves_to_another_awa
         inner_body_ran.append("ran")
         return library_models.Branch.objects.all()
 
-    async def _resolve_to_awaitable(root, info):
+    async def _resolve_to_awaitable(root: object, info: strawberry.Info[object, object]):
         coroutine = _inner()
         inner_coroutines.append(coroutine)
         return coroutine
@@ -520,14 +542,14 @@ async def test_async_http_rejects_an_async_resolver_that_resolves_to_another_awa
 
 def _async_callable_object_resolver():
     class _AsyncResolver:
-        async def __call__(self, root, info):
+        async def __call__(self, root: object, info: strawberry.Info[object, object]):
             return library_models.Branch.objects.all()
 
     return _AsyncResolver()
 
 
 def _partial_async_def_resolver():
-    async def _resolve(prefix, root, info):
+    async def _resolve(prefix: str, root: object, info: strawberry.Info[object, object]):
         return library_models.Branch.objects.all()
 
     return functools.partial(_resolve, "ignored")
@@ -537,9 +559,9 @@ def _partial_async_callable_object_resolver():
     class _AsyncResolver:
         async def __call__(
             self,
-            prefix,
-            root,
-            info,
+            prefix: str,
+            root: object,
+            info: strawberry.Info[object, object],
         ):
             return library_models.Branch.objects.all()
 
@@ -556,7 +578,9 @@ def _partial_async_callable_object_resolver():
     ],
     ids=["callable_object", "partial_async_def", "partial_callable_object"],
 )
-async def test_async_http_classified_resolver_still_applies_visibility(resolver):
+async def test_async_http_classified_resolver_still_applies_visibility(
+    resolver: Callable[..., object],
+):
     """Factory-classified exotic async resolvers still run ``BranchType.get_queryset``.
 
     ``inspect.iscoroutinefunction`` is False for an ``async def __call__`` instance
@@ -595,7 +619,7 @@ async def test_async_http_staticmethod_resolver_still_applies_visibility():
     @strawberry.type
     class _StaticQuery:
         @staticmethod
-        async def _resolve(root, info):
+        async def _resolve(root: object, info: strawberry.Info[object, object]):
             return library_models.Branch.objects.all()
 
         branches: list[library_schema.BranchType] = DjangoListField(
@@ -640,9 +664,9 @@ async def test_async_http_partial_async_generator_resolver_is_bounded():
     class _Resolver:
         def __call__(
             self,
-            prefix,
-            root,
-            info,
+            prefix: str,
+            root: object,
+            info: strawberry.Info[object, object],
         ):
             holder["gen"] = _rows()
             return holder["gen"]
@@ -674,7 +698,7 @@ async def test_async_http_partial_async_generator_resolver_is_bounded():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("with_optimizer", [False, True], ids=["plain", "optimized"])
-async def test_async_queryset_completion_windows_the_same_rows(with_optimizer):
+async def test_async_queryset_completion_windows_the_same_rows(with_optimizer: bool):
     """Each schema configuration owns a node, and both assert the SAME literal rows.
 
     Asserting the two payloads equal each other would go green whenever they are
@@ -816,7 +840,7 @@ async def test_async_iterator_aclose_witness_on_limit_zero_and_rejection():
 
     holder: dict[str, _ClosableAsyncIterator | None] = {"it": None}
 
-    def _resolver(root, info):
+    def _resolver(root: object, info: strawberry.Info[object, object]):
         it = _ClosableAsyncIterator(branches)
         holder["it"] = it
         return it
@@ -860,7 +884,7 @@ async def test_async_generator_natural_exhaustion_does_not_call_aclose():
 
     holder: dict[str, _ClosableAsyncIterator | None] = {"it": None}
 
-    def _resolver(root, info):
+    def _resolver(root: object, info: strawberry.Info[object, object]):
         it = _ClosableAsyncIterator(branches)
         holder["it"] = it
         return it
@@ -893,7 +917,7 @@ _UNREACHABLE_DEADLINE_SECONDS = 30
     ["", "(limit: 0)"],
     ids=["default-window", "limit-zero"],
 )
-async def test_async_deadline_rejection_closes_the_source_it_never_advanced(arguments):
+async def test_async_deadline_rejection_closes_the_source_it_never_advanced(arguments: str):
     """A budget that ends while the resolver awaits still closes the source it returned.
 
     The resolver produces its source first and the bounding seam reads the clock
@@ -920,7 +944,7 @@ async def test_async_deadline_rejection_closes_the_source_it_never_advanced(argu
 
     holder: dict[str, Any] = {"it": None, "awaited": False}
 
-    async def _resolver(root, info):
+    async def _resolver(root: object, info: strawberry.Info[object, object]):
         it = _ClosableAsyncIterator(branches)
         holder["it"] = it
         await asyncio.sleep(0)
@@ -977,7 +1001,7 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_through_the_context()
 
     holder: dict[str, Any] = {"awaited": False}
 
-    async def _resolver(root, info):
+    async def _resolver(root: object, info: strawberry.Info[object, object]):
         await asyncio.sleep(0)
         holder["awaited"] = True
         stash_on_context(info.context, DST_RESOURCE_POLICY, ResourcePolicy(max_list_rows=5))
@@ -1012,11 +1036,11 @@ class _NarrowsThenNeverExpires(float):
     """
 
     @override
-    def __lt__(self, other):
+    def __lt__(self, other: float):
         return True
 
     @override
-    def __le__(self, other):
+    def __le__(self, other: float):
         return False
 
 
@@ -1035,7 +1059,9 @@ _WIDENED_DEADLINES = [
     _WIDENED_DEADLINES,
     ids=["far-future", "narrowing-subclass"],
 )
-async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context(widened):
+async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context(
+    widened: Callable[[], float],
+):
     """A budget that ended while the resolver awaited cannot be pushed back out.
 
     The resolver sleeps well past its own configured deadline and then writes a
@@ -1049,7 +1075,7 @@ async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context(w
 
     holder: dict[str, Any] = {"awaited": False}
 
-    async def _resolver(root, info):
+    async def _resolver(root: object, info: strawberry.Info[object, object]):
         await asyncio.sleep(_SHORT_DEADLINE_SECONDS * 3)
         holder["awaited"] = True
         stash_on_context(info.context, DST_RESOURCE_DEADLINE, widened())
@@ -1159,7 +1185,7 @@ def _offset_guard_schema():
     return DjangoSchema(query=_OffsetGuardQuery, config=strawberry_config())
 
 
-def _record_table_sql(monkeypatch, table: str = "library_branch") -> list[str]:
+def _record_table_sql(monkeypatch: pytest.MonkeyPatch, table: str = "library_branch") -> list[str]:
     """Record every statement against ``table`` the request compiles, whichever thread runs it.
 
     ``CaptureQueriesContext`` watches one connection object, and the async
@@ -1178,7 +1204,7 @@ def _record_table_sql(monkeypatch, table: str = "library_branch") -> list[str]:
     recorded: list[str] = []
     original_execute_sql = SQLCompiler.execute_sql
 
-    def _recording_execute_sql(self, *args, **kwargs):
+    def _recording_execute_sql(self: SQLCompiler, *args: Any, **kwargs: Any) -> object:
         if type(self) is SQLCompiler:
             try:
                 sql = self.as_sql()[0]
@@ -1193,7 +1219,7 @@ def _record_table_sql(monkeypatch, table: str = "library_branch") -> list[str]:
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_a_random_model_default(monkeypatch):
+async def test_async_offset_rejects_a_random_model_default(monkeypatch: pytest.MonkeyPatch):
     """The async coloring reads the same effective order the sync one does.
 
     Both pipelines hand the sealed queryset to one guard, so the order the
@@ -1205,7 +1231,13 @@ async def test_async_offset_rejects_a_random_model_default(monkeypatch):
     await _seed_three_branches_async()
     monkeypatch.setattr(library_models.Branch._meta, "ordering", ("?",))
 
-    async def _apply_unchanged(cls, order_input, queryset, info, **kwargs):
+    async def _apply_unchanged(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_apply_unchanged))
@@ -1256,7 +1288,9 @@ def _coin_case_ordering(lookup: str = "coin__gt", threshold: object = 0.5):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_a_relation_default_that_expands_to_a_random_order(monkeypatch):
+async def test_async_offset_rejects_a_relation_default_that_expands_to_a_random_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The async coloring expands a relation term the same way the sync one does.
 
     Both pipelines hand the sealed queryset to one guard, so a shelf ordering by
@@ -1278,7 +1312,9 @@ async def test_async_offset_rejects_a_relation_default_that_expands_to_a_random_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_accepts_a_relation_default_that_expands_to_a_stable_order(monkeypatch):
+async def test_async_offset_accepts_a_relation_default_that_expands_to_a_stable_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The control for the row above: the expansion is read, not assumed random."""
     await _seed_three_shelves_async()
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("branch",))
@@ -1295,7 +1331,9 @@ async def test_async_offset_accepts_a_relation_default_that_expands_to_a_stable_
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_accepts_a_relation_attname_over_a_random_related_default(monkeypatch):
+async def test_async_offset_accepts_a_relation_attname_over_a_random_related_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Naming the foreign-key column instead of the relation never reaches the related default."""
     await _seed_three_shelves_async()
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", ("branch_id",))
@@ -1322,8 +1360,8 @@ async def test_async_offset_accepts_a_relation_attname_over_a_random_related_def
     ids=["f-asc", "orderby-f", "f-bare"],
 )
 async def test_async_offset_accepts_an_expression_reference_to_a_relation(
-    monkeypatch,
-    shelf_ordering,
+    monkeypatch: pytest.MonkeyPatch,
+    shelf_ordering: _ModelOrdering,
 ):
     """Only a STRING ordering term expands; an expression reference is a column order."""
     await _seed_three_shelves_async()
@@ -1341,7 +1379,9 @@ async def test_async_offset_accepts_an_expression_reference_to_a_relation(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_a_conditional_order_over_a_random_predicate(monkeypatch):
+async def test_async_offset_rejects_a_conditional_order_over_a_random_predicate(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The async coloring reads both sides of a predicate the same way the sync one does."""
     await _seed_three_shelves_async()
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", _coin_case_ordering())
@@ -1359,7 +1399,9 @@ async def test_async_offset_rejects_a_conditional_order_over_a_random_predicate(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_accepts_a_conditional_order_over_a_column_alias_predicate(monkeypatch):
+async def test_async_offset_accepts_a_conditional_order_over_a_column_alias_predicate(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The control for the row above: a predicate comparing a column alias still pages."""
     await _seed_three_shelves_async()
     monkeypatch.setattr(library_models.Shelf._meta, "ordering", _coin_case_ordering())
@@ -1425,9 +1467,9 @@ class _ProjectTransform(Transform):
     ids=["project-func", "approved-func"],
 )
 async def test_async_offset_reads_an_expression_by_its_approved_form(
-    monkeypatch,
-    ordering,
-    served,
+    monkeypatch: pytest.MonkeyPatch,
+    ordering: _ModelOrdering,
+    served: bool,
 ):
     """The async coloring names the same approved forms the sync one does."""
     await _seed_three_shelves_async()
@@ -1453,7 +1495,7 @@ class _ProjectF(models.F):
     """A reference subclass that resolves to SQL of its own instead of to the name it holds."""
 
     @override
-    def resolve_expression(self, *args, **kwargs):
+    def resolve_expression(self, *args: object, **kwargs: object):
         return Random()
 
 
@@ -1462,21 +1504,21 @@ class _ProjectQ(models.Q):
 
     @override
     # basedpyright: deliberately resolves to foreign SQL, the predicate subclass the guard refuses
-    def resolve_expression(self, *args, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def resolve_expression(self, *args: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
         return Random()
 
 
 class _ProjectName(str):
     """A string subclass Django reads as an expression because it carries the method."""
 
-    def resolve_expression(self, *args, **kwargs):
+    def resolve_expression(self, *args: object, **kwargs: object):
         return Random()
 
     def asc(self):
         return OrderBy(Random())
 
 
-def _case_ordering_over(condition):
+def _case_ordering_over(condition: models.Q):
     """A conditional ordering whose ``When`` is built from a predicate object."""
     return (
         models.Case(
@@ -1497,9 +1539,9 @@ def _case_ordering_over(condition):
     ids=["reference-subclass", "name-that-resolves", "reference"],
 )
 async def test_async_offset_reads_a_term_by_the_form_it_resolves_into(
-    monkeypatch,
-    ordering,
-    served,
+    monkeypatch: pytest.MonkeyPatch,
+    ordering: _ModelOrdering,
+    served: bool,
 ):
     """The async coloring reads a reference by its exact type the same way the sync one does."""
     await _seed_three_shelves_async()
@@ -1528,9 +1570,9 @@ async def test_async_offset_reads_a_term_by_the_form_it_resolves_into(
     ids=["predicate-subclass", "predicate"],
 )
 async def test_async_offset_reads_a_conditional_predicate_by_its_exact_type(
-    monkeypatch,
-    condition,
-    served,
+    monkeypatch: pytest.MonkeyPatch,
+    condition: models.Q,
+    served: bool,
 ):
     """The async coloring reads a ``When`` condition by its exact type as well.
 
@@ -1559,7 +1601,9 @@ async def test_async_offset_reads_a_conditional_predicate_by_its_exact_type(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_a_predicate_chain_of_project_sql(monkeypatch):
+async def test_async_offset_rejects_a_predicate_chain_of_project_sql(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A project transform on a built-in field is SQL the predicate wraps its column in."""
     await _seed_three_shelves_async()
     monkeypatch.setattr(
@@ -1579,7 +1623,9 @@ async def test_async_offset_rejects_a_predicate_chain_of_project_sql(monkeypatch
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(monkeypatch):
+async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The async twin of the acceptance half: a superseded ``"?"`` cannot reject the offset.
 
     ``extra`` ordering wins over ``query.order_by`` in the compiler, so the page
@@ -1591,7 +1637,13 @@ async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(m
     """
     await _seed_three_branches_async()
 
-    async def _extra_supersedes_random(cls, order_input, queryset, info, **kwargs):
+    async def _extra_supersedes_random(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset.order_by("?").extra(order_by=["id"])
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_extra_supersedes_random))
@@ -1610,7 +1662,9 @@ async def test_async_offset_accepts_extra_ordering_over_a_dormant_random_order(m
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_extra_random_ordering_over_a_stable_order(monkeypatch):
+async def test_async_offset_rejects_extra_random_ordering_over_a_stable_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The control for the acceptance above: the same precedence, opposite verdict.
 
     ``extra`` ordering supersedes an explicit ``order_by`` whichever way the two
@@ -1621,7 +1675,13 @@ async def test_async_offset_rejects_extra_random_ordering_over_a_stable_order(mo
     """
     await _seed_three_branches_async()
 
-    async def _random_extra_supersedes_stable(cls, order_input, queryset, info, **kwargs):
+    async def _random_extra_supersedes_stable(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset.order_by("name").extra(order_by=["?"])
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_random_extra_supersedes_stable))
@@ -1636,7 +1696,7 @@ async def test_async_offset_rejects_extra_random_ordering_over_a_stable_order(mo
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_an_annotated_random_order(monkeypatch):
+async def test_async_offset_rejects_an_annotated_random_order(monkeypatch: pytest.MonkeyPatch):
     """The async coloring resolves an ordering alias the same way the sync one does.
 
     ``order_by("rnd")`` names an annotation, and the name alone looks like any
@@ -1646,7 +1706,13 @@ async def test_async_offset_rejects_an_annotated_random_order(monkeypatch):
     """
     await _seed_three_branches_async()
 
-    async def _random_annotation(cls, order_input, queryset, info, **kwargs):
+    async def _random_annotation(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset.annotate(rnd=Random()).order_by("rnd")
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_random_annotation))
@@ -1661,7 +1727,7 @@ async def test_async_offset_rejects_an_annotated_random_order(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_an_extra_select_ordering(monkeypatch):
+async def test_async_offset_rejects_an_extra_select_ordering(monkeypatch: pytest.MonkeyPatch):
     """Raw SQL reached through ``extra`` is opaque on this coloring too.
 
     The ``extra`` collection already decides the verdict for a term written as
@@ -1671,7 +1737,13 @@ async def test_async_offset_rejects_an_extra_select_ordering(monkeypatch):
     """
     await _seed_three_branches_async()
 
-    async def _extra_select_ordering(cls, order_input, queryset, info, **kwargs):
+    async def _extra_select_ordering(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset.extra(select={"rnd": "RANDOM()"}, order_by=["rnd"])
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_extra_select_ordering))
@@ -1686,7 +1758,7 @@ async def test_async_offset_rejects_an_extra_select_ordering(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_offset_rejects_a_raw_sql_order(monkeypatch):
+async def test_async_offset_rejects_a_raw_sql_order(monkeypatch: pytest.MonkeyPatch):
     """A raw SQL leaf is unreadable on this coloring for the same reason.
 
     Both pipelines classify the sealed queryset with one term reader, so the
@@ -1695,7 +1767,13 @@ async def test_async_offset_rejects_a_raw_sql_order(monkeypatch):
     """
     await _seed_three_branches_async()
 
-    async def _raw_sql_ordering(cls, order_input, queryset, info, **kwargs):
+    async def _raw_sql_ordering(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset.order_by(RawSQL("RANDOM()", []))
 
     monkeypatch.setattr(BranchOrder, "apply_async", classmethod(_raw_sql_ordering))
@@ -1730,38 +1808,87 @@ class _ResidualAwaitable:
         return iter(())
 
 
-async def _async_combined_duplicates(cls, order_input, queryset, info, **kwargs):
+async def _async_combined_duplicates(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return queryset.union(queryset, all=True)
 
 
-async def _async_evaluated(cls, order_input, queryset, info, **kwargs):
+async def _async_evaluated(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     async for _row in queryset:
         pass
     return queryset
 
 
-async def _async_materialized(cls, order_input, queryset, info, **kwargs):
+async def _async_materialized(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return [branch async for branch in queryset]
 
 
-async def _async_projection(cls, order_input, queryset, info, **kwargs):
+async def _async_projection(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return queryset.values("name")
 
 
-async def _async_wrong_model(cls, order_input, queryset, info, **kwargs):
+async def _async_wrong_model(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return library_models.Book.objects.all()
 
 
-async def _async_sliced(cls, order_input, queryset, info, **kwargs):
+async def _async_sliced(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return queryset.order_by("name")[:1]
 
 
-async def _async_in_place_routing(cls, order_input, queryset, info, **kwargs):
-    queryset._hints = {"tenant": 2}
+async def _async_in_place_routing(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
     return queryset
 
 
-async def _async_untrusted(cls, order_input, queryset, info, **kwargs):
+async def _async_untrusted(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     candidate = _AsyncDeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
@@ -1770,11 +1897,23 @@ async def _async_untrusted(cls, order_input, queryset, info, **kwargs):
     return candidate
 
 
-def _async_non_awaitable(cls, order_input, queryset, info, **kwargs):
+def _async_non_awaitable(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return queryset
 
 
-async def _async_residual(cls, order_input, queryset, info, **kwargs):
+async def _async_residual(
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
+    **kwargs: object,
+):
     return _ResidualAwaitable()
 
 
@@ -1854,10 +1993,10 @@ _MALFORMED_APPLY_ASYNC_ROWS = (
     ids=[row[0] for row in _MALFORMED_APPLY_ASYNC_ROWS],
 )
 async def test_async_holder_branches_a_malformed_apply_async_result_names_its_own_defect(
-    monkeypatch,
-    override,
-    message_start,
-    substrings,
+    monkeypatch: pytest.MonkeyPatch,
+    override: _ApplyAsyncOverride,
+    message_start: str,
+    substrings: tuple[str, ...],
 ):
     """Every malformed ``apply_async`` result names its exact defect, on its own node.
 
@@ -1894,22 +2033,30 @@ async def test_async_holder_branches_a_malformed_apply_async_result_names_its_ow
 class _NestedTenantRouter:
     """Routes by state INSIDE the tenant hint object - ordinary, legal router code."""
 
-    def db_for_read(self, model, **hints):
+    def db_for_read(self, model: type[models.Model], **hints: object) -> str | None:
         token = hints.get("tenant")
         return token["alias"] if type(token) is dict else None
 
-    def db_for_write(self, model, **hints):
+    def db_for_write(self, model: type[models.Model], **hints: object):
         return None
 
-    def allow_relation(self, obj1, obj2, **hints):
+    def allow_relation(self, obj1: models.Model, obj2: models.Model, **hints: object):
         return None
 
-    def allow_migrate(self, db, app_label, model_name=None, **hints):
+    def allow_migrate(
+        self,
+        db: str,
+        app_label: str,
+        model_name: str | None = None,
+        **hints: object,
+    ):
         return None
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_mutable_hint_cannot_reroute_the_completed_read(monkeypatch):
+async def test_async_mutable_hint_cannot_reroute_the_completed_read(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The async override's accepted result is pinned to the alias frozen before it ran.
 
     ``apply_async`` is a distinct executable seam from ``apply_sync``, so the
@@ -1925,7 +2072,13 @@ async def test_async_mutable_hint_cannot_reroute_the_completed_read(monkeypatch)
 
     token = {"alias": "default"}
 
-    async def _hint_mutating_apply_async(cls, order_input, queryset, info, **kwargs):
+    async def _hint_mutating_apply_async(
+        cls: type[BranchOrder],
+        order_input: object,
+        queryset: models.QuerySet[library_models.Branch],
+        info: object,
+        **kwargs: object,
+    ):
         token["alias"] = "no_such_alias"
         return queryset.order_by("name")
 
@@ -1936,7 +2089,12 @@ async def test_async_mutable_hint_cannot_reroute_the_completed_read(monkeypatch)
     # field to the async coloring, so it takes no ``resolver=``.
     original_get_queryset = library_schema.BranchType.get_queryset
 
-    def _hinted_get_queryset(cls, queryset, info, **kwargs):
+    def _hinted_get_queryset(
+        cls: type[library_schema.BranchType],
+        queryset: models.QuerySet[library_models.Branch],
+        info: strawberry.Info[object, object],
+        **kwargs: object,
+    ):
         hinted = original_get_queryset(queryset, info, **kwargs)
         monkeypatch.setattr(hinted, "_hints", {"tenant": token})
         return hinted
@@ -1985,7 +2143,7 @@ async def test_async_rejection_reports_the_published_name_without_extra_converte
         calls = 0
 
         @override
-        def from_argument(self, argument):
+        def from_argument(self, argument: StrawberryArgument):
             type(self).calls += 1
             return super().from_argument(argument).upper()
 
@@ -2022,7 +2180,7 @@ class _MarkedContext(StrawberryDjangoContext):
 class _CapturingAsyncContextView(AsyncDjangoGraphQLView):
     @override
     # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
-    async def get_context(self, request, response):  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def get_context(self, request: HttpRequest, response: HttpResponse):  # pyright: ignore[reportIncompatibleMethodOverride]
         context = _MarkedContext(
             request=request,
             response=response,
@@ -2035,23 +2193,23 @@ class _CapturingAsyncContextView(AsyncDjangoGraphQLView):
 class _FrozenContext:
     """A context that refuses every attribute write or delete after construction."""
 
-    def __init__(self, request, response):
+    def __init__(self, request: HttpRequest, response: HttpResponse):
         object.__setattr__(self, "request", request)
         object.__setattr__(self, "response", response)
 
     @override
-    def __setattr__(self, name, value):
+    def __setattr__(self, name: str, value: object):
         raise AttributeError(f"frozen context refuses write to {name!r}")
 
     @override
-    def __delattr__(self, name):
+    def __delattr__(self, name: str):
         raise AttributeError(f"frozen context refuses delete of {name!r}")
 
 
 class _FrozenAsyncContextView(AsyncDjangoGraphQLView):
     @override
     # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
-    async def get_context(self, request, response):  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def get_context(self, request: HttpRequest, response: HttpResponse):  # pyright: ignore[reportIncompatibleMethodOverride]
         return _FrozenContext(request, response)
 
 
@@ -2089,8 +2247,8 @@ _ORDERED_CONTEXT_REQUESTS: tuple[tuple[str, str, str], ...] = (
     ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
 )
 async def test_async_ordering_leaves_the_consumer_context_exactly_as_found(
-    control_query,
-    ordered_query,
+    control_query: str,
+    ordered_query: str,
 ):
     """An async ordered surface adds nothing to ``info.context`` its control does not.
 
@@ -2122,7 +2280,7 @@ async def test_async_ordering_leaves_the_consumer_context_exactly_as_found(
     [row[2] for row in _ORDERED_CONTEXT_REQUESTS],
     ids=[row[0] for row in _ORDERED_CONTEXT_REQUESTS],
 )
-async def test_async_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query):
+async def test_async_ordering_succeeds_on_a_context_that_forbids_writes(ordered_query: str):
     """A write-refusing context still serves each async ordered surface."""
     for name in ("Alpha", "Bravo"):
         await sync_to_async(library_models.Branch.objects.create)(name=name, city="Boston")
@@ -2166,10 +2324,10 @@ def _build_child_delegating_schema() -> DjangoSchema:
 
 
 async def _child_delegating_apply_async(
-    cls,
-    order_input,
-    queryset,
-    info,
+    cls: type[BranchOrder],
+    order_input: object,
+    queryset: models.QuerySet[library_models.Branch],
+    info: object,
 ):
     """A supported public override that hands the application to a child task."""
     return await asyncio.create_task(
@@ -2178,7 +2336,9 @@ async def _child_delegating_apply_async(
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_child_delegated_ordering_still_orders_and_pages(monkeypatch):
+async def test_async_child_delegated_ordering_still_orders_and_pages(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """An ``apply_async`` override that applies in a child task serves a correct page.
 
     The rejection row below only proves the guard SEES the child's work; this row
@@ -2201,7 +2361,7 @@ async def test_async_child_delegated_ordering_still_orders_and_pages(monkeypatch
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_child_delegated_impure_ordering_is_rejected(monkeypatch):
+async def test_async_child_delegated_impure_ordering_is_rejected(monkeypatch: pytest.MonkeyPatch):
     """A/B/B across a child-task delegation raises the typed purity rejection.
 
     The ordering the client receives is built inside the child task from the
@@ -2215,7 +2375,7 @@ async def test_async_child_delegated_impure_ordering_is_rejected(monkeypatch):
     sequence = [[("city", Ordering.ASC)], [("name", Ordering.DESC)], [("name", Ordering.DESC)]]
     calls = {"n": 0}
 
-    def _impure_normalize(cls, order_input):
+    def _impure_normalize(cls: type[BranchOrder], order_input: object):
         result = sequence[min(calls["n"], len(sequence) - 1)]
         calls["n"] += 1
         return result
@@ -2234,17 +2394,18 @@ async def test_async_child_delegated_impure_ordering_is_rejected(monkeypatch):
     assert calls["n"] == 2
 
 
-def _async_policy_from_info_object(info):
+def _async_policy_from_info_object(info: strawberry.Info[object, object]):
     """The policy the package's own bound readers get."""
     return policy_from_info(info)
 
 
-def _async_schema_attribute_object(info):
+def _async_schema_attribute_object(info: strawberry.Info[object, object]):
     """The resolved schema policy, which ``info.schema`` puts in every resolver's reach."""
+    assert isinstance(info.schema, DjangoSchema)
     return info.schema.resource_policy
 
 
-def _async_context_mirror_object(info):
+def _async_context_mirror_object(info: strawberry.Info[object, object]):
     """The published mirror, which the spec invites a consumer to read."""
     return get_context_value(info.context, DST_RESOURCE_POLICY)
 
@@ -2259,7 +2420,9 @@ _ASYNC_REACHABLE_POLICY_IDS = ("policy-from-info", "schema-attribute", "context-
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("reach", _ASYNC_REACHABLE_POLICIES, ids=_ASYNC_REACHABLE_POLICY_IDS)
-async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_it_can_reach(reach):
+async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_it_can_reach(
+    reach: Callable[[strawberry.Info[object, object]], object],
+):
     """The object-write twin of the context-write row, on the far side of an ``await``.
 
     The write happens after a real suspension point, so the bounded field answers
@@ -2271,7 +2434,7 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_i
 
     holder: dict[str, Any] = {"awaited": False}
 
-    async def _widen(root, info: strawberry.Info) -> str:
+    async def _widen(root: object, info: strawberry.Info[object, object]) -> str:
         await asyncio.sleep(0)
         holder["awaited"] = True
         reach(info).__dict__["max_list_rows"] = 999
@@ -2331,11 +2494,11 @@ class _HostileBranchQuerySet(models.QuerySet[library_models.Branch]):
     """
 
     @override
-    def filter(self, *args, **kwargs):
+    def filter(self, *args: object, **kwargs: object):
         return library_models.Branch.objects.all()
 
     @override
-    def order_by(self, *args, **kwargs):
+    def order_by(self, *args: object, **kwargs: object):
         return library_models.Branch.objects.all()
 
     @override
@@ -2347,7 +2510,12 @@ class _HostileBranchQuerySet(models.QuerySet[library_models.Branch]):
         return library_models.Branch.objects.all().order_by("pk").__aiter__()
 
 
-def _hostile_branch_hook(cls, queryset, info, **kwargs):
+def _hostile_branch_hook(
+    cls: type[library_schema.BranchType],
+    queryset: models.QuerySet[library_models.Branch],
+    info: strawberry.Info[object, object],
+    **kwargs: object,
+) -> models.QuerySet[library_models.Branch]:
     """Apply the visibility predicate through unbound ``QuerySet.filter``."""
     return models.QuerySet.filter(
         _HostileBranchQuerySet(model=library_models.Branch),
@@ -2366,7 +2534,9 @@ def _degrading_branch_manager():
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_hostile_queryset_subclass_cannot_leak_restricted_rows(monkeypatch):
+async def test_async_hostile_queryset_subclass_cannot_leak_restricted_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The async view seals a hostile ``QuerySet`` subclass the same way the sync one does."""
     await sync_to_async(library_models.Branch.objects.create)(name="Alpha", city="Boston")
     await sync_to_async(library_models.Branch.objects.create)(name="Hidden", city="restricted")
@@ -2393,7 +2563,7 @@ async def test_async_hostile_queryset_subclass_cannot_leak_restricted_rows(monke
 async def test_async_manager_that_degrades_to_a_list_is_rejected():
     """An async resolver returning a list-degrading Manager is a typed refusal."""
 
-    async def _resolve(root, info):
+    async def _resolve(root: object, info: strawberry.Info[object, object]):
         return _degrading_branch_manager()
 
     @strawberry.type
@@ -2437,7 +2607,7 @@ async def test_async_a_nested_synchronous_operation_refuses_a_list_field():
         branches: list[library_schema.BranchType] = DjangoListField(library_schema.BranchType)
 
         @strawberry.field
-        def nested(self, info: strawberry.Info) -> str:
+        def nested(self, info: strawberry.Info[object, object]) -> str:
             """Run a synchronous operation of this schema's own, from inside this one."""
             inner = info.schema.execute_sync("{ branches { name } }")
             if inner.errors:

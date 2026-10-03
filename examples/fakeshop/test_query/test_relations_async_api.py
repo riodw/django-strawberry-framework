@@ -48,8 +48,11 @@ import pytest
 import strawberry
 from apps.library import models
 from asgiref.sync import sync_to_async
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test import override_settings
 from django.urls import clear_url_caches, path
+from graphql_client import JSONObject
 
 from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
@@ -58,7 +61,7 @@ from django_strawberry_framework.views import AsyncDjangoGraphQLView
 _CURRENT: dict[str, object | None] = {"schema": None}
 
 
-async def _async_graphql_view(request):
+async def _async_graphql_view(request: HttpRequest) -> HttpResponseBase:
     schema = _CURRENT["schema"]
     assert schema is not None
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
@@ -97,7 +100,7 @@ def _seed_card_graph():
     return with_card, without_card
 
 
-async def _post_async(schema, query):
+async def _post_async(schema: strawberry.Schema, query: str) -> JSONObject:
     """POST ``query`` against ``schema`` over the live async mount, returning the payload."""
     _CURRENT["schema"] = schema
     try:

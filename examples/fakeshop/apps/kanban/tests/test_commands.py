@@ -2,6 +2,7 @@
 
 import json
 from io import StringIO
+from pathlib import Path
 
 import pytest
 from django.core.management import CommandError, call_command
@@ -22,7 +23,7 @@ PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 
 
 @pytest.fixture(autouse=True)
-def _command_lookups(db):
+def _command_lookups(db: None) -> None:
     kf.make_status("todo")
     kf.make_section("dependencies_note")
     kf.make_card_reference_kind("dependency")
@@ -30,11 +31,11 @@ def _command_lookups(db):
 
 
 @pytest.fixture
-def beta_version():
+def beta_version() -> models.TargetVersion:
     return kf.make_target_version("9.9.9", milestone=kf.make_milestone("beta"))
 
 
-def _write_json(tmp_path, payload: dict[str, object]) -> str:
+def _write_json(tmp_path: Path, payload: dict[str, object]) -> str:
     path = tmp_path / "cards.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return str(path)
@@ -44,7 +45,10 @@ def _write_json(tmp_path, payload: dict[str, object]) -> str:
 
 
 @pytest.mark.django_db
-def test_import_card_files_changed_dry_run_rolls_back(tmp_path, beta_version):
+def test_import_card_files_changed_dry_run_rolls_back(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(
         title="Existing card",
         target_version=beta_version,
@@ -63,7 +67,10 @@ def test_import_card_files_changed_dry_run_rolls_back(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_changed_replaces_existing_links(tmp_path, beta_version):
+def test_import_card_files_changed_replaces_existing_links(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(
         title="Existing card",
         target_version=beta_version,
@@ -84,7 +91,10 @@ def test_import_card_files_changed_replaces_existing_links(tmp_path, beta_versio
 
 
 @pytest.mark.django_db
-def test_import_card_files_changed_clears_links(tmp_path, beta_version):
+def test_import_card_files_changed_clears_links(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(
         title="Existing card",
         target_version=beta_version,
@@ -99,7 +109,10 @@ def test_import_card_files_changed_clears_links(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_missing_files_key_errors(tmp_path, beta_version):
+def test_import_card_files_missing_files_key_errors(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(title="Existing card", target_version=beta_version)
     path = _write_json(tmp_path, {"cards": [{"card": card.title}]})
 
@@ -108,7 +121,7 @@ def test_import_card_files_missing_files_key_errors(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_requires_kind(tmp_path, beta_version):
+def test_import_card_files_requires_kind(tmp_path: Path, beta_version: models.TargetVersion):
     card = kf.make_card(title="Existing card", target_version=beta_version)
     path = _write_json(tmp_path, {"cards": [{"card": card.title, "files": []}]})
 
@@ -120,7 +133,10 @@ def test_import_card_files_requires_kind(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_predicted_dry_run_rolls_back(tmp_path, beta_version):
+def test_import_card_files_predicted_dry_run_rolls_back(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -136,7 +152,10 @@ def test_import_card_files_predicted_dry_run_rolls_back(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_predicted_replaces_idempotently(tmp_path, beta_version):
+def test_import_card_files_predicted_replaces_idempotently(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -166,7 +185,10 @@ def test_import_card_files_predicted_replaces_idempotently(tmp_path, beta_versio
 
 
 @pytest.mark.django_db
-def test_import_card_files_predicted_marks_directories(tmp_path, beta_version):
+def test_import_card_files_predicted_marks_directories(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -185,7 +207,10 @@ def test_import_card_files_predicted_marks_directories(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_predicted_rejects_done_card(tmp_path, beta_version):
+def test_import_card_files_predicted_rejects_done_card(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(
         title="Shipped card",
         target_version=beta_version,
@@ -203,7 +228,10 @@ def test_import_card_files_predicted_rejects_done_card(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
-def test_import_card_files_predicted_rejects_path_outside_roots(tmp_path, beta_version):
+def test_import_card_files_predicted_rejects_path_outside_roots(
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+):
     card = kf.make_card(title="Future card", target_version=beta_version)
     path = _write_json(
         tmp_path,
@@ -218,16 +246,16 @@ def test_import_card_files_predicted_rejects_path_outside_roots(tmp_path, beta_v
 
 @pytest.mark.django_db
 def test_import_card_files_wraps_validation_error_as_command_error(
-    tmp_path,
-    beta_version,
-    monkeypatch,
+    tmp_path: Path,
+    beta_version: models.TargetVersion,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A signal-guard ValidationError surfaces as CommandError, not a raw traceback."""
     from django.core.exceptions import ValidationError
 
     card = kf.make_card(title="Guarded card", target_version=beta_version)
 
-    def _raise(*args, **kwargs):
+    def _raise(*args: object, **kwargs: object):
         raise ValidationError("guard says no")
 
     monkeypatch.setattr(services, "set_card_changed_files", _raise)

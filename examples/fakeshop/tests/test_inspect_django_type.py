@@ -59,12 +59,12 @@ def _reload_inspect_schema() -> None:
 
 
 @pytest.fixture
-def reload_inspect_schema():
+def reload_inspect_schema() -> None:
     """Recreate the project schema around package-test registry clears."""
     _reload_inspect_schema()
 
 
-def test_inspect_by_meta_name(reload_inspect_schema):
+def test_inspect_by_meta_name(reload_inspect_schema: None):
     """Bare lookup honors ``Meta.name`` (``PublicPatron``), not only ``__name__``.
 
     ``PublicPatronType`` declares ``name = "PublicPatron"`` - the SDL surface an
@@ -87,7 +87,7 @@ def test_inspect_by_meta_name(reload_inspect_schema):
     assert out_cls.getvalue().splitlines()[0].startswith("PublicPatron  (model:")
 
 
-def test_inspect_by_registered_name(reload_inspect_schema):
+def test_inspect_by_registered_name(reload_inspect_schema: None):
     out = StringIO()
     call_command("inspect_django_type", "BookType", stdout=out)
     text = out.getvalue()
@@ -115,7 +115,7 @@ def test_inspect_by_registered_name(reload_inspect_schema):
     assert "[GenreType!]!" in text
 
 
-def test_inspect_by_dotted_path(reload_inspect_schema):
+def test_inspect_by_dotted_path(reload_inspect_schema: None):
     out = StringIO()
     call_command("inspect_django_type", "apps.library.schema.BookType", stdout=out)
     text = out.getvalue()
@@ -129,7 +129,7 @@ def test_inspect_by_dotted_path(reload_inspect_schema):
 
 
 @pytest.mark.parametrize("selector", ["config.schema", "config.schema:schema"])
-def test_inspect_with_schema_option(selector):
+def test_inspect_with_schema_option(selector: str):
     """Cold path: --schema must register + finalize on its own.
 
     An in-process ``registry.clear()`` alone is not a cold start because
@@ -164,7 +164,7 @@ def test_inspect_with_schema_option(selector):
         reload_all_project_schemas()
 
 
-def test_inspect_choice_field_row(reload_inspect_schema):
+def test_inspect_choice_field_row(reload_inspect_schema: None):
     out = StringIO()
     call_command("inspect_django_type", "BookType", stdout=out)
     text = out.getvalue()
@@ -173,7 +173,7 @@ def test_inspect_choice_field_row(reload_inspect_schema):
     assert "choice enum" in text
 
 
-def test_inspect_relation_field_rows(reload_inspect_schema):
+def test_inspect_relation_field_rows(reload_inspect_schema: None):
     out = StringIO()
     call_command("inspect_django_type", "BookType", stdout=out)
     text = out.getvalue()
@@ -190,7 +190,7 @@ def test_inspect_relation_field_rows(reload_inspect_schema):
     assert "relation: reverse FK" in loans_row
 
 
-def test_inspect_consumer_authored_relation_field(reload_inspect_schema):
+def test_inspect_consumer_authored_relation_field(reload_inspect_schema: None):
     """A live ``@strawberry.field`` relation override renders from the resolved type.
 
     ``BranchType.shelves`` (``apps/library/schema.py``) shadows the ``shelves``
@@ -214,7 +214,7 @@ def test_inspect_consumer_authored_relation_field(reload_inspect_schema):
     assert "StrawberryAnnotation" not in text
 
 
-def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema):
+def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema: None):
     """``OverriddenScalarSpecimenType`` shows every consumer-authored scalar corner live.
 
     The scalars app's ``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``)
@@ -264,7 +264,7 @@ def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema)
     assert "consumer" not in note_row
 
 
-def test_inspect_bigint_field_rows_use_package_scalar_name(reload_inspect_schema):
+def test_inspect_bigint_field_rows_use_package_scalar_name(reload_inspect_schema: None):
     """Cold path (no ``--schema``) names the ``BigInt`` scalar from ``scalars.py``.
 
     Without ``--schema``, ``scalar_namer`` gets no live schema ``scalar_map``, so
@@ -284,7 +284,7 @@ def test_inspect_bigint_field_rows_use_package_scalar_name(reload_inspect_schema
     assert "BigInt!" in unsigned_row
 
 
-def test_inspect_relay_node_pk_row(reload_inspect_schema):
+def test_inspect_relay_node_pk_row(reload_inspect_schema: None):
     """GenreType declares ``interfaces = (relay.Node,)`` - its pk is suppressed.
 
     The pk row must report the interface-supplied ``GlobalID!`` / ``relay.Node
@@ -299,7 +299,7 @@ def test_inspect_relay_node_pk_row(reload_inspect_schema):
     assert "relay.Node id" in text
 
 
-def test_inspect_reads_resolved_annotation_not_field_null(reload_inspect_schema):
+def test_inspect_reads_resolved_annotation_not_field_null(reload_inspect_schema: None):
     """The command reports the post-override nullability for the acceptance type.
 
     The command runs over the ``NullabilityOverrideBookType`` acceptance
@@ -330,7 +330,10 @@ def test_inspect_reads_resolved_annotation_not_field_null(reload_inspect_schema)
     ["PeriodicalType", "apps.library.schema.PeriodicalType"],
     ids=["bare", "dotted"],
 )
-def test_inspect_connection_only_relation_shape_renders_row(reload_inspect_schema, selector):
+def test_inspect_connection_only_relation_shape_renders_row(
+    reload_inspect_schema: None,
+    selector: str,
+):
     """``PeriodicalType.issues`` is connection-only: the list form is absent from the table.
 
     ``relation_shapes = {"issues": "connection"}`` pops the generated list
@@ -354,9 +357,9 @@ def test_inspect_connection_only_relation_shape_renders_row(reload_inspect_schem
     ids=["default-file", "path-opt-in"],
 )
 def test_inspect_file_and_image_rows_name_output_converters(
-    reload_inspect_schema,
-    type_name,
-    attachment_type,
+    reload_inspect_schema: None,
+    type_name: str,
+    attachment_type: str,
 ):
     """File/image columns name ``convert_field_output``, not ``SCALAR_MAP``.
 
@@ -389,12 +392,12 @@ def test_inspect_file_and_image_rows_name_output_converters(
     assert "DjangoFileType" not in image_row
 
 
-def test_bad_dotted_path_raises_command_error(reload_inspect_schema):
+def test_bad_dotted_path_raises_command_error(reload_inspect_schema: None):
     with pytest.raises(CommandError, match="No module named"):
         call_command("inspect_django_type", "does.not.exist.Type")
 
 
-def test_malformed_dotted_path_raises_command_error(reload_inspect_schema):
+def test_malformed_dotted_path_raises_command_error(reload_inspect_schema: None):
     with pytest.raises(CommandError, match="module path is empty"):
         call_command("inspect_django_type", ".BookType")
 
@@ -413,17 +416,17 @@ def test_bad_schema_selector_raises_command_error():
     ],
     ids=["empty", "colon-only", "relative"],
 )
-def test_malformed_schema_selector_raises_command_error(selector, message):
+def test_malformed_schema_selector_raises_command_error(selector: str, message: str):
     with pytest.raises(CommandError, match=message):
         call_command("inspect_django_type", "BookType", "--schema", selector)
 
 
-def test_unregistered_bare_name_raises_command_error(reload_inspect_schema):
+def test_unregistered_bare_name_raises_command_error(reload_inspect_schema: None):
     """A bare name with no registry match is refused even when the project schema is loaded."""
     with pytest.raises(CommandError, match="Import the project schema first"):
         call_command("inspect_django_type", "TotallyUnregisteredType")
 
 
-def test_non_djangotype_symbol_raises_command_error(reload_inspect_schema):
+def test_non_djangotype_symbol_raises_command_error(reload_inspect_schema: None):
     with pytest.raises(CommandError, match="is not a DjangoType subclass"):
         call_command("inspect_django_type", "apps.library.models.Book")

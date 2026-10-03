@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Count, Max
+from django.db.models import Count, Max, Model
 from django.db.models.signals import (
     m2m_changed,
     post_delete,
@@ -150,7 +150,7 @@ def _validate_done_card_has_glossary_link(card: models.Card, using: str | None) 
         raise ValidationError(DONE_CARD_GLOSSARY_ERROR)
 
 
-def _delete_origin_is_card(origin) -> bool:
+def _delete_origin_is_card(origin: object) -> bool:
     return isinstance(origin, models.Card) or getattr(origin, "model", None) is models.Card
 
 
@@ -367,11 +367,11 @@ def _sync_card_order_after_insert(card: models.Card, using: str | None) -> None:
 
 @receiver(pre_save, sender=models.Card, dispatch_uid="kanban_prepare_card_save")
 def prepare_card_save(
-    sender,
+    sender: type[models.Card],
     instance: models.Card,
     update_fields: frozenset[str] | None,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     _validate_card_status_transition(instance, update_fields, using)
     _validate_done_card_has_spec(instance, using)
@@ -381,10 +381,10 @@ def prepare_card_save(
 
 @receiver(pre_save, sender=models.SpecDoc, dispatch_uid="kanban_validate_spec_doc_card")
 def validate_spec_doc_card(
-    sender,
+    sender: type[models.SpecDoc],
     instance: models.SpecDoc,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     if instance.card_id is None:
         raise ValidationError(SPEC_CARD_REQUIRED_ERROR)
@@ -402,10 +402,10 @@ def validate_spec_doc_card(
 
 @receiver(pre_delete, sender=models.SpecDoc, dispatch_uid="kanban_protect_done_card_spec")
 def protect_done_card_spec(
-    sender,
+    sender: type[models.SpecDoc],
     instance: models.SpecDoc,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     if _delete_origin_is_card(kwargs.get("origin")):
         return
@@ -419,10 +419,10 @@ def protect_done_card_spec(
     dispatch_uid="kanban_validate_card_glossary_term_card",
 )
 def validate_card_glossary_term_card(
-    sender,
+    sender: type[models.CardGlossaryTerm],
     instance: models.CardGlossaryTerm,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     if instance.pk is None:
         return
@@ -448,10 +448,10 @@ def validate_card_glossary_term_card(
     dispatch_uid="kanban_protect_done_card_glossary_link",
 )
 def protect_done_card_glossary_link(
-    sender,
+    sender: type[models.CardGlossaryTerm],
     instance: models.CardGlossaryTerm,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     if _delete_origin_is_card(kwargs.get("origin")):
         return
@@ -465,22 +465,22 @@ def protect_done_card_glossary_link(
 
 @receiver(post_save, sender=models.Card, dispatch_uid="kanban_sync_card_after_save")
 def sync_card_after_save(
-    sender,
+    sender: type[models.Card],
     instance: models.Card,
     created: bool,
     update_fields: frozenset[str] | None,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     _sync_card_order_after_insert(instance, using)
 
 
 @receiver(post_delete, sender=models.Card, dispatch_uid="kanban_compact_card_order_after_delete")
 def compact_card_order_after_delete(
-    sender,
+    sender: type[models.Card],
     instance: models.Card,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     """Delegate delete-compaction to the service layer (the receiver only wires it)."""
     from apps.kanban import services
@@ -490,10 +490,10 @@ def compact_card_order_after_delete(
 
 @receiver(pre_save, sender=models.CardReference, dispatch_uid="kanban_prepare_card_reference")
 def prepare_card_reference(
-    sender,
+    sender: type[models.CardReference],
     instance: models.CardReference,
     using: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     """Raise-only guard: reject self-references, cycles, and dependency mis-ordering.
 
@@ -516,14 +516,14 @@ def prepare_card_reference(
     dispatch_uid="kanban_uuid_cardpathlink_m2m",
 )
 def create_card_path_link_uuid_rows(
-    sender,
-    instance,
+    sender: type[models.CardPathLink],
+    instance: models.Card | models.TrackedPath,
     action: str,
     reverse: bool,
-    model,
-    pk_set,
+    model: type[models.Card] | type[models.TrackedPath],
+    pk_set: set[int] | None,
     using: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> None:
     """Create ``UUIDModel`` side-rows for ``CardPathLink`` rows added via M2M writes.
 
@@ -549,14 +549,24 @@ def create_card_path_link_uuid_rows(
         _manager(models.UUIDModel, using).create(cardpathlink=link)
 
 
-def create_uuid_row(sender, instance, created: bool, using: str | None = None, **kwargs) -> None:
+def create_uuid_row(
+    sender: type[Model],
+    instance: Model,
+    created: bool,
+    using: str | None = None,
+    **kwargs: object,
+) -> None:
     """On first save of a linked model, create its ``UUIDModel`` side-row.
 
     ``bulk_create`` does not emit ``post_save``; importers must use
     ``.save()`` / ``.objects.create()`` for this to fire.
     """
     if created:
-        _manager(models.UUIDModel, using).create(**{sender._meta.model_name: instance})
+        # ``Options.model_name`` is None only until ``contribute_to_class`` binds a model.
+        link_name = sender._meta.model_name
+        if link_name is None:
+            raise TypeError(f"{sender!r} has no model name to link a UUID side-row by.")
+        _manager(models.UUIDModel, using).create(**{link_name: instance})
 
 
 for uuid_linked_model in UUID_LINKED_MODELS:

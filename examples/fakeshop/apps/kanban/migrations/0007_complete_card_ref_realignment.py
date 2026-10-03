@@ -38,6 +38,8 @@ is a deliberate no-op: the realigned placeholders are the correct state.
 import re
 
 from django.db import migrations
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
 
@@ -76,7 +78,7 @@ def _remap(text: str, old_to_new: dict[int, int]) -> str:
     return CARD_REF_RE.sub(replace, text or "")
 
 
-def _complete_realignment(apps, schema_editor):
+def _complete_realignment(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     Card = apps.get_model("kanban", "Card")
     CardItem = apps.get_model("kanban", "CardItem")
     CardReference = apps.get_model("kanban", "CardReference")

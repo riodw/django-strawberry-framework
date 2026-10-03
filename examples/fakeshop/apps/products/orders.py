@@ -38,7 +38,7 @@ class CategoryOrder(OrderSet):
         model = models.Category
         fields = "__all__"
 
-    def check_name_permission(self, request):
+    def check_name_permission(self, request: object) -> None:
         """Only staff users may order by ``Category.name``."""
         user = getattr(request, "user", None)
         if not user or not user.is_staff:

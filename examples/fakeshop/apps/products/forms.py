@@ -33,6 +33,8 @@ end. These forms cover the spec's Decision-12 live matrix:
   case Django's own validation cannot see).
 """
 
+from typing import Any
+
 from django import forms
 from django.contrib.auth.models import AnonymousUser, User
 from typing_extensions import override
@@ -113,7 +115,7 @@ class StampedItemModelForm(forms.ModelForm[Item]):
         model = Item
         fields = ("name", "category")
 
-    def __init__(self, *args, user: User | AnonymousUser, **kwargs) -> None:
+    def __init__(self, *args: Any, user: User | AnonymousUser, **kwargs: Any) -> None:
         self._user = user
         super().__init__(*args, **kwargs)
 
@@ -166,7 +168,12 @@ class DefaultCategoryItemModelForm(forms.ModelForm[Item]):
         model = Item
         fields = ("name",)
 
-    def __init__(self, *args, category: Category | None = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        category: Category | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(*args, **kwargs)
         if category is not None:
             self.instance.category = category

@@ -275,7 +275,7 @@ Claims span two tiers → split by tier: consumer-visible live, construction-tim
 _CURRENT: dict[str, Any] = {"schema": None}
 
 
-def _graphql_view(request):
+def _graphql_view(request: HttpRequest):
     schema = _CURRENT["schema"]
     assert schema is not None
     return DjangoGraphQLView.as_view(schema=schema)(request)
@@ -284,7 +284,13 @@ def _graphql_view(request):
 urlpatterns = [path("graphql-test/", _graphql_view)]
 
 
-def _post(schema, query, *, client=None, variables=None):
+def _post(
+    schema: DjangoSchema,
+    query: str,
+    *,
+    client: Client | None = None,
+    variables: Mapping[str, object] | None = None,
+):
     _CURRENT["schema"] = schema
     try:
         with override_settings(ROOT_URLCONF=__name__):
@@ -474,7 +480,7 @@ def test_synthesized_connection_per_parent_query_cost(django_assert_num_queries)
 After ([`test_products_visibility_api.py`][test-products-visibility-api]):
 
 ```python
-def _nested_connection_item_queries(parent_count):
+def _nested_connection_item_queries(parent_count: int) -> list[str]:
     """Post ``_NESTED_CONNECTION_QUERY`` at ``parent_count`` parents; return the item SQL.
 
     The holder schema installs NO ``DjangoOptimizerExtension``, so the nested
@@ -499,7 +505,7 @@ def _nested_connection_item_queries(parent_count):
     return [entry["sql"] for entry in captured.captured_queries if "products_item" in entry["sql"]]
 
 
-def test_nested_connection_costs_one_query_per_parent_without_the_optimizer(db):
+def test_nested_connection_costs_one_query_per_parent_without_the_optimizer(db: None) -> None:
     """With no optimizer installed a nested connection costs one window query per parent.
 
     ... measured at two cardinalities so a fixed count cannot satisfy it, and so a
@@ -618,8 +624,9 @@ After ([`test_uploads_api.py`][test-uploads-api]):
 ```python
 @pytest.mark.django_db
 def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A backend that cannot produce a path nulls ``path`` alone; ``name`` / ``url`` resolve.
 
     All three are selected in one request, so a guard that sat on the parent
@@ -630,7 +637,7 @@ def test_storage_without_absolute_paths_nulls_only_the_path_subfield_over_http(
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
         specimen.save()
 
-        def _no_absolute_path(self, name):
+        def _no_absolute_path(self: FileSystemStorage, name: str) -> NoReturn:
             raise NotImplementedError("This backend doesn't support absolute paths.")
 
         monkeypatch.setattr(FileSystemStorage, "path", _no_absolute_path)
@@ -664,7 +671,11 @@ After ([`test_scalars_api.py`][test-scalars-api]):
     [("true", "BigInt does not accept boolean values"), ("1.9", "BigInt cannot parse float")],
     ids=["bool", "float"],
 )
-def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(field, literal, reason):
+def test_filter_specimens_by_bigint_exact_rejects_non_integer_literal(
+    field: str,
+    literal: str,
+    reason: str,
+) -> None:
     ...
     assert body["data"] is None, body
     assert reason in body["errors"][0]["message"], body
@@ -701,7 +712,10 @@ After ([`test_schema_composition_api.py`][test-schema-composition-api]):
     ],
     ids=["products-item", "products-category", "library-book"],
 )
-def test_the_composed_schema_publishes_each_apps_types(type_name, expected_fields):
+def test_the_composed_schema_publishes_each_apps_types(
+    type_name: str,
+    expected_fields: set[str],
+) -> None:
     """One type per contributing app is on the shipped endpoint, with its relation fields.
 
     A type that never registered introspects as ``null`` here rather than failing

@@ -447,7 +447,9 @@ def test_distributor_mixed_case_scalar_projects_its_own_column():
 
 @pytest.mark.parametrize("distributor_count", [1, 3])
 @pytest.mark.django_db
-def test_consignment_mixed_case_forward_key_joins_its_target_in_one_statement(distributor_count):
+def test_consignment_mixed_case_forward_key_joins_its_target_in_one_statement(
+    distributor_count: int,
+) -> None:
     """``distributorRef { displayName }`` is one ``JOIN`` at every parent cardinality.
 
     ``distributorRef`` reverses to ``distributor_ref``, which names no relation;
@@ -474,7 +476,9 @@ def test_consignment_mixed_case_forward_key_joins_its_target_in_one_statement(di
 
 @pytest.mark.parametrize("distributor_count", [1, 3])
 @pytest.mark.django_db
-def test_distributor_mixed_case_reverse_relation_loads_through_one_prefetch(distributor_count):
+def test_distributor_mixed_case_reverse_relation_loads_through_one_prefetch(
+    distributor_count: int,
+) -> None:
     """``consignmentItems`` loads every parent's rows in one statement at every cardinality.
 
     The ``related_name`` ``consignmentItems`` reverses to ``consignment_items``,

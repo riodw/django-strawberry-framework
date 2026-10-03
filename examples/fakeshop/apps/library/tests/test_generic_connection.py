@@ -22,6 +22,7 @@ each test independent.
 
 import os
 import traceback
+from collections.abc import Mapping, Sequence
 
 import pytest
 import strawberry
@@ -30,6 +31,7 @@ from django.core.exceptions import SynchronousOnlyOperation
 from django.db import connection as db_connection
 from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
+from graphql import GraphQLError
 from strawberry import relay
 
 from apps.library.models import Branch, Genre, ProxyBranch, TaggedItem
@@ -58,7 +60,7 @@ def _isolate_registry():
     _connection_type_cache.clear()
 
 
-def _build_schema(*, strategy=None, total_count=False):
+def _build_schema(*, strategy: str | None = None, total_count: bool = False):
     """Build a schema exposing ``branches`` with a windowed ``tagsConnection``.
 
     ``strategy`` selects the nested-connection strategy
@@ -96,7 +98,7 @@ def _build_schema(*, strategy=None, total_count=False):
     )
 
 
-def _window_sql(captured_queries):
+def _window_sql(captured_queries: Sequence[Mapping[str, str]]):
     """Return the windowed child SQL (the ``ROW_NUMBER`` prefetch), asserting it ran.
 
     Its presence proves the generic connection took the WINDOWED path rather
@@ -249,7 +251,7 @@ def test_lateral_strategy_generic_connection_degrades_to_windowed():
 _OPTIMIZER_PATH_MARKER = os.sep + "optimizer" + os.sep
 
 
-def _sync_only_optimizer_frames(error):
+def _sync_only_optimizer_frames(error: GraphQLError):
     """Return ``(original_error, optimizer_frame_filenames)`` for a GraphQL error.
 
     The GraphQL layer wraps the raised exception; ``original_error`` is the real

@@ -20,11 +20,13 @@ one-hot constraint is re-added without ``planningstate`` -- keeping the
 
 import django.db.models.lookups
 from django.db import migrations, models
+from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+from django.db.migrations.state import StateApps
 
 import apps.kanban.constraints
 
 
-def _delete_planning_state_data(apps, schema_editor):
+def _delete_planning_state_data(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     """Delete the ``PlanningState`` seed rows, cascading their UUID side-rows."""
     PlanningState = apps.get_model("kanban", "PlanningState")
     PlanningState.objects.using(schema_editor.connection.alias).all().delete()

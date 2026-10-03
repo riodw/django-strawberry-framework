@@ -16,7 +16,7 @@ from apps.kanban.constants import TRACKED_FILE_PATHS
 
 
 @pytest.fixture(autouse=True)
-def _service_lookups(db):
+def _service_lookups(db: None) -> None:
     kf.make_status("todo")
     kf.make_status("done")
     kf.make_priority("medium")
@@ -25,7 +25,7 @@ def _service_lookups(db):
 
 
 @pytest.fixture
-def alpha_version():
+def alpha_version() -> models.TargetVersion:
     return kf.make_target_version("0.0.8", milestone=kf.make_milestone("alpha"))
 
 
@@ -54,7 +54,9 @@ def test_database_alias_returns_none_for_unsaved_objects():
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_after_places_card_below_reference(alpha_version):
+def test_create_card_from_spec_after_places_card_below_reference(
+    alpha_version: models.TargetVersion,
+):
     kf.make_card(number=1, title="Anchor card")
 
     card = services.create_card_from_spec(
@@ -75,7 +77,7 @@ def test_create_card_from_spec_after_places_card_below_reference(alpha_version):
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_duplicate_title(alpha_version):
+def test_create_card_from_spec_rejects_duplicate_title(alpha_version: models.TargetVersion):
     kf.make_card(number=1, title="Existing title")
 
     with pytest.raises(services.KanbanServiceError) as excinfo:
@@ -90,7 +92,7 @@ def test_create_card_from_spec_rejects_duplicate_title(alpha_version):
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_done_status(alpha_version):
+def test_create_card_from_spec_rejects_done_status(alpha_version: models.TargetVersion):
     with pytest.raises(services.KanbanServiceError) as excinfo:
         services.create_card_from_spec(
             {
@@ -105,7 +107,9 @@ def test_create_card_from_spec_rejects_done_status(alpha_version):
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_dependencies_in_sections(alpha_version):
+def test_create_card_from_spec_rejects_dependencies_in_sections(
+    alpha_version: models.TargetVersion,
+):
     with pytest.raises(services.KanbanServiceError) as excinfo:
         services.create_card_from_spec(
             {

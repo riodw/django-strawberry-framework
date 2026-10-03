@@ -5,6 +5,7 @@ from io import StringIO
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
+from pytest_django import Settings
 
 from apps.products.models import Category, Item
 from apps.products.services import create_users, seed_data
@@ -158,7 +159,7 @@ def test_delete_users_command_invalid_string():
 # tests do so deliberately (shard-alias setup), so the otherwise-fatal warning is
 # scoped-ignored here rather than globally (see pytest.ini filterwarnings).
 @pytest.mark.filterwarnings("ignore:Overriding setting DATABASES:UserWarning")
-def test_seed_shards_command_raises_when_shard_alias_missing(settings):
+def test_seed_shards_command_raises_when_shard_alias_missing(settings: Settings):
     """When ``shard_b`` isn't declared in DATABASES, the command must raise CommandError.
 
     Forces ``shard_b`` absence via the ``settings`` fixture so the test is
@@ -178,7 +179,10 @@ def test_seed_shards_command_raises_when_shard_alias_missing(settings):
 
 @pytest.mark.django_db(databases=["default"])
 @pytest.mark.filterwarnings("ignore:Overriding setting DATABASES:UserWarning")
-def test_seed_shards_command_runs_when_shard_alias_present(settings, monkeypatch):
+def test_seed_shards_command_runs_when_shard_alias_present(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """When ``shard_b`` is present in DATABASES, the command runs end-to-end against ``default`` only."""
     settings.DATABASES = {
         **settings.DATABASES,

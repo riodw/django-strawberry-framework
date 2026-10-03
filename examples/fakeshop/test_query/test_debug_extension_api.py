@@ -39,6 +39,8 @@ belong in ``tests/extensions/test_debug.py``.
 
 import contextlib
 import logging
+from collections.abc import Callable, Iterator, Sequence
+from typing import TypeAlias
 
 import pytest
 import strawberry
@@ -47,14 +49,18 @@ from apps.products.services import create_users, seed_data
 from django.conf import settings
 from django.contrib.auth.models import Permission, User
 from django.db import DEFAULT_DB_ALIAS, connection
+from django.http import HttpRequest
+from django.http.response import HttpResponseBase
 from django.test.utils import override_settings
 from django.urls import path
+from graphql_client import JSONObject
 from strawberry import relay
 from strawberry.django.views import GraphQLView
+from strawberry.extensions import SchemaExtension
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema
 from django_strawberry_framework.extensions import DjangoDebugExtension
-from django_strawberry_framework.testing import TestClient
+from django_strawberry_framework.testing import Response, TestClient
 
 # One module-level URLconf activation covering every request-driving scenario
 # (spec-044 DRY D3) - never per-test override_settings/clear_url_caches blocks.
@@ -68,8 +74,13 @@ pytestmark = pytest.mark.urls(__name__)
 
 _current: dict[str, object | None] = {"schema": None}
 
+#: One ``extensions=[...]`` entry: an extension class or a zero-argument factory.
+_ExtensionEntry: TypeAlias = type[SchemaExtension] | Callable[[], SchemaExtension]
+#: The ``install_probe_schema`` fixture's installer.
+_InstallProbeSchema: TypeAlias = Callable[[Sequence[_ExtensionEntry]], None]
 
-def _graphql_view(request):
+
+def _graphql_view(request: HttpRequest) -> HttpResponseBase:
     """Closure-bound view that reads ``_current['schema']`` per request."""
     schema = _current["schema"]
     assert schema is not None, "install_probe_schema must run before any /graphql/ request"
@@ -119,7 +130,7 @@ _WITHHELD = DjangoDebugExtension()
 _SHARED_DEBUG = DjangoDebugExtension(allow_unsafe_production=True)
 
 
-def _acknowledged_debug():
+def _acknowledged_debug() -> DjangoDebugExtension:
     """The documented acknowledgement spelling (spec-048 Decision 5), as ONE named factory.
 
     Written as a factory, never a pre-built instance: the engine builds it once
@@ -132,7 +143,9 @@ def _acknowledged_debug():
 
 
 @pytest.fixture
-def install_probe_schema(_reload_project_schema_for_acceptance_tests):
+def install_probe_schema(
+    _reload_project_schema_for_acceptance_tests: None,
+) -> Iterator[_InstallProbeSchema]:
     """Return an installer that mounts a probe schema over the reloaded products types.
 
     Imported INSIDE the fixture body (never at module top) so the classes are
@@ -180,7 +193,7 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
     class Mutation(ProductsMutation):
         """The products write surface, unchanged."""
 
-    def _install(extensions):
+    def _install(extensions: Sequence[_ExtensionEntry]) -> None:
         finalize_django_types()
         # DjangoSchema: the probe mounts the generated products write surface,
         # whose pipeline requires the completion-spanning transaction
@@ -240,7 +253,7 @@ def _grant_add_item_and_visible_category_gid():
     return user, category_gid
 
 
-def _debug(response):
+def _debug(response: Response) -> JSONObject:
     """Validate-and-return the debug payload for executed-operation happy paths.
 
     Never used by the absence scenarios (5's unknown-field half, both halves of
@@ -266,7 +279,9 @@ def _debug(response):
 
 
 @pytest.mark.django_db
-def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(install_probe_schema):
+def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """The bracket - not Django's ``DEBUG`` query logging - produces the captured rows.
 
     Run deliberately under ``settings.DEBUG`` false, through the
@@ -320,7 +335,9 @@ def test_query_capture_uses_the_forced_debug_cursor_not_debug_query_logging(inst
 
 
 @pytest.mark.django_db
-def test_optimizer_composition_shows_the_two_query_prefetch_shape(install_probe_schema):
+def test_optimizer_composition_shows_the_two_query_prefetch_shape(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """The captured rows show one item slice + one category prefetch, never N+1.
 
     ``CategoryType`` defines a custom ``get_queryset`` visibility hook, so the
@@ -372,7 +389,9 @@ def test_optimizer_composition_shows_the_two_query_prefetch_shape(install_probe_
 
 
 @pytest.mark.django_db(transaction=True)
-def test_mutation_capture_includes_the_insert_row(install_probe_schema):
+def test_mutation_capture_includes_the_insert_row(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """The write path is captured like the read path - INSERT beside the pipeline SELECTs.
 
     ``transaction=True`` so pytest-django does not wrap the test in an outer
@@ -414,7 +433,9 @@ def test_mutation_capture_includes_the_insert_row(install_probe_schema):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_enclosing_atomic_requests_transaction_is_not_captured(install_probe_schema):
+def test_enclosing_atomic_requests_transaction_is_not_captured(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """``ATOMIC_REQUESTS`` BEGIN/COMMIT sit outside the hook; the write is a savepoint.
 
     The handler wraps the view in ``atomic()`` before GraphQL runs, so the
@@ -456,7 +477,9 @@ def test_enclosing_atomic_requests_transaction_is_not_captured(install_probe_sch
 # ---------------------------------------------------------------------------
 
 
-def test_resolver_exception_produces_an_unmasked_exception_row(install_probe_schema):
+def test_resolver_exception_produces_an_unmasked_exception_row(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
@@ -478,7 +501,9 @@ def test_resolver_exception_produces_an_unmasked_exception_row(install_probe_sch
 # ---------------------------------------------------------------------------
 
 
-def test_validation_versus_execution_error_boundary(install_probe_schema):
+def test_validation_versus_execution_error_boundary(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """No key for a validation failure; a completion error IS an execution row.
 
     The second half pins the documented result-level widening beyond
@@ -504,7 +529,9 @@ def test_validation_versus_execution_error_boundary(install_probe_schema):
 # ---------------------------------------------------------------------------
 
 
-def test_no_sql_operation_carries_both_empty_lists(install_probe_schema):
+def test_no_sql_operation_carries_both_empty_lists(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
 
@@ -518,7 +545,7 @@ def test_no_sql_operation_carries_both_empty_lists(install_probe_schema):
 # ---------------------------------------------------------------------------
 
 
-def test_off_by_default_publishes_no_debug_key(install_probe_schema):
+def test_off_by_default_publishes_no_debug_key(install_probe_schema: _InstallProbeSchema) -> None:
     """Without any debug entry in ``extensions=``, no key appears and no envelope widens.
 
     Distinct from the spec-048 gate's withheld payload: there the extension IS
@@ -545,9 +572,9 @@ def test_off_by_default_publishes_no_debug_key(install_probe_schema):
 
 @override_settings(DEBUG=False)
 def test_debug_false_bare_class_entry_withholds_the_payload_and_warns(
-    install_probe_schema,
-    caplog,
-):
+    install_probe_schema: _InstallProbeSchema,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A production schema that lists the class gets NO payload and ONE warning.
 
     The ubiquitous spelling ``extensions=[DjangoDebugExtension]`` is what a
@@ -583,9 +610,9 @@ def test_debug_false_bare_class_entry_withholds_the_payload_and_warns(
     ],
 )
 def test_a_malformed_debug_setting_stays_fail_closed_on_the_bare_class_entry(
-    install_probe_schema,
-    debug_value,
-):
+    install_probe_schema: _InstallProbeSchema,
+    debug_value: object,
+) -> None:
     """Only the exact boolean ``True`` may enable disclosure on a bare class entry.
 
     ``"False"`` and ``1`` are truthy, so a ``if settings.DEBUG`` gate would
@@ -608,9 +635,9 @@ def test_a_malformed_debug_setting_stays_fail_closed_on_the_bare_class_entry(
 
 @override_settings(DEBUG=False)
 def test_acknowledged_factory_publishes_the_payload_under_debug_false(
-    install_probe_schema,
-    caplog,
-):
+    install_probe_schema: _InstallProbeSchema,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """The acknowledgement factory is the deliberate opt-out - payload published, no warning."""
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
@@ -625,7 +652,9 @@ def test_acknowledged_factory_publishes_the_payload_under_debug_false(
 
 
 @override_settings(DEBUG=False)
-def test_acknowledged_factory_keeps_one_instance_per_operation(install_probe_schema):
+def test_acknowledged_factory_keeps_one_instance_per_operation(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """A factory entry is still fresh per operation: no payload leaks into the next request."""
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
@@ -644,7 +673,9 @@ def test_acknowledged_factory_keeps_one_instance_per_operation(install_probe_sch
 # ---------------------------------------------------------------------------
 
 
-def test_over_cap_exception_message_is_truncated_in_the_published_payload(install_probe_schema):
+def test_over_cap_exception_message_is_truncated_in_the_published_payload(
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """A real resolver raise past the message cap reaches the wire cut and marked."""
     install_probe_schema([_acknowledged_debug])
     client = TestClient()
@@ -686,7 +717,7 @@ def test_project_graphql_endpoint_publishes_no_debug_key():
 # ---------------------------------------------------------------------------
 
 
-def _shared_entry(spelling):
+def _shared_entry(spelling: str) -> Callable[[], DjangoDebugExtension]:
     """The ``extensions=[...]`` entry that spells ``spelling``.
 
     The bare-instance spelling is deliberately absent. Strawberry deprecated
@@ -710,9 +741,9 @@ def _shared_entry(spelling):
     ids=["singleton-factory", "fresh-factory-control"],
 )
 def test_a_parse_failure_never_republishes_the_previous_operations_payload(
-    install_probe_schema,
-    spelling,
-):
+    install_probe_schema: _InstallProbeSchema,
+    spelling: str,
+) -> None:
     """The payload belongs to the operation that built it, not to the extension.
 
     A document the server could not parse ran no SQL and raised nothing, so the
@@ -738,8 +769,8 @@ def test_a_parse_failure_never_republishes_the_previous_operations_payload(
 @override_settings(DEBUG=False)
 @pytest.mark.django_db
 def test_a_resolver_cannot_arm_the_production_disclosure_for_a_later_request(
-    install_probe_schema,
-):
+    install_probe_schema: _InstallProbeSchema,
+) -> None:
     """The acknowledgement is a construction statement, not a request-local preference.
 
     A process-lived entry is reachable from every resolver of every later

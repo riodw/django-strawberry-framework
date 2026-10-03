@@ -24,7 +24,7 @@ from django_strawberry_framework.testing import AsyncTestClient
 
 
 @pytest.fixture(autouse=True)
-def _lookups(db):
+def _lookups(db: None) -> None:
     for key in (
         "backlog",
         "todo",
@@ -520,7 +520,7 @@ def test_create_card_from_spec_number_branch_places_and_shifts():
 
 
 @pytest.fixture
-def _async_kanban_card(transactional_db):
+def _async_kanban_card(transactional_db: None) -> tuple[models.Card, User]:
     """Seed lookups, a TODO card, and a staff user, committed so the async view thread sees them.
 
     ``AsyncTestClient`` posts through Django's in-process async handler, running
@@ -547,7 +547,9 @@ def _async_kanban_card(transactional_db):
     return card, user
 
 
-async def test_set_card_status_illegal_transition_async_envelope(_async_kanban_card):
+async def test_set_card_status_illegal_transition_async_envelope(
+    _async_kanban_card: tuple[models.Card, User],
+) -> None:
     """Drive one mutation through ``resolve_async``: an illegal transition maps to the envelope.
 
     The async color of ``test_set_card_status_illegal_transition_returns_envelope``:

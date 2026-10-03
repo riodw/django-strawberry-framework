@@ -1763,7 +1763,7 @@ def test_nested_serializer_fields_access_exception_raises_configuration_error():
 def test_normalize_nested_serializer_configs_rejects_non_mapping():
     """normalize_nested_serializer_configs raises ConfigurationError on non-mapping values."""
     with pytest.raises(ConfigurationError, match="nested_configs must be a mapping"):
-        normalize_nested_serializer_configs(["invalid"])  # type: ignore[arg-type]
+        normalize_nested_serializer_configs(["invalid"])
 
 
 def test_build_serializer_input_class_rejects_non_nested_config_items():
@@ -1779,7 +1779,7 @@ def test_build_serializer_input_class_rejects_non_nested_config_items():
         build_serializer_input_class(
             Parent,
             operation_kind="create",
-            nested_configs={"child": "not_a_config"},  # type: ignore[dict-item]
+            nested_configs={"child": "not_a_config"},
         )
 
 
@@ -1819,7 +1819,7 @@ def test_validate_nested_config_keys_not_a_mapping():
         pass
 
     with pytest.raises(ConfigurationError, match="must be a mapping"):
-        validate_nested_config_keys(S, {}, ["not_a_mapping"])  # type: ignore[arg-type]
+        validate_nested_config_keys(S, {}, ["not_a_mapping"])
 
 
 def test_build_nested_serializer_spec_child_fields_configuration_error():
@@ -1940,7 +1940,7 @@ def test_set_valued_meta_fields_fail_loud_at_class_creation():
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
-                fields = {"name", "category"}  # type: ignore[assignment]
+                fields = {"name", "category"}
 
 
 def test_set_valued_builder_fields_fail_loud():

@@ -310,7 +310,7 @@ def test_from_django_field_rejects_non_django_input():
         pass
 
     with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
-        FieldMeta.from_django_field(NotAField())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(NotAField())
 
 
 def test_from_django_field_rejects_partial_shape():
@@ -320,7 +320,7 @@ def test_from_django_field_rejects_partial_shape():
         name = "x"
 
     with pytest.raises(OptimizerError):
-        FieldMeta.from_django_field(PartialField())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(PartialField())
 
 
 def test_from_django_field_rejects_hostile_required_attributes_safely():
@@ -339,7 +339,7 @@ def test_from_django_field_rejects_hostile_required_attributes_safely():
 
     for field in (HostileRepr(), HostileAttribute()):
         with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
-            FieldMeta.from_django_field(field)  # type: ignore[arg-type]
+            FieldMeta.from_django_field(field)
 
 
 def test_target_pk_name_defensively_resolves_and_contains_errors():
@@ -375,7 +375,7 @@ def test_from_django_field_rejects_non_string_field_name():
     """Non-string field names are rejected with OptimizerError at stamp time."""
     non_str_field = SimpleNamespace(name=123, is_relation=False)
     with pytest.raises(OptimizerError, match="expected a string field name"):
-        FieldMeta.from_django_field(non_str_field)  # type: ignore[arg-type]
+        FieldMeta.from_django_field(non_str_field)
 
 
 def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
@@ -393,7 +393,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         ConfigurationError,
         match="Could not read relation metadata 'many_to_many'",
     ):
-        FieldMeta.from_django_field(HostileM2M())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(HostileM2M())
 
     class NonBoolM2M:
         name = "rel"
@@ -404,7 +404,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         ConfigurationError,
         match="Relation metadata 'many_to_many' on .* must be a bool",
     ):
-        FieldMeta.from_django_field(NonBoolM2M())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(NonBoolM2M())
 
     class HostileAccessor:
         name = "rel"
@@ -416,7 +416,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
             raise RuntimeError("accessor error")
 
     with pytest.raises(ConfigurationError, match="Could not resolve relation accessor"):
-        FieldMeta.from_django_field(HostileAccessor())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(HostileAccessor())
 
     class NonCallableAccessor:
         name = "rel"
@@ -426,7 +426,7 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         get_accessor_name = "not_callable"
 
     with pytest.raises(ConfigurationError, match="Relation accessor metadata .* must be callable"):
-        FieldMeta.from_django_field(NonCallableAccessor())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(NonCallableAccessor())
 
     class NonStrAccessor:
         name = "rel"
@@ -437,14 +437,14 @@ def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
         ConfigurationError,
         match="Relation accessor metadata on .* must be a string",
     ):
-        FieldMeta.from_django_field(NonStrAccessor())  # type: ignore[arg-type]
+        FieldMeta.from_django_field(NonStrAccessor())
 
 
 def test_field_meta_is_frozen():
     """FieldMeta instances are immutable."""
     fm = FieldMeta(name="test")
     with pytest.raises((AttributeError, TypeError)):
-        fm.name = "other"  # type: ignore[misc]
+        fm.name = "other"
 
 
 def test_field_meta_slots_hashing_and_copy():

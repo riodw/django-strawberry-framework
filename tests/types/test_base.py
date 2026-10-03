@@ -2597,7 +2597,7 @@ def test_optimizer_hints_bad_value_raises():
             class Meta:
                 model = Category
                 fields = ("id", "name", "items")
-                optimizer_hints = {"items": "not_a_hint"}  # type: ignore[dict-item]
+                optimizer_hints = {"items": "not_a_hint"}
 
 
 # ---------------------------------------------------------------------------

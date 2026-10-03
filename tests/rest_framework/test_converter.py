@@ -1223,7 +1223,7 @@ def test_serializer_field_description_handles_an_unreadable_field_name_in_diagno
             raise RuntimeError("name unavailable")
 
     with pytest.raises(ConfigurationError, match="Serializer field <unavailable>"):
-        serializer_field_description(HostileField())  # type: ignore[arg-type]
+        serializer_field_description(HostileField())
 
 
 def test_declared_choicefield_over_model_column_emits_serializer_enum():

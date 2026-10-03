@@ -205,9 +205,9 @@ def test_logic_operator_descriptors_and_mappings():
     assert isinstance(LOGIC_OPERATORS_BY_WIRE, MappingProxyType)
     assert isinstance(LOGIC_OPERATORS_BY_PYTHON_ATTR, MappingProxyType)
     with pytest.raises(TypeError):
-        LOGIC_OPERATORS_BY_WIRE["custom"] = LOGIC_OP_AND  # type: ignore[index]
+        LOGIC_OPERATORS_BY_WIRE["custom"] = LOGIC_OP_AND
     with pytest.raises(TypeError):
-        LOGIC_OPERATORS_BY_PYTHON_ATTR["custom_"] = LOGIC_OP_AND  # type: ignore[index]
+        LOGIC_OPERATORS_BY_PYTHON_ATTR["custom_"] = LOGIC_OP_AND
     assert LOGIC_OP_AND.is_sequence is True
     assert LOGIC_OP_OR.is_sequence is True
     assert LOGIC_OP_NOT.is_sequence is False

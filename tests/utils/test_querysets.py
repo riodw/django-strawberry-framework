@@ -4469,7 +4469,7 @@ def test_manager_coercion_rejects_unreadable_routing_state():
         __slots__ = ()
 
     with pytest.raises(ConfigurationError, match="could not read the manager's routing state"):
-        _coerced_manager_queryset(_NoRoutingState())  # type: ignore[arg-type]
+        _coerced_manager_queryset(_NoRoutingState())
 
 
 def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(monkeypatch):

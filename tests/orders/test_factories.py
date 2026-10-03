@@ -246,7 +246,7 @@ def test_factory_skips_related_order_with_none_target():
     class BookOrderNone(OrderSet):
         # ``None`` target is the cookbook's placeholder shape per
         # cookbook lines 124-130 (factory skips the target enqueue).
-        ghost = RelatedOrder(None, field_name="ghost")  # type: ignore[arg-type]
+        ghost = RelatedOrder(None, field_name="ghost")
 
         class Meta:
             model = library_models.Book

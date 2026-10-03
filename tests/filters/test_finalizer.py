@@ -115,11 +115,11 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     original_get_filters = GenreFilter.get_filters.__func__
 
     @classmethod
-    def instrumented_get_filters(cls):  # type: ignore[no-redef]
+    def instrumented_get_filters(cls):
         observations.append(cls._owner_definition is not None)
         return original_get_filters(cls)
 
-    GenreFilter.get_filters = instrumented_get_filters  # type: ignore[method-assign]
+    GenreFilter.get_filters = instrumented_get_filters
     try:
 
         class BookType(DjangoType):

@@ -975,7 +975,7 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
     class Query:
         @strawberry.field
         def bool_as_bigint(self) -> BigInt:
-            return True  # type: ignore[return-value]
+            return True
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("{ boolAsBigint }")

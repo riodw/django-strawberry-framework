@@ -154,11 +154,11 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     original_get_fields = ShelfOrder.get_fields.__func__
 
     @classmethod
-    def instrumented_get_fields(cls):  # type: ignore[no-redef]
+    def instrumented_get_fields(cls):
         observations.append(cls._owner_definition is not None)
         return original_get_fields(cls)
 
-    ShelfOrder.get_fields = instrumented_get_fields  # type: ignore[method-assign]
+    ShelfOrder.get_fields = instrumented_get_fields
     try:
 
         class BookType(DjangoType):

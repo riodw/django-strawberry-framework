@@ -42,7 +42,7 @@ def test_mutation_operation_descriptor_immutability():
     assert isinstance(desc, MutationOperationDescriptor)
     assert dataclasses.is_dataclass(desc)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        desc.name = "other"  # type: ignore[misc]
+        desc.name = "other"
 
 
 def test_operation_descriptors_invariants():

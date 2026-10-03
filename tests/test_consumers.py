@@ -64,7 +64,7 @@ def test_connection_actor_state_hostile_get_raises_configuration_error(exc_type)
             raise exc_type("hostile get")
 
     with pytest.raises(ConfigurationError) as excinfo:
-        connection_actor_state(HostileScope())  # type: ignore[arg-type]
+        connection_actor_state(HostileScope())
     assert excinfo.value.__cause__ is not None
     assert isinstance(excinfo.value.__cause__, exc_type)
 
@@ -75,14 +75,14 @@ def test_connection_actor_state_hostile_setitem_raises_configuration_error():
             raise ValueError("hostile set")
 
     with pytest.raises(ConfigurationError) as excinfo:
-        connection_actor_state(HostileScope())  # type: ignore[arg-type]
+        connection_actor_state(HostileScope())
     assert isinstance(excinfo.value.__cause__, ValueError)
 
 
 def test_connection_actor_state_corrupted_value_raises_configuration_error():
     scope = {_ACTOR_STATE_SCOPE_KEY: "not-a-state"}
     with pytest.raises(ConfigurationError, match="corrupted"):
-        connection_actor_state(scope)  # type: ignore[arg-type]
+        connection_actor_state(scope)
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ async def test_actor_is_current_hostile_window_attribute_fails_closed():
     # hostile property for revalidation_window
     type(consumer).revalidation_window = property(
         lambda self: (_ for _ in ()).throw(AttributeError("hostile window")),
-    )  # type: ignore[attr-defined]
+    )
 
     # Actually Mock property trick is messy; use a real object with hostile property
     class HostileConsumer:
@@ -203,7 +203,7 @@ async def test_actor_is_current_hostile_window_attribute_fails_closed():
             return scope
 
     hc = HostileConsumer()
-    result = await cmod._actor_is_current(hc)  # type: ignore[arg-type]
+    result = await cmod._actor_is_current(hc)
     assert result is False
 
 
@@ -218,7 +218,7 @@ async def test_actor_is_current_hostile_window_comparison_falls_through_to_db():
     scope[_ACTOR_STATE_SCOPE_KEY].authenticated_provenance = True
     consumer = Mock()
     consumer.scope = scope
-    consumer.revalidation_window = HostileFloat()  # type: ignore[assignment]
+    consumer.revalidation_window = HostileFloat()
     # _refreshed_actor will be called; mock it to succeed
     with patch.object(cmod, "_refreshed_actor", new_callable=AsyncMock) as mock_ref:
         mock_ref.return_value = Mock(is_authenticated=True)
@@ -307,7 +307,7 @@ async def test_actor_is_current_hostile_scope_user_setitem_fails_closed(exc_type
     hostile_scope[_ACTOR_STATE_SCOPE_KEY] = scope[_ACTOR_STATE_SCOPE_KEY]
     hostile_scope["user"] = scope["user"]
     hostile_scope.raise_enabled = True
-    consumer.scope = hostile_scope  # type: ignore[assignment]
+    consumer.scope = hostile_scope
     with patch.object(cmod, "_refreshed_actor", return_value=Mock(is_authenticated=True)):
         result = await cmod._actor_is_current(consumer)
         assert result is False
@@ -348,7 +348,7 @@ async def test_actor_is_current_hostile_consumer_scope_property_fails_closed():
 
         revalidation_window = 0.0
 
-    result = await cmod._actor_is_current(HostileConsumer())  # type: ignore[arg-type]
+    result = await cmod._actor_is_current(HostileConsumer())
     assert result is False
 
 
@@ -367,7 +367,7 @@ async def test_revalidate_hostile_connection_acknowledged_fails_closed():
         websocket = Mock()
         view = Mock()
 
-    result = await cmod.revalidate_operation_actor(HostileHandler())  # type: ignore[arg-type]
+    result = await cmod.revalidate_operation_actor(HostileHandler())
     assert result is False
 
 
@@ -382,7 +382,7 @@ async def test_revalidate_hostile_view_fails_closed():
 
         websocket = Mock()
 
-    result = await cmod.revalidate_operation_actor(Handler())  # type: ignore[arg-type]
+    result = await cmod.revalidate_operation_actor(Handler())
     assert result is False
 
 
@@ -438,7 +438,7 @@ async def test_send_revalidated_hostile_ws_consumer_fails_closed():
             raise KeyError("hostile ws_consumer")
 
     with patch.object(cmod, "_revoke_connection", new_callable=AsyncMock) as mock_revoke:
-        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # type: ignore[arg-type]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())
         mock_revoke.assert_awaited_once()
 
 
@@ -496,7 +496,7 @@ def _build_consumer_and_adapter():
     consumer.revalidation_window = 0.0
     adapter_cls = cls.websocket_adapter_class
     adapter = adapter_cls.__new__(adapter_cls)
-    adapter.ws_consumer = consumer  # type: ignore[attr-defined]
+    adapter.ws_consumer = consumer
     return consumer, adapter
 
 
@@ -516,7 +516,7 @@ async def test_send_json_hostile_message_get_fails_closed():
                 raise ValueError("hostile get")
 
         # Should not raise ValueError
-        await adapter.send_json(HostileMessage({"type": "next"}))  # type: ignore[arg-type]
+        await adapter.send_json(HostileMessage({"type": "next"}))
         # After hostile, it should have revoked
         assert adapter.ws_consumer._revocation.revoked is True
 
@@ -534,7 +534,7 @@ async def test_send_json_non_dict_message_does_not_escape(message):
         from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
         note_authenticated_actor(adapter.ws_consumer.scope)
-        await adapter.send_json(message)  # type: ignore[arg-type]
+        await adapter.send_json(message)
         assert adapter.ws_consumer._revocation.revoked is True
 
 
@@ -546,7 +546,7 @@ async def test_send_json_control_frame_hostile_scope_suppresses():
         "django_strawberry_framework.consumers.actor_lease",
         side_effect=TypeError("hostile control scope"),
     ):
-        adapter.ws_consumer.scope = hostile_scope  # type: ignore[assignment]
+        adapter.ws_consumer.scope = hostile_scope
         await adapter.send_json({"type": "ping"})
 
 
@@ -595,7 +595,7 @@ async def test_send_revalidated_hostile_ws_consumer_with_failing_revoke_is_conta
         new_callable=AsyncMock,
         side_effect=ValueError("hostile close"),
     ) as mock_revoke:
-        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # type: ignore[arg-type]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())
         mock_revoke.assert_awaited_once()
 
 
@@ -706,7 +706,7 @@ async def test_send_revalidated_cancellation_in_hostile_ws_consumer_revoke_is_re
         side_effect=asyncio.CancelledError,
     ):
         with pytest.raises(asyncio.CancelledError):
-            await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # type: ignore[arg-type]
+            await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -822,7 +822,7 @@ async def test_send_json_cancellation_reading_the_message_type_is_re_raised():
             raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
-        await adapter.send_json(CancellingMessage({"type": "next"}))  # type: ignore[arg-type]
+        await adapter.send_json(CancellingMessage({"type": "next"}))
 
 
 @pytest.mark.asyncio
@@ -840,7 +840,7 @@ async def test_send_json_hostile_message_with_failing_delegate_is_contained():
         new_callable=AsyncMock,
         side_effect=ValueError("hostile delegate"),
     ) as mock_send:
-        await adapter.send_json(HostileMessage({"type": "next"}))  # type: ignore[arg-type]
+        await adapter.send_json(HostileMessage({"type": "next"}))
         mock_send.assert_awaited_once()
 
 
@@ -854,7 +854,7 @@ async def test_send_json_control_frame_unreadable_revoked_flag_suppresses_the_fr
         def revoked(self):
             raise ValueError("hostile revoked")
 
-    adapter.ws_consumer._revocation = HostileRevocation()  # type: ignore[attr-defined]
+    adapter.ws_consumer._revocation = HostileRevocation()
 
     with patch.object(
         adapter.__class__.__bases__[0],
@@ -875,7 +875,7 @@ async def test_send_json_control_frame_cancellation_reading_revoked_is_re_raised
         def revoked(self):
             raise asyncio.CancelledError
 
-    adapter.ws_consumer._revocation = CancellingRevocation()  # type: ignore[attr-defined]
+    adapter.ws_consumer._revocation = CancellingRevocation()
 
     with pytest.raises(asyncio.CancelledError):
         await adapter.send_json({"type": "ping"})
@@ -924,7 +924,7 @@ async def test_revoke_connection_hostile_ws_consumer_does_not_raise():
             raise AttributeError("hostile ws_consumer")
 
     # Should not raise
-    await cmod._revoke_connection(HostileWS())  # type: ignore[arg-type]
+    await cmod._revoke_connection(HostileWS())
 
 
 @pytest.mark.asyncio
@@ -972,7 +972,7 @@ class _WindowFloatSubclass(float):
 def test_resolved_window_rejects_bool_and_subclasses(bad):
     """Only the built-in ``int`` and ``float`` types are a usable window."""
     with pytest.raises(ConfigurationError):
-        cmod.resolved_revalidation_window(bad)  # type: ignore[arg-type]
+        cmod.resolved_revalidation_window(bad)
 
 
 @pytest.mark.parametrize(
@@ -1054,7 +1054,7 @@ def test_host_validation_case_insensitive_header():
 def test_host_validation_server_absent_vs_null(server):
     """A falsy ``scope['server']`` uses the same ``unknown`` reconstruction as absence."""
     scope = {"headers": [], "server": server}
-    req = cmod._host_validation_request(scope)  # type: ignore[arg-type]
+    req = cmod._host_validation_request(scope)
     assert req.META["SERVER_NAME"] == "unknown"
 
 
@@ -1074,7 +1074,7 @@ async def test_revalidate_hostile_ack_cancelled_propagates():
         view = Mock()
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod.revalidate_operation_actor(HostileHandler())  # type: ignore[arg-type]
+        await cmod.revalidate_operation_actor(HostileHandler())
 
 
 @pytest.mark.asyncio
@@ -1085,13 +1085,13 @@ async def test_revalidate_hostile_ack_websocket_cancelled_propagates():
             raise ValueError("hostile ack")
 
         @property
-        def websocket(self):  # type: ignore[no-redef]
+        def websocket(self):
             raise asyncio.CancelledError("hostile websocket cancelled")
 
         view = Mock()
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod.revalidate_operation_actor(HostileHandler())  # type: ignore[arg-type]
+        await cmod.revalidate_operation_actor(HostileHandler())
 
 
 @pytest.mark.asyncio
@@ -1106,7 +1106,7 @@ async def test_revalidate_hostile_view_cancelled_propagates():
         websocket = Mock()
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod.revalidate_operation_actor(Handler())  # type: ignore[arg-type]
+        await cmod.revalidate_operation_actor(Handler())
 
 
 @pytest.mark.asyncio
@@ -1118,7 +1118,7 @@ async def test_revalidate_hostile_revoked_cancelled_propagates():
     # Make _revocation.revoked raise Cancelled
     type(handler.view._revocation).revoked = property(
         lambda self: (_ for _ in ()).throw(asyncio.CancelledError("cancelled")),
-    )  # type: ignore[attr-defined]
+    )
     handler.websocket = Mock()
     handler.websocket.ws_consumer = handler.view
     with pytest.raises(asyncio.CancelledError):
@@ -1154,7 +1154,7 @@ async def test_actor_is_current_cancelled_at_scope_get_propagates():
         revalidation_window = 0.0
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod._actor_is_current(HostileConsumer())  # type: ignore[arg-type]
+        await cmod._actor_is_current(HostileConsumer())
 
 
 @pytest.mark.asyncio
@@ -1218,11 +1218,11 @@ async def test_actor_is_current_cancelled_at_window_propagates():
             raise asyncio.CancelledError("cancelled window")
 
         @property
-        def scope(self):  # type: ignore[no-redef]
+        def scope(self):
             return scope
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod._actor_is_current(HostileConsumer())  # type: ignore[arg-type]
+        await cmod._actor_is_current(HostileConsumer())
 
 
 @pytest.mark.asyncio
@@ -1236,7 +1236,7 @@ async def test_actor_is_current_cancelled_at_cache_comparison_propagates():
     scope[_ACTOR_STATE_SCOPE_KEY].authenticated_provenance = True
     consumer = Mock()
     consumer.scope = scope
-    consumer.revalidation_window = HostileFloat()  # type: ignore[assignment]
+    consumer.revalidation_window = HostileFloat()
     with pytest.raises(asyncio.CancelledError):
         await cmod._actor_is_current(consumer)
 
@@ -1291,7 +1291,7 @@ async def test_actor_is_current_cancelled_at_scope_user_set_propagates():
     hostile_scope[_ACTOR_STATE_SCOPE_KEY] = scope[_ACTOR_STATE_SCOPE_KEY]
     hostile_scope["user"] = scope["user"]
     hostile_scope.raise_enabled = True
-    consumer.scope = hostile_scope  # type: ignore[assignment]
+    consumer.scope = hostile_scope
     with patch.object(cmod, "_refreshed_actor", return_value=Mock(is_authenticated=True)):
         with pytest.raises(asyncio.CancelledError):
             await cmod._actor_is_current(consumer)
@@ -1317,7 +1317,7 @@ async def test_actor_is_current_cancelled_at_timestamp_set_propagates():
     hostile_scope[_ACTOR_STATE_SCOPE_KEY] = scope[_ACTOR_STATE_SCOPE_KEY]
     hostile_scope["user"] = scope["user"]
     hostile_scope.raise_enabled = True
-    consumer.scope = hostile_scope  # type: ignore[assignment]
+    consumer.scope = hostile_scope
     with patch.object(cmod, "_refreshed_actor", return_value=Mock(is_authenticated=True)):
         with patch.object(cmod, "_monotonic", return_value=1.0):
             with pytest.raises(asyncio.CancelledError):
@@ -1332,7 +1332,7 @@ async def test_send_revalidated_hostile_ws_consumer_cancelled_propagates():
             raise asyncio.CancelledError("cancelled ws_consumer")
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())  # type: ignore[arg-type]
+        await cmod.send_revalidated_operation_frame(HostileWS(), {}, AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -1365,7 +1365,7 @@ async def test_send_json_hostile_message_cancelled_propagates():
 
         # ValueError triggers the except that calls send_revalidated, which now raises Cancelled
         with pytest.raises(asyncio.CancelledError):
-            await adapter.send_json(HostileMessage({"type": "next"}))  # type: ignore[arg-type]
+            await adapter.send_json(HostileMessage({"type": "next"}))
 
 
 @pytest.mark.asyncio
@@ -1387,7 +1387,7 @@ async def test_revoke_connection_hostile_ws_consumer_cancelled_propagates():
             raise asyncio.CancelledError("cancelled")
 
     with pytest.raises(asyncio.CancelledError):
-        await cmod._revoke_connection(HostileWS())  # type: ignore[arg-type]
+        await cmod._revoke_connection(HostileWS())
 
 
 @pytest.mark.asyncio
@@ -1424,7 +1424,7 @@ async def test_revalidate_ack_hostile_websocket_value_error_fails_closed():
 
         view = Mock()
 
-    result = await cmod.revalidate_operation_actor(HostileHandler())  # type: ignore[arg-type]
+    result = await cmod.revalidate_operation_actor(HostileHandler())
     assert result is False
 
 
@@ -1439,7 +1439,7 @@ async def test_revalidate_ack_hostile_revoke_value_error_still_fails_closed():
         view = Mock()
 
     with patch.object(cmod, "_revoke_connection", side_effect=ValueError("hostile revoke")):
-        result = await cmod.revalidate_operation_actor(HostileHandler())  # type: ignore[arg-type]
+        result = await cmod.revalidate_operation_actor(HostileHandler())
         assert result is False
 
 
@@ -1452,7 +1452,7 @@ async def test_revalidate_revoked_hostile_fails_closed():
     # Make revoked raise ValueError
     type(handler.view._revocation).revoked = property(
         lambda self: (_ for _ in ()).throw(ValueError("hostile revoked")),
-    )  # type: ignore[attr-defined]
+    )
     handler.websocket = Mock()
     handler.websocket.ws_consumer = handler.view
     with patch.object(cmod, "_revoke_connection", new_callable=AsyncMock):
@@ -1461,7 +1461,7 @@ async def test_revalidate_revoked_hostile_fails_closed():
     # Restore
     type(handler.view._revocation).revoked = property(
         lambda self: self.state != cmod._REVOCATION_PERMITTED,
-    )  # type: ignore[attr-defined]
+    )
 
 
 @pytest.mark.asyncio
@@ -1527,11 +1527,11 @@ async def test_send_revalidated_revoked_hostile():
     # Make revoked raise
     type(consumer._revocation).revoked = property(
         lambda self: (_ for _ in ()).throw(ValueError("hostile")),
-    )  # type: ignore[attr-defined]
+    )
     # Need to actually set _revocation to a real one with hostile property
     # Use a mock revocation
     mock_rev = Mock()
-    type(mock_rev).revoked = property(lambda self: (_ for _ in ()).throw(ValueError("hostile")))  # type: ignore[attr-defined]
+    type(mock_rev).revoked = property(lambda self: (_ for _ in ()).throw(ValueError("hostile")))
     consumer._revocation = mock_rev
     consumer.revalidation_window = 0.0
     ws = Mock()
@@ -1611,7 +1611,7 @@ async def test_revalidate_ack_hostile_revoke_cancelled():
         side_effect=asyncio.CancelledError("cancelled revoke"),
     ):
         with pytest.raises(asyncio.CancelledError):
-            await cmod.revalidate_operation_actor(HostileHandler())  # type: ignore[arg-type]
+            await cmod.revalidate_operation_actor(HostileHandler())
 
 
 @pytest.mark.asyncio
@@ -1696,7 +1696,7 @@ def test_utils_connection_actor_state_hostile_isinstance():
         side_effect=ValueError("hostile"),
     ):
         with pytest.raises(ConfigurationError):
-            connection_actor_state(scope)  # type: ignore[arg-type]
+            connection_actor_state(scope)
 
 
 @pytest.mark.asyncio

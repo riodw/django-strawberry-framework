@@ -974,13 +974,13 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry):
     """
 
     class _NonHashableField:
-        __hash__ = None  # type: ignore[assignment]
+        __hash__ = None
 
     pending = PendingRelation(
         source_type=type("Src", (), {}),
         source_model=Category,
         field_name="items",
-        django_field=_NonHashableField(),  # type: ignore[arg-type]
+        django_field=_NonHashableField(),
         related_model=Item,
     )
 

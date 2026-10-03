@@ -203,7 +203,7 @@ def test_connection_actor_state_slots_prevent_arbitrary_attributes():
     """__slots__ enforces exact field shape and raises AttributeError on typos."""
     state = ConnectionActorState()
     with pytest.raises(AttributeError):
-        state.unknown_field = True  # type: ignore[attr-defined]
+        state.unknown_field = True
 
 
 def test_connection_actor_state_get_or_create_reused_per_scope():

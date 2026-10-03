@@ -576,7 +576,7 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(_nam
     class BindStateOrder(OrderSet):
         pass
 
-    BindStateOrder._owner_definition = "stub_owner"  # type: ignore[assignment]
+    BindStateOrder._owner_definition = "stub_owner"
     BindStateOrder._expanded_fields = OrderedDict([("title", None)])
     BindStateOrder._is_expanding_fields = True
     assert "_owner_definition" in BindStateOrder.__dict__

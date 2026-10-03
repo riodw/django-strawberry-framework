@@ -534,7 +534,7 @@ def test_classify_path_empty_path_infos_relation_raises():
 def test_classify_path_non_string_path_raises_typed_path_error():
     """A non-string path is rejected through the path error contract before any split."""
     with pytest.raises(PathResolutionError):
-        classify_path(Book, object())  # type: ignore[arg-type]
+        classify_path(Book, object())
 
 
 def test_classify_path_malformed_path_info_member_raises_typed_path_error():
@@ -563,11 +563,11 @@ def test_relation_path_hop_and_classified_path_are_frozen():
 
     hop = RelationPathHop(segment="s", kind="many", target_model=Book, many_side=True)
     with pytest.raises(FrozenInstanceError):
-        hop.segment = "other"  # type: ignore[misc]
+        hop.segment = "other"
 
     plan = classify_path(Book, "title")
     with pytest.raises(FrozenInstanceError):
-        plan.path = "other"  # type: ignore[misc]
+        plan.path = "other"
 
 
 @pytest.mark.parametrize(
@@ -963,7 +963,7 @@ def test_many_side_kind_membership_fails_closed_for_hostile_hashing():
         def __hash__(self):
             raise RuntimeError("kind hash exploded")
 
-    assert is_many_side_relation_kind(_HostileKind()) is False  # type: ignore[arg-type]
+    assert is_many_side_relation_kind(_HostileKind()) is False
 
 
 def test_traversable_relation_probe_handles_false_and_hostile_flags():
@@ -1046,7 +1046,7 @@ def test_lookup_validation_wraps_every_transform_failure_stage():
     with pytest.raises(LookupValidationError):
         validate_lookup_expr(_BrokenExactTerminal(), "last")
     with pytest.raises(LookupValidationError):
-        validate_lookup_expr(Book._meta.get_field("title"), 123)  # type: ignore[arg-type]
+        validate_lookup_expr(Book._meta.get_field("title"), 123)
 
 
 def test_many_path_probes_fail_closed_for_unexpected_classifier_errors(monkeypatch):
@@ -1069,7 +1069,7 @@ def test_many_path_probes_fail_closed_for_unexpected_classifier_errors(monkeypat
 
 def test_many_path_probe_rejects_a_non_string_path():
     """A non-string path is not many-side rather than an error out of the probe."""
-    assert path_traverses_to_many(Book, 123) is False  # type: ignore[arg-type]
+    assert path_traverses_to_many(Book, 123) is False
 
 
 def test_instance_accessor_rejects_malformed_accessor_metadata():

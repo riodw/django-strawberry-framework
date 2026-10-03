@@ -1543,5 +1543,5 @@ def test_build_payload_type_rejects_reserved_or_invalid_object_slot():
             build_payload_type(
                 "CreateThing",
                 object_type=relay_type,
-                object_slot=bad_slot,  # type: ignore[arg-type]
+                object_slot=bad_slot,
             )

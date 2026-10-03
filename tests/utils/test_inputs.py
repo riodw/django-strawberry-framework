@@ -97,7 +97,7 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
     @strawberry.type
     class Query:
         @strawberry.field
-        def probe(self, inp: input_cls) -> int:  # type: ignore[valid-type]
+        def probe(self, inp: input_cls) -> int:
             return 1
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())
@@ -478,9 +478,9 @@ def test_input_builder_wraps_unreadable_and_malformed_field_specifications():
             raise RuntimeError("field specs exploded")
 
     with pytest.raises(ConfigurationError, match="field specifications could not be read"):
-        build_strawberry_input_class("UnreadableInput", _UnreadableSpecs())  # type: ignore[arg-type]
+        build_strawberry_input_class("UnreadableInput", _UnreadableSpecs())
     with pytest.raises(ConfigurationError, match="must contain.*triples"):
-        build_strawberry_input_class("MalformedInput", [("name", int)])  # type: ignore[list-item]
+        build_strawberry_input_class("MalformedInput", [("name", int)])
 
 
 def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs():

@@ -90,7 +90,7 @@ class TestPrefetchFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint.prefetch(None)  # type: ignore[arg-type]
+            OptimizerHint.prefetch(None)
 
 
 class TestStrategyFactory:
@@ -130,7 +130,7 @@ class TestStrategyFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="strategy name"):
-            OptimizerHint.strategy(None)  # type: ignore[arg-type]
+            OptimizerHint.strategy(None)
 
     def test_bad_name_raises_at_construction(self) -> None:
         """A typo'd strategy name fails loud through ``resolve_strategy``."""
@@ -173,7 +173,7 @@ class TestStrategyFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="nested_connection_strategy"):
-            OptimizerHint.strategy(NotStrategy())  # type: ignore[arg-type]
+            OptimizerHint.strategy(NotStrategy())
 
     def test_strategy_rejects_class_with_clean_name(self) -> None:
         """Passing a strategy class instead of an instance names the class, not 'type'."""
@@ -183,7 +183,7 @@ class TestStrategyFactory:
         )
 
         with pytest.raises(ConfigurationError, match="WindowedPrefetchStrategy"):
-            OptimizerHint.strategy(WindowedPrefetchStrategy)  # type: ignore[arg-type]
+            OptimizerHint.strategy(WindowedPrefetchStrategy)
 
     def test_strategy_hostile_selection_values_stay_typed(self) -> None:
         """A hostile selection value cannot replace the typed strategy rejection.
@@ -224,12 +224,12 @@ class TestStrategyFactory:
         # Unknown names raise the unknown-name rejection rendered safely.
         for hostile in (HostileRepr("winowed"), HostileHash("winowed")):
             with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
-                OptimizerHint.strategy(hostile)  # type: ignore[arg-type]
+                OptimizerHint.strategy(hostile)
             with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
-                OptimizerHint(nested_strategy=hostile)  # type: ignore[arg-type]
+                OptimizerHint(nested_strategy=hostile)
         # A raising ``__getattr__`` reads as "not a strategy", typed the same way.
         with pytest.raises(ConfigurationError, match="must be a strategy name"):
-            OptimizerHint.strategy(HostileGetattr())  # type: ignore[arg-type]
+            OptimizerHint.strategy(HostileGetattr())
         # Content decides through the base ``str`` slot: a hostile ``__eq__``
         # can neither force a false AUTO_STRATEGY match nor break a valid name.
         # (Even the assertion reads through the base slot - ``==`` on the
@@ -250,7 +250,7 @@ class TestStrategyFactory:
             ConfigurationError,
             match="Unknown nested_connection_strategy",
         ) as exc_info:
-            OptimizerHint.strategy(HostileHash("winowed"))  # type: ignore[arg-type]
+            OptimizerHint.strategy(HostileHash("winowed"))
         assert exc_info.value.__cause__ is None
 
     def test_public_annotations_resolve_at_runtime(self) -> None:
@@ -284,12 +284,12 @@ class TestFrozenImmutability:
         """Attempting to set an attribute raises ``FrozenInstanceError``."""
         hint = OptimizerHint.select_related()
         with pytest.raises(AttributeError):
-            hint.force_select = False  # type: ignore[misc]
+            hint.force_select = False
 
     def test_skip_sentinel_cannot_be_mutated(self) -> None:
         """The SKIP sentinel is also frozen."""
         with pytest.raises(AttributeError):
-            OptimizerHint.SKIP.skip = False  # type: ignore[misc]
+            OptimizerHint.SKIP.skip = False
 
 
 class TestEquality:
@@ -323,7 +323,7 @@ class TestInvalidStatesRejected:
 
         for kwargs in ({"force_select": 1}, {"force_prefetch": ""}, {"skip": "false"}):
             with pytest.raises(ConfigurationError, match="bool values"):
-                OptimizerHint(**kwargs)  # type: ignore[arg-type]
+                OptimizerHint(**kwargs)
 
     def test_skip_with_force_select_raises(self) -> None:
         from django_strawberry_framework.exceptions import ConfigurationError
@@ -370,9 +370,9 @@ class TestInvalidStatesRejected:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint.prefetch("entries__items")  # type: ignore[arg-type]
+            OptimizerHint.prefetch("entries__items")
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint(prefetch_obj="entries__items")  # type: ignore[arg-type]
+            OptimizerHint(prefetch_obj="entries__items")
 
     def test_prefetch_obj_rejects_hostile_type_name_safely(self) -> None:
         """A hostile metaclass cannot replace the typed Prefetch rejection."""
@@ -388,7 +388,7 @@ class TestInvalidStatesRejected:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint.prefetch(NotPrefetch())  # type: ignore[arg-type]
+            OptimizerHint.prefetch(NotPrefetch())
 
 
 class TestSkipPredicate:

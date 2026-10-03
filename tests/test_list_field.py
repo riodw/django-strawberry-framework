@@ -140,7 +140,7 @@ def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
         ConfigurationError,
         match=r"DjangoListField requires a DjangoType class; got",
     ):
-        DjangoListField(non_class)  # type: ignore[arg-type]
+        DjangoListField(non_class)
 
 
 def test_djangolistfield_rejects_non_djangotype_class() -> None:
@@ -216,7 +216,7 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
         ConfigurationError,
         match=r"DjangoListField resolver must be callable\.",
     ):
-        DjangoListField(_T, resolver="not callable")  # type: ignore[arg-type]
+        DjangoListField(_T, resolver="not callable")
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ class _HostileNameMeta(type):
     """
 
     @property
-    def __name__(cls) -> str:  # type: ignore[override]
+    def __name__(cls) -> str:
         raise RuntimeError("hostile __name__ detonated")
 
 
@@ -281,7 +281,7 @@ def test_djangolistfield_non_class_guard_survives_a_hostile_repr() -> None:
     RuntimeError replaced the promised typed rejection.
     """
     with pytest.raises(ConfigurationError, match="requires a DjangoType class"):
-        DjangoListField(_HostileRepr())  # type: ignore[arg-type]
+        DjangoListField(_HostileRepr())
 
 
 def test_djangolistfield_non_djangotype_guard_survives_a_hostile_metaclass_name() -> None:
@@ -335,7 +335,7 @@ def test_djangolistfield_rejects_bare_string_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives must be a sequence of directive instances",
     ):
-        DjangoListField(_DirectiveHolderType(), directives="not-a-directive-list")  # type: ignore[arg-type]
+        DjangoListField(_DirectiveHolderType(), directives="not-a-directive-list")
 
 
 def test_djangolistfield_rejects_bare_bytes_directives() -> None:
@@ -344,7 +344,7 @@ def test_djangolistfield_rejects_bare_bytes_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives must be a sequence of directive instances",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=b"\x01\x02")  # type: ignore[arg-type]
+        DjangoListField(_DirectiveHolderType(), directives=b"\x01\x02")
 
 
 def test_djangolistfield_rejects_non_iterable_directives() -> None:
@@ -353,7 +353,7 @@ def test_djangolistfield_rejects_non_iterable_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives could not be read",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=42)  # type: ignore[arg-type]
+        DjangoListField(_DirectiveHolderType(), directives=42)
 
 
 def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
@@ -362,7 +362,7 @@ def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives could not be read",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())  # type: ignore[arg-type]
+        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())
 
 
 def test_djangolistfield_passes_real_directive_instances_through() -> None:

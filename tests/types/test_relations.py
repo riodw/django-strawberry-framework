@@ -24,7 +24,7 @@ from django_strawberry_framework.types.relations import (
 class _NonHashableField:
     """Stand-in for relation metadata whose ``__hash__`` is ``None``."""
 
-    __hash__ = None  # type: ignore[assignment]
+    __hash__ = None
 
 
 def _build_pending() -> PendingRelation:
@@ -32,7 +32,7 @@ def _build_pending() -> PendingRelation:
         source_type=type("Src", (), {}),
         source_model=Category,
         field_name="items",
-        django_field=_NonHashableField(),  # type: ignore[arg-type]
+        django_field=_NonHashableField(),
         related_model=Item,
     )
 
@@ -81,4 +81,4 @@ def test_pending_relation_is_frozen_dataclass():
     pending = _build_pending()
 
     with pytest.raises(FrozenInstanceError):
-        pending.field_name = "mutated"  # type: ignore[misc]
+        pending.field_name = "mutated"

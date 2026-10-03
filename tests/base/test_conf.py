@@ -538,7 +538,7 @@ def test_normalize_hostile_isinstance_raises_configurationerror():
 
     class Boom:
         @property
-        def __class__(self):  # type: ignore[no-redef]
+        def __class__(self):
             raise RuntimeError("hostile __class__ boom")
 
     with pytest.raises(ConfigurationError, match="must be a mapping"):
@@ -607,9 +607,9 @@ def test_settings_getattr_hostile_lookup_becomes_configurationerror():
 
     s = Settings.__new__(Settings)
     # Bypass _normalize sanitization to exercise the __getattr__ containment directly
-    s._user_settings = HostileLookup({"OTHER": 1})  # type: ignore[attr-defined]
-    s._live_source = conf._LIVE_UNSET  # type: ignore[attr-defined]
-    s._django_backed = False  # type: ignore[attr-defined]
+    s._user_settings = HostileLookup({"OTHER": 1})
+    s._live_source = conf._LIVE_UNSET
+    s._django_backed = False
     with pytest.raises(ConfigurationError, match="lookup of 'MISSING' failed"):
         _ = s.MISSING
 
@@ -620,7 +620,7 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool():
 
     class LiarMapping(Mapping):
         @property
-        def __class__(self):  # type: ignore[no-redef]
+        def __class__(self):
             return bool
 
         def __getitem__(self, key):
@@ -647,7 +647,7 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool():
 
     class LiarScalar:
         @property
-        def __class__(self):  # type: ignore[no-redef]
+        def __class__(self):
             return bool
 
         def __bool__(self):
@@ -667,7 +667,7 @@ def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror(
 
     class Boom:
         @property
-        def __class__(self):  # type: ignore[no-redef]
+        def __class__(self):
             raise RuntimeError("hostile __class__ boom")
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Boom()})
@@ -705,7 +705,7 @@ def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationer
 
     class HostileKey:
         @property
-        def __class__(self):  # type: ignore[no-redef]
+        def __class__(self):
             raise RuntimeError("hostile __class__ boom")
 
     # Need a mapping whose key is hostile; dict() will preserve that key object
@@ -763,10 +763,10 @@ def test_normalize_hostile_metaclass_name_property_contained():
 
     class BadMeta(type):
         @property
-        def __name__(cls):  # type: ignore[override]
+        def __name__(cls):
             raise RuntimeError("hostile __name__ boom")
 
-    class Evil(metaclass=BadMeta):  # type: ignore[misc]
+    class Evil(metaclass=BadMeta):
         pass
 
     with pytest.raises(ConfigurationError, match="must be a mapping or None; got object"):
@@ -780,10 +780,10 @@ def test_upstream_patches_enabled_hostile_metaclass_value_contained():
 
     class BadMeta(type):
         @property
-        def __name__(cls):  # type: ignore[override]
+        def __name__(cls):
             raise RuntimeError("hostile __name__ boom")
 
-    class Evil(metaclass=BadMeta):  # type: ignore[misc]
+    class Evil(metaclass=BadMeta):
         pass
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Evil()})
@@ -799,10 +799,10 @@ def test_upstream_patches_enabled_hostile_metaclass_mapping_value_contained():
 
     class BadMeta(type):
         @property
-        def __name__(cls):  # type: ignore[override]
+        def __name__(cls):
             raise RuntimeError("hostile __name__ boom")
 
-    class Evil(metaclass=BadMeta):  # type: ignore[misc]
+    class Evil(metaclass=BadMeta):
         pass
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": {"django": Evil()}})

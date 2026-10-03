@@ -5133,7 +5133,7 @@ def test_hook_context_and_upload_metadata_invariants():
     assert not hasattr(ctx, "__dict__")
 
     with pytest.raises(FrozenInstanceError):
-        ctx.operation = "create"  # type: ignore[misc]
+        ctx.operation = "create"
 
     ctx_same = SerializerHookContext(
         operation="update",
@@ -5154,7 +5154,7 @@ def test_hook_context_and_upload_metadata_invariants():
     assert not hasattr(meta, "__dict__")
 
     with pytest.raises(FrozenInstanceError):
-        meta.name = "other.jpg"  # type: ignore[misc]
+        meta.name = "other.jpg"
 
     meta_same = UploadMetadata(
         name="photo.jpg",

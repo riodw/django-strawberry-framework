@@ -121,7 +121,7 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
         @strawberry.field
         def all_items(self) -> list[ItemType]:
             # Return the Manager itself, not ``Manager.all()``.
-            return Item.objects  # type: ignore[return-value]
+            return Item.objects
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1157,7 +1157,7 @@ def test_cache_clear_makes_the_next_request_build_its_plan_again():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()  # type: ignore[return-value]
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -2963,7 +2963,7 @@ def test_check_schema_descends_into_interface_implementations():
     @strawberry.type
     class Query:
         @strawberry.field
-        def some_node(self) -> relay.Node:  # type: ignore[valid-type]
+        def some_node(self) -> relay.Node:
             return None  # pragma: no cover
 
     finalize_django_types()
@@ -3629,16 +3629,16 @@ def test_relation_is_optimizer_scoped_unhashable_fail_closed():
     )
 
     # Inactive: returns False for unhashable shapes
-    assert not relation_is_optimizer_scoped({})  # type: ignore[arg-type]
-    assert not relation_is_optimizer_scoped([])  # type: ignore[arg-type]
+    assert not relation_is_optimizer_scoped({})
+    assert not relation_is_optimizer_scoped([])
 
     # Active: still fail-closed (returns False rather than raising TypeError)
     frame = begin_execution_frame({}, nested=False)
     try:
         publish_scoped_relations({"valid@Type"})
         assert relation_is_optimizer_scoped("valid@Type")
-        assert not relation_is_optimizer_scoped({})  # type: ignore[arg-type]
-        assert not relation_is_optimizer_scoped([])  # type: ignore[arg-type]
+        assert not relation_is_optimizer_scoped({})
+        assert not relation_is_optimizer_scoped([])
     finally:
         end_execution_frame(frame)
 
@@ -4436,7 +4436,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
 def test_extension_rejects_unknown_kwargs_at_construction():
     """Misspelled config (e.g. ``strict=`` instead of ``strictness=``) raises TypeError."""
     with pytest.raises(TypeError):
-        DjangoOptimizerExtension(strict=True)  # type: ignore[call-arg]
+        DjangoOptimizerExtension(strict=True)
 
 
 def test_extension_accepts_strawberry_execution_context_kwarg():

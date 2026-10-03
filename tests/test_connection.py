@@ -2463,7 +2463,7 @@ def test_guard_source_not_pre_sliced_hostile_query_is_graphql_error():
             raise AttributeError("hostile query")
 
     with pytest.raises(GraphQLError, match="sliced state could not be read"):
-        _guard_source_not_pre_sliced(HostileQS())  # type: ignore[arg-type]
+        _guard_source_not_pre_sliced(HostileQS())
 
 
 def test_guard_source_not_pre_sliced_hostile_is_sliced_value_error():
@@ -2480,7 +2480,7 @@ def test_guard_source_not_pre_sliced_hostile_is_sliced_value_error():
     from django_strawberry_framework.connection import _guard_source_not_pre_sliced
 
     with pytest.raises(GraphQLError, match="sliced state could not be read"):
-        _guard_source_not_pre_sliced(HostileQS())  # type: ignore[arg-type]
+        _guard_source_not_pre_sliced(HostileQS())
 
 
 def test_finalize_queryset_hostile_order_by_is_graphql_error():
@@ -2510,7 +2510,7 @@ def test_finalize_queryset_hostile_order_by_is_graphql_error():
 
     qs = HostileQS(model=Category)
     with pytest.raises(GraphQLError, match="ordering could not be read"):
-        _finalize_queryset(node, qs, info, definition=node.__django_strawberry_definition__)  # type: ignore[arg-type]
+        _finalize_queryset(node, qs, info, definition=node.__django_strawberry_definition__)
 
 
 def test_window_rows_are_annotated_hostile_iter_returns_false():
@@ -2696,11 +2696,11 @@ def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
             model = kw.get("model", Item)
             super().__init__(model=model)
 
-        def order_by(self, *args, **kwargs):  # type: ignore[override]
+        def order_by(self, *args, **kwargs):
             raise KeyError("hostile order_by apply")
 
     qs2 = HostileQS(model=Item)
-    qs2.query.order_by = ("name",)  # type: ignore[attr-defined]
+    qs2.query.order_by = ("name",)
     with pytest.raises(GraphQLError, match="ordering could not be applied"):
         _finalize_queryset(
             node_item,

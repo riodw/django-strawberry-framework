@@ -288,7 +288,7 @@ class TestOptimizationPlanFinalize:
         import pytest
 
         with pytest.raises(AttributeError):
-            plan.prefetch_related.append("new")  # type: ignore[attr-defined]
+            plan.prefetch_related.append("new")
 
     def test_finalize_is_idempotent(self):
         plan = OptimizationPlan(select_related=["a"]).finalize()

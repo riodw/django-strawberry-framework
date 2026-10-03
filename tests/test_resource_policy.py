@@ -355,7 +355,7 @@ def test_a_non_mapping_policy_setting_is_rejected(settings):
 
 def test_a_non_mapping_policy_argument_is_rejected():
     with pytest.raises(ConfigurationError, match="must be a ResourcePolicy or a mapping"):
-        resolve_resource_policy(12)  # type: ignore[arg-type]
+        resolve_resource_policy(12)
 
 
 def test_an_unknown_bound_name_is_rejected_with_the_valid_vocabulary():
@@ -1208,7 +1208,7 @@ async def test_bounded_rows_async_hostile_notes_property_getter_does_not_mask_th
     """An unreadable ``__notes__`` descriptor must not replace the source error."""
 
     class HostileError(Exception):
-        __notes__ = property(lambda self: (_ for _ in ()).throw(RuntimeError("getter")))  # type: ignore[assignment]
+        __notes__ = property(lambda self: (_ for _ in ()).throw(RuntimeError("getter")))
 
     class BrokenRows:
         def __aiter__(self):

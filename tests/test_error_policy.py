@@ -205,7 +205,7 @@ def test_a_str_subclass_cannot_survive_into_the_private_record():
 def test_the_policy_is_frozen_so_a_resolver_cannot_widen_its_own_request():
     """Frozen is the point: a request holding the policy cannot loosen it."""
     with pytest.raises(Exception, match="cannot assign to field"):
-        DEFAULT_ERROR_POLICY.enabled = False  # type: ignore[misc]
+        DEFAULT_ERROR_POLICY.enabled = False
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ def test_a_non_mapping_policy_setting_is_rejected(settings):
 
 def test_a_non_mapping_policy_argument_is_rejected():
     with pytest.raises(ConfigurationError, match="must be an ErrorPolicy or a mapping"):
-        resolve_error_policy("invalid")  # type: ignore[arg-type]
+        resolve_error_policy("invalid")
 
 
 def test_an_unknown_option_name_is_rejected_with_the_valid_vocabulary():

@@ -13,6 +13,8 @@ uv add django-strawberry-framework
 
 Add `"django_strawberry_framework"` to `INSTALLED_APPS`: the package's `AppConfig.ready()` applies its upstream-bug patches (all gated by the `APPLY_UPSTREAM_PATCHES` setting), and app registration is what makes the `inspect_django_type` / `export_schema` management commands and the debug-toolbar middleware's app template resolve.
 
+The package ships type information (`py.typed`) for a static checker. At runtime it needs no `django-stubs-ext` patch: every module imports on every supported Python, and no annotation subscripts a Django class that only the stubs make generic. Evaluating its annotations yourself with `typing.get_type_hints` is not supported, the same as on the Strawberry and graphql-core classes many of its types subclass: an annotation may name a type imported only for the checker, which raises `NameError`. `OptimizerHint` is the one exception; its annotations resolve, so a runtime validator can read the hints you build.
+
 ## Quick start
 
 ```python

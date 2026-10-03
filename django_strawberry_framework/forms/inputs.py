@@ -98,6 +98,11 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     # ``ModelForm``'s model parameter is read-only here, so its ``Model`` bound covers
     # every model form.
     FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[models.Model]]
+    #: Any ``ModelChoiceField``: its model parameter is read-only here.
+    _ModelChoiceFieldAny: TypeAlias = forms.ModelChoiceField[models.Model]
+else:
+    # ``ModelChoiceField`` has no ``__class_getitem__`` at runtime: the hint stays the class.
+    _ModelChoiceFieldAny = forms.ModelChoiceField
 
 # Module path the ``strawberry.lazy(...)`` marker references for the FORM input
 # namespace; pinned as a single constant so any forward-ref and
@@ -513,7 +518,7 @@ def _model_column_for(form_class: FormClass, name: str) -> ConcreteField | None:
 
 def _model_less_relation_annotation(
     name: str,
-    field: forms.ModelChoiceField[models.Model],
+    field: _ModelChoiceFieldAny,
     form_class: FormClass,
 ) -> tuple[str, object, type[models.Model]]:
     """Map a column-LESS relation form field to its ``(python_attr, annotation, related_model)``.

@@ -30,7 +30,6 @@ operation is exactly the envelope the engine base's map builder cannot produce.
 
 import io
 import os
-from typing import Any
 
 import pytest
 from apps.scalars import models
@@ -41,6 +40,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
+from graphql_client import JSONObject
 from strawberry import relay
 
 from django_strawberry_framework.testing import TestClient
@@ -70,7 +70,7 @@ def _png_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _introspect_type(name: str, selection: str) -> dict[str, Any]:
+def _introspect_type(name: str, selection: str) -> JSONObject:
     # ``assert_no_errors=True`` (the TestClient default) replaces the old
     # hand-rolled "errors" not-in-body assertion.
     res = TestClient().query(f'query {{ __type(name: "{name}") {{ {selection} }} }}')

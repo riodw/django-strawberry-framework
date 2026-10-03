@@ -104,6 +104,11 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     _PayloadT = TypeVar("_PayloadT")
     # The class ``require_subclass`` gates against.
     _ExpectedT = TypeVar("_ExpectedT")
+    #: One ``resolver_seams`` classmethod: a resolver seam of any signature.
+    _SeamClassmethod: TypeAlias = classmethod[object, ..., object]
+else:
+    # ``classmethod`` has no ``__class_getitem__`` before Python 3.11: the hint stays the class.
+    _SeamClassmethod = classmethod
 
 #: Common Meta keys accepted by every write-flavor Mutation.Meta (fields, exclude, permission_classes).
 COMMON_WRITE_META_KEYS: frozenset[str] = frozenset(
@@ -463,7 +468,7 @@ def resolver_seams(
     async_name: str,
     *,
     with_id: bool = True,
-) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
+) -> tuple[_SeamClassmethod, _SeamClassmethod]:
     """Build the ``(resolve_sync, resolve_async)`` classmethod pair a mutation base exposes.
 
     Every write-flavor base (``DjangoMutation`` / ``DjangoModelFormMutation`` /
@@ -494,7 +499,7 @@ def _id_resolver_seams(
     module_path: str,
     sync_name: str,
     async_name: str,
-) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
+) -> tuple[_SeamClassmethod, _SeamClassmethod]:
     """Build ``resolver_seams``' ``(info, *, data, id)`` pair (every model-backed flavor)."""
 
     def resolve_sync(
@@ -530,7 +535,7 @@ def _id_less_resolver_seams(
     module_path: str,
     sync_name: str,
     async_name: str,
-) -> tuple[classmethod[object, ..., object], classmethod[object, ..., object]]:
+) -> tuple[_SeamClassmethod, _SeamClassmethod]:
     """Build ``resolver_seams``' ``(info, *, data)`` pair (the model-less plain form)."""
 
     def resolve_sync(cls: type[object], info: Info[object, object], *, data: object) -> object:

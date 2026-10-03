@@ -19,11 +19,14 @@ content-type negotiation), which ``TestClient`` exists to abstract away.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypeAlias
 
 from django.test import Client
 
 from django_strawberry_framework.testing import TestClient
+
+#: A parsed GraphQL JSON object (response envelope, ``data``, or variables).
+JSONObject: TypeAlias = dict[str, Any]
 
 
 def post_graphql(
@@ -73,7 +76,7 @@ def graphql_payload(
     client: Client | None = None,
     variables: Mapping[str, object] | None = None,
     url: str | None = None,
-) -> dict[str, Any]:
+) -> JSONObject:
     """POST ``query`` to the configured or one-call ``url`` and return parsed JSON."""
     response = post_graphql(query, client=client, variables=variables, url=url)
     assert response.status_code == 200
@@ -86,7 +89,7 @@ def assert_graphql_success(
     client: Client | None = None,
     variables: Mapping[str, object] | None = None,
     url: str | None = None,
-) -> dict[str, Any]:
+) -> JSONObject:
     """POST ``query``, assert HTTP 200 and no GraphQL errors, then return ``data``."""
     payload = graphql_payload(query, client=client, variables=variables, url=url)
     assert "errors" not in payload, payload

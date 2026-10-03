@@ -1,13 +1,11 @@
 """Library GraphQL relation, optimizer, Relay/keyset, and model/form/serializer mutation surface."""
 
 from collections.abc import Mapping
-from typing import Any
 
 import strawberry
 from django.conf import settings
 from django.db.models import Manager, Prefetch, QuerySet
 from django.forms import BaseForm
-from rest_framework.fields import Field as DRFField
 from rest_framework.serializers import ModelSerializer as DRFModelSerializer
 from strawberry import relay
 from strawberry.types import Info
@@ -1464,7 +1462,7 @@ class CreateShelfViaSchemaHookSerializer(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
+    def get_serializer_for_schema(cls) -> serializers.FieldMap:
         # The stable, request-independent schema-time field map: construct WITH a
         # placeholder tenant (the field SET does not depend on the tenant value).
         return dict(serializers.TenantShelfSerializer(tenant="__schema__").fields)
@@ -1582,7 +1580,7 @@ class CreateShelfViaHookTargetingPatron(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
+    def get_serializer_for_schema(cls) -> serializers.FieldMap:
         return serializers.shelf_collision_schema_field_map(models.Patron)
 
     @override
@@ -1621,7 +1619,7 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
+    def get_serializer_for_schema(cls) -> serializers.FieldMap:
         return serializers.shelf_collision_schema_field_map(models.Loan)
 
     @override
@@ -1656,7 +1654,7 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
+    def get_serializer_for_schema(cls) -> serializers.FieldMap:
         # Default no-arg discovery succeeds, so construct once and DROP the unsupported
         # alt_branches from its bound .fields - leaving the supported (code + branch) subset.
         fields = dict(serializers.HookNarrowedShelfSerializer().fields)
@@ -1688,7 +1686,7 @@ class CreateShelfViaHookNonNullNote(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
+    def get_serializer_for_schema(cls) -> serializers.FieldMap:
         return serializers.nullability_schema_field_map(allow_null=False)
 
     @override
@@ -1725,7 +1723,7 @@ class CreateShelfViaHookNullableNote(SerializerMutation):
 
     @classmethod
     @override
-    def get_serializer_for_schema(cls) -> dict[str, DRFField[Any, Any, Any, Any]]:
+    def get_serializer_for_schema(cls) -> serializers.FieldMap:
         return serializers.nullability_schema_field_map(allow_null=True)
 
     @override

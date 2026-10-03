@@ -19,7 +19,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 ``UniqueTogetherValidator``.
 """
 
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeAlias
 
 from django.db.models import Model
 from rest_framework import serializers
@@ -35,6 +35,10 @@ from django_strawberry_framework import (
 )
 
 from .models import Book, Branch, Genre, Shelf
+
+#: A serializer's name-to-field map. The four ``Any``s are DRF ``Field``'s generics, which
+#: no single binding fits across a heterogeneous map.
+FieldMap: TypeAlias = dict[str, serializers.Field[Any, Any, Any, Any]]
 
 
 class TenantShelfSerializer(serializers.ModelSerializer[Shelf]):
@@ -194,7 +198,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
         fields = ("code", "branch")
 
     @override
-    def get_fields(self) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
+    def get_fields(self) -> FieldMap:
         fields = super().get_fields()
         if self._target_model is not None:
             fields["target"] = serializers.PrimaryKeyRelatedField(
@@ -214,7 +218,7 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
 
 def shelf_collision_schema_field_map(
     target_model: type[Model],
-) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
+) -> FieldMap:
     """Schema-time field map of ``code`` + ``branch`` + the write-only ``target`` relation at ``target_model`` (spec-039).
 
     The two collision mutations' ``get_serializer_for_schema()`` hooks call this with two
@@ -261,7 +265,7 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
         fields = ("code", "branch")
 
     @override
-    def get_fields(self) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
+    def get_fields(self) -> FieldMap:
         fields = super().get_fields()
         if self._note_allow_null is not None:
             fields["note"] = serializers.CharField(
@@ -282,7 +286,7 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
 def nullability_schema_field_map(
     *,
     allow_null: bool,
-) -> dict[str, serializers.Field[Any, Any, Any, Any]]:
+) -> FieldMap:
     """Schema-time field map of ``code`` + ``branch`` + a ``note`` differing ONLY in ``allow_null``.
 
     The two nullability mutations' ``get_serializer_for_schema()`` hooks call this with

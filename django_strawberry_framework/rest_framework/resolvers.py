@@ -225,6 +225,12 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
         @property
         def instance(self) -> object: ...
 
+    #: Any ``File``, binary or text.
+    _FileAny: TypeAlias = File[bytes] | File[str]
+else:
+    # ``File`` has no ``__class_getitem__`` at runtime: the hint stays the class.
+    _FileAny = File
+
 
 # The omission sentinel the reserved serializer-kwarg checks use: it keeps an
 # explicit ``data=None`` / ``instance=None`` return distinguishable from a hook
@@ -660,7 +666,7 @@ def _build_reverse_map(specs: Iterable[InputFieldSpec]) -> _ReverseMap:
     return result
 
 
-def _upload_metadata(item: File[bytes] | File[str]) -> UploadMetadata:
+def _upload_metadata(item: _FileAny) -> UploadMetadata:
     """Build the frozen upload descriptor a hook data view carries instead of the file.
 
     The authoritative upload object is STATEFUL (a hook that ``read()``s it would

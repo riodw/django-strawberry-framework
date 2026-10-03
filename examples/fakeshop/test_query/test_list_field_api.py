@@ -33,7 +33,7 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext, register_lookup
 from django.urls import clear_url_caches, path
-from graphql_client import graphql_payload, post_graphql
+from graphql_client import JSONObject, graphql_payload, post_graphql
 from strawberry.django.context import StrawberryDjangoContext
 from strawberry.schema.name_converter import NameConverter
 from typing_extensions import TypedDict, override
@@ -97,7 +97,7 @@ def _post_sync_response(
     schema: DjangoSchema | strawberry.Schema,
     query: str,
     *,
-    variables: dict[str, Any] | None = None,
+    variables: JSONObject | None = None,
     client: Client | None = None,
     extra_settings: dict[str, Any] | None = None,
     view_class: type[DjangoGraphQLView] | None = None,
@@ -132,11 +132,11 @@ def _post_sync(
     schema: DjangoSchema | strawberry.Schema,
     query: str,
     *,
-    variables: dict[str, Any] | None = None,
+    variables: JSONObject | None = None,
     client: Client | None = None,
     extra_settings: dict[str, Any] | None = None,
     view_class: type[DjangoGraphQLView] | None = None,
-) -> dict[str, Any]:
+) -> JSONObject:
     response = _post_sync_response(
         schema,
         query,
@@ -199,7 +199,7 @@ _INTROSPECTION_QUERY = """
     """
 
 
-def _introspected_query_fields() -> dict[str, Any]:
+def _introspected_query_fields() -> dict[str, JSONObject]:
     """The ``Query`` type's fields, keyed by published name."""
     payload = graphql_payload(_INTROSPECTION_QUERY)
     return {f["name"]: f for f in payload["data"]["__type"]["fields"]}

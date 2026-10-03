@@ -134,6 +134,11 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     _VisibilityStep: TypeAlias = (
         "tuple[str, type[DjangoType], type[FilterSet], object, models.QuerySet[models.Model]]"
     )
+    #: Any forward ``ManyToManyField``, as django-stubs parametrizes it.
+    _ManyToManyFieldAny: TypeAlias = models.ManyToManyField[models.Model, models.Model]
+else:
+    # ``ManyToManyField`` has no ``__class_getitem__`` at runtime: the hint stays the class.
+    _ManyToManyFieldAny = models.ManyToManyField
 
 _M = TypeVar("_M", bound=models.Model)
 
@@ -316,7 +321,7 @@ def _forward_relation_extra(field: ForeignKeyField) -> dict[str, object]:
 
 
 def _forward_m2m_extra(
-    field: models.ManyToManyField[models.Model, models.Model],
+    field: _ManyToManyFieldAny,
 ) -> dict[str, object]:
     """Package-owned mirror of upstream's ``ManyToManyField`` extra (queryset only)."""
     return {"queryset": filterset.remote_queryset(field)}

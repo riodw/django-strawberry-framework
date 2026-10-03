@@ -62,7 +62,7 @@ else:
     _PrefetchAny = Prefetch
 
 
-def _require_prefetch(obj: object) -> Prefetch[str]:
+def _require_prefetch(obj: object) -> _PrefetchAny:
     """Return ``obj`` when it is a ``Prefetch``; else raise ``ConfigurationError``.
 
     Single owner for the Prefetch-type invariant shared by

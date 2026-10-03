@@ -36,6 +36,7 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.test import AsyncClient, override_settings
 from django.test.utils import register_lookup
 from django.urls import clear_url_caches, path
+from graphql_client import JSONObject
 from strawberry.django.context import StrawberryDjangoContext
 from typing_extensions import override
 
@@ -86,11 +87,11 @@ async def _post_async(
     schema: DjangoSchema | strawberry.Schema,
     query: str,
     *,
-    variables: dict[str, Any] | None = None,
+    variables: JSONObject | None = None,
     client: AsyncClient | None = None,
     extra_settings: dict[str, Any] | None = None,
     view_class: type[AsyncDjangoGraphQLView] | None = None,
-) -> dict[str, Any]:
+) -> JSONObject:
     _CURRENT["schema"] = schema
     _CURRENT["view_class"] = view_class
     override_dict: dict[str, Any] = {"ROOT_URLCONF": __name__}
@@ -100,7 +101,7 @@ async def _post_async(
         with override_settings(**override_dict):
             clear_url_caches()
             http_client = client or AsyncClient()
-            body: dict[str, Any] = {"query": query}
+            body: JSONObject = {"query": query}
             if variables is not None:
                 body["variables"] = variables
             response = await http_client.post(

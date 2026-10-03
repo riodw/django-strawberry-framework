@@ -6,6 +6,10 @@ out of ``__all__`` so ``import *`` stays DRF-free (spec-039 Decision 12).
 """
 
 import logging
+import os
+import subprocess
+import sys
+import textwrap
 
 import django_strawberry_framework
 from django_strawberry_framework import (
@@ -162,7 +166,7 @@ def test_dynamic_getattr_unknown_attribute_error():
 
 def test_star_import_preserves_namespace_hygiene():
     """Verify `from django_strawberry_framework import *` only imports __all__."""
-    ns: dict = {}
+    ns: dict[str, object] = {}
     exec("from django_strawberry_framework import *", ns)
 
     assert "SerializerMutation" not in ns
@@ -260,4 +264,186 @@ def test_orders_submodule_not_imported_at_package_root():
         ),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+_UNPATCHED_IMPORT = textwrap.dedent(
+    """
+    import importlib
+    import pkgutil
+    import sys
+
+    import django
+    from django.conf import settings
+
+    settings.configure(
+        INSTALLED_APPS=[
+            "django.contrib.contenttypes",
+            "django.contrib.auth",
+            "debug_toolbar",
+            "django_strawberry_framework",
+        ],
+        STATIC_URL="static/",
+        DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    )
+    django.setup()
+
+    from django.contrib.admin import ModelAdmin
+    from django.db.models import Prefetch
+
+    assert "django_stubs_ext" not in sys.modules, "django_stubs_ext is imported"
+    for patched in (Prefetch, ModelAdmin):
+        assert not hasattr(patched, "__class_getitem__"), f"{patched.__name__} is patched"
+
+    import django_strawberry_framework
+
+    modules = [django_strawberry_framework] + [
+        importlib.import_module(info.name)
+        for info in pkgutil.walk_packages(
+            django_strawberry_framework.__path__,
+            prefix="django_strawberry_framework.",
+        )
+    ]
+    """,
+)
+
+_ANNOTATION_CHECK = _UNPATCHED_IMPORT + textwrap.dedent(
+    """
+    import ast
+    import inspect
+    import typing
+
+
+    class TypeCheckingOnly:
+        def __getitem__(self, item):
+            return self
+
+        def __or__(self, other):
+            return self
+
+        __ror__ = __or__
+
+        def __call__(self, *args, **kwargs):
+            return self
+
+        def __getattr__(self, name):
+            if name.startswith("__"):
+                raise AttributeError(name)
+            return self
+
+
+    def bound_names(statements):
+        for statement in statements:
+            if isinstance(statement, (ast.Import, ast.ImportFrom)):
+                for alias in statement.names:
+                    yield (alias.asname or alias.name).split(".")[0]
+            elif isinstance(statement, (ast.ClassDef, ast.FunctionDef)):
+                yield statement.name
+            elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                targets = getattr(statement, "targets", [getattr(statement, "target", None)])
+                yield from (target.id for target in targets if isinstance(target, ast.Name))
+            elif isinstance(statement, (ast.If, ast.Try)):
+                yield from bound_names(statement.body)
+                yield from bound_names(statement.orelse)
+
+
+    def type_checking_names(module):
+        with open(module.__file__, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read())
+        return {
+            name
+            for node in tree.body
+            if isinstance(node, ast.If)
+            and ast.unparse(node.test) in ("TYPE_CHECKING", "typing.TYPE_CHECKING")
+            for name in bound_names(node.body)
+        }
+
+
+    def defined_in(module, owner):
+        for member in vars(owner).values():
+            if isinstance(member, property):
+                member = member.fget
+            member = getattr(member, "__func__", member)
+            if (
+                inspect.isfunction(member)
+                and member.__code__.co_filename == module.__file__
+                and "<locals>" not in member.__qualname__
+            ):
+                yield member
+            elif (
+                inspect.isclass(member)
+                and member.__module__ == module.__name__
+                and member.__qualname__.startswith(getattr(owner, "__qualname__", ""))
+                and "<locals>" not in member.__qualname__
+            ):
+                yield member
+                yield from defined_in(module, member)
+
+
+    for module in modules:
+        for name in type_checking_names(module):
+            vars(module).setdefault(name, TypeCheckingOnly())
+
+    failures = []
+    for module in modules:
+        for obj in [module, *defined_in(module, module)]:
+            try:
+                if inspect.isfunction(obj):
+                    typing.get_type_hints(obj)
+                else:
+                    inspect.get_annotations(obj, eval_str=True)
+            except Exception as exc:
+                label = getattr(obj, "__qualname__", "<module>")
+                failures.append(f"{module.__name__}:{label}: {type(exc).__name__}: {exc}")
+    for failure in failures:
+        print(failure, file=sys.stderr)
+    sys.exit(1 if failures else 0)
+    """,
+)
+
+
+def _run_without_django_stubs_ext(script: str) -> subprocess.CompletedProcess[str]:
+    env = {key: value for key, value in os.environ.items() if key != "DJANGO_SETTINGS_MODULE"}
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=120,
+    )
+
+
+def test_every_module_imports_without_django_stubs_ext_patch():
+    """Verify every package module imports in a process ``django_stubs_ext`` never patched.
+
+    The fakeshop settings every test loads call ``django_stubs_ext.monkeypatch()``,
+    which makes ``Prefetch``, ``Field``, ``Options``, ``ModelAdmin`` and the rest
+    subscriptable at runtime; a consumer's process has no such patch, so an eager
+    ``Prefetch[str]`` at module level passes the suite and raises ``TypeError`` at
+    the consumer's import. The subprocess configures a bare Django (no fakeshop
+    settings), asserts the patch is absent, then imports every package module.
+    ``debug_toolbar`` and ``STATIC_URL`` are there because
+    ``middleware.debug_toolbar`` refuses to import without the app installed.
+    """
+    result = _run_without_django_stubs_ext(_UNPATCHED_IMPORT)
+    assert result.returncode == 0, result.stderr
+
+
+def test_annotations_evaluate_without_django_stubs_ext_patch():
+    """Verify every package annotation evaluates in a process ``django_stubs_ext`` never patched.
+
+    ``from __future__ import annotations`` (and lazy annotations on 3.14) defer a
+    ``Prefetch[str]`` annotation until something introspects it, so the same
+    unpatched-subscript ``TypeError`` waits for ``typing.get_type_hints``, or for a
+    builtin generic the floor interpreter lacks. Functions go through
+    ``typing.get_type_hints``; modules and classes through
+    ``inspect.get_annotations(eval_str=True)``, which reads a class's own
+    annotations instead of walking third-party bases. A name bound only under a
+    module-level ``if TYPE_CHECKING:`` is absent at runtime by design, so it is
+    replaced by a permissive stand-in and evaluation continues past it; any other
+    ``NameError`` fails. Function-local classes are skipped: their annotations
+    close over a scope no module namespace holds.
+    """
+    result = _run_without_django_stubs_ext(_ANNOTATION_CHECK)
     assert result.returncode == 0, result.stderr

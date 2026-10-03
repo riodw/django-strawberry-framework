@@ -73,7 +73,6 @@ that reload, and the slot is cleared when the request ends.
 import importlib
 import inspect
 from collections.abc import Coroutine
-from typing import Any
 
 import pytest
 import strawberry
@@ -86,7 +85,7 @@ from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
-from graphql_client import assert_graphql_success, graphql_payload
+from graphql_client import JSONObject, assert_graphql_success, graphql_payload
 
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
@@ -703,7 +702,7 @@ urlpatterns = [
 ]
 
 
-async def _post_async_genres(query: str) -> dict[str, Any]:
+async def _post_async_genres(query: str) -> JSONObject:
     """POST ``query`` against the async-resolver genre connection over ``/graphql-async/``.
 
     ``graphql_client.py`` is sync-only, so the async rows take the documented

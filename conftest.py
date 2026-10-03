@@ -40,15 +40,22 @@ import copy
 import inspect
 import json
 import threading
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
+
+
+class _Closeable(Protocol):
+    """A raw DB-API connection, as far as the session-teardown drain needs it."""
+
+    def close(self) -> None: ...
+
 
 #: Raw psycopg connections opened from an executor thread or under a running
 #: event loop - the handles main-thread ``close_all()`` can never reach.
 #: ``list.append`` is GIL-atomic, so cross-thread appends need no lock; the
 #: drain runs single-threaded at session teardown.
-_stray_postgres_connections: list[Any] = []
+_stray_postgres_connections: list[_Closeable] = []
 
 #: Attribute of ``django.db.backends.postgresql.base`` that holds
 #: ``_stray_postgres_connections``: pg-tier tests read the registry there without

@@ -29,7 +29,7 @@ from ..utils.typing import schema_config_from_info
 from . import logger
 from . import nested_planner as _nested_planner
 from .field_meta import FieldMeta
-from .hints import OptimizerHint, hint_is_skip
+from .hints import OptimizerHint, _PrefetchAny, hint_is_skip
 from .join_taxonomy import classify_relation_join
 from .nested_planner import _coerce_pagination_int
 from .nested_planner import (
@@ -1407,11 +1407,11 @@ def _apply_hint(
 
 
 def _hint_prefetch_over_pk_set(
-    prefetch: Prefetch[str],
+    prefetch: _PrefetchAny,
     *,
     django_name: str,
     type_name: str,
-) -> Prefetch[str]:
+) -> _PrefetchAny:
     """Return ``prefetch`` with a combined queryset rewritten to its primary-key set.
 
     Django's reverse-FK prefetch adds the parent-batch predicate to the child
@@ -1448,12 +1448,12 @@ def _hint_prefetch_over_pk_set(
 
 
 def _prefetch_hint_for_path(
-    prefetch: Prefetch[str],
+    prefetch: _PrefetchAny,
     *,
     django_name: str,
     full_path: str,
     type_name: str,
-) -> Prefetch[str]:
+) -> _PrefetchAny:
     """Return ``prefetch`` adapted from a type-relative lookup to ``full_path``."""
     lookup: str | None = getattr(prefetch, "prefetch_through", None)
     if lookup is None:

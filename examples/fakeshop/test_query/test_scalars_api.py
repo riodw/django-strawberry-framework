@@ -11,7 +11,6 @@ round-trip as a JSON number.
 
 import datetime
 from decimal import Decimal
-from typing import Any
 from uuid import UUID
 
 import pytest
@@ -20,6 +19,7 @@ from django.conf import settings
 from django.db import connection
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from graphql_client import JSONObject
 from graphql_client import post_graphql as _post_graphql
 
 # The production error policy masks any error carrying an originating
@@ -118,7 +118,7 @@ def _seed_tag(label: str, *, active: bool = True):
     return models.ScalarSpecimenTag.objects.create(label=label, active=active)
 
 
-def _query_one_specimen() -> dict[str, Any]:
+def _query_one_specimen() -> JSONObject:
     response = _post_graphql(
         """
         query {
@@ -577,7 +577,7 @@ def test_scalar_specimen_self_referential_parent_children_over_http():
     assert rows["leaf"]["children"] == []
 
 
-def _introspect_field_types(type_name: str) -> dict[str, dict[str, Any]]:
+def _introspect_field_types(type_name: str) -> dict[str, JSONObject]:
     """Fetch the field-type map for ``type_name`` via live ``/graphql/`` introspection."""
     response = _post_graphql(
         f"""

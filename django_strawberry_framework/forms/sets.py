@@ -96,6 +96,7 @@ from .inputs import (
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from collections.abc import Callable, Mapping
+    from typing import TypeAlias
 
     from django.db import models
     from strawberry.types import Info
@@ -104,6 +105,18 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
     from .inputs import FormClass
+
+    #: Each flavor's ``get_form_fields`` classmethod.
+    _ModelFormFieldsClassmethod: TypeAlias = (
+        "classmethod[DjangoModelFormMutation, [], dict[str, forms.Field]]"
+    )
+    _FormFieldsClassmethod: TypeAlias = (
+        "classmethod[DjangoFormMutation, [], dict[str, forms.Field]]"
+    )
+else:
+    # ``classmethod`` has no ``__class_getitem__`` before Python 3.11: the hints stay the class.
+    _ModelFormFieldsClassmethod = classmethod
+    _FormFieldsClassmethod = classmethod
 
 # The form ``Meta``'s allowed-key sets (spec-038 Decision 6), composed from
 # the shared mutation foundation key sets plus the local ``form_class`` key.
@@ -562,10 +575,8 @@ class DjangoModelFormMutation(DjangoMutation):
     ``Meta.fields`` / ``Meta.exclude`` / ``Meta.permission_classes``).
     """
 
-    get_form_fields: ClassVar[classmethod[DjangoModelFormMutation, [], dict[str, forms.Field]]] = (
-        classmethod(
-            _default_mutation_get_form_fields,
-        )
+    get_form_fields: ClassVar[_ModelFormFieldsClassmethod] = classmethod(
+        _default_mutation_get_form_fields,
     )
 
     @classmethod
@@ -836,10 +847,8 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     payload (no object slot). The resolver pipeline lives in ``resolvers.py``.
     """
 
-    get_form_fields: ClassVar[classmethod[DjangoFormMutation, [], dict[str, forms.Field]]] = (
-        classmethod(
-            _default_mutation_get_form_fields,
-        )
+    get_form_fields: ClassVar[_FormFieldsClassmethod] = classmethod(
+        _default_mutation_get_form_fields,
     )
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.

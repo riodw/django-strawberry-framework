@@ -37,7 +37,7 @@ from django.db.models.functions import Lower
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
-from graphql_client import post_graphql
+from graphql_client import JSONObject, post_graphql
 from strategy_schemas import make_django_type
 
 from django_strawberry_framework import (
@@ -90,9 +90,9 @@ def _post(
     query: str,
     *,
     optimizer: bool = True,
-    variables: dict[str, Any] | None = None,
+    variables: JSONObject | None = None,
     schema: DjangoSchema | None = None,
-) -> dict[str, Any]:
+) -> JSONObject:
     """Post ``query`` and return the parsed envelope.
 
     ``optimizer=True`` posts to the shipped ``/graphql/``, whose schema carries the
@@ -114,7 +114,7 @@ def _post(
     return response.json()
 
 
-def _data(query: str, **kwargs: Any) -> dict[str, Any]:
+def _data(query: str, **kwargs: Any) -> JSONObject:
     payload = _post(query, **kwargs)
     assert "errors" not in payload, payload
     return payload["data"]
@@ -252,7 +252,7 @@ def _install_shape(
     _install(monkeypatch, type_name, lambda queryset, info: chosen(queryset, column))
 
 
-def _both_hooks(monkeypatch, type_name, shape, column, query, **kwargs) -> dict[str, Any]:
+def _both_hooks(monkeypatch, type_name, shape, column, query, **kwargs) -> JSONObject:
     """The data the combined hook serves, after asserting the uncombined hook serves the same rows.
 
     The two payloads are compared order-free (``_order_free``); a caller whose query
@@ -617,7 +617,7 @@ def _expected_nested_pages(shape: str) -> dict[str, dict[str, Any]]:
     return pages
 
 
-def _nested_pages(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _nested_pages(data: JSONObject) -> dict[str, dict[str, Any]]:
     return {
         row["name"]: {
             "titles": [edge["node"]["title"] for edge in row["booksConnection"]["edges"]],

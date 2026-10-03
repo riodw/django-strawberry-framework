@@ -22,7 +22,6 @@ the fresh-account path; no test hand-rolls a ``User``.
 
 import json
 import logging
-from typing import Any
 
 import pytest
 import strawberry
@@ -36,8 +35,8 @@ from django.contrib.sessions.models import Session
 from django.core.exceptions import PermissionDenied
 from django.test import AsyncClient, Client, override_settings
 from django.urls import clear_url_caches, path
+from graphql_client import JSONObject, graphql_payload
 from graphql_client import assert_graphql_success as _graphql_data
-from graphql_client import graphql_payload
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
@@ -108,7 +107,7 @@ _NO_AUTHENTICATION_MIDDLEWARE = {
 _MODEL_BACKEND = "django.contrib.auth.backends.ModelBackend"
 
 
-def _login(client: Client, username: str, password: str) -> dict[str, Any]:
+def _login(client: Client, username: str, password: str) -> JSONObject:
     return _graphql_data(_LOGIN, client=client, variables={"u": username, "p": password})["login"]
 
 
@@ -781,7 +780,7 @@ def test_complete_reload_preserves_the_auth_surface(reload_all_project_app_schem
     assert _graphql_data(_LOGOUT, client=client)["logout"]["ok"] is True
 
 
-def _introspect_type(name: str) -> dict[str, Any]:
+def _introspect_type(name: str) -> JSONObject:
     query = (
         f'{{ __type(name: "{name}") {{ '
         "fields { name args { name type { kind ofType { kind name } name } } "

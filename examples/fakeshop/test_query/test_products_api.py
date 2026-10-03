@@ -26,7 +26,6 @@ robust across Faker versions.
 """
 
 import json
-from typing import Any
 
 import pytest
 from apps.products import models
@@ -44,6 +43,7 @@ from django.db import connection
 from django.test import AsyncClient, Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
+from graphql_client import JSONObject
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql as _post_graphql
@@ -2630,7 +2630,7 @@ query($after: String, $before: String, $first: Int, $last: Int) {
 """
 
 
-def _items_connection_page(category_name: str, variables: dict[str, object]) -> dict[str, Any]:
+def _items_connection_page(category_name: str, variables: dict[str, object]) -> JSONObject:
     """Return one seeded category's ``itemsConnection`` page over live /graphql."""
     data = _graphql_data(_ITEMS_CONNECTION_WINDOW_QUERY, variables=variables)
     nodes = [edge["node"] for edge in data["allCategories"]["edges"]]

@@ -31,9 +31,13 @@ from django_strawberry_framework.utils.relations import (
     is_forward_concrete_relation,
     is_forward_many_to_many,
     is_many_side_relation_kind,
+    is_multi_column_forward_link,
+    is_single_column_foreign_key,
+    m2m_through_link_fields,
     path_traverses_to_many,
     relation_bool,
     relation_kind,
+    relation_link,
     validate_lookup_expr,
 )
 
@@ -1230,3 +1234,286 @@ def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
     finally:
         _classify_path_cached.cache_clear()
         path_traverses_to_many.cache_clear()
+
+
+@pytest.mark.parametrize(
+    (
+        "owner",
+        "field_name",
+        "carriers",
+        "targets",
+    ),
+    [
+        (
+            "LnkPairChild",
+            "parent",
+            ("p_tenant", "p_code"),
+            ("tenant", "code"),
+        ),
+        (
+            "LnkParent",
+            "pair_children",
+            ("p_tenant", "p_code"),
+            ("tenant", "code"),
+        ),
+        (
+            "LnkParent",
+            "column_children",
+            ("p_id",),
+            ("id",),
+        ),
+        (
+            "LnkParent",
+            "slug_children",
+            ("parent_id",),
+            ("slug",),
+        ),
+        (
+            "Book",
+            "shelf",
+            ("shelf_id",),
+            ("id",),
+        ),
+        (
+            "Patron",
+            "card",
+            ("patron_id",),
+            ("id",),
+        ),
+        (
+            "Branch",
+            "tags",
+            ("object_id",),
+            ("id",),
+        ),
+        (
+            "Book",
+            "genres",
+            ("book_id",),
+            ("id",),
+        ),
+        (
+            "Genre",
+            "books",
+            ("genre_id",),
+            ("id",),
+        ),
+        (
+            "LnkParent",
+            "tags",
+            ("parent_id",),
+            ("slug",),
+        ),
+        (
+            "LnkTag",
+            "parents",
+            ("tag_id",),
+            ("code",),
+        ),
+        (
+            "TaggedItem",
+            "content_object",
+            (),
+            (),
+        ),
+        (
+            "Book",
+            "title",
+            (),
+            (),
+        ),
+    ],
+    ids=[
+        "forward_two_column_fo",
+        "reverse_two_column_fo",
+        "reverse_one_column_fo",
+        "reverse_to_field_fk",
+        "forward_fk",
+        "reverse_o2o",
+        "generic_relation",
+        "forward_m2m",
+        "reverse_m2m",
+        "forward_to_field_through_m2m",
+        "reverse_to_field_through_m2m",
+        "generic_foreign_key",
+        "non_relation",
+    ],
+)
+def test_relation_link_reads_the_link_column_pairs(
+    owner,
+    field_name,
+    carriers,
+    targets,
+):
+    """``relation_link`` answers a link's carrier / target columns from either side.
+
+    A forward link answers from itself, a reverse descriptor from its forward
+    ``.field``, and an M2M hop in either direction from its through table's FK
+    onto the source model; a ``GenericForeignKey`` and a non-relation carry no
+    pairs.
+    """
+    from tests.optimizer._link_models import LnkPairChild, LnkParent, LnkTag
+
+    model = {
+        "LnkPairChild": LnkPairChild,
+        "LnkParent": LnkParent,
+        "LnkTag": LnkTag,
+        "Book": Book,
+        "Patron": Patron,
+        "Branch": Branch,
+        "Genre": Genre,
+        "TaggedItem": TaggedItem,
+    }[owner]
+    link = relation_link(model._meta.get_field(field_name))
+    assert link.carrier_attnames == carriers
+    assert link.target_attnames == targets
+
+
+@pytest.mark.parametrize(
+    "double",
+    [
+        SimpleNamespace(local_related_fields="p_id", foreign_related_fields=()),
+        SimpleNamespace(
+            local_related_fields=(SimpleNamespace(attname=1),),
+            foreign_related_fields=(SimpleNamespace(attname="id"),),
+        ),
+        SimpleNamespace(
+            local_related_fields=(SimpleNamespace(attname="a"), SimpleNamespace(attname="b")),
+            foreign_related_fields=(SimpleNamespace(attname="id"),),
+        ),
+        SimpleNamespace(local_related_fields=(), foreign_related_fields=()),
+        SimpleNamespace(field=SimpleNamespace(local_related_fields=None)),
+        SimpleNamespace(field=None),
+    ],
+    ids=[
+        "carriers_not_a_sequence",
+        "carrier_attname_not_a_string",
+        "unequal_sides",
+        "empty_sides",
+        "reverse_link_without_pairs",
+        "no_link",
+    ],
+)
+def test_relation_link_answers_empty_for_malformed_links(double):
+    """A link shape the reader cannot pair column-for-column answers no pairs."""
+    link = relation_link(double)
+    assert link.carriers == ()
+    assert link.targets == ()
+
+
+def test_relation_link_failure_policy_on_a_raising_read():
+    """A raising read is a ``ConfigurationError`` under the strict policy, empty under lenient."""
+
+    class _RaisingLink:
+        @property
+        def local_related_fields(self):
+            raise RuntimeError("hostile link")
+
+    with pytest.raises(ConfigurationError, match="local_related_fields"):
+        relation_link(_RaisingLink())
+    assert relation_link(_RaisingLink(), lenient=True).carriers == ()
+
+
+@pytest.mark.parametrize(
+    ("owner", "field_name", "expected"),
+    [
+        ("Book", "shelf", True),
+        ("MembershipCard", "patron", True),
+        ("LnkSlugChild", "parent", True),
+        ("LnkColumnChild", "parent", False),
+        ("LnkPairChild", "parent", False),
+        ("Patron", "card", False),
+        ("Book", "genres", False),
+        ("Branch", "tags", False),
+        ("TaggedItem", "content_object", False),
+    ],
+    ids=[
+        "fk",
+        "o2o",
+        "to_field_fk",
+        "one_column_fo",
+        "two_column_fo",
+        "reverse_o2o",
+        "m2m",
+        "generic_relation",
+        "generic_foreign_key",
+    ],
+)
+def test_is_single_column_foreign_key(owner, field_name, expected):
+    """Only a forward ``ForeignKey`` / ``OneToOneField`` is a one-column link."""
+    from tests.optimizer._link_models import LnkColumnChild, LnkPairChild, LnkSlugChild
+
+    model = {
+        "Book": Book,
+        "MembershipCard": MembershipCard,
+        "LnkSlugChild": LnkSlugChild,
+        "LnkColumnChild": LnkColumnChild,
+        "LnkPairChild": LnkPairChild,
+        "Patron": Patron,
+        "Branch": Branch,
+        "TaggedItem": TaggedItem,
+    }[owner]
+    assert is_single_column_foreign_key(model._meta.get_field(field_name)) is expected
+
+
+@pytest.mark.parametrize(
+    "double",
+    [
+        SimpleNamespace(many_to_many=True, through=None, remote_field=None),
+        SimpleNamespace(many_to_many=True, through=object, m2m_field_name=None),
+    ],
+    ids=["no_through_model", "no_naming_api"],
+)
+def test_m2m_through_link_answers_empty_without_a_through_link(double):
+    """An M2M hop whose through FKs do not resolve has no link pairs."""
+    assert relation_link(double).carriers == ()
+    assert m2m_through_link_fields(double) == (None, None)
+
+
+def test_m2m_through_link_fields_failure_policy_on_a_raising_lookup():
+    """A through model whose field lookup raises: ``ConfigurationError`` strict, empty lenient."""
+
+    class _BrokenMeta:
+        def get_field(self, name):
+            raise RuntimeError(name)
+
+    class _BrokenThrough:
+        _meta = _BrokenMeta()
+
+    double = SimpleNamespace(
+        many_to_many=True,
+        through=_BrokenThrough,
+        m2m_field_name=lambda: "source",
+        m2m_reverse_field_name=lambda: "target",
+    )
+    with pytest.raises(ConfigurationError, match="through-table foreign keys"):
+        m2m_through_link_fields(double)
+    assert m2m_through_link_fields(double, lenient=True) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("owner", "field_name", "expected"),
+    [
+        ("LnkPairChild", "parent", True),
+        ("LnkColumnChild", "parent", False),
+        ("LnkParent", "pair_children", False),
+        ("Book", "shelf", False),
+    ],
+    ids=[
+        "forward_two_column_fo",
+        "forward_one_column_fo",
+        "reverse_two_column_fo",
+        "forward_fk",
+    ],
+)
+def test_is_multi_column_forward_link(owner, field_name, expected):
+    """Only a FORWARD relation joined on more than one column is a multi-column forward link."""
+    from tests.optimizer._link_models import LnkColumnChild, LnkPairChild, LnkParent
+
+    model = {
+        "LnkPairChild": LnkPairChild,
+        "LnkColumnChild": LnkColumnChild,
+        "LnkParent": LnkParent,
+        "Book": Book,
+    }[owner]
+    assert is_multi_column_forward_link(model._meta.get_field(field_name)) is expected

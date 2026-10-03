@@ -42,7 +42,7 @@ def test_reverse_fk_classifies_direct_fk():
         kind="reverse_many_to_one",
         windowable=True,
         partition_expr="category_id",
-        parent_join_column="category_id",
+        parent_join_columns=("category_id",),
         through_model=None,
         lateral_shape=LateralJoinShape.DIRECT_FK,
         # The resolved child-side FK object (the lateral join's link field).
@@ -59,7 +59,7 @@ def test_forward_m2m_classifies_through_table():
     # The reverse query name, NOT the accessor (related_name="books" here).
     assert descriptor.partition_expr == "books"
     # The join table owns the attach; the child only needs its pk.
-    assert descriptor.parent_join_column == Genre._meta.pk.attname
+    assert descriptor.parent_join_columns == (Genre._meta.pk.attname,)
     assert descriptor.through_model is Book.genres.through
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
     # Through-link FK pair: parent side (Book) / child side (Genre).
@@ -73,7 +73,7 @@ def test_reverse_m2m_classifies_through_table():
     assert descriptor.kind == "many"
     assert descriptor.windowable is True
     assert descriptor.partition_expr == "genres"
-    assert descriptor.parent_join_column == Book._meta.pk.attname
+    assert descriptor.parent_join_columns == (Book._meta.pk.attname,)
     assert descriptor.through_model is Book.genres.through
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
     # The sides swap on the reverse rel: parent is Genre, child is Book.
@@ -88,7 +88,7 @@ def test_forward_single_classifies_unsupported():
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
     # The connector column still resolves (list-prefetch projection uses it).
-    assert descriptor.parent_join_column == "id"
+    assert descriptor.parent_join_columns == ("id",)
     assert descriptor.lateral_shape is LateralJoinShape.UNSUPPORTED
     assert descriptor.through_model is None
 
@@ -102,7 +102,7 @@ def test_reverse_one_to_one_classifies_direct_fk():
     assert descriptor.kind == "reverse_one_to_one"
     assert descriptor.windowable is True
     assert descriptor.partition_expr == "patron_id"
-    assert descriptor.parent_join_column == "patron_id"
+    assert descriptor.parent_join_columns == ("patron_id",)
     assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
 
 
@@ -119,13 +119,13 @@ def test_windowable_kind_without_partition_classifies_unwindowable():
         auto_created=True,
         remote_field=None,
         field=None,
-        reverse_connector_attname=None,
+        link_carrier_attnames=(),
     )
     descriptor = classify_relation_join(double)
     assert descriptor.kind == "reverse_many_to_one"
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
-    assert descriptor.parent_join_column is None
+    assert descriptor.parent_join_columns == ()
 
 
 def test_generic_relation_classifies_direct_fk_partitioned_by_object_id():
@@ -146,7 +146,7 @@ def test_generic_relation_classifies_direct_fk_partitioned_by_object_id():
     assert descriptor.kind == "generic"
     assert descriptor.windowable is True
     assert descriptor.partition_expr == object_id_attname
-    assert descriptor.parent_join_column == object_id_attname
+    assert descriptor.parent_join_columns == (object_id_attname,)
     # The morph column rides the descriptor so the composite-index advisory can
     # recommend the ``(content_type_id, object_id, ...)`` prefix (never object_id
     # alone) even though the content type is a constant WHERE, not a partition.
@@ -180,7 +180,7 @@ def test_generic_double_without_related_model_classifies_unwindowable():
     assert descriptor.kind == "generic"
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
-    assert descriptor.parent_join_column is None
+    assert descriptor.parent_join_columns == ()
     assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
     assert descriptor.parent_link_field is None
 
@@ -200,7 +200,7 @@ def test_m2m_double_without_related_model_has_no_connector():
     descriptor = classify_relation_join(double)
     assert descriptor.windowable is True
     assert descriptor.partition_expr == "posts"
-    assert descriptor.parent_join_column is None
+    assert descriptor.parent_join_columns == ()
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
     # No through model -> no resolvable through-link FK pair either.
     assert descriptor.parent_link_field is None
@@ -218,7 +218,7 @@ def test_classifier_fail_closes_when_m2m_target_model_has_no_meta():
     """An M2M whose target model carries no ``_meta`` -> connector ``None``.
 
     The M2M connector is the target's pk attname, so a target that cannot
-    report one leaves ``parent_join_column`` unresolved rather than raising
+    report one leaves ``parent_join_columns`` empty rather than raising
     ``AttributeError`` out of plan building.
     """
 
@@ -236,7 +236,7 @@ def test_classifier_fail_closes_when_m2m_target_model_has_no_meta():
         related_model=MissingTargetMeta,
     )
     descriptor = classify_relation_join(m2m)
-    assert descriptor.parent_join_column is None
+    assert descriptor.parent_join_columns == ()
 
 
 def test_classifier_fail_closes_when_generic_target_field_lookup_raises():
@@ -341,7 +341,100 @@ def test_classifier_fail_closes_on_hostile_many_to_many_metadata(field_factory):
         kind="forward_single",
         windowable=False,
         partition_expr=None,
-        parent_join_column=None,
+        parent_join_columns=(),
         through_model=None,
         lateral_shape=LateralJoinShape.UNSUPPORTED,
     )
+
+
+@pytest.mark.parametrize(
+    ("owner", "field_name", "carriers"),
+    [
+        ("LnkParent", "pair_children", ("p_tenant", "p_code")),
+        ("RpCompositeParent", "children", ("parent_tenant_id", "parent_code")),
+    ],
+    ids=["unique_together_targets", "composite_pk_targets"],
+)
+def test_two_column_foreign_object_reverse_is_unwindowable_and_attaches_on_every_carrier(
+    owner,
+    field_name,
+    carriers,
+):
+    """A reverse two-column ``ForeignObject`` has no single partition expression.
+
+    It stays unwindowable (the planner resolves it per parent), its list
+    prefetch attaches on both carrier columns, and no correlated-fetch link
+    field resolves because the link is not one column.
+    """
+    from tests._relation_fixtures import RpCompositeParent
+
+    from ._link_models import LnkParent
+
+    model = {"LnkParent": LnkParent, "RpCompositeParent": RpCompositeParent}[owner]
+    descriptor = classify_relation_join(model._meta.get_field(field_name))
+    assert descriptor.kind == "reverse_many_to_one"
+    assert descriptor.windowable is False
+    assert descriptor.partition_expr is None
+    assert descriptor.parent_join_columns == carriers
+    assert descriptor.prefetch_attach_columns == carriers
+    assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
+    assert descriptor.parent_link_field is None
+
+
+def test_one_column_foreign_object_reverse_windows_on_its_carrier_without_a_link_field():
+    """A reverse one-column ``ForeignObject`` partitions by its carrier column.
+
+    ``parent_link_field`` stays ``None``: a ``ForeignObject`` has no ``column``
+    or ``db_type``, so the lateral and single-parent strategies refuse it and
+    the windowed body serves it.
+    """
+    from ._link_models import LnkParent
+
+    descriptor = classify_relation_join(LnkParent._meta.get_field("column_children"))
+    assert descriptor.windowable is True
+    assert descriptor.partition_expr == "p_id"
+    assert descriptor.parent_join_columns == ("p_id",)
+    assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
+    assert descriptor.parent_link_field is None
+
+
+def test_to_field_foreign_key_reverse_windows_on_its_fk_column_with_the_fk_as_link():
+    """A reverse ``to_field`` ``ForeignKey`` partitions by the FK column and keeps the FK link."""
+    from ._link_models import LnkParent, LnkSlugChild
+
+    descriptor = classify_relation_join(LnkParent._meta.get_field("slug_children"))
+    assert descriptor.windowable is True
+    assert descriptor.partition_expr == "parent_id"
+    assert descriptor.parent_join_columns == ("parent_id",)
+    assert descriptor.parent_link_field is LnkSlugChild._meta.get_field("parent")
+
+
+def test_field_meta_classifies_through_its_precomputed_carriers():
+    """A ``FieldMeta`` snapshot attaches on the carriers its builder read from the link.
+
+    It carries no link field, so ``parent_link_field`` stays ``None``.
+    """
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+
+    from ._link_models import LnkParent
+
+    meta = FieldMeta.from_django_field(LnkParent._meta.get_field("pair_children"))
+    descriptor = classify_relation_join(meta)
+    assert descriptor.prefetch_attach_columns == ("p_tenant", "p_code")
+    assert descriptor.windowable is False
+    assert descriptor.parent_link_field is None
+
+
+def test_reverse_double_with_malformed_carrier_slot_has_no_connector():
+    """A reverse double whose carrier slot is not a tuple of strings resolves no connector."""
+    double = SimpleNamespace(
+        name="mystery",
+        many_to_many=False,
+        one_to_many=True,
+        one_to_one=False,
+        auto_created=True,
+        link_carrier_attnames=("p_id", 7),
+    )
+    descriptor = classify_relation_join(double)
+    assert descriptor.parent_join_columns == ()
+    assert descriptor.windowable is False

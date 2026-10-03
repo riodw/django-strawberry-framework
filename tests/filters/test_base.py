@@ -567,6 +567,19 @@ def test_relation_uses_non_pk_to_field_false_for_reverse_relation():
     assert _relation_uses_non_pk_to_field(field) is False
 
 
+def test_relation_uses_non_pk_to_field_false_for_generic_foreign_key():
+    """A ``GenericForeignKey`` is forward-single but carries no link pairs, so it is not flagged."""
+    field = models.TaggedItem._meta.get_field("content_object")
+    assert _relation_uses_non_pk_to_field(field) is False
+
+
+def test_relation_uses_non_pk_to_field_false_for_unreadable_relation_flags():
+    """A descriptor whose relation flags are not booleans is not flagged (no raise)."""
+    from types import SimpleNamespace
+
+    assert _relation_uses_non_pk_to_field(SimpleNamespace(many_to_many="yes")) is False
+
+
 def test_relation_uses_non_pk_to_field_false_for_non_relation():
     """A plain scalar column is not flagged."""
     field = models.Book._meta.get_field("title")

@@ -1806,9 +1806,10 @@ class FilterSet(
             **_strip_model_choice_extras(default.extra),  # pyright: ignore[reportArgumentType]
         )
         _stamp(identity_replacement, "package_replacement")
-        # A forward FK/O2O bound on a NON-pk ``to_field`` stores and joins on that
-        # ``to_field`` column, but a Relay GlobalID and a raw-pk leaf both carry the
-        # target's PK. Set the BOOLEAN pk-qualification flag so the filter DERIVES the
+        # A forward relation whose link targets NON-pk columns (a ``to_field``
+        # FK/O2O, a ``ForeignObject`` off the pk) stores and joins on those columns,
+        # but a Relay GlobalID and a raw-pk leaf both carry the target's PK. Set the
+        # BOOLEAN pk-qualification flag so the filter DERIVES the
         # ``<relation>__pk`` path from its LIVE ``field_name`` at filter time (see
         # ``base.py::_relation_uses_non_pk_to_field`` / ``_GLOBALID_RELATION_PK_ATTR``).
         # A boolean (not a frozen absolute path) survives ``_expand_related_filter``'s

@@ -913,6 +913,54 @@ def test_generated_forward_fk_to_field_in_is_pk_qualified_multiple_choice():
     assert getattr(exact_leaf, _GLOBALID_RELATION_PK_ATTR, None) is True
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("child_name", "marked"),
+    [("LnkSlugObjectChild", True), ("LnkPairChild", True), ("LnkColumnChild", False)],
+    ids=["one_column_fo_non_pk_target", "two_column_fo", "one_column_fo_pk_target"],
+)
+def test_generated_forward_foreign_object_globalid_filter_matches_by_decoded_pk(
+    child_name,
+    marked,
+):
+    """A forward ``ForeignObject`` whose link targets non-pk columns is pk-qualified.
+
+    The link stores ``p_slug`` (or ``(p_tenant, p_code)``) while a Relay GlobalID
+    carries the parent's pk, so the generated leaf must compile
+    ``parent__pk=<pk>``; a one-column link onto the pk itself keeps the raw
+    ``parent=<pk>`` predicate. Either way the leaf returns exactly the encoded
+    parent's children.
+    """
+    from django.db import connection
+
+    from tests.optimizer import _link_models
+
+    child_model = getattr(_link_models, child_name)
+
+    class LnkParentType(DjangoType):
+        class Meta:
+            model = _link_models.LnkParent
+            fields = ("id", "label")
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(LnkParentType, LnkParentType.__django_strawberry_definition__)
+
+    child_filter = type(
+        "ChildFilter",
+        (FilterSet,),
+        {"Meta": type("Meta", (), {"model": child_model, "fields": {"parent": ["exact"]}})},
+    )
+    leaf = child_filter.get_filters()["parent"]
+    assert isinstance(leaf, GlobalIDFilter)
+    assert getattr(leaf, _GLOBALID_RELATION_PK_ATTR, False) is marked
+
+    with _link_models.link_fixture_tables(connection):
+        parent = _link_models.LnkParent.objects.get(slug="s-a")
+        node_id = strawberry.relay.to_base64("LnkParentType", str(parent.pk))
+        result = leaf.filter(child_model.objects.all(), node_id)
+        assert list(result.values_list("name", flat=True)) == ["a1", "a2", "a3"]
+
+
 @pytest.mark.django_db
 def test_generated_forward_fk_to_field_in_execution_matches_by_decoded_pk():
     """The generated non-pk-``to_field`` ``in`` leaf unions targets by decoded pk.

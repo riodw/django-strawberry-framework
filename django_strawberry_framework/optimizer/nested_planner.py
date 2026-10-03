@@ -585,7 +585,7 @@ def _advise_composite_index(
     """Emit a dev-mode advisory when no index covers a nested window's leading columns.
 
     A windowed or lateral nested connection equality-constrains the child
-    connector column (``join.parent_join_column``) - and, for a
+    connector columns (``join.parent_join_columns``) - and, for a
     ``GenericRelation``, the ``content_type_id`` morph column
     (``join.content_type_column``) ahead of it - then orders by the deterministic
     order terms, so a composite index whose leading columns mirror
@@ -624,13 +624,12 @@ def _advise_composite_index(
     cache, so a given ``(model, equality prefix, order terms)`` shape warns at
     most once.
     """
-    connector = join.parent_join_column
-    if connector is None:
+    if not join.parent_join_columns:
         return
     equality: list[str] = []
     if join.content_type_column is not None:
         append_unique(equality, join.content_type_column)
-    append_unique(equality, connector)
+    append_unique_many(equality, join.parent_join_columns)
     order_terms = _concrete_order_terms(order_by, related_model)
     if order_terms is None:
         # Order-parsing UNKNOWN dominates: some effective ordering term is not a
@@ -1121,6 +1120,21 @@ def plan_connection_relation(
     django_field = field_map.get(relation_field_name)
     if django_field is None:
         return NestedConnectionPlanResult(plan=plan)
+    hints_map = resolve_optimizer_hints(definition)
+    if hint_is_skip(hints_map.get(relation_field_name)):
+        return NestedConnectionPlanResult(plan=plan)
+    # Parent-row link columns (a reverse ``to_field`` / ``ForeignObject``
+    # link's non-pk targets). The window's attach reads them off each parent
+    # row, and so does the per-parent resolution every refusal arm below leaves
+    # the relation to, so they load before the first of those arms, under the
+    # same G2 gate as ``walker.py::_record_relation_access``. Only a SKIP hint
+    # (the consumer opting the relation out of planning) and a field the map
+    # does not carry leave them unloaded.
+    if enable_only:
+        append_unique_many(
+            cast("MutableSequence[str]", plan.only_fields),
+            [f"{prefix}{attname}" for attname in django_field.source_link_attnames],
+        )
     # (b) Refusal arms detectable before any queryset is built -> UNPLANNED.
     if response_key_arguments_conflict(sel):
         _log_connection_fallback(
@@ -1141,11 +1155,8 @@ def plan_connection_relation(
         return NestedConnectionPlanResult(plan=plan)
     # Scheme selector only (payload map + identity writes). Arguments-derived
     # gates including sidecar run per payload inside ``_divergent_key_windows``,
-    # after the relation-level SKIP / identities / related_model gates below.
+    # after the relation-level identities / related_model gates below.
     divergent = aliased_arguments_diverge(sel)
-    hints_map = resolve_optimizer_hints(definition)
-    if hint_is_skip(hints_map.get(relation_field_name)):
-        return NestedConnectionPlanResult(plan=plan)
 
     target_type, target_definition = resolve_relation_target(
         definition,

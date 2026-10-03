@@ -135,6 +135,7 @@ from .utils.querysets import (
 # already in the package-root ``__all__`` via ``types``, so this re-export adds no
 # new public name.
 from .utils.querysets import SyncMisuseError as SyncMisuseError
+from .utils.relations import is_single_column_foreign_key
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from .types.base import DjangoType
@@ -203,19 +204,16 @@ def _is_cascadable_edge(field: ModelField) -> TypeGuard[ForeignKeyField]:
 
     The single definition of "cascadable edge" -- the full walk, the
     ``fields=`` validator, and the preflight all key off the cached
-    ``_edge_plan`` built from this predicate, so scope cannot drift.
-    ``isinstance(field, models.ForeignKey)`` is the forward-concrete test:
-    ``OneToOneField`` subclasses ``ForeignKey`` (MTI ``<parent>_ptr`` parent
-    links included -- a hidden MTI parent must hide its child row, so the
-    parent link cascades like any other O2O edge), while reverse relations
-    (``ForeignObjectRel``), M2M (join-table-backed), ``GenericForeignKey``
-    (virtual, polymorphic), ``GenericRelation`` (a ``ForeignObject`` but not a
-    ``ForeignKey``), and plain multi-column ``ForeignObject`` relations are
-    all excluded by construction. The ``column`` check guards the
-    single-column contract against a future ``ForeignKey`` shape whose value
-    is not one concrete column.
+    ``_edge_plan`` built from this predicate, so scope cannot drift. The edge
+    test itself is ``utils/relations.py::is_single_column_foreign_key``: a
+    cascade edge is one ``__in`` subquery over one column, the same
+    one-column contract the optimizer's correlated fetch links gate on. MTI
+    ``<parent>_ptr`` parent links pass it (a hidden MTI parent must hide its
+    child row, so the parent link cascades like any other O2O edge); reverse
+    relations, M2M, ``GenericForeignKey``, ``GenericRelation`` and plain
+    ``ForeignObject`` relations of any width do not.
     """
-    return isinstance(field, models.ForeignKey) and getattr(field, "column", None) is not None
+    return is_single_column_foreign_key(field)
 
 
 def _is_unsupported_forward_edge(field: ModelField) -> bool:

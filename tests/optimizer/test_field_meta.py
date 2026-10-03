@@ -786,7 +786,7 @@ def test_from_django_field_non_string_attributes():
     with pytest.raises(OptimizerError, match="expected a string field name"):
         FieldMeta._from_field_shape(SimpleNamespace(), is_relation=True, field_name=123)
 
-    # Non-string target_field name/attname, field attname, reverse_connector_attname
+    # Non-string target_field name/attname and field attname
     fake_target = SimpleNamespace(name=123, attname=456)
     fake_rel = SimpleNamespace(attname=789)
     fake_field = SimpleNamespace(
@@ -805,7 +805,8 @@ def test_from_django_field_non_string_attributes():
     assert fm.target_field_name is None
     assert fm.target_field_attname is None
     assert fm.attname is None
-    assert fm.reverse_connector_attname is None
+    assert fm.link_carrier_attnames == ()
+    assert fm.source_target_attnames == ()
 
 
 def test_from_django_field_many_side_nullability_short_circuits():
@@ -847,3 +848,152 @@ def test_from_django_field_many_side_nullability_short_circuits():
     assert fm_rev_fk.relation_kind == "reverse_many_to_one"
     assert fm_rev_fk.is_many_side is True
     assert fm_rev_fk.nullable is False
+
+
+_LINK_COLUMN_ROWS = {
+    "two_column_fo": (
+        "LnkParent",
+        "pair_children",
+        ("p_tenant", "p_code"),
+        ("tenant", "code"),
+    ),
+    "one_column_fo": (
+        "LnkParent",
+        "column_children",
+        ("p_id",),
+        (),
+    ),
+    "to_field_fk": (
+        "LnkParent",
+        "slug_children",
+        ("parent_id",),
+        ("slug",),
+    ),
+    "composite_pk": (
+        "RpCompositeParent",
+        "children",
+        ("parent_tenant_id", "parent_code"),
+        (),
+    ),
+    "plain_fk": (
+        "Category",
+        "items",
+        ("category_id",),
+        (),
+    ),
+}
+
+
+@pytest.mark.parametrize("row", list(_LINK_COLUMN_ROWS), ids=list(_LINK_COLUMN_ROWS))
+def test_from_django_field_stamps_reverse_link_columns(row):
+    """A reverse FK / O2O stamps its child carriers and its non-pk parent targets.
+
+    Primary-key targets (an ordinary pk, each ``CompositePrimaryKey`` member) are
+    omitted because every projection loads them; the parent row must carry
+    exactly those targets (``source_link_attnames``).
+    """
+    from tests._relation_fixtures import RpCompositeParent
+
+    from ._link_models import LnkParent
+
+    owner, field_name, carriers, targets = _LINK_COLUMN_ROWS[row]
+    model = {
+        "LnkParent": LnkParent,
+        "RpCompositeParent": RpCompositeParent,
+        "Category": Category,
+    }[owner]
+    meta = FieldMeta.from_django_field(model._meta.get_field(field_name))
+    assert meta.link_carrier_attnames == carriers
+    assert meta.source_target_attnames == targets
+    assert meta.source_link_attnames == targets
+
+
+@pytest.mark.parametrize(
+    ("owner", "field_name", "carriers"),
+    [
+        ("Item", "category", ("category_id",)),
+        ("LnkColumnChild", "parent", ("p_id",)),
+        ("LnkSlugChild", "parent", ("parent_id",)),
+    ],
+    ids=["fk", "one_column_fo", "to_field_fk"],
+)
+def test_from_django_field_stamps_forward_link_carriers(owner, field_name, carriers):
+    """A forward relation's source row carries its link's carriers, never its ``attname``.
+
+    A one-column ``ForeignObject``'s ``attname`` is the relation name and its
+    carrier ``p_id`` exists only in the link, so both slots come from
+    ``utils/relations.py::relation_link``; a forward relation has no reverse
+    targets.
+    """
+    from ._link_models import LnkColumnChild, LnkSlugChild
+
+    model = {"Item": Item, "LnkColumnChild": LnkColumnChild, "LnkSlugChild": LnkSlugChild}[owner]
+    meta = FieldMeta.from_django_field(model._meta.get_field(field_name))
+    assert meta.link_carrier_attnames == carriers
+    assert meta.source_target_attnames == ()
+    assert meta.source_link_attnames == carriers
+
+
+def test_from_django_field_multi_column_forward_foreign_object_has_no_single_target():
+    """A two-column forward ``ForeignObject`` stamps without raising and names no target column.
+
+    Its target columns come from ``utils/relations.py::relation_link`` (Django's
+    single-target ``target_field`` accessor raises for it): several targets
+    leave ``target_field_name`` / ``target_field_attname`` ``None``, the
+    carriers still stamp, and FK-id elision stays off.
+    """
+    from ._link_models import LnkPairChild
+
+    meta = FieldMeta.from_django_field(LnkPairChild._meta.get_field("parent"))
+    assert meta.relation_kind == "forward_single"
+    assert meta.target_field_name is None
+    assert meta.target_field_attname is None
+    assert meta.attname is None
+    assert meta.fk_id_elision_eligible is False
+    assert meta.link_carrier_attnames == ("p_tenant", "p_code")
+    assert meta.link_target_attnames == ("tenant", "code")
+    assert meta.source_link_attnames == ("p_tenant", "p_code")
+
+
+@pytest.mark.parametrize(
+    ("owner", "field_name", "source_targets"),
+    [
+        ("LnkParent", "tags", ("slug",)),
+        ("LnkTag", "parents", ("code",)),
+        ("Book", "genres", ()),
+        ("Genre", "books", ()),
+        ("GlossaryTerm", "categories", ()),
+        ("GlossaryCategory", "terms", ()),
+    ],
+    ids=[
+        "forward_to_field_through",
+        "reverse_to_field_through",
+        "forward_auto_through",
+        "reverse_auto_through",
+        "forward_pk_custom_through",
+        "reverse_pk_custom_through",
+    ],
+)
+def test_from_django_field_stamps_m2m_through_source_targets(owner, field_name, source_targets):
+    """An M2M hop's source row carries the non-pk column its through table's source FK targets.
+
+    Auto-created and pk-targeted custom through tables target the source pk, so
+    they stamp nothing and their projections stay unchanged.
+    """
+    from apps.glossary.models import GlossaryCategory, GlossaryTerm
+    from apps.library.models import Book, Genre
+
+    from ._link_models import LnkParent, LnkTag
+
+    model = {
+        "LnkParent": LnkParent,
+        "LnkTag": LnkTag,
+        "Book": Book,
+        "Genre": Genre,
+        "GlossaryTerm": GlossaryTerm,
+        "GlossaryCategory": GlossaryCategory,
+    }[owner]
+    meta = FieldMeta.from_django_field(model._meta.get_field(field_name))
+    assert meta.link_carrier_attnames == ()
+    assert meta.source_target_attnames == source_targets
+    assert meta.source_link_attnames == source_targets

@@ -1150,6 +1150,15 @@ def _record_relation_access(
     after the elision check would silently drop the FK column on the
     elided path and reintroduce the N+1.
 
+    The connector columns are ``FieldMeta.source_link_attnames``: a forward
+    relation's carrier columns on the source row (its FK column, every
+    ``from_fields`` member of a ``ForeignObject``); for every other relation, the
+    non-pk source columns its link targets - a reverse FK / reverse one-to-one
+    link's ``to_field`` / ``to_fields``, an M2M through table's source FK
+    ``to_field`` in either direction, nothing for a ``GenericRelation`` (whose
+    link always targets the pk). Django's prefetch attach reads them on every
+    source row.
+
     The G2 gate (spec-035 Decision 4) gates ONLY the connector-column
     append: under a non-``QUERY`` operation the source row is fully loaded,
     so the FK column need not be masked. The ``planned_resolver_keys``
@@ -1157,9 +1166,11 @@ def _record_relation_access(
     relation regardless of operation (Decision 4 / Edge cases
     #"every projection writer checks the gate").
     """
-    attname = django_field.attname
-    if enable_only and attname is not None:
-        append_unique(cast("MutableSequence[str]", plan.only_fields), f"{prefix}{attname}")
+    if enable_only:
+        append_unique_many(
+            cast("MutableSequence[str]", plan.only_fields),
+            [f"{prefix}{attname}" for attname in django_field.source_link_attnames],
+        )
     append_unique_many(
         cast("MutableSequence[str]", plan.planned_resolver_keys),
         resolver_identities,

@@ -171,9 +171,9 @@ def _restore_app_registry():
     ``post_migrate`` recreates content types; a test that builds a model therefore
     needs no manual ``all_models`` pop of its own. What it does NOT cover:
 
-    (a) Models declared at module import (``tests/_relation_fixtures.py``, the
-        ``_Ct*`` family in ``tests/test_permissions.py``,
-        ``tests/optimizer/test_nested_index_advisory.py``,
+    (a) Models declared at module import (``tests/_relation_fixtures.py``,
+        ``tests/optimizer/_link_models.py``, the ``_Ct*`` family in
+        ``tests/test_permissions.py``, ``tests/optimizer/test_nested_index_advisory.py``,
         ``tests/filters/test_sets.py::ShelfProxy``) are registered before any test
         runs, so they sit inside every snapshot; import-time leakage is not fixed here.
     (b) ``apps.clear_cache()`` does not expire the package's own model-keyed caches

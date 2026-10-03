@@ -125,11 +125,11 @@ def single_parent_spec(request: NestedConnectionRequest) -> SingleParentWindowSp
       behavior erased by the class rebind, so anything but a plain ``QuerySet``
       keeps the windowed strategy (same rule as ``_build_lateral_spec``).
     - the join shape is ``DIRECT_FK`` with a resolved ``parent_link_field`` - M2M
-      ``THROUGH_TABLE`` is correction 2's exclusion, and a generic relation is
-      ``DIRECT_FK`` but leaves ``parent_link_field`` ``None`` (join_taxonomy owns
-      the link resolution). The two checks fold into ONE branch: for a genuine
-      ``DIRECT_FK`` FK relation ``parent_link_field`` is always resolved, so a
-      separate ``is None`` arm would be unreachable and break ``fail_under=100``.
+      ``THROUGH_TABLE`` is correction 2's exclusion, and a generic relation or a
+      reverse ``ForeignObject`` is ``DIRECT_FK`` but leaves ``parent_link_field``
+      ``None`` (join_taxonomy owns the link resolution and sets it only for a
+      single-column ``ForeignKey`` link, the one shape a plain filtered ``LIMIT``
+      on ``parent_link_column`` reproduces). The two checks fold into ONE branch.
     - the window is the plain first page (``plain_first_page`` implies
       ``offset == 0`` and a bounded positive ``limit``) - the only shape a plain
       filtered ``LIMIT`` reproduces row-for-row.

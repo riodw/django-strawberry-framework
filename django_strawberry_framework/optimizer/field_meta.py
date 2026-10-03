@@ -25,12 +25,14 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from ..exceptions import OptimizerError, _safe_type_name
 from ..utils.relations import (
+    RelationLink,
     has_composite_pk,
     instance_accessor,
     is_many_side_relation_kind,
     relation_attr,
     relation_bool,
     relation_kind,
+    relation_link,
     relation_name,
 )
 
@@ -38,7 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
 
     from ..utils.relations import RelationKind
-    from ..utils.typing import ModelField
+    from ..utils.typing import ConcreteField, ModelField
 
 
 class _DjangoFieldLike(Protocol):
@@ -117,9 +119,29 @@ class FieldMeta:
             false for many-side relations, reverse relations, non-PK
             ``to_field`` relations, unresolved targets, and composite
             primary keys.
-        reverse_connector_attname: For reverse FK relations, the forward
-            FK column on the related model that points back to the
-            parent model.
+        link_carrier_attnames: The columns that carry the relation's key,
+            read from its link (``utils/relations.py::relation_link``): for a
+            forward FK / one-to-one / ``ForeignObject``, its own carriers on the
+            source row (``("category_id",)``, a one-column ``ForeignObject``'s
+            ``("p_id",)`` although its ``attname`` is the relation name); for a
+            reverse FK / reverse one-to-one, the child's carriers (one entry per
+            ``from_fields`` member of a reverse ``ForeignObject``). ``()`` for
+            every other shape. Django's prefetch attach reads every one of them.
+        link_target_attnames: The columns those carriers reference, index for
+            index, for the same shapes: a forward relation's target columns on
+            the related model (its pk, a ``to_field``, every ``to_fields``
+            member, where Django's single-target ``target_field`` has nothing
+            for a multi-column ``ForeignObject``), a reverse relation's columns
+            on the source row. ``()`` for every other shape.
+        source_target_attnames: For a relation whose link targets the SOURCE
+            row - a reverse FK / reverse one-to-one, or an M2M in either
+            direction through its through table's source-side FK - the source
+            columns the link targets that are not part of the source's primary
+            key (a non-pk ``to_field``, a ``ForeignObject``'s ``to_fields``, a
+            through FK's ``to_field``); ``()`` when every target is a
+            primary-key member (always loaded) and for a forward single
+            relation. Django's prefetch attach and per-parent filter read them
+            on each source row.
         auto_created: Django's auto-created flag. ``True`` for reverse
             descriptors and concrete MTI parent links.
         accessor_name: The attribute name relation rows are reached
@@ -160,7 +182,9 @@ class FieldMeta:
     target_field_attname: str | None = None
     target_pk_name: str | None = None
     fk_id_elision_eligible: bool = False
-    reverse_connector_attname: str | None = None
+    link_carrier_attnames: tuple[str, ...] = ()
+    link_target_attnames: tuple[str, ...] = ()
+    source_target_attnames: tuple[str, ...] = ()
     auto_created: bool = False
     accessor_name: str | None = None
     concrete: bool = False
@@ -176,6 +200,19 @@ class FieldMeta:
     def is_many_side(self) -> bool:
         """Return whether this relation resolves as a GraphQL list."""
         return is_many_side_relation_kind(self.relation_kind)
+
+    @property
+    def source_link_attnames(self) -> tuple[str, ...]:
+        """Columns the SOURCE row must carry so traversing this relation reads no deferred field.
+
+        A forward single relation's own carrier columns
+        (``link_carrier_attnames``); for every other relation, the non-pk source
+        columns its link targets (``source_target_attnames``). ``()`` for every
+        relation that needs only the source pk.
+        """
+        if self.relation_kind == "forward_single":
+            return self.link_carrier_attnames
+        return self.source_target_attnames
 
     @classmethod
     def from_django_field(cls, field: _DjangoFieldLike | ModelField) -> FieldMeta:
@@ -248,7 +285,17 @@ class FieldMeta:
             raise OptimizerError(
                 f"FieldMeta expected a string field name; got {_safe_type_name(field_name)}.",
             )
-        target_field = relation_attr(field, "target_field", None)
+        kind = relation_kind(field)
+        link = relation_link(field) if is_relation else RelationLink()
+        # A forward link's target column comes from the link itself: Django's
+        # single-target ``target_field`` accessor raises on a multi-column
+        # ``ForeignObject``, which has no single target column (``None`` here).
+        # Every other shape keeps Django's ``target_field``, which names one
+        # column for each of them (a reverse rel's child pk, an M2M's target pk).
+        if kind == "forward_single" and link.targets:
+            target_field = link.targets[0] if len(link.targets) == 1 else None
+        else:
+            target_field = relation_attr(field, "target_field", None)
         # Trusted, not checked: a Django relation's ``related_model`` is a model class
         # or ``None`` (a resolver-path stand-in may carry a lighter class that
         # ``_target_pk_name`` reads defensively).
@@ -293,7 +340,6 @@ class FieldMeta:
             attname = None
         content_type_field_name = relation_name(field, "content_type_field_name")
         object_id_field_name = relation_name(field, "object_id_field_name")
-        kind = relation_kind(field)
 
         # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
         if is_many_side_relation_kind(kind):
@@ -303,15 +349,17 @@ class FieldMeta:
         else:
             nullable = relation_bool(field, "null", False)
 
-        field_rel = relation_attr(field, "field", None)
-        reverse_connector_attname = (
-            relation_attr(field_rel, "attname", None) if field_rel is not None else None
-        )
-        if reverse_connector_attname is not None and not isinstance(
-            reverse_connector_attname,
-            str,
-        ):
-            reverse_connector_attname = None
+        # A forward single relation's carriers sit on the source row; every other
+        # link (reverse FK / one-to-one, M2M through its through table's source
+        # FK, ``GenericRelation``) targets the source row instead.
+        link_carrier_attnames: tuple[str, ...] = ()
+        link_target_attnames: tuple[str, ...] = ()
+        source_target_attnames: tuple[str, ...] = ()
+        if kind in ("forward_single", "reverse_many_to_one", "reverse_one_to_one"):
+            link_carrier_attnames = link.carrier_attnames
+            link_target_attnames = link.target_attnames
+        if kind != "forward_single":
+            source_target_attnames = _non_pk_attnames(link.targets)
 
         accessor_name = instance_accessor(field)
 
@@ -335,7 +383,9 @@ class FieldMeta:
                 and kind == "forward_single"
                 and not has_composite_pk(related_model)
             ),
-            reverse_connector_attname=reverse_connector_attname,
+            link_carrier_attnames=link_carrier_attnames,
+            link_target_attnames=link_target_attnames,
+            source_target_attnames=source_target_attnames,
             auto_created=auto_created,
             accessor_name=accessor_name,
             concrete=concrete,
@@ -366,3 +416,19 @@ def _target_pk_name(model: type[models.Model] | None) -> str | None:
         return pk_name if isinstance(pk_name, str) else None
     except BaseException:
         return None
+
+
+def _non_pk_attnames(fields: tuple[ConcreteField, ...]) -> tuple[str, ...]:
+    """Attnames of ``fields`` that are not members of their model's primary key.
+
+    Every ``.only()`` projection loads the primary key (each member of a
+    ``CompositePrimaryKey`` included), so only the remaining columns need an
+    explicit projection entry.
+    """
+    attnames: list[str] = []
+    for field in fields:
+        meta = field.model._meta
+        pk_attnames = {pk_field.attname for pk_field in meta.pk_fields}
+        if field.attname not in pk_attnames:
+            attnames.append(field.attname)
+    return tuple(attnames)

@@ -787,7 +787,7 @@ class TestAdviseCompositeIndex:
     @staticmethod
     def _join(column: str | None, content_type_column: str | None = None) -> SimpleNamespace:
         return SimpleNamespace(
-            parent_join_column=column,
+            parent_join_columns=(column,) if column is not None else (),
             content_type_column=content_type_column,
         )
 

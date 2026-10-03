@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, TypeGuard, cast, overload
 
 from django.core.exceptions import FieldDoesNotExist
+from django.db import models
 from django.db.models.constants import LOOKUP_SEP
 
 from django_strawberry_framework.exceptions import (
@@ -19,16 +20,16 @@ from django_strawberry_framework.exceptions import (
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from collections.abc import Callable, Sequence, Sized
 
-    from django.db import models
     from django.db.models.lookups import Lookup, Transform
     from django.db.models.query_utils import PathInfo
 
-    from .typing import ConcreteField, ModelField
+    from .typing import ConcreteField, ForeignKeyField, ModelField
 
 __all__ = [
     "MANY_SIDE_RELATION_KINDS",
     "ClassifiedPath",
     "RelationKind",
+    "RelationLink",
     "RelationPathHop",
     "classify_path",
     "has_composite_pk",
@@ -36,10 +37,15 @@ __all__ = [
     "is_forward_concrete_relation",
     "is_forward_many_to_many",
     "is_many_side_relation_kind",
+    "is_multi_column_forward_link",
+    "is_single_column_foreign_key",
+    "m2m_through_link_fields",
+    "m2m_through_model",
     "path_traverses_to_many",
     "relation_attr",
     "relation_bool",
     "relation_kind",
+    "relation_link",
     "relation_name",
     "safe_truthy",
     "validate_lookup_expr",
@@ -730,6 +736,184 @@ def is_forward_concrete_relation(field: object) -> bool:
         )
     except BaseException:
         return False
+
+
+@dataclass(frozen=True)
+class RelationLink:
+    """A relation link's column pairs, as Django's ``ForeignObject`` declares them.
+
+    ``carriers`` are the columns on the model that STORES the key (the link's
+    ``local_related_fields``); ``targets`` are the columns they reference on the
+    other model (``foreign_related_fields``), index-for-index. Which model each
+    side lives on depends on the hop:
+
+    - a forward ``ForeignKey`` / ``OneToOneField`` / ``ForeignObject``: carriers
+      on the source row (``(<name>_id,)``, one per ``from_fields`` entry),
+      targets on the related model (its pk, a ``to_field``, the ``to_fields``);
+    - a reverse FK / reverse one-to-one / reverse ``ForeignObject``: the forward
+      link read from the other side, so carriers on the child and targets on the
+      source row;
+    - a ``GenericRelation``: the child's ``object_id`` carrying the source pk;
+    - an M2M hop in either direction: the through table's foreign key onto the
+      SOURCE model (``m2m_through_link_fields``), so carriers on the through row
+      and targets on the source row (the source pk, or a through FK's
+      ``to_field``).
+
+    Both tuples are empty for every shape that is not such a link (a
+    ``GenericForeignKey``, a non-relation, an M2M whose through table does not
+    resolve).
+    """
+
+    carriers: tuple[ConcreteField, ...] = ()
+    targets: tuple[ConcreteField, ...] = ()
+
+    @property
+    def carrier_attnames(self) -> tuple[str, ...]:
+        """The carrier columns' attnames, in link order."""
+        return tuple(field.attname for field in self.carriers)
+
+    @property
+    def target_attnames(self) -> tuple[str, ...]:
+        """The target columns' attnames, in link order."""
+        return tuple(field.attname for field in self.targets)
+
+
+def _link_field_tuple(value: object, *, lenient: bool) -> tuple[ConcreteField, ...] | None:
+    """Return ``value`` as a tuple of column fields, or ``None`` when it is not one."""
+    if not isinstance(value, (tuple, list)):
+        return None
+    fields = cast("tuple[object, ...]", tuple(value))
+    for field in fields:
+        if type(relation_attr(field, "attname", None, lenient=lenient)) is not str:
+            return None
+    return cast("tuple[ConcreteField, ...]", fields)
+
+
+def relation_link(field: object, *, lenient: bool = False) -> RelationLink:
+    """Return the column pairs of the link ``field`` is, or is the reverse of.
+
+    The one reader of "which columns join this relation". A forward
+    ``ForeignObject`` (``ForeignKey``, ``OneToOneField``, ``GenericRelation``
+    included) answers from its own ``local_related_fields`` /
+    ``foreign_related_fields``; an M2M hop (forward ``ManyToManyField`` or
+    reverse ``ManyToManyRel``) answers from its through table's foreign key onto
+    the source model; a reverse descriptor (``ManyToOneRel``, ``OneToOneRel``,
+    ``ForeignObjectRel``) answers from its forward ``.field``.
+    A relation's ``attname`` names its carrier column only for a ``ForeignKey``
+    (``<name>_id``): a plain ``ForeignObject`` has ``attname == name``,
+    ``column`` ``None``, and its columns exist only as these pairs, so a
+    consumer deriving a column from ``attname`` reads a name no table carries.
+
+    Shapes that carry no pairs, and malformed ones (unequal or empty sides, a
+    member without a string ``attname``), answer the empty ``RelationLink``.
+    ``lenient`` selects :func:`relation_attr`'s failure policy for a read that
+    raises: strict raises ``ConfigurationError``, lenient answers empty.
+    """
+    link = field
+    carriers = relation_attr(field, "local_related_fields", None, lenient=lenient)
+    if carriers is None and relation_bool(field, "many_to_many", lenient=lenient):
+        link, _target_side = m2m_through_link_fields(field, lenient=lenient)
+        if link is None:
+            return RelationLink()
+        carriers = relation_attr(link, "local_related_fields", None, lenient=lenient)
+    elif carriers is None:
+        link = relation_attr(field, "field", None, lenient=lenient)
+        if link is None:
+            return RelationLink()
+        carriers = relation_attr(link, "local_related_fields", None, lenient=lenient)
+    carrier_fields = _link_field_tuple(carriers, lenient=lenient)
+    target_fields = _link_field_tuple(
+        relation_attr(link, "foreign_related_fields", None, lenient=lenient),
+        lenient=lenient,
+    )
+    if not carrier_fields or target_fields is None or len(carrier_fields) != len(target_fields):
+        return RelationLink()
+    return RelationLink(carriers=carrier_fields, targets=target_fields)
+
+
+def is_multi_column_forward_link(field: object) -> bool:
+    """Return whether ``field`` is a forward relation joined on more than one column.
+
+    A forward ``ForeignObject`` with several ``from_fields`` / ``to_fields``
+    pairs: neither upstream maps one to a GraphQL field, and no single column
+    identifies its target, so ``DjangoType`` declaration refuses it. Its reverse
+    side reads the same link from the other end and stays exposable.
+    """
+    return relation_kind(field) == "forward_single" and len(relation_link(field).carriers) > 1
+
+
+def m2m_through_model(field: object, *, lenient: bool = False) -> type[models.Model] | None:
+    """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
+    through = relation_attr(field, "through", None, lenient=lenient)
+    if through is None:
+        through = relation_attr(
+            relation_attr(field, "remote_field", None, lenient=lenient),
+            "through",
+            None,
+            lenient=lenient,
+        )
+    # A relation's ``through`` slot holds the join-table model class.
+    return cast("type[models.Model] | None", through)
+
+
+def m2m_through_link_fields(
+    field: object,
+    *,
+    lenient: bool = False,
+) -> tuple[ForeignKeyField | None, ForeignKeyField | None]:
+    """The M2M through table's (source-side FK, target-side FK) for one M2M hop.
+
+    Resolved from the forward ``ManyToManyField``'s own naming
+    (``m2m_field_name`` / ``m2m_reverse_field_name``, which honor
+    ``through_fields``), which stays correct for self-referential M2Ms where
+    scanning through-model FKs by target would be ambiguous. ``field`` is either
+    the forward field (the source owns it) or the ``ManyToManyRel`` (the source
+    is the target; the sides swap). ``(None, None)`` when the through model or
+    the naming API is missing; a through model whose field lookup raises is a
+    ``ConfigurationError`` under the strict policy and ``(None, None)`` under
+    the lenient one.
+    """
+    forward_field = relation_attr(field, "field", None, lenient=lenient)
+    if not safe_truthy(forward_field):
+        forward_field = field
+    through = m2m_through_model(field, lenient=lenient)
+    source_name = relation_attr(forward_field, "m2m_field_name", None, lenient=lenient)
+    target_name = relation_attr(forward_field, "m2m_reverse_field_name", None, lenient=lenient)
+    if through is None or not callable(source_name) or not callable(target_name):
+        return None, None
+    try:
+        through_meta = through._meta
+        # ``m2m_field_name`` / ``m2m_reverse_field_name`` name the through table's
+        # two ``ForeignKey`` columns.
+        source_fk = cast("ForeignKeyField", through_meta.get_field(cast("str", source_name())))
+        target_fk = cast("ForeignKeyField", through_meta.get_field(cast("str", target_name())))
+    except BaseException as exc:
+        if lenient:
+            return None, None
+        raise ConfigurationError(
+            f"Could not resolve the M2M through-table foreign keys of {_safe_type_name(field)}.",
+        ) from exc
+    if forward_field is field:
+        return source_fk, target_fk
+    return target_fk, source_fk
+
+
+def is_single_column_foreign_key(field: object) -> TypeGuard[ForeignKeyField]:
+    """Return whether ``field`` is a forward FK / OneToOne whose value is one column.
+
+    ``isinstance(field, models.ForeignKey)`` is the forward-concrete test:
+    ``OneToOneField`` subclasses ``ForeignKey`` (MTI ``<parent>_ptr`` parent
+    links included), while reverse relations (``ForeignObjectRel``), M2M
+    (join-table-backed), ``GenericForeignKey`` (virtual, polymorphic),
+    ``GenericRelation`` (a ``ForeignObject`` but not a ``ForeignKey``), and plain
+    ``ForeignObject`` relations of any width are all excluded by construction.
+    The ``column`` check guards the single-column contract against a
+    ``ForeignKey`` shape whose value is not one concrete column. Every consumer
+    that joins, casts, or filters on ``.column`` / ``.attname`` /
+    ``.target_field`` as ONE column (the visibility cascade's ``__in`` edge, the
+    lateral and single-parent fetch link) gates on this predicate.
+    """
+    return isinstance(field, models.ForeignKey) and getattr(field, "column", None) is not None
 
 
 def instance_accessor(field: object) -> str:

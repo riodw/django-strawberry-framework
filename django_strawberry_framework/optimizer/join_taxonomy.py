@@ -30,7 +30,7 @@ fact the fetch strategies need:
 
 - ``windowable`` + ``partition_expr`` - the windowed-prefetch strategy's
   ``PARTITION BY`` input.
-- ``parent_join_column`` - the child-side column Django needs loaded to
+- ``parent_join_columns`` - the child-side columns Django needs loaded to
   attach prefetched rows to parents.
 - ``through_model`` + ``lateral_shape`` - the Postgres LATERAL strategy's
   join-SQL selector (``optimizer/lateral_fetch.py``: a ``DIRECT_FK`` shape
@@ -38,11 +38,19 @@ fact the fetch strategies need:
   M2M through table inside the lateral subquery; ``UNSUPPORTED`` never
   plans).
 
-The classifier takes the RAW Django relation field (or rel descriptor), not a
-``FieldMeta``: the forward-M2M reverse query name lives only on
-``field.remote_field``. Defensive ``getattr`` fallbacks keep the synthetic
-test-double shapes (``reverse_connector_attname`` / ``target_field_attname``)
-classifiable.
+A ``DIRECT_FK`` link's columns come from one reader,
+``utils/relations.py::relation_link``: a relation's ``attname`` is its carrier
+column only for a ``ForeignKey``, never for a plain ``ForeignObject``, so the
+partition, the attach columns and the correlated-fetch link field all derive
+from the link's carrier fields instead, and a forward relation's attach
+columns from the link's target fields (never Django's single-target
+``target_field``, which a multi-column ``ForeignObject`` does not have).
+
+The planner classifies the RAW Django relation field (or rel descriptor): the
+forward-M2M reverse query name lives only on ``field.remote_field``. A
+``FieldMeta`` classifies too (the projection writers hand one in), reading its
+precomputed ``link_carrier_attnames`` / ``link_target_attnames`` slots; it
+carries no link field, so its ``parent_link_field`` stays ``None``.
 """
 
 from __future__ import annotations
@@ -53,9 +61,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ..utils.relations import (
     RelationKind,
+    is_single_column_foreign_key,
+    m2m_through_link_fields,
+    m2m_through_model,
     relation_attr,
     relation_bool,
     relation_kind,
+    relation_link,
     safe_truthy,
 )
 
@@ -89,7 +101,7 @@ WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 
 # This module's never-raises contract is a stated MODE of the shared
 # relation readers rather than a parallel family beside them: one read body,
-# one truth test, two failure policies. The local names stay so the 22 call
+# one truth test, two failure policies. The local names stay so the call
 # sites below read as taxonomy code, and so the lenient policy is declared once
 # here instead of at each of them.
 def _safe_getattr(value: object, name: str, default: object = None) -> object:
@@ -119,9 +131,9 @@ class RelationJoinDescriptor:
 
     ``partition_expr`` is the parent-side partition the windowed strategy
     hands to ``PARTITION BY`` (``None`` when not ``windowable``);
-    ``parent_join_column`` is the child-side connector column the prefetch
-    attach reads (``None`` when no column resolves - the caller logs and
-    degrades); ``through_model`` is the M2M join table when
+    ``parent_join_columns`` are the child-side connector columns the prefetch
+    attach reads (one per link carrier; ``()`` when none resolves - the caller
+    logs and degrades); ``through_model`` is the M2M join table when
     ``lateral_shape`` is ``THROUGH_TABLE``.
 
     ``parent_link_field`` / ``through_child_field`` are the resolved LINK
@@ -129,10 +141,13 @@ class RelationJoinDescriptor:
     any future strategy or the polymorphic work reads the same resolved
     facts instead of re-walking ``remote_field`` / ``m2m_field_name``):
     for ``DIRECT_FK`` the child-side FK whose column carries the parent id
-    (``through_child_field`` is ``None``); for ``THROUGH_TABLE`` the through
-    table's parent-side FK and child-side FK respectively; ``None`` when the
-    shape is ``UNSUPPORTED`` or the field cannot resolve them (synthetic
-    doubles - the classifier never raises).
+    (``through_child_field`` is ``None``), set only when that link passes
+    ``utils/relations.py::is_single_column_foreign_key`` (a ``ForeignObject``
+    link of any width has no single ``column`` / ``db_type`` to join or cast on,
+    so the correlated strategies refuse it and the windowed body serves it); for
+    ``THROUGH_TABLE`` the through table's parent-side FK and child-side FK
+    respectively; ``None`` when the shape is ``UNSUPPORTED`` or the field cannot
+    resolve them (synthetic doubles - the classifier never raises).
 
     ``content_type_column`` is the child ``content_type_id`` attname a
     ``GenericRelation`` needs alongside the ``object_id`` connector: Django's
@@ -143,14 +158,14 @@ class RelationJoinDescriptor:
     it - the classifier never raises.
 
     ``prefetch_attach_columns`` is the derived attach-complete set projection
-    writers must ``.only()`` (connector, plus morph when present) so attach
-    never deferred-refetches either half of the key.
+    writers must ``.only()`` (every connector, plus morph when present) so
+    attach never deferred-refetches any part of the key.
     """
 
     kind: RelationKind
     windowable: bool
     partition_expr: str | None
-    parent_join_column: str | None
+    parent_join_columns: tuple[str, ...]
     through_model: type[models.Model] | None
     lateral_shape: LateralJoinShape
     parent_link_field: ForeignKeyField | None = None
@@ -161,27 +176,24 @@ class RelationJoinDescriptor:
     def prefetch_attach_columns(self) -> tuple[str, ...]:
         """Child columns Django's prefetch attach reads on each related row.
 
-        Always ``parent_join_column`` when resolved; for a ``GenericRelation``
-        also ``content_type_column`` - ``GenericRelatedObjectManager.
+        Every ``parent_join_columns`` entry (a multi-column ``ForeignObject``
+        attaches on all of its carriers); for a ``GenericRelation`` also
+        ``content_type_column`` - ``GenericRelatedObjectManager.
         get_prefetch_querysets`` builds ``rel_obj_attr`` as
         ``(object_id, content_type_id)``. Empty when neither resolves (callers
         log and degrade). Order matches the attach key, not the index-advisory
         equality prefix (morph-first there).
         """
-        columns: list[str] = []
-        if self.parent_join_column is not None:
-            columns.append(self.parent_join_column)
-        if self.content_type_column is not None:
-            columns.append(self.content_type_column)
-        return tuple(columns)
+        if self.content_type_column is None:
+            return self.parent_join_columns
+        return (*self.parent_join_columns, self.content_type_column)
 
 
 def _partition_expr(field: object) -> str | None:
-    """The parent-side partition expression Django's prefetch attach uses.
+    """The parent-side partition expression Django's M2M prefetch attach uses.
 
     ``remote_field.attname or remote_field.name`` - exactly what upstream's
-    ``_optimize_prefetch_queryset`` partitions by (spec-033 Decision 4):
-    child FK attname for reverse FK / reverse O2O (``"shelf_id"``), the
+    ``_optimize_prefetch_queryset`` partitions by (spec-033 Decision 4): the
     child's forward M2M field name for a reverse M2M (``"genres"``), and the
     target's reverse query name for a forward M2M (``"books"`` - NOT the
     accessor when ``related_name`` is absent).
@@ -197,88 +209,56 @@ def _partition_expr(field: object) -> str | None:
     )
 
 
-def _parent_join_column(field: object, kind: RelationKind) -> str | None:
-    """The child-side column Django needs loaded to attach rows to parents.
+def _precomputed_attnames(field: object, slot: str) -> tuple[str, ...]:
+    """A ``FieldMeta`` link slot stamped from ``relation_link``; ``()`` if absent or malformed."""
+    precomputed = _safe_getattr(field, slot)
+    if isinstance(precomputed, tuple) and all(
+        isinstance(attname, str) for attname in cast("tuple[object, ...]", precomputed)
+    ):
+        return cast("tuple[str, ...]", precomputed)
+    return ()
 
-    The relation-kind-specific connector: the child FK
-    attname for a reverse FK / reverse one-to-one, the target field's attname
-    for a forward single-valued relation, and the related model's pk attname
-    for an M2M (the join table owns the attach, so the child only needs its
-    pk). ``getattr`` fallbacks keep the synthetic test-double contract.
+
+def _carrier_attnames(field: object) -> tuple[str, ...]:
+    """The child columns carrying the parent key of a reverse FK / reverse O2O link.
+
+    A raw rel descriptor answers through ``utils/relations.py::relation_link``
+    (``("shelf_id",)`` for a reverse ``ForeignKey``, one entry per
+    ``from_fields`` member for a reverse ``ForeignObject``); a ``FieldMeta``
+    answers from its ``link_carrier_attnames`` slot, which its builder fills
+    from the same reader. ``()`` when neither resolves.
     """
-    # Every slot read below is a column ``attname``, which Django holds as a string.
-    if _safe_flag(field, "one_to_many") or kind == "reverse_one_to_one":
-        return cast(
-            "str | None",
-            _first_truthy(
-                _safe_getattr(_safe_getattr(field, "field"), "attname"),
-                _safe_getattr(field, "reverse_connector_attname"),
-            ),
-        )
-    if not _safe_flag(field, "many_to_many"):
-        return cast(
-            "str | None",
-            _first_truthy(
-                _safe_getattr(_safe_getattr(field, "target_field"), "attname"),
-                _safe_getattr(field, "target_field_attname"),
-            ),
-        )
+    carriers = relation_link(field, lenient=True).carrier_attnames
+    if carriers:
+        return carriers
+    return _precomputed_attnames(field, "link_carrier_attnames")
+
+
+def _forward_join_columns(field: object) -> tuple[str, ...]:
+    """The related-model columns a forward single-valued relation's link targets.
+
+    Django's prefetch attach for a forward relation keys each related row by
+    these columns (the target pk, a ``to_field``, every ``to_fields`` member of
+    a ``ForeignObject``), so a prefetched related queryset must load them all. A
+    raw field answers through ``utils/relations.py::relation_link``; a
+    ``FieldMeta`` from its ``link_target_attnames`` slot, which its builder fills
+    from the same reader. ``()`` when neither resolves.
+    """
+    targets = relation_link(field, lenient=True).target_attnames
+    if targets:
+        return targets
+    return _precomputed_attnames(field, "link_target_attnames")
+
+
+def _m2m_join_columns(field: object) -> tuple[str, ...]:
+    """The related model's pk attname: the join table owns an M2M attach."""
     related_model: Any = _safe_getattr(field, "related_model")
     if related_model is None:
-        return None
+        return ()
     try:
-        return cast("str", related_model._meta.pk.attname)
+        return (cast("str", related_model._meta.pk.attname),)
     except BaseException:
-        return None
-
-
-def _through_model(field: object) -> type[models.Model] | None:
-    """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
-    # A relation's ``through`` slot holds the join-table model class.
-    through = _safe_getattr(field, "through")
-    if through is not None:
-        return cast("type[models.Model]", through)
-    return cast(
-        "type[models.Model] | None",
-        _safe_getattr(_safe_getattr(field, "remote_field"), "through"),
-    )
-
-
-def _through_link_fields(
-    field: object,
-    through: type[models.Model] | None,
-) -> tuple[ForeignKeyField | None, ForeignKeyField | None]:
-    """The M2M through table's (parent-side FK, child-side FK) for ``field``.
-
-    Resolved from the forward ``ManyToManyField``'s own naming
-    (``m2m_field_name`` / ``m2m_reverse_field_name``), which stays correct
-    for self-referential M2Ms where scanning through-model FKs by target
-    would be ambiguous. ``field`` is either the forward field (parent owns
-    it) or the ``ManyToManyRel`` (parent is the target; the sides swap).
-    ``(None, None)`` when the through model or the naming API is missing
-    (synthetic doubles) - the classifier never raises.
-    """
-    # Either the relation's own forward field or ``field`` itself, read by the
-    # naming API below: a descriptor double rather than a typed field.
-    forward_field: Any = _safe_getattr(field, "field")
-    if not _safe_truthy(forward_field):
-        forward_field = field
-    if through is None or not callable(_safe_getattr(forward_field, "m2m_field_name")):
-        return None, None
-    try:
-        through_meta = through._meta
-        # ``m2m_field_name`` / ``m2m_reverse_field_name`` name the through table's
-        # two ``ForeignKey`` columns.
-        source_fk = cast("ForeignKeyField", through_meta.get_field(forward_field.m2m_field_name()))
-        target_fk = cast(
-            "ForeignKeyField",
-            through_meta.get_field(forward_field.m2m_reverse_field_name()),
-        )
-        if forward_field is field:
-            return source_fk, target_fk  # forward: parent side is the source FK.
-        return target_fk, source_fk  # reverse: parent side is the target FK.
-    except BaseException:
-        return None, None
+        return ()
 
 
 def _generic_child_attname(field: object, name_attr: str) -> str | None:
@@ -328,6 +308,8 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
     parent_link_field = None
     through_child_field = None
     content_type_column = None
+    through = None
+    partition: str | None = None
     if kind == "generic":
         # GenericRelation: partition by the child ``object_id`` COLUMN and
         # attach on the same column; the content type is an alias-late WHERE
@@ -340,32 +322,39 @@ def classify_relation_join(field: ModelField | FieldMeta) -> RelationJoinDescrip
         # ``LateralJoinShape.GENERIC`` arm exists (or is wanted).
         object_id_attname = _generic_child_attname(field, "object_id_field_name")
         partition = object_id_attname
-        parent_join_column = object_id_attname
+        parent_join_columns = (object_id_attname,) if object_id_attname is not None else ()
         content_type_column = _generic_child_attname(field, "content_type_field_name")
         lateral_shape = LateralJoinShape.DIRECT_FK
-        through = None
+    elif is_m2m:
+        partition = _partition_expr(field)
+        parent_join_columns = _m2m_join_columns(field)
+        lateral_shape = LateralJoinShape.THROUGH_TABLE
+        through = m2m_through_model(field, lenient=True)
+        parent_link_field, through_child_field = m2m_through_link_fields(field, lenient=True)
+    elif windowable:
+        # Reverse FK / reverse O2O: the child rows carry the parent key in the
+        # link's carrier columns. One carrier partitions the window; a
+        # multi-column ``ForeignObject`` has no single partition expression, so
+        # it stays unwindowable (spec-033 Decision 4: an underivable partition
+        # leaves the relation unplanned for per-parent resolution) while its
+        # list prefetch still attaches on every carrier.
+        parent_join_columns = _carrier_attnames(field)
+        if len(parent_join_columns) == 1:
+            partition = parent_join_columns[0]
+        lateral_shape = LateralJoinShape.DIRECT_FK
+        # The child-side link (a reverse rel descriptor's ``.field``), kept only
+        # when it is one column the correlated strategies can join and cast on.
+        link = _safe_getattr(field, "field")
+        if is_single_column_foreign_key(link):
+            parent_link_field = link
     else:
-        partition = _partition_expr(field) if windowable else None
-        parent_join_column = _parent_join_column(field, kind)
-        if is_m2m:
-            lateral_shape = LateralJoinShape.THROUGH_TABLE
-            through = _through_model(field)
-            parent_link_field, through_child_field = _through_link_fields(field, through)
-        elif windowable:
-            lateral_shape = LateralJoinShape.DIRECT_FK
-            through = None
-            # The child-side FK carrying the parent id (a reverse FK / O2O rel
-            # descriptor's ``.field`` is its forward ``ForeignKey``); ``None`` on a
-            # synthetic double without one.
-            parent_link_field = cast("ForeignKeyField | None", _safe_getattr(field, "field"))
-        else:
-            lateral_shape = LateralJoinShape.UNSUPPORTED
-            through = None
+        parent_join_columns = _forward_join_columns(field)
+        lateral_shape = LateralJoinShape.UNSUPPORTED
     return RelationJoinDescriptor(
         kind=kind,
         windowable=windowable and partition is not None,
         partition_expr=partition,
-        parent_join_column=parent_join_column,
+        parent_join_columns=parent_join_columns,
         through_model=through,
         lateral_shape=lateral_shape,
         parent_link_field=parent_link_field,

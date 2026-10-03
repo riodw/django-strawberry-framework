@@ -139,7 +139,7 @@ below was re-derived from HEAD-plus-working-tree, not read out of the spec.
 | G1 `_result_cache` early-return, after `normalize_query_source`, before `apply_to` | `optimizer/extension.py::DjangoOptimizerExtension._optimize #"getattr(result, \"_result_cache\", None) is not None"` | **holds** |
 | G2 gate derived once at the walker entry | `optimizer/walker.py::_enable_only_for_operation`, called from `optimizer/walker.py::plan_optimizations` | **holds** |
 | G2 writer 1 — scalar + Relay-pk appends | `optimizer/walker.py::_walk_selections #"if db_field is not None and enable_only"` and `#"if enable_only:"` | **holds** |
-| G2 writer 2 — FK connector columns | `optimizer/walker.py::_record_relation_access #"if enable_only and attname is not None"` | **holds** |
+| G2 writer 2 — FK connector columns | `optimizer/walker.py::_record_relation_access #"if enable_only:"` | **holds** |
 | G2 writer 3 — prefetch connector columns | `optimizer/walker.py::_ensure_connector_only_fields #"if not enable_only:"` | **holds** |
 | G2 writer 4 — scalar-only window `.only(...)` | **RELOCATED** → `optimizer/nested_planner.py::_project_scalar_only_window #"if not enable_only:"` | **holds, spec cite stale** |
 | Decision 5 elision loaded-check + loud fallback | `types/resolvers.py::_build_fk_id_stub`, `types/resolvers.py::_fk_attname_is_deferred`, `types/resolvers.py #"_FK_ELISION_UNSAFE"`, `types/resolvers.py::forward_resolver #"elision_unsafe = True"` | **holds, mechanism richer than the spec states** |

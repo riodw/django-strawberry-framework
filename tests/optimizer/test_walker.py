@@ -339,6 +339,8 @@ def test_plan_select_relation_with_missing_related_model_is_not_elided():
         is_relation=True,
         related_model=None,
         attname="relation_id",
+        local_related_fields=(SimpleNamespace(attname="relation_id"),),
+        foreign_related_fields=(SimpleNamespace(attname="id"),),
         many_to_many=False,
         one_to_many=False,
         auto_created=False,
@@ -362,6 +364,21 @@ def test_unregistered_field_map_rejects_malformed_descriptor():
 
     with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
         plan_optimizations([_sel("x")], FakeModel)
+
+
+def test_unregistered_field_map_stamps_a_multi_column_forward_foreign_object():
+    """The unregistered fallback map stamps every field, a two-column ``ForeignObject`` too.
+
+    ``_resolve_field_map`` builds ``FieldMeta`` over all of ``get_fields()`` for a
+    model no ``DjangoType`` registers; the multi-column forward link (refused
+    only at ``DjangoType`` declaration) stamps without raising, so planning the
+    model's scalars still succeeds.
+    """
+    from ._link_models import LnkPairChild
+
+    registry.clear()
+    plan = plan_optimizations([_sel("name")], LnkPairChild)
+    assert plan.only_fields == ("name",)
 
 
 def test_selected_scalar_names_returns_none_without_model():
@@ -2019,15 +2036,15 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
     assert any("could not resolve connector column" in r.message for r in caplog.records)
 
 
-def test_parent_join_column_is_the_reverse_fk_child_attname():
-    """The connector the writer above loads is the classifier's ``parent_join_column``.
+def test_parent_join_columns_are_the_reverse_fk_child_attname():
+    """The connector the writer above loads is the classifier's ``parent_join_columns``.
 
     ``classify_relation_join`` is the one source of the connector fact the
     prefetch-connector writer projects, so a reverse FK resolves to the
     child-side FK attname.
     """
     field = Category._meta.get_field("items")
-    assert classify_relation_join(field).parent_join_column == "category_id"
+    assert classify_relation_join(field).parent_join_columns == ("category_id",)
 
 
 def test_plan_prefetch_obj_hint_marks_plan_non_cacheable():
@@ -2769,7 +2786,7 @@ def test_plan_connection_relation_field_without_related_model_is_noop():
         _conn_sel("booksConnection", node_selections=[_sel("id")], arguments={"first": 2}),
         None,
         relation_field_name="modelless",
-        field_map={"modelless": SimpleNamespace(related_model=None)},
+        field_map={"modelless": FieldMeta(name="modelless", is_relation=True)},
         plan=plan,
         prefix="",
         info=_fake_info(),
@@ -2798,7 +2815,7 @@ def test_plan_connection_relation_non_windowable_partition_is_noop():
             _conn_sel("categoryConnection", node_selections=[_sel("id")], arguments={"first": 2}),
             None,
             relation_field_name="category",
-            field_map={"category": Item._meta.get_field("category")},
+            field_map={"category": FieldMeta.from_django_field(Item._meta.get_field("category"))},
             plan=plan,
             prefix="",
             info=_fake_info(),
@@ -5090,6 +5107,55 @@ def test_mutation_scalar_only_connection_window_no_only():
         from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
         assert WINDOW_ROW_NUMBER in prefetch.queryset.query.annotations
+    finally:
+        registry.clear()
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_only"),
+    [(OperationType.MUTATION, ()), (OperationType.QUERY, ("label", "slug"))],
+    ids=["mutation_gated", "query_projects"],
+)
+def test_connection_parent_link_columns_follow_the_projection_gate(operation, expected_only):
+    """The nested-connection planner's parent link-column append sits behind the gate.
+
+    A reverse ``to_field`` link needs the parent's ``slug`` loaded for its attach
+    and per-parent resolution; ``nested_planner.py::plan_connection_relation``
+    appends it only while the operation projects, so a mutation's parent plan
+    keeps no ``only_fields`` (spec-035 Decision 4 / Edge cases
+    #"every projection writer checks the gate").
+    """
+    from strategy_schemas import make_django_type
+
+    from django_strawberry_framework import finalize_django_types
+
+    from ._link_models import LnkParent, LnkSlugChild
+
+    registry.clear()
+    try:
+        make_django_type("LnkSlugChildType", LnkSlugChild, ("id", "name"))
+        parent_type = make_django_type(
+            "LnkParentType",
+            LnkParent,
+            ("id", "label", "slug_children"),
+            meta_extra={"relation_shapes": {"slug_children": "connection"}},
+        )
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _sel("label"),
+                _conn_sel(
+                    "slugChildrenConnection",
+                    node_selections=[_sel("name")],
+                    arguments={"first": 2},
+                ),
+            ],
+            LnkParent,
+            info=_op_info(operation),
+            source_type=parent_type,
+        )
+        assert tuple(plan.only_fields) == expected_only
+        assert plan.prefetch_related != ()
     finally:
         registry.clear()
 

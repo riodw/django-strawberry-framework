@@ -64,6 +64,7 @@ from ..utils.errors import (
     coded_error_extensions,
 )
 from ..utils.querysets import base_queryset, coerce_field_value_or_none
+from ..utils.relations import relation_kind, relation_link
 
 # The three framework strategies whose emitted GlobalID a filter input CAN
 # decode + validate (``model`` / ``type`` / ``type+model``). Derived from the
@@ -260,8 +261,9 @@ def _globalid_multiple_choice_values(value: object) -> list[object]:
 
 
 # Private instance-attribute slot a generated GlobalID RELATION filter carries a
-# BOOLEAN flag under, set ``True`` when, and only when, its forward FK/O2O binds
-# on a NON-pk ``to_field``. The raw-pk siblings (``RelationPkFilter`` /
+# BOOLEAN flag under, set ``True`` when, and only when, its forward relation's
+# link targets NON-pk columns (a ``to_field`` FK/O2O, a ``ForeignObject`` off the
+# pk). The raw-pk siblings (``RelationPkFilter`` /
 # ``RelationPkMultipleFilter``) carry the same flag, because their value is the
 # target's primary key too. ``filter_for_field`` stamps the flag via
 # ``_relation_uses_non_pk_to_field``; ``GlobalIDFilter.filter`` /
@@ -281,35 +283,39 @@ _GLOBALID_RELATION_PK_ATTR = "_dst_globalid_relation_pk"
 
 
 def _relation_uses_non_pk_to_field(model_field: object) -> bool:
-    """Return True iff ``model_field`` is a forward FK/O2O bound on a non-pk ``to_field``.
+    """Return True iff ``model_field`` is a forward relation whose link targets a non-pk column.
 
-    A ``ForeignKey``/``OneToOneField`` declared with ``to_field="<col>"`` stores
-    and joins on the target's ``<col>`` (via ``model_field.target_field``), which
-    is NOT the target's primary key. A Relay GlobalID always carries the target's
-    PK, so ``filter(<relation>=<node_id>)`` would compare the PK value against the
-    stored ``to_field`` column and return wrong rows; the GlobalID relation filter
-    must qualify with ``__pk`` in exactly this case.
+    A ``ForeignKey``/``OneToOneField`` declared with ``to_field="<col>"``, or a
+    ``ForeignObject`` whose ``to_fields`` are anything but the target's primary
+    key, stores and joins on those target columns, which are NOT the target's
+    primary key. A Relay GlobalID always carries the target's PK, so
+    ``filter(<relation>=<node_id>)`` would compare the PK value against the
+    stored link columns and return wrong rows; the GlobalID relation filter must
+    qualify with ``__pk`` in exactly this case.
 
-    False for everything else - non-relations, M2M, and reverse relations
-    (``concrete`` is False on M2M / reverse-rel objects, including the composite
-    ``ForeignObject`` shape), and ordinary FK-to-pk (``target_field`` IS the
-    related model's pk) - so every other GlobalID relation predicate keeps its
-    current shape unchanged.
-
-    A field that clears both guards is a concrete single-valued forward relation
-    (``ForeignKey`` / ``OneToOneField``), which always carries a ``related_model``
-    and a single ``target_field``; the composite ``ForeignObject`` (whose
-    ``target_field`` would raise) is non-concrete and rejected by the first guard.
+    The link's target columns come from ``utils/relations.py::relation_link``
+    (a ``ForeignObject``'s ``attname`` / ``column`` name no column, so the
+    target cannot be read off the relation itself). False for everything else -
+    non-relations, M2M and reverse relations (not ``"forward_single"``, or no
+    link pairs), a ``GenericForeignKey`` (no link pairs), and a link whose
+    targets are exactly the target's primary key (an ordinary FK-to-pk, a
+    ``ForeignObject`` over every ``CompositePrimaryKey`` member) - so every
+    other GlobalID relation predicate keeps its current shape unchanged.
     """
-    if not getattr(model_field, "concrete", False):
+    try:
+        if relation_kind(model_field) != "forward_single":
+            return False
+    except ConfigurationError:
         return False
-    if not (
-        getattr(model_field, "many_to_one", False) or getattr(model_field, "one_to_one", False)
-    ):
+    targets = relation_link(model_field, lenient=True).targets
+    if not targets:
         return False
-    related_model = getattr(model_field, "related_model", None)
-    target_pk = getattr(getattr(related_model, "_meta", None), "pk", None)
-    return getattr(model_field, "target_field", None) is not target_pk
+    target_pk_fields = getattr(
+        getattr(getattr(model_field, "related_model", None), "_meta", None),
+        "pk_fields",
+        None,
+    )
+    return list(targets) != list(target_pk_fields or ())
 
 
 def _marked_pk_field_name(filter_instance: Filter) -> str | None:
@@ -317,7 +323,7 @@ def _marked_pk_field_name(filter_instance: Filter) -> str | None:
 
     The single home for the ``_GLOBALID_RELATION_PK_ATTR`` read shared by
     ``GlobalIDFilter.filter`` and ``GlobalIDMultipleChoiceFilter.filter``: a marked
-    filter (a forward FK/O2O bound on a non-pk ``to_field``) compiles against
+    filter (a forward relation whose link targets non-pk columns) compiles against
     ``f"{self.field_name}__pk"`` DERIVED from the LIVE ``field_name`` at filter time
     (immune to ``_expand_related_filter`` rebasing, per ``_GLOBALID_RELATION_PK_ATTR``);
     every other target keeps the raw ``{field_name__lookup_expr: node_id}`` predicate

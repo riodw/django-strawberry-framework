@@ -549,6 +549,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_write_transaction.py # The mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
+│   ├── _link_models.py           # Test-local models whose relations join on links other than a pk ``ForeignKey``.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
@@ -560,6 +561,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 │   ├── test_predicates.py        # Executable ORM tests for the correlated-EXISTS predicate primitive.
+│   ├── test_relation_link_execution.py  # Optimizer execution over relations whose link is not a plain pk ``ForeignKey``.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection when the pk attname is not ``id``.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
 │   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
@@ -806,6 +808,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   └── test_write_transaction.py # The mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
+│   ├── _link_models.py           # Test-local models whose relations join on links other than a pk ``ForeignKey``.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
@@ -817,6 +820,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 │   ├── test_predicates.py        # Executable ORM tests for the correlated-EXISTS predicate primitive.
+│   ├── test_relation_link_execution.py  # Optimizer execution over relations whose link is not a plain pk ``ForeignKey``.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection when the pk attname is not ``id``.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
 │   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).

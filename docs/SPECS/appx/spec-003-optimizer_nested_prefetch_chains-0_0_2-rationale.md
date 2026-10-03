@@ -40,10 +40,13 @@ Spec: [Same-query recursion for single-valued paths][spec-003-samequery].
 
 Spec: [Prefetch-boundary recursion for many-side and downgraded paths][spec-003-prefetch].
 
-- **The parent-side FK-column append.** A forward FK or OneToOne reaching this branch (downgraded by
-  O6, or forced by `force_prefetch`) is matched by Django reading `<field>_id` off each parent; leaving
-  it out of the parent projection costs a deferred load per parent row. Reverse descriptors carry no
-  `attname`, so the guard appends nothing for them. The append is
+- **The parent-side link-column append.** A forward relation reaching this branch (downgraded by
+  O6, or forced by `force_prefetch`) is matched by Django reading its carrier columns off each parent
+  (`<field>_id`, a one-column `ForeignObject`'s `from_fields` column); a reverse, M2M or generic
+  relation whose link targets non-pk source columns (a `to_field`, a `ForeignObject`'s `to_fields`, a
+  through FK's `to_field`) is attached by Django reading those columns off each parent. Leaving either
+  out of the parent projection costs a deferred load per parent row. A link onto the source pk
+  appends nothing, since every projection loads the pk. The append is
   `django_strawberry_framework/optimizer/walker.py::_record_relation_access`, shared with the
   same-query branch.
 - **The `Prefetch` lookup segment is the instance accessor.** Django's `prefetch_related` resolves a
@@ -61,7 +64,11 @@ Spec: [Prefetch-boundary recursion for many-side and downgraded paths][spec-003-
   of completing must still leave the parent uncacheable, or a request-scoped visibility result is
   cached.
 - **The connector rules live in the join taxonomy.** The nested planner and the walker read one
-  source of truth for which column each cardinality needs.
+  source of truth for which columns each cardinality needs
+  (`django_strawberry_framework/optimizer/join_taxonomy.py::RelationJoinDescriptor`), and the
+  taxonomy reads a link's carrier and target columns from one reader
+  (`django_strawberry_framework/utils/relations.py::relation_link`), because a relation's `attname`
+  is a column only for a `ForeignKey`.
 
 ## Hints are leaf operations
 

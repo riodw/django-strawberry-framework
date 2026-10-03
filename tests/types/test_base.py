@@ -2861,3 +2861,51 @@ def test_meta_metaclass_raising_getattr_raises_configuration_error():
         class ProbeHostileMetaType(DjangoType):
             class Meta(metaclass=HostileMeta):
                 model = Category
+
+
+_MULTI_COLUMN_REFUSAL = (
+    r"LnkPairChild\.parent is a multi-column ForeignObject \(p_tenant, p_code\); a forward "
+    r"relation joined on more than one column cannot be exposed as a GraphQL field\. Leave it "
+    r"out of Meta\.fields \(or name it in Meta\.exclude\), or supply an explicit annotation or "
+    r"resolver\. Its reverse side stays exposable\."
+)
+
+
+@pytest.mark.parametrize(
+    "fields_spec",
+    [("id", "name", "parent"), "__all__"],
+    ids=["explicit_fields", "all_fields"],
+)
+def test_multi_column_forward_foreign_object_is_refused_at_declaration(fields_spec):
+    """A forward ``ForeignObject`` over two columns is a ``ConfigurationError`` naming the remedy.
+
+    Neither upstream maps one to a GraphQL field and no single column identifies
+    its target, so ``Meta.fields`` naming it - explicitly or through
+    ``"__all__"``, the same loud contract as a ``GenericForeignKey`` - refuses at
+    class creation instead of dropping it.
+    """
+    from tests.optimizer._link_models import LnkPairChild
+
+    with pytest.raises(ConfigurationError, match=_MULTI_COLUMN_REFUSAL):
+        type(
+            "LnkPairChildType",
+            (DjangoType,),
+            {"Meta": type("Meta", (), {"model": LnkPairChild, "fields": fields_spec})},
+        )
+
+
+def test_multi_column_forward_foreign_object_declares_when_excluded():
+    """Excluding the multi-column ``ForeignObject`` declares the rest of the model."""
+    from tests.optimizer._link_models import LnkPairChild
+
+    child_type = type(
+        "LnkPairChildType",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": LnkPairChild, "exclude": ("parent",)})},
+    )
+    assert set(child_type.__django_strawberry_definition__.field_map) == {
+        "id",
+        "p_tenant",
+        "p_code",
+        "name",
+    }

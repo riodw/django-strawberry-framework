@@ -845,15 +845,15 @@ def test_lenient_fallback_all_to_one_relation_terminal_returns_false():
 
 def test_path_traverses_to_many_is_cached():
     """Repeated checks reuse the bounded metadata cache."""
-    path_traverses_to_many.cache_clear()
+    relations_module._path_traverses_to_many_cache_clear()
     try:
         assert path_traverses_to_many(Branch, "shelves__code") is True
         assert path_traverses_to_many(Branch, "shelves__code") is True
-        info = path_traverses_to_many.cache_info()
+        info = relations_module._path_traverses_to_many_cached.cache_info()
         assert info.misses == 1
         assert info.hits == 1
     finally:
-        path_traverses_to_many.cache_clear()
+        relations_module._path_traverses_to_many_cache_clear()
 
 
 def test_classify_path_cached_wrapper_shares_bounded_cache():
@@ -1185,17 +1185,17 @@ def test_is_forward_concrete_relation_contains_every_metadata_read():
 
 
 def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
-    """``cache_clear`` invalidates the classifier cache beneath the answer cache.
+    """The probe's cache clear invalidates the classifier cache beneath the answer cache.
 
     The probe's answer is computed from ``_classify_path_cached``; a clear that
     emptied only the outer answer cache would serve the stale frozen
     classification after a metadata change under the same ``(model, path)``
-    key, even though the public handle had been called.
+    key, even though the clear had been called.
     """
     from django_strawberry_framework.utils.relations import _classify_path_cached
 
     _classify_path_cached.cache_clear()
-    path_traverses_to_many.cache_clear()
+    relations_module._path_traverses_to_many_cache_clear()
     try:
 
         class _MutableOpts:
@@ -1224,15 +1224,15 @@ def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
                 path_infos=(SimpleNamespace(m2m=True, to_opts=SimpleNamespace(model=Genre)),),
             ),
         }
-        path_traverses_to_many.cache_clear()
+        relations_module._path_traverses_to_many_cache_clear()
 
         assert path_traverses_to_many(fake_model, "flag") is True
-        # The handle reaches beneath the answer cache: the classifier cache is
+        # The clear reaches beneath the answer cache: the classifier cache is
         # empty too, so no warm key can serve a stale frozen classification.
         assert _classify_path_cached.cache_info().currsize == 0
     finally:
         _classify_path_cached.cache_clear()
-        path_traverses_to_many.cache_clear()
+        relations_module._path_traverses_to_many_cache_clear()
 
 
 @pytest.mark.parametrize(

@@ -633,19 +633,10 @@ def _path_traverses_to_many_cache_clear() -> None:
     The probe layers a bounded classifier cache beneath its own answer cache;
     a clear that emptied only the outer layer would leave a metadata change
     under a warm ``(model, field_path)`` key answering from the stale frozen
-    classification even after the public handle was called.
+    classification even after the clear was called.
     """
     _classify_path_cached.cache_clear()
     _path_traverses_to_many_cached.cache_clear()
-
-
-# basedpyright: an attribute assigned on a plain ``def`` is rejected.
-path_traverses_to_many.cache_clear = (  # pyright: ignore[reportFunctionMemberAccess]
-    _path_traverses_to_many_cache_clear
-)
-path_traverses_to_many.cache_info = (  # pyright: ignore[reportFunctionMemberAccess]
-    _path_traverses_to_many_cached.cache_info
-)
 
 
 @overload

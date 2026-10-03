@@ -264,11 +264,10 @@ def _literal_constructs(text: str, blines: list[bytes]) -> Iterator[Construct]:
             continue
         if count < 2:  # 0/1-item collections are never touched (incl. 1-tuples)
             continue
-        # basedpyright: typeshed's ``ast.expr`` types end positions ``int | None`` since a
-        # hand-built node may omit them; ``ast.parse`` sets both on every node it returns
-        end_lineno: int = node.end_lineno  # pyright: ignore[reportAssignmentType]
-        # basedpyright: same ``ast.expr`` end-position declaration as ``end_lineno`` above
-        end_col_offset: int = node.end_col_offset  # pyright: ignore[reportAssignmentType]
+        # A hand-built node may omit its end positions; ``ast.parse`` sets both on every node.
+        end_lineno = node.end_lineno
+        end_col_offset = node.end_col_offset
+        assert end_lineno is not None and end_col_offset is not None
         open_bytes = blines[node.lineno - 1]
         if (
             isinstance(node, ast.Tuple)

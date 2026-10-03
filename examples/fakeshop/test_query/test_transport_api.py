@@ -71,7 +71,7 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, ParamSpec, TypeVar, overload
 
 import pytest
 import strawberry
@@ -115,6 +115,9 @@ if TYPE_CHECKING:
 
 #: A view callback a probe decorator hands back unchanged.
 _ViewT = TypeVar("_ViewT", bound=Callable[..., object])
+#: An upload-handler hook's parameters and return, carried through ``_recorded``.
+_HookP = ParamSpec("_HookP")
+_HookR = TypeVar("_HookR")
 
 # ---------------------------------------------------------------------------
 # Operations. ``__typename`` is deliberately DB-free so a row whose subject is a
@@ -695,6 +698,16 @@ _MULTIPART_BOUNDARY = "BoUnDaRyFoRtHeWiReRoWs"
 _UPLOAD_EVENTS: list[str] = []
 
 
+def _recorded(event: str, hook: Callable[_HookP, _HookR]) -> Callable[_HookP, _HookR]:
+    """``hook`` with its exact signature, appending ``event`` to ``_UPLOAD_EVENTS`` first."""
+
+    def recorder(*args: _HookP.args, **kwargs: _HookP.kwargs) -> _HookR:
+        _UPLOAD_EVENTS.append(event)
+        return hook(*args, **kwargs)
+
+    return recorder
+
+
 class _RecordingUploadHandler(MemoryFileUploadHandler):
     """Django's own in-memory upload handler, with a call recorder in front of it.
 
@@ -710,29 +723,18 @@ class _RecordingUploadHandler(MemoryFileUploadHandler):
     direction honest: files really are streamed through the normal handler chain,
     and the row that proves it is asserting about the shipped path.
 
-    Every override takes ``*args, **kwargs`` deliberately - the hook signatures
-    carry Django's own ``META`` spelling, which is not a name this repo's lint
-    allows a parameter to have, and forwarding blind also keeps the recorder
-    correct if a supported Django adds a hook argument.
+    Each hook is Django's own method wrapped by ``_recorded``, so it keeps Django's
+    exact signature (including the ``META`` parameter name this repo's lint would
+    refuse in a hand-written override) and follows any hook argument a supported
+    Django adds.
     """
 
-    @override
-    def handle_raw_input(self, *args: object, **kwargs: object):
-        _UPLOAD_EVENTS.append("handle_raw_input")
-        # basedpyright: the hook args are forwarded blind by design (class docstring); the base hook is typed
-        return super().handle_raw_input(*args, **kwargs)  # pyright: ignore[reportArgumentType]
-
-    @override
-    def new_file(self, *args: object, **kwargs: object):
-        _UPLOAD_EVENTS.append("new_file")
-        # basedpyright: the hook args are forwarded blind by design (class docstring); the base hook is typed
-        return super().new_file(*args, **kwargs)  # pyright: ignore[reportArgumentType]
-
-    @override
-    def receive_data_chunk(self, *args: object, **kwargs: object):
-        _UPLOAD_EVENTS.append("receive_data_chunk")
-        # basedpyright: the hook args are forwarded blind by design (class docstring); the base hook is typed
-        return super().receive_data_chunk(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+    handle_raw_input = _recorded("handle_raw_input", MemoryFileUploadHandler.handle_raw_input)
+    new_file = _recorded("new_file", MemoryFileUploadHandler.new_file)
+    receive_data_chunk = _recorded(
+        "receive_data_chunk",
+        MemoryFileUploadHandler.receive_data_chunk,
+    )
 
 
 def _recording_upload_handlers():

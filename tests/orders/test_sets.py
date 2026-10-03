@@ -788,17 +788,18 @@ def test_path_traverses_to_many_detects_multiplying_relations():
 def test_path_traverses_to_many_is_cached():
     """Repeated to-many path checks reuse the metadata walk."""
     from django_strawberry_framework.orders.sets import _path_traverses_to_many
+    from django_strawberry_framework.utils import relations
 
-    _path_traverses_to_many.cache_clear()
+    relations._path_traverses_to_many_cache_clear()
     try:
         assert _path_traverses_to_many(Branch, "shelves__code") is True
         assert _path_traverses_to_many(Branch, "shelves__code") is True
 
-        cache_info = _path_traverses_to_many.cache_info()
+        cache_info = relations._path_traverses_to_many_cached.cache_info()
         assert cache_info.misses == 1
         assert cache_info.hits == 1
     finally:
-        _path_traverses_to_many.cache_clear()
+        relations._path_traverses_to_many_cache_clear()
 
 
 def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():

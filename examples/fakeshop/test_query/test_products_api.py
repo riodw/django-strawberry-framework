@@ -2699,24 +2699,20 @@ def test_products_items_connection_inverted_after_before_window_is_empty():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("argument", ["after", "before"])
-@override_settings(**_ERROR_POLICY_PASS_THROUGH)
-def test_products_items_connection_negative_cursor_preserves_pipeline_error(argument):
-    """A forged negative offset cursor cannot be approximated by a SQL window.
+@pytest.mark.parametrize("index", ["-1", "-2"])
+def test_products_items_connection_negative_cursor_is_a_cursor_error(argument, index):
+    """A correctly prefixed offset cursor naming a negative index is a cursor error.
 
-    Strawberry decodes these correctly prefixed cursors to a negative slice
-    boundary. Its per-parent Django ``QuerySet`` path rejects negative indexing;
-    pre-fix, the optimizer translated the boundary to an SQL row-number range and
-    silently served rows instead. Falling back preserves the field's own error.
-
-    "Preserves the field's own error" is the assertion, and Django raises it as a
-    plain ``ValueError`` - unexpected under the spec-048 classification, so the
-    error policy would substitute its stable production message and the row would
-    no longer be able to tell a preserved error from a swallowed one. ``DEBUG=True``
-    opens the policy's pass-through gate; this is a live request against the project
-    schema, whose construction this test does not own.
+    No connection mints a negative offset cursor, so
+    ``utils/connections.py::decode_offset_cursor`` rejects it before the nested
+    ``itemsConnection`` is window-planned or sliced per parent. ``after:-1`` would
+    otherwise decode to start 0 and serve page one, and ``after:-2`` / ``before:-2``
+    would reach Django's negative-index ``ValueError``. The message is the
+    package's own ``GraphQLError``, so it reaches the client under the default
+    (``DEBUG=False``) error policy with no pass-through.
     """
     seed_data(1)
-    variables: dict[str, object] = {argument: relay.to_base64("arrayconnection", "-2")}
+    variables: dict[str, object] = {argument: relay.to_base64("arrayconnection", index)}
     if argument == "after":
         variables["first"] = 2
     response = _post_graphql(
@@ -2725,7 +2721,9 @@ def test_products_items_connection_negative_cursor_preserves_pipeline_error(argu
     )
     payload = response.json()
     assert response.status_code == 200
-    assert payload["errors"][0]["message"] == "Negative indexing is not supported."
+    assert {error["message"] for error in payload["errors"]} == {
+        f"Argument '{argument}' contains a non-existing value.",
+    }
 
 
 # The products conversion (spec-033) deliberately adds NO Meta.connection opt-in on the four

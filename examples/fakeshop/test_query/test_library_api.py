@@ -5246,11 +5246,11 @@ _PAST_CAP_ROWS = 130
 
 #: ``before:`` cursor shapes that carry no ``first`` / ``last``, each paired with
 #: the 0-based index its page starts at: a ``before`` past the cap, an ``after`` +
-#: ``before`` interval wider than the cap, and the largest offset a cursor holds.
+#: ``before`` interval wider than the cap, and the largest index a cursor accepts.
 _CAP_BOUNDED_BEFORE_SHAPES = [
     pytest.param("before", 0, id="before-past-cap"),
     pytest.param("after-before", 6, id="after-before-wider-than-cap"),
-    pytest.param("before-maxsize", 0, id="before-maxsize"),
+    pytest.param("before-largest-index", 0, id="before-largest-index"),
 ]
 
 
@@ -5259,7 +5259,7 @@ def _cap_bounded_before_arguments(shape: str) -> str:
     return {
         "before": f'before: "{_array_cursor(120)}"',
         "after-before": f'after: "{_array_cursor(5)}", before: "{_array_cursor(125)}"',
-        "before-maxsize": f'before: "{_array_cursor(sys.maxsize)}"',
+        "before-largest-index": f'before: "{_array_cursor(sys.maxsize - 1)}"',
     }[shape]
 
 

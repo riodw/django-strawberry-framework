@@ -14,6 +14,7 @@ from apps.products.models import Category, Entry, Item
 from apps.products.services import seed_data
 from django.db.models import Prefetch
 from graphql import OperationType
+from strawberry.relay.utils import to_base64
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -3711,7 +3712,18 @@ def test_windowed_prefetch_queryset_carries_deterministic_order():
         registry.clear()
 
 
-def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(caplog):
+@pytest.mark.parametrize(
+    "after",
+    [
+        "not-a-valid-cursor",
+        # Decodes to start 0 in ``SliceMetadata``, a plannable first page,
+        # unless ``decode_offset_cursor`` rejects the negative index first.
+        to_base64("arrayconnection", "-1"),
+        to_base64("arrayconnection", "-2"),
+    ],
+    ids=["not-base64", "negative-one", "negative-two"],
+)
+def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(caplog, after):
     """A malformed ``after:`` cursor emits NO window but RECORDS the resolver key.
 
     Error-locality contract (spec-033 Decision 4 step f / Decision 8): the
@@ -3735,7 +3747,7 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(caplog
                 _conn_sel(
                     "booksConnection",
                     node_selections=[_sel("title")],
-                    arguments={"first": 3, "after": "not-a-valid-cursor"},
+                    arguments={"first": 3, "after": after},
                 ),
             ],
             genre_model,

@@ -27,6 +27,7 @@ from django_strawberry_framework.utils.connections import (
     assert_window_fetch_mode,
     assert_window_fetch_mode_for,
     connection_sidecar_inputs_from_kwargs,
+    decode_offset_cursor,
     derive_connection_window_bounds,
     has_connection_sidecar_input,
     has_connection_sidecar_kwargs,
@@ -216,49 +217,42 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
         )
 
 
-def test_negative_after_cursor_start_is_malformed_not_windowable():
-    """A forged negative offset stays a field-local pagination error."""
-    after_cursor = to_base64("arrayconnection", "-2")
-    slice_meta = SliceMetadata.from_arguments(
-        None,
-        after=after_cursor,
-        first=2,
-        max_results=_MAX,
-    )
-    assert slice_meta.start == -1
-    assert slice_meta.expected == 2
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        ("", None),
+        (strawberry.UNSET, None),
+        (to_base64("arrayconnection", "0"), 0),
+        (to_base64("arrayconnection", "17"), 17),
+    ],
+    ids=[
+        "none",
+        "empty",
+        "unset",
+        "zero",
+        "index",
+    ],
+)
+def test_decode_offset_cursor_returns_the_minted_index_or_none_when_absent(value, expected):
+    """An absent cursor is ``None`` by the engine's truthiness; a minted one is its index.
 
-    with pytest.raises(TypeError, match="Argument 'after' contains a non-existing value"):
-        derive_connection_window_bounds(
-            None,
-            before=None,
-            after=after_cursor,
-            first=2,
-            last=None,
-            max_results=_MAX,
-        )
+    The wire sees only rejections and served pages; the decoded value itself is
+    this return. Rejection of every non-minted shape is pinned live in
+    ``examples/fakeshop/test_query/test_connection_pagination_api.py``.
+    """
+    assert decode_offset_cursor(value, argument="after") == expected
 
 
-def test_negative_before_cursor_end_is_malformed_not_inverted():
-    """A forged negative end is malformed, not a strictness-visible fallback."""
-    before_cursor = to_base64("arrayconnection", "-2")
-    slice_meta = SliceMetadata.from_arguments(
-        None,
-        before=before_cursor,
-        max_results=_MAX,
-    )
-    assert slice_meta.start == 0
-    assert slice_meta.end == -2
+def test_decode_offset_cursor_rejects_a_foreign_prefix_itself():
+    """The decoder owns the prefix check rather than leaving it to ``SliceMetadata``.
 
-    with pytest.raises(TypeError, match="Argument 'before' contains a non-existing value"):
-        derive_connection_window_bounds(
-            None,
-            before=before_cursor,
-            after=None,
-            first=None,
-            last=None,
-            max_results=_MAX,
-        )
+    Strawberry's engine rejects a foreign prefix with the same message, so the
+    wire cannot tell which of the two refused it; this row pins that the
+    decoder never returns a position for a cursor ``relay.Edge`` did not mint.
+    """
+    with pytest.raises(TypeError, match="^Argument 'before' contains a non-existing value.$"):
+        decode_offset_cursor(to_base64("GenreType", "1"), argument="before")
 
 
 def test_non_inverted_after_before_stays_a_windowed_forward_offset():

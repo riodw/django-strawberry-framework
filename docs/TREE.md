@@ -293,7 +293,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
-    ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
+    ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
     ├── directives.py             # Construction-time containment for the consumer-supplied ``directives=`` forward.
@@ -427,7 +427,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
     ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
-    ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
+    ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by write-field and filter-input converters.
     ├── directives.py             # Construction-time containment for the consumer-supplied ``directives=`` forward.

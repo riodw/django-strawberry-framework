@@ -110,6 +110,7 @@ from .utils.connections import (
     UnwindowableConnection,
     assert_relay_pagination_bound,
     connection_sidecar_inputs_from_kwargs,
+    decode_offset_cursor,
     derive_connection_window_bounds,
     derive_keyset_window_bounds,
     has_connection_sidecar_input,
@@ -780,6 +781,11 @@ def _consume_fallback(
     Both slicers receive ``first`` / ``last`` through
     ``utils/connections.py::page_arguments``, so every page is bounded by the
     already-clamped ``max_results`` and ``last: 0`` is the ``first: 0`` page.
+    An offset page's ``after`` / ``before`` pass
+    ``utils/connections.py::decode_offset_cursor`` first, the validator the
+    window derivation runs, so whatever the source shape (``QuerySet``, list,
+    tuple, generator, sync or async) a negative or non-canonical cursor is the
+    same ``GraphQLError`` and never a slice position.
     ``super(DjangoConnection, cls)`` reaches ``ListConnection`` even for a
     generated ``<TypeName>Connection`` subclass (the spec-032 concrete-class
     pin): the package override already ran the guard and window probe.
@@ -803,6 +809,12 @@ def _consume_fallback(
             **slice_kwargs,
         )
     try:
+        # Validated here, synchronously and for every offset source, because
+        # ``ListConnection`` decodes the cursors with ``int()`` alone and an
+        # async-iterable source (a ``QuerySet`` from an async resolver) slices
+        # inside the coroutine it returns, outside this ``try``.
+        decode_offset_cursor(slice_kwargs["after"], argument="after")
+        decode_offset_cursor(slice_kwargs["before"], argument="before")
         conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
     except (
         ValueError,

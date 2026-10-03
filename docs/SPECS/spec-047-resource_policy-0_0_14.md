@@ -802,7 +802,11 @@ applies), and `last: 0` with no integer `first` is the `first: 0` page.
 `::derive_connection_window_bounds`, `::derive_keyset_window_bounds` and
 `connection.py::_consume_fallback` all call it, so the planned window and the per-parent page
 are the same bounded page on both forks, and the `_page_bound` charge (0 for `last: 0`) is
-what the field serves. Every other shape is unchanged.
+what the field serves. Nor does a negative cursor: `utils/connections.py::decode_offset_cursor`
+rejects a negative or non-canonical `after` / `before` index inside
+`::derive_connection_window_bounds` and `connection.py::_consume_fallback`, before anything
+slices, so `before` on a list source
+can never cut a wrapped Python slice wider than the cap. Every other shape is unchanged.
 
 This keeps the existing precedence intact (an explicit field `max_results` still beats the
 schema config, which still beats Strawberry's default) and adds the policy strictly on top.
@@ -1263,8 +1267,8 @@ check runs rather than about how long anything takes.
   `ItemType.entries` and `BookType.genres` / `GenreType.books` are explicit `"both"`
   opt-ins so the bounded raw-list surface stays covered, while `CategoryType.properties` is
   left on the new default so the connection-only shape is covered by the same schema.
-- **A `before` cursor with no `first` / `last`**, including a client-minted cursor at
-  `sys.maxsize`, serves the page `first: <cap>` serves on the planned window and on the
+- **A `before` cursor with no `first` / `last`**, including one at the largest accepted
+  index `sys.maxsize - 1`, serves the page `first: <cap>` serves on the planned window and on the
   per-parent fallback alike, never the whole `start..before` interval
   ([Decision 7](#decision-7--the-policy-is-a-ceiling-over-relay_max_results-never-a-replacement)).
 - **`last: 0`** serves the `first: 0` page on every connection, so it returns no edges and

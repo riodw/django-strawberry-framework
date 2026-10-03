@@ -1,6 +1,6 @@
-"""Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
+"""Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
 
-A cycle-safe home for two correctness contracts that the optimizer planner
+A cycle-safe home for three correctness contracts that the optimizer planner
 (``optimizer/walker.py``) and the Relay resolver (``connection.py``) must spell
 IDENTICALLY, or optimizer-on and optimizer-off behavior can split:
 
@@ -12,6 +12,11 @@ IDENTICALLY, or optimizer-on and optimizer-off behavior can split:
   reverse / limit rule, so the resolve-time window matches the plan-time window
   by construction (spec-033 Decision 4 / Decision 5, the cursor-parity
   invariant's resolve-time half).
+* The offset cursor decoder (``decode_offset_cursor``) - the one validator of
+  an ``after`` / ``before`` offset cursor's position, read by the window
+  derivation above and by the resolver's non-window slicing tail, so the
+  planned window and every ``ListConnection``-sliced source accept and reject
+  the same cursors.
 * The connection sidecar kwarg names and the presence predicates over them -
   the walker refuses to window-plan a sidecar-bearing nested connection, and
   the resolver refuses to consume a window when sidecar kwargs are present
@@ -40,7 +45,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 import strawberry
-from strawberry.relay.utils import SliceMetadata
+from strawberry import relay
+from strawberry.relay.utils import SliceMetadata, from_base64
 
 from ..exceptions import OptimizerError
 from ..resource_policy import effective_bound, policy_from_info
@@ -89,8 +95,8 @@ class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, no
     results or page flags. This includes offset-bearing backward windows
     (``after`` + ``last``) and inverted ``after`` + ``before`` intervals. Per
     spec-033 Decision 5 these valid shapes fall back per parent rather than being
-    approximated. Malformed negative cursor indices raise ``TypeError`` instead,
-    preserving the existing pagination-error locality path.
+    approximated. A malformed offset cursor (``decode_offset_cursor``) raises
+    ``TypeError`` instead, keeping the field-local pagination error.
 
     A control-flow sentinel, deliberately NOT a ``DjangoStrawberryFrameworkError``
     and NOT a ``ValueError`` / ``TypeError``: the walker catches the pagination
@@ -451,9 +457,9 @@ def window_range_plan(
       ``derive_connection_window_bounds`` and fall back per parent; silently
       treating a negative direct-call limit as unbounded would recreate the same
       wrong-row failure in both renderers.
-    - A negative offset likewise raises ``OptimizerError``. Derived offset-cursor
-      starts are classified as malformed pagination upstream, but direct request
-      objects must not turn one into an absolute SQL row-number floor.
+    - A negative offset likewise raises ``OptimizerError``. An offset cursor never
+      derives one (``decode_offset_cursor`` rejects a negative index upstream), but
+      direct request objects must not turn one into an absolute SQL row-number floor.
 
     ``next_page_probe`` (the count-free ``hasNextPage`` overfetch) is honored
     on the ``plain_first_page`` shape AND the bounded forward offset page
@@ -650,6 +656,58 @@ class ConnectionWindowBounds:
     reverse: bool
 
 
+#: Digits in ``sys.maxsize``, the exclusive upper bound of an offset cursor index:
+#: a longer payload is rejected before ``int()`` converts it.
+_OFFSET_CURSOR_MAX_DIGITS = len(str(sys.maxsize))
+
+
+def decode_offset_cursor(value: str | None, *, argument: str) -> int | None:
+    """Decode one ``after`` / ``before`` offset cursor into the row index it names.
+
+    The one validator of an offset cursor's position, read by both offset
+    entries: the window derivation (``derive_connection_window_bounds``, at plan
+    and resolve time) and the non-window slicing tail
+    (``connection.py::_consume_fallback``) every other offset source reaches.
+    Strawberry's ``SliceMetadata.from_arguments`` checks only the prefix and runs
+    the payload through ``int()``, so a correctly prefixed negative index would
+    reach Python slicing (which wraps), ``islice`` or Django's ``QuerySet``
+    slicing (each with its own error text) as a position.
+
+    Returns ``None`` when the cursor is absent by the engine's truthiness
+    (``None``, ``""``, or a falsy sentinel such as ``UNSET``): ``SliceMetadata``
+    reads ``if after:``, so an empty string sets no bound. Otherwise accepts only
+    the form the package and ``ListConnection`` mint: ``relay.Edge.CURSOR_PREFIX``,
+    a colon, and a canonical decimal (ASCII digits, no sign, no padding, no
+    leading zero) in ``0 <= index < sys.maxsize``. Both mints are non-negative by
+    construction (``ListConnection`` mints ``start + i``; the window mints the row
+    number minus one), so a negative or non-canonical payload is never a cursor
+    this API issued. The upper bound is the largest index a row can have: no
+    Python sequence is longer than ``sys.maxsize``, ``SliceMetadata`` reserves
+    ``sys.maxsize`` as its unbounded-end sentinel, and ``after`` adds one, so
+    ``sys.maxsize - 1`` is the last index whose start still fits a 64-bit SQL
+    ``OFFSET`` (an ordinary past-the-end page). The length is compared before
+    ``int()`` runs, so an arbitrarily long digit string is never converted. Any
+    other value raises ``TypeError`` with Strawberry's own foreign-prefix wording,
+    which the walker reads as malformed pagination and both resolve-time callers
+    surface as the field's ``GraphQLError``.
+    """
+    if not value:
+        return None
+    rejection = TypeError(f"Argument '{argument}' contains a non-existing value.")
+    try:
+        prefix, raw = from_base64(value)
+    except ValueError:
+        raise rejection from None
+    if prefix != relay.Edge.CURSOR_PREFIX or not (raw.isascii() and raw.isdigit()):
+        raise rejection
+    if len(raw) > _OFFSET_CURSOR_MAX_DIGITS:
+        raise rejection
+    position = int(raw)
+    if position >= sys.maxsize or str(position) != raw:
+        raise rejection
+    return position
+
+
 def derive_connection_window_bounds(
     info: EitherInfo | None,
     *,
@@ -698,15 +756,16 @@ def derive_connection_window_bounds(
     uncapped tail). Per spec-033 Decision 5 this falls back per-parent rather than
     approximating, so raise ``UnwindowableConnection`` to leave it unplanned.
 
-    Strawberry's metadata is a Python slice, so only a nonnegative,
-    non-inverted interval can be translated to positive SQL row numbers. An
-    inverted ``after`` + ``before`` interval has a negative ``expected`` and
-    means an empty Python slice, not an unbounded SQL tail, so it falls back per
-    parent under spec-033 Decision 5. A correctly prefixed but forged negative
-    cursor can produce a negative ``start`` or ``end``; classify that as malformed
-    pagination (``TypeError``), not a valid fallback, so strictness cannot mask
-    the field's own negative-index error.
+    Both cursors go through ``decode_offset_cursor`` before the engine sees them,
+    so a negative or non-canonical index raises ``TypeError`` (malformed
+    pagination) and ``start`` / ``end`` are never negative. Strawberry's metadata
+    is a Python slice, so only a non-inverted interval can be translated to SQL
+    row numbers. An inverted ``after`` + ``before`` interval has a negative
+    ``expected`` and means an empty Python slice, not an unbounded SQL tail, so it
+    falls back per parent under spec-033 Decision 5.
     """
+    decode_offset_cursor(after, argument="after")
+    decode_offset_cursor(before, argument="before")
     effective_max_results = resolve_relay_max_results(info, max_results)
     first, last = page_arguments(first, last, cap=effective_max_results)
     slice_meta = SliceMetadata.from_arguments(
@@ -728,10 +787,6 @@ def derive_connection_window_bounds(
     before_supplied = bool(before)
     after_supplied = bool(after)
     reverse = is_backward_shape(first, last) and not before_supplied
-    if slice_meta.start < 0:
-        raise TypeError("Argument 'after' contains a non-existing value.")
-    if slice_meta.end < 0:
-        raise TypeError("Argument 'before' contains a non-existing value.")
     if reverse and after_supplied:
         # Offset-bearing backward window: the reversed window's whole-partition
         # row numbering cannot honor the ``after`` offset (spec-033 Decision 5).

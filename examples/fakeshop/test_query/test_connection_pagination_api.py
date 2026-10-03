@@ -64,14 +64,32 @@ disposal read and the same ``super()`` pass-through control, which asserts the
 filtered page. The filter step runs before ordering, the optimizer plan and the
 Relay window, so an unsealed return would reach all three.
 
-The async mount serves whichever schema the test in flight published in the
-module's holder: the acceptance harness reloads every contributing app schema
+Offset cursor decoding is pinned last, under the default (``DEBUG=False``)
+error policy so each row reads the exact message a client gets. A correctly
+prefixed cursor naming a negative index, and every non-minted shape (bad
+base64, no colon, foreign prefix, sign, padding, leading zero, underscore,
+non-ASCII digit, a 5000-digit string, an index of ``sys.maxsize``), answers with
+``Argument '<after|before>' contains a non-existing value.`` on every source a
+connection slices: list and tuple consumer resolvers, sync and async, under a
+three-row ``max_page_size`` (where a wrapped negative slice would serve 39 of
+40 rows); a generator resolver; a ``QuerySet`` from an async resolver; and the
+shipped root ``allLibraryGenresConnection``. Index 0, a minted ``endCursor``,
+``after: ""`` (absent) and the largest accepted index ``sys.maxsize - 1`` (an
+ordinary past-the-end page on the root ``QuerySet`` and a list resolver) are the
+positive controls. The test-local resolvers
+are served over module-owned ``/graphql-cursor/`` and ``/graphql-cursor-async/``
+mounts with no error-policy pass-through.
+
+Each test-local mount serves whichever schema the test in flight published in
+its holder: the acceptance harness reloads every contributing app schema
 around each test, so the local field is built inside the request helper, after
 that reload, and the slot is cleared when the request ends.
 """
 
+import base64
 import importlib
 import inspect
+import sys
 from collections.abc import Callable, Coroutine
 from typing import TypeAlias
 
@@ -81,16 +99,18 @@ from apps.library import models as library_models
 from apps.library.filters_genre import GenreFilter
 from apps.library.orders_genre import GenreOrder
 from apps.products.services import seed_data
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches, path
 from graphql_client import JSONObject, assert_graphql_success, graphql_payload
+from strawberry import relay
 
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
-from django_strawberry_framework.views import AsyncDjangoGraphQLView
+from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 _ApplySyncOverride: TypeAlias = Callable[
     [
@@ -1406,3 +1426,375 @@ async def test_connection_async_healthy_filter_apply_async_override_still_filter
     assert "errors" not in payload, payload
     names = [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]]
     assert names == ["Bravo"]
+
+
+# =============================================================================
+# Offset cursor decoding. ``utils/connections.py::decode_offset_cursor`` is the
+# one validator of an ``after`` / ``before`` offset cursor; these rows drive it
+# through every source shape a connection slices, under the default
+# (``DEBUG=False``) error policy, so each rejection is asserted as the exact
+# wire message a client reads.
+# =============================================================================
+
+#: The rows each cursor-decoding page is cut from: enough that a wrapped
+#: negative slice is visibly wider than the ``max_page_size`` cap below.
+_CURSOR_ROW_COUNT = 40
+
+#: The schema the cursor mounts serve for the request in flight (the same
+#: per-test publication discipline as ``_ASYNC_CURRENT``).
+_CURSOR_CURRENT: dict[str, DjangoSchema | None] = {"schema": None}
+
+
+def _cursor(payload: str) -> str:
+    """An ``arrayconnection`` cursor carrying ``payload`` verbatim."""
+    return relay.to_base64("arrayconnection", payload)
+
+
+def _cursor_rows() -> list[library_models.Genre]:
+    return list(library_models.Genre.objects.order_by("pk"))
+
+
+def _list_genres(root, info):
+    return _cursor_rows()
+
+
+def _tuple_genres(root, info):
+    return tuple(_cursor_rows())
+
+
+def _generator_genres(root, info):
+    return (genre for genre in _cursor_rows())
+
+
+async def _async_list_genres(root, info):
+    return await sync_to_async(_cursor_rows)()
+
+
+async def _async_tuple_genres(root, info):
+    return tuple(await sync_to_async(_cursor_rows)())
+
+
+async def _async_queryset_genres(root, info):
+    return library_models.Genre.objects.all()
+
+
+def _cursor_schema() -> DjangoSchema:
+    """One consumer-resolver connection per source shape, capped at three rows a page.
+
+    Built per request after the harness reload (see ``_ASYNC_CURRENT``). The
+    ``max_page_size`` policy is the cap a wrapped negative slice would
+    otherwise widen a page past.
+    """
+    importlib.import_module("config.schema")
+    from apps.library.schema import GenreType
+
+    @strawberry.type
+    class Query:
+        list_genres = DjangoConnectionField(GenreType, resolver=_list_genres)
+        tuple_genres = DjangoConnectionField(GenreType, resolver=_tuple_genres)
+        generator_genres = DjangoConnectionField(GenreType, resolver=_generator_genres)
+        async_list_genres = DjangoConnectionField(GenreType, resolver=_async_list_genres)
+        async_tuple_genres = DjangoConnectionField(GenreType, resolver=_async_tuple_genres)
+        async_queryset_genres = DjangoConnectionField(GenreType, resolver=_async_queryset_genres)
+
+    return DjangoSchema(
+        query=Query,
+        config=strawberry_config(),
+        resource_policy={"max_page_size": 3},
+    )
+
+
+def _cursor_graphql_view(request):
+    schema = _CURSOR_CURRENT["schema"]
+    assert schema is not None
+    return DjangoGraphQLView.as_view(schema=schema)(request)
+
+
+async def _async_cursor_graphql_view(request):
+    schema = _CURSOR_CURRENT["schema"]
+    assert schema is not None
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
+# Appended here so the mounts sit beside the only rows that use them.
+urlpatterns += [
+    path("graphql-cursor/", _cursor_graphql_view),
+    path("graphql-cursor-async/", _async_cursor_graphql_view),
+]
+
+
+def _cursor_page_query(field: str) -> str:
+    return (
+        "query($after: String, $before: String, $first: Int, $last: Int) {"
+        f" {field}(after: $after, before: $before, first: $first, last: $last) {{"
+        " edges { cursor node { name } } } }"
+    )
+
+
+def _post_cursor_sync(field: str, variables: JSONObject) -> JSONObject:
+    _CURSOR_CURRENT["schema"] = _cursor_schema()
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            return graphql_payload(
+                _cursor_page_query(field),
+                variables=variables,
+                url="/graphql-cursor/",
+            )
+    finally:
+        _CURSOR_CURRENT["schema"] = None
+        clear_url_caches()
+
+
+async def _post_cursor_async(field: str, variables: JSONObject) -> JSONObject:
+    _CURSOR_CURRENT["schema"] = await sync_to_async(_cursor_schema)()
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            clear_url_caches()
+            result = await AsyncTestClient().query(
+                _cursor_page_query(field),
+                variables=variables,
+                assert_no_errors=False,
+                url="/graphql-cursor-async/",
+            )
+    finally:
+        _CURSOR_CURRENT["schema"] = None
+        clear_url_caches()
+    assert result.response.status_code == 200
+    return result.response.json()
+
+
+def _assert_cursor_rejected(payload: JSONObject, argument: str) -> None:
+    assert payload["data"] is None, payload
+    assert {error["message"] for error in payload["errors"]} == {
+        f"Argument '{argument}' contains a non-existing value.",
+    }, payload
+
+
+#: ``(id, argument the cursor rides on, variables)``. ``before:-2, first:3``
+#: would slice ``rows[0:-1]`` (39 of 40 rows past a three-row cap);
+#: ``after:-2`` decodes to start -1, which slices from the last row and mints
+#: an ``arrayconnection:-1`` cursor for it.
+_NEGATIVE_CURSOR_ROWS = [
+    ("before-first", "before", {"before": _cursor("-2"), "first": 3}),
+    ("after-no-page", "after", {"after": _cursor("-2")}),
+    ("after-last", "after", {"after": _cursor("-2"), "last": 2}),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field", ["listGenres", "tupleGenres"])
+@pytest.mark.parametrize(
+    ("argument", "variables"),
+    [row[1:] for row in _NEGATIVE_CURSOR_ROWS],
+    ids=[row[0] for row in _NEGATIVE_CURSOR_ROWS],
+)
+def test_negative_offset_cursor_on_a_sequence_resolver_is_a_cursor_error(
+    field,
+    argument,
+    variables,
+):
+    """A list or tuple consumer resolver never serves a negative cursor as a wrapped slice."""
+    library_models.Genre.objects.bulk_create(
+        [library_models.Genre(name=f"g{index:02d}") for index in range(_CURSOR_ROW_COUNT)],
+    )
+
+    _assert_cursor_rejected(_post_cursor_sync(field, variables), argument)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("field", ["asyncListGenres", "asyncTupleGenres"])
+@pytest.mark.parametrize(
+    ("argument", "variables"),
+    [row[1:] for row in _NEGATIVE_CURSOR_ROWS],
+    ids=[row[0] for row in _NEGATIVE_CURSOR_ROWS],
+)
+async def test_negative_offset_cursor_on_an_async_sequence_resolver_is_a_cursor_error(
+    field,
+    argument,
+    variables,
+):
+    """The async colour of the sequence-resolver rows, over ``/graphql-cursor-async/``."""
+    await library_models.Genre.objects.abulk_create(
+        [library_models.Genre(name=f"g{index:02d}") for index in range(_CURSOR_ROW_COUNT)],
+    )
+
+    _assert_cursor_rejected(await _post_cursor_async(field, variables), argument)
+
+
+@pytest.mark.django_db
+def test_negative_offset_cursor_on_a_generator_resolver_is_a_cursor_error():
+    """A generator source is rejected with the package message, not ``islice``'s text."""
+    library_models.Genre.objects.create(name="g00")
+
+    payload = _post_cursor_sync("generatorGenres", {"after": _cursor("-2"), "first": 2})
+
+    _assert_cursor_rejected(payload, "after")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("argument", ["after", "before"])
+async def test_negative_offset_cursor_on_an_async_queryset_resolver_is_a_cursor_error(argument):
+    """A ``QuerySet`` from an async resolver gets the same message as the sync path.
+
+    ``ListConnection`` slices an async-iterable source inside the coroutine it
+    returns, so the cursor is decoded before that coroutine exists; otherwise
+    Django's negative-index ``ValueError`` would surface as the policy's masked
+    message.
+    """
+    await library_models.Genre.objects.acreate(name="g00")
+
+    payload = await _post_cursor_async("asyncQuerysetGenres", {argument: _cursor("-2")})
+
+    _assert_cursor_rejected(payload, argument)
+
+
+_ROOT_GENRE_PAGE_QUERY = (
+    "query($after: String, $before: String, $first: Int, $last: Int) {"
+    " allLibraryGenresConnection(after: $after, before: $before, first: $first, last: $last) {"
+    " edges { cursor node { name } } totalCount"
+    " pageInfo { hasNextPage hasPreviousPage endCursor } } }"
+)
+
+
+@pytest.mark.django_db
+def test_after_minus_one_on_the_root_connection_is_a_cursor_error():
+    """``after:-1`` decodes to start 0; it is still a cursor no connection minted.
+
+    The shipped root ``allLibraryGenresConnection`` (default resolver, ``QuerySet``
+    source, ``totalCount`` variant) rejects it instead of serving page one.
+    """
+    library_models.Genre.objects.create(name="g00")
+
+    payload = graphql_payload(
+        _ROOT_GENRE_PAGE_QUERY,
+        variables={"after": _cursor("-1"), "first": 2},
+    )
+
+    _assert_cursor_rejected(payload, "after")
+
+
+#: ``(id, cursor)``: every shape that is not ``arrayconnection:<canonical index>``.
+_MALFORMED_CURSOR_ROWS = [
+    ("not-base64", "not-base64!"),
+    ("no-colon", base64.b64encode(b"arrayconnection").decode()),
+    ("foreign-prefix", relay.to_base64("GenreType", "1")),
+    ("letters", _cursor("abc")),
+    ("empty-index", _cursor("")),
+    ("plus-sign", _cursor("+1")),
+    ("negative-zero", _cursor("-0")),
+    ("leading-zero", _cursor("01")),
+    ("leading-space", _cursor(" 1")),
+    ("underscore", _cursor("1_0")),
+    ("non-ascii-digit", _cursor(chr(0x0661))),  # ARABIC-INDIC DIGIT ONE
+    ("five-thousand-digits", _cursor("9" * 5000)),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("argument", ["after", "before"])
+@pytest.mark.parametrize(
+    "cursor",
+    [row[1] for row in _MALFORMED_CURSOR_ROWS],
+    ids=[row[0] for row in _MALFORMED_CURSOR_ROWS],
+)
+def test_malformed_offset_cursor_is_a_cursor_error(argument, cursor):
+    """Only the minted form decodes; every other cursor is one message, no parser text."""
+    library_models.Genre.objects.create(name="g00")
+
+    payload = graphql_payload(_ROOT_GENRE_PAGE_QUERY, variables={argument: cursor})
+
+    _assert_cursor_rejected(payload, argument)
+
+
+def _root_genre_payload(variables: JSONObject) -> JSONObject:
+    return graphql_payload(_ROOT_GENRE_PAGE_QUERY, variables=variables)
+
+
+def _list_genre_payload(variables: JSONObject) -> JSONObject:
+    return _post_cursor_sync("listGenres", variables)
+
+
+#: The two source shapes the index bound is read on: a ``QuerySet`` (SQL
+#: ``OFFSET``) behind the shipped root connection and a list consumer resolver
+#: (Python slicing).
+_BOUND_SOURCES: dict[str, Callable[[JSONObject], JSONObject]] = {
+    "root-queryset": _root_genre_payload,
+    "list-resolver": _list_genre_payload,
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("argument", ["after", "before"])
+@pytest.mark.parametrize("source", list(_BOUND_SOURCES))
+def test_offset_cursor_index_sys_maxsize_is_a_cursor_error(source, argument):
+    """``sys.maxsize`` is past the largest index a row can have, so it is no cursor.
+
+    ``SliceMetadata`` reserves ``sys.maxsize`` as its unbounded-end sentinel and
+    ``after`` adds one, so on a ``QuerySet`` this index would ask SQLite for an
+    ``OFFSET`` past 64 bits.
+    """
+    library_models.Genre.objects.create(name="Alpha")
+
+    payload = _BOUND_SOURCES[source]({argument: _cursor(str(sys.maxsize)), "first": 2})
+
+    _assert_cursor_rejected(payload, argument)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("source", list(_BOUND_SOURCES))
+def test_offset_cursor_index_below_sys_maxsize_is_an_ordinary_cursor(source):
+    """The largest accepted index pages like any cursor past the last row.
+
+    ``after: sys.maxsize - 1`` is an empty past-the-end page and
+    ``before: sys.maxsize - 1`` bounds nothing, so it serves the first page.
+    """
+    for name in ("Alpha", "Bravo", "Charlie"):
+        library_models.Genre.objects.create(name=name)
+    largest = _cursor(str(sys.maxsize - 1))
+
+    past_end = _BOUND_SOURCES[source]({"after": largest, "first": 2})
+    before_end = _BOUND_SOURCES[source]({"before": largest, "first": 2})
+
+    assert "errors" not in past_end, past_end
+    assert "errors" not in before_end, before_end
+    (past_end_page,) = past_end["data"].values()
+    (before_end_page,) = before_end["data"].values()
+    assert past_end_page["edges"] == []
+    assert [edge["node"]["name"] for edge in before_end_page["edges"]] == ["Alpha", "Bravo"]
+
+
+def _root_genre_page(variables: JSONObject) -> JSONObject:
+    payload = _root_genre_payload(variables)
+    assert "errors" not in payload, payload
+    return payload["data"]["allLibraryGenresConnection"]
+
+
+@pytest.mark.django_db
+def test_minted_offset_cursors_still_page():
+    """The positive controls: index 0, a cursor the connection minted, and an empty cursor.
+
+    ``arrayconnection:0`` is canonical and pages past the first row; the
+    ``endCursor`` the first page mints opens the second page; ``after: ""`` is
+    absent (the engine's truthiness), so it serves page one.
+    """
+    for name in (
+        "Alpha",
+        "Bravo",
+        "Charlie",
+        "Delta",
+    ):
+        library_models.Genre.objects.create(name=name)
+
+    first_page = _root_genre_page({"first": 2})
+    after_zero = _root_genre_page({"after": _cursor("0"), "first": 2})
+    second_page = _root_genre_page({"after": first_page["pageInfo"]["endCursor"], "first": 2})
+    empty_after = _root_genre_page({"after": "", "first": 2})
+
+    names = [edge["node"]["name"] for edge in first_page["edges"]]
+    assert names == ["Alpha", "Bravo"]
+    assert [edge["node"]["name"] for edge in after_zero["edges"]] == ["Bravo", "Charlie"]
+    assert after_zero["pageInfo"]["hasPreviousPage"] is True
+    assert [edge["node"]["name"] for edge in second_page["edges"]] == ["Charlie", "Delta"]
+    assert second_page["edges"][0]["cursor"] == _cursor("2")
+    assert empty_after == first_page

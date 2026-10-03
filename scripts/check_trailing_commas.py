@@ -157,22 +157,12 @@ def line_length() -> int:
         text = pyproject.read_text(encoding="utf-8")
     except OSError as error:
         raise RuntimeError(f"cannot read {pyproject}: {error}") from error
+    import tomli
+
     try:
-        import tomllib  # Python 3.11+
-    except ModuleNotFoundError:
-        pass
-    else:
-        try:
-            return int(tomllib.loads(text)["tool"]["ruff"]["line-length"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise RuntimeError(f"[tool.ruff] line-length missing from {pyproject}") from error
-    # Scope the fallback to the [tool.ruff] table: a bare first-match regex would
-    # happily read some other tool's line-length out of an earlier section.
-    section = re.search(r"(?ms)^\[tool\.ruff\]\s*$(.*?)(?=^\[|\Z)", text)
-    match = re.search(r"(?m)^line-length\s*=\s*(\d+)", section.group(1) if section else "")
-    if match is None:
-        raise RuntimeError(f"[tool.ruff] line-length missing from {pyproject}")
-    return int(match.group(1))
+        return int(tomli.loads(text)["tool"]["ruff"]["line-length"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(f"[tool.ruff] line-length missing from {pyproject}") from error
 
 
 DEFAULT_THRESHOLD = 4

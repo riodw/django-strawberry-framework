@@ -65,14 +65,14 @@ repos:
         require_serial: true
 
       - id: basedpyright-floor
-        name: basedpyright at the Python floor (package, 3.10)
+        name: basedpyright at the Python floor (same scope, 3.10)
         entry: uv run basedpyright -p pyrightconfig.floor.json
         language: system
-        # `pyrightconfig.floor.json` extends `[tool.basedpyright]`, narrowed to the
-        # package at the `requires-python` floor: catches a 3.11+ stdlib or `typing`
-        # name the 3.11 pass reads as valid. Fires on package source, its own config,
-        # pyproject.toml or the lock.
-        files: ^(django_strawberry_framework/.*\.py|pyrightconfig\.floor\.json|pyproject\.toml|uv\.lock)$
+        # `pyrightconfig.floor.json` extends `[tool.basedpyright]`, scope included, at
+        # the `requires-python` floor: catches a 3.11+ stdlib or `typing` name the 3.11
+        # pass reads as valid. Fires on the same files as `basedpyright` plus its own
+        # config.
+        files: ^(django_strawberry_framework/.*\.py|scripts/.*\.py|examples/.*\.py|conftest\.py|line_count\.py|docs/dry/export_dry_review\.py|pyrightconfig\.floor\.json|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
 

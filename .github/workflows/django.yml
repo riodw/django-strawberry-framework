@@ -50,8 +50,8 @@ jobs:
         # run; it never imports the fakeshop settings.
         run: uv run basedpyright
       - name: Type check at the Python floor (basedpyright, 3.10)
-        # pyrightconfig.floor.json extends `[tool.basedpyright]` and re-checks only the
-        # package at the `requires-python` floor, so a 3.11+ stdlib or `typing` name
+        # pyrightconfig.floor.json extends `[tool.basedpyright]` and re-checks its whole
+        # scope at the `requires-python` floor, so a 3.11+ stdlib or `typing` name
         # fails here when it is written rather than when a floor-cell test reaches it.
         # The unneeded-suppression rule is off: a suppression the 3.11 pass needs may be
         # moot at 3.10, and that pass already gates it.

@@ -599,6 +599,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "tomli" },
     { name = "types-channels" },
     { name = "types-django-filter" },
 ]
@@ -634,6 +635,7 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "ruff", specifier = ">=0.15.0" },
+    { name = "tomli", specifier = ">=2.4.1" },
     { name = "types-channels", specifier = ">=4.3.0.20260518" },
     { name = "types-django-filter", specifier = ">=26.1.0.20260906" },
 ]

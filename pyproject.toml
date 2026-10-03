@@ -91,6 +91,9 @@ dev = [
     # rather than reviewed by eye (spec-049 Decision 6).
     "pyyaml>=6.0.2",
     "ruff>=0.15.0",
+    # ``scripts/`` read pyproject.toml with it: the scripts run on the 3.10 floor cell,
+    # where the stdlib ``tomllib`` does not exist yet.
+    "tomli>=2.4.1",
     # The package ships ``py.typed``, so its annotations are a public contract
     # that downstream type checkers consume. basedpyright (config in
     # ``[tool.basedpyright]``) checks them, with the Django and DRF stubs so
@@ -262,7 +265,7 @@ max-line-length = 110
 # ``pythonVersion`` is the lowest Python the installed stubs support (they import
 # ``typing.Self``); a lower one would read every ``Self`` return as ``Any``. The
 # package's own 3.10 floor is proven by the floor CI cell running the suite on 3.10, and
-# ``pyrightconfig.floor.json`` (which extends this table) re-checks the package at 3.10
+# ``pyrightconfig.floor.json`` (which extends this table) re-checks its scope at 3.10
 # so a 3.11+ stdlib or ``typing`` name fails when it is written. The one suppression is
 # ``# pyright: ignore[<rule>]``, always rule-scoped: ``# type: ignore`` is not read at
 # all, and a suppression the run does not need is itself an error.

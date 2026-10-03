@@ -1,8 +1,5 @@
 {
   "extends": "pyproject.toml",
-  "include": [
-    "django_strawberry_framework"
-  ],
   "pythonVersion": "3.10",
   "reportUnnecessaryTypeIgnoreComment": "none"
 }

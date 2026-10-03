@@ -318,7 +318,6 @@ def _bind(
 _BLOCK_NODES: tuple[type[ast.AST], ...] = (
     ast.If,
     ast.Try,
-    *((ast.TryStar,) if hasattr(ast, "TryStar") else ()),
     ast.ExceptHandler,
     ast.With,
     ast.AsyncWith,

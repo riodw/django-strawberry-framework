@@ -367,13 +367,13 @@ def build_environment(environment: Path) -> None:
 
 def checked_python_version() -> str:
     """Return ``[tool.basedpyright] pythonVersion``, the Python the package checkers read."""
-    import tomllib  # Python 3.11+: the gate runs on the lint interpreter, never the floor cell.
+    import tomli
 
     pyproject = REPO_ROOT / "pyproject.toml"
     try:
-        config = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        config = tomli.loads(pyproject.read_text(encoding="utf-8"))
         return str(config["tool"]["basedpyright"]["pythonVersion"])
-    except (OSError, KeyError, tomllib.TOMLDecodeError) as error:
+    except (OSError, KeyError, tomli.TOMLDecodeError) as error:
         raise MeasurementError(
             f"[tool.basedpyright] pythonVersion is unreadable from {pyproject}: {error!r}",
         ) from error

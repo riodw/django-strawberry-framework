@@ -67,7 +67,7 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_text, _safe_t
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
-from ..utils.relations import is_multi_column_forward_link, relation_link
+from ..utils.relations import is_single_column_foreign_key
 from ..utils.typing import is_async_callable
 from .converters import _field_output_type_for, convert_field_output
 from .definition import _GRAPHQL_NAME_RE, DjangoTypeDefinition
@@ -1848,9 +1848,15 @@ def _validate_relation_shape_targets(
                 "connection shape.",
             )
         if not field_map[name].is_many_side:
+            if field_map[name].relation_kind == "reverse_one_to_one":
+                shape = "reverse OneToOne"
+            elif is_single_column_foreign_key(selected_by_name[name]):
+                shape = "forward FK / OneToOne"
+            else:
+                shape = "forward ForeignObject"
             raise ConfigurationError(
                 f"{model.__name__}.Meta.relation_shapes names single-valued relation {_safe_arg_repr(name)} "
-                "(forward FK / OneToOne); there is nothing to paginate. Only many-side "
+                f"({shape}); there is nothing to paginate. Only many-side "
                 "relations (reverse FK, forward/reverse M2M) can take a connection shape.",
             )
         if name in consumer_authored_fields:
@@ -2058,14 +2064,6 @@ def _build_annotations(
                     "relation without a concrete related model. It cannot be auto-mapped to "
                     "a single GraphQL type. Exclude it via Meta.exclude, or supply an "
                     "explicit annotation or resolver.",
-                )
-            if is_multi_column_forward_link(field):
-                raise ConfigurationError(
-                    f"{source_model.__name__}.{field.name} is a multi-column ForeignObject "
-                    f"({', '.join(relation_link(field).carrier_attnames)}); a forward relation "
-                    "joined on more than one column cannot be exposed as a GraphQL field. "
-                    "Leave it out of Meta.fields (or name it in Meta.exclude), or supply an "
-                    "explicit annotation or resolver. Its reverse side stays exposable.",
                 )
             # Always defer auto-synthesized relation annotations: the
             # consumer_authored short-circuit above leaves consumer overrides

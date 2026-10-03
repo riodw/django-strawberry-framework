@@ -61,13 +61,13 @@ depends on:
   edge; a child row whose MTI parent the parent type hides is dropped
   (excluding parent links would leave a hidden parent reachable through its
   child type).
-- **Unsupported forward relations preflight.** A ``GenericForeignKey`` (or any
-  future composite / multi-column forward relation) can neither be composed as
-  a single-column subquery nor safely skipped, so a full walk (``fields=None``)
-  over a model carrying one fails before any visibility hook runs, and naming
-  one in ``fields=`` fails at validation. The GFK's *backing* ``content_type``
-  FK is an ordinary single-column edge and may be selected explicitly;
-  ``object_id`` is a scalar and never an edge. Reverse FK / reverse OneToOne,
+- **Unsupported forward relations preflight.** A ``GenericForeignKey`` (or a
+  forward ``ForeignObject`` that is not a ``ForeignKey``, of any width) can
+  neither be composed as a single-column subquery nor safely skipped, so a full
+  walk (``fields=None``) over a model carrying one fails before any visibility
+  hook runs, and naming one in ``fields=`` fails at validation. The GFK's
+  *backing* ``content_type`` FK is an ordinary single-column edge and may be
+  selected explicitly; ``object_id`` is a scalar and never an edge. Reverse FK / reverse OneToOne,
   M2M, and ``GenericRelation`` stay outside parent-row cascade semantics and
   are skipped.
 - **Nullable edges only get the ``__isnull`` disjunct.** ``| Q(<edge>__isnull
@@ -190,8 +190,8 @@ class _EdgePlan(NamedTuple):
     ``cascadable`` is the tuple of single-column concrete forward FK / OneToOne
     fields (MTI parent links included) the walk composes. ``unsupported`` is
     the tuple of forward-relation *names* the cascade can neither compose nor
-    safely skip (``GenericForeignKey``, composite / multi-column forward
-    relations): a full walk over a model carrying one fails closed before any
+    safely skip (``GenericForeignKey``, a forward ``ForeignObject`` that is not
+    a ``ForeignKey`` of any width): a full walk over a model carrying one fails closed before any
     hook runs, and ``fields=`` naming one fails at validation.
     """
 
@@ -221,8 +221,9 @@ def _is_unsupported_forward_edge(field: ModelField) -> bool:
 
     A forward relation that is not a single-column concrete FK / OneToOne --
     ``GenericForeignKey`` (polymorphic target, no single visibility policy to
-    compose) or a composite / multi-column ``ForeignObject`` -- cannot be
-    expressed as a one-column ``__in`` subquery, and silently *skipping* it
+    compose) or a ``ForeignObject`` that is not a ``ForeignKey``, one carrier
+    column or several (no column of its own) -- cannot be expressed as a
+    one-column ``__in`` subquery, and silently *skipping* it
     would let a row pointing at a hidden target survive the cascade. Reverse
     relations (``ForeignObjectRel``), M2M, and one-to-many virtual relations
     (``GenericRelation``) are outside parent-row cascade semantics entirely
@@ -271,7 +272,7 @@ def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) ->
     naming the field-name-iterable contract rather than escaping as a raw
     ``TypeError`` from ``set(...)``.
     Otherwise every supplied name must be a cascadable edge. A name matching an
-    *unsupported* forward relation (``GenericForeignKey`` / composite) raises
+    *unsupported* forward relation (``GenericForeignKey`` / ``ForeignObject``) raises
     the dedicated no-cascade-semantics error; other unknown or
     known-but-non-cascadable names raise ``ConfigurationError`` naming the
     offending entry, the model, and the cascadable set. A cascadable name whose
@@ -312,9 +313,9 @@ def _validate_fields(model: type[models.Model], fields: Iterable[str] | None) ->
         raise ConfigurationError(
             f"apply_cascade_permissions fields={sorted(unsupported)!r} on "
             f"{model.__name__} have no single-column cascade semantics: a "
-            f"GenericForeignKey or composite forward relation cannot be composed "
-            f"as a visibility subquery. Select its real backing FK (for a GFK, "
-            f"the content_type edge) or drop the entry.",
+            f"GenericForeignKey or a ForeignObject that is not a ForeignKey cannot "
+            f"be composed as a visibility subquery. Select a real backing FK edge "
+            f"where it has one (for a GFK, the content_type edge) or drop the entry.",
         )
     cascadable = frozenset(field.name for field in plan.cascadable)
     unknown = requested - cascadable
@@ -599,7 +600,7 @@ def apply_cascade_permissions(
             or a ``fields=``
             name that is unknown, non-cascadable, or an unsupported forward
             relation; a full walk over a model carrying an unsupported forward
-            relation (``GenericForeignKey`` / composite -- preflighted before
+            relation (``GenericForeignKey`` / ``ForeignObject`` -- preflighted before
             any hook runs); a cascade cycle (fail-closed, path-rich); a nested
             application or a hook return EXPLICITLY routed off the root DB
             alias (an unrouted hook return is repinned onto it -- the shared
@@ -639,8 +640,8 @@ def apply_cascade_permissions(
         raise ConfigurationError(
             f"apply_cascade_permissions cannot walk every edge of {model.__name__}: "
             f"forward relation(s) {sorted(plan.unsupported)!r} have no "
-            f"single-column cascade semantics (a GenericForeignKey or composite "
-            f"forward relation cannot be composed as a visibility subquery, and "
+            f"single-column cascade semantics (a GenericForeignKey or a ForeignObject "
+            f"that is not a ForeignKey cannot be composed as a visibility subquery, and "
             f"skipping one would leak rows pointing at hidden targets); pass "
             f"fields= naming the edges to walk explicitly.",
         )

@@ -41,6 +41,7 @@ from django_strawberry_framework.management.commands.inspect_django_type import 
     _sdl_type_name,
 )
 from django_strawberry_framework.registry import registry
+from tests.optimizer import _link_models
 
 
 @pytest.fixture(autouse=True)
@@ -446,6 +447,45 @@ def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
     assert "relation: forward FK" in category_row
     assert "RenamedCategoryType" not in text
     assert "PublishedState!" in _connection_row(text, "name")
+
+
+@pytest.mark.parametrize(
+    ("child_name", "label"),
+    [
+        ("LnkPairChild", "relation: forward ForeignObject"),
+        ("LnkColumnChild", "relation: forward ForeignObject"),
+        ("LnkSlugChild", "relation: forward FK"),
+    ],
+    ids=["two_column_fo", "one_column_fo", "to_field_fk"],
+)
+def test_inspect_labels_a_forward_foreign_object_by_its_link(child_name, label):
+    """A forward ``ForeignObject`` row reads ``forward ForeignObject``; a ``ForeignKey`` ``forward FK``.
+
+    Only a ``ForeignKey`` (any ``to_field``) stores the link in a column of its
+    own; a ``ForeignObject`` joins on its carrier columns, one or several.
+    """
+    type(
+        "LnkParentInspectType",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": _link_models.LnkParent, "fields": ("id", "label")})},
+    )
+    type(
+        "LnkChildInspectType",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": getattr(_link_models, child_name), "fields": ("id", "parent")},
+            ),
+        },
+    )
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "LnkChildInspectType", stdout=out)
+    parent_row = _connection_row(out.getvalue(), "parent")
+    assert "LnkParentInspectType!" in parent_row
+    assert parent_row.rstrip().endswith(label)
 
 
 def test_bare_name_meta_name_collision_with_python_name_is_ambiguous():

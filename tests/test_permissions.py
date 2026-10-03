@@ -97,10 +97,12 @@ from django_strawberry_framework.permissions import (
     _edge_plan,
     _is_cascadable_edge,
     _is_unsupported_forward_edge,
+    _validate_fields,
     aapply_cascade_permissions,
     apply_cascade_permissions,
 )
 from django_strawberry_framework.registry import registry
+from tests.optimizer import _link_models
 
 # ``info`` is threaded into each target hook but never read by the synthetic
 # hooks below (they narrow unconditionally), so a placeholder namespace suffices.
@@ -487,6 +489,27 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
     assert _is_unsupported_forward_edge(by_name["children"]) is False
     assert _is_cascadable_edge(by_name["profile"]) is False  # reverse O2O
     assert _is_unsupported_forward_edge(by_name["profile"]) is False
+
+
+@pytest.mark.parametrize(
+    "child_name",
+    ["LnkPairChild", "LnkColumnChild"],
+    ids=["two_column_fo", "one_column_fo"],
+)
+def test_forward_foreign_object_of_any_width_is_an_unsupported_edge(child_name):
+    """A forward ``ForeignObject`` is unsupported whether it joins on two columns or one.
+
+    Neither width is a ``ForeignKey``: the relation has no column of its own to
+    project as a one-column ``__in`` subquery, so the cascade classifies it
+    fail-closed rather than cascadable, and naming it in ``fields=`` raises.
+    """
+    model = getattr(_link_models, child_name)
+    plan = _edge_plan(model)
+    assert plan.cascadable == ()
+    assert plan.unsupported == ("parent",)
+    with pytest.raises(ConfigurationError) as excinfo:
+        _validate_fields(model, ["parent"])
+    assert "a ForeignObject that is not a ForeignKey" in str(excinfo.value)
 
 
 def test_gfk_default_walk_preflights_closed():

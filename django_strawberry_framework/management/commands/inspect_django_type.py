@@ -62,6 +62,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import _PACKAGE_SCALAR_MAP
 from django_strawberry_framework.types.base import DjangoType, _is_relay_shaped
 from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
+from django_strawberry_framework.utils.relations import is_single_column_foreign_key
 
 if typing.TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from strawberry.types.base import WithStrawberryObjectDefinition
@@ -76,7 +77,8 @@ _DEFAULT_NAME_CONVERTER = NameConverter()
 _ScalarNamer = Callable[[object], str]
 
 # Friendly converter-column labels for relation rows, mirroring the spec's
-# illustrative output (``M2M`` / ``forward FK`` / ``reverse FK``).
+# illustrative output (``M2M`` / ``forward FK`` / ``reverse FK``); a forward
+# ``ForeignObject`` that is not a ``ForeignKey`` reads ``forward ForeignObject``.
 # ``FieldMeta.relation_kind`` returns the internal cardinality token; this maps
 # it to the consumer-facing name. Unmapped kinds fall back to the raw token.
 _RELATION_KIND_LABELS: dict[str, str] = {
@@ -344,7 +346,12 @@ class Command(BaseCommand):
         annotation: object = definition.origin.__annotations__[field.name]
         graphql_type = _render_annotation(annotation, scalar_namer)
         kind = field_meta.relation_kind
-        converter = f"relation: {_RELATION_KIND_LABELS.get(kind, kind)}"
+        label = _RELATION_KIND_LABELS.get(kind, kind)
+        if kind == "forward_single" and not is_single_column_foreign_key(field):
+            # A forward ``ForeignObject`` that is not a ``ForeignKey`` joins on
+            # its link's carrier columns, not on a column of its own.
+            label = "forward ForeignObject"
+        converter = f"relation: {label}"
         nullable = "no (list)" if field_meta.is_many_side else _yes_no(field_meta.nullable)
         return graphql_type, nullable, converter
 

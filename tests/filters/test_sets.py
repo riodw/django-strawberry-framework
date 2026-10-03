@@ -87,6 +87,7 @@ from django_strawberry_framework.optimizer.predicates import correlated_inner_ro
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
+from tests.optimizer import _link_models
 
 
 def _favoring_profile(genre, postal_code):
@@ -933,8 +934,6 @@ def test_generated_forward_foreign_object_globalid_filter_matches_by_decoded_pk(
     """
     from django.db import connection
 
-    from tests.optimizer import _link_models
-
     child_model = getattr(_link_models, child_name)
 
     class LnkParentType(DjangoType):
@@ -959,6 +958,83 @@ def test_generated_forward_foreign_object_globalid_filter_matches_by_decoded_pk(
         node_id = strawberry.relay.to_base64("LnkParentType", str(parent.pk))
         result = leaf.filter(child_model.objects.all(), node_id)
         assert list(result.values_list("name", flat=True)) == ["a1", "a2", "a3"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("node", [True, False], ids=["relay_target", "plain_target"])
+@pytest.mark.parametrize(
+    ("label", "names"),
+    [("pb", ["b1"]), ("pa", ["a1", "a2", "a3"])],
+    ids=["second_tenant", "first_tenant"],
+)
+def test_all_fields_filterset_matches_a_two_column_forward_foreign_object_on_both_columns(
+    node,
+    label,
+    names,
+):
+    """A ``"__all__"`` FilterSet's generated ``parent`` leaf selects the encoded parent's children.
+
+    ``pa`` and ``pb`` share ``code="A"`` under different tenants, so the leaf
+    matches only when it compares the parent's pk (a GlobalID for a Relay
+    target, the raw pk otherwise) through both link columns: ``pb`` selects
+    ``b1`` alone and ``pa`` its three children, over the live connection.
+    """
+    from django.db import connection
+
+    from django_strawberry_framework import (
+        DjangoConnection,
+        DjangoConnectionField,
+        finalize_django_types,
+        strawberry_config,
+    )
+    from django_strawberry_framework.testing.relay import global_id_for
+
+    class PairFilter(FilterSet):
+        class Meta:
+            model = _link_models.LnkPairChild
+            fields = "__all__"
+
+    parent_meta: dict[str, object] = {"model": _link_models.LnkParent, "fields": ("id", "label")}
+    if node:
+        parent_meta["interfaces"] = (strawberry.relay.Node,)
+    parent_type = type("LnkParentType", (DjangoType,), {"Meta": type("Meta", (), parent_meta)})
+    child_meta = {
+        "model": _link_models.LnkPairChild,
+        "fields": "__all__",
+        "filterset_class": PairFilter,
+        "interfaces": (strawberry.relay.Node,),
+    }
+    child_type = type("LnkPairChildType", (DjangoType,), {"Meta": type("Meta", (), child_meta)})
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"pairs": DjangoConnection[child_type]},
+                "pairs": DjangoConnectionField(child_type),
+            },
+        ),
+    )
+    schema = strawberry.Schema(query=query_cls, config=strawberry_config())
+    scalar = "String" if node else "Int"
+    query = (
+        f"query ($parent: {scalar}!) {{ pairs(filter: {{ parent: {{ exact: $parent }} }}) "
+        "{ edges { node { name parent { label } } } } }"
+    )
+
+    with _link_models.link_fixture_tables(connection):
+        parent = _link_models.LnkParent.objects.get(label=label)
+        value = global_id_for(parent_type, parent.pk) if node else parent.pk
+        result = schema.execute_sync(
+            query,
+            variable_values={"parent": value},
+            context_value=HttpRequest(),
+        )
+    assert result.errors is None, result.errors
+    rows = [edge["node"] for edge in result.data["pairs"]["edges"]]
+    assert [row["name"] for row in rows] == names
+    assert {row["parent"]["label"] for row in rows} == {label}
 
 
 @pytest.mark.django_db

@@ -46,6 +46,7 @@ injective narrowed type name (``django_strawberry_framework/utils/inputs.py::pas
 from __future__ import annotations
 
 import itertools
+import re
 
 import pytest
 import strawberry
@@ -87,6 +88,7 @@ from django_strawberry_framework.mutations.inputs import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import Upload
+from tests.optimizer import _link_models
 
 
 @pytest.fixture(autouse=True)
@@ -1153,6 +1155,190 @@ def test_payload_slot_defaults_from_object_type():
     fields_plain = {f.python_name for f in payload_plain.__strawberry_definition__.fields}
     assert "result" in fields_plain
     assert "errors" in fields_plain
+
+
+# ---------------------------------------------------------------------------
+# editable_input_fields - a forward ForeignObject's value lives in its carriers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("child_name", "names"),
+    [
+        ("LnkPairChild", ["p_tenant", "p_code", "name"]),
+        ("LnkColumnChild", ["p_id", "name"]),
+        ("LnkSlugObjectChild", ["p_slug", "name"]),
+        ("LnkSlugChild", ["name", "parent"]),
+    ],
+    ids=[
+        "two_column_fo",
+        "one_column_fo",
+        "one_column_fo_non_pk",
+        "to_field_fk",
+    ],
+)
+def test_editable_fields_keep_foreign_object_carriers_not_the_relation(child_name, names):
+    """A forward ``ForeignObject`` is left out of the basis; its carrier columns stay in it.
+
+    The relation stores no column of its own (its value is the carriers), the
+    same reason a ``GenericForeignKey`` is never an input, so the generated
+    input writes the carriers as the scalars they are. A ``ForeignKey`` keeps
+    its ``<field>_id`` input whatever column it targets.
+    """
+    model = getattr(_link_models, child_name)
+    assert [field.name for field in editable_input_fields(model)] == names
+
+
+def _carrier_backed_link_message(
+    model: str,
+    key: str,
+    targets: str,
+    carriers: str,
+    remedy: str,
+) -> str:
+    return re.escape(
+        f"DjangoMutation for {model} declares `{key}` naming {model}.parent, a ForeignObject "
+        f"that targets LnkParent ({targets}) through the carrier column(s) ({carriers}). It "
+        f"has no column of its own and cannot be generated as a mutation input. {remedy}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("child_name", "targets", "carriers"),
+    [("LnkPairChild", "tenant, code", "p_tenant, p_code"), ("LnkColumnChild", "id", "p_id")],
+    ids=["two_column_fo", "one_column_fo"],
+)
+@pytest.mark.parametrize("key", ["fields", "exclude"])
+def test_editable_fields_reject_naming_a_foreign_object(
+    child_name,
+    targets,
+    carriers,
+    key,
+):
+    """Naming a forward ``ForeignObject`` in ``fields`` or ``exclude`` names its link columns.
+
+    It is never part of the basis, so naming it is the unknown-name rejection
+    every other non-basis field gets, worded with the relation's target and
+    carrier columns and the remedy for each key.
+    """
+    model = getattr(_link_models, child_name)
+    remedy = (
+        f"Name its carrier field(s) ({carriers}) in `fields` instead."
+        if key == "fields"
+        else "It is never part of the generated input; drop it from `exclude`."
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match=_carrier_backed_link_message(child_name, key, targets, carriers, remedy),
+    ):
+        editable_input_fields(model, **{key: iter(("name", "parent"))})
+
+
+@pytest.mark.parametrize(
+    (
+        "from_fields",
+        "to_fields",
+        "carriers",
+        "remedy",
+    ),
+    [
+        (
+            ["owner"],
+            ["id"],
+            "owner_id",
+            "Name its carrier field(s) (owner) in `fields` instead.",
+        ),
+        (
+            ["id"],
+            ["id"],
+            "id",
+            "Its carrier field(s) (id) are not mutation inputs, so a generated input cannot "
+            "set it; drop it from `fields`.",
+        ),
+        (
+            ["id", "p_code"],
+            ["tenant", "code"],
+            "id, p_code",
+            "Name its carrier field(s) (p_code) in `fields` instead. Its other carrier "
+            "field(s) (id) are not mutation inputs.",
+        ),
+    ],
+    ids=["foreign_key_carrier", "pk_carrier", "pk_and_column_carriers"],
+)
+def test_editable_fields_offer_only_carriers_that_are_inputs(
+    from_fields,
+    to_fields,
+    carriers,
+    remedy,
+):
+    """The ``fields`` remedy names carrier FIELDS the input carries, and only those.
+
+    ``Meta.fields`` takes field names, so a ``ForeignKey`` carrier is offered as
+    ``owner``, never its ``owner_id`` column; a primary-key carrier is never an
+    input, so it is reported as one instead of offered. Each offered name is
+    accepted by ``editable_input_fields``.
+    """
+    model = type(
+        "LnkCarrierProbe",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "owner": models.ForeignKey(
+                _link_models.LnkParent,
+                on_delete=models.CASCADE,
+                related_name="+",
+            ),
+            "p_code": models.TextField(),
+            "parent": models.ForeignObject(
+                _link_models.LnkParent,
+                on_delete=models.CASCADE,
+                from_fields=from_fields,
+                to_fields=to_fields,
+                related_name="+",
+            ),
+            "Meta": type("Meta", (), {"app_label": "products", "managed": False}),
+        },
+    )
+    targets = ", ".join(to_fields)
+    with pytest.raises(
+        ConfigurationError,
+        match=_carrier_backed_link_message("LnkCarrierProbe", "fields", targets, carriers, remedy),
+    ):
+        editable_input_fields(model, fields=("parent",))
+    offered = [name for name in ("owner", "p_code") if f"({name})" in remedy]
+    assert [field.name for field in editable_input_fields(model, fields=offered)] == offered
+
+
+def test_editable_fields_report_fields_and_exclude_together_before_a_foreign_object():
+    """``fields`` beside ``exclude`` is the mutual-exclusion error, whichever names the link."""
+    with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
+        editable_input_fields(_link_models.LnkPairChild, fields=("parent",), exclude=("name",))
+
+
+def test_generated_input_over_a_foreign_object_model_binds_its_carriers():
+    """The full-shape input over a ``ForeignObject`` child binds: carriers are scalar inputs.
+
+    The relation contributes no ``parent_id`` attr, so the bind-time reverse map
+    resolves every generated attr to a concrete column.
+    """
+    from django_strawberry_framework.utils.inputs import SCALAR
+
+    child_type = type(
+        "LnkPairChildType",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": _link_models.LnkPairChild, "fields": ("id", "name")})},
+    )
+    input_cls = build_mutation_input(
+        _link_models.LnkPairChild,
+        operation_kind=CREATE,
+        primary_type=child_type,
+    )
+    assert list(_field_map(input_cls)) == ["p_tenant", "p_code", "name"]
+    specs, _model_fields = mutation_input_field_specs(_link_models.LnkPairChild, input_cls)
+    assert {spec.input_attr: spec.kind for spec in specs} == dict.fromkeys(
+        ("p_tenant", "p_code", "name"),
+        SCALAR,
+    )
 
 
 # ---------------------------------------------------------------------------

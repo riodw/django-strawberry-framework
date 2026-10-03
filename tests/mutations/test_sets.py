@@ -30,6 +30,7 @@ registration refusal.
 
 from __future__ import annotations
 
+import re
 import sys
 
 import pytest
@@ -60,6 +61,7 @@ from django_strawberry_framework.mutations.sets import (
     iter_mutations,
 )
 from django_strawberry_framework.registry import registry
+from tests.optimizer import _link_models
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +204,30 @@ def test_meta_unknown_fields_raises_at_class_creation():
                 model = product_models.Item
                 operation = "create"
                 fields = ("not_a_real_field",)
+
+
+def test_meta_fields_naming_a_foreign_object_raises_at_class_creation():
+    """``Meta.fields`` naming a forward ``ForeignObject`` raises naming its link columns.
+
+    The relation has no column of its own to write; the class-creation walk
+    rejects it and points at the carriers, which the full-shape input already
+    writes as scalars.
+    """
+    with pytest.raises(
+        ConfigurationError,
+        match=re.escape(
+            "DjangoMutation for LnkPairChild declares `fields` naming LnkPairChild.parent, a "
+            "ForeignObject that targets LnkParent (tenant, code) through the carrier column(s) "
+            "(p_tenant, p_code). It has no column of its own and cannot be generated as a "
+            "mutation input. Name its carrier field(s) (p_tenant, p_code) in `fields` instead.",
+        ),
+    ):
+
+        class CreatePairChild(DjangoMutation):
+            class Meta:
+                model = _link_models.LnkPairChild
+                operation = "create"
+                fields = ("name", "parent")
 
 
 def test_meta_empty_fields_raises_at_class_creation():

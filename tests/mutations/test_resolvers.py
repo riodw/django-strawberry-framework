@@ -51,6 +51,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.write_transaction import managed_write_transaction
+from tests.optimizer import _link_models
 
 
 @pytest.fixture(autouse=True)
@@ -1712,3 +1713,107 @@ def test_delete_integrity_error_contained_in_envelope():
         assert len(errors) == 1
         assert errors[0].field == NON_FIELD_ERROR_KEY
         assert errors[0].codes == ["constraint"]
+
+
+# ---------------------------------------------------------------------------
+# A forward ``ForeignObject`` written through its carriers (no fakeshop model has one)
+# ---------------------------------------------------------------------------
+
+
+def _build_link_child_schema(child_model):
+    """Primaries over ``LnkParent`` and ``child_model`` + all-fields create / update mutations.
+
+    The child type exposes every field, its generated ``parent`` relation
+    included; the mutations name no ``Meta.fields``, so their inputs carry the
+    link's carrier columns as scalars and no relation input.
+    """
+    type(
+        "LnkParentT",
+        (DjangoType, relay.Node),
+        {"Meta": type("Meta", (), {"model": _link_models.LnkParent, "fields": ("id", "label")})},
+    )
+    child_type = type(
+        "LnkChildT",
+        (DjangoType, relay.Node),
+        {"Meta": type("Meta", (), {"model": child_model, "fields": "__all__"})},
+    )
+    create = type(
+        "CreateChild",
+        (DjangoMutation,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": child_model, "operation": "create", "permission_classes": [_AllowAll]},
+            ),
+        },
+    )
+    update = type(
+        "UpdateChild",
+        (DjangoMutation,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": child_model, "operation": "update", "permission_classes": [_AllowAll]},
+            ),
+        },
+    )
+
+    @strawberry.type
+    class Mutation:
+        create_child = DjangoMutationField(create)
+        update_child = DjangoMutationField(update)
+
+    finalize_django_types()
+    return _schema(Mutation), child_type
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("child_name", "carriers"),
+    [
+        ("LnkPairChild", lambda parent: {"pTenant": parent.tenant, "pCode": parent.code}),
+        ("LnkColumnChild", lambda parent: {"pId": parent.pk}),
+    ],
+    ids=["two_column_fo", "one_column_fo"],
+)
+def test_all_fields_mutation_writes_a_foreign_object_through_its_carriers(child_name, carriers):
+    """Create and update set the link by writing its carrier columns; ``parent`` reads it back.
+
+    ``pa`` and ``pb`` share ``code="A"``, so the two-column create lands on
+    ``pb`` only when both carriers are written; the update moves the row to
+    ``pc`` and the payload's generated ``parent`` follows it.
+    """
+    from django.db import connection
+
+    child_model = getattr(_link_models, child_name)
+    schema, child_type = _build_link_child_schema(child_model)
+    payload = "node { id name parent { label } } errors { field messages }"
+    create = f"mutation($d: {child_name}Input!) {{ createChild(data: $d) {{ {payload} }} }}"
+    update = (
+        f"mutation($id: ID!, $d: {child_name}PartialInput!) "
+        f"{{ updateChild(id: $id, data: $d) {{ {payload} }} }}"
+    )
+
+    with _link_models.link_fixture_tables(connection):
+        parents = {p.label: p for p in _link_models.LnkParent.objects.all()}
+        created = schema.execute_sync(
+            create,
+            variable_values={"d": {"name": "new", **carriers(parents["pb"])}},
+        )
+        assert created.errors is None, created.errors
+        node = created.data["createChild"]["node"]
+        assert created.data["createChild"]["errors"] == []
+        assert (node["name"], node["parent"]) == ("new", {"label": "pb"})
+        row = child_model.objects.get(name="new")
+        assert node["id"] == global_id_for(child_type, row.pk)
+
+        updated = schema.execute_sync(
+            update,
+            variable_values={"id": node["id"], "d": carriers(parents["pc"])},
+        )
+        assert updated.errors is None, updated.errors
+        assert updated.data["updateChild"]["errors"] == []
+        assert updated.data["updateChild"]["node"]["parent"] == {"label": "pc"}
+        assert child_model.objects.get(pk=row.pk).parent == parents["pc"]

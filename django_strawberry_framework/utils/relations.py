@@ -37,7 +37,6 @@ __all__ = [
     "is_forward_concrete_relation",
     "is_forward_many_to_many",
     "is_many_side_relation_kind",
-    "is_multi_column_forward_link",
     "is_single_column_foreign_key",
     "m2m_through_link_fields",
     "m2m_through_model",
@@ -829,17 +828,6 @@ def relation_link(field: object, *, lenient: bool = False) -> RelationLink:
     if not carrier_fields or target_fields is None or len(carrier_fields) != len(target_fields):
         return RelationLink()
     return RelationLink(carriers=carrier_fields, targets=target_fields)
-
-
-def is_multi_column_forward_link(field: object) -> bool:
-    """Return whether ``field`` is a forward relation joined on more than one column.
-
-    A forward ``ForeignObject`` with several ``from_fields`` / ``to_fields``
-    pairs: neither upstream maps one to a GraphQL field, and no single column
-    identifies its target, so ``DjangoType`` declaration refuses it. Its reverse
-    side reads the same link from the other end and stays exposable.
-    """
-    return relation_kind(field) == "forward_single" and len(relation_link(field).carriers) > 1
 
 
 def m2m_through_model(field: object, *, lenient: bool = False) -> type[models.Model] | None:

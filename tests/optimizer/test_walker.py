@@ -370,9 +370,8 @@ def test_unregistered_field_map_stamps_a_multi_column_forward_foreign_object():
     """The unregistered fallback map stamps every field, a two-column ``ForeignObject`` too.
 
     ``_resolve_field_map`` builds ``FieldMeta`` over all of ``get_fields()`` for a
-    model no ``DjangoType`` registers; the multi-column forward link (refused
-    only at ``DjangoType`` declaration) stamps without raising, so planning the
-    model's scalars still succeeds.
+    model no ``DjangoType`` registers; the multi-column forward link stamps
+    without raising, so planning the model's scalars still succeeds.
     """
     from ._link_models import LnkPairChild
 

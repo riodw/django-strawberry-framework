@@ -22,6 +22,7 @@ import strawberry
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from strategy_schemas import make_django_type
+from strawberry import relay
 
 from django_strawberry_framework import (
     DjangoConnection,
@@ -36,6 +37,7 @@ from django_strawberry_framework.registry import registry
 
 from ._link_models import (
     LnkColumnChild,
+    LnkOptionalPairChild,
     LnkPairChild,
     LnkParent,
     LnkSlugChild,
@@ -328,7 +330,6 @@ def test_m2m_through_to_field_link_loads_the_source_key(link_tables, row):
 def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
     """Expose the two-column forward ``ForeignObject`` through a consumer-authored field.
 
-    Declaration refuses the link as a generated field, so the consumer authors it:
     ``"annotation"`` annotates ``parent`` over a target whose ``get_queryset``
     forces a ``Prefetch``; ``"hint"`` assigns a resolver and opts back into
     planning with ``OptimizerHint.prefetch_related()``.
@@ -393,3 +394,213 @@ def test_consumer_authored_two_column_forward_link_prefetch_loads_every_target(l
         ("b1", "pb"),
     ]
     assert len(ctx.captured_queries) == 2
+
+
+def _generated_pair_schema(
+    *,
+    optimizer: bool,
+    parent_hook: bool,
+    child_model: type = LnkPairChild,
+) -> strawberry.Schema:
+    """Expose a two-column forward ``ForeignObject`` as the generated ``parent`` field.
+
+    The child type names ``parent`` in ``Meta.fields``; the parent type exposes
+    the reverse ``pair_children`` of ``LnkPairChild`` as a list and a
+    connection, so a selection can walk the link forward and back. ``parent_hook`` gives the
+    parent type an identity ``get_queryset``, which turns the forward hop into a
+    ``Prefetch``.
+    """
+    registry.clear()
+    _connection_type_cache.clear()
+    reverse = ("pair_children",) if child_model is LnkPairChild else ()
+    make_django_type(
+        "LnkParentType",
+        LnkParent,
+        ("id", "label", *reverse),
+        meta_extra={"relation_shapes": dict.fromkeys(reverse, "both")} if reverse else None,
+        namespace_extra=(
+            {"get_queryset": classmethod(_parent_visibility)} if parent_hook else None
+        ),
+    )
+    child_type = make_django_type(
+        f"{child_model.__name__}Type",
+        child_model,
+        ("id", "name", "parent"),
+    )
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {
+                    "pairs": list[child_type],
+                    "pairs_connection": DjangoConnection[child_type],
+                },
+                "pairs": DjangoListField(child_type),
+                "pairs_connection": DjangoConnectionField(child_type),
+            },
+        ),
+    )
+    extensions = []
+    if optimizer:
+        extension = DjangoOptimizerExtension()
+        extensions = [lambda: extension]
+    return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
+
+
+def _run_generated(
+    query: str,
+    *,
+    parent_hook: bool = False,
+    child_model: type = LnkPairChild,
+) -> tuple[dict, list[str]]:
+    """Execute ``query`` optimized over the generated link; return its data and SQL.
+
+    The optimizer-off wire is the oracle: the optimized data must equal it.
+    """
+    expected = _generated_pair_schema(
+        optimizer=False,
+        parent_hook=parent_hook,
+        child_model=child_model,
+    ).execute_sync(query)
+    assert expected.errors is None, expected.errors
+    schema = _generated_pair_schema(
+        optimizer=True,
+        parent_hook=parent_hook,
+        child_model=child_model,
+    )
+    with CaptureQueriesContext(connection) as ctx:
+        result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    assert result.data == expected.data
+    return result.data, [captured["sql"] for captured in ctx.captured_queries]
+
+
+def _pair_rows(data: dict) -> list[dict]:
+    """The child rows of a ``pairs`` list or a ``pairsConnection`` page."""
+    if "pairs" in data:
+        return data["pairs"]
+    return [edge["node"] for edge in data["pairsConnection"]["edges"]]
+
+
+_PAIR_PARENTS = [
+    ("a1", "pa"),
+    ("a2", "pa"),
+    ("a3", "pa"),
+    ("b1", "pb"),
+]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "query",
+    [
+        "{ pairs { name parent { label } } }",
+        "{ pairsConnection(first: 10) { edges { node { name parent { label } } } } }",
+    ],
+    ids=["list_root", "connection_root"],
+)
+@pytest.mark.parametrize(
+    ("parent_hook", "queries"),
+    [(False, 1), (True, 2)],
+    ids=["select_related", "prefetch"],
+)
+def test_generated_two_column_forward_link_resolves_every_parent(
+    link_tables,
+    query,
+    parent_hook,
+    queries,
+):
+    """The generated forward field over a two-column link joins on both columns.
+
+    ``pa`` and ``pb`` share ``code="A"`` under different tenants, so a link that
+    joined on one column would hand ``b1`` the wrong parent. Without a parent
+    ``get_queryset`` the hop is one ``select_related`` join; with one it is a
+    ``Prefetch`` matched on ``(tenant, code)``, one query more.
+    """
+    data, sql = _run_generated(query, parent_hook=parent_hook)
+    assert [(row["name"], row["parent"]["label"]) for row in _pair_rows(data)] == _PAIR_PARENTS
+    assert len(sql) == queries
+
+
+@pytest.mark.django_db(transaction=True)
+def test_generated_two_column_forward_link_id_selection_joins_the_parent(link_tables):
+    """An id-only selection over the link reads the parent row, never one carrier column.
+
+    FK-id elision answers an id-only hop from the source row's one link column;
+    a two-column link has no such column, so the hop stays a join and every
+    child gets its own parent's pk.
+    """
+    data, sql = _run_generated("{ pairs { name parent { id } } }")
+    parent_ids = dict(LnkParent.objects.values_list("label", "id"))
+    assert [
+        (row["name"], int(relay.from_base64(row["parent"]["id"])[1])) for row in data["pairs"]
+    ] == [(name, parent_ids[label]) for name, label in _PAIR_PARENTS]
+    assert len(sql) == 1
+    assert 'JOIN "products_lnkparent"' in sql[0]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("relation", "queries"),
+    [
+        ("pairChildren { name }", 2),
+        ("pairChildrenConnection(first: 2) { edges { node { name } } }", 1 + 4),
+    ],
+    ids=["reverse_list", "reverse_connection"],
+)
+def test_generated_two_column_forward_link_round_trips_through_the_reverse_side(
+    link_tables,
+    relation,
+    queries,
+):
+    """Forward over the link and back through its reverse side returns each parent's children.
+
+    The reverse list prefetches on both carriers (one query after the join);
+    the reverse connection has no single partition column and pages per
+    parent row.
+    """
+    data, sql = _run_generated(f"{{ pairs {{ name parent {{ label {relation} }} }} }}")
+    siblings = {"pa": ["a1", "a2", "a3"], "pb": ["b1"]}
+    for row in data["pairs"]:
+        related = next(value for key, value in row["parent"].items() if key != "label")
+        nodes = related if isinstance(related, list) else [e["node"] for e in related["edges"]]
+        expected = siblings[row["parent"]["label"]]
+        if not isinstance(related, list):
+            expected = expected[:2]
+        assert [node["name"] for node in nodes] == expected
+    assert len(sql) == queries
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("parent_hook", "queries"),
+    [(False, 1), (True, 2)],
+    ids=["select_related", "prefetch"],
+)
+def test_generated_nullable_two_column_forward_link_resolves_absent_parents_to_null(
+    link_tables,
+    parent_hook,
+    queries,
+):
+    """A ``null=True`` link over nullable carriers is null wherever no parent matches.
+
+    Both carriers ``NULL``, one carrier ``NULL`` and carriers matching no parent
+    all resolve ``null`` and keep their row: the join is an outer join, and the
+    prefetch leaves the unmatched rows without a parent.
+    """
+    data, sql = _run_generated(
+        "{ pairs { name parent { label } } }",
+        parent_hook=parent_hook,
+        child_model=LnkOptionalPairChild,
+    )
+    assert [(row["name"], row["parent"] and row["parent"]["label"]) for row in data["pairs"]] == [
+        ("o1", "pa"),
+        ("o2", None),
+        ("o3", None),
+        ("o4", None),
+    ]
+    assert len(sql) == queries
+    if not parent_hook:
+        assert 'LEFT OUTER JOIN "products_lnkparent"' in sql[0]

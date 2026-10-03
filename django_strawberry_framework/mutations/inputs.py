@@ -61,11 +61,19 @@ from ..utils.inputs import (
     iter_input_field_collisions,
     make_input_namespace,
     name_set_input_type_name,
+    normalize_field_name_sequence,
     optional_input_field,
     pascalize_token,
     resolve_effective_fields,
 )
-from ..utils.relations import is_forward_concrete_relation, is_forward_many_to_many
+from ..utils.relations import (
+    RelationLink,
+    is_forward_concrete_relation,
+    is_forward_many_to_many,
+    is_single_column_foreign_key,
+    relation_kind,
+    relation_link,
+)
 from ..utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -285,8 +293,15 @@ def editable_input_fields(
     ``editable=True``, so the ``primary_key`` flag - not ``editable`` - is what
     drops it; a write never sets the pk, FK targets come via ``<field>_id``),
     every ``editable=False`` column (the ``auto_now`` / ``auto_now_add``
-    timestamps and any consumer ``editable=False`` column), and reverse
-    relations (no ``column`` attribute and not ``many_to_many``).
+    timestamps and any consumer ``editable=False`` column), reverse
+    relations (no ``column`` attribute and not ``many_to_many``), and a forward
+    ``ForeignObject`` that is not a ``ForeignKey`` (one carrier column or
+    several): its value lives in its carrier fields, so the relation has no
+    column of its own to write. Each carrier is an input exactly when this
+    basis keeps it on its own terms (a carrier that is the primary key or
+    ``editable=False`` is not). Naming the relation in ``fields`` or ``exclude``
+    raises a ``ConfigurationError`` naming its carrier and target columns and,
+    under ``fields``, the carrier fields that are inputs.
 
     Then narrowed by the mutation's own ``fields`` / ``exclude`` through the
     shared ``utils/inputs.py::resolve_effective_fields`` spine (at most one may
@@ -303,7 +318,12 @@ def editable_input_fields(
     malformed declaration reaching it would iterate as characters or collapse silently.
     """
     selected: list[ConcreteField] = []
+    carrier_links: dict[str, RelationLink] = {}
     for field in model._meta.get_fields():
+        link = _carrier_backed_link(field)
+        if link is not None:
+            carrier_links[field.name] = link
+            continue
         if getattr(field, "many_to_many", False):
             # Forward M2M only: a forward ``ManyToManyField`` is concrete and
             # writable; an auto-created reverse M2M accessor is not.
@@ -324,6 +344,20 @@ def editable_input_fields(
             selected.append(cast("ConcreteField", field))
 
     by_name = {field.name: field for field in selected}
+    fields = normalize_field_name_sequence(fields, label="fields", flavor="DjangoMutation")
+    exclude = normalize_field_name_sequence(exclude, label="exclude", flavor="DjangoMutation")
+    if fields is None or exclude is None:
+        for key, names in (("fields", fields), ("exclude", exclude)):
+            for name in names or ():
+                if name in carrier_links:
+                    raise _carrier_backed_link_error(
+                        model,
+                        name,
+                        carrier_links[name],
+                        key,
+                        input_names=by_name.keys(),
+                    )
+
     # No ``empty_message``: the model flavor's empty-input rejection is
     # override-aware (a consumer ``input_class`` may supply the fields), so it
     # stays downstream at the build site where the overrides are known.
@@ -336,6 +370,67 @@ def editable_input_fields(
         unknown_noun="non-editable or unknown field(s)",
     )
     return list(effective.values())
+
+
+def _carrier_backed_link(field: object) -> RelationLink | None:
+    """Return the link of a forward relation whose value lives in separate carrier columns.
+
+    A forward ``ForeignObject`` that is not a ``ForeignKey`` stores nothing in a
+    column of its own (``column`` is ``None``): its link is the pairs of
+    carrier columns on this model and target columns on the related model that
+    ``utils/relations.py::relation_link`` reads. ``None`` for every other field,
+    a ``ForeignKey`` / ``OneToOneField`` (one column of its own) and a
+    ``GenericForeignKey`` (no link pairs) included.
+    """
+    if not getattr(field, "is_relation", False) or is_single_column_foreign_key(field):
+        return None
+    if relation_kind(field) != "forward_single":
+        return None
+    link = relation_link(field)
+    return link if link.carriers else None
+
+
+def _carrier_backed_link_error(
+    model: type[models.Model],
+    name: str,
+    link: RelationLink,
+    key: str,
+    *,
+    input_names: Collection[str],
+) -> ConfigurationError:
+    """Build the error for ``Meta.<key>`` naming a carrier-backed forward link.
+
+    The ``fields`` remedy offers only the carriers ``input_names`` (the basis)
+    holds, by the field NAME ``Meta.fields`` takes (``owner`` for a
+    ``ForeignKey`` carrier whose column is ``owner_id``); a carrier the basis
+    drops (the primary key, an ``editable=False`` column) is named as not an
+    input, and when no carrier is one the error says the generated input
+    cannot set the relation at all.
+    """
+    carriers = ", ".join(link.carrier_attnames)
+    targets = ", ".join(link.target_attnames)
+    related = link.targets[0].model.__name__
+    writable = [carrier.name for carrier in link.carriers if carrier.name in input_names]
+    unwritable = [carrier.name for carrier in link.carriers if carrier.name not in input_names]
+    if key == "exclude":
+        remedy = "It is never part of the generated input; drop it from `exclude`."
+    elif not writable:
+        remedy = (
+            f"Its carrier field(s) ({', '.join(unwritable)}) are not mutation inputs, so a "
+            "generated input cannot set it; drop it from `fields`."
+        )
+    else:
+        remedy = f"Name its carrier field(s) ({', '.join(writable)}) in `fields` instead."
+        if unwritable:
+            remedy += (
+                f" Its other carrier field(s) ({', '.join(unwritable)}) are not mutation inputs."
+            )
+    return ConfigurationError(
+        f"DjangoMutation for {model.__name__} declares `{key}` naming "
+        f"{model.__name__}.{name}, a ForeignObject that targets {related} ({targets}) "
+        f"through the carrier column(s) ({carriers}). It has no column of its own and "
+        f"cannot be generated as a mutation input. {remedy}",
+    )
 
 
 def input_field_required(field: ConcreteField) -> bool:

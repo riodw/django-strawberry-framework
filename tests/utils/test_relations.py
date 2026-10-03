@@ -31,7 +31,6 @@ from django_strawberry_framework.utils.relations import (
     is_forward_concrete_relation,
     is_forward_many_to_many,
     is_many_side_relation_kind,
-    is_multi_column_forward_link,
     is_single_column_foreign_key,
     m2m_through_link_fields,
     path_traverses_to_many,
@@ -1489,31 +1488,3 @@ def test_m2m_through_link_fields_failure_policy_on_a_raising_lookup():
     with pytest.raises(ConfigurationError, match="through-table foreign keys"):
         m2m_through_link_fields(double)
     assert m2m_through_link_fields(double, lenient=True) == (None, None)
-
-
-@pytest.mark.parametrize(
-    ("owner", "field_name", "expected"),
-    [
-        ("LnkPairChild", "parent", True),
-        ("LnkColumnChild", "parent", False),
-        ("LnkParent", "pair_children", False),
-        ("Book", "shelf", False),
-    ],
-    ids=[
-        "forward_two_column_fo",
-        "forward_one_column_fo",
-        "reverse_two_column_fo",
-        "forward_fk",
-    ],
-)
-def test_is_multi_column_forward_link(owner, field_name, expected):
-    """Only a FORWARD relation joined on more than one column is a multi-column forward link."""
-    from tests.optimizer._link_models import LnkColumnChild, LnkPairChild, LnkParent
-
-    model = {
-        "LnkPairChild": LnkPairChild,
-        "LnkColumnChild": LnkColumnChild,
-        "LnkParent": LnkParent,
-        "Book": Book,
-    }[owner]
-    assert is_multi_column_forward_link(model._meta.get_field(field_name)) is expected

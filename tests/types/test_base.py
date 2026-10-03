@@ -32,6 +32,7 @@ from collections.abc import Sequence
 
 import pytest
 import strawberry
+from apps.library.models import Patron
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
 from strawberry import relay
@@ -62,6 +63,7 @@ from django_strawberry_framework.types.converters import (
     resolved_relation_annotation,
 )
 from django_strawberry_framework.types.relations import PendingRelationAnnotation
+from tests.optimizer import _link_models
 
 CATEGORY_SCALAR_FIELDS = (
     "id",
@@ -662,8 +664,24 @@ def _declare_relation_shapes_type(
             ("id", "name", "category"),
             {"category": "both"},
             True,
-            "names single-valued relation 'category'",
+            "names single-valued relation 'category' (forward FK / OneToOne)",
             id="single-valued-relation",
+        ),
+        pytest.param(
+            Patron,
+            ("id", "name", "profile"),
+            {"profile": "both"},
+            True,
+            "names single-valued relation 'profile' (reverse OneToOne)",
+            id="single-valued-reverse-one-to-one",
+        ),
+        pytest.param(
+            _link_models.LnkPairChild,
+            ("id", "name", "parent"),
+            {"parent": "both"},
+            True,
+            "names single-valued relation 'parent' (forward ForeignObject)",
+            id="single-valued-foreign-object",
         ),
         pytest.param(
             Category,
@@ -2863,49 +2881,54 @@ def test_meta_metaclass_raising_getattr_raises_configuration_error():
                 model = Category
 
 
-_MULTI_COLUMN_REFUSAL = (
-    r"LnkPairChild\.parent is a multi-column ForeignObject \(p_tenant, p_code\); a forward "
-    r"relation joined on more than one column cannot be exposed as a GraphQL field\. Leave it "
-    r"out of Meta\.fields \(or name it in Meta\.exclude\), or supply an explicit annotation or "
-    r"resolver\. Its reverse side stays exposable\."
-)
-
-
 @pytest.mark.parametrize(
-    "fields_spec",
-    [("id", "name", "parent"), "__all__"],
-    ids=["explicit_fields", "all_fields"],
+    ("child_name", "fields_spec", "nullable"),
+    [
+        ("LnkPairChild", ("id", "name", "parent"), False),
+        ("LnkPairChild", "__all__", False),
+        ("LnkOptionalPairChild", ("id", "name", "parent"), True),
+        ("LnkOptionalPairChild", "__all__", True),
+    ],
+    ids=[
+        "required_explicit",
+        "required_all",
+        "nullable_explicit",
+        "nullable_all",
+    ],
 )
-def test_multi_column_forward_foreign_object_is_refused_at_declaration(fields_spec):
-    """A forward ``ForeignObject`` over two columns is a ``ConfigurationError`` naming the remedy.
+def test_multi_column_forward_foreign_object_maps_to_its_related_type(
+    child_name,
+    fields_spec,
+    nullable,
+):
+    """A forward ``ForeignObject`` over two columns is a generated relation field.
 
-    Neither upstream maps one to a GraphQL field and no single column identifies
-    its target, so ``Meta.fields`` naming it - explicitly or through
-    ``"__all__"``, the same loud contract as a ``GenericForeignKey`` - refuses at
-    class creation instead of dropping it.
+    Named in ``Meta.fields`` or pulled in through ``"__all__"``, it resolves at
+    finalize to the related model's ``DjangoType`` like any forward
+    single-valued relation, beside its carrier columns. Nullability is the
+    relation's own ``null``, the flag Django's descriptor and join type read: a
+    required link is ``LnkParentType``, a ``null=True`` link over nullable
+    carriers is ``LnkParentType | None``.
     """
-    from tests.optimizer._link_models import LnkPairChild
-
-    with pytest.raises(ConfigurationError, match=_MULTI_COLUMN_REFUSAL):
-        type(
-            "LnkPairChildType",
-            (DjangoType,),
-            {"Meta": type("Meta", (), {"model": LnkPairChild, "fields": fields_spec})},
-        )
-
-
-def test_multi_column_forward_foreign_object_declares_when_excluded():
-    """Excluding the multi-column ``ForeignObject`` declares the rest of the model."""
-    from tests.optimizer._link_models import LnkPairChild
-
-    child_type = type(
-        "LnkPairChildType",
+    child_model = getattr(_link_models, child_name)
+    parent_type = type(
+        "LnkParentType",
         (DjangoType,),
-        {"Meta": type("Meta", (), {"model": LnkPairChild, "exclude": ("parent",)})},
+        {"Meta": type("Meta", (), {"model": _link_models.LnkParent, "fields": ("id", "label")})},
     )
+    child_type = type(
+        f"{child_name}Type",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": child_model, "fields": fields_spec})},
+    )
+    finalize_django_types()
+
+    carriers = {"p_tenant", "p_code"} if fields_spec == "__all__" else set()
     assert set(child_type.__django_strawberry_definition__.field_map) == {
         "id",
-        "p_tenant",
-        "p_code",
         "name",
+        "parent",
+        *carriers,
     }
+    expected = (parent_type | None) if nullable else parent_type
+    assert child_type.__annotations__["parent"] == expected

@@ -88,7 +88,7 @@ from ._context import active_nested_strategy
 from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import MutableSequence
 
     from ..keyset import KeysetSeek
@@ -212,7 +212,7 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
 
     def _fetch_recognized_rows(self) -> list[models.Model] | None:
         """Return the strategy's rows, or ``None`` for every unrecognized shape."""
-        raise NotImplementedError  # pragma: no cover - subclasses always override.
+        raise NotImplementedError
 
     @override
     def _fetch_all(self) -> None:

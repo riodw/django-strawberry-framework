@@ -59,7 +59,7 @@ from graphql.language.ast import (
 from ..utils.typing import schema_config_from_info
 from ._context import converted_selections_memo
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import TypeAlias
 
     from graphql.language.ast import (

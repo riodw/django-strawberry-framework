@@ -74,7 +74,7 @@ from .utils.querysets import (
     reject_async_in_sync_context,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Sized
 
     from django.db import models

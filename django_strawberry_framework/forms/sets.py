@@ -94,7 +94,7 @@ from .inputs import (
     INPUTS_MODULE_PATH as FORMS_INPUTS_MODULE_PATH,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from typing import TypeAlias
 
@@ -698,7 +698,7 @@ class DjangoModelFormMutation(DjangoMutation):
     # field), stashed at bind so the decode reaches the form-field-keyed
     # reverse map. ``None`` until bind (mirrors ``_input_class``); a type checker
     # sees the bound list, since every form operation has an input.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         # basedpyright: the declaration narrows the base's pre-bind ``None`` (bind always stores
         # the list before a read); it rejects an invariant mutable override of ``list | None``
         _input_field_specs: ClassVar[list[InputFieldSpec]]  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -751,7 +751,7 @@ class DjangoModelFormMutation(DjangoMutation):
     # ``get_form`` as returning a ``ModelForm`` (the resolver saves it and reads its
     # ``instance``); ``ModelForm``'s model parameter is invariant, so ``Any`` there lets an
     # override return its own ``ModelForm[<Model>]``.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
 
         def get_form_kwargs(
             self,
@@ -817,7 +817,7 @@ class DjangoModelFormMutation(DjangoMutation):
 # registry or ``bind_mutations()``. A type checker cannot follow a factory-built
 # metaclass into a ``metaclass=`` keyword, so it sees the class statement below
 # instead; the runtime binding is the factory product.
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+if TYPE_CHECKING:
 
     class DjangoFormMutationMetaclass(type):
         """The factory-built plain-form metaclass, as a type checker sees it."""
@@ -854,7 +854,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.
     # ``None`` on the abstract base (no ``Meta``); a type checker sees the
     # concrete-subclass type, the only one the pipeline reads.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _mutation_meta: ClassVar[_ValidatedMutationMeta]
     else:
         _mutation_meta = None
@@ -866,14 +866,14 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # payload name, since only a bound mutation is resolved.
     _primary_type: ClassVar[None] = None
     _input_class: ClassVar[type[object] | None] = None
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _payload_type_name: ClassVar[str]
     else:
         _payload_type_name = None
 
     # The reverse-map records, stashed at bind for the decode
     # (mirrors ``DjangoModelFormMutation._input_field_specs``).
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _input_field_specs: ClassVar[list[InputFieldSpec]]
     else:
         _input_field_specs = None
@@ -1065,7 +1065,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # A type checker reads both construction hooks as methods, so a consumer override is
     # checked against a method signature; the runtime attributes are the shared defaults
     # ``_form_kwargs_overridden`` compares by identity.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
 
         def get_form_kwargs(
             self,
@@ -1147,7 +1147,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     # keeps ``forms/sets.py`` free of a load-time edge to the resolver module. A
     # type checker sees the pair as the classmethods the factory builds, declared
     # the way ``mutations/sets.py::DjangoMutation`` declares its ``with_id`` pair.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
 
         @classmethod
         def resolve_sync(cls, info: Info[Any, Any], *, data: object) -> object:

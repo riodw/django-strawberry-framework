@@ -325,7 +325,7 @@ def test_a_hook_that_raises_while_setting_up_still_resets_every_binding():
     class _RaisingSetup(SchemaExtension):
         def on_operation(self):
             raise RuntimeError("setup refused")
-            yield  # pragma: no cover - unreachable, the hook raises first
+            yield  # unreachable, the hook raises first
 
     shared = _Probe()
     schema = DjangoSchema(query=_Query, extensions=[lambda: shared, _RaisingSetup])
@@ -344,7 +344,7 @@ async def test_a_hook_that_raises_while_setting_up_resets_on_the_async_path_too(
     class _RaisingSetup(SchemaExtension):
         async def on_operation(self):
             raise RuntimeError("setup refused")
-            yield  # pragma: no cover - unreachable, the hook raises first
+            yield  # unreachable, the hook raises first
 
     shared = _Probe()
     schema = DjangoSchema(query=_Query, extensions=[lambda: shared, _RaisingSetup])
@@ -1622,7 +1622,7 @@ async def test_an_operation_that_fails_in_front_of_its_hooks_binds_no_mode_eithe
         def on_operation(self):
             """Fail where the operation scope would otherwise open."""
             raise RuntimeError("setup")
-            yield  # pragma: no cover - unreachable, the hook raises first
+            yield  # unreachable, the hook raises first
 
     seen: dict = {}
     _, mode_query = _mode_schema(seen)

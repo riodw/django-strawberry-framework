@@ -48,7 +48,7 @@ from django_strawberry_framework.types.base import (
 )
 from django_strawberry_framework.types.relay import decode_global_id, encode_typename
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
 __all__ = ["decode_global_id", "global_id_for"]

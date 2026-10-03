@@ -81,7 +81,7 @@ FRAMEWORK_GLOBALID_STRATEGIES = MODEL_LABEL_STRATEGIES | TYPE_NAME_STRATEGIES
 # so the literal lives here rather than being derived by exclusion.
 ENCODE_ONLY_GLOBALID_STRATEGIES = frozenset({"callable", "custom"})
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
     from typing import TypeAlias
 

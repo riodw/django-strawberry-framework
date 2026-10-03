@@ -657,7 +657,7 @@ def _asgi_post(
         if pending:
             return pending.pop(0)
         await asyncio.Event().wait()
-        raise AssertionError("unreachable: the handler cancels this await")  # pragma: no cover
+        raise AssertionError("unreachable: the handler cancels this await")
 
     async def send(message: Mapping[str, object]):
         sent.append(message)

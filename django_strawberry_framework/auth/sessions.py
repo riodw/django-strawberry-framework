@@ -65,7 +65,7 @@ from ..utils.sessions import (
     session_store_class,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from types import ModuleType
 
     from django.contrib.sessions.backends.base import SessionBase

@@ -50,7 +50,7 @@ from .input_values import (
 from .querysets import reject_async_in_sync_context
 from .strings import flatten_lookup_path
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.db import models
 
     from ..sets_mixins import ActiveInputPermissionMixin

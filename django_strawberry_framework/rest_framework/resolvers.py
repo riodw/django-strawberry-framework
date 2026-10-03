@@ -188,7 +188,7 @@ from .serializer_converter import (
     resolve_serializer_field,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Iterable
     from typing import Protocol, TypeAlias
 

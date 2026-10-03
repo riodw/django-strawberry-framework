@@ -108,7 +108,7 @@ from .utils.querysets import (
 )
 from .utils.typing import is_async_callable
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+if TYPE_CHECKING:
     from collections.abc import Coroutine, Mapping
 
     from django.db.models.expressions import Expression

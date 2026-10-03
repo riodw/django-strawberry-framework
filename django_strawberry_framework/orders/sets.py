@@ -65,7 +65,7 @@ from .inputs import (
     normalize_input_value,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
 
     from django.db.models.expressions import OrderBy

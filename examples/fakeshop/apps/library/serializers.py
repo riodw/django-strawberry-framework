@@ -376,7 +376,7 @@ class HexColorField(serializers.Field[str, object, str, object]):
 
     # Write-only, never serialized out.
     @override
-    def to_representation(self, value: str) -> str:  # pragma: no cover
+    def to_representation(self, value: str) -> str:
         return value
 
 

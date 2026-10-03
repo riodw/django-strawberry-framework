@@ -101,7 +101,7 @@ import dataclasses
 from collections.abc import AsyncGenerator, Callable, MutableMapping
 from typing import TYPE_CHECKING, TypeVar, cast
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.contrib.sessions.backends.base import SessionBase
 
 _ScopedT = TypeVar("_ScopedT")

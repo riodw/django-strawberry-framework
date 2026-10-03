@@ -119,7 +119,7 @@ from .inputs import (
 # excluded from the active-permission field walk (they recurse separately).
 _LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(op.python_attr for op in LOGIC_OPERATORS)
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+if TYPE_CHECKING:
     from types import MethodType
     from typing import TypeAlias
 
@@ -1041,7 +1041,7 @@ def _candidate_metadata_for(
     )
 
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+if TYPE_CHECKING:
 
     class _FilterSetMetaclassBase(filterset.FilterSetMetaclass):
         """The class attributes upstream's metaclass ``__new__`` sets on every class it builds.

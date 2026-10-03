@@ -34,7 +34,7 @@ from ..exceptions import (
 )
 from ..sets_mixins import RelatedSetTargetMixin
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
 

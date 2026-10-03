@@ -84,7 +84,7 @@ from .converter import (
     form_field_required,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
     from typing import TypeAlias
 

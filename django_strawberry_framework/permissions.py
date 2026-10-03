@@ -137,7 +137,7 @@ from .utils.querysets import (
 from .utils.querysets import SyncMisuseError as SyncMisuseError
 from .utils.relations import is_single_column_foreign_key
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from .types.base import DjangoType
     from .utils.typing import ForeignKeyField, ModelField
 

@@ -17,7 +17,7 @@ from django_strawberry_framework.exceptions import (
     _safe_type_name,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+if TYPE_CHECKING:
     from collections.abc import Callable, Sequence, Sized
 
     from django.db.models.lookups import Lookup, Transform

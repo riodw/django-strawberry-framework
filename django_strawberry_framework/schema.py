@@ -99,7 +99,7 @@ from .utils.policies import copy_policy
 from .utils.private_state import PrivateAuthority, PrivateMembership
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import Protocol
 
     from django.db.transaction import Atomic

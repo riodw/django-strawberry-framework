@@ -122,7 +122,7 @@ from django.test.testcases import SimpleTestCase
 
 from .conf import upstream_patches_enabled
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.db.backends.base.base import BaseDatabaseWrapper
     from django.test.testcases import _DatabaseFailure as _DatabaseFailureClass
     from typing_extensions import TypeIs
@@ -132,7 +132,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 _DatabaseFailure: "type[_DatabaseFailureClass] | None"
 try:
     from django.test.testcases import _DatabaseFailure
-except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
+except ImportError:  # pragma: no cover - every supported release imports; tests patch the sentinel
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
     _DatabaseFailure = None

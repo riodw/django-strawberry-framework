@@ -447,7 +447,7 @@ def test_awaitable_is_authenticated_is_closed_and_read_as_anonymous():
     it and classifies the request as anonymous.
     """
 
-    async def _pending():  # pragma: no cover - closed, never awaited
+    async def _pending():  # closed, never awaited
         return True
 
     coro = _pending()
@@ -473,7 +473,7 @@ def test_legacy_callable_returning_an_awaitable_is_closed_and_read_as_anonymous(
 
     class _AsyncCallableIsAuth:
         def is_authenticated(self):
-            async def _pending():  # pragma: no cover - closed, never awaited
+            async def _pending():  # closed, never awaited
                 return True
 
             coro = _pending()

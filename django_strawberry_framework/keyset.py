@@ -92,7 +92,7 @@ from strawberry.relay.utils import from_base64, to_base64
 from .exceptions import ConfigurationError
 from .utils.imports import require_optional_module
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from cryptography.hazmat.primitives.ciphers.aead import AESSIV
 
     from .types.definition import DjangoTypeDefinition

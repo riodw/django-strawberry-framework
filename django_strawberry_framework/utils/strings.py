@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, cast
 
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_type_name
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import Protocol
 
     class _CachedNameTransform(Protocol):

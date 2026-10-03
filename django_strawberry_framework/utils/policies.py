@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from ..exceptions import ConfigurationError, describe_value
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from _typeshed import DataclassInstance
 
 __all__ = ("canonical_policy", "copy_policy", "resolve_policy")

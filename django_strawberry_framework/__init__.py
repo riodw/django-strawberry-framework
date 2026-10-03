@@ -101,7 +101,7 @@ _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
 # names still resolve through the lazy guard below, so ``import
 # django_strawberry_framework`` stays DRF-free. The redundant ``as`` aliases mark
 # them re-exported. Each line mirrors one ``_DRF_SOFT_EXPORTS`` entry.
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from .rest_framework.hook_context import SerializerHookContext as SerializerHookContext
     from .rest_framework.hook_context import UploadMetadata as UploadMetadata
     from .rest_framework.inputs import NestedSerializerConfig as NestedSerializerConfig

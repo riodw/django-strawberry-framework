@@ -84,7 +84,7 @@ from .operations import (
 )
 from .permissions import DjangoModelPermission, run_permission_classes
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
     from typing import Protocol, TypeAlias, TypeVar
 
@@ -706,7 +706,7 @@ def make_meta_validating_metaclass(
     """
 
     class MetaValidatingMetaclass(type):
-        if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
+        if TYPE_CHECKING:
             # Every class this metaclass builds declares the ``_validate_meta`` seam and
             # the ``_mutation_meta`` slot ``__new__`` fills from it.
             _mutation_meta: object
@@ -1116,7 +1116,7 @@ def model_backed_permission_and_lock(
 # validate-then-register lifecycle over ``register_form_mutation``. A type checker
 # cannot follow a factory-built metaclass into a ``metaclass=`` keyword, so it sees
 # the class statement below instead; the runtime binding is the factory product.
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+if TYPE_CHECKING:
 
     class DjangoMutationMetaclass(type):
         """The factory-built model-flavor metaclass, as a type checker sees it."""
@@ -1151,7 +1151,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # base (which carries no ``Meta``). A type checker sees the snapshot's own
     # type, since the pipeline reads only a validated subclass's snapshot, never
     # the abstract base's ``None``.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _mutation_meta: ClassVar[_ValidatedMutationMeta]
     else:
         _mutation_meta = None
@@ -1162,12 +1162,12 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # ``DjangoMutationField`` reads them to synthesize the resolver signature +
     # the ``strawberry.lazy`` payload return-ref. Left ``None`` until the bind runs;
     # a type checker sees the bound types, since only a bound mutation is resolved.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _primary_type: ClassVar[type[DjangoType]]
     else:
         _primary_type = None
     _input_class: ClassVar[type[object] | None] = None
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _payload_type_name: ClassVar[str]
     else:
         _payload_type_name = None
@@ -1435,7 +1435,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     # the pair as the classmethods the factory builds, so a subclass may override
     # either with a method. ``Info`` is invariant in both parameters, so ``Any``
     # there lets an override type ``info`` with its own context and root.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
 
         @classmethod
         def resolve_sync(
@@ -1504,7 +1504,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         return run_permission_classes(self, info, operation, data, instance)
 
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only declarations.
+if TYPE_CHECKING:
     # A write-mutation declaration class of either ledger: the model-backed
     # ``DjangoMutation`` family (model / ``ModelForm`` / serializer) or the
     # model-less ``DjangoFormMutation``.

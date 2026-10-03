@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
 from .conf import upstream_patches_enabled
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
     from typing import TypeAlias
 
@@ -69,7 +69,7 @@ is_iterable: "Callable[[object], bool] | None"
 try:
     from graphql.execution.execute import ExecutionContext
     from graphql.pyutils import is_iterable
-except ImportError:  # pragma: no cover - exercised through patched imports in tests.
+except ImportError:  # pragma: no cover - every supported release imports; tests patch the sentinel
     ExecutionContext = None
     is_iterable = None
 

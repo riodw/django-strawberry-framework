@@ -32,7 +32,7 @@ import contextlib
 from collections.abc import Generator
 from typing import TYPE_CHECKING, Final, cast
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Mapping, MutableMapping
 
 __all__ = (

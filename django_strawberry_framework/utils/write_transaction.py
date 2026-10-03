@@ -81,7 +81,7 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
 from .canonical import base_container_values, canonical_sort_key
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Generator, Iterable, Sequence
     from typing import Protocol, TypeAlias
 
@@ -858,7 +858,7 @@ class _ValueSnapshot:
 
     def matches(self, current: object) -> bool:
         """Return whether ``current`` still holds the value this snapshot captured."""
-        raise NotImplementedError  # pragma: no cover - abstract base
+        raise NotImplementedError
 
 
 class _FileNameSnapshot(_ValueSnapshot):

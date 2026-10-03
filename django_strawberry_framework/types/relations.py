@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from django.db import models
 from typing_extensions import override
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from ..utils.typing import ModelField
     from .base import DjangoType
 

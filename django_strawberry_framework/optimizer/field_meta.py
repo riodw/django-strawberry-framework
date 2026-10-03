@@ -36,7 +36,7 @@ from ..utils.relations import (
     relation_name,
 )
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from django.db import models
 
     from ..utils.relations import RelationKind

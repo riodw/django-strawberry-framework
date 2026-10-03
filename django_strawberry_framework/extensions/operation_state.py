@@ -137,7 +137,7 @@ from ..utils.execution_mode import OperationMode, bind_operation_mode
 from ..utils.operation_lease import OperationLease
 from ..utils.private_state import PrivateAuthority
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Generator
     from types import TracebackType
     from typing import TypeAlias
@@ -228,7 +228,7 @@ _StateT = TypeVar("_StateT", bound=OperationState, covariant=True)
 #: One frame a streamed operation yields: whatever the stream it wraps yields.
 _FrameT = TypeVar("_FrameT")
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only aliases.
+if TYPE_CHECKING:
     #: Each operation-bound extension paired with the state built for this operation.
     _OperationStates = tuple[
         tuple["_OperationBoundExtension[OperationState]", OperationState],

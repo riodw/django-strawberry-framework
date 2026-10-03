@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from django.apps import AppConfig
 from typing_extensions import override
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django_stubs_ext import StrOrPromise
 
 

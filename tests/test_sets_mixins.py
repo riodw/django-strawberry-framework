@@ -927,7 +927,7 @@ def test_re_readable_gate_never_iterates_the_declaration():
 
     class _Boom:
         def __iter__(self):
-            raise RuntimeError("boom")  # pragma: no cover - never entered
+            raise RuntimeError("boom")  # never entered
 
     assert is_re_readable_field_declaration(_Boom()) is False
 

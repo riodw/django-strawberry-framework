@@ -54,7 +54,7 @@ from .selections import (
     with_runtime_prefix,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     # The ``MutableSequence`` casts below restate that a plan under walker
     # construction still holds its mutable directive lists; ``OptimizationPlan``
     # types them as the ``Sequence`` a finalized plan's tuples also satisfy.

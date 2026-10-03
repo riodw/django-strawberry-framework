@@ -46,7 +46,7 @@ from ..utils.querysets import (
     model_for,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from strawberry.types import Info
     from strawberry.utils.await_maybe import AwaitableOrValue
 

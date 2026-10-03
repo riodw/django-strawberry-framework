@@ -26,7 +26,7 @@ from ..utils.inputs import GeneratedInputArgumentsFactory
 from .inputs import _build_input_fields, _build_logic_fields
 from .sets import FilterSet
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from ..types.definition import DjangoTypeDefinition
 
 

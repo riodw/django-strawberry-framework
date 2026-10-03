@@ -53,7 +53,7 @@ from ..resource_policy import effective_bound, policy_from_info
 from .input_values import is_inactive_value
 from .typing import schema_config_from_info
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from strawberry import Info
 
     from .typing import EitherInfo

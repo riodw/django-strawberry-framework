@@ -76,7 +76,7 @@ from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.sessions import actor_transition
 from . import sessions
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine, Iterable, MutableMapping, Sequence
     from typing import Protocol
 
@@ -255,7 +255,7 @@ class _AuthMutationMetaSnapshot:
 # type-checking-only base so the runtime metaclass body records no annotations: a
 # metaclass-level ``__annotations__`` would shadow ``type``'s own descriptor on every
 # holder class.
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+if TYPE_CHECKING:
 
     class _AuthHolderAttributes(type):
         """The holder class attributes, as a type checker sees them."""

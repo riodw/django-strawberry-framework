@@ -381,7 +381,7 @@ from .utils.sessions import (
     scope_key,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import MutableMapping
     from typing import Protocol
 

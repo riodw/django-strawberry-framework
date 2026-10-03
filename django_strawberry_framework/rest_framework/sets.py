@@ -115,7 +115,7 @@ from .inputs import (
 )
 from .serializer_converter import is_nested_serializer_field, nested_serializer_child
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.db import models
     from strawberry.types import Info
 
@@ -498,7 +498,7 @@ class SerializerMutation(DjangoMutation):
     # at bind so the decode reaches the serializer-field-keyed reverse map.
     # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot); a type
     # checker sees the bound list, since every serializer operation has an input.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         # basedpyright: the declaration narrows the base's pre-bind ``None`` (bind always stores
         # the list before a read); it rejects the invariant mutable-variable override
         _input_field_specs: ClassVar[list[InputFieldSpec]]  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -509,7 +509,7 @@ class SerializerMutation(DjangoMutation):
     # bind so the resolver holds each injected field to the SAME runtime-agreement
     # contract (present / writable / source / kind / relation-model) an input field gets - not
     # merely that its key is present in ``data``. ``[]`` when no fields are injected.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _injected_field_specs: ClassVar[list[InputFieldSpec]]
     else:
         _injected_field_specs = None
@@ -517,7 +517,7 @@ class SerializerMutation(DjangoMutation):
     # The bound serializer-input type name, stashed after successful materialization.
     # Before bind, ``input_type_name`` derives the descriptor through the shared
     # cache helper; after bind, it can read this once the determinism guard passes.
-    if TYPE_CHECKING:  # pragma: no cover - type-checking-only declaration.
+    if TYPE_CHECKING:
         _input_type_name: ClassVar[str]
     else:
         _input_type_name = None

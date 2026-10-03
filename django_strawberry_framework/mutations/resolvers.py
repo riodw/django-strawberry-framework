@@ -132,7 +132,7 @@ from .inputs import EXCLUDED, FieldError, payload_object_slot
 from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
     from typing import Protocol, TypeAlias, TypeVar
 

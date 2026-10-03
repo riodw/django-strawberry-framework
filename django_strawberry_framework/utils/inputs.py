@@ -59,7 +59,7 @@ _SetT = TypeVar("_SetT")
 _FactorySetT = TypeVar("_FactorySetT", bound="ClassBasedTypeNameMixin")
 _SpecT = TypeVar("_SpecT", bound="_NamedInputSpec")
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
     from typing import Protocol
 

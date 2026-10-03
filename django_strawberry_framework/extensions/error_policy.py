@@ -84,7 +84,7 @@ from .. import logger
 from ..error_policy import _PACKAGE_ERROR_POLICY, ErrorPolicy, new_correlation_id
 from .operation_state import OperationState, _OperationBoundExtension
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing_extensions import TypeIs
 
 #: Either result shape ``is_maskable_result`` admits; masking hands back the same shape.

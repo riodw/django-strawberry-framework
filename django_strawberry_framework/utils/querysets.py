@@ -111,7 +111,7 @@ from .write_transaction import (
     pipeline_scoped_queryset,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
     from typing import Literal, Protocol, TypeAlias
 

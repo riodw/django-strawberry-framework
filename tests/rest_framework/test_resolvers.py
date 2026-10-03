@@ -3269,7 +3269,7 @@ def test_write_witness_blocks_cross_alias_pre_save():
                     created=True,
                     using="default",
                 )
-            except BaseException as exc:  # pragma: no cover - only on regression
+            except BaseException as exc:  # only on regression
                 errors.append(exc)
 
         thread = threading.Thread(target=_other_thread_save)
@@ -3464,7 +3464,7 @@ def test_pipeline_alias_guard_blocks_cross_alias_pre_save_and_ignores_other_thre
                     instance=product_models.Item(name="x"),
                     using="other",
                 )
-            except BaseException as exc:  # pragma: no cover - only on regression
+            except BaseException as exc:  # only on regression
                 errors.append(exc)
 
         thread = threading.Thread(target=_other_thread_save)

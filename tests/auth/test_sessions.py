@@ -258,7 +258,7 @@ async def test_scope_lock_rejects_an_immutable_scope_loudly():
     adapter = _adapter(MappingProxyType({"type": "websocket"}))
     with pytest.raises(ConfigurationError, match="mutable Channels scope"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover - the __aenter__ raise never reaches the body
+            pass  # the __aenter__ raise never reaches the body
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +384,7 @@ async def test_cancelling_a_task_waiting_on_the_scope_lock_leaves_it_acquirable(
 
     async def task_b():
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover - B is cancelled before it ever acquires
+            pass  # B is cancelled before it ever acquires
 
     ta = asyncio.create_task(task_a())
     tb = asyncio.create_task(task_b())
@@ -573,7 +573,7 @@ async def test_scope_lock_hostile_get_is_contained():
     adapter = _adapter(HostileGetMutable({"type": "websocket"}))
     with pytest.raises(ConfigurationError, match="could not read.*Channels request scope"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 async def test_scope_lock_hostile_setitem_is_contained():
@@ -586,7 +586,7 @@ async def test_scope_lock_hostile_setitem_is_contained():
     adapter = _adapter(HostileSet({"type": "websocket"}))
     with pytest.raises(ConfigurationError, match="could not store.*per-scope session lock"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 async def test_scope_lock_corrupted_non_lock_value_is_contained():
@@ -594,7 +594,7 @@ async def test_scope_lock_corrupted_non_lock_value_is_contained():
     adapter = _adapter(scope)
     with pytest.raises(ConfigurationError, match="requires an asyncio.Lock"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 def test_uses_signed_cookie_sessions_non_class_store_is_contained():
@@ -657,7 +657,7 @@ async def test_scope_lock_isinstance_lock_raising_is_contained(monkeypatch):
     adapter = _adapter(scope)
     with pytest.raises(ConfigurationError, match="could not be inspected"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 async def test_scope_lock_acquire_raising_is_contained():
@@ -669,7 +669,7 @@ async def test_scope_lock_acquire_raising_is_contained():
     adapter = _adapter(scope)
     with pytest.raises(ConfigurationError, match="could not be acquired"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 def test_uses_signed_cookie_sessions_store_resolution_hostile_is_contained(monkeypatch):
@@ -705,7 +705,7 @@ async def test_scope_lock_acquire_configuration_error_propagates():
     adapter = _adapter(scope)
     with pytest.raises(ConfigurationError, match="hostile config inside lock"):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 async def test_scope_lock_acquire_cancelled_error_propagates():
@@ -717,7 +717,7 @@ async def test_scope_lock_acquire_cancelled_error_propagates():
     adapter = _adapter(scope)
     with pytest.raises(asyncio.CancelledError):
         async with scope_session_lock(adapter):
-            pass  # pragma: no cover
+            pass
 
 
 # ---------------------------------------------------------------------------

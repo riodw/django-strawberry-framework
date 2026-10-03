@@ -324,6 +324,7 @@ show_missing = true
 skip_covered = false
 exclude_lines = [
     "pragma: no cover",
+    "^\\s*if (typing\\.)?TYPE_CHECKING:",
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
 ]

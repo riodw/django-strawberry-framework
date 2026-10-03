@@ -13,7 +13,7 @@ from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import TypeAlias
 

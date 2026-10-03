@@ -33,7 +33,7 @@ from ..utils.permissions import request_from_info
 from ..utils.querysets import reject_async_in_sync_context
 from .operations import _OPERATION_PERMISSION_ACTION
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import ClassVar, Protocol, TypeAlias
 

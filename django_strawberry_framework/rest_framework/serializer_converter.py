@@ -99,7 +99,7 @@ from ..utils.inputs import SCALAR as SCALAR
 from ..utils.inputs import FieldConversionBase, InputFieldSpec
 from ..utils.strings import graphql_camel_name, pascal_case
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import TypeAlias
 
     from ..types.base import DjangoType

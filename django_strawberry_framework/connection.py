@@ -140,7 +140,7 @@ from .utils.querysets import (
 from .utils.relations import relation_kind
 from .utils.typing import is_async_callable, unwrap_container_type
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import Literal, TypeAlias
 
     from strawberry.types.base import WithStrawberryObjectDefinition

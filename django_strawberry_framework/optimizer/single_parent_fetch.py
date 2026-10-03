@@ -63,7 +63,7 @@ from .nested_fetch import (
 )
 from .plans import WINDOW_ROW_NUMBER
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.db import models
     from django.db.models.sql.where import WhereNode
 

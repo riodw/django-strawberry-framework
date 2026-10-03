@@ -36,7 +36,7 @@ from django.utils.functional import Promise
 
 from ..exceptions import _safe_text, _unprintable
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from ..mutations.inputs import FieldError
 
 __all__ = [

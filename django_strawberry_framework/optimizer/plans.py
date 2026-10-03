@@ -45,7 +45,7 @@ from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from ..utils.querysets import applied_order
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from typing import TypeAlias
 

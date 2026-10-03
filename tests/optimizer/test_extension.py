@@ -2964,7 +2964,7 @@ def test_check_schema_descends_into_interface_implementations():
     class Query:
         @strawberry.field
         def some_node(self) -> relay.Node:
-            return None  # pragma: no cover
+            return None
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, types=[CategoryNode, ItemNode])

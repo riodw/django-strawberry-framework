@@ -184,7 +184,7 @@ DATABASES = {
         "NAME": _kanban_db or (BASE_DIR / "db.sqlite3"),
     },
 }
-if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
+if os.environ.get("FAKESHOP_SHARDED") == "1":
     DATABASES["shard_b"] = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db_shard_b.sqlite3",
@@ -203,7 +203,7 @@ if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
 # psycopg); the DSN is parsed with the stdlib so the default sqlite install
 # carries no Postgres dependency.
 _pg_dsn = os.environ.get("FAKESHOP_PG_DSN")
-if _pg_dsn:  # pragma: no cover
+if _pg_dsn:
     from urllib.parse import urlsplit
 
     _pg = urlsplit(_pg_dsn)

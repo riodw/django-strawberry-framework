@@ -26,7 +26,7 @@ from django.db import models
 from .exceptions import ConfigurationError
 from .utils.imports import import_attr_if_importable
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from .types.base import DjangoType
     from .types.definition import DjangoTypeDefinition, GlobalIDStrategy
     from .types.relations import PendingRelation

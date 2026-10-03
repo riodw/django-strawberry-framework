@@ -36,7 +36,7 @@ from .querysets import (
     visible_related_objects,
 )
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import TypeAlias
 

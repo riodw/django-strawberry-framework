@@ -118,7 +118,7 @@ from ..utils.write_values import (
     materialize_relation_id_container,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Container
     from typing import Protocol, TypeAlias, TypeVar
 

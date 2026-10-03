@@ -421,10 +421,10 @@ def test_unknown_custom_field_subclass_raises():
     """
 
     class CustomField(serializers.Field):
-        def to_internal_value(self, data):  # pragma: no cover - never called in conversion.
+        def to_internal_value(self, data):  # never called in conversion.
             return data
 
-        def to_representation(self, value):  # pragma: no cover - never called in conversion.
+        def to_representation(self, value):  # never called in conversion.
             return value
 
     with pytest.raises(
@@ -886,10 +886,10 @@ def test_model_field_over_unsupported_column_fails_loud():
 class _CustomHexField(serializers.Field):
     """A custom DRF field whose MRO has NO supported ancestor (unregistered -> raises)."""
 
-    def to_internal_value(self, data):  # pragma: no cover - never called in conversion.
+    def to_internal_value(self, data):  # never called in conversion.
         return data
 
-    def to_representation(self, value):  # pragma: no cover - never called in conversion.
+    def to_representation(self, value):  # never called in conversion.
         return value
 
 

@@ -1124,7 +1124,7 @@ def test_orderset_expand_meta_fields_rejects_hostile_iterable_without_iterating(
 
     class Boom:
         def __iter__(self):
-            yield "title"  # pragma: no cover - never reached past the gate
+            yield "title"  # never reached past the gate
             raise RuntimeError("boom mid-iteration")
 
     class HostileIterOrder(OrderSet):

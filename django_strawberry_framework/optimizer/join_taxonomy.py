@@ -72,7 +72,7 @@ from ..utils.relations import (
     safe_truthy,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.db import models
 
     from ..utils.typing import ForeignKeyField, ModelField

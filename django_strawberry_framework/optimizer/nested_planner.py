@@ -75,7 +75,7 @@ from .selections import (
     response_keys as _response_keys,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import MutableSequence
 
     from django.contrib.postgres.indexes import BTreeIndex

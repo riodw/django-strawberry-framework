@@ -80,7 +80,7 @@ _camel_case = graphql_camel_name
 _iter_filterset_subclasses = iter_set_subclasses
 _input_type_name_for = set_input_type_name
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import Protocol
 
     from django_filters.filterset import FilterSetOptions

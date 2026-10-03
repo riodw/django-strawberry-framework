@@ -65,7 +65,7 @@ from .utils.permissions import (
 )
 from .utils.strings import pascal_case_or_raise
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from .filters.sets import FilterSetMetaclass
     from .orders.sets import OrderSetMetaclass
     from .utils.input_values import RelatedBranch

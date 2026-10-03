@@ -139,7 +139,7 @@ from ..utils.private_state import PrivateAuthority
 from ..utils.typing import unwrap_non_null
 from .operation_state import OperationState, _OperationBoundExtension
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from graphql import (
         ArgumentNode,
         DocumentNode,

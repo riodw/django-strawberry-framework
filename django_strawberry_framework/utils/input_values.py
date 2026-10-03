@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, NoReturn, cast
 
 from ..exceptions import ConfigurationError, _safe_type_name
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import TypeAlias
 
     from ..filters.sets import FilterSet

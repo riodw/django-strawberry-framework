@@ -44,7 +44,7 @@ from typing_extensions import override
 from django_strawberry_framework.conf import testing_endpoint_setting
 from django_strawberry_framework.exceptions import _safe_arg_repr
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Generator, Mapping
     from typing import Protocol, TypedDict
 

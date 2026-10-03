@@ -48,7 +48,7 @@ from django.db.models import Exists, OuterRef, Q
 
 from ..exceptions import OptimizerError
 
-if TYPE_CHECKING:  # pragma: no cover
+if TYPE_CHECKING:
     from django.db import models
     from django.db.models import QuerySet
 

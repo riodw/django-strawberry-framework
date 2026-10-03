@@ -132,7 +132,7 @@ from .selections import (
 )
 from .walker import plan_optimizations, plan_relation
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Iterable
     from types import SimpleNamespace
 

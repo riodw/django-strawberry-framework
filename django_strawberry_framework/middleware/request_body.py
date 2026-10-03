@@ -96,7 +96,7 @@ from django_strawberry_framework._boundary_ordering import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from django.http import HttpRequest, HttpResponseBase

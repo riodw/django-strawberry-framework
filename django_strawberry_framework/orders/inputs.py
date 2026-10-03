@@ -42,7 +42,7 @@ from ..utils.inputs import (
 )
 from ..utils.strings import graphql_camel_name
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from ..types.definition import DjangoTypeDefinition
     from .base import RelatedOrder
     from .sets import OrderSet

@@ -64,7 +64,7 @@ from django_strawberry_framework.types.base import DjangoType, _is_relay_shaped
 from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
 from django_strawberry_framework.utils.relations import is_single_column_foreign_key
 
-if typing.TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if typing.TYPE_CHECKING:
     from strawberry.types.base import WithStrawberryObjectDefinition
 
     from django_strawberry_framework.optimizer.field_meta import FieldMeta

@@ -63,7 +63,7 @@ from ..utils.execution_mode import async_execution
 from .inputs import INPUTS_MODULE_PATH
 from .operations import operation_takes_data, operation_takes_id
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from .sets import WriteMutationClass
 
 # The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,

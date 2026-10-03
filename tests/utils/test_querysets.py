@@ -313,7 +313,7 @@ async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():
 def test_visibility_source_must_be_a_queryset():
     """A non-queryset source fails closed BEFORE the hook runs (fires no consumer code)."""
 
-    def _boom(cls, queryset, info):  # pragma: no cover - must never run
+    def _boom(cls, queryset, info):  # must never run
         raise AssertionError("hook ran on an invalid source")
 
     with pytest.raises(ConfigurationError, match="requires a QuerySet of Category rows"):
@@ -396,7 +396,7 @@ def test_unsealable_source_fails_closed():
     runs on an unsealable source.
     """
 
-    def _boom(cls, queryset, info):  # pragma: no cover - must never run
+    def _boom(cls, queryset, info):  # must never run
         raise AssertionError("hook ran on an unsealable source")
 
     source = Category.objects.filter(name="visible")
@@ -419,7 +419,7 @@ def test_a_source_carrying_a_consumer_expression_names_the_state_the_seal_rebuil
     the queryset from instead.
     """
 
-    def _boom(cls, queryset, info):  # pragma: no cover - must never run
+    def _boom(cls, queryset, info):  # must never run
         raise AssertionError("hook ran on an unsealable source")
 
     source = Category.objects.annotate(u=_ConsumerUpper(F("name")))
@@ -472,7 +472,7 @@ async def test_hook_manager_result_is_coerced_async():
 
 def _async_generator_result():
     async def _agen():
-        yield 1  # pragma: no cover - never iterated
+        yield 1  # never iterated
 
     return _agen()
 
@@ -821,7 +821,7 @@ def test_pending_deferred_filter_over_foreign_query_never_dispatches():
     dispatched = []
 
     class _AddQSpy(sql.Query):
-        def add_q(self, q):  # pragma: no cover - must never run
+        def add_q(self, q):  # must never run
             dispatched.append(q)
             return super().add_q(q)
 
@@ -846,7 +846,7 @@ def test_deferred_filter_never_dispatches_instance_shadowed_inplace():
     """
     dispatched = []
 
-    def _spy_inplace(negate, args, kwargs):  # pragma: no cover - must never run
+    def _spy_inplace(negate, args, kwargs):  # must never run
         dispatched.append((negate, args, kwargs))
 
     result = Category.objects.all()
@@ -873,7 +873,7 @@ def test_deferred_filter_never_dispatches_instance_shadowed_add_q():
 
     dispatched = []
 
-    def _spy_add_q(q):  # pragma: no cover - must never run
+    def _spy_add_q(q):  # must never run
         dispatched.append(q)
 
     query = sql.Query(Category)
@@ -967,7 +967,7 @@ def test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool():
     dispatched = []
 
     class _NegateSpy:
-        def __bool__(self):  # pragma: no cover - must never run
+        def __bool__(self):  # must never run
             dispatched.append(True)
             return True
 
@@ -1424,7 +1424,7 @@ def test_hostile_prefetch_queryset_is_neutralized_to_plain():
     from django.db.models import Prefetch
 
     class _HostileItemQS(models.QuerySet):
-        def _fetch_all(self):  # pragma: no cover - never dispatched after sealing
+        def _fetch_all(self):  # never dispatched after sealing
             self._result_cache = [Item(name="SYNTHETIC-HIDDEN")]
 
     hostile = _HostileItemQS(model=Item).filter(name="real")
@@ -1452,7 +1452,7 @@ def test_hostile_prefetch_synthetic_row_never_materializes():
     Item.objects.create(name="item-real", category=category)
 
     class _HostileItemQS(models.QuerySet):
-        def _fetch_all(self):  # pragma: no cover - never dispatched after sealing
+        def _fetch_all(self):  # never dispatched after sealing
             self._result_cache = [Item(name="SYNTHETIC-HIDDEN", category_id=category.pk)]
 
     hostile = _HostileItemQS(model=Item)
@@ -1610,7 +1610,7 @@ def test_hostile_where_subclass_fails_closed():
     from django.db.models.sql.where import WhereNode
 
     class _WideningWhere(WhereNode):
-        def clone(self):  # pragma: no cover - never dispatched; rejected first
+        def clone(self):  # never dispatched; rejected first
             return WhereNode()
 
     source = Category.objects.filter(is_private=False)
@@ -1838,7 +1838,7 @@ class _AwaitableOf:
 
     def __await__(self):
         return self.value
-        yield  # pragma: no cover - marks this as a generator function
+        yield  # marks this as a generator function
 
 
 def test_sync_boundary_rejects_custom_awaitable_hook():
@@ -1864,7 +1864,7 @@ async def test_async_nested_awaitable_fails_closed():
         @classmethod
         async def get_queryset(cls, queryset, info):
             async def _inner():
-                return queryset  # pragma: no cover - disposed, never awaited
+                return queryset  # disposed, never awaited
 
             return _inner()
 
@@ -1937,7 +1937,7 @@ def test_exact_wherenode_shadowed_clone_never_dispatches():
 
     fired = []
 
-    def _spy_clone():  # pragma: no cover - must never run
+    def _spy_clone():  # must never run
         fired.append("clone")
         return WhereNode()
 
@@ -1961,7 +1961,7 @@ def test_shadowed_leaf_as_sql_never_dispatches():
 
     fired = []
 
-    def _spy_as_sql(compiler, connection):  # pragma: no cover - must never run
+    def _spy_as_sql(compiler, connection):  # must never run
         fired.append("as_sql")
         return "1", []
 
@@ -1991,7 +1991,7 @@ def test_lookup_direct_rhs_attribute_hook_never_dispatches():
         def __init__(self, log):
             self.log = log
 
-        def __getattr__(self, name):  # pragma: no cover - must never run
+        def __getattr__(self, name):  # must never run
             self.log.append(name)
             return None
 
@@ -2079,7 +2079,7 @@ def test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date():
     fired = []
 
     class _LoudDate(datetime.date):
-        def __str__(self):  # pragma: no cover - must never run
+        def __str__(self):  # must never run
             fired.append("__str__")
             return "1999-12-31"
 
@@ -2135,17 +2135,17 @@ def test_lookup_direct_rhs_property_shadowed_subclass_normalizes_safely():
 
     class _ShadowedDate(datetime.date):
         @property
-        def year(self):  # pragma: no cover - must never run
+        def year(self):  # must never run
             fired.append("year")
             return 1999
 
         @property
-        def month(self):  # pragma: no cover - must never run
+        def month(self):  # must never run
             fired.append("month")
             return 12
 
         @property
-        def day(self):  # pragma: no cover - must never run
+        def day(self):  # must never run
             fired.append("day")
             return 31
 
@@ -2276,7 +2276,7 @@ def test_lookup_expression_rhs_still_recurses():
     fired = []
 
     class _HostileRhs(models.Func):
-        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+        def as_sql(self, compiler, connection):  # must never run
             fired.append("rhs.as_sql")
             return "1", []
 
@@ -2298,7 +2298,7 @@ def test_lookup_hostile_lhs_fails_closed():
     fired = []
 
     class _HostileLhs(models.Func):
-        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+        def as_sql(self, compiler, connection):  # must never run
             fired.append("lhs.as_sql")
             return "1", []
 
@@ -2321,7 +2321,7 @@ def test_hostile_order_by_expression_fails_closed():
     fired = []
 
     class _HostileOrder(models.Func):
-        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+        def as_sql(self, compiler, connection):  # must never run
             fired.append("order_by.as_sql")
             return "1", []
 
@@ -2344,7 +2344,7 @@ def test_consumer_expression_nested_in_genuine_func_fails_closed():
     from django.db.models.functions import Upper
 
     class _NestedHostile(models.Func):
-        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+        def as_sql(self, compiler, connection):  # must never run
             return "1", []
 
     source = Category.objects.filter(is_private=False)
@@ -2404,7 +2404,7 @@ def test_hostile_expression_inside_genuine_subquery_where_fails_closed():
     """
 
     class _BuriedHostile(models.Func):
-        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+        def as_sql(self, compiler, connection):  # must never run
             return "1", []
 
     inner = models.Subquery(Item.objects.filter(name="x").values("pk"))
@@ -2432,7 +2432,7 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
     class _HostileValue:
         conditional = True
 
-        def resolve_expression(self, query, *args, **kwargs):  # pragma: no cover
+        def resolve_expression(self, query, *args, **kwargs):
             fired.append("resolve_expression")
             from django.db.models.sql.where import WhereNode
 
@@ -2493,7 +2493,7 @@ def test_hostile_query_container_subclass_fails_closed():
     fired = []
 
     class _HostileRefcount(dict):
-        def copy(self):  # pragma: no cover - must never run
+        def copy(self):  # must never run
             fired.append("copy")
             return {}
 
@@ -2577,7 +2577,7 @@ def test_stateful_combined_queries_tuple_subclass_fails_closed():
     class _StatefulTuple(tuple):
         _calls = [0]
 
-        def __iter__(self):  # pragma: no cover - must never be iterated
+        def __iter__(self):  # must never be iterated
             self._calls[0] += 1
             if self._calls[0] == 1:
                 return iter((Category.objects.all().query,))
@@ -2603,7 +2603,7 @@ def test_is_inert_value_uses_exact_types_not_isinstance():
     from decimal import Decimal
 
     class _EvilStr(str):
-        def resolve_expression(self, query, *args, **kwargs):  # pragma: no cover
+        def resolve_expression(self, query, *args, **kwargs):
             from django.db.models import Value
 
             return Value(1)
@@ -2627,7 +2627,7 @@ def test_deferred_str_subclass_expression_never_dispatches():
     fired = []
 
     class _EvilStr(str):
-        def resolve_expression(self, query, *args, **kwargs):  # pragma: no cover
+        def resolve_expression(self, query, *args, **kwargs):
             fired.append("resolve_expression")
             from django.db.models import Value
 
@@ -2690,7 +2690,7 @@ def test_dynamic_as_vendor_shadow_never_dispatches():
 
     fired = []
 
-    def _spy_as_sqlite(compiler, connection):  # pragma: no cover - must never run
+    def _spy_as_sqlite(compiler, connection):  # must never run
         fired.append("as_sqlite")
         return "1", []
 
@@ -2716,7 +2716,7 @@ def test_func_arg_joiner_metadata_non_string_fails_closed():
     from django.db.models.functions import Concat
 
     class _EvilJoiner:
-        def join(self, parts):  # pragma: no cover - must never run
+        def join(self, parts):  # must never run
             return "x"
 
     source = Category.objects.all()
@@ -2741,7 +2741,7 @@ def test_func_extra_template_parameter_object_fails_closed():
     fired = []
 
     class _HostileTemplateParam:
-        def __str__(self):  # pragma: no cover - must never run
+        def __str__(self):  # must never run
             fired.append("__str__")
             return "UPPER"
 
@@ -2818,7 +2818,7 @@ def test_where_node_non_string_connector_fails_closed():
     """
 
     class _EvilConnector:
-        def __str__(self):  # pragma: no cover - must never run
+        def __str__(self):  # must never run
             return "OR"
 
     source = Category.objects.filter(is_private=False)
@@ -2866,7 +2866,7 @@ def test_query_extra_select_executable_sql_fails_closed_before_clone():
     fired = []
 
     class _HostileSQL:
-        def __str__(self):  # pragma: no cover - must never run
+        def __str__(self):  # must never run
             fired.append("str")
             return "1"
 
@@ -2932,7 +2932,7 @@ def test_extra_where_executable_sql_fails_closed_before_clone():
     fired = []
 
     class _HostileSQL:
-        def __str__(self):  # pragma: no cover - must never run
+        def __str__(self):  # must never run
             fired.append("str")
             return "1"
 
@@ -2956,7 +2956,7 @@ def test_extra_where_non_sequence_sqls_fails_closed():
     fired = []
 
     class _EvilSqls:
-        def __iter__(self):  # pragma: no cover - must never run
+        def __iter__(self):  # must never run
             fired.append("iter")
             return iter(["1 = 1"])
 
@@ -2981,7 +2981,7 @@ def test_extra_where_non_sequence_params_fails_closed():
     fired = []
 
     class _EvilParams:
-        def __iter__(self):  # pragma: no cover - must never run
+        def __iter__(self):  # must never run
             fired.append("iter")
             return iter(["keep"])
 
@@ -3040,7 +3040,7 @@ def test_filtered_relation_hostile_resolved_condition_never_dispatches():
     fired = []
 
     class _BuriedHostile(models.Func):
-        def as_sql(self, compiler, connection):  # pragma: no cover - must never run
+        def as_sql(self, compiler, connection):  # must never run
             fired.append("as_sql")
             return "1", []
 
@@ -3093,7 +3093,7 @@ def test_module_spoofing_metaclass_is_not_invoked_and_fails_closed():
     fired = []
 
     class _NoisyMeta(type):
-        def __getattribute__(cls, name):  # pragma: no cover - must never run for provenance
+        def __getattribute__(cls, name):  # must never run for provenance
             fired.append(name)
             return super().__getattribute__(name)
 
@@ -3150,11 +3150,11 @@ def test_hostile_hints_bool_and_iter_never_dispatch():
     fired = []
 
     class _EvilHints(dict):
-        def __bool__(self):  # pragma: no cover - must never run
+        def __bool__(self):  # must never run
             fired.append("bool")
             return True
 
-        def __iter__(self):  # pragma: no cover - must never run
+        def __iter__(self):  # must never run
             fired.append("iter")
             return super().__iter__()
 
@@ -3191,7 +3191,7 @@ def test_prefetch_lookups_wrong_shape_fails_closed():
     """``_prefetch_related_lookups`` must be an exact tuple / list before iteration."""
 
     class _EvilLookups:
-        def __bool__(self):  # pragma: no cover - must never run
+        def __bool__(self):  # must never run
             raise RuntimeError("dispatched")
 
     source = Category.objects.all()
@@ -3226,10 +3226,10 @@ def test_deferred_filter_slot_never_truth_tested():
     """
 
     class _EvilDeferred:
-        def __bool__(self):  # pragma: no cover - must never run
+        def __bool__(self):  # must never run
             raise RuntimeError("dispatched __bool__")
 
-        def __iter__(self):  # pragma: no cover - must never run
+        def __iter__(self):  # must never run
             raise RuntimeError("dispatched __iter__")
 
     source = Category.objects.all()
@@ -3509,7 +3509,7 @@ def test_hostile_case_container_fails_closed_before_its_iterator_runs():
     fired = []
 
     class _HostileCases(list):
-        def __iter__(self):  # pragma: no cover - must never run
+        def __iter__(self):  # must never run
             fired.append("iter")
             return super().__iter__()
 
@@ -3541,11 +3541,11 @@ def test_hostile_alias_refcount_payload_fails_closed():
     fired = []
 
     class _HostileCount(int):
-        def __add__(self, other):  # pragma: no cover - must never run
+        def __add__(self, other):  # must never run
             fired.append("add")
             return self
 
-        def __sub__(self, other):  # pragma: no cover - must never run
+        def __sub__(self, other):  # must never run
             fired.append("sub")
             return self
 
@@ -3608,7 +3608,7 @@ def test_hostile_filtered_relation_payload_fails_closed():
         "query _filtered_relations['rel'] is a object",
     )
     relation = models.FilteredRelation("items", condition=models.Q(pk=1))
-    relation.as_sql = lambda *args, **kwargs: None  # pragma: no cover - must never run
+    relation.as_sql = lambda *args, **kwargs: None  # must never run
     source.query._filtered_relations = {"rel": relation}
     assert _query_container_defect(source.query) == (
         "untrusted",
@@ -3934,7 +3934,7 @@ def test_value_payload_plain_data_subclass_normalizes_to_exact_value():
         KEEP = "keep", "Keep"
 
     class _LoudDate(datetime.date):
-        def __str__(self):  # pragma: no cover - must never run
+        def __str__(self):  # must never run
             fired.append("__str__")
             return "1999-12-31"
 
@@ -4005,13 +4005,13 @@ def test_hostile_tzinfo_subclass_fails_closed():
     """
 
     class _HostileTz(datetime.tzinfo):
-        def utcoffset(self, dt):  # pragma: no cover - must never run
+        def utcoffset(self, dt):  # must never run
             return datetime.timedelta(0)
 
-        def tzname(self, dt):  # pragma: no cover - must never run
+        def tzname(self, dt):  # must never run
             return "X"
 
-        def dst(self, dt):  # pragma: no cover - must never run
+        def dst(self, dt):  # must never run
             return datetime.timedelta(0)
 
     source = Category.objects.filter(is_private=False).annotate(
@@ -4071,7 +4071,7 @@ def test_non_class_model_with_convincing_meta_fails_closed():
 
     class _HookedMeta:
         @property
-        def concrete_model(self):  # pragma: no cover - must never run
+        def concrete_model(self):  # must never run
             fired.append("concrete_model")
             return Category
 
@@ -4092,7 +4092,7 @@ def test_non_model_class_with_convincing_meta_fails_closed():
 
     class _HookedMeta:
         @property
-        def concrete_model(self):  # pragma: no cover - must never run
+        def concrete_model(self):  # must never run
             fired.append("concrete_model")
             return Category
 

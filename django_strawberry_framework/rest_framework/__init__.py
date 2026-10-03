@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from ..utils.imports import require_optional_module
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from types import ModuleType
 
 # The single DRF install-hint string (spec-039 carry-forward, Decision 12).

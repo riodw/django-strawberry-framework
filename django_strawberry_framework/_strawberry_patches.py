@@ -381,7 +381,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from .conf import upstream_patches_enabled
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
     from types import CodeType
     from typing import Protocol, TypeGuard
@@ -422,7 +422,7 @@ try:
     from strawberry.http.async_base_view import AsyncBaseHTTPView
     from strawberry.http.base import BaseView
     from strawberry.http.sync_base_view import SyncBaseHTTPView
-except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
+except ImportError:  # pragma: no cover - every supported release imports; tests patch the sentinel
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
     BaseView = None

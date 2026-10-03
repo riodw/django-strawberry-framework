@@ -69,7 +69,7 @@ from ..utils.querysets import (
 from ..utils.relations import RelationKind, instance_accessor, is_many_side_relation_kind
 from .converters import _field_output_type_for
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from ..utils.typing import ModelField
     from .base import DjangoType
 

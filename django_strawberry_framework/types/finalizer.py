@@ -79,7 +79,7 @@ from .relay import (
 )
 from .resolvers import _attach_file_resolvers, _attach_relation_resolvers
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from strawberry.types.fields.resolver import StrawberryResolver

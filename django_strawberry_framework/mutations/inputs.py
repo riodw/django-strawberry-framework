@@ -76,7 +76,7 @@ from ..utils.relations import (
 )
 from ..utils.strings import graphql_camel_name
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import TypeAlias
 
     from strawberry.types.base import WithStrawberryObjectDefinition

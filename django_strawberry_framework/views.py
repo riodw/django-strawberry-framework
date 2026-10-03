@@ -105,7 +105,7 @@ from django_strawberry_framework._request_body import body_exceeds_limit
 from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
     from cross_web import AsyncHTTPRequestAdapter, SyncHTTPRequestAdapter

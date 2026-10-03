@@ -63,7 +63,7 @@ from typing_extensions import override
 
 from django_strawberry_framework.utils.imports import require_optional_module
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from types import ModuleType
 
 # The single django-debug-toolbar install-hint string (spec-042 Decision 5).

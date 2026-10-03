@@ -81,7 +81,7 @@ from ..scalars import BigInt
 from ..utils.imports import import_attr_if_importable
 from ..utils.strings import pascal_case
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.contrib.postgres.fields import ArrayField, HStoreField
     from typing_extensions import Never, TypeForm
 

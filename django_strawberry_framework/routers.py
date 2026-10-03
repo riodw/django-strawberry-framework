@@ -55,7 +55,7 @@ from .consumers import (
 from .exceptions import ConfigurationError, describe_value
 from .utils.imports import CHANNELS_FLOOR, STRAWBERRY_FLOOR, require_optional_module
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
     from typing import Protocol

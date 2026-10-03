@@ -101,7 +101,7 @@ from .plans import (
     order_entry_name_and_direction,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import TypeAlias
 

@@ -108,7 +108,7 @@ from ..exceptions import ConfigurationError, describe_value
 from ..utils.private_state import PrivateAuthority
 from .operation_state import OperationState, _OperationBoundExtension
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from django.db.backends.base.base import BaseDatabaseWrapper
     from strawberry.types import ExecutionContext
 

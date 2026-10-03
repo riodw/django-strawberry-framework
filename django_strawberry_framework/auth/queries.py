@@ -35,7 +35,7 @@ from .mutations import (
     _sync_bridged_async_body,
 )
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
     from django.contrib.auth.models import _User

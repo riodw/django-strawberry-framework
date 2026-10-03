@@ -267,7 +267,7 @@ def test_schema_hook_stable_field_map_generates_input():
     """
 
     class CtxSer(serializers.Serializer):
-        def get_fields(self):  # pragma: no cover - never called; field_map is supplied.
+        def get_fields(self):  # never called; field_map is supplied.
             _ = self.context["tenant"]
             return {}
 
@@ -1018,10 +1018,10 @@ def test_multiple_schema_time_problems_aggregate_into_one_error():
     _register_products_types()
 
     class CustomField(serializers.Field):
-        def to_internal_value(self, data):  # pragma: no cover - never reached in conversion.
+        def to_internal_value(self, data):  # never reached in conversion.
             return data
 
-        def to_representation(self, value):  # pragma: no cover - never reached in conversion.
+        def to_representation(self, value):  # never reached in conversion.
             return value
 
     class MultiBadSer(serializers.ModelSerializer):

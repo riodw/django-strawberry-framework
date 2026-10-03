@@ -50,7 +50,7 @@ from .nested_fetch import StrategySelection, resolve_strategy
 # ``from __future__ import annotations``, but the runtime check is the
 # load-bearing surface here.
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import TypeAlias
 
     #: Any ``Prefetch``: django-stubs' parameters are covariant, so the

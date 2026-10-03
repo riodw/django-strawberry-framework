@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, NamedTuple
 from ..utils.context import clear_context_key, get_context_value, stash_on_context
 from ..utils.operation_lease import OperationLease
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from collections.abc import Iterable
     from typing import TypeAlias
 

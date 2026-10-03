@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast, get_args, get_o
 
 from typing_extensions import Never
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
+if TYPE_CHECKING:
     from typing import Protocol, TypeAlias
 
     from django.db import models

@@ -3064,9 +3064,7 @@ class FilterSet(
             "Invalid filter input",
             extensions=coded_error_extensions(
                 FILTER_INVALID_ERROR_CODE,
-                # basedpyright: typeshed types ``errors`` as a plain dict; it is the form's
-                # ``ErrorDict``, so ``get_json_data`` reads as unknown on ``dict``
-                errors=filterset_instance.errors.get_json_data(),  # pyright: ignore[reportAttributeAccessIssue]
+                errors=filterset_instance.form.errors.get_json_data(),
             ),
         )
 

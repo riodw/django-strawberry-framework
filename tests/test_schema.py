@@ -512,7 +512,7 @@ def test_get_extensions_gives_an_unrelated_factory_both_package_authorities():
         "DjangoErrorPolicyExtension",
         "_MarkerExtension",
         "DjangoResourcePolicyExtension",
-        "_AdmissionGuard",
+        "AdmissionGuard",
         "_OperationModeMarker",
     ]
 

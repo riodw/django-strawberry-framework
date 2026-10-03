@@ -834,7 +834,10 @@ difference, and one that does was accepting handshakes addressed to a host it ne
 It is a leaf-module import — `from django_strawberry_framework.views import
 DjangoGraphQLView` — never a package-root export, matching the established posture for
 every integration surface (`routers.py`, `middleware/debug_toolbar.py`,
-`extensions/`).
+`extensions/`). Both views stay generic over Strawberry's `Context` and `RootValue` type
+variables (`strawberry.http.typevars`, each defaulting to `None`) exactly as the upstream
+views are, so a consumer whose `get_context` returns its own context type subclasses
+`DjangoGraphQLView[MyContext, None]` (or the async twin) and the override type-checks.
 
 The subclass adds exactly **one subject** — the raw request body — and inherits everything
 else. That subject is two questions: how many of the body's bytes will be processed (the

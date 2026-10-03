@@ -92,6 +92,7 @@ from django.conf import settings
 from django.utils.decorators import classonlymethod
 from django.views.decorators.csrf import csrf_protect
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
+from strawberry.http.typevars import Context, RootValue
 from typing_extensions import override
 
 from django_strawberry_framework._boundary_ordering import (
@@ -1000,7 +1001,7 @@ _csrf_protected_async_run = csrf_protect(_async_run_after_csrf_check)
 
 # basedpyright: the mixin defines no ``__init__`` (its base is ``object`` at run time), so
 # construction runs the Strawberry view's ``BaseView.__init__``, which chains to ``View``'s
-class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):  # pyright: ignore[reportUnsafeMultipleInheritance]
+class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView[Context, RootValue]):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """The package's synchronous Django GraphQL view.
 
         A subclass of ``strawberry.django.views.GraphQLView`` that overrides exactly
@@ -1013,6 +1014,12 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):  # pyright: ign
         ``get_root_value`` / ``process_result`` hooks a consumer may override. The
         one package keyword it adds is ``max_request_body_bytes=``, whose contract
         lives on ``_RequestBodyBoundaryMixin``.
+
+        Like upstream's view it is generic over Strawberry's ``Context`` and
+        ``RootValue`` type variables (each defaulting to ``None``), so a consumer
+        whose ``get_context`` returns its own context type subclasses
+        ``DjangoGraphQLView[MyContext, None]``; the async twin takes the same two
+        parameters.
 
         It exists as a package-owned symbol so the URLconf entry, the migration
         note, and the transport bounds the package owns on the HTTP path all name
@@ -1068,7 +1075,7 @@ class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView):  # pyright: ign
 
 # basedpyright: the mixin defines no ``__init__`` (its base is ``object`` at run time), so
 # construction runs the Strawberry view's ``BaseView.__init__``, which chains to ``View``'s
-class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView):  # pyright: ignore[reportUnsafeMultipleInheritance]
+class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView[Context, RootValue]):  # pyright: ignore[reportUnsafeMultipleInheritance]
     """The asynchronous twin, with an identical surface.
 
     The shape an ASGI deployment generally wants: ``AsyncGraphQLView.as_view``

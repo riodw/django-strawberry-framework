@@ -683,7 +683,7 @@ def test_bind_materializes_input_and_payload_globals():
     assert CreateItem._input_class is _materialized_names["ItemInput"]
     assert CreateItem._payload_type_name == "CreateItemPayload"
     assert DeleteItem._input_class is None  # delete is id-only
-    assert DeleteItem._input_field_specs is None
+    assert DeleteItem._input_field_specs == ()
     assert UpdateItem._primary_type is not None
     create_attrs = {spec.input_attr for spec in CreateItem._input_field_specs or ()}
     assert create_attrs == {

@@ -85,7 +85,7 @@ from .operations import (
 from .permissions import DjangoModelPermission, run_permission_classes
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
     from typing import Protocol, TypeAlias, TypeVar
 
     from strawberry.types import Info
@@ -1172,10 +1172,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
     else:
         _payload_type_name = None
     # Bind-stashed reverse map the model decode rides
-    # (``utils/write_values.py::decode_provided_fields``). ``None`` until bind
-    # (and stays ``None`` for ``delete``, which has no input). Form / serializer
+    # (``utils/write_values.py::decode_provided_fields``). Empty until bind (and
+    # stays empty for ``delete``, which has no input). Form / serializer
     # subclasses overwrite ``_input_field_specs`` with their own flavor map.
-    _input_field_specs: ClassVar[list[InputFieldSpec] | None] = None
+    _input_field_specs: ClassVar[Sequence[InputFieldSpec]] = ()
     _model_fields_by_attr: ClassVar[ModelFieldIndex | None] = None
 
     @classmethod

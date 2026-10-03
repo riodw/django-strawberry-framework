@@ -62,6 +62,7 @@ from django_strawberry_framework.views import DjangoGraphQLView
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
     from django.http import HttpRequest, HttpResponse
+    from django.views import View
     from strawberry.schema.name_converter import HasGraphQLName
     from strawberry.types.arguments import StrawberryArgument
 
@@ -126,7 +127,7 @@ def _post_sync_response(
     variables: JSONObject | None = None,
     client: Client | None = None,
     extra_settings: dict[str, Any] | None = None,
-    view_class: type[DjangoGraphQLView] | None = None,
+    view_class: type[View] | None = None,
 ):
     """Post to the test mount and return the RAW ``HttpResponse``.
 
@@ -161,7 +162,7 @@ def _post_sync(
     variables: JSONObject | None = None,
     client: Client | None = None,
     extra_settings: dict[str, Any] | None = None,
-    view_class: type[DjangoGraphQLView] | None = None,
+    view_class: type[View] | None = None,
 ) -> JSONObject:
     response = _post_sync_response(
         schema,
@@ -3582,12 +3583,11 @@ class _MarkedContext(StrawberryDjangoContext):
     consumer_marker: object = None
 
 
-class _CapturingContextView(DjangoGraphQLView):
+class _CapturingContextView(DjangoGraphQLView[_MarkedContext, None]):
     """Pre-populates a consumer attribute on the context and hands the object to the test."""
 
     @override
-    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
-    def get_context(self, request: HttpRequest, response: HttpResponse):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def get_context(self, request: HttpRequest, response: HttpResponse):
         context = _MarkedContext(
             request=request,
             response=response,
@@ -3613,10 +3613,9 @@ class _FrozenContext:
         raise AttributeError(f"frozen context refuses delete of {name!r}")
 
 
-class _FrozenContextView(DjangoGraphQLView):
+class _FrozenContextView(DjangoGraphQLView[_FrozenContext, None]):
     @override
-    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
-    def get_context(self, request: HttpRequest, response: HttpResponse):  # pyright: ignore[reportIncompatibleMethodOverride]
+    def get_context(self, request: HttpRequest, response: HttpResponse):
         return _FrozenContext(request, response)
 
 

@@ -91,7 +91,7 @@ from .extensions.error_policy import (
     masking_is_active,
 )
 from .extensions.operation_state import DjangoExtensionsRunner, _OperationModeMarker
-from .extensions.resource_policy import DjangoResourcePolicyExtension, _AdmissionGuard
+from .extensions.resource_policy import AdmissionGuard, DjangoResourcePolicyExtension
 from .mutations.fields import MUTATION_CLASS_MARKER
 from .resource_policy import _PACKAGE_RESOURCE_POLICY, ResourcePolicy, resolve_resource_policy
 from .utils.execution_mode import OperationMode, async_execution
@@ -1289,7 +1289,7 @@ def _admitted_chain(resolved: list[SchemaExtension], *, sync: bool) -> list[Sche
         DjangoErrorPolicyExtension(),
         *resolved,
         DjangoResourcePolicyExtension(),
-        _AdmissionGuard(),
+        AdmissionGuard(),
         _OperationModeMarker(_operation_mode(sync=sync)),
     ]
 

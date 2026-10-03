@@ -73,8 +73,8 @@ from django_strawberry_framework.extensions.resource_policy import (
     _CLOSE_TOKEN_KINDS,
     _OPEN_TOKEN_KINDS,
     _STRUCTURAL_DELIMITER_PAIRS,
+    AdmissionGuard,
     DjangoResourcePolicyExtension,
-    _AdmissionGuard,
     charge_document,
     scan_document_text,
 )
@@ -3409,7 +3409,7 @@ async def test_the_streaming_path_carries_the_same_admission_verdict(extensions,
 
 @pytest.mark.parametrize(
     "extension_type",
-    [DjangoResourcePolicyExtension, _AdmissionGuard],
+    [DjangoResourcePolicyExtension, AdmissionGuard],
     ids=["the-enforcing-entry", "the-appended-guard"],
 )
 def test_a_rejection_an_extension_erased_is_restated_before_execution_is_decided(extension_type):
@@ -3438,7 +3438,7 @@ def test_a_rejection_an_extension_erased_is_restated_before_execution_is_decided
 
 @pytest.mark.parametrize(
     "extension_type",
-    [DjangoResourcePolicyExtension, _AdmissionGuard],
+    [DjangoResourcePolicyExtension, AdmissionGuard],
     ids=["the-enforcing-entry", "the-appended-guard"],
 )
 def test_an_admitted_operation_keeps_whatever_validation_published(extension_type):

@@ -26,7 +26,7 @@ five parity-floor primitives (spec-027 Decision 4):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -463,12 +463,13 @@ class RangeField(Field):
     constraint instead of compiling ``col BETWEEN NULL AND NULL``.
     """
 
-    # django-stubs declares both as ``forms.Field`` instance variables; Django
-    # defines them as class attributes, which is what these override.
-    # ``empty_values`` keeps the base's ``Sequence`` type: it is only read.
-    # basedpyright: the stub declares both as instance vars; it rejects a ClassVar over each
-    default_validators: ClassVar[list[_Validator]] = [validate_range]  # pyright: ignore[reportIncompatibleVariableOverride]
-    empty_values: ClassVar[Sequence[object]] = [  # pyright: ignore[reportIncompatibleVariableOverride]
+    # Class-level defaults ``forms.Field`` reads through the instance and never
+    # mutates (``__init__`` copies ``default_validators`` into a fresh per-instance
+    # ``validators`` list), so every ``RangeField`` shares them; annotated with the
+    # types django-stubs declares on ``forms.Field``. ``empty_values`` keeps the
+    # base's ``Sequence`` type: it is only read.
+    default_validators: list[_Validator] = [validate_range]  # noqa: RUF012 - copied, never mutated
+    empty_values: Sequence[object] = [
         None,
         [None, None],
         (None, None),

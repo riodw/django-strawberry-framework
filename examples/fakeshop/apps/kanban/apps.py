@@ -1,5 +1,7 @@
 """Django app configuration that registers kanban consistency signals at startup."""
 
+from importlib import import_module
+
 from django.apps import AppConfig
 from typing_extensions import override
 
@@ -13,5 +15,5 @@ class KanbanConfig(AppConfig):
 
     @override
     def ready(self) -> None:
-        # basedpyright: imported for its side effect: importing the module connects its receivers
-        from . import signals  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        # Importing the signals module connects its receivers.
+        import_module(f"{self.name}.signals")

@@ -423,7 +423,7 @@ def test_a_consumer_extension_is_prepended_behind_the_policy_not_in_front_of_it(
         "DjangoErrorPolicyExtension",
         "_ConsumerExtension",
         "DjangoResourcePolicyExtension",
-        "_AdmissionGuard",
+        "AdmissionGuard",
         "_OperationModeMarker",
     ]
 

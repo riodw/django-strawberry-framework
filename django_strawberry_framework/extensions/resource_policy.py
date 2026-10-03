@@ -64,7 +64,7 @@ Where each pass reaches, stated as the boundary rather than as parity:
   writes (``resource_policy.py::admission_rejection``). Upstream decides whether
   to execute from INSIDE the validation stage, so restating it has to happen as
   a validation hook sets up and the last one to do so has the last word:
-  ``schema.py::DjangoSchema`` appends :class:`_AdmissionGuard` behind every
+  ``schema.py::DjangoSchema`` appends :class:`AdmissionGuard` behind every
   consumer entry for exactly that position. It is read once more at the hook
   execution begins from, so a plain ``strawberry.Schema`` whose consumer placed a
   validation cache after this extension, which the pre-execution check then
@@ -337,7 +337,7 @@ def _mutation_input_specs(field_def: object) -> Mapping[str, InputFieldSpec] | N
     mutation_cls = getattr(resolver, MUTATION_CLASS_MARKER, None)
     # The marker is stamped by ``mutations/fields.py::DjangoMutationField`` with a
     # package mutation class, which declares ``_input_field_specs`` (``mutations/sets.py``).
-    specs: list[InputFieldSpec] | None = getattr(mutation_cls, "_input_field_specs", None)
+    specs: Sequence[InputFieldSpec] | None = getattr(mutation_cls, "_input_field_specs", None)
     if not specs:
         return None
     return {spec.graphql_name: spec for spec in specs}
@@ -1696,7 +1696,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         whichever validation hook SET UP last - which is why this restates
         before yielding rather than after, and why it can only answer for
         entries ahead of this one. ``schema.py::DjangoSchema`` closes the rest
-        by appending :class:`_AdmissionGuard` after every consumer entry; a
+        by appending :class:`AdmissionGuard` after every consumer entry; a
         plain ``strawberry.Schema`` whose consumer placed a validation cache
         after this extension has :meth:`on_execute` as the backstop instead.
         """
@@ -1710,7 +1710,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         A rejection is a statement that nothing runs. Where a validation hook
         set up after this extension erased the published rejection - a plain
         ``strawberry.Schema`` with a later validation cache, which has no
-        appended :class:`_AdmissionGuard` - the pre-execution check waves the
+        appended :class:`AdmissionGuard` - the pre-execution check waves the
         operation through, and execution BEGINNING is the contradiction, so the
         refusal is restated at the hook execution starts from, which every
         upstream execution path converts into an error entry. Raising is correct
@@ -1723,9 +1723,7 @@ class DjangoResourcePolicyExtension(_OperationBoundExtension[OperationState]):
         yield
 
 
-# basedpyright: package-internal, not unused: it is imported and appended by
-# ``django_strawberry_framework/schema.py::_admitted_chain``
-class _AdmissionGuard(SchemaExtension):  # pyright: ignore[reportUnusedClass]
+class AdmissionGuard(SchemaExtension):
     """Restate the operation's admission verdict after every consumer validation hook.
 
     Not a second enforcement stage: it charges nothing, arms nothing, and

@@ -26,6 +26,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, cast
+from weakref import WeakKeyDictionary
 
 import strawberry
 from django.db import models
@@ -826,6 +827,15 @@ def _unwrap_enum_member(value: object) -> object:
     return value
 
 
+# Range sub-input classes built per filter instance, keyed by generation identity
+# (see ``_build_range_input_class``). Weak keys tie each cache to its filter's
+# lifetime without writing an attribute onto the upstream ``Filter`` object.
+_RANGE_INPUT_CLASSES: WeakKeyDictionary[
+    Filter,
+    dict[tuple[type[FilterSet] | None, str, _TypeForm], type[object]],
+] = WeakKeyDictionary()
+
+
 def _build_range_input_class(
     filter_instance: Filter,
     inner: _TypeForm,
@@ -833,7 +843,7 @@ def _build_range_input_class(
 ) -> type[object]:
     """Return a Strawberry input dataclass with ``start: T | None`` and ``end: T | None``.
 
-    Classes are cached on the filter instance by their full generation identity:
+    Classes are cached per filter instance by their full generation identity:
     owning filterset, Django field path, and inner scalar. A single declared
     filter instance can be converted first without an owner (a direct converter
     call) and later through its owning filterset; one unkeyed cache slot would
@@ -861,17 +871,7 @@ def _build_range_input_class(
     """
     field_name = getattr(filter_instance, "field_name", "field") or "field"
     cache_key = (filterset_cls, field_name, inner)
-    # The per-instance slot is written only here, keyed and valued as below.
-    cache: dict[tuple[type[FilterSet] | None, str, _TypeForm], type[object]] | None = getattr(
-        filter_instance,
-        "_range_input_classes",
-        None,
-    )
-    if cache is None:
-        cache = {}
-        # basedpyright: a per-instance cache slot no filter class declares, reported as an unknown
-        # ``Filter`` attribute
-        filter_instance._range_input_classes = cache  # pyright: ignore[reportAttributeAccessIssue]
+    cache = _RANGE_INPUT_CLASSES.setdefault(filter_instance, {})
     cached = cache.get(cache_key)
     if cached is not None:
         return cached

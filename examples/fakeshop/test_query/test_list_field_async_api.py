@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     from collections.abc import Coroutine, Generator
 
     from django.db.models.sql.compiler import _AsSqlType
+    from django.views import View
 
 _ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
 # ``BranchOrder.apply_async`` replaced by a classmethod whose result the seal must judge.
@@ -112,7 +113,7 @@ async def _post_async(
     variables: JSONObject | None = None,
     client: AsyncClient | None = None,
     extra_settings: dict[str, Any] | None = None,
-    view_class: type[AsyncDjangoGraphQLView] | None = None,
+    view_class: type[View] | None = None,
 ) -> JSONObject:
     _CURRENT["schema"] = schema
     _CURRENT["view_class"] = view_class
@@ -2177,10 +2178,9 @@ class _MarkedContext(StrawberryDjangoContext):
     consumer_marker: object = None
 
 
-class _CapturingAsyncContextView(AsyncDjangoGraphQLView):
+class _CapturingAsyncContextView(AsyncDjangoGraphQLView[_MarkedContext, None]):
     @override
-    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
-    async def get_context(self, request: HttpRequest, response: HttpResponse):  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def get_context(self, request: HttpRequest, response: HttpResponse):
         context = _MarkedContext(
             request=request,
             response=response,
@@ -2206,10 +2206,9 @@ class _FrozenContext:
         raise AttributeError(f"frozen context refuses delete of {name!r}")
 
 
-class _FrozenAsyncContextView(AsyncDjangoGraphQLView):
+class _FrozenAsyncContextView(AsyncDjangoGraphQLView[_FrozenContext, None]):
     @override
-    # basedpyright: upstream's Context TypeVar defaults to None, so the base view's get_context is declared None
-    async def get_context(self, request: HttpRequest, response: HttpResponse):  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def get_context(self, request: HttpRequest, response: HttpResponse):
         return _FrozenContext(request, response)
 
 

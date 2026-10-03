@@ -133,7 +133,7 @@ from .operations import operation_takes_id
 from .permissions import _require_sync_bool_auth_result
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine
+    from collections.abc import Callable, Coroutine, Sequence
     from typing import Protocol, TypeAlias, TypeVar
 
     from django.db import models
@@ -471,7 +471,7 @@ def _decode_relations(
     data: object,
     info: Info[object, object],
     *,
-    specs: list[InputFieldSpec],
+    specs: Sequence[InputFieldSpec],
     model_fields: ModelFieldIndex,
 ) -> tuple[dict[str, object], _M2MAssignments, dict[str, object], FieldError | None]:
     """Decode provided input fields into model attrs + M2M pk lists.
@@ -937,7 +937,7 @@ def _run_pipeline_sync(
             info,
             instance=instance,
             # A create / update has an input, so the bind stashed the decode's reverse maps.
-            specs=cast("list[InputFieldSpec]", mutation_cls._input_field_specs),
+            specs=mutation_cls._input_field_specs,
             model_fields=cast("ModelFieldIndex", mutation_cls._model_fields_by_attr),
         ),
         # The model flavor's bind stashes no ``EXCLUDED`` spec, so its decode
@@ -955,7 +955,7 @@ def _model_decode_step(
     info: Info[object, object],
     *,
     instance: models.Model | None,
-    specs: list[InputFieldSpec],
+    specs: Sequence[InputFieldSpec],
     model_fields: ModelFieldIndex,
 ) -> _ModelDecoded | _ModelDecodedWithExcluded | list[FieldError]:
     """The model ``decode_step``: relation-decode + construct / ``setattr``.

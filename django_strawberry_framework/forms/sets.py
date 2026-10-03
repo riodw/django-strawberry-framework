@@ -95,7 +95,7 @@ from .inputs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
     from typing import TypeAlias
 
     from django.db import models
@@ -694,17 +694,6 @@ class DjangoModelFormMutation(DjangoMutation):
     # ref resolves the form-derived input, not a model-column input.
     input_module_path: ClassVar[str] = FORMS_INPUTS_MODULE_PATH
 
-    # The reverse-map records (``utils/inputs.py::InputFieldSpec`` per input
-    # field), stashed at bind so the decode reaches the form-field-keyed
-    # reverse map. ``None`` until bind (mirrors ``_input_class``); a type checker
-    # sees the bound list, since every form operation has an input.
-    if TYPE_CHECKING:
-        # basedpyright: the declaration narrows the base's pre-bind ``None`` (bind always stores
-        # the list before a read); it rejects an invariant mutable override of ``list | None``
-        _input_field_specs: ClassVar[list[InputFieldSpec]]  # pyright: ignore[reportIncompatibleVariableOverride]
-    else:
-        _input_field_specs = None
-
     @classmethod
     @override
     def build_input(
@@ -871,12 +860,9 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     else:
         _payload_type_name = None
 
-    # The reverse-map records, stashed at bind for the decode
-    # (mirrors ``DjangoModelFormMutation._input_field_specs``).
-    if TYPE_CHECKING:
-        _input_field_specs: ClassVar[list[InputFieldSpec]]
-    else:
-        _input_field_specs = None
+    # The reverse-map records, stashed at bind for the decode; empty until bind
+    # (mirrors ``DjangoMutation._input_field_specs``).
+    _input_field_specs: ClassVar[Sequence[InputFieldSpec]] = ()
 
     # The form-input namespace; mirrors ``DjangoModelFormMutation``.
     input_module_path: ClassVar[str] = FORMS_INPUTS_MODULE_PATH

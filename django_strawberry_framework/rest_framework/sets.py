@@ -494,17 +494,6 @@ class SerializerMutation(DjangoMutation):
     # ``data:`` ref resolves the serializer-derived input, not a model-column input.
     input_module_path: ClassVar[str] = SERIALIZER_INPUTS_MODULE_PATH
 
-    # The reverse-map records (``InputFieldSpec`` per input field), stashed
-    # at bind so the decode reaches the serializer-field-keyed reverse map.
-    # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot); a type
-    # checker sees the bound list, since every serializer operation has an input.
-    if TYPE_CHECKING:
-        # basedpyright: the declaration narrows the base's pre-bind ``None`` (bind always stores
-        # the list before a read); it rejects the invariant mutable-variable override
-        _input_field_specs: ClassVar[list[InputFieldSpec]]  # pyright: ignore[reportIncompatibleVariableOverride]
-    else:
-        _input_field_specs = None
-
     # The schema-time specs for ``Meta.injected_fields``, stashed at
     # bind so the resolver holds each injected field to the SAME runtime-agreement
     # contract (present / writable / source / kind / relation-model) an input field gets - not

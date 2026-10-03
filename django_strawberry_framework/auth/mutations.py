@@ -92,7 +92,6 @@ if TYPE_CHECKING:
     from ..mutations.resolvers import _GeneratedPayload, _M2MAssignments
     from ..mutations.sets import DeclarationRegistry, _ValidatedMutationMeta
     from ..types.base import DjangoType
-    from ..utils.inputs import InputFieldSpec
     from ..utils.permissions import ChannelsRequestAdapter
 
     # The register decode product: the constructed (unsaved) user, the M2M
@@ -1244,7 +1243,7 @@ def _register_decode_step(
         data,
         info,
         instance=instance,
-        specs=cast("list[InputFieldSpec]", mutation_cls._input_field_specs),
+        specs=mutation_cls._input_field_specs,
         model_fields=cast("ModelFieldIndex", mutation_cls._model_fields_by_attr),
     )
     if isinstance(decoded, list):

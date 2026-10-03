@@ -433,7 +433,6 @@ def test_bind_materializes_serializer_input_into_rest_framework_namespace():
     assert "node" in slots  # Item is Relay-shaped -> node slot
 
     # The generated reverse map is stashed for the decode (non-None).
-    assert CreateItem._input_field_specs is not None
     assert len(CreateItem._input_field_specs) > 0
 
 

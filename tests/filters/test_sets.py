@@ -520,6 +520,22 @@ def test_filterset_fields_alias_carried_generator_hits_the_gate():
                 filter_fields = (f for f in ["code"])
 
 
+@pytest.mark.parametrize("declared_fields", ["__all__", ["title"], {"title": ["exact"]}])
+def test_filterset_rejects_an_abstract_model_at_class_build(declared_fields):
+    """An abstract ``Meta.model`` fails at the class statement, naming the model.
+
+    django-filter resolves every generated lookup through the model's default
+    manager, which an abstract model does not have, so each ``Meta.fields`` shape
+    would otherwise die in ``resolve_field`` with an ``AttributeError`` on ``None``.
+    """
+    with pytest.raises(ConfigurationError, match=r"Meta.model TitledEntry is an abstract model"):
+
+        class TitledEntryFilter(FilterSet):
+            class Meta:
+                model = library_models.TitledEntry
+                fields = declared_fields
+
+
 def test_filterset_get_fields_re_readables_still_expand():
     """Positive control: every shipped ``Meta.fields`` shape keeps expanding
     (the gate has no false positives)."""

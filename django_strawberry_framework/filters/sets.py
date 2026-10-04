@@ -1600,6 +1600,15 @@ class FilterSet(
         # no-arg nested function / lambda has no positional to bind).
         get_base = super().get_filters
 
+        # An abstract model has no default manager, which django-filter reads to resolve
+        # every generated lookup (and no primary key for ``get_fields`` to add).
+        own_model = cls._meta.model
+        if own_model is not None and own_model._meta.abstract:
+            raise ConfigurationError(
+                f"{cls.__name__}: Meta.model {own_model.__name__} is an abstract model; a "
+                f"FilterSet needs a concrete model.",
+            )
+
         def _build() -> OrderedDict[str, Filter]:
             all_filters = get_base()
             model = cls._meta.model
@@ -1925,10 +1934,7 @@ class FilterSet(
 
         # ADD the PK if upstream excluded it (typically the auto-id column).
         pk_field = model._meta.pk
-        # basedpyright: django-stubs types ``Options.pk`` as always a ``Field``, but Django leaves
-        # it ``None`` on an abstract model (``ModelBase.__new__`` returns before ``_prepare``
-        # adds the auto primary key), so the comparison is live
-        if pk_field is not None and pk_field.name not in fields:  # pyright: ignore[reportUnnecessaryComparison]
+        if pk_field.name not in fields:
             fields[pk_field.name] = ["exact"]
 
         # REMOVE every ManyToManyField from the swept dict.

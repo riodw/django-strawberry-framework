@@ -1032,6 +1032,42 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
 
 
 @pytest.mark.django_db
+def test_an_abstract_model_type_serves_concrete_rows_and_its_default_seed_names_the_model():
+    """A ``DjangoType`` over an abstract model serves the concrete rows a resolver returns.
+
+    The generated default resolver has no table to seed from, so it fails with a
+    ``ConfigurationError`` naming the abstract model rather than an ``AttributeError``
+    off the default manager the abstract model does not have.
+    """
+
+    class TitledEntryType(DjangoType):
+        class Meta:
+            model = library_models.TitledEntry
+            fields = ("title",)
+
+    finalize_django_types()
+    library_models.ReadingList.objects.create(title="Classics")
+
+    @strawberry.type
+    class Query:
+        entries: list[TitledEntryType] = DjangoListField(TitledEntryType)
+
+        @strawberry.field
+        def reading_lists(self) -> list[TitledEntryType]:
+            return list(library_models.ReadingList.objects.all())
+
+    schema = strawberry.Schema(query=Query)
+    context = {"request": RequestFactory().get("/")}
+    served = schema.execute_sync("{ readingLists { title } }", context_value=context)
+    assert served.errors is None, served.errors
+    assert served.data == {"readingLists": [{"title": "Classics"}]}
+
+    seeded = schema.execute_sync("{ entries { title } }", context_value=context)
+    assert seeded.errors is not None
+    assert "TitledEntry is an abstract model" in seeded.errors[0].message
+
+
+@pytest.mark.django_db
 def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
     """The seed queries the captured model's table and the seals validate against it.
 

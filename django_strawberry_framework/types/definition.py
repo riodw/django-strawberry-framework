@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
 from django.db import models
 
@@ -440,17 +440,14 @@ def _resolves_id_off_pk(origin: type[object], pk_name: str) -> bool:
     from strawberry.relay.exceptions import NodeIDAnnotationError
 
     try:
-        # basedpyright: trust boundary: a consumer class can answer ``__class__`` with any object,
-        # which ``isinstance`` consults; the check keeps ``issubclass`` off a non-class answer
-        is_node = isinstance(origin, type) and issubclass(origin, relay.Node)  # pyright: ignore[reportUnnecessaryIsInstance]
+        is_node = issubclass(origin, relay.Node)
     except BaseException:
         return True
     if not is_node:
         return False
     try:
-        # ``is_node`` above established the ``relay.Node`` subclass.
         # A consumer ``Node`` may override ``resolve_id_attr`` to return anything.
-        id_attr: object = cast("type[relay.Node]", origin).resolve_id_attr()
+        id_attr: object = origin.resolve_id_attr()
     except NodeIDAnnotationError:
         # No ``NodeID`` annotation: the framework default resolves to "pk".
         return False

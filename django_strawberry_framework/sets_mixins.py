@@ -571,6 +571,8 @@ class ActiveInputPermissionMixin:
       recursion is already capped inside ``run_active_input_permission_checks``).
     - ``_run_logic_permission_checks`` -- filter recurses ``and`` / ``or`` /
       ``not``; order has none.
+    - ``_permission_walk_gates`` -- filter names the gates each active leaf's ORM
+      path fires; order walks its source paths alone.
 
     Apply pipelines stay family-owned: filters still derive related
     visibility and validate a django-filter form; orders still flatten to
@@ -658,6 +660,17 @@ class ActiveInputPermissionMixin:
         gate path its generated field would carry from its lookup table.
         """
         return verbatim_path(python_attr)
+
+    @classmethod
+    def _permission_walk_gates(cls, _input_value: object) -> tuple[tuple[type[object], str], ...]:
+        """Return the ``(set class, gate path)`` pairs active leaves' ORM paths fire. Default: none.
+
+        ``FilterSet`` answers with the gates the nested twin of each supplied
+        leaf's ORM path fires (``utils/permissions.py::relation_path_gates``), so
+        a declared filter whose ``field_name`` crosses a declared branch is gated
+        like its nested twin.
+        """
+        return ()
 
     @classmethod
     def _active_permission_targets(

@@ -786,9 +786,9 @@ def _build_loan_filter_test_schema(
     The shard-alias twin of ``_build_test_schema`` for the row-preserving
     relational-leaf predicate proof (spec-060 Part 1): the
     resolver applies the PRODUCTION ``LoanFilter`` (whose deep
-    ``book__loans__patron__email`` leaf compiles to a correlated ``EXISTS``) over a
-    queryset pinned to ``shard_b``, so the predicate primitive's ``.using(queryset.db)``
-    pin must carry the ``EXISTS`` subquery to that alias. ``LoanFilter`` / ``LoanType``
+    ``book__loans__patron__email`` leaf compiles to restriction subqueries, one per
+    declared hop) over a queryset pinned to ``shard_b``, so every hop's subquery must
+    run on that alias. ``LoanFilter`` / ``LoanType``
     are imported inside the fixture body (like ``BookType`` above) so the freshly
     reloaded classes are used after the autouse registry clear.
     """
@@ -1005,15 +1005,15 @@ def _seed_loan_relation_graph_on_shard_b() -> dict[str, int]:
 def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias(
     _build_loan_filter_test_schema: None,
 ):
-    """The correlated-``EXISTS`` relational-leaf predicate runs on the ``shard_b`` alias.
+    """The relational-leaf predicate runs on the ``shard_b`` alias.
 
     The production ``LoanFilter`` deep leaf ``book__loans__patron__email`` (spelled
     ``bookLoansPatronEmail`` on the wire) is applied over a ``.using('shard_b')``
-    queryset. The predicate primitive pins its correlated ``EXISTS`` subquery to
-    ``queryset.db``, so the whole filter - outer root scan AND the ``EXISTS``
-    re-entry - must execute on ``shard_b``: the seeded shard rows return
+    queryset. Each declared hop's subquery derives from ``queryset.db``, so the
+    whole filter - outer root scan AND the walk through ``book`` / ``loans`` /
+    ``patron`` - must execute on ``shard_b``: the seeded shard rows return
     row-preserved (both shared-book loans, each once), and the captured ``shard_b``
-    SQL carries the ``EXISTS`` with no framework ``DISTINCT``.
+    statement carries the ``library_book`` hop with no ``DISTINCT``.
     """
     from django.db import connection as default_connection
     from django.test.utils import CaptureQueriesContext
@@ -1047,16 +1047,15 @@ def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias(
         pks["relation_b"],
     ]
 
-    # The correlated EXISTS re-entry ran on shard_b (the .using(queryset.db) pin),
-    # never on default.
+    # The filtered root statement, its hops included, ran on shard_b, never on default.
     shard_loan_sql = [
         query["sql"]
         for query in shard_captured.captured_queries
-        if "library_loan" in query["sql"].lower() and "EXISTS(" in query["sql"].upper()
+        if 'FROM "library_loan"' in query["sql"] and "library_book" in query["sql"]
     ]
     assert shard_loan_sql, shard_captured.captured_queries
     for sql in shard_loan_sql:
-        assert "SELECT DISTINCT" not in sql.upper()
+        assert "DISTINCT" not in sql.upper()
     assert not [
         query["sql"]
         for query in default_captured.captured_queries

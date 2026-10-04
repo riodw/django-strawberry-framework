@@ -856,8 +856,9 @@ def test_phase_2_5_unregistered_related_filter_target_raises_at_finalize():
     is unfulfillable even though its input field would be materialized
     into the schema. The misconfiguration surfaces at finalize, naming
     the filterset, instead of on the first request that activates the
-    branch (where ``FilterSet._iter_visibility_steps`` raises the runtime
-    sibling of this error).
+    branch, nested or walked by a flat leaf (where
+    ``FilterSet._branch_visibility_seed`` raises the runtime sibling of this
+    error).
     """
 
     class ShelfFilter(FilterSet):

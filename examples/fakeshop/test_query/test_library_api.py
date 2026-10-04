@@ -8,6 +8,9 @@ holder at ``/graphql-test/`` because the shipped query exposes typed
 """
 
 import base64
+import importlib
+import json
+import string
 import sys
 from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, TypeAlias
@@ -17,6 +20,7 @@ import strawberry
 from apps.library import models
 from apps.library.filters_genre import GenreFilter
 from apps.products.services import create_users
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import connection
@@ -31,7 +35,14 @@ from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 from typing_extensions import override
 
-from django_strawberry_framework import DjangoNodesField, DjangoType, strawberry_config
+from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
+    DjangoNodesField,
+    DjangoSchema,
+    DjangoType,
+    strawberry_config,
+)
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
@@ -51,6 +62,46 @@ _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
     "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
 }
+
+#: ``BookType.get_queryset``'s anonymous predicate as it compiles: a statement that
+#: filters through a declared ``book`` / ``books`` hop carries it inside that hop's
+#: subquery.
+_BOOK_HIDDEN_ROW_PREDICATE = "\"circulation_status\" = 'repair'"
+
+
+def _outer_level(sql: str) -> str:
+    """``sql`` with every parenthesized span and single-quoted literal removed.
+
+    A relational predicate compiles to a subquery (``IN (SELECT ...)`` or
+    ``EXISTS(SELECT ...)``), so what is left is the root ``SELECT ... FROM ... WHERE``
+    skeleton that decides how many root rows come back: a ``JOIN`` or a related
+    table here can multiply the roots, one inside a subquery cannot.
+    """
+    depth = 0
+    in_literal = False
+    kept: list[str] = []
+    for char in sql:
+        if char == "'":
+            in_literal = not in_literal
+        elif in_literal:
+            continue
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0:
+            kept.append(char)
+    return "".join(kept)
+
+
+def _assert_row_preserving_root(sql: str, root_table: str, *related_tables: str) -> None:
+    """The root table is scanned once with no JOIN, no DISTINCT, and no related table at the top level."""
+    assert "DISTINCT" not in sql.upper(), sql
+    outer = _outer_level(sql)
+    assert outer.count(f'FROM "{root_table}"') == 1, sql
+    assert "JOIN" not in outer.upper(), sql
+    for table in related_tables:
+        assert table not in outer, sql
 
 
 def _seed_library_graph():
@@ -2645,9 +2696,8 @@ def test_nested_related_filter_honors_target_get_queryset():
     models.Book.objects.create(title="Hidden Book", shelf=hidden_shelf)
 
     # Anonymous: ``ShelfType.get_queryset`` strips ``topic="secret"``, so
-    # asking for the hidden shelf yields no books (the ``<rel>__in``
-    # constraint built from the visibility-scoped child queryset is
-    # empty); asking for the visible shelf returns its book.
+    # asking for the hidden shelf yields no books (no shelf the request
+    # can see carries that id); asking for the visible shelf returns its book.
     hidden_query_response = _post_graphql(
         f"""
         query {{
@@ -2694,6 +2744,648 @@ def test_nested_related_filter_honors_target_get_queryset():
     assert [row["title"] for row in staff_payload["data"]["allLibraryBooks"]] == [
         "Hidden Book",
     ]
+
+
+def _seed_flat_twin_visibility_graph() -> None:
+    """Rows only a hidden related row can match, beside rows anyone can match.
+
+    ``ShelfType`` hides the ``topic="secret"`` shelf and ``BookType`` hides the
+    ``repair`` book from anonymous requests; ``BranchFilter.shelves`` carries an
+    explicit ``queryset=`` admitting only ``"permanent collection"`` shelves, which
+    binds staff too. Each book is on loan to its own patron, so a predicate on the
+    ``repair`` book's borrower reaches that patron's loan only through the book.
+    """
+    branch = models.Branch.objects.create(name="Twin", city="Boston")
+    open_shelf = models.Shelf.objects.create(code="T-open", topic="general", branch=branch)
+    secret_shelf = models.Shelf.objects.create(code="T-secret", topic="secret", branch=branch)
+    on_secret = models.Book.objects.create(title="On secret shelf", shelf=secret_shelf)
+    in_repair = models.Book.objects.create(
+        title="In repair",
+        shelf=open_shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+    ada = models.Patron.objects.create(name="Ada")
+    bea = models.Patron.objects.create(name="Bea", email="bea@example.org")
+    models.Loan.objects.create(book=on_secret, patron=ada, note="loan-on-secret")
+    models.Loan.objects.create(book=in_repair, patron=bea, note="loan-in-repair")
+    genre = models.Genre.objects.create(name="Twin genre")
+    genre.books.add(on_secret)
+
+
+class _FlatTwinRow(NamedTuple):
+    """One flat relation leaf, its nested twin, and what each viewer may match."""
+
+    root: str
+    selection: str
+    flat: str
+    nested: str
+    anonymous: list[str]
+    staff: list[str]
+
+
+_FLAT_TWIN_ROWS = {
+    "one-hop-forward-fk": _FlatTwinRow(
+        "allLibraryBooks",
+        "title",
+        '{ shelfTopic: { exact: "secret" } }',
+        '{ shelf: { topic: { exact: "secret" } } }',
+        [],
+        ["On secret shelf"],
+    ),
+    "two-hop-forward-fk": _FlatTwinRow(
+        "allLibraryLoans",
+        "note",
+        '{ bookShelfTopic: { exact: "secret" } }',
+        '{ book: { shelf: { topic: { exact: "secret" } } } }',
+        [],
+        ["loan-on-secret"],
+    ),
+    "hop-target-own-visibility": _FlatTwinRow(
+        "allLibraryLoans",
+        "note",
+        "{ bookCirculationStatus: { exact: repair } }",
+        "{ book: { circulationStatus: { exact: repair } } }",
+        [],
+        ["loan-in-repair"],
+    ),
+    "reverse-fk-to-many": _FlatTwinRow(
+        "allLibraryShelves",
+        "code",
+        "{ booksCirculationStatus: { exact: repair } }",
+        "{ books: { circulationStatus: { exact: repair } } }",
+        [],
+        ["T-open"],
+    ),
+    "explicit-queryset-constraint": _FlatTwinRow(
+        "allLibraryBranches",
+        "name",
+        '{ shelvesTopic: { exact: "general" } }',
+        '{ shelves: { topic: { exact: "general" } } }',
+        [],
+        [],
+    ),
+    "owner-bound-projected-leaf": _FlatTwinRow(
+        "allLibraryLoans",
+        "note",
+        '{ patronLoansBookLoansPatronEmail: { iContains: "bea@example.org" } }',
+        "{ patron: { loans: { book: { loans: { patron:"
+        ' { emailMustHaveAtSign: { exact: "bea@example.org" } } } } } } }',
+        [],
+        ["loan-in-repair"],
+    ),
+    "inside-logical-or": _FlatTwinRow(
+        "allLibraryBooks",
+        "title",
+        '{ or: [{ shelfTopic: { exact: "secret" } }] }',
+        '{ or: [{ shelf: { topic: { exact: "secret" } } }] }',
+        [],
+        ["On secret shelf"],
+    ),
+}
+
+
+def _flat_twin_names(row: _FlatTwinRow, filter_input: str, *, staff: bool) -> list[object]:
+    query = f"query {{ {row.root}(filter: {filter_input}) {{ {row.selection} }} }}"
+    response = _post_graphql_as_staff(query) if staff else _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return [record[row.selection] for record in payload["data"][row.root]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_FLAT_TWIN_ROWS))
+@pytest.mark.parametrize("spelling", ["flat", "nested"])
+def test_flat_relation_leaf_answers_like_its_nested_twin_for_anonymous(shape: str, spelling: str):
+    """A flat relation leaf cannot use a related row the target type hides.
+
+    ``shelfTopic`` and ``shelf: { topic }`` are two spellings of one
+    ``RelatedFilter`` predicate. Each declared hop it walks applies the target
+    type's ``get_queryset`` and the declaration's explicit ``queryset=``, so the
+    anonymous request matches nothing the hidden row alone would make match, under
+    either spelling, at every depth, inside a logical arm, and for a leaf whose
+    behavior its own filter set owns: ``patronLoansBookLoansPatronEmail`` runs inside
+    a ``PatronFilter`` instance (``PatronFilter`` overrides ``__init__``), whose
+    ``loans__book__loans__patron__email`` path walks the declared ``book`` hop.
+    The nested twin spells the email match through ``emailMustHaveAtSign``, the one
+    email leaf ``PatronFilter`` publishes.
+    """
+    _seed_flat_twin_visibility_graph()
+    row = _FLAT_TWIN_ROWS[shape]
+    filter_input = row.flat if spelling == "flat" else row.nested
+
+    assert _flat_twin_names(row, filter_input, staff=False) == row.anonymous
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_FLAT_TWIN_ROWS))
+@pytest.mark.parametrize("spelling", ["flat", "nested"])
+def test_flat_relation_leaf_answers_like_its_nested_twin_for_staff(shape: str, spelling: str):
+    """Staff see the hidden rows, so both spellings match them; the explicit constraint still binds."""
+    _seed_flat_twin_visibility_graph()
+    row = _FLAT_TWIN_ROWS[shape]
+    filter_input = row.flat if spelling == "flat" else row.nested
+
+    assert _flat_twin_names(row, filter_input, staff=True) == row.staff
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        "{ booksCirculationStatus: { exact: repair } }",
+        "{ books: { circulationStatus: { exact: repair } } }",
+    ],
+)
+async def test_flat_relation_leaf_answers_like_its_nested_twin_async(filter_input: str):
+    """The async apply path scopes a flat many-to-many leaf like its nested twin."""
+    branch = await models.Branch.objects.acreate(name="Twin", city="Boston")
+    shelf = await models.Shelf.objects.acreate(code="T-open", topic="general", branch=branch)
+    book = await models.Book.objects.acreate(
+        title="In repair",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+    genre = await models.Genre.objects.acreate(name="Twin genre")
+    await genre.books.aadd(book)
+
+    payload = await _post_async_genres(
+        f"query {{ genres(filter: {filter_input}) {{ edges {{ node {{ name }} }} }} }}",
+    )
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["genres"]["edges"] == []
+
+
+class _VisibleWorld(NamedTuple):
+    """The keys a visible-world row names in its filter, captured at seed time."""
+
+    secret_shelf: int
+    null_shelf: int
+    permanent_shelf: int
+    hidden_book: str
+    set_book: str
+
+
+def _seed_visible_world() -> _VisibleWorld:
+    """Parents whose related rows are absent, hidden, visible with a null terminal, or visible and set.
+
+    ``ShelfType`` hides the ``topic="secret"`` shelf and ``BookType`` hides the two
+    ``repair`` books from anonymous requests. Each book sits on its own shelf except
+    ``Beside hidden``, whose shelf also holds the hidden ``Hidden null``, so a hidden
+    sibling stands where ``Set subtitle`` has none. Genres, in creation order:
+    ``No books`` (no related row), ``Hidden book only`` (its one book hidden),
+    ``Null subtitle book`` (a visible book with a null subtitle), ``Set subtitle book``
+    (a visible book with a subtitle) and ``Beside hidden book`` (a visible set book
+    beside a hidden null one). Every hidden book carries a subtitle opposite to what
+    an absent row would answer, so a leaked hidden row changes the answer. One
+    patron borrows ``On secret shelf`` (no genre), ``Set subtitle`` and the hidden
+    ``Hidden set``.
+    """
+    branch = models.Branch.objects.create(name="Visible world", city="Boston")
+
+    def shelf(code: str, topic: str = "general") -> models.Shelf:
+        return models.Shelf.objects.create(code=code, topic=topic, branch=branch)
+
+    secret_shelf = shelf("W-secret", "secret")
+    null_shelf = shelf("W-null")
+    set_shelf = shelf("W-set")
+    mixed_shelf = shelf("W-mixed")
+    repair_shelf = shelf("W-repair")
+    permanent_shelf = shelf("W-permanent", "permanent collection")
+    repair = models.Book.CirculationStatus.REPAIR
+    on_secret = models.Book.objects.create(
+        title="On secret shelf",
+        subtitle="kept",
+        shelf=secret_shelf,
+    )
+    null_book = models.Book.objects.create(title="Null subtitle", subtitle=None, shelf=null_shelf)
+    set_book = models.Book.objects.create(title="Set subtitle", subtitle="set", shelf=set_shelf)
+    beside = models.Book.objects.create(title="Beside hidden", subtitle="set", shelf=mixed_shelf)
+    hidden_null = models.Book.objects.create(
+        title="Hidden null",
+        subtitle=None,
+        shelf=mixed_shelf,
+        circulation_status=repair,
+    )
+    hidden_set = models.Book.objects.create(
+        title="Hidden set",
+        subtitle="hidden",
+        shelf=repair_shelf,
+        circulation_status=repair,
+    )
+    models.Genre.objects.create(name="No books")
+    models.Genre.objects.create(name="Hidden book only").books.add(hidden_set)
+    models.Genre.objects.create(name="Null subtitle book").books.add(null_book)
+    models.Genre.objects.create(name="Set subtitle book").books.add(set_book)
+    models.Genre.objects.create(name="Beside hidden book").books.add(beside, hidden_null)
+    reader = models.Patron.objects.create(name="Visible world reader")
+    models.Loan.objects.create(book=on_secret, patron=reader, note="on-secret")
+    models.Loan.objects.create(book=set_book, patron=reader, note="on-set")
+    models.Loan.objects.create(book=hidden_set, patron=reader, note="on-hidden-set")
+
+    def book_id(book: models.Book) -> str:
+        return json.dumps(str(relay.GlobalID(type_name="library.book", node_id=str(book.pk))))
+
+    return _VisibleWorld(
+        secret_shelf=secret_shelf.pk,
+        null_shelf=null_shelf.pk,
+        permanent_shelf=permanent_shelf.pk,
+        hidden_book=book_id(hidden_set),
+        set_book=book_id(set_book),
+    )
+
+
+class _VisibleWorldRow(NamedTuple):
+    """One filter over the visible-world graph and what each viewer must get back.
+
+    ``hidden_like`` names a parent whose related row is hidden from anonymous
+    requests and the parent standing where that row is absent: the anonymous
+    answer must hold both or neither.
+    """
+
+    root: str
+    selection: str
+    filter: str
+    anonymous: list[str]
+    staff: list[str]
+    hidden_like: tuple[str, str] | None = None
+
+
+_ALL_GENRES = [
+    "No books",
+    "Hidden book only",
+    "Null subtitle book",
+    "Set subtitle book",
+    "Beside hidden book",
+]
+
+_VISIBLE_WORLD_ROWS = {
+    "to-many-isnull-true": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ booksSubtitle: { isNull: true } }",
+        ["No books", "Hidden book only", "Null subtitle book"],
+        ["No books", "Null subtitle book", "Beside hidden book"],
+        ("Hidden book only", "No books"),
+    ),
+    "to-many-isnull-false": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ booksSubtitle: { isNull: false } }",
+        ["Set subtitle book", "Beside hidden book"],
+        ["Hidden book only", "Set subtitle book", "Beside hidden book"],
+        ("Hidden book only", "No books"),
+    ),
+    "to-many-isnull-true-nested-twin": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ books: { subtitle: { isNull: true } } }",
+        ["Null subtitle book"],
+        ["Null subtitle book", "Beside hidden book"],
+        ("Hidden book only", "No books"),
+    ),
+    "to-many-isnull-false-nested-twin": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ books: { subtitle: { isNull: false } } }",
+        ["Set subtitle book", "Beside hidden book"],
+        ["Hidden book only", "Set subtitle book", "Beside hidden book"],
+        ("Hidden book only", "No books"),
+    ),
+    "forward-then-to-many-isnull-true": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ shelfBooksSubtitle: { isNull: true } }",
+        ["On secret shelf", "Null subtitle"],
+        ["Null subtitle", "Beside hidden", "Hidden null"],
+        ("Beside hidden", "Set subtitle"),
+    ),
+    "forward-then-to-many-isnull-false": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ shelfBooksSubtitle: { isNull: false } }",
+        ["Set subtitle", "Beside hidden"],
+        [
+            "On secret shelf",
+            "Set subtitle",
+            "Beside hidden",
+            "Hidden null",
+            "Hidden set",
+        ],
+        ("Beside hidden", "Set subtitle"),
+    ),
+    "forward-then-to-many-isnull-true-nested-twin": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ shelf: { books: { subtitle: { isNull: true } } } }",
+        ["Null subtitle"],
+        ["Null subtitle", "Beside hidden", "Hidden null"],
+        ("Beside hidden", "Set subtitle"),
+    ),
+    "many-to-many-two-hops-isnull-true": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ genresBooksSubtitle: { isNull: true } }",
+        ["On secret shelf", "Null subtitle"],
+        [
+            "On secret shelf",
+            "Null subtitle",
+            "Beside hidden",
+            "Hidden null",
+        ],
+        ("Beside hidden", "Set subtitle"),
+    ),
+    "many-to-many-two-hops-isnull-false": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ genresBooksSubtitle: { isNull: false } }",
+        ["Set subtitle", "Beside hidden"],
+        [
+            "Set subtitle",
+            "Beside hidden",
+            "Hidden null",
+            "Hidden set",
+        ],
+        ("Beside hidden", "Set subtitle"),
+    ),
+    "many-to-many-two-hops-isnull-true-nested-twin": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ genres: { books: { subtitle: { isNull: true } } } }",
+        ["Null subtitle"],
+        ["Null subtitle", "Beside hidden", "Hidden null"],
+        ("Beside hidden", "Set subtitle"),
+    ),
+    "isnull-true-inside-logical-or": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        '{ or: [{ booksSubtitle: { isNull: true } }, { name: { exact: "Set subtitle book" } }] }',
+        [
+            "No books",
+            "Hidden book only",
+            "Null subtitle book",
+            "Set subtitle book",
+        ],
+        [
+            "No books",
+            "Null subtitle book",
+            "Set subtitle book",
+            "Beside hidden book",
+        ],
+        ("Hidden book only", "No books"),
+    ),
+    "isnull-true-inside-not": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ not: { booksSubtitle: { isNull: true } } }",
+        ["Set subtitle book", "Beside hidden book"],
+        ["Hidden book only", "Set subtitle book"],
+        ("Hidden book only", "No books"),
+    ),
+    "forward-key-membership-of-a-hidden-target": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ shelfId: { exact: $secret_shelf } }",
+        [],
+        ["On secret shelf"],
+    ),
+    "forward-key-membership-hidden-beside-visible": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        "{ shelfId: { in: [$secret_shelf, $null_shelf] } }",
+        ["Null subtitle"],
+        ["On secret shelf", "Null subtitle"],
+    ),
+    "to-many-global-id-membership-of-a-hidden-target": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ booksId: { in: [$hidden_book] } }",
+        [],
+        ["Hidden book only"],
+        ("Hidden book only", "No books"),
+    ),
+    "to-many-global-id-membership-hidden-beside-visible": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        "{ booksId: { in: [$hidden_book, $set_book] } }",
+        ["Set subtitle book"],
+        ["Hidden book only", "Set subtitle book"],
+        ("Hidden book only", "No books"),
+    ),
+    "to-many-key-membership-outside-the-explicit-queryset": _VisibleWorldRow(
+        "allLibraryBranches",
+        "name",
+        "{ shelvesId: { in: [$null_shelf] } }",
+        [],
+        [],
+    ),
+    "to-many-key-membership-inside-the-explicit-queryset": _VisibleWorldRow(
+        "allLibraryBranches",
+        "name",
+        "{ shelvesId: { in: [$permanent_shelf] } }",
+        ["Visible world"],
+        ["Visible world"],
+    ),
+    "declared-exclude-over-a-hidden-row": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        '{ withoutBookTitled: { exact: "Hidden set" } }',
+        _ALL_GENRES,
+        [
+            "No books",
+            "Null subtitle book",
+            "Set subtitle book",
+            "Beside hidden book",
+        ],
+        ("Hidden book only", "No books"),
+    ),
+    "declared-exclude-over-a-visible-row": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        '{ withoutBookTitled: { exact: "Set subtitle" } }',
+        [
+            "No books",
+            "Hidden book only",
+            "Null subtitle book",
+            "Beside hidden book",
+        ],
+        [
+            "No books",
+            "Hidden book only",
+            "Null subtitle book",
+            "Beside hidden book",
+        ],
+        ("Hidden book only", "No books"),
+    ),
+    "declared-exclude-not-arm-twin": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        '{ not: { booksTitle: { exact: "Hidden set" } } }',
+        _ALL_GENRES,
+        [
+            "No books",
+            "Null subtitle book",
+            "Set subtitle book",
+            "Beside hidden book",
+        ],
+        ("Hidden book only", "No books"),
+    ),
+    "projected-exclude-over-a-hidden-row": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        '{ genresWithoutBookTitled: { exact: "Hidden set" } }',
+        [
+            "On secret shelf",
+            "Null subtitle",
+            "Set subtitle",
+            "Beside hidden",
+        ],
+        [
+            "On secret shelf",
+            "Null subtitle",
+            "Set subtitle",
+            "Beside hidden",
+            "Hidden null",
+        ],
+    ),
+    "projected-exclude-over-a-visible-row": _VisibleWorldRow(
+        "allLibraryBooks",
+        "title",
+        '{ genresWithoutBookTitled: { exact: "Set subtitle" } }',
+        ["On secret shelf", "Null subtitle", "Beside hidden"],
+        [
+            "On secret shelf",
+            "Null subtitle",
+            "Beside hidden",
+            "Hidden null",
+            "Hidden set",
+        ],
+    ),
+    "twice-projected-exclude-over-a-hidden-row": _VisibleWorldRow(
+        "allLibraryLoans",
+        "note",
+        '{ bookGenresWithoutBookTitled: { exact: "Hidden set" } }',
+        ["on-secret", "on-set", "on-hidden-set"],
+        ["on-secret", "on-set"],
+        ("on-hidden-set", "on-secret"),
+    ),
+    "twice-projected-exclude-over-a-visible-row": _VisibleWorldRow(
+        "allLibraryLoans",
+        "note",
+        '{ bookGenresWithoutBookTitled: { exact: "Set subtitle" } }',
+        ["on-secret", "on-hidden-set"],
+        ["on-secret", "on-hidden-set"],
+        ("on-hidden-set", "on-secret"),
+    ),
+    "declared-exclude-inside-logical-and": _VisibleWorldRow(
+        "allLibraryGenres",
+        "name",
+        '{ and: [{ withoutBookTitled: { exact: "Hidden set" } }, { booksSubtitle: { isNull: true } }] }',
+        ["No books", "Hidden book only", "Null subtitle book"],
+        ["No books", "Null subtitle book", "Beside hidden book"],
+        ("Hidden book only", "No books"),
+    ),
+}
+
+
+def _visible_world_names(
+    row: _VisibleWorldRow,
+    world: _VisibleWorld,
+    *,
+    staff: bool,
+) -> list[object]:
+    filter_input = string.Template(row.filter).substitute(world._asdict())
+    query = f"query {{ {row.root}(filter: {filter_input}) {{ {row.selection} }} }}"
+    response = _post_graphql_as_staff(query) if staff else _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return [record[row.selection] for record in payload["data"][row.root]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_VISIBLE_WORLD_ROWS))
+def test_walked_leaf_answers_over_the_visible_world_for_anonymous(shape: str):
+    """A related row the target type hides answers exactly like an absent one.
+
+    A flat leaf whose path walks declared ``RelatedFilter`` hops answers as the ORM
+    would if every hidden related row did not exist. ``isNull: true`` matches a
+    parent with a visible null terminal OR no visible related row at some hop
+    (``On secret shelf`` has no visible shelf; ``Hidden book only`` has no visible
+    book), ``isNull: false`` stays existential, and the declared
+    ``exclude=True`` leaf drops only a genre holding a visible match, as its
+    ``not:`` twin does. Reached through a projection (``genresWithoutBookTitled``
+    on books, ``bookGenresWithoutBookTitled`` on loans) that leaf negates at the
+    outermost parent, so a book with no genre and a loan whose book is hidden both
+    match. The nested spelling stays existential over visible rows.
+    A forward or to-many key naming a hidden target matches nothing, and a key
+    outside the declaration's explicit ``queryset=`` matches nothing for any
+    viewer. Each answer holds inside ``or`` / ``and`` / ``not`` arms.
+    """
+    world = _seed_visible_world()
+    row = _VISIBLE_WORLD_ROWS[shape]
+
+    names = _visible_world_names(row, world, staff=False)
+
+    assert names == row.anonymous
+    if row.hidden_like is not None:
+        hidden, absent = row.hidden_like
+        assert (hidden in names) == (absent in names), names
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_VISIBLE_WORLD_ROWS))
+def test_walked_leaf_answers_over_the_visible_world_for_staff(shape: str):
+    """Staff see the repair books and the secret shelf, so they answer as present rows."""
+    world = _seed_visible_world()
+    row = _VISIBLE_WORLD_ROWS[shape]
+
+    assert _visible_world_names(row, world, staff=True) == row.staff
+
+
+_ASYNC_VISIBLE_WORLD_ROWS = (
+    "to-many-isnull-true",
+    "to-many-isnull-false",
+    "to-many-isnull-true-nested-twin",
+    "to-many-global-id-membership-of-a-hidden-target",
+    "declared-exclude-over-a-hidden-row",
+    "isnull-true-inside-not",
+)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("shape", _ASYNC_VISIBLE_WORLD_ROWS)
+@pytest.mark.parametrize("viewer", ["anonymous", "staff"])
+async def test_walked_leaf_answers_over_the_visible_world_async(viewer: str, shape: str):
+    """The async apply path reads every hop a supplied leaf walks before answering.
+
+    The holder's ``genres`` connection applies ``GenreFilter`` through ``apply_async``,
+    so the ``isNull`` leaf, the key membership leaf and the declared ``exclude=True``
+    leaf each answer over the books the viewer can see, at the top level and
+    inside a ``not:`` arm, with the same answers as the sync rows.
+    """
+    world = await sync_to_async(_seed_visible_world)()
+    row = _VISIBLE_WORLD_ROWS[shape]
+    assert row.root == "allLibraryGenres"
+    filter_input = string.Template(row.filter).substitute(world._asdict())
+    user = None
+    if viewer == "staff":
+        user = await sync_to_async(User.objects.create_user)(
+            username="staff",
+            password="pw",
+            is_staff=True,
+        )
+
+    payload = await _post_async_genres(
+        f"query {{ genres(filter: {filter_input}, orderBy: [{{ id: ASC }}])"
+        " { edges { node { name } } } }",
+        user=user,
+    )
+
+    assert "errors" not in payload, payload
+    names = [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]]
+    assert names == (row.staff if viewer == "staff" else row.anonymous)
 
 
 @pytest.mark.django_db
@@ -4435,9 +5127,8 @@ def test_genre_connection_flat_leaf_total_count_is_row_preserving():
 
     The public flat ``booksTitle`` leaf on ``GenreFilter`` (the flattened
     ``books__title__icontains`` expansion, public because ``HIDE_FLAT_FILTERS``
-    defaults False) is still a ``distinct=False`` leaf, but the applicator routes
-    the expanded reverse-M2M path through the row-preserving correlated
-    ``EXISTS``. A single genre linked to TWO books whose titles both match the
+    defaults False) is still a ``distinct=False`` leaf, and its declared ``books``
+    hop compiles to a row-preserving restriction subquery. A single genre linked to TWO books whose titles both match the
     term is now reported ONCE: the connection reports ``totalCount == 1`` and a
     single edge for the one genre.
     """
@@ -4506,8 +5197,8 @@ def test_genre_connection_expanded_origin_pagination_is_row_preserving():
     Two genres each match the public flat ``booksTitle`` leaf (the flattened
     reverse-M2M ``books__title__icontains`` expansion) through TWO matching books
     apiece. Pre-cut-over each genre would fan out to two rows, inflating
-    ``totalCount`` to 4 and duplicating edges. Post-cut-over the correlated
-    ``EXISTS`` collapses the membership to a per-parent existence test:
+    ``totalCount`` to 4 and duplicating edges. The ``books`` hop's restriction
+    subquery collapses the membership to a per-parent membership test:
     ``first: 1`` returns one edge with ``hasNextPage: true`` and a pre-slice
     ``totalCount`` of 2; following the ``after:`` cursor returns the second
     genre with ``hasNextPage: false``. This proves the connection's cursor
@@ -4573,12 +5264,11 @@ def test_genre_connection_expanded_origin_pagination_is_row_preserving():
 def test_genre_connection_nested_spelling_matches_flat_spelling():
     """The nested ``books: {title: ...}`` control equals the flat ``booksTitle`` leaf.
 
-    The nested spelling routes through ``_apply_related_constraints`` (machinery
-    untouched by the flat-leaf cut-over); the flat spelling routes through the new
-    correlated-``EXISTS`` applicator. Over the shared expanded-origin fixture both
-    must return the SAME edges and ``totalCount`` - the nested path is the
-    row-preserving control that pins the flat path's parity, not new coverage for
-    the flat adapter.
+    The nested spelling routes through ``_apply_related_constraints``; the flat
+    spelling is a flat leaf that walks the same declared ``books`` hop. Over the
+    shared expanded-origin fixture both must return the SAME edges and
+    ``totalCount`` - the nested path is the row-preserving control that pins the
+    flat path's parity.
     """
     _seed_two_matching_genres_over_two_books_each()
 
@@ -4615,15 +5305,15 @@ def test_genre_connection_nested_spelling_matches_flat_spelling():
 
 @pytest.mark.django_db
 def test_genre_connection_flat_leaf_sql_shape_is_row_preserving():
-    """Live SQL over the expanded origin: no DISTINCT, correlated EXISTS, pinned count.
+    """Live SQL over the expanded origin: no DISTINCT, related tables in a subquery, pinned count.
 
     Capturing the flat-spelling connection POST (``totalCount`` + edges +
     ``pageInfo`` with ``first: 1``): the ``library_genre`` root emits exactly TWO
     queries - the page fetch and the count - and no others. Neither carries a
-    filter-driven ``SELECT DISTINCT`` (the distinct wrapper the pre-cut-over
-    ``distinct=True`` path would add); both carry the correlated ``EXISTS`` that
-    the flat-leaf adapter compiles. The membership + book tables live INSIDE the
-    ``EXISTS`` body, never in the outer root shape.
+    ``DISTINCT``. In both the membership + book tables live inside the subquery
+    the declared ``books`` hop compiles to, never in the outer root shape, and
+    that subquery carries ``BookType.get_queryset``'s anonymous predicate: the
+    hop answers from the books the viewer can see.
     """
     _seed_two_matching_genres_over_two_books_each()
 
@@ -4650,33 +5340,28 @@ def test_genre_connection_flat_leaf_sql_shape_is_row_preserving():
         q["sql"] for q in captured.captured_queries if "library_genre" in q["sql"].lower()
     ]
     # Pinned query roles over the ``library_genre`` root:
-    #   [0] page fetch  - SELECT ... FROM library_genre WHERE EXISTS(...) LIMIT 2
-    #   [1] count       - SELECT COUNT(*) ... FROM library_genre WHERE EXISTS(...)
+    #   [0] page fetch  - SELECT ... FROM library_genre WHERE <books hop> LIMIT 2
+    #   [1] count       - SELECT COUNT(*) ... FROM library_genre WHERE <books hop>
     # Exactly two; totalCount gating (Decision 4) adds the count, first: 1 adds
     # no separate slice query.
     assert len(genre_sql) == 2
     for sql in genre_sql:
-        assert "SELECT DISTINCT" not in sql.upper()
-        assert "EXISTS(" in sql.upper()
-        # The book + membership tables belong to the EXISTS body, never the
-        # outer root FROM clause.
-        pre_where = sql.split("WHERE")[0]
-        assert "library_book" not in pre_where.lower()
+        _assert_row_preserving_root(sql, "library_genre", "library_book")
+        assert _BOOK_HIDDEN_ROW_PREDICATE in sql
 
 
 @pytest.mark.django_db
 def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
-    """Live SQL over the direct deep origin: single query, no DISTINCT, EXISTS re-entry.
+    """Live SQL over the direct deep origin: single query, no DISTINCT, related tables in subqueries.
 
     The ``allLibraryLoans`` list field filtered on the reverse-FK deep leaf
     ``bookLoansPatronEmail`` emits exactly ONE query. Its outer shape owns
-    ``library_loan`` exactly once (the membership re-entry - a second
-    ``library_loan`` alias plus ``library_patron`` - lives inside the ``EXISTS``
-    subquery, after the outer ``WHERE``). No filter-driven ``SELECT DISTINCT``.
-    The outer alias set is ``library_loan`` alone: no ``JOIN`` and no
-    ``library_book`` before the outer ``WHERE``, and the whole statement owns
-    exactly one ``EXISTS``. Row preservation is read off the payload too - both
-    seeded loans come back, each exactly once.
+    ``library_loan`` exactly once: the walk back through ``book``, ``loans`` and
+    ``patron`` - a second ``library_loan`` alias, ``library_book`` and
+    ``library_patron`` - lives inside subqueries, with no ``JOIN`` and no
+    ``DISTINCT`` at the top level. The ``book`` hop's subquery carries
+    ``BookType.get_queryset``'s anonymous predicate. Row preservation is read off
+    the payload too - both seeded loans come back, each exactly once.
     """
     branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
     shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
@@ -4705,18 +5390,9 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
     loan_sql = [q["sql"] for q in captured.captured_queries if "library_loan" in q["sql"].lower()]
     # A plain list field, filter-only: exactly one root query, no count.
     assert len(loan_sql) == 1
-    sql = loan_sql[0]
-    assert "SELECT DISTINCT" not in sql.upper()
-    assert "EXISTS(" in sql.upper()
-    assert sql.upper().count("EXISTS(") == 1
-
-    # The outer query (everything before the outer WHERE) owns library_loan once;
-    # the membership re-entry and library_patron live inside the EXISTS body.
-    pre_where = sql.split("WHERE")[0]
-    assert pre_where.count('FROM "library_loan"') == 1
-    assert "library_book" not in pre_where.lower()
-    assert "library_patron" not in pre_where.lower()
-    assert "JOIN" not in pre_where.upper()
+    (sql,) = loan_sql
+    _assert_row_preserving_root(sql, "library_loan", "library_book", "library_patron")
+    assert _BOOK_HIDDEN_ROW_PREDICATE in sql
 
 
 @pytest.mark.django_db
@@ -4725,8 +5401,8 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
 
     The central production oracle: ``note icontains "Cardio" OR
     book__loans__patron__email icontains "Cardio"`` unions a DIRECT scalar leaf
-    with a DEEP relational leaf that routes through the row-preserving correlated
-    ``EXISTS``. Over the Medtrics graph the result is EXACTLY
+    with a DEEP relational leaf whose declared hops each compile to a subquery.
+    Over the Medtrics graph the result is EXACTLY
     ``[relation_and_direct, relation_only, direct_only]`` (id-ordered, each once):
 
     - ``relation_and_direct`` + ``relation_only`` match the relational leaf via the
@@ -4736,9 +5412,10 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
     - ``unrelated`` matches neither and is excluded.
 
     The SQL-shape assertions pin the row-preserving guarantee at the wire: one
-    root query, a correlated ``EXISTS`` for the relational arm, NO framework
-    ``SELECT DISTINCT``, and NO ``library_loan`` self-join / ``library_patron``
-    join in the OUTER query (the membership re-entry lives inside the ``EXISTS``).
+    root query, NO ``DISTINCT``, and NO ``library_loan`` self-join /
+    ``library_book`` / ``library_patron`` join in the OUTER query (the relational
+    arm's walk lives inside its subqueries, its ``book`` hop scoped by
+    ``BookType.get_queryset``).
     """
     graph = _seed_medtrics_loan_graph()
 
@@ -4771,17 +5448,9 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
     loan_sql = [q["sql"] for q in captured.captured_queries if "library_loan" in q["sql"].lower()]
     # A plain list field, filter-only: exactly one root query, no count.
     assert len(loan_sql) == 1
-    sql = loan_sql[0]
-    assert "SELECT DISTINCT" not in sql.upper()
-    # The relational arm compiles to a correlated EXISTS re-entry.
-    assert "EXISTS(" in sql.upper()
-
-    # The outer query (everything before the outer WHERE) owns library_loan once;
-    # no self-join and no patron join leak into the outer shape - the membership
-    # re-entry and library_patron live inside the EXISTS subquery.
-    pre_where = sql.split("WHERE")[0]
-    assert pre_where.count('FROM "library_loan"') == 1
-    assert "library_patron" not in pre_where.lower()
+    (sql,) = loan_sql
+    _assert_row_preserving_root(sql, "library_loan", "library_book", "library_patron")
+    assert _BOOK_HIDDEN_ROW_PREDICATE in sql
 
 
 @pytest.mark.django_db
@@ -4855,22 +5524,18 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
         end_cursor = conn_one["pageInfo"]["endCursor"]
         assert isinstance(end_cursor, str) and end_cursor
 
-        # The outer connection query owns library_loan once with a correlated
-        # EXISTS and no framework DISTINCT / self-join / patron join.
-        loan_sql = [
+        # Every filtered connection statement (page fetch and count) owns
+        # library_loan once at its top level, with no DISTINCT / self-join /
+        # book or patron join; the relational arm's book hop is visibility-scoped.
+        row_sql = [
             q["sql"]
             for q in captured.captured_queries
-            if "library_loan" in q["sql"].lower() and "SELECT" in q["sql"].upper()
+            if 'FROM "library_loan"' in _outer_level(q["sql"]) and "WHERE" in q["sql"]
         ]
-        assert loan_sql, captured.captured_queries
-        row_sql = [sql for sql in loan_sql if "EXISTS(" in sql.upper()]
-        assert len(row_sql) >= 1, loan_sql
+        assert len(row_sql) == 2, captured.captured_queries
         for sql in row_sql:
-            assert "SELECT DISTINCT" not in sql.upper()
-            assert sql.upper().count("EXISTS(") == 1
-            pre_where = sql.split("WHERE")[0]
-            assert pre_where.count('FROM "library_loan"') == 1
-            assert "library_patron" not in pre_where.lower()
+            _assert_row_preserving_root(sql, "library_loan", "library_book", "library_patron")
+            assert _BOOK_HIDDEN_ROW_PREDICATE in sql
 
         page_two = _post_graphql(
             """
@@ -4913,7 +5578,7 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
 def test_genre_connection_flat_leaf_no_match_is_empty():
     """A flat leaf whose term matches nothing yields ``totalCount 0`` / empty edges.
 
-    Proves the correlated ``EXISTS`` does not over-match: an unmatched term keeps
+    Proves the restriction subquery does not over-match: an unmatched term keeps
     the row-preserving root empty rather than admitting parents.
     """
     _seed_two_matching_genres_over_two_books_each()
@@ -5695,10 +6360,77 @@ async def _async_shipped_graphql_view(request: HttpRequest):
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
 
 
+async def _async_holder_graphql_view(request: HttpRequest):
+    """The holder schema on an async view that resolves the session user first.
+
+    The library ``get_queryset`` hooks are plain ``def`` methods reading
+    ``request.user``; on the event loop that lazy object would load the session
+    synchronously, so the view awaits ``request.auser()`` before execution, as an
+    async Django view serving sync visibility hooks does.
+    """
+    schema = _CURRENT["schema"]
+    assert schema is not None
+    request.user = await request.auser()
+    return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
+
+
 urlpatterns = [
     path("graphql-test/", _holder_graphql_view),
     path("graphql-async/", _async_shipped_graphql_view),
+    path("graphql-async-test/", _async_holder_graphql_view),
 ]
+
+
+async def _async_genres_resolver(root: object, info: strawberry.Info[object, object]):
+    """An ``async def`` consumer resolver: the connection shape that applies ``filter:`` asynchronously."""
+    return models.Genre.objects.all()
+
+
+def _async_genre_connection_holder_schema() -> DjangoSchema:
+    """A schema whose ``genres`` connection applies ``GenreFilter`` through ``apply_async``.
+
+    ``connection.py::_build_connection_resolver`` selects the async pipeline only for
+    a field given an ``async def`` ``resolver=``; the shipped
+    ``allLibraryGenresConnection`` declares none, so it filters through ``apply_sync``
+    on either view. Built inside the test, after the autouse reload registered the
+    ``GenreType`` it composes.
+    """
+    importlib.import_module("config.schema")
+    from apps.library.schema import GenreType
+
+    @strawberry.type
+    class Query:
+        genres: DjangoConnection[GenreType] = DjangoConnectionField(
+            GenreType,
+            resolver=_async_genres_resolver,
+        )
+
+    return DjangoSchema(query=Query, config=strawberry_config())
+
+
+async def _post_async_genres(query: str, *, user: User | None = None) -> JSONObject:
+    """POST ``query`` to the ``apply_async`` genre connection over ``/graphql-async-test/``, as ``user`` when given."""
+    _CURRENT["schema"] = _async_genre_connection_holder_schema()
+    client = AsyncTestClient()
+    try:
+        with override_settings(ROOT_URLCONF=__name__):
+            if user is None:
+                result = await client.query(
+                    query,
+                    assert_no_errors=False,
+                    url="/graphql-async-test/",
+                )
+            else:
+                async with client.login(user):
+                    result = await client.query(
+                        query,
+                        assert_no_errors=False,
+                        url="/graphql-async-test/",
+                    )
+    finally:
+        _CURRENT["schema"] = None
+    assert result.response.status_code == 200
+    return result.response.json()
 
 
 def _post_holder(
@@ -8681,8 +9413,8 @@ def test_many_side_related_filter_returns_each_parent_once_live():
     """A many-side related branch matching N shelves yields the parent ONCE.
 
     The live twin of ``test_related_filter_on_many_side_relation_returns_each_parent_once``:
-    ``_apply_related_constraints`` restricts the parent via a
-    ``pk__in=<parent-pk subquery>`` rather than a fan-out join, so a branch
+    ``_apply_related_constraints`` restricts the parent through a row-preserving
+    subquery rather than a fan-out join, so a branch
     whose TWO shelves both match comes back exactly once - no duplicate node in
     the HTTP list (a join would surface ``alpha`` twice and corrupt any
     downstream pagination count).
@@ -8715,8 +9447,8 @@ def test_related_filter_identical_direct_and_inside_logic_tree_live():
 
     The live twin of ``test_related_filter_answers_identically_direct_and_inside_logic_tree``:
     the direct path constrains via ``_apply_related_constraints`` while the
-    logic-tree path routes through ``_q_for_branch``'s ``Q(pk__in=...)``; both
-    share the parent-pk-subquery shape, so two aliases in ONE request - one
+    logic-tree path routes through ``_q_for_branch``; both build the same
+    restriction subquery, so two aliases in ONE request - one
     direct, one wrapped in ``and`` - must return identical rows.
     """
     _seed_branch_with_shelf_codes("alpha", ("match-1", "match-2"))

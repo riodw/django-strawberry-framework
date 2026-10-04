@@ -306,7 +306,7 @@ Investigated, explained, kept. Skip when sweeping.
 
 - **`SCALAR_MAP[models.BigAutoField] = int`, not `BigInt`.** 32-bit `Int` cap → graphql-core rejects out-of-range pks at boundary, never reach DB / overflow param binding; M2M/FK existence path relies on it.
 - **`finalize_django_types()` allows two types w/ one GraphQL name.** Finalize = process-global; collision = per-schema; Strawberry's own duplicate-name error at schema build is the accurate catch. Real broken case (two field names camel-casing to one) already fails loud in field audits.
-- **`FilterSet._iter_visibility_steps` seeds child branch from child filterset's own `_default_manager`**, not connection field's `initial_queryset(target_type)`. Owner binding lets target model be strict SUBCLASS of filterset model; seeds differ in a visibility seam.
+- **`FilterSet._branch_visibility_seed` seeds every active branch (nested, or walked by a flat leaf) from child filterset's own `_default_manager`**, not connection field's `initial_queryset(target_type)`. Owner binding lets target model be strict SUBCLASS of filterset model; seeds differ in a visibility seam.
 - **Generated `Prefetch` `to_attr` never contains `__`.** Django splits `prefetch_to` on it; descent silently breaks; only executing catches it. Grammar = `$` delimiter, `_`→`$` escape; read w/ `getattr`/`setattr`.
 - **Cascade flips that look like bugs:** cycles raise, `fields=[]` = re-entry escape, MTI parents included, GFKs preflighted, unregistered relation target fails loud. Read glossary before "fixing".
 - **Visibility boundary = sealed-execution queryset, not blacklist.** Prove-then-clone was whack-a-mole; never reintroduce a blacklist. Process-wide monkeypatching unsupported; fingerprint ≠ trust boundary.

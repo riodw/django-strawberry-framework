@@ -323,10 +323,14 @@ of the first foundation card.
   aliases are allocated against the *current* queryset's annotations, and a
   duplicate `.alias()` silently overwrites — which is why compilation must
   fold sequentially (Decision 4). `filters/sets.py::FilterSet._apply_flat_leaves`
-  consumes the primitives for audited framework-generated to-many leaves;
-  `filters/sets.py::FilterSet._apply_related_constraints` is the sibling
-  parent-PK-subquery strategy (uncorrelated `pk__in`, a distinct proof
-  member). The PostgreSQL proof is recorded in
+  consumes the primitives for audited framework-generated to-many leaves.
+  `optimizer/predicates.py::related_rows_exist` is the target-side sibling:
+  an `EXISTS` built from a given related queryset and correlated on each
+  link's own columns, one nested `EXISTS` per link; every declared
+  `RelatedFilter` branch restricts through it
+  (`filters/sets.py::FilterSet._apply_related_constraints` for a nested
+  branch, `filters/sets.py::FilterSet._reaches_hop` for each hop a flat
+  leaf walks). The PostgreSQL proof of both shapes is recorded in
   [`docs/row-preserving-predicates-part1-pg-explain.md`][row-preserving-pg].
 - **Strict path classification is shipped, for pure model paths only.**
   `django_strawberry_framework/utils/relations.py` classifies every relation

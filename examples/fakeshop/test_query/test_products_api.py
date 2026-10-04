@@ -12,7 +12,14 @@ wired in ``apps.products.schema`` end to end:
 * own-PK Relay ``GlobalID`` filtering (``id: { in: [...] }``) now that the
   products types declare ``interfaces = (relay.Node,)``;
 * ``RelatedFilter`` traversal (``Item.category``) via the nested
-  GlobalID input.
+  GlobalID input;
+* flat ``EntryFilter.property`` leaves (``propertyName``,
+  ``propertyCategoryName``, ``propertyCategoryDescription``) answering like
+  their nested twins inside the declaration's explicit ``queryset=``, for
+  anonymous and staff;
+* relation keys through a declared hop (``entriesId``, ``propertyId``)
+  answering ``isNull`` and GlobalID membership over the rows the viewer
+  sees, a hidden related row answering like an absent one.
 
 Form-mutation async colour uses a module-local ``/graphql-async/`` mount
 (``graphql_client.py`` is sync-only).
@@ -26,8 +33,10 @@ robust across Faker versions.
 """
 
 import json
+import string
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from apps.products import models
@@ -42,6 +51,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
+from django.db.models import QuerySet
 from django.http import HttpRequest
 from django.test import AsyncClient, Client, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -2181,6 +2191,289 @@ def test_products_items_flat_category_name_as_staff():
         {"allItems": {"edges": expected_edges}},
         client=_staff_client(),
     )
+
+
+_SECRET_PROPERTY_NAME = "Secret"
+
+
+def _entries_visible_to_anonymous() -> QuerySet[models.Entry]:
+    """The entries ``EntryType.get_queryset`` serves anonymously: every row its cascade walks is public."""
+    return models.Entry.objects.filter(
+        is_private=False,
+        item__is_private=False,
+        item__category__is_private=False,
+        property__is_private=False,
+        property__category__is_private=False,
+    )
+
+
+def _rename_a_visible_property_to_secret() -> models.Category:
+    """Rename the property of an anonymously visible entry to ``"Secret"``; return its category.
+
+    ``EntryFilter.property`` declares ``queryset=Property.objects.exclude(name="Secret")``,
+    so the renamed property falls outside that boundary for every viewer while its
+    entry stays inside every viewer's ``EntryType.get_queryset``. The category keeps a
+    second anonymously visible entry, so a predicate on the category still has rows
+    inside the boundary to answer with.
+    """
+    visible = _entries_visible_to_anonymous().select_related("property__category")
+    for entry in visible.order_by("pk"):
+        category = entry.property.category
+        if visible.filter(property__category=category).count() > 1:
+            entry.property.name = _SECRET_PROPERTY_NAME
+            entry.property.save(update_fields=["name"])
+            return category
+    pytest.fail("seed_data left no category with two anonymously visible entries")
+
+
+class _EntryBoundaryRow(NamedTuple):
+    """A flat leaf through ``EntryFilter.property``, its nested twin, and the ORM path both constrain."""
+
+    flat: str
+    nested: str
+    path: str
+    staff_only: bool
+
+
+_ENTRY_BOUNDARY_ROWS: dict[str, _EntryBoundaryRow] = {
+    "one-hop-meta-fields-path": _EntryBoundaryRow(
+        "{{ propertyName: {{ exact: {value} }} }}",
+        "{{ property: {{ name: {{ exact: {value} }} }} }}",
+        "property__name",
+        staff_only=False,
+    ),
+    "two-hop-meta-fields-path": _EntryBoundaryRow(
+        "{{ propertyCategoryName: {{ exact: {value} }} }}",
+        "{{ property: {{ category: {{ name: {{ exact: {value} }} }} }} }}",
+        "property__category__name",
+        staff_only=True,
+    ),
+    "two-hop-expanded-path": _EntryBoundaryRow(
+        "{{ propertyCategoryDescription: {{ exact: {value} }} }}",
+        "{{ property: {{ category: {{ description: {{ exact: {value} }} }} }} }}",
+        "property__category__description",
+        staff_only=False,
+    ),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_ENTRY_BOUNDARY_ROWS))
+@pytest.mark.parametrize("spelling", ["flat", "nested"])
+@pytest.mark.parametrize("viewer", ["anonymous", "staff"])
+def test_products_entries_flat_property_leaf_stays_inside_the_explicit_queryset(
+    viewer: str,
+    spelling: str,
+    shape: str,
+):
+    """A flat ``EntryFilter.property`` leaf cannot reach a property the explicit ``queryset=`` excludes.
+
+    ``propertyName`` and ``property: { name }`` are two spellings of one
+    ``RelatedFilter`` predicate, so both answer from the properties
+    ``Property.objects.exclude(name="Secret")`` admits: the ``"Secret"`` property's
+    entry, which the viewer otherwise sees, matches neither spelling for staff or
+    anonymous, at one hop or two, through a ``Meta.fields`` path or one the
+    ``RelatedFilter`` expansion generated. ``CategoryFilter.check_name_permission``
+    denies an anonymous ``Category.name`` predicate under either spelling, so that
+    shape answers for staff and is a denial for anonymous.
+    """
+    seed_data(1)
+    category = _rename_a_visible_property_to_secret()
+    row = _ENTRY_BOUNDARY_ROWS[shape]
+    value = {
+        "property__name": _SECRET_PROPERTY_NAME,
+        "property__category__name": category.name,
+        "property__category__description": category.description,
+    }[row.path]
+    template = row.flat if spelling == "flat" else row.nested
+    filter_input = template.format(value=json.dumps(value))
+    staff = viewer == "staff"
+    response = _post_graphql(
+        f"query {{ allEntries(filter: {filter_input}) {{ edges {{ node {{ id }} }} }} }}",
+        client=_staff_client() if staff else None,
+    )
+    payload = response.json()
+
+    if row.staff_only and not staff:
+        assert payload["data"] is None, payload
+        assert "staff user" in payload["errors"][0]["message"]
+        return
+    visible = models.Entry.objects.all() if staff else _entries_visible_to_anonymous()
+    reached_by_path = visible.filter(**{row.path: value})
+    assert reached_by_path.filter(property__name=_SECRET_PROPERTY_NAME).exists()
+    expected = [
+        {"node": {"id": _global_id("products.entry", pk)}}
+        for pk in reached_by_path.exclude(property__name=_SECRET_PROPERTY_NAME)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    ]
+    assert "errors" not in payload, payload
+    assert payload["data"]["allEntries"]["edges"] == expected
+
+
+def _items_visible_to_anonymous() -> QuerySet[models.Item]:
+    """The items ``ItemType.get_queryset`` serves anonymously: public rows under a public category."""
+    return models.Item.objects.filter(is_private=False, category__is_private=False)
+
+
+class _EntryKeyGraph(NamedTuple):
+    """Anonymously visible items whose entries are hidden, absent, or visible."""
+
+    hidden_entries: models.Item
+    no_entries: models.Item
+    visible_entries: models.Item
+    hidden_entry: models.Entry
+    visible_entry: models.Entry
+
+
+def _hide_one_items_entries_and_strip_anothers() -> _EntryKeyGraph:
+    """Make every entry of one visible item private and delete every entry of a second.
+
+    Both items stay anonymously visible; the first keeps its entries for staff, the
+    second has none for anyone. A third visible item keeps an anonymously visible
+    entry as the control a key leaf can still match.
+    """
+    visible_entries = _entries_visible_to_anonymous()
+    items = list(
+        _items_visible_to_anonymous()
+        .filter(pk__in=visible_entries.values("item"))
+        .order_by("pk")[:3],
+    )
+    if len(items) < 3:
+        pytest.fail("seed_data left fewer than three items with anonymously visible entries")
+    hidden_entries, no_entries, kept = items
+    models.Entry.objects.filter(item=hidden_entries).update(is_private=True)
+    models.Entry.objects.filter(item=no_entries).delete()
+    hidden_entry = models.Entry.objects.filter(item=hidden_entries).order_by("pk").first()
+    visible_entry = visible_entries.filter(item=kept).order_by("pk").first()
+    assert hidden_entry is not None
+    assert visible_entry is not None
+    assert not visible_entries.filter(item=hidden_entries).exists()
+    assert not models.Entry.objects.filter(item=no_entries).exists()
+    return _EntryKeyGraph(hidden_entries, no_entries, kept, hidden_entry, visible_entry)
+
+
+def _item_ids(filter_input: str, *, staff: bool) -> list[str]:
+    response = _post_graphql(
+        f"query {{ allItems(filter: {filter_input}) {{ edges {{ node {{ id }} }} }} }}",
+        client=_staff_client() if staff else None,
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return [edge["node"]["id"] for edge in payload["data"]["allItems"]["edges"]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("is_null", [True, False])
+@pytest.mark.parametrize("viewer", ["anonymous", "staff"])
+def test_products_items_entries_key_isnull_answers_over_the_entries_the_viewer_sees(
+    viewer: str,
+    is_null: bool,
+):
+    """``entriesId: { isNull }`` reads the declared ``entries`` hop over visible entries.
+
+    ``entriesId`` walks ``ItemFilter.entries`` into the entry's own key, so
+    ``isNull: true`` matches an item with no entry ``EntryType.get_queryset`` lets the
+    viewer see and ``isNull: false`` an item with at least one. An item whose every
+    entry is hidden from anonymous answers exactly like an item with no entries at
+    all; staff see those entries, so for staff it answers as an item that has them.
+    """
+    seed_data(1)
+    graph = _hide_one_items_entries_and_strip_anothers()
+    staff = viewer == "staff"
+    visible_items = models.Item.objects.all() if staff else _items_visible_to_anonymous()
+    visible_entries = models.Entry.objects.all() if staff else _entries_visible_to_anonymous()
+    with_entry = visible_items.filter(pk__in=visible_entries.values("item"))
+    expected = visible_items.exclude(pk__in=with_entry) if is_null else with_entry
+
+    ids = _item_ids(f"{{ entriesId: {{ isNull: {json.dumps(is_null)} }} }}", staff=staff)
+
+    assert ids == [
+        _global_id("products.item", pk)
+        for pk in expected.order_by("pk").values_list("pk", flat=True)
+    ]
+    no_entries = _global_id("products.item", graph.no_entries.pk)
+    hidden_entries = _global_id("products.item", graph.hidden_entries.pk)
+    assert (no_entries in ids) is is_null
+    assert (hidden_entries in ids) is (is_null is not staff)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("members", ["hidden", "hidden-beside-visible"])
+@pytest.mark.parametrize("viewer", ["anonymous", "staff"])
+def test_products_items_entries_key_membership_never_matches_a_hidden_entry(
+    viewer: str,
+    members: str,
+):
+    """``entriesId: { in }`` naming an entry hidden from the viewer matches nothing through it.
+
+    The GlobalID of a private entry reaches the predicate like any other, and the
+    anonymous answer is the one a missing entry would give; staff see the entry,
+    so its item matches.
+    """
+    seed_data(1)
+    graph = _hide_one_items_entries_and_strip_anothers()
+    staff = viewer == "staff"
+    named = [graph.hidden_entry]
+    if members == "hidden-beside-visible":
+        named.append(graph.visible_entry)
+    gids = ", ".join(json.dumps(_global_id("products.entry", entry.pk)) for entry in named)
+    expected = [entry.item_id for entry in named if staff or entry != graph.hidden_entry]
+
+    ids = _item_ids(f"{{ entriesId: {{ in: [{gids}] }} }}", staff=staff)
+
+    assert ids == [_global_id("products.item", pk) for pk in sorted(expected)]
+
+
+_ENTRY_PROPERTY_KEY_ROWS = {
+    "flat-isnull-true": ("{ propertyId: { isNull: true } }", ["secret"]),
+    "flat-isnull-false": ("{ propertyId: { isNull: false } }", ["sibling"]),
+    "nested-twin-isnull-true": ("{ property: { id: { isNull: true } } }", []),
+    "flat-exact-outside-the-boundary": ("{ propertyId: { exact: $secret_property } }", []),
+    "flat-exact-inside-the-boundary": (
+        "{ propertyId: { exact: $sibling_property } }",
+        ["sibling"],
+    ),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_ENTRY_PROPERTY_KEY_ROWS))
+@pytest.mark.parametrize("viewer", ["anonymous", "staff"])
+def test_products_entries_property_key_reads_the_explicit_queryset(viewer: str, shape: str):
+    """A forward key through ``EntryFilter.property`` answers over the properties it admits.
+
+    ``EntryFilter.property`` declares ``queryset=Property.objects.exclude(name="Secret")``
+    for every viewer, so an entry whose property is ``"Secret"`` has no admitted
+    property: ``propertyId: { isNull: true }`` matches it, ``isNull: false`` and the
+    ``Secret`` property's own GlobalID do not. The nested ``property: { id: { isNull:
+    true } }`` stays existential over admitted properties and matches nothing.
+    """
+    seed_data(1)
+    category = _rename_a_visible_property_to_secret()
+    visible = _entries_visible_to_anonymous().filter(property__category=category)
+    secret = visible.get(property__name=_SECRET_PROPERTY_NAME)
+    sibling = visible.exclude(property__name=_SECRET_PROPERTY_NAME).order_by("pk").first()
+    assert sibling is not None
+    entries = {"secret": secret, "sibling": sibling}
+    template, names = _ENTRY_PROPERTY_KEY_ROWS[shape]
+    leaf = string.Template(template).substitute(
+        secret_property=json.dumps(_global_id("products.property", secret.property.pk)),
+        sibling_property=json.dumps(_global_id("products.property", sibling.property.pk)),
+    )
+    scope = ", ".join(json.dumps(_global_id("products.entry", e.pk)) for e in (secret, sibling))
+    filter_input = f"{{ and: [{{ id: {{ in: [{scope}] }} }}, {leaf}] }}"
+
+    response = _post_graphql(
+        f"query {{ allEntries(filter: {filter_input}) {{ edges {{ node {{ id }} }} }} }}",
+        client=_staff_client() if viewer == "staff" else None,
+    )
+
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["allEntries"]["edges"] == [
+        {"node": {"id": _global_id("products.entry", entries[name].pk)}} for name in names
+    ]
 
 
 @pytest.mark.django_db

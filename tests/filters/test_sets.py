@@ -15,6 +15,7 @@ response cannot show.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import datetime
 import pickle
@@ -116,7 +117,7 @@ class ShelfProxy(library_models.Shelf):
     Django releases. A proxy of a concrete model is a legal shape (fakeshop
     ships ``ProxyBranch``); conversion onto it is deferred, and this proxy pins
     the proxy rejection of
-    ``django_strawberry_framework/filters/sets.py::FilterSet._apply_related_constraints``.
+    ``django_strawberry_framework/filters/sets.py::_restrict_through_branch``.
     """
 
     class Meta:
@@ -1226,6 +1227,21 @@ def _register_relay_target(model):
     return django_type
 
 
+def _register_plain_types(*models):
+    """Register a plain ``DjangoType`` per model, the visibility a declared hop's target needs.
+
+    A flat leaf walking a declared ``RelatedFilter`` hop applies the target
+    type's ``get_queryset`` exactly as the nested branch does, so the target
+    model needs a registered type (the default ``get_queryset`` hides nothing).
+    """
+    for model in models:
+        type(
+            f"{model.__name__}PlainType",
+            (DjangoType,),
+            {"Meta": type("Meta", (), {"model": model})},
+        )
+
+
 def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build():
     """An unsupported ordering lookup on a framework-owned forward FK is rejected."""
     _register_relay_target(library_models.Shelf)
@@ -1402,14 +1418,13 @@ def test_consumer_override_relation_nonstandard_lookup_not_rejected():
 
 
 @pytest.mark.django_db
-def test_expanded_to_field_leaf_routes_pk_qualified_through_correlated_exists():
-    """An expanded non-pk-``to_field`` GlobalID leaf routes and compiles ``__pk``.
+def test_traversal_to_field_leaf_routes_pk_qualified_through_correlated_exists():
+    """A traversal non-pk-``to_field`` GlobalID leaf routes and compiles ``__pk``.
 
-    Exercises the expanded ``favoring_profiles__favorite_genre`` shape through the PARENT
-    ``FilterSet`` and its ``.qs`` -> ``FilterSet._apply_flat_leaves`` --
-    NOT ``expanded_leaf.filter()`` in isolation like
-    ``test_expanded_related_filter_derives_pk_path_from_live_field_name``, which
-    never instantiates the parent. The leaf is a
+    Exercises the ``Meta.fields`` traversal ``favoring_profiles__favorite_genre``
+    (no ``RelatedFilter`` declares ``favoring_profiles``, so the leaf walks no
+    declared hop) through the PARENT ``FilterSet`` and its ``.qs`` ->
+    ``FilterSet._apply_flat_leaves``. The leaf is a
     ``GlobalIDFilter`` on ``PatronProfile.favorite_genre`` (a forward FK on the
     non-pk ``to_field="name"``), reached across the reverse to-many
     ``favoring_profiles`` prefix, so it is routable AND pk-marked.
@@ -1427,20 +1442,13 @@ def test_expanded_to_field_leaf_routes_pk_qualified_through_correlated_exists():
 
     apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
-    class ChildFilter(FilterSet):
-        class Meta:
-            model = library_models.PatronProfile
-            fields = {"favorite_genre": ["exact"]}
-
     class ParentFilter(FilterSet):
-        favoring_profiles = RelatedFilter(ChildFilter)
-
         class Meta:
             model = library_models.Genre
-            fields = {"name": ["exact"]}
+            fields = {"name": ["exact"], "favoring_profiles__favorite_genre": ["exact"]}
 
     # Publish the atomic expansion snapshot (sets ``base_filters`` + candidate
-    # rows). The expanded to_field leaf is an eligible, pk-marked, ROUTABLE candidate.
+    # rows). The traversal to_field leaf is an eligible, pk-marked, ROUTABLE candidate.
     ParentFilter.get_filters()
     candidate = ParentFilter._expansion_snapshot().candidates["favoring_profiles__favorite_genre"]
     assert candidate.eligible is True
@@ -1474,20 +1482,17 @@ def test_expanded_to_field_leaf_routes_pk_qualified_through_correlated_exists():
 
 
 @pytest.mark.django_db
-def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
-    """The expanded non-pk-``to_field`` ``in`` leaf through the adapter.
+def test_traversal_to_field_in_leaf_routes_through_correlated_exists():
+    """The traversal non-pk-``to_field`` ``in`` leaf through the adapter.
 
-    The only regression that composes all three recently corrected mechanisms at
-    once -- lookup-aware ``in``, non-pk pk-qualification, and live candidate
-    authorization -- over the reverse to-many ``favoring_profiles`` prefix. The
-    earlier ``in`` tests invoked the generated CHILD leaf directly on the child
-    queryset; this expands ``favoring_profiles__favorite_genre__in`` across the
-    reverse hop through the PARENT
-    ``FilterSet`` and its ``.qs`` -> ``_apply_flat_leaves`` gate. Proves the
-    expanded live class + list annotation, marker survival through
-    deepcopy/rebasing, one correlated ``EXISTS`` (no outer join / ``DISTINCT``),
-    correct rows for two encoded genre pks (where ``pk != name``), and restrictive
-    empty-list behavior through the adapter.
+    Composes three mechanisms at once -- lookup-aware ``in``, non-pk
+    pk-qualification, and live candidate authorization -- over the reverse
+    to-many ``favoring_profiles`` prefix, through the PARENT ``FilterSet`` and its
+    ``.qs`` -> ``_apply_flat_leaves`` gate (no ``RelatedFilter`` declares the
+    prefix, so the leaf routes). Proves the live class + list annotation, marker
+    survival through the per-request deepcopy, one correlated ``EXISTS`` (no
+    outer join / ``DISTINCT``), correct rows for two encoded genre pks (where
+    ``pk != name``), and restrictive empty-list behavior through the adapter.
     """
 
     class GenreType(DjangoType):
@@ -1497,17 +1502,10 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
 
     apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
-    class ChildFilter(FilterSet):
-        class Meta:
-            model = library_models.PatronProfile
-            fields = {"favorite_genre": ["in"]}
-
     class ParentFilter(FilterSet):
-        favoring_profiles = RelatedFilter(ChildFilter)
-
         class Meta:
             model = library_models.Genre
-            fields = {"name": ["exact"]}
+            fields = {"name": ["exact"], "favoring_profiles__favorite_genre": ["in"]}
 
     ParentFilter.get_filters()
     candidate = ParentFilter._expansion_snapshot().candidates[
@@ -1542,8 +1540,8 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
         request=HttpRequest(),
     )
     clean_qs = clean_fs.qs
-    # The pk-qualification marker survived the deepcopy/rebasing onto the live
-    # instance (it is what makes the expanded leaf compile ``__pk``).
+    # The pk-qualification marker survived the deepcopy onto the live instance
+    # (it is what makes the traversal leaf compile ``__pk``).
     live = clean_fs.filters["favoring_profiles__favorite_genre__in"]
     assert getattr(live, _GLOBALID_RELATION_PK_ATTR, None) is True
     # One correlated EXISTS; no outer join (root table only) and no DISTINCT.
@@ -1568,6 +1566,62 @@ def test_expanded_to_field_in_leaf_routes_through_correlated_exists():
     ).qs
     assert library_models.Genre.objects.count() == 3
     assert list(empty_qs.values_list("pk", flat=True)) == []
+
+
+@pytest.mark.django_db
+def test_expanded_to_field_leaf_answers_pk_qualified_through_its_branch():
+    """An expanded non-pk-``to_field`` GlobalID leaf keeps ``__pk`` when it runs as its branch.
+
+    ``favoring_profiles__favorite_genre`` walks the declared ``favoring_profiles``
+    hop, so it runs as a ``ChildFilter`` leaf over the visible ``PatronProfile``
+    rows (``favorite_genre`` rebased onto the child model) and restricts the
+    genres through the relation instead of routing. The pk-qualification marker
+    rides the rebased copy: only the ``__pk`` comparison returns the right row
+    where the auto pk and the FK-stored ``name`` differ. A restrictive empty
+    ``in`` matches nothing.
+    """
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
+    _register_plain_types(library_models.PatronProfile)
+
+    class ChildFilter(FilterSet):
+        class Meta:
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["exact", "in"]}
+
+    class ParentFilter(FilterSet):
+        favoring_profiles = RelatedFilter(ChildFilter)
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+    ParentFilter.get_filters()
+    t1 = library_models.Genre.objects.create(name="C1")
+    _favoring_profile(t1, "c1")
+    t2 = library_models.Genre.objects.create(name="C2")
+    _favoring_profile(t2, "c2")
+    library_models.Genre.objects.create(name="C3")
+    assert str(t1.pk) != t1.name
+
+    def _pks(data):
+        qs = ParentFilter(
+            data=data,
+            queryset=library_models.Genre.objects.order_by("id"),
+            request=HttpRequest(),
+        ).qs
+        assert _reserved_aliases(qs) == []
+        return list(qs.values_list("pk", flat=True))
+
+    encoded = [strawberry.relay.to_base64("GenreType", str(g.pk)) for g in (t1, t2)]
+    assert _pks({"favoring_profiles__favorite_genre": encoded[0]}) == [t1.pk]
+    assert _pks({"favoring_profiles__favorite_genre__in": encoded}) == [t1.pk, t2.pk]
+    assert _pks({"favoring_profiles__favorite_genre__in": []}) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1999,18 +2053,19 @@ def test_generated_deep_to_many_path_correctness_is_row_preserving():
 
 @pytest.mark.django_db
 def test_flattened_related_filter_leaf_is_row_preserving():
-    """Cut-over: a flattened ``RelatedFilter`` leaf no longer duplicates the parent row.
+    """A flattened ``RelatedFilter`` leaf does not duplicate the parent row.
 
-    Post-cut-over (C.3): although ``_expand_related_filter`` deep-copies a filter
-    generated against the CHILD model then prefixes ``field_name`` (so the flat
-    ``genres__name__icontains`` leaf on ``BookFilter`` is still a
-    ``distinct=False`` leaf with ``field_name="genres__name"``), the applicator
-    classifies the EXPANDED path against the root model and routes it through the
-    row-preserving correlated ``EXISTS``. The single matching book is returned
-    ONCE. The permanent test-local oracle (the old production behavior: direct
-    outer invocation of the same ``distinct=False`` leaf) still DUPLICATES the
-    row, proving the fix is in the adapter, not the leaf.
+    ``_expand_related_filter`` deep-copies a filter generated against the CHILD
+    model then prefixes ``field_name`` (so the flat ``genres__name__icontains``
+    leaf on ``BookFilter`` is a ``distinct=False`` leaf with
+    ``field_name="genres__name"``). It walks the declared ``genres`` hop, so the
+    applicator runs it as its branch (``FilterSet._apply_relation_leaf``): the
+    child rows restrict the books through the branch's correlated ``EXISTS``, and the single
+    matching book is returned ONCE. The test-local oracle (direct outer
+    invocation of the same ``distinct=False`` leaf) DUPLICATES the row, proving
+    the row preservation is the applicator's, not the leaf's.
     """
+    _register_plain_types(library_models.Genre)
     leaf = BookFilter.get_filters()["genres__name__icontains"]
     assert leaf.field_name == "genres__name"
     assert leaf.distinct is False
@@ -2285,24 +2340,36 @@ def test_restrictive_empty_in_composes_as_exists_over_none():
 
 @pytest.mark.django_db
 def test_pre_snapshot_filterset_degrades_to_old_behavior(monkeypatch):
-    """A filterset with no expansion snapshot behaves byte-for-byte like the old path."""
+    """A filterset with no expansion snapshot runs every leaf's original outer invocation.
+
+    The traversal ``genres__name__icontains`` walks no declared hop, so only its
+    candidate row could route it. With the fail-closed pre-snapshot state forced
+    (a filterset built before lazy target resolution) every name is a
+    non-candidate: the leaf runs django-filter's own JOIN + framework
+    ``distinct()`` on the outer queryset, with no correlated ``EXISTS``.
+    """
     matching_book, _other = _seed_two_matching_genres_on_one_book()
 
+    class BookGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"genres__name": ["icontains"]}
+
     # Expand ``base_filters`` (so the flat leaf is a real form field) THEN force
-    # the fail-closed pre-snapshot state (a filterset built before lazy target
-    # resolution): every name becomes a non-candidate and the flattened
-    # distinct=False leaf duplicates the parent row exactly as it did before.
-    BookFilter.get_filters()
-    monkeypatch.setattr(BookFilter, "_expansion_snapshot", classmethod(lambda cls: None))
-    bare = BookFilter(
+    # the pre-snapshot state.
+    BookGenreFilter.get_filters()
+    monkeypatch.setattr(BookGenreFilter, "_expansion_snapshot", classmethod(lambda cls: None))
+    bare = BookGenreFilter(
         data={"genres__name__icontains": "cardio"},
         queryset=library_models.Book.objects.order_by("id"),
         request=HttpRequest(),
     )
     result = bare.qs
 
-    assert list(result.values_list("pk", flat=True)) == [matching_book.pk, matching_book.pk]
-    assert result.count() == 2
+    assert _reserved_aliases(result) == []
+    assert result.query.distinct is True
+    assert "EXISTS" not in str(result.query).upper()
+    assert list(result.values_list("pk", flat=True)) == [matching_book.pk]
 
 
 @pytest.mark.django_db
@@ -2327,6 +2394,7 @@ def test_not_branch_over_to_many_related_branch_is_row_preserving():
 
     from apps.library.filters_genre import GenreFilter
 
+    _register_plain_types(library_models.Book)
     qs = GenreFilter.apply_sync(
         {"not_": {"books__title": {"i_contains": "cardio"}}},
         library_models.Genre.objects.order_by("id"),
@@ -2336,17 +2404,33 @@ def test_not_branch_over_to_many_related_branch_is_row_preserving():
     assert list(qs.values_list("pk", flat=True)) == [neuro.pk]
 
 
+def _routed_genre_filter():
+    """A ``Genre`` filter set whose reverse-M2M ``books__title`` leaf routes.
+
+    ``books__title`` is a ``Meta.fields`` traversal and no ``RelatedFilter``
+    declares ``books``, so the leaf walks no declared hop and its eligible
+    candidate row routes it through the correlated ``EXISTS``.
+    """
+
+    class RoutedGenreFilter(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["icontains"], "books__title": ["icontains"]}
+
+    return RoutedGenreFilter
+
+
 @pytest.mark.django_db
 def test_eligible_leaf_in_and_tree_position_is_row_preserving():
     """An ELIGIBLE to-many leaf inside an ``and`` branch stays row-preserving.
 
-    ``GenreFilter`` root; the eligible reverse-M2M ``books__title`` leaf is one
-    ``and_`` arm, a scalar ``name`` leaf the other. A genre linked to TWO matching
-    books AND carrying the matching name is returned exactly once (no framework
-    duplicate); a genre matching only one arm is excluded. The eligible arm routes
-    through the correlated ``EXISTS`` applicator inside ``_q_for_branch``.
+    The eligible reverse-M2M ``books__title`` leaf (``_routed_genre_filter``) is
+    one ``and_`` arm, a scalar ``name`` leaf the other. A genre linked to TWO
+    matching books AND carrying the matching name is returned exactly once (no
+    framework duplicate); a genre matching only one arm is excluded. The eligible
+    arm routes through the correlated ``EXISTS`` applicator inside ``_q_for_branch``.
     """
-    from apps.library.filters_genre import GenreFilter
+    RoutedGenreFilter = _routed_genre_filter()
 
     branch = library_models.Branch.objects.create(name="And Branch")
     shelf = library_models.Shelf.objects.create(branch=branch, code="AND-1")
@@ -2362,7 +2446,7 @@ def test_eligible_leaf_in_and_tree_position_is_row_preserving():
     neuro_book = library_models.Book.objects.create(shelf=shelf, title="Cardio Three")
     neuro_book.genres.add(books_only)
 
-    qs = GenreFilter.apply_sync(
+    qs = RoutedGenreFilter.apply_sync(
         {
             "and_": [
                 {"books__title": {"i_contains": "cardio"}},
@@ -2382,13 +2466,14 @@ def test_eligible_leaf_in_and_tree_position_is_row_preserving():
 def test_eligible_leaf_in_or_tree_position_is_row_preserving():
     """An ELIGIBLE to-many leaf inside an ``or`` branch stays row-preserving.
 
-    ``GenreFilter`` root; the eligible reverse-M2M ``books__title`` leaf is one
-    ``or_`` arm, a scalar ``name`` leaf the other. A genre matching only via TWO
-    books (eligible arm) is returned exactly once, unioned with a genre matching
-    only the scalar arm; a genre matching neither is excluded. The eligible arm
-    routes through the correlated ``EXISTS`` applicator inside ``_q_for_branch``.
+    The eligible reverse-M2M ``books__title`` leaf (``_routed_genre_filter``) is
+    one ``or_`` arm, a scalar ``name`` leaf the other. A genre matching only via
+    TWO books (eligible arm) is returned exactly once, unioned with a genre
+    matching only the scalar arm; a genre matching neither is excluded. The
+    eligible arm routes through the correlated ``EXISTS`` applicator inside
+    ``_q_for_branch``.
     """
-    from apps.library.filters_genre import GenreFilter
+    RoutedGenreFilter = _routed_genre_filter()
 
     branch = library_models.Branch.objects.create(name="Or Branch")
     shelf = library_models.Shelf.objects.create(branch=branch, code="OR-1")
@@ -2404,7 +2489,7 @@ def test_eligible_leaf_in_or_tree_position_is_row_preserving():
     neuro_book = library_models.Book.objects.create(shelf=shelf, title="Neuro Atlas")
     neuro_book.genres.add(miss)
 
-    qs = GenreFilter.apply_sync(
+    qs = RoutedGenreFilter.apply_sync(
         {
             "or_": [
                 {"books__title": {"i_contains": "cardio"}},
@@ -2424,13 +2509,13 @@ def test_eligible_leaf_in_or_tree_position_is_row_preserving():
 def test_qs_and_apply_sync_and_async_over_eligible_candidate():
     """``.qs``, ``apply_sync``, and ``apply_async`` all filter an eligible candidate correctly.
 
-    Uses the fakeshop ``GenreFilter`` flat reverse-M2M leaf ``books__title`` (an
-    eligible framework-generated to-many candidate) so the input spelling matches
-    the real generated surface.
+    Uses the flat reverse-M2M leaf ``books__title`` (``_routed_genre_filter``, an
+    eligible framework-generated to-many candidate that routes) under the input
+    spelling the generated surface uses.
     """
     import asyncio
 
-    from apps.library.filters_genre import GenreFilter
+    RoutedGenreFilter = _routed_genre_filter()
 
     branch = library_models.Branch.objects.create(name="Apply Branch")
     shelf = library_models.Shelf.objects.create(branch=branch, code="APL-1")
@@ -2444,8 +2529,8 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate():
     neuro_book.genres.add(neuro)
 
     # `.qs` path (snapshot published via get_filters, as apply_* does).
-    GenreFilter.get_filters()
-    bare = GenreFilter(
+    RoutedGenreFilter.get_filters()
+    bare = RoutedGenreFilter(
         data={"books__title__icontains": "cardio"},
         queryset=library_models.Genre.objects.order_by("id"),
         request=HttpRequest(),
@@ -2453,7 +2538,7 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate():
     assert list(bare.qs.values_list("pk", flat=True)) == [cardio.pk]
 
     # apply_sync path.
-    sync_qs = GenreFilter.apply_sync(
+    sync_qs = RoutedGenreFilter.apply_sync(
         {"books__title": {"i_contains": "cardio"}},
         library_models.Genre.objects.order_by("id"),
         _make_info(),
@@ -2462,7 +2547,7 @@ def test_qs_and_apply_sync_and_async_over_eligible_candidate():
 
     # apply_async path.
     async_qs = asyncio.run(
-        GenreFilter.apply_async(
+        RoutedGenreFilter.apply_async(
             {"books__title": {"i_contains": "cardio"}},
             library_models.Genre.objects.order_by("id"),
             _make_info(),
@@ -3265,9 +3350,13 @@ def test_c4_untouched_surfaces_attach_no_reserved_alias():
 # duplicates already present from the consumer's own queryset shaping;
 # consumer ordering and explicit consumer ``.distinct()`` pass through
 # untouched. These rows assert ordered pk SEQUENCES (never sets), ``count()``,
-# and duplicate multiplicity across four INPUT querysets for one fixed
-# eligible to-many candidate (``BookFilter`` root, ``genres__name`` icontains).
+# and duplicate multiplicity across four INPUT querysets for one to-many
+# ``genres__name`` icontains leaf in both of its relational shapes: a routed
+# traversal (correlated ``EXISTS``) and the ``BookFilter`` expansion walking the
+# declared ``genres`` hop (the branch's correlated ``EXISTS`` restriction).
 # ---------------------------------------------------------------------------
+
+_BOOK_GENRE_LEAF_SHAPES = ("routed", "branch")
 
 
 def _seed_multiset_book_genre_graph():
@@ -3294,15 +3383,27 @@ def _seed_multiset_book_genre_graph():
     return book_two_genres.pk, book_one_genre.pk, book_no_match.pk
 
 
-def _apply_book_genre_leaf(queryset):
-    """Apply the eligible framework leaf via the consumer-shaped-queryset seam.
+def _apply_book_genre_leaf(queryset, shape):
+    """Apply the ``genres__name`` icontains leaf via the consumer-shaped-queryset seam.
 
-    Constructing ``BookFilter`` with ``queryset=<shaped input>`` is exactly the
+    Constructing the filter set with ``queryset=<shaped input>`` is exactly the
     consumer-shaped-queryset seam production uses; form validation is
-    transparent (the flat leaf name is a valid form key).
+    transparent (the flat leaf name is a valid form key). ``shape`` picks the
+    routed traversal or the ``BookFilter`` expansion that runs as its branch.
     """
-    BookFilter.get_filters()
-    return BookFilter(
+    if shape == "routed":
+
+        class RoutedBookGenreFilter(FilterSet):
+            class Meta:
+                model = library_models.Book
+                fields = {"genres__name": ["icontains"]}
+
+        filterset_cls = RoutedBookGenreFilter
+    else:
+        _register_plain_types(library_models.Genre)
+        filterset_cls = BookFilter
+    filterset_cls.get_filters()
+    return filterset_cls(
         data={"genres__name__icontains": "cardio"},
         queryset=queryset,
         request=HttpRequest(),
@@ -3310,11 +3411,12 @@ def _apply_book_genre_leaf(queryset):
 
 
 @pytest.mark.django_db
-def test_c4_multiset_non_fanned_input_each_row_once():
+@pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
+def test_c4_multiset_non_fanned_input_each_row_once(shape):
     """(a) Non-fanned input: each matching book exactly once, consumer order kept."""
     two, one, _no = _seed_multiset_book_genre_graph()
 
-    result = _apply_book_genre_leaf(library_models.Book.objects.order_by("id"))
+    result = _apply_book_genre_leaf(library_models.Book.objects.order_by("id"), shape)
 
     sequence = list(result.values_list("pk", flat=True))
     assert sequence == [two, one]
@@ -3324,7 +3426,8 @@ def test_c4_multiset_non_fanned_input_each_row_once():
 
 
 @pytest.mark.django_db
-def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives():
+@pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
+def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives(shape):
     """(b) Pre-fanned consumer input: existing duplicates that match survive; non-matches drop.
 
     The consumer deliberately fans the queryset on ``genres__name icontains
@@ -3345,7 +3448,7 @@ def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives():
         no_match,
     ]
 
-    result = _apply_book_genre_leaf(pre_fanned)
+    result = _apply_book_genre_leaf(pre_fanned, shape)
 
     sequence = list(result.values_list("pk", flat=True))
     assert sequence == [two, two, one]
@@ -3354,14 +3457,15 @@ def test_c4_multiset_pre_fanned_consumer_input_multiplicity_survives():
 
 
 @pytest.mark.django_db
-def test_c4_multiset_consumer_distinct_input_is_preserved():
+@pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
+def test_c4_multiset_consumer_distinct_input_is_preserved(shape):
     """(c) Explicitly consumer-distinct input: consumer's own distinct collapses duplicates."""
     two, one, _no = _seed_multiset_book_genre_graph()
 
     consumer_distinct = (
         library_models.Book.objects.filter(genres__name__icontains="o").order_by("id").distinct()
     )
-    result = _apply_book_genre_leaf(consumer_distinct)
+    result = _apply_book_genre_leaf(consumer_distinct, shape)
 
     sequence = list(result.values_list("pk", flat=True))
     assert sequence == [two, one]
@@ -3371,7 +3475,8 @@ def test_c4_multiset_consumer_distinct_input_is_preserved():
 
 
 @pytest.mark.django_db
-def test_c4_multiset_custom_filter_produced_input_multiplicity_survives():
+@pytest.mark.parametrize("shape", _BOOK_GENRE_LEAF_SHAPES)
+def test_c4_multiset_custom_filter_produced_input_multiplicity_survives(shape):
     """(d) Custom-filter-produced input: the fanned multiplicity from a declared leaf survives.
 
     A consumer-declared ``CharFilter`` with ``distinct=False`` on a to-many
@@ -3400,7 +3505,7 @@ def test_c4_multiset_custom_filter_produced_input_multiplicity_survives():
     # The consumer-declared leaf fans the matching book with two genres.
     assert list(fanned.values_list("pk", flat=True)) == [two, two, one]
 
-    result = _apply_book_genre_leaf(fanned)
+    result = _apply_book_genre_leaf(fanned, shape)
 
     sequence = list(result.values_list("pk", flat=True))
     assert sequence == [two, two, one]
@@ -3409,24 +3514,39 @@ def test_c4_multiset_custom_filter_produced_input_multiplicity_survives():
 
 
 # ---------------------------------------------------------------------------
-# C.4 - Medtrics LoanFilter adapter tier (package-tier SQL shape + pagination)
+# C.4 - Medtrics deep-path adapter tier (package-tier SQL shape + pagination)
 #
-# The fakeshop ``LoanFilter`` gains the generated deep path
-# ``book__loans__patron__email`` (spelled ``bookLoansPatronEmail`` on the wire).
-# These package-tier tests inspect the query object; the live row-semantics
-# proof lives in ``examples/fakeshop/test_query/test_library_api.py``.
+# The Medtrics deep path ``book__loans__patron__email`` as a ``Meta.fields``
+# traversal on a ``Loan`` filter set declaring no ``RelatedFilter``
+# (``_routed_deep_loan_filter``), so it walks no declared hop and routes. The
+# fakeshop ``LoanFilter`` declares ``book`` and ``patron``, so its spelling of
+# the path (``bookLoansPatronEmail`` on the wire) runs as the branch chain; the
+# live row-semantics and SQL-shape proof lives in
+# ``examples/fakeshop/test_query/test_library_api.py``. These package-tier tests
+# inspect the query object.
 # ---------------------------------------------------------------------------
+
+
+def _routed_deep_loan_filter():
+    """A ``Loan`` filter set whose deep ``book__loans__patron__email`` leaf routes."""
+
+    class RoutedDeepLoanFilter(FilterSet):
+        class Meta:
+            model = library_models.Loan
+            fields = {"book__loans__patron__email": ["icontains"]}
+
+    return RoutedDeepLoanFilter
 
 
 @pytest.mark.django_db
 def test_c4_medtrics_loanfilter_deep_leaf_sql_shape():
     """The Medtrics deep leaf composes as ONE correlated EXISTS with no root fan-out."""
-    from apps.library.filters import LoanFilter
+    DeepLoanFilter = _routed_deep_loan_filter()
 
     graph = _seed_medtrics_loan_graph()
-    LoanFilter.get_filters()
+    DeepLoanFilter.get_filters()
 
-    result = LoanFilter(
+    result = DeepLoanFilter(
         data={"book__loans__patron__email__icontains": "Cardio"},
         queryset=library_models.Loan.objects.order_by("id"),
         request=HttpRequest(),
@@ -3460,12 +3580,12 @@ def test_c4_medtrics_loanfilter_deep_leaf_package_tier_pagination():
     ``all_library_loans`` is a plain list field (no connection surface), so
     pagination coverage lands here as offset/limit slicing with a stable count.
     """
-    from apps.library.filters import LoanFilter
+    DeepLoanFilter = _routed_deep_loan_filter()
 
     graph = _seed_medtrics_loan_graph()
-    LoanFilter.get_filters()
+    DeepLoanFilter.get_filters()
 
-    filtered = LoanFilter(
+    filtered = DeepLoanFilter(
         data={"book__loans__patron__email__icontains": "Cardio"},
         queryset=library_models.Loan.objects.order_by("id"),
         request=HttpRequest(),
@@ -4430,8 +4550,9 @@ def test_apply_related_constraints_proxy_model_is_rejected():
     database table) are still rejected by ``&``. The precheck
     surfaces a typed ``ConfigurationError`` BEFORE the consumer hits
     the raw ``TypeError`` so the failure mode is actionable. The
-    docstring on ``_apply_related_constraints`` explicitly carves
-    proxy / MTI out of the accepted shapes.
+    comment in ``_restrict_through_branch`` (the restriction
+    ``_apply_related_constraints`` applies) explicitly carves proxy / MTI
+    out of the accepted shapes.
 
     ``ShelfProxy`` is defined at module scope (see top of file) so the
     app registry registers it at import time.
@@ -4542,9 +4663,8 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
     assert parent_querysets, "BranchFilter was never constructed with a queryset kwarg"
     parent_queryset = parent_querysets[0]
     # The constrained queryset reached `BranchFilter.__init__` BEFORE the
-    # filterset was constructed; the SQL carries the parent-pk
-    # `pk__in=<subquery over <rel>__in>` restriction that
-    # `_apply_related_constraints` baked in.
+    # filterset was constructed; the SQL carries the branch's correlated
+    # `EXISTS` restriction that `_apply_related_constraints` baked in.
     sql = str(parent_queryset.query).lower()
     assert "library_shelf" in sql
     assert "active" in sql
@@ -5494,6 +5614,7 @@ def test_normalize_input_flat_expanded_children_bind_their_expanded_form_keys(
     oracle: Q,
 ):
     """Each flat ``RelatedFilter`` expansion binds its own expanded ``get_filters()`` name."""
+    _register_plain_types(library_models.Branch)
     alpha = library_models.Branch.objects.create(name="Alpha")
     beta = library_models.Branch.objects.create(name="Beta")
     library_models.Shelf.objects.create(code="A1", branch=alpha)
@@ -7819,13 +7940,14 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     way the consumer's custom child filter is never routed through the correlated
     ``EXISTS`` adapter.
 
-    At request time the leaf therefore runs the ORIGINAL child filter on the
-    OUTER queryset: with no framework ``distinct`` on the flattened leaf, a book
-    with TWO matching loans fans out to a duplicate row -- observably different
-    from the single-row correlated-``EXISTS`` result, proving fail-closed.
+    At request time the leaf walks the declared ``loans`` hop, so it runs as its
+    branch (``FilterSet._apply_relation_leaf``): the custom child filter runs over
+    the visible loans and the book is kept once through the branch's correlated
+    ``EXISTS``, with no reserved ``EXISTS`` alias.
     """
     import django_filters
 
+    _register_plain_types(library_models.Loan)
     matched = _seed_matched_book_two_cardio_loans()
 
     class CustomChildGenerated(django_filters.CharFilter):
@@ -7869,23 +7991,25 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
         request=HttpRequest(),
     ).qs
     # Not routed through the correlated adapter (no reserved EXISTS alias); the
-    # custom child filter ran on the OUTER queryset, so the two matching loans
-    # fan out to a duplicate row.
+    # branch restriction keeps the book once although two loans match.
     assert _reserved_aliases(result) == []
-    assert list(result.order_by("id").values_list("pk", flat=True)) == [matched.pk, matched.pk]
+    assert list(result.order_by("id").values_list("pk", flat=True)) == [matched.pk]
 
 
 @pytest.mark.django_db
-def test_capability_gate_related_filter_expands_capable_child_is_routed():
-    """Positive control: a capable PARENT + capable CHILD over a to-many path DO route.
+def test_capability_gate_related_filter_expands_capable_child_row_is_routable():
+    """Positive control: a capable PARENT + capable CHILD over a to-many path freeze ROUTABLE.
 
     The mirror of the fail-closed expansion test. With a fully capable child
     ``FilterSet`` (no generation-seam override), the expanded
     ``loans__note__icontains`` row carries ``generation_capable=True``, so the
-    capable parent freezes it ROUTABLE. The request composes as a single
-    distinct-free correlated ``EXISTS``, proving the fix does not over-block the
-    legitimate expansion case.
+    capable parent freezes it ROUTABLE: the capability gate does not over-block
+    the expansion case. At request time the leaf walks the declared ``loans``
+    hop, which takes precedence over the row (``FilterSet._apply_flat_leaves``):
+    it runs as its branch, distinct-free, and the two matching loans keep the
+    book once.
     """
+    _register_plain_types(library_models.Loan)
     matched = _seed_matched_book_two_cardio_loans()
 
     class ChildLoanFilter(FilterSet):
@@ -7915,9 +8039,9 @@ def test_capability_gate_related_filter_expands_capable_child_is_routed():
         request=HttpRequest(),
     )
     result = instance.qs
-    # Routed through the correlated adapter: one reserved EXISTS alias, no outer
-    # distinct, and the two matching loans collapse to a single row.
-    assert _reserved_aliases(result) == ["_dst_predicate_0"]
+    # The branch path: no reserved EXISTS alias, no outer distinct, and the two
+    # matching loans keep a single row.
+    assert _reserved_aliases(result) == []
     assert result.query.distinct is False
     assert list(result.order_by("id").values_list("pk", flat=True)) == [matched.pk]
 
@@ -9677,6 +9801,7 @@ def test_projected_leaf_filters_through_the_child_filterset():
     treats as empty (``""``) makes the child filter return its input unchanged,
     so the parent is unconstrained too, never restricted to parents with a child.
     """
+    _register_plain_types(library_models.Patron)
     LoanFilter.get_filters()
     book, alpha, _beta = _seed_loans_for_two_patrons()
     library_models.Loan.objects.create(
@@ -9731,6 +9856,7 @@ def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing():
             model = library_models.Loan
             fields = []
 
+    _register_plain_types(library_models.Patron)
     Parent.get_filters()
     _seed_loans_for_two_patrons()
     rows = Parent(
@@ -9767,6 +9893,7 @@ def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate()
             model = library_models.Book
             fields = []
 
+    _register_plain_types(library_models.Loan, library_models.Patron)
     leaf = BookParent.get_filters()["loans__patron__email"]
     assert isinstance(leaf, ProjectedChildFilter)
     assert leaf._projection == ChildProjection(LoanChild, "patron__email", "loans")
@@ -9917,3 +10044,1795 @@ def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
     fired.clear()
     ParentBookFilter._run_permission_checks({"shelf": {"home_branch": 1}}, HttpRequest())
     assert sorted(fired) == ["child.home_branch", "parent.shelf"]
+
+
+# ---------------------------------------------------------------------------
+# Flat relation leaves answer as their nested twins: each declared hop a flat
+# leaf walks applies its target type's ``get_queryset`` and the declaration's
+# explicit ``queryset=`` (``FilterSet._apply_relation_leaf``). The live rows are
+# ``examples/fakeshop/test_query/test_library_api.py``; these pin what no
+# fakeshop query reaches: an unresolvable hop, an async-only ``get_queryset``, the
+# request-wide visibility map, and a projected child leaf walking its own hop.
+# ---------------------------------------------------------------------------
+
+
+def _shelf_and_branch_filters(shelf_type_get_queryset=None):
+    """``BranchFilter.shelves -> ShelfFilter`` plus a ``ShelfType`` whose ``get_queryset`` is given.
+
+    ``ShelfFilter.code_is`` is a ``method=`` filter, so ``shelves__code_is`` is a
+    ``ProjectedChildFilter``; ``shelves__code`` / ``shelves__topic`` are plain
+    expansions. ``shelf_type_get_queryset`` of ``None`` registers no ``ShelfType``.
+    """
+    if shelf_type_get_queryset is not None:
+        type(
+            "ShelfType",
+            (DjangoType,),
+            {
+                "Meta": type("Meta", (), {"model": library_models.Shelf}),
+                "get_queryset": classmethod(shelf_type_get_queryset),
+            },
+        )
+
+    class ShelfFilter(FilterSet):
+        code_is = CharFilter(field_name="code", method="filter_code_is")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"], "topic": ["exact"]}
+
+        def filter_code_is(
+            self,
+            queryset,
+            name,
+            value,
+        ):
+            return queryset.filter(code=value)
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    BranchFilter.get_filters()
+    return BranchFilter
+
+
+def _seed_open_and_secret_match_shelves():
+    """``alpha`` owns an open ``match`` shelf, ``beta`` a secret one."""
+    alpha = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=alpha, code="match", topic="open")
+    beta = library_models.Branch.objects.create(name="beta")
+    library_models.Shelf.objects.create(branch=beta, code="match", topic="secret")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "filter_input",
+    [{"shelves__code": "match"}, {"shelves": {"code": "match"}}],
+    ids=["flat", "nested"],
+)
+def test_flat_leaf_hop_with_no_registered_target_type_raises_like_its_nested_twin(filter_input):
+    """An active hop whose target has no registered ``DjangoType`` fails loud, flat as nested."""
+    branch_filter = _shelf_and_branch_filters()
+    with pytest.raises(
+        ConfigurationError,
+        match=r"branch 'shelves' is active .* no DjangoType is registered for its target model Shelf",
+    ):
+        list(
+            branch_filter.apply_sync(
+                filter_input,
+                library_models.Branch.objects.all(),
+                _make_info(),
+            ),
+        )
+
+
+@pytest.mark.django_db
+def test_flat_traversal_under_a_placeholder_branch_raises():
+    """A ``Meta.fields`` traversal walking a ``RelatedFilter(None)`` hop cannot be scoped, so it raises.
+
+    The placeholder declares an explicit ``queryset=`` so its own form field builds.
+    """
+
+    class BookFilter(FilterSet):
+        shelf = RelatedFilter(
+            None,
+            field_name="shelf",
+            queryset=library_models.Shelf.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf__code": ["exact"]}
+
+    BookFilter.get_filters()
+    with pytest.raises(ConfigurationError, match="its target FilterSet could not be resolved"):
+        list(
+            BookFilter(
+                data={"shelf__code": "match"},
+                queryset=library_models.Book.objects.all(),
+                request=HttpRequest(),
+            ).qs,
+        )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        {"shelves__code": "match"},
+        {"or_": [{"shelves__code": "match"}]},
+        {"shelves__code_is": "match"},
+        {"and_": [{"or_": [{"shelves__code_is": "match"}]}]},
+    ],
+    ids=[
+        "expanded",
+        "expanded-in-or-arm",
+        "projected",
+        "projected-in-nested-arm",
+    ],
+)
+def test_apply_async_awaits_async_get_queryset_of_every_flat_hop(filter_input):
+    """``apply_async`` awaits each flat hop's async-only ``get_queryset`` before the sync ``.qs`` read.
+
+    The hidden ``secret`` shelf matches too, so the result proves the hook ran;
+    the sync ``apply`` cannot await it and says to use ``apply_async``.
+    """
+    import asyncio
+
+    from asgiref.sync import sync_to_async
+
+    async def _visible_shelves(cls, queryset, info, **kwargs):
+        return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
+
+    branch_filter = _shelf_and_branch_filters(_visible_shelves)
+    _seed_open_and_secret_match_shelves()
+
+    qs = asyncio.run(
+        branch_filter.apply_async(filter_input, library_models.Branch.objects.all(), _make_info()),
+    )
+    assert list(qs.values_list("name", flat=True)) == ["alpha"]
+    with pytest.raises(RuntimeError, match="use apply_async instead"):
+        list(branch_filter.apply(filter_input, library_models.Branch.objects.all(), _make_info()))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize(
+    ("filter_input", "derivations", "names"),
+    [
+        ({"name": "beta"}, {"sync": 0, "async": 0}, ["beta"]),
+        ({"shelves__code": ""}, {"sync": 0, "async": 1}, ["alpha", "beta"]),
+        ({"shelves__code_is": ""}, {"sync": 0, "async": 1}, ["alpha", "beta"]),
+        ({"shelves__code": "match"}, {"sync": 1, "async": 1}, ["alpha"]),
+        (
+            {"shelves__code": "match", "shelves__topic": "open", "shelves__code_is": "match"},
+            {"sync": 1, "async": 1},
+            ["alpha"],
+        ),
+        (
+            {"or_": [{"shelves__code": "match"}, {"shelves__topic": "open"}]},
+            {"sync": 1, "async": 1},
+            ["alpha"],
+        ),
+    ],
+    ids=[
+        "no-relation-leaf",
+        "empty-expanded",
+        "empty-projected",
+        "one-leaf",
+        "three-leaves-one-hop",
+        "two-or-arms-one-hop",
+    ],
+)
+def test_flat_hop_visibility_runs_once_per_request_and_never_for_an_inactive_leaf(
+    filter_input,
+    derivations,
+    names,
+    mode,
+):
+    """A hop's ``get_queryset`` runs once per request however many leaves and arms walk it.
+
+    An inactive leaf (django-filter's empty-value skip returns its input by
+    identity) constrains nothing. On the sync path it runs no ``get_queryset``;
+    ``apply_async`` awaits the hop of every SUPPLIED leaf before the form exists,
+    so a supplied empty value costs one awaited hook (as a present-but-empty
+    nested branch does) and still constrains nothing.
+    """
+    import asyncio
+
+    calls: list[object] = []
+
+    def _visible_shelves(cls, queryset, info, **kwargs):
+        calls.append(info)
+        return queryset.exclude(topic="secret")
+
+    branch_filter = _shelf_and_branch_filters(_visible_shelves)
+    _seed_open_and_secret_match_shelves()
+    info = _make_info()
+    base = library_models.Branch.objects.order_by("name")
+
+    if mode == "sync":
+        qs = branch_filter.apply_sync(filter_input, base, info)
+    else:
+        qs = asyncio.run(branch_filter.apply_async(filter_input, base, info))
+    assert list(qs.values_list("name", flat=True)) == names
+    assert len(calls) == derivations[mode]
+    assert all(seen is info for seen in calls)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("spelling", ["flat", "nested"])
+def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling):
+    """A projected child leaf that walks a declared hop of the child set answers as its nested twin.
+
+    ``PatronChild`` overrides ``__init__``, so ``LoanParent.patron__loans__note``
+    is a ``ProjectedChildFilter`` whose child filter, ``loans__note``, walks
+    ``PatronChild.loans``. The child runs over the visible patrons, its leaf over
+    the visible loans: a match through a hidden loan or a hidden patron is no match.
+    """
+
+    def _visible_patrons(cls, queryset, info, **kwargs):
+        return queryset.exclude(name="hidden")
+
+    def _visible_loans(cls, queryset, info, **kwargs):
+        return queryset.exclude(note__startswith="secret")
+
+    for model, hook in (
+        (library_models.Patron, _visible_patrons),
+        (library_models.Loan, _visible_loans),
+    ):
+        type(
+            f"{model.__name__}VisibleType",
+            (DjangoType,),
+            {"Meta": type("Meta", (), {"model": model}), "get_queryset": classmethod(hook)},
+        )
+
+    class LoanChild(FilterSet):
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    class PatronChild(FilterSet):
+        loans = RelatedFilter(LoanChild, field_name="loans")
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"name": ["exact"]}
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    class LoanParent(FilterSet):
+        patron = RelatedFilter(PatronChild, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    leaf = LoanParent.get_filters()["patron__loans__note"]
+    assert isinstance(leaf, ProjectedChildFilter)
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="Shared")
+    seen = library_models.Patron.objects.create(name="seen", email="s@x")
+    hidden = library_models.Patron.objects.create(name="hidden", email="h@x")
+    visible_loan = library_models.Loan.objects.create(book=book, patron=seen, note="open")
+    library_models.Loan.objects.create(
+        book=library_models.Book.objects.create(shelf=shelf, title="Second"),
+        patron=seen,
+        note="secret",
+    )
+    library_models.Loan.objects.create(
+        book=library_models.Book.objects.create(shelf=shelf, title="Third"),
+        patron=hidden,
+        note="open",
+    )
+
+    def _pks(note):
+        filter_input = (
+            {"patron__loans__note": note}
+            if spelling == "flat"
+            else {"patron": {"loans": {"note": note}}}
+        )
+        return sorted(
+            LoanParent.apply_sync(
+                filter_input,
+                library_models.Loan.objects.all(),
+                _make_info(),
+            ).values_list("pk", flat=True),
+        )
+
+    seen_loans = sorted(
+        library_models.Loan.objects.filter(patron=seen).values_list("pk", flat=True),
+    )
+    assert visible_loan.pk in seen_loans
+    assert _pks("open") == seen_loans
+    assert _pks("secret") == []
+
+
+# ---------------------------------------------------------------------------
+# Visible world: a flat leaf walking declared hops answers as Django's ORM answers
+# the same lookup once every row a hop's target type hides (or a hop's explicit
+# ``queryset=`` excludes) is gone. The oracle deletes those rows inside a
+# savepoint and asks Django directly, so "hidden" and "absent" must agree.
+# ---------------------------------------------------------------------------
+
+
+def _hide(model, fields="__all__", **lookups):
+    """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``lookups``."""
+
+    def get_queryset(cls, queryset, info, **kwargs):
+        return queryset.exclude(**lookups)
+
+    type(
+        f"{model.__name__}HidingType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": model, "fields": fields}),
+            "get_queryset": classmethod(get_queryset),
+        },
+    )
+
+
+def _absent_world(
+    model,
+    lookups,
+    *,
+    exclude=False,
+    hidden=(),
+):
+    """Django's own answer for ``lookups`` on ``model`` once every ``hidden`` row is deleted."""
+    from django.db import transaction
+
+    class _RollbackError(Exception):
+        pass
+
+    answer: set[object] = set()
+    with contextlib.suppress(_RollbackError), transaction.atomic():
+        for rows in hidden:
+            rows.delete()
+        method = model.objects.exclude if exclude else model.objects.filter
+        answer = set(method(**lookups).values_list("pk", flat=True))
+        raise _RollbackError
+    return answer
+
+
+def _applied(filterset, filter_input, base):
+    """The pks ``filterset.apply_sync`` keeps for ``filter_input`` over ``base``."""
+    return set(filterset.apply_sync(filter_input, base, _make_info()).values_list("pk", flat=True))
+
+
+def _book(
+    title,
+    *,
+    subtitle=None,
+    hidden=False,
+    shelf=None,
+):
+    """Create a ``Book`` on its own shelf (or ``shelf``), ``repair`` when ``hidden``."""
+    if shelf is None:
+        branch = library_models.Branch.objects.create(name=f"branch-{uuid.uuid4().hex}")
+        shelf = library_models.Shelf.objects.create(branch=branch, code=uuid.uuid4().hex)
+    status = (
+        library_models.Book.CirculationStatus.REPAIR
+        if hidden
+        else library_models.Book.CirculationStatus.AVAILABLE
+    )
+    return library_models.Book.objects.create(
+        shelf=shelf,
+        title=title,
+        subtitle=subtitle,
+        circulation_status=status,
+    )
+
+
+def _genre_world(*, register_type=True):
+    """Genres over books, some books in ``repair`` (hidden by ``BookType``, registered here by default).
+
+    ``mixed`` holds a visible ``x`` book with no subtitle and a hidden ``x`` book;
+    ``hidden_only`` holds only a hidden book; ``empty`` no book; ``other`` a
+    visible ``y`` book; ``plain`` visible ``x`` and ``y`` books. A visible ``x``
+    book in no genre would make a child-side ``NOT IN`` see a ``NULL``.
+    """
+    if register_type:
+        _hide(library_models.Book, circulation_status="repair")
+    visible_x = _book("x")
+    hidden_x = _book("x", subtitle="s", hidden=True)
+    hidden_y = _book("y", hidden=True)
+    visible_y = _book("y", subtitle="s")
+    _book("x", subtitle="s")
+    genres = {}
+    for name, members in (
+        ("mixed", [visible_x, hidden_x]),
+        ("hidden_only", [hidden_y]),
+        ("empty", []),
+        ("other", [visible_y]),
+        ("plain", [visible_x, visible_y]),
+    ):
+        genres[name] = library_models.Genre.objects.create(name=name)
+        genres[name].books.set(members)
+    return genres, {"visible_x": visible_x, "hidden_x": hidden_x, "hidden_y": hidden_y}
+
+
+def _genre_parent():
+    class BookChild(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"], "subtitle": ["exact", "isnull"]}
+
+    class GenreParent(FilterSet):
+        visible_books = RelatedFilter(BookChild, field_name="books")
+        without_title = CharFilter(field_name="books__title", exclude=True)
+
+        class Meta:
+            model = library_models.Genre
+            fields = {
+                "name": ["exact"],
+                "books": ["exact", "isnull"],
+                "books__title": ["exact"],
+                "books__subtitle": ["isnull"],
+            }
+
+    GenreParent.get_filters()
+    return GenreParent
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "lookups", "exclude"),
+    [
+        ({"books__title": "x"}, {"books__title": "x"}, False),
+        ({"visible_books__title": "x"}, {"books__title": "x"}, False),
+        ({"books__subtitle": {"is_null": True}}, {"books__subtitle__isnull": True}, False),
+        ({"books__subtitle": {"is_null": False}}, {"books__subtitle__isnull": False}, False),
+        ({"without_title": "x"}, {"books__title": "x"}, True),
+        ({"books": {"is_null": True}}, {"books__isnull": True}, False),
+        ({"books": {"is_null": False}}, {"books__isnull": False}, False),
+    ],
+    ids=[
+        "positive",
+        "positive-expanded",
+        "isnull-true",
+        "isnull-false",
+        "exclude",
+        "key-isnull-true",
+        "key-isnull-false",
+    ],
+)
+def test_reverse_m2m_flat_leaf_answers_as_if_hidden_books_were_absent(
+    filter_input,
+    lookups,
+    exclude,
+):
+    """Each walked leaf over ``Genre.books`` matches Django's answer with the hidden books deleted."""
+    _genre_world()
+    expected = _absent_world(
+        library_models.Genre,
+        lookups,
+        exclude=exclude,
+        hidden=[library_models.Book.objects.filter(circulation_status="repair")],
+    )
+    assert _applied(_genre_parent(), filter_input, library_models.Genre.objects.all()) == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("book", ["visible_x", "hidden_x", "hidden_y"])
+def test_reverse_m2m_relation_key_membership_never_matches_a_hidden_book(book):
+    """``books: [pk]`` matches a genre only through a visible book; a hidden pk matches nothing."""
+    _genres, books = _genre_world()
+    pk = books[book].pk
+    expected = _absent_world(
+        library_models.Genre,
+        {"books__in": [pk]},
+        hidden=[library_models.Book.objects.filter(circulation_status="repair")],
+    )
+    got = _applied(_genre_parent(), {"books": {"exact": [pk]}}, library_models.Genre.objects.all())
+    assert got == expected
+    assert bool(got) is (book == "visible_x")
+
+
+@pytest.mark.django_db
+def test_isnull_and_exclude_leaves_differ_from_their_existential_nested_twins():
+    """The nested spelling stays existential; the flat ``isnull`` / ``exclude`` spellings do not.
+
+    ``visible_books: {subtitle: {isNull: true}}`` is "has a visible book with no
+    subtitle"; the flat ``books__subtitle`` leaf also matches a genre with no
+    visible book. The nested ``not`` arm and the flat ``exclude=True`` filter agree.
+    """
+    genres, _books = _genre_world()
+    parent = _genre_parent()
+    base = library_models.Genre.objects.all()
+    nested = _applied(parent, {"visible_books": {"subtitle": {"is_null": True}}}, base)
+    flat = _applied(parent, {"books__subtitle": {"is_null": True}}, base)
+    assert nested == {genres["mixed"].pk, genres["plain"].pk}
+    assert flat == nested | {genres["hidden_only"].pk, genres["empty"].pk}
+    assert _applied(parent, {"without_title": "x"}, base) == _applied(
+        parent,
+        {"not_": {"books__title": "x"}},
+        base,
+    )
+
+
+@pytest.mark.django_db
+def test_exclude_leaf_compiles_not_exists_so_a_null_key_cannot_empty_it():
+    """An excluding walked leaf is ``NOT EXISTS``: a visible matching book in no genre changes nothing.
+
+    A child-side ``NOT IN (SELECT <genre key> ...)`` projects that book's missing
+    genre as ``NULL`` and then matches no genre at all.
+    """
+    genres, _books = _genre_world()
+    _book("x", subtitle="orphan")
+    qs = _genre_parent().apply_sync(
+        {"without_title": "x"},
+        library_models.Genre.objects.all(),
+        _make_info(),
+    )
+    sql = str(qs.query).upper()
+    assert sql.count("NOT (EXISTS(") == 1
+    assert " NOT IN " not in sql
+    assert set(qs.values_list("pk", flat=True)) == {
+        genres["hidden_only"].pk,
+        genres["empty"].pk,
+        genres["other"].pk,
+    }
+
+
+@pytest.mark.django_db
+def test_walked_leaf_restriction_is_one_correlated_exists_per_leaf_with_no_parent_rescan():
+    """Each walked leaf adds one ``EXISTS`` built from the visible books, correlated to the genre.
+
+    No leaf re-reads the genre table or embeds an earlier leaf's restriction, and
+    no framework ``DISTINCT`` appears.
+    """
+    _genre_world()
+    qs = _genre_parent().apply_sync(
+        {"books__title": "x", "books__subtitle": {"is_null": False}, "name": "mixed"},
+        library_models.Genre.objects.all(),
+        _make_info(),
+    )
+    sql = str(qs.query)
+    assert sql.count("EXISTS") == 4
+    assert sql.count('FROM "library_genre"') == 1
+    assert "DISTINCT" not in sql
+    assert " IN (SELECT" not in sql
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "names"),
+    [
+        (
+            {"or_": [{"books": {"is_null": True}}, {"name": "other"}]},
+            ["empty", "hidden_only", "other"],
+        ),
+        ({"and_": [{"without_title": "x"}, {"books__title": "y"}]}, ["other"]),
+        ({"not_": {"books__subtitle": {"is_null": True}}}, ["other"]),
+    ],
+    ids=["or", "and", "not"],
+)
+@pytest.mark.parametrize("mode", ["sync", "async"])
+def test_visible_world_leaves_inside_logic_arms(filter_input, names, mode):
+    """``isnull`` / ``exclude`` / relation-key leaves keep their visible-world answer inside every arm."""
+    import asyncio
+
+    _genre_world()
+    parent = _genre_parent()
+    base = library_models.Genre.objects.order_by("name")
+    if mode == "sync":
+        qs = parent.apply_sync(filter_input, base, _make_info())
+    else:
+        qs = asyncio.run(parent.apply_async(filter_input, base, _make_info()))
+    assert list(qs.values_list("name", flat=True)) == names
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        {"books": {"is_null": True}},
+        {"books": {"exact": [0]}},
+        {"without_title": "x"},
+        {"not_": {"books": {"is_null": False}}},
+    ],
+    ids=[
+        "key-isnull",
+        "key-membership",
+        "exclude",
+        "key-in-not-arm",
+    ],
+)
+def test_apply_async_awaits_the_hop_of_relation_key_and_exclude_leaves(filter_input):
+    """An async-only ``get_queryset`` behind a relation-key or excluding leaf is awaited before ``.qs``."""
+    import asyncio
+
+    from asgiref.sync import sync_to_async
+
+    calls = []
+
+    async def _visible_books(cls, queryset, info, **kwargs):
+        calls.append(info)
+        return await sync_to_async(lambda: queryset.exclude(circulation_status="repair"))()
+
+    type(
+        "BookAsyncType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": library_models.Book}),
+            "get_queryset": classmethod(_visible_books),
+        },
+    )
+    parent = _genre_parent()
+    qs = asyncio.run(
+        parent.apply_async(filter_input, library_models.Genre.objects.all(), _make_info()),
+    )
+    list(qs)
+    assert len(calls) == 1
+    with pytest.raises(RuntimeError, match="use apply_async instead"):
+        list(parent.apply(filter_input, library_models.Genre.objects.all(), _make_info()))
+
+
+@pytest.mark.django_db
+def test_inactive_relation_key_leaf_runs_no_get_queryset():
+    """A relation-key leaf the filter skips (an omitted value) constrains nothing and derives nothing."""
+    calls = []
+
+    def _visible_books(cls, queryset, info, **kwargs):
+        calls.append(info)
+        return queryset
+
+    type(
+        "BookCountingType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": library_models.Book}),
+            "get_queryset": classmethod(_visible_books),
+        },
+    )
+    genre = library_models.Genre.objects.create(name="solo")
+    got = _applied(
+        _genre_parent(),
+        {"books": {"is_null": None}},
+        library_models.Genre.objects.all(),
+    )
+    assert got == {genre.pk}
+    assert calls == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("book", ["visible_x", "hidden_x"])
+@pytest.mark.parametrize(
+    ("filter_name", "value"),
+    [
+        ("has_book", lambda book: book.pk),
+        ("has_any_book", lambda book: [book.pk]),
+        ("has_book_in", lambda book: [str(book.pk)]),
+        ("has_book_global", lambda book: [strawberry.relay.to_base64("BookNode", str(book.pk))]),
+    ],
+    ids=[
+        "model-choice",
+        "model-multiple-choice",
+        "model-choice-in",
+        "globalid",
+    ],
+)
+def test_to_many_relation_key_filters_compare_the_visible_target_key(filter_name, value, book):
+    """Model-choice, ``in`` and GlobalID relation keys over ``Genre.books`` match only a visible book.
+
+    Each cleans to model instances, a list, a queryset, or a node id; each is
+    re-read against the target's own key over the visible books.
+    """
+    genres, books = _genre_world(register_type=False)
+    node = type(
+        "BookNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Book, "interfaces": (strawberry.relay.Node,)},
+            ),
+            "get_queryset": classmethod(
+                lambda cls, queryset, info, **kwargs: queryset.exclude(
+                    circulation_status="repair",
+                ),
+            ),
+        },
+    )
+    apply_interfaces(node, node.__django_strawberry_definition__)
+
+    class BookChild(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    class GenreKeys(FilterSet):
+        visible_books = RelatedFilter(BookChild, field_name="books")
+        has_book = ModelChoiceFilter(
+            field_name="books",
+            queryset=library_models.Book.objects.all(),
+        )
+        has_any_book = ModelMultipleChoiceFilter(
+            field_name="books",
+            queryset=library_models.Book.objects.all(),
+        )
+        has_book_in = _ModelChoiceInFilter(
+            field_name="books",
+            queryset=library_models.Book.objects.all(),
+        )
+        has_book_global = GlobalIDMultipleChoiceFilter(field_name="books")
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+    GenreKeys.get_filters()
+    target = books[book]
+    got = _applied(
+        GenreKeys,
+        {filter_name: value(target)},
+        library_models.Genre.objects.all(),
+    )
+    expected = {genres["mixed"].pk, genres["plain"].pk} if book == "visible_x" else set()
+    assert got == expected
+
+
+class _ModelChoiceInFilter(BaseInFilter, ModelChoiceFilter):
+    """The django-filter ``in`` idiom over a model-choice filter: a list of keys."""
+
+
+def _world_of_genre_favorites():
+    """Profiles keyed to genres by name (``to_field``, ``SET_NULL``); ``secret*`` genres are hidden."""
+    _hide(library_models.Genre, name__startswith="secret")
+    open_genre = library_models.Genre.objects.create(name="open")
+    secret = library_models.Genre.objects.create(name="secret")
+    profiles = {}
+    for label, genre in (("open", open_genre), ("secret", secret), ("none", None)):
+        patron = library_models.Patron.objects.create(name=label, email=f"{label}@x")
+        profiles[label] = library_models.PatronProfile.objects.create(
+            patron=patron,
+            favorite_genre=genre,
+        )
+    return {"open": open_genre, "secret": secret}, profiles
+
+
+def _profile_parent():
+    class GenreChild(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact", "isnull"]}
+
+    class ProfileParent(FilterSet):
+        favorite = RelatedFilter(GenreChild, field_name="favorite_genre")
+        favored = ModelChoiceFilter(
+            field_name="favorite_genre",
+            queryset=library_models.Genre.objects.all(),
+        )
+        not_favored = ModelChoiceFilter(
+            field_name="favorite_genre",
+            queryset=library_models.Genre.objects.all(),
+            exclude=True,
+        )
+        favorite_not_named = CharFilter(field_name="favorite_genre__name", exclude=True)
+
+        class Meta:
+            model = library_models.PatronProfile
+            fields = {"favorite_genre": ["exact", "isnull"], "favorite_genre__name": ["isnull"]}
+
+    ProfileParent.get_filters()
+    return ProfileParent
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "lookups", "exclude"),
+    [
+        (
+            {"favorite_genre__name": {"is_null": True}},
+            {"favorite_genre__name__isnull": True},
+            False,
+        ),
+        ({"favorite_genre": {"is_null": True}}, {"favorite_genre__isnull": True}, False),
+        ({"favorite_genre": {"is_null": False}}, {"favorite_genre__isnull": False}, False),
+        ({"favorite_not_named": "open"}, {"favorite_genre__name": "open"}, True),
+        ({"favorite_not_named": "secret"}, {"favorite_genre__name": "secret"}, True),
+    ],
+    ids=[
+        "terminal-isnull",
+        "key-isnull-true",
+        "key-isnull-false",
+        "exclude-open",
+        "exclude-secret",
+    ],
+)
+def test_nullable_to_field_forward_fk_leaf_answers_as_if_hidden_genres_were_absent(
+    filter_input,
+    lookups,
+    exclude,
+):
+    """A ``to_field`` FK leaf matches Django's answer once the hidden genre is deleted (``SET_NULL``)."""
+    _genres, _profiles = _world_of_genre_favorites()
+    expected = _absent_world(
+        library_models.PatronProfile,
+        lookups,
+        exclude=exclude,
+        hidden=[library_models.Genre.objects.filter(name__startswith="secret")],
+    )
+    got = _applied(_profile_parent(), filter_input, library_models.PatronProfile.objects.all())
+    assert got == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("genre", ["open", "secret"])
+@pytest.mark.parametrize("filter_name", ["favorite_genre", "favored", "not_favored"])
+def test_forward_relation_key_membership_reads_the_visible_target(filter_name, genre):
+    """A raw-key, model-choice or excluding key over a ``to_field`` FK treats a hidden genre as no genre."""
+    genres, _profiles = _world_of_genre_favorites()
+    pk = genres[genre].pk
+    filter_input = (
+        {filter_name: {"exact": pk}} if filter_name == "favorite_genre" else {filter_name: pk}
+    )
+    expected = _absent_world(
+        library_models.PatronProfile,
+        {"favorite_genre__pk": pk} if genre == "open" else {"pk__in": []},
+        exclude=filter_name == "not_favored",
+        hidden=[library_models.Genre.objects.filter(name__startswith="secret")],
+    )
+    got = _applied(_profile_parent(), filter_input, library_models.PatronProfile.objects.all())
+    assert got == expected
+
+
+def _relation_kind_case(kind):
+    """Seed one relation kind; return ``(parent filterset, parent model, hidden rows, cases)``.
+
+    Each case is ``(filter_input, lookups, exclude)``: the leaf, and the Django
+    lookup it spells over the parent model.
+    """
+    child_fields = {"title": ["exact"], "subtitle": ["isnull"]}
+    if kind in {"forward-m2m", "hidden-reverse-m2m"}:
+        relation = "genres" if kind == "forward-m2m" else "archive_genres"
+        _hide(library_models.Genre, name__startswith="secret")
+        open_genre = library_models.Genre.objects.create(name="open")
+        secret = library_models.Genre.objects.create(name="secret")
+        for title, members in (("both", [open_genre, secret]), ("secret", [secret]), ("none", [])):
+            getattr(_book(title), relation).set(members)
+        child_model, child_fields = library_models.Genre, {"name": ["exact"]}
+        hidden = [library_models.Genre.objects.filter(name__startswith="secret")]
+        parent_model, terminal = library_models.Book, ("name", "secret")
+    elif kind == "reverse-fk":
+        relation = "books"
+        _hide(library_models.Book, circulation_status="repair")
+        for code, members in (("mixed", [False, True]), ("hidden", [True]), ("empty", [])):
+            branch = library_models.Branch.objects.create(name=code)
+            shelf = library_models.Shelf.objects.create(branch=branch, code=code)
+            for index, is_hidden in enumerate(members):
+                _book(f"x{index}", shelf=shelf, hidden=is_hidden)
+        child_model = library_models.Book
+        hidden = [library_models.Book.objects.filter(circulation_status="repair")]
+        parent_model, terminal = library_models.Shelf, ("title", "x1")
+    elif kind == "reverse-o2o":
+        relation = "card"
+        _hide(library_models.MembershipCard, barcode__startswith="secret")
+        for name in ("open", "secret", "none"):
+            patron = library_models.Patron.objects.create(name=name, email=f"{name}@x")
+            if name != "none":
+                library_models.MembershipCard.objects.create(patron=patron, barcode=name)
+        child_model, child_fields = library_models.MembershipCard, {"barcode": ["exact"]}
+        hidden = [library_models.MembershipCard.objects.filter(barcode__startswith="secret")]
+        parent_model, terminal = library_models.Patron, ("barcode", "secret")
+    elif kind in {"generic-relation", "proxy-generic-relation"}:
+        from django.contrib.contenttypes.models import ContentType
+
+        relation = "tags" if kind == "generic-relation" else "proxy_tags"
+        parent_model = (
+            library_models.Branch if kind == "generic-relation" else library_models.ProxyBranch
+        )
+        _hide(library_models.TaggedItem, fields=("id", "tag"), tag__startswith="secret")
+        content_type = ContentType.objects.get_for_model(parent_model, for_concrete_model=False)
+        other_type = ContentType.objects.get_for_model(library_models.Shelf)
+        for name, tags in (("both", ["open", "secret"]), ("secret", ["secret"]), ("none", [])):
+            branch = library_models.Branch.objects.create(name=name)
+            for tag in tags:
+                library_models.TaggedItem.objects.create(
+                    tag=tag,
+                    content_type=content_type,
+                    object_id=branch.pk,
+                )
+            library_models.TaggedItem.objects.create(
+                tag="open",
+                content_type=other_type,
+                object_id=branch.pk,
+            )
+        child_model, child_fields = library_models.TaggedItem, {"tag": ["exact"]}
+        hidden = [library_models.TaggedItem.objects.filter(tag__startswith="secret")]
+        terminal = ("tag", "secret")
+    else:  # "nullable-fk-hidden-reverse-mti-outer"
+        relation = "lead_ticket"
+        _hide(library_models.RepairTicket, code__startswith="secret")
+        for name in ("open", "secret", "none"):
+            desk = library_models.LendingDesk.objects.create(name=name)
+            if name != "none":
+                desk.lead_ticket = library_models.RepairTicket.objects.create(
+                    code=name,
+                    venue=desk,
+                )
+                desk.save()
+        child_model, child_fields = library_models.RepairTicket, {"code": ["exact"]}
+        hidden = [library_models.RepairTicket.objects.filter(code__startswith="secret")]
+        parent_model, terminal = library_models.LendingDesk, ("code", "secret")
+
+    child = type(
+        "Child",
+        (FilterSet,),
+        {"Meta": type("Meta", (), {"model": child_model, "fields": child_fields})},
+    )
+    path = f"{relation}__{terminal[0]}"
+    parent = type(
+        "Parent",
+        (FilterSet,),
+        {
+            "visible": RelatedFilter(child, field_name=relation),
+            "excluding": CharFilter(field_name=path, exclude=True),
+            "key_isnull": BooleanFilter(field_name=relation, lookup_expr="isnull"),
+            "Meta": type("Meta", (), {"model": parent_model, "fields": {path: ["exact"]}}),
+        },
+    )
+    parent.get_filters()
+    cases = [
+        ({path: terminal[1]}, {path: terminal[1]}, False),
+        ({"excluding": terminal[1]}, {path: terminal[1]}, True),
+        ({"key_isnull": True}, {f"{relation}__isnull": True}, False),
+        ({"key_isnull": False}, {f"{relation}__isnull": False}, False),
+    ]
+    return parent, parent_model, hidden, cases
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "forward-m2m",
+        "hidden-reverse-m2m",
+        "reverse-fk",
+        "reverse-o2o",
+        "generic-relation",
+        "proxy-generic-relation",
+        "nullable-fk-hidden-reverse-mti-outer",
+    ],
+)
+def test_every_relation_kind_answers_as_if_hidden_rows_were_absent(kind):
+    """Positive, excluding and relation-key leaves over each relation kind match Django with the rows deleted."""
+    parent, parent_model, hidden, cases = _relation_kind_case(kind)
+    for filter_input, lookups, exclude in cases:
+        expected = _absent_world(parent_model, lookups, exclude=exclude, hidden=hidden)
+        assert _applied(parent, filter_input, parent_model.objects.all()) == expected, filter_input
+
+
+def _shelf_branch_world():
+    """Books on shelves on branches: ``secret`` shelves and ``restricted`` branches are hidden.
+
+    ``open`` sits on an open shelf of an open branch, ``on_secret`` on a hidden
+    shelf, ``on_restricted`` on an open shelf of a hidden branch,
+    ``no_topic`` on an open shelf with an empty topic.
+    """
+    _hide(library_models.Shelf, topic="secret")
+    _hide(library_models.Branch, city="restricted")
+    open_branch = library_models.Branch.objects.create(name="open", city="here")
+    restricted = library_models.Branch.objects.create(name="restricted", city="restricted")
+    shelves = {
+        "open": library_models.Shelf.objects.create(branch=open_branch, code="o", topic="t"),
+        "secret": library_models.Shelf.objects.create(
+            branch=open_branch,
+            code="s",
+            topic="secret",
+        ),
+        "restricted": library_models.Shelf.objects.create(branch=restricted, code="r", topic="t"),
+        "no_topic": library_models.Shelf.objects.create(branch=open_branch, code="n", topic=""),
+    }
+    books = {
+        "open": _book("open", shelf=shelves["open"]),
+        "on_secret": _book("on_secret", shelf=shelves["secret"]),
+        "on_restricted": _book("on_restricted", shelf=shelves["restricted"]),
+        "no_topic": _book("no_topic", shelf=shelves["no_topic"]),
+    }
+
+    class BranchChild(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class ShelfChild(FilterSet):
+        branch = RelatedFilter(BranchChild, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"topic": ["exact"]}
+
+    class BookParent(FilterSet):
+        shelf = RelatedFilter(ShelfChild, field_name="shelf")
+        shelf_is = ModelChoiceFilter(
+            field_name="shelf",
+            queryset=library_models.Shelf.objects.all(),
+        )
+        branch_is = NumberFilter(field_name="shelf__branch")
+        not_branch = NumberFilter(field_name="shelf__branch", exclude=True)
+        branch_missing = BooleanFilter(field_name="shelf__branch", lookup_expr="isnull")
+        name_missing = BooleanFilter(field_name="shelf__branch__name", lookup_expr="isnull")
+        not_topic = CharFilter(field_name="shelf__topic", exclude=True)
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    BookParent.get_filters()
+    return BookParent, shelves, open_branch, restricted, books
+
+
+@pytest.mark.django_db
+def test_two_hop_forward_leaves_treat_a_hidden_hop_as_no_related_row():
+    """A book on a hidden shelf, or on a shelf of a hidden branch, has no visible shelf / branch.
+
+    ``shelf: {branch: {isNull: true}}`` style leaves therefore match it,
+    excluding leaves keep it, and key membership never matches through it.
+    """
+    parent, shelves, open_branch, restricted, _books = _shelf_branch_world()
+    base = library_models.Book.objects.all()
+
+    def titles(filter_input):
+        return {
+            book.title
+            for book in library_models.Book.objects.filter(
+                pk__in=_applied(parent, filter_input, base),
+            )
+        }
+
+    assert titles({"shelf_is": shelves["open"].pk}) == {"open"}
+    assert titles({"shelf_is": shelves["secret"].pk}) == set()
+    assert titles({"branch_is": open_branch.pk}) == {"open", "no_topic"}
+    assert titles({"branch_is": restricted.pk}) == set()
+    assert titles({"not_branch": open_branch.pk}) == {"on_secret", "on_restricted"}
+    assert titles({"branch_missing": True}) == {"on_secret", "on_restricted"}
+    assert titles({"branch_missing": False}) == {"open", "no_topic"}
+    assert titles({"name_missing": True}) == {"on_secret", "on_restricted"}
+    assert titles({"not_topic": "t"}) == {"on_secret", "no_topic"}
+    assert titles({"shelf__topic": "t"}) == {"open", "on_restricted"}
+    assert titles({"not_": {"shelf__topic": "t"}}) == titles({"not_topic": "t"})
+
+
+@pytest.mark.django_db
+def test_forward_key_leaf_of_the_parent_keeps_its_own_filter_invocation():
+    """A relation-key leaf of the parent's own forward relation runs on the parent rows, then checks visibility.
+
+    The filter's consumer ``distinct`` reaches the parent queryset as it does for
+    a leaf walking no hop; the hidden-target check is one ``EXISTS``.
+    """
+    parent, shelves, _open, _restricted, _books = _shelf_branch_world()
+    parent.base_filters["shelf_is"].distinct = True
+    qs = parent.apply_sync(
+        {"shelf_is": shelves["open"].pk},
+        library_models.Book.objects.all(),
+        _make_info(),
+    )
+    assert qs.query.distinct
+    assert str(qs.query).count("EXISTS") == 1
+
+
+@pytest.mark.django_db
+def test_mti_target_rows_correlate_by_primary_key():
+    """A branch whose target set is a multi-table-inheritance child matches only through visible child rows.
+
+    The relation targets ``Venue``; the child set reads ``LendingDesk`` rows, whose
+    key is the parent link, so a plain venue and a hidden desk are both no desk.
+    """
+    _hide(library_models.LendingDesk, name__startswith="secret")
+    plain = library_models.Venue.objects.create(name="plain")
+    desk = library_models.LendingDesk.objects.create(name="desk")
+    secret = library_models.LendingDesk.objects.create(name="secret desk")
+    tickets = {
+        name: library_models.RepairTicket.objects.create(code=name, venue=venue)
+        for name, venue in (("plain", plain), ("desk", desk), ("secret", secret))
+    }
+
+    class DeskChild(FilterSet):
+        class Meta:
+            model = library_models.LendingDesk
+            fields = {"window_count": ["exact"]}
+
+    class TicketParent(FilterSet):
+        desk = RelatedFilter(DeskChild, field_name="venue")
+        no_desk = BooleanFilter(field_name="venue", lookup_expr="isnull")
+
+        class Meta:
+            model = library_models.RepairTicket
+            fields = {"code": ["exact"]}
+
+    TicketParent.get_filters()
+    base = library_models.RepairTicket.objects.all()
+    assert _applied(TicketParent, {"desk": {"window_count": 0}}, base) == {tickets["desk"].pk}
+    assert _applied(TicketParent, {"no_desk": True}, base) == {
+        tickets["plain"].pk,
+        tickets["secret"].pk,
+    }
+
+
+@pytest.mark.django_db
+def test_self_referential_through_model_m2m_correlates_through_its_link_table():
+    """``GlossaryTerm.related_terms`` (explicit ``through``, self-referential) reads only visible targets."""
+    from apps.glossary import models as glossary_models
+
+    _hide(glossary_models.GlossaryTerm, title__startswith="secret")
+    status = glossary_models.GlossaryStatus.objects.create(key="impl2-status", label="s")
+    kind = glossary_models.GlossaryTermLinkKind.objects.create(key="impl2-kind", label="k")
+
+    def term(title):
+        return glossary_models.GlossaryTerm.objects.create(
+            title=title,
+            title_sort=title,
+            anchor=f"impl2-{title}",
+            status=status,
+            status_text="s",
+        )
+
+    source, lonely, target, secret = term("source"), term("lonely"), term("target"), term("secret")
+    for order, linked in enumerate((target, secret)):
+        glossary_models.GlossaryTermLink.objects.create(
+            source_term=source,
+            target_term=linked,
+            kind=kind,
+            order=order,
+        )
+    glossary_models.GlossaryTermLink.objects.create(
+        source_term=lonely,
+        target_term=secret,
+        kind=kind,
+        order=0,
+    )
+
+    class TermChild(FilterSet):
+        class Meta:
+            model = glossary_models.GlossaryTerm
+            fields = {"title": ["exact"]}
+
+    class TermParent(FilterSet):
+        linked = RelatedFilter(TermChild, field_name="related_terms")
+        unlinked = BooleanFilter(field_name="related_terms", lookup_expr="isnull")
+
+        class Meta:
+            model = glossary_models.GlossaryTerm
+            fields = {"related_terms__title": ["exact"]}
+
+    TermParent.get_filters()
+    base = glossary_models.GlossaryTerm.objects.filter(pk__in=[source.pk, lonely.pk])
+    hidden = [glossary_models.GlossaryTerm.objects.filter(pk=secret.pk)]
+    for filter_input, lookups in (
+        ({"related_terms__title": "secret"}, {"related_terms__title": "secret"}),
+        ({"related_terms__title": "target"}, {"related_terms__title": "target"}),
+        ({"unlinked": True}, {"related_terms__isnull": True}),
+    ):
+        expected = _absent_world(glossary_models.GlossaryTerm, lookups, hidden=hidden)
+        assert _applied(TermParent, filter_input, base) == expected & {source.pk, lonely.pk}
+    assert _applied(TermParent, {"unlinked": True}, base) == {lonely.pk}
+
+
+@pytest.mark.django_db
+def test_explicit_queryset_boundary_counts_as_absent_for_isnull_and_exclude():
+    """A row the declaration's explicit ``queryset=`` excludes is as absent as one the type hides."""
+    _hide(library_models.Shelf)
+    branch = library_models.Branch.objects.create(name="b")
+    kept = library_models.Shelf.objects.create(branch=branch, code="kept", topic="t")
+    outside = library_models.Shelf.objects.create(branch=branch, code="outside", topic="t")
+    books = {"kept": _book("kept", shelf=kept), "outside": _book("outside", shelf=outside)}
+
+    class ShelfChild(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"topic": ["exact"]}
+
+    class BookParent(FilterSet):
+        shelf = RelatedFilter(
+            ShelfChild,
+            field_name="shelf",
+            queryset=library_models.Shelf.objects.filter(code="kept"),
+        )
+        no_shelf = BooleanFilter(field_name="shelf", lookup_expr="isnull")
+        not_topic = CharFilter(field_name="shelf__topic", exclude=True)
+
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf__topic": ["exact"]}
+
+    BookParent.get_filters()
+    base = library_models.Book.objects.all()
+    assert _applied(BookParent, {"shelf__topic": "t"}, base) == {books["kept"].pk}
+    assert _applied(BookParent, {"no_shelf": True}, base) == {books["outside"].pk}
+    assert _applied(BookParent, {"not_topic": "t"}, base) == {books["outside"].pk}
+
+
+def test_walked_leaf_restriction_compiles_on_the_parent_database_alias():
+    """The visibility seed and every correlated link of a walked leaf read the parent queryset's alias."""
+    seen = []
+
+    def get_queryset(cls, queryset, info, **kwargs):
+        seen.append(queryset.db)
+        return queryset
+
+    type(
+        "BookAliasType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": library_models.Book}),
+            "get_queryset": classmethod(get_queryset),
+        },
+    )
+    parent = _genre_parent()
+    for filter_input in (
+        {"books__title": "x"},
+        {"books": {"is_null": True}},
+        {"without_title": "x"},
+    ):
+        qs = parent.apply_sync(
+            filter_input,
+            library_models.Genre.objects.using("shard_b"),
+            _make_info(),
+        )
+        assert qs.db == "shard_b"
+        str(qs.query)
+    assert seen == ["shard_b"] * 3
+
+
+def _book_genre_book_parent(*, customize_child):
+    """``BookParent.genres -> GenreChild.books -> BookChild``; ``GenreChild`` declares an excluding leaf.
+
+    With ``customize_child`` the genre set overrides ``__init__``, so every
+    expanded genre leaf is a ``ProjectedChildFilter``; without it the excluding
+    leaf expands as a plain copy walking both hops.
+    """
+
+    class BookChild(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    def filter_named(
+        self,
+        queryset,
+        name,
+        value,
+    ):
+        return queryset.filter(name=value)
+
+    attrs = {
+        "books": RelatedFilter(BookChild, field_name="books"),
+        "without_book_titled": CharFilter(field_name="books__title", exclude=True),
+        "subtitle_missing": BooleanFilter(field_name="books__subtitle", lookup_expr="isnull"),
+        "named_by_method": CharFilter(field_name="name", method="filter_named", exclude=True),
+        "filter_named": filter_named,
+        "Meta": type("Meta", (), {"model": library_models.Genre, "fields": {"name": ["exact"]}}),
+    }
+    if customize_child:
+        attrs["__init__"] = lambda self, *args, **kwargs: FilterSet.__init__(self, *args, **kwargs)
+    genre_child = type("GenreChild", (FilterSet,), attrs)
+
+    class BookParent(FilterSet):
+        genres = RelatedFilter(genre_child, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    BookParent.get_filters()
+    return BookParent
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("customize_child", [True, False], ids=["projected", "expanded"])
+@pytest.mark.parametrize(
+    ("filter_input", "lookups", "exclude"),
+    [
+        ({"genres__without_book_titled": "x"}, {"genres__books__title": "x"}, True),
+        ({"genres__subtitle_missing": True}, {"genres__books__subtitle__isnull": True}, False),
+        ({"genres__subtitle_missing": False}, {"genres__books__subtitle__isnull": False}, False),
+    ],
+    ids=["exclude", "isnull-true", "isnull-false"],
+)
+def test_child_set_excluding_and_isnull_leaves_negate_at_the_outermost_parent(
+    filter_input,
+    lookups,
+    exclude,
+    customize_child,
+):
+    """A child set's ``exclude=True`` / ``isnull`` leaf reached flat answers at the parent, projected or not.
+
+    ``genresWithoutBookTitled: "x"`` keeps the books with no visible genre that
+    has a visible ``x`` book (a book with no visible genre at all included),
+    never "has some genre without an ``x`` book".
+    """
+    _hide(library_models.Book, circulation_status="repair")
+    _hide(library_models.Genre, name__startswith="secret")
+    parent = _book_genre_book_parent(customize_child=customize_child)
+    leaf = parent.get_filters()[next(iter(filter_input))]
+    assert isinstance(leaf, ProjectedChildFilter) is customize_child
+    x_open, x_hidden = _book("x"), _book("x", hidden=True)
+    no_subtitle = _book("plain")
+    with_x = library_models.Genre.objects.create(name="with_x")
+    with_x.books.set([x_open])
+    only_hidden_x = library_models.Genre.objects.create(name="only_hidden_x")
+    only_hidden_x.books.set([x_hidden, no_subtitle])
+    secret = library_models.Genre.objects.create(name="secret")
+    secret.books.set([x_open])
+    for title, genres in (
+        ("in_with_x", [with_x]),
+        ("in_only_hidden_x", [only_hidden_x]),
+        ("in_both", [with_x, only_hidden_x]),
+        ("in_secret", [secret]),
+        ("in_none", []),
+    ):
+        _book(title, subtitle="s").genres.set(genres)
+    expected = _absent_world(
+        library_models.Book,
+        lookups,
+        exclude=exclude,
+        hidden=[
+            library_models.Book.objects.filter(circulation_status="repair"),
+            library_models.Genre.objects.filter(name__startswith="secret"),
+        ],
+    )
+    visible_parents = library_models.Book.objects.exclude(circulation_status="repair")
+    assert _applied(parent, filter_input, visible_parents) == expected
+
+
+@pytest.mark.django_db
+def test_projected_method_filter_stays_existential_whatever_its_exclude_flag():
+    """django-filter hands a ``method=`` filter its value and applies no lookup, so ``exclude`` changes nothing."""
+    _hide(library_models.Book)
+    _hide(library_models.Genre, name__startswith="secret")
+    parent = _book_genre_book_parent(customize_child=True)
+    named = library_models.Genre.objects.create(name="named")
+    hidden = library_models.Genre.objects.create(name="secret")
+    in_named = _book("in_named")
+    in_named.genres.set([named])
+    _book("in_hidden").genres.set([hidden])
+    _book("in_none")
+    base = library_models.Book.objects.all()
+    assert _applied(parent, {"genres__named_by_method": "named"}, base) == {in_named.pk}
+    assert _applied(parent, {"genres__named_by_method": "secret"}, base) == set()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", ["open", "secret"])
+def test_to_many_relation_key_on_a_to_field_compares_the_target_to_field_column(name):
+    """A raw key over a to-many path ending in a ``to_field`` FK compares the target's ``to_field``.
+
+    ``favoring_profiles__favorite_genre`` reaches genres through their profiles;
+    Django compares the stored genre ``name``, so the re-read compares the
+    visible genres' ``name`` too, and a hidden genre's name matches nothing.
+    """
+    _genres, _profiles = _world_of_genre_favorites()
+
+    class GenreChild(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+    class GenreParent(FilterSet):
+        fans_favorite = RelatedFilter(GenreChild, field_name="favoring_profiles__favorite_genre")
+        favored_as = CharFilter(field_name="favoring_profiles__favorite_genre")
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+    GenreParent.get_filters()
+    expected = _absent_world(
+        library_models.Genre,
+        {"favoring_profiles__favorite_genre": name},
+        hidden=[library_models.Genre.objects.filter(name__startswith="secret")],
+    )
+    got = _applied(GenreParent, {"favored_as": name}, library_models.Genre.objects.all())
+    assert got == expected
+    assert bool(got) is (name == "open")
+
+
+def _desk_ticket_parent():
+    """``TicketParent.desk`` targets ``Venue`` (``field_name="venue"``) with a child set on ``LendingDesk``.
+
+    ``LendingDesk`` is a multi-table-inheritance child of ``Venue``, so the
+    expanded ``desk__window_count`` leaf's path resolves only on the child
+    set's model, never on the parent's ``venue`` relation.
+    """
+
+    class DeskChild(FilterSet):
+        class Meta:
+            model = library_models.LendingDesk
+            fields = {"window_count": ["exact"]}
+
+    class TicketParent(FilterSet):
+        desk = RelatedFilter(DeskChild, field_name="venue")
+
+        class Meta:
+            model = library_models.RepairTicket
+            fields = {"code": ["exact"]}
+
+    TicketParent.get_filters()
+    return TicketParent
+
+
+@pytest.mark.django_db
+def test_expanded_leaf_under_an_mti_subclass_child_set_runs_where_its_path_resolves():
+    """``desk__window_count`` probes and runs over ``LendingDesk`` rows, never the parent's relation.
+
+    Active it matches only through a visible desk, as its nested twin does;
+    inactive it constrains nothing and runs no ``get_queryset``.
+    """
+    calls = []
+
+    def get_queryset(cls, queryset, info, **kwargs):
+        calls.append(info)
+        return queryset.exclude(name__startswith="secret")
+
+    type(
+        "LendingDeskHidingType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": library_models.LendingDesk}),
+            "get_queryset": classmethod(get_queryset),
+        },
+    )
+    parent = _desk_ticket_parent()
+    plain = library_models.Venue.objects.create(name="plain")
+    desk = library_models.LendingDesk.objects.create(name="desk", window_count=2)
+    secret = library_models.LendingDesk.objects.create(name="secret desk", window_count=2)
+    tickets = {
+        name: library_models.RepairTicket.objects.create(code=name, venue=venue)
+        for name, venue in (("plain", plain), ("desk", desk), ("secret", secret))
+    }
+    base = library_models.RepairTicket.objects.all()
+
+    assert _applied(parent, {"desk__window_count": None}, base) == set(
+        base.values_list("pk", flat=True),
+    )
+    assert calls == []
+    assert _applied(parent, {"desk__window_count": 2}, base) == {tickets["desk"].pk}
+    assert _applied(parent, {"desk": {"window_count": 2}}, base) == {tickets["desk"].pk}
+    assert _applied(parent, {"desk__window_count": 0}, base) == set()
+    assert _applied(parent, {"desk": {"window_count": 0}}, base) == set()
+
+
+def _gated_branch_parent(branch_attr):
+    """``BranchParent`` declares ``branch_attr`` over ``shelves`` with a gate denying ``request.denied``.
+
+    ``has_code`` is a declared filter whose ``field_name`` walks the branch;
+    ``code_by_method`` is a ``method=`` filter on the same path, which owns its
+    scoping and walks no branch.
+    """
+    _register_plain_types(library_models.Shelf)
+
+    class ShelfChild(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    def branch_gate(self, request):
+        if getattr(request, "denied", False):
+            raise GraphQLError(f"{branch_attr} denied")
+
+    def code_by_method(
+        self,
+        queryset,
+        name,
+        value,
+    ):
+        return queryset.filter(shelves__code=value)
+
+    parent = type(
+        "BranchParent",
+        (FilterSet,),
+        {
+            branch_attr: RelatedFilter(ShelfChild, field_name="shelves"),
+            "has_code": CharFilter(field_name="shelves__code"),
+            "code_by_method": CharFilter(field_name="shelves__code", method="filter_code"),
+            "filter_code": code_by_method,
+            f"check_{branch_attr}_permission": branch_gate,
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Branch, "fields": {"name": ["exact"]}},
+            ),
+        },
+    )
+    parent.get_filters()
+    return parent
+
+
+def _gate_outcome(filterset, filter_input, *, denied):
+    """``"denied"`` when a gate refuses ``filter_input`` for the request, else ``"allowed"``."""
+    request = HttpRequest()
+    request.denied = denied
+    try:
+        list(
+            filterset.apply_sync(
+                filter_input,
+                library_models.Branch.objects.all(),
+                _make_info(request),
+            ),
+        )
+    except GraphQLError:
+        return "denied"
+    return "allowed"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "branch_attr",
+    ["shelves", "visible_shelves"],
+    ids=["same-name", "renamed"],
+)
+@pytest.mark.parametrize(
+    ("spelling", "gated"),
+    [("has_code", True), ("nested", True), ("code_by_method", False)],
+    ids=["declared-flat", "nested-twin", "method"],
+)
+def test_declared_filter_walking_a_branch_fires_the_branch_gate_its_nested_twin_fires(
+    branch_attr,
+    spelling,
+    gated,
+):
+    """A declared filter whose ``field_name`` walks a declared branch is gated like the nested branch.
+
+    A ``method=`` filter declared on the parent receives the parent queryset and
+    owns its scoping, so it walks no branch and fires only its own gate.
+    """
+    parent = _gated_branch_parent(branch_attr)
+    filter_input = {branch_attr: {"code": "x"}} if spelling == "nested" else {spelling: "x"}
+    assert _gate_outcome(parent, filter_input, denied=False) == "allowed"
+    assert _gate_outcome(parent, filter_input, denied=True) == ("denied" if gated else "allowed")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("spelling", ["projected", "nested"])
+def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling):
+    """A projected child filter walking the child set's own branch fires that branch's gate.
+
+    ``GenreChild`` overrides ``__init__``, so ``genres__named`` is a
+    ``ProjectedChildFilter`` whose child filter, ``named``, walks
+    ``GenreChild.books``; the nested twin fires the same gate.
+    """
+    _register_plain_types(library_models.Genre, library_models.Book)
+
+    class BookChild(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    class GenreChild(FilterSet):
+        books = RelatedFilter(BookChild, field_name="books")
+        named = CharFilter(field_name="books__title")
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def check_books_permission(self, request):
+            if getattr(request, "denied", False):
+                raise GraphQLError("books denied")
+
+    class BookParent(FilterSet):
+        genres = RelatedFilter(GenreChild, field_name="genres")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    BookParent.get_filters()
+    assert isinstance(BookParent.get_filters()["genres__named"], ProjectedChildFilter)
+    filter_input = (
+        {"genres__named": "x"}
+        if spelling == "projected"
+        else {"genres": {"books": {"title": "x"}}}
+    )
+
+    def outcome(denied):
+        request = HttpRequest()
+        request.denied = denied
+        try:
+            list(
+                BookParent.apply_sync(
+                    filter_input,
+                    library_models.Book.objects.all(),
+                    _make_info(request),
+                ),
+            )
+        except GraphQLError:
+            return "denied"
+        return "allowed"
+
+    assert outcome(denied=False) == "allowed"
+    assert outcome(denied=True) == "denied"
+
+
+def _gate(label):
+    """A ``check_*_permission`` that records ``label`` on the request it is handed."""
+
+    def check(self, request):
+        request.fired.add(label)
+
+    return check
+
+
+def _fired_gates(filterset, filter_input, root):
+    """The labels of every gate ``filterset.apply_sync`` fires for ``filter_input``."""
+    request = HttpRequest()
+    request.fired = set()
+    list(filterset.apply_sync(filter_input, root, _make_info(request)))
+    return request.fired
+
+
+def _gate_recording_branch_parent(branch_attr):
+    """``BranchParent.<branch_attr>`` over ``shelves``; every set records each gate it fires."""
+    _register_plain_types(library_models.Shelf)
+
+    class ShelfChild(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"id": ["exact", "isnull"], "code": ["exact", "isnull"]}
+
+        check_id_permission = _gate("Shelf.id")
+        check_code_permission = _gate("Shelf.code")
+
+    def code_by_method(
+        self,
+        queryset,
+        name,
+        value,
+    ):
+        return queryset.filter(shelves__code=value)
+
+    declared = {
+        "has_code": CharFilter(field_name="shelves__code"),
+        "not_code": CharFilter(field_name="shelves__code", exclude=True),
+        "code_missing": BooleanFilter(field_name="shelves__code", lookup_expr="isnull"),
+        "no_shelf": BooleanFilter(field_name="shelves", lookup_expr="isnull"),
+        "shelf_is": NumberFilter(field_name="shelves"),
+        "code_by_method": CharFilter(field_name="shelves__code", method="filter_code"),
+    }
+    attrs = {
+        branch_attr: RelatedFilter(ShelfChild, field_name="shelves"),
+        **declared,
+        "filter_code": code_by_method,
+        f"check_{branch_attr}_permission": _gate(f"Branch.{branch_attr}"),
+        "Meta": type("Meta", (), {"model": library_models.Branch, "fields": {"name": ["exact"]}}),
+    }
+    for name in declared:
+        attrs[f"check_{name}_permission"] = _gate(f"Branch.{name}")
+    parent = type("BranchParent", (FilterSet,), attrs)
+    parent.get_filters()
+    return parent
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "branch_attr",
+    ["shelves", "visible_shelves"],
+    ids=["same-name", "renamed"],
+)
+@pytest.mark.parametrize(
+    ("leaf", "value", "twin"),
+    [
+        ("has_code", "x", {"code": "x"}),
+        ("not_code", "x", {"code": "x"}),
+        ("code_missing", True, {"code": {"is_null": True}}),
+        ("no_shelf", True, {"id": {"is_null": True}}),
+        ("shelf_is", 1, {"id": 1}),
+    ],
+    ids=[
+        "positive",
+        "exclude",
+        "isnull",
+        "key-isnull",
+        "key-membership",
+    ],
+)
+def test_declared_walked_leaf_fires_exactly_its_nested_twins_gates_plus_its_own(
+    branch_attr,
+    leaf,
+    value,
+    twin,
+):
+    """A declared leaf walking a branch fires the twin's branch AND target field gates, plus its own."""
+    parent = _gate_recording_branch_parent(branch_attr)
+    root = library_models.Branch.objects.all()
+    flat = _fired_gates(parent, {leaf: value}, root)
+    nested = _fired_gates(parent, {branch_attr: twin}, root)
+    assert nested
+    assert flat == nested | {f"Branch.{leaf}"}
+
+
+@pytest.mark.django_db
+def test_parent_method_filter_fires_only_its_own_gate():
+    """A ``method=`` filter declared on the parent owns its scoping: it walks no branch, fires no twin gate."""
+    parent = _gate_recording_branch_parent("shelves")
+    fired = _fired_gates(parent, {"code_by_method": "x"}, library_models.Branch.objects.all())
+    assert fired == {"Branch.code_by_method"}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("leaf", "twin"),
+    [
+        ("genres__named", {"genres": {"named": "x"}}),
+        ("genres__title_missing", {"genres": {"title_missing": True}}),
+        ("genres__name", {"genres": {"name": "x"}}),
+    ],
+    ids=["walking", "isnull-walking", "plain"],
+)
+@pytest.mark.parametrize("customize_child", [True, False], ids=["projected", "expanded"])
+def test_child_set_leaf_reached_flat_fires_exactly_its_nested_twins_gates(
+    leaf,
+    twin,
+    customize_child,
+):
+    """A child set's leaf reached flat fires the branch gate, the child filter's gate and its own walk's.
+
+    Projected (the child overrides ``__init__``) or expanded as a plain copy,
+    the flat leaf fires the same gates as ``genres: {<child filter>: ...}``.
+    """
+    _register_plain_types(library_models.Genre, library_models.Book)
+
+    class BookChild(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+        check_title_permission = _gate("Book.title")
+
+    class GenreChild(FilterSet):
+        books = RelatedFilter(BookChild, field_name="books")
+        named = CharFilter(field_name="books__title")
+        title_missing = BooleanFilter(field_name="books__title", lookup_expr="isnull")
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+        check_books_permission = _gate("Genre.books")
+        check_named_permission = _gate("Genre.named")
+        check_title_missing_permission = _gate("Genre.title_missing")
+        check_name_permission = _gate("Genre.name")
+
+    class CustomizedGenreChild(GenreChild):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    class BookParent(FilterSet):
+        genres = RelatedFilter(
+            CustomizedGenreChild if customize_child else GenreChild,
+            field_name="genres",
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+        check_genres_permission = _gate("Book.genres")
+
+    BookParent.get_filters()
+    assert isinstance(BookParent.get_filters()[leaf], ProjectedChildFilter) is customize_child
+    root = library_models.Book.objects.all()
+    value = True if leaf.endswith("missing") else "x"
+    assert _fired_gates(BookParent, {leaf: value}, root) == _fired_gates(BookParent, twin, root)
+
+
+def test_expansion_origin_reads_the_branch_and_child_name_off_an_expanded_copy():
+    """A copy resolves to its child set and child filter; a copy held under another name does not."""
+    _register_plain_types(library_models.Genre, library_models.Book)
+    parent = _book_genre_book_parent(customize_child=False)
+    copy_ = parent.get_filters()["genres__without_book_titled"]
+    child_cls, child_name = parent._expansion_origin("genres__without_book_titled", copy_)
+    assert child_name == "without_book_titled"
+    assert "books" in child_cls.related_filters
+    assert parent._expansion_origin("renamed_copy", copy_) is None
+    assert parent._expansion_origin("title", parent.get_filters()["title"]) is None

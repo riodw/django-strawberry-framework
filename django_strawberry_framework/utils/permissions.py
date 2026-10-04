@@ -23,11 +23,18 @@ This module owns mechanics only; the family-specific shape lives on
 It depends on neither family package (it operates on a duck-typed ``cls`` that
 exposes the per-family permission methods), so both can import it without a
 cycle -- same contract as ``utils/connections.py`` / ``utils/inputs.py``.
+
+``walk_declared_relation_path`` reads a flat relation path as the declared
+branch chain it spells. The flat-path gates fire along it, and
+``filters/sets.py::FilterSet`` applies each hop's target visibility along the same
+chain, so authorization and row scoping never disagree about which branches a
+flat leaf walks.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, cast
 
@@ -409,7 +416,7 @@ def invoke_permission_method(
     never errors, the same authorization no-op the async guard closes -- so a
     non-callable non-``None`` slot is a ``ConfigurationError``. An unreadable
     slot (a raising descriptor / hostile metaclass) is typed too, matching
-    ``_related_declarations`` and ``_fire_flat_relation_path_gates`` on this
+    ``_related_declarations`` and ``walk_declared_relation_path`` on this
     surface: hostile metadata reads become ``ConfigurationError``, never a raw
     escape. A ``None`` slot stays indistinguishable from an absent one (the
     ``getattr`` default) and remains a silent no-op.
@@ -569,6 +576,132 @@ def _fire_gate_on_class(
     invoke_permission_method(object.__new__(gate_cls), field_path, request, fired=class_fired)
 
 
+@dataclass(frozen=True)
+class DeclaredRelationHop:
+    """One declared related branch a flat source path walks through.
+
+    ``owner`` declares ``related_obj`` (a ``RelatedFilter`` / ``RelatedOrder``)
+    under the public attribute ``declared_attr``; ``target`` is the child set
+    class the declaration resolves, ``None`` when it resolves none.
+    """
+
+    owner: type[object]
+    declared_attr: str
+    related_obj: object
+    target: type[object] | None
+
+
+def walk_declared_relation_path(
+    owning_cls: type[object],
+    source_path: str,
+    *,
+    related_attr: str,
+    target_attr: str,
+) -> tuple[tuple[DeclaredRelationHop, ...], tuple[str, ...]]:
+    """Read a flat ``source_path`` as the declared branch chain it spells, plus the rest.
+
+    The one reading of a flat relation path (``category__name``,
+    ``entries__property__category__name``) as its nested twin
+    (``category: {name: ...}``): the flat-path permission gates fire along these
+    hops (``_fire_flat_relation_path_gates``) and a flat filter leaf applies each
+    hop's target visibility along them
+    (``filters/sets.py::FilterSet._flat_leaf_walk``), so both see the same chain.
+
+    Each hop is resolved against the current set's declared related collection
+    (``related_filters`` / ``related_orders``) by matching a declaration's
+    ``field_name`` -- the ORM accessor, NOT the public attribute name -- so a
+    renamed branch (``visible_shelves = RelatedFilter(ShelfFilter,
+    field_name="shelves")``) still resolves. A declaration whose ``field_name``
+    spans several ORM segments (``target_version__milestone``) is one hop and
+    wins over a shorter overlapping declaration (``target_version``), so the
+    flat and nested spellings reach the same target. A relation-key path
+    (``shelf``, ``shelf__branch``: nothing after a declared relation) consumes
+    that last relation as a hop too and leaves an empty remainder. The walk
+    stops at the first segment no declaration claims, and after a hop whose
+    target does not resolve to a class; the unconsumed segments are returned as
+    the remainder, a path relative to the deepest hop's target.
+    """
+    segments = tuple(source_path.split(LOOKUP_SEP))
+    hops: list[DeclaredRelationHop] = []
+    current_cls: type[object] = owning_cls
+    index = 0
+    while index < len(segments):
+        matches: list[tuple[int, str, object]] = []
+        for declared_attr, related_obj in _related_declarations(current_cls, related_attr):
+            try:
+                field_name: object = getattr(related_obj, "field_name", None)
+            except BaseException as exc:
+                raise ConfigurationError(
+                    f"{_safe_type_name(current_cls)} declares an unreadable related "
+                    f"branch under {related_attr!r}.",
+                ) from exc
+            if field_name is None:
+                field_name = declared_attr
+            if not isinstance(field_name, str):
+                continue
+            field_segments = tuple(field_name.split(LOOKUP_SEP))
+            if segments[index : index + len(field_segments)] == field_segments:
+                matches.append((len(field_segments), declared_attr, related_obj))
+        if not matches:
+            break
+        consumed, declared_attr, related_obj = max(matches, key=lambda match: match[0])
+        target: object = getattr(related_obj, target_attr, None)
+        resolved = target if isinstance(target, type) else None
+        hops.append(DeclaredRelationHop(current_cls, declared_attr, related_obj, resolved))
+        index += consumed
+        if resolved is None:
+            break
+        current_cls = resolved
+    return tuple(hops), segments[index:]
+
+
+def relation_path_gates(
+    owning_cls: type[object],
+    source_path: str,
+    *,
+    related_attr: str,
+    target_attr: str,
+) -> tuple[tuple[type[object], str], ...]:
+    """Return the ``(set class, gate path)`` pairs the nested twin of a flat ``source_path`` fires.
+
+    A flat leaf (``categoryName`` -> source path ``category__name``, a deep
+    ``entriesPropertyCategoryName``, a declared filter whose ``field_name`` is
+    ``books__title``) constrains the SAME column as its nested twin
+    (``category: {name: ...}``), whose gates are those of each set it passes
+    through. Along the hops ``walk_declared_relation_path`` reads: each walked
+    branch gate on its owner, keyed on the PUBLIC attr so it matches the
+    ``check_<branch>_permission`` the nested form fires; then the last
+    resolved target set's gate for the path the walk leaves there, the gate path
+    the twin's leaf on that set carries (``name``; ``property__name`` for a
+    remainder crossing an undeclared relation). A relation-key path leaves
+    nothing, and its twin filters the target's own key (``shelves: {id: ...}``),
+    so the target gate is the target model's primary-key name. A path whose
+    first relation segment no declaration claims names no gate here and no
+    target set is guessed: the owner's own gate stays the authorization point.
+    """
+    hops, remainder = walk_declared_relation_path(
+        owning_cls,
+        source_path,
+        related_attr=related_attr,
+        target_attr=target_attr,
+    )
+    gates = [(hop.owner, hop.declared_attr) for hop in hops]
+    target = hops[-1].target if hops else None
+    if target is not None:
+        terminal = LOOKUP_SEP.join(remainder) if remainder else _key_gate_path(target)
+        if terminal is not None:
+            gates.append((target, terminal))
+    return tuple(gates)
+
+
+def _key_gate_path(target: type[object]) -> str | None:
+    """Return the primary-key field name of ``target``'s model, ``None`` when it declares none."""
+    meta = getattr(getattr(getattr(target, "_meta", None), "model", None), "_meta", None)
+    pk = getattr(meta, "pk", None)
+    name = getattr(pk, "name", None)
+    return name if isinstance(name, str) else None
+
+
 def _fire_flat_relation_path_gates(
     owning_cls: type[ActiveInputPermissionMixin],
     source_path: str,
@@ -578,82 +711,19 @@ def _fire_flat_relation_path_gates(
     related_attr: str,
     target_attr: str,
 ) -> None:
-    """Fire the target-set gate chain a flat relation-traversal leaf would otherwise bypass.
+    """Fire the gates the nested twin of a flat ``source_path`` fires (``relation_path_gates``).
 
-    A generated flat leaf (``categoryName`` -> source path ``category__name``, or
-    a deep ``entriesPropertyCategoryName`` -> ``entries__property__category__name``)
-    constrains the SAME column as the equivalent nested branch
-    (``category: {name: ...}``) but its owning-class gate name
-    (``check_category_name_permission`` on the owner) never consults the TARGET
-    filterset's ``check_name_permission``. Left alone, a client bypasses a target
-    gate merely by spelling the predicate flat. This walks the flat path and fires
-    the SAME gates the nested form fires: each parent relation branch gate plus the
-    terminal target set's field gate. The owner's flat-path gate is fired
-    separately by the caller and is preserved.
-
-    Hops are resolved against each set's declared related collection
-    (``related_filters`` / ``related_orders``) by matching a related object's
-    ``field_name`` -- the ORM accessor, NOT the public attribute name -- so a
-    renamed branch (``visible_shelves = RelatedFilter(ShelfFilter,
-    field_name="shelves")``) still resolves. Composite declarations whose
-    ``field_name`` spans multiple ORM hops (``target_version__milestone``)
-    are matched as one prefix, taking precedence over a shorter overlapping
-    declaration (``target_version``), so the flat and nested spellings reach
-    the same target gate. The branch gate fired is keyed on the PUBLIC attr so
-    it matches the gate the nested form fires. If any relation hop has no
-    matching declared related object, the walk stops without firing target
-    gates: the owner's flat-path gate stays the authorization point and no
-    target set is guessed. Dedup rides the shared per-class ``fired`` map, so a
-    flat leaf and its nested twin fire each gate at most once per request.
+    Left alone, a client bypasses a target gate merely by spelling the predicate
+    flat. Dedup rides the shared per-class ``fired`` map, so a flat leaf and its
+    nested twin fire each gate at most once per request.
     """
-    hops = source_path.split(LOOKUP_SEP)
-    if len(hops) < 2:
-        # Not a relation traversal -- the owner's own field gate is authoritative.
-        return
-    current_cls: type[object] = owning_cls
-    terminal_index = len(hops) - 1
-    index = 0
-    while index < terminal_index:
-        related = _related_declarations(current_cls, related_attr)
-        matches: list[tuple[int, str, object]] = []
-        for declared_attr, related_obj in related:
-            try:
-                field_name: object = getattr(related_obj, "field_name", None)
-            except BaseException as exc:
-                raise ConfigurationError(
-                    f"{_safe_type_name(current_cls)} declares an unreadable related "
-                    f"permission branch under {related_attr!r}.",
-                ) from exc
-            if field_name is None:
-                field_name = declared_attr
-            if not isinstance(field_name, str):
-                continue
-            field_hops = field_name.split(LOOKUP_SEP)
-            if hops[index : index + len(field_hops)] == field_hops:
-                matches.append((len(field_hops), declared_attr, related_obj))
-        if not matches:
-            # No declared RelatedFilter/RelatedOrder for this hop -- do not guess a
-            # target set; the owner's flat-path gate (fired by the caller) stands.
-            return
-        # A declaration may represent a multi-hop ORM path (for example,
-        # ``milestone`` mapped to ``target_version__milestone``) while a sibling
-        # declaration represents only its first hop (``target_version``). Follow
-        # the longest matching declaration so the flat spelling reaches the same
-        # branch and target permission gates as the nested declaration, rather than
-        # descending through the unrelated shorter branch and silently stopping.
-        consumed, declared_attr, related_obj = max(matches, key=lambda match: match[0])
-        # Parent relation branch gate on the current set, keyed on the PUBLIC attr
-        # so it matches the ``check_<branch>_permission`` the nested form fires.
-        _fire_gate_on_class(current_cls, declared_attr, request, fired=fired)
-        child_set: object = getattr(related_obj, target_attr, None)
-        if not isinstance(child_set, type):
-            return
-        current_cls = child_set
-        index += consumed
-    if index == terminal_index:
-        # Terminal scalar field on the deepest resolved target set -- fire its
-        # field gate (the gate the nested form's child recursion fires).
-        _fire_gate_on_class(current_cls, hops[terminal_index], request, fired=fired)
+    for gate_cls, gate_path in relation_path_gates(
+        owning_cls,
+        source_path,
+        related_attr=related_attr,
+        target_attr=target_attr,
+    ):
+        _fire_gate_on_class(gate_cls, gate_path, request, fired=fired)
 
 
 def _related_declarations(cls: type[object], related_attr: str) -> tuple[tuple[str, object], ...]:
@@ -736,7 +806,10 @@ def run_active_input_permission_checks(
     Flat relation-traversal leaves are gated the same as their nested twins: for
     each active leaf whose source path crosses a relation (``category__name``),
     ``_fire_flat_relation_path_gates`` fires the target set's gate chain so a
-    client cannot bypass a target gate by spelling the predicate flat.
+    client cannot bypass a target gate by spelling the predicate flat, and
+    ``_permission_walk_gates`` names the gates the nested twin of each active
+    leaf's ORM path fires (a declared filter's ``field_name``, a projected child
+    filter's own path in its set), which fire too.
     """
     class_fired = fired.setdefault(cls, set())
 
@@ -758,6 +831,13 @@ def run_active_input_permission_checks(
             related_attr=related_attr,
             target_attr=target_attr,
         )
+
+    # A leaf whose ORM path walks a declared branch under a name of its own (a
+    # declared filter, ``home_branch`` over ``branch``; a projected child filter
+    # walking its own set's branch) fires the gates its nested twin fires; the
+    # gate path above names only the leaf.
+    for gate_cls, gate_path in cls._permission_walk_gates(input_value):
+        _fire_gate_on_class(gate_cls, gate_path, request, fired=fired)
 
     for field_name, related_obj, child_input in related_branches:
         # ``related_obj`` is a declaration ``sets_mixins.py::collect_related_declarations``

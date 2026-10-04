@@ -6,6 +6,32 @@
 floor as it stood when this plan was written, and is left standing rather than rewritten. A
 worker enacting the acceptance steps today pins the current exact floor, `Django==5.2.16`.
 
+**Routing-scope note.** The routed population is narrower than this plan's
+"expanded generated origin": a flat leaf whose ORM path walks a declared
+`RelatedFilter` hop (every flattened `RelatedFilter` copy, an owner-bound
+projected leaf, a `Meta.fields` traversal under a declared root such as
+`LoanFilter`'s `book__loans__patron__email`, and a relation-key leaf over a
+declared relation, its `isnull` included) answers over the rows each hop's
+target `get_queryset` and explicit `queryset=` admit, and is never routed
+through the correlated `EXISTS` adapter
+(`django_strawberry_framework/filters/sets.py::FilterSet._apply_flat_leaves`,
+spec-027 Decision 8 step 3). Each hop it walks is one correlated `EXISTS`
+built from the hop's visible rows
+(`django_strawberry_framework/optimizer/predicates.py::related_rows_exist`),
+the same restriction a nested `RelatedFilter` branch applies
+(`django_strawberry_framework/filters/sets.py::FilterSet._apply_related_constraints`);
+only the `and` / `or` / `not` arms of `_q_for_branch` compose a parent-pk
+`pk__in`. Only framework-generated leaves whose path walks no
+declared hop route, so the Boolean relation `isnull` routing below applies only
+to a relation no `RelatedFilter` declares. Every routing statement below about
+flattened `RelatedFilter` leaves, the public flat `booksTitle` / `genresName`
+inputs, the deep `book__loans__patron__email` leaf, the nested branch's
+`pk__in` composition and its `Exists` / `pk__in` equivalence records the plan
+as enacted, and is left standing rather than rewritten; the PG `EXPLAIN`
+artifact (`docs/row-preserving-predicates-part1-pg-explain.md`) captures a
+routed leaf and the walked `book__loans__patron__email` leaf as production
+emits them.
+
 ## Identity and completion ownership
 
 This document is the working plan for the **pre-card groundwork slice of

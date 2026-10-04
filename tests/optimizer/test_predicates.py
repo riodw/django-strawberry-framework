@@ -1,7 +1,8 @@
 """Executable ORM tests for the correlated-EXISTS predicate primitive.
 
 Guards, reserved-alias allocation, evaluated-outer parity, composite-pk
-correlation, and ``_base_manager`` start have no GraphQL envelope. Row-preserving
+correlation, ``_base_manager`` start, and ``related_rows_exist``'s link-column
+correlation over multi-column links have no GraphQL envelope. Row-preserving
 EXISTS SQL without ``SELECT DISTINCT`` is
 ``examples/fakeshop/test_query/test_library_api.py::test_genre_connection_flat_leaf_sql_shape_is_row_preserving``
 and
@@ -13,12 +14,13 @@ from apps.library.models import Book, Branch, Genre, Loan, Shelf
 from django.db import connection, router
 from django.db.models import Value
 
-from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.predicates import (
     _effective_alias_names,
     _next_reserved_alias,
     attach_exists,
     correlated_inner_root,
+    related_rows_exist,
 )
 from tests._relation_fixtures import (
     RpCompositeChild,
@@ -223,3 +225,46 @@ def test_base_manager_start_does_not_leak_outer_filters():
     inner = correlated_inner_root(Book.objects.filter(title="x"))
     # Only the OuterRef correlation is present; the outer's filters never leak in.
     assert len(inner.query.where.children) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_related_rows_exist_correlates_both_directions_of_a_multi_column_link():
+    """A two-column ``ForeignObject`` correlates on both column pairs, forward and reverse.
+
+    Each parent matches only through its own children: a child sharing one of
+    the two key columns with another parent never reaches it.
+    """
+    with relation_fixture_tables(connection):
+        left = RpCompositeParent.objects.create(tenant_id=1, code="LEFT", label="l")
+        right = RpCompositeParent.objects.create(tenant_id=2, code="LEFT", label="r")
+        lonely = RpCompositeParent.objects.create(tenant_id=1, code="LONELY", label="x")
+        RpCompositeChild.objects.create(parent=left, name="kept")
+        RpCompositeChild.objects.create(parent=right, name="other")
+
+        kept = RpCompositeChild.objects.filter(name="kept")
+        parents = RpCompositeParent.objects.filter(
+            related_rows_exist(RpCompositeParent, "children", kept, using="default"),
+        )
+        assert list(parents.values_list("label", flat=True)) == ["l"]
+        none_kept = RpCompositeParent.objects.filter(
+            ~related_rows_exist(RpCompositeParent, "children", kept, using="default"),
+        )
+        assert set(none_kept.values_list("label", flat=True)) == {"r", "x"}
+        assert lonely.label == "x"
+        children = RpCompositeChild.objects.filter(
+            related_rows_exist(
+                RpCompositeChild,
+                "parent",
+                RpCompositeParent.objects.filter(label="r"),
+                using="default",
+            ),
+        )
+        assert list(children.values_list("name", flat=True)) == ["other"]
+
+
+def test_related_rows_exist_rejects_a_segment_without_link_columns():
+    """A ``GenericForeignKey`` names no link columns, so nothing could correlate it: it raises."""
+    from apps.library.models import TaggedItem
+
+    with pytest.raises(ConfigurationError, match="segment 'content_object' is not a relation"):
+        related_rows_exist(TaggedItem, "content_object", Branch.objects.all(), using="default")

@@ -970,11 +970,20 @@ def test_register_converter_override_guard(_restore_converter_registry):
     assert convert_serializer_field(_bind(serializers.CharField(), "f")).annotation is int
 
 
-def test_register_converter_rejects_non_field_class(_restore_converter_registry):
+@pytest.mark.parametrize(
+    "field_class",
+    [
+        pytest.param(int, id="non-field-class"),
+        # The likely slip: an instance where the class belongs. The class check runs
+        # first, so ``issubclass`` never sees the instance and raises its bare ``TypeError``.
+        pytest.param(serializers.CharField(), id="field-instance"),
+    ],
+)
+def test_register_converter_rejects_non_field_class(_restore_converter_registry, field_class):
     """``field_class`` must be a ``serializers.Field`` subclass."""
     with pytest.raises(ConfigurationError, match="must be a serializers.Field subclass"):
         register_serializer_field_converter(
-            int,  # not a serializers.Field
+            field_class,
             lambda field: SerializerFieldConversion(annotation=str, required=field.required),
         )
 

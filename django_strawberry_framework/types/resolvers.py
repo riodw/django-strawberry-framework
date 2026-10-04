@@ -426,11 +426,6 @@ def _custom_visibility_type(field_meta: FieldMeta) -> "type[DjangoType] | None":
     """
     if field_meta.related_model is None:
         return None
-    # basedpyright: django-stubs types ``related_model`` as a model class, but
-    # ``FieldMeta.related_model`` copies the Django field's, which is still the lazy-reference
-    # string when the relation never resolved
-    if not isinstance(field_meta.related_model, type):  # pyright: ignore[reportUnnecessaryIsInstance]
-        return None
     target_type = registry.get(field_meta.related_model)
     if target_type is None:
         return None
@@ -706,7 +701,6 @@ def _make_relation_resolver(
         reverse_does_not_exist = (
             field_meta.related_model.DoesNotExist
             if field_meta.related_model is not None
-            and hasattr(field_meta.related_model, "DoesNotExist")
             else AttributeError
         )
 
@@ -755,13 +749,10 @@ def _make_relation_resolver(
     # ``AttributeError`` arm would additionally swallow one raised by a
     # consumer's own descriptor / property or a typo'd accessor, turning a
     # programming error into a silent null. The empty-tuple fallback (a
-    # relation double with no ``DoesNotExist``) deliberately catches nothing
-    # for the same reason.
+    # relation with no target model) deliberately catches nothing for the
+    # same reason.
     related_does_not_exist: tuple[type[BaseException], ...] = (
-        (field_meta.related_model.DoesNotExist,)
-        if field_meta.related_model is not None
-        and hasattr(field_meta.related_model, "DoesNotExist")
-        else ()
+        (field_meta.related_model.DoesNotExist,) if field_meta.related_model is not None else ()
     )
 
     def forward_resolver(root: object, info: Info[object, object]) -> object:

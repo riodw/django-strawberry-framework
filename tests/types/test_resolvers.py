@@ -586,13 +586,16 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
     class FakeDoesNotExist(Exception):  # noqa: N818  (mirrors Django's Model.DoesNotExist naming)
         pass
 
+    class FakeProfile:
+        DoesNotExist = FakeDoesNotExist
+
     fake_field = SimpleNamespace(
         name="profile",
         many_to_many=False,
         one_to_many=False,
         one_to_one=True,
         auto_created=True,
-        related_model=SimpleNamespace(DoesNotExist=FakeDoesNotExist),
+        related_model=FakeProfile,
     )
     resolver = _make_relation_resolver(fake_field)
 
@@ -703,13 +706,16 @@ def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
     class FakeDoesNotExist(Exception):  # noqa: N818  (mirrors Django's Model.DoesNotExist naming)
         pass
 
+    class FakeProfile:
+        DoesNotExist = FakeDoesNotExist
+
     fake_field = SimpleNamespace(
         name="profile",
         many_to_many=False,
         one_to_many=False,
         one_to_one=True,
         auto_created=True,
-        related_model=SimpleNamespace(DoesNotExist=FakeDoesNotExist),
+        related_model=FakeProfile,
     )
     resolver = _make_relation_resolver(fake_field)
 

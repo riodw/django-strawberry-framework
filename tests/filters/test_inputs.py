@@ -69,6 +69,7 @@ from django_strawberry_framework.filters.inputs import (
     clear_filter_input_namespace,
     construct_search,
     convert_filter_to_input_annotation,
+    filter_lookup_table,
     materialize_input_class,
     normalize_input_value,
 )
@@ -408,6 +409,134 @@ def test_declared_non_exact_filter_keeps_its_form_key():
     assert DeclaredContainsFilter._normalize_input(
         {"custom": {"i_contains": "alpha"}},
     ) == {"custom": "alpha"}
+
+
+def _bag_lookup_attrs(filterset_cls: type[FilterSet], python_attr: str) -> list[str]:
+    """Return the lookup attrs of one generated operator-bag field, in emission order."""
+    triples = _build_input_fields(filterset_cls)
+    annotation = {attr: annotation for attr, annotation, _kwargs in triples}[python_attr]
+    (bag_class,) = (arg for arg in get_args(annotation) if arg is not type(None))
+    return list(bag_class.__dataclass_fields__)
+
+
+def test_overlap_head_emits_one_bag_with_each_lookup_keeping_its_own_form_key():
+    """A declared head that is also a ``Meta.fields`` head emits one bag, two form keys.
+
+    The declared ``name`` (``iexact``) and the generated ``name__icontains`` share
+    the ``name`` head; the table keeps each lookup's own ``get_filters()`` name.
+    """
+
+    class OverlapBranchFilter(FilterSet):
+        name = CharFilter(lookup_expr="iexact")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["icontains"]}
+
+    assert _bag_lookup_attrs(OverlapBranchFilter, "name") == ["i_contains", "i_exact"]
+    lookups = filter_lookup_table(OverlapBranchFilter).by_input_attr["name"]
+    assert {attr: form_key for attr, (form_key, _filter) in lookups.items()} == {
+        "i_contains": "name__icontains",
+        "i_exact": "name",
+    }
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(_build_input_fields, id="input-build"),
+        pytest.param(
+            lambda cls: cls._normalize_input({"name": {"i_contains": "x"}}),
+            id="direct-mapping",
+        ),
+    ],
+)
+def test_two_filters_on_one_head_lookup_slot_raise(build: Any):
+    """A declared filter and a generated one claiming one ``(head, lookup)`` slot raise.
+
+    The declared ``name`` (``icontains`` over ``city``) and the generated
+    ``name__icontains`` both land on ``name`` / ``icontains``; one would vanish from
+    the generated input, so the table refuses the class wherever it is first read.
+    """
+
+    class SameSlotBranchFilter(FilterSet):
+        name = CharFilter(field_name="city", lookup_expr="icontains")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["icontains"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        build(SameSlotBranchFilter)
+    assert str(excinfo.value) == (
+        "test_two_filters_on_one_head_lookup_slot_raise.<locals>.SameSlotBranchFilter: "
+        "filters 'name__icontains' and 'name' both bind the 'icontains' lookup of input "
+        "field 'name', so one would be unreachable from the generated input. Rename one "
+        "filter or drop one via Meta.fields / Meta.exclude."
+    )
+
+
+def test_two_heads_flattening_to_one_input_attr_raise():
+    """Two ``__`` heads sharing one flattened input attr raise; neither is reachable alone."""
+
+    class AliasCollisionBranchFilter(FilterSet):
+        a__b_c = CharFilter(field_name="name")
+        a_b__c = CharFilter(field_name="city")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        filter_lookup_table(AliasCollisionBranchFilter)
+    assert str(excinfo.value) == (
+        "test_two_heads_flattening_to_one_input_attr_raise.<locals>.AliasCollisionBranchFilter: "
+        "filters 'a__b_c' and 'a_b__c' both generate the input attribute 'a_b_c' (Django "
+        "path separators flatten to '_'), so one would be unreachable. Rename one filter or "
+        "drop one via Meta.fields / Meta.exclude."
+    )
+
+
+def test_expanded_declared_child_filter_is_its_own_head():
+    """A ``RelatedFilter`` expansion of a child's declared filter keeps its own head.
+
+    The child declares ``title`` (``field_name="name"``) and ``name__exact`` beside a
+    generated ``name``. Expanded under ``branch``, ``branch__name__exact`` is its own
+    head (it would otherwise shadow the generated ``branch__name`` exact), and every
+    flat head binds its own expanded form key.
+    """
+
+    class ChildBranchFilter(FilterSet):
+        title = CharFilter(field_name="name", lookup_expr="icontains")
+        name__exact = CharFilter(field_name="name", lookup_expr="exact")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class ParentShelfFilter(FilterSet):
+        branch = RelatedFilter(ChildBranchFilter, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = []
+
+    table = filter_lookup_table(ParentShelfFilter)
+    flat = {
+        head: {token: form_key for token, (form_key, _filter) in bag.items()}
+        for head, bag in table.heads.items()
+        if head != "branch"
+    }
+    assert flat == {
+        "branch__name": {"exact": "branch__name"},
+        "branch__title": {"icontains": "branch__title"},
+        "branch__name__exact": {"exact": "branch__name__exact"},
+    }
+    assert table.by_input_attr["branch_name_exact"] is table.by_input_attr["branch__name__exact"]
+    # An expanded declared child keeps its declared name as its gate path; the
+    # generated ``branch__name`` gates on the ORM path it is named after.
+    assert table.gate_paths["branch_title"] == "branch__title"
+    assert table.gate_paths["branch__name"] == "branch__name"
 
 
 # ---------------------------------------------------------------------------

@@ -1683,6 +1683,212 @@ def test_library_declared_model_choice_in_filter_takes_a_list_of_pks_over_http()
     _assert_invalid_choice(query, {"pks": [south.pk, restricted.pk]}, "home_branch_in")
 
 
+class _FlatHomeBranchCase(NamedTuple):
+    """One flat ``BookFilter`` expansion of a ``ShelfFilter`` declared model-choice filter.
+
+    ``permitted`` / ``restricted`` name the seeded branches whose ``column`` the
+    query sends, as a list when ``many``.
+    """
+
+    field: str
+    lookup: str
+    variable_type: str
+    column: str
+    many: bool
+    permitted: tuple[str, ...]
+    permitted_books: list[str]
+    restricted: tuple[str, ...]
+    form_key: str
+
+
+_FLAT_HOME_BRANCH_CASES = [
+    _FlatHomeBranchCase(
+        "shelfHomeBranch",
+        "exact",
+        "Int",
+        "pk",
+        False,
+        ("North",),
+        ["N-1 book"],
+        ("Vault",),
+        "shelf__home_branch",
+    ),
+    _FlatHomeBranchCase(
+        "shelfHomeBranches",
+        "exact",
+        "[Int!]",
+        "pk",
+        True,
+        ("North", "South"),
+        ["N-1 book", "S-1 book"],
+        ("North", "Vault"),
+        "shelf__home_branches",
+    ),
+    _FlatHomeBranchCase(
+        "shelfHomeBranchNamed",
+        "exact",
+        "String",
+        "name",
+        False,
+        ("South",),
+        ["S-1 book"],
+        ("Vault",),
+        "shelf__home_branch_named",
+    ),
+    _FlatHomeBranchCase(
+        "shelfHomeBranchIn",
+        "in",
+        "[Int!]",
+        "pk",
+        True,
+        ("North", "South"),
+        ["N-1 book", "S-1 book"],
+        ("South", "Vault"),
+        "shelf__home_branch_in",
+    ),
+    _FlatHomeBranchCase(
+        "shelfHomeBranchForRequest",
+        "exact",
+        "Int",
+        "pk",
+        False,
+        ("North",),
+        ["N-1 book"],
+        ("Vault",),
+        "shelf__home_branch_for_request",
+    ),
+]
+
+
+def _flat_home_branch_value(case: _FlatHomeBranchCase, names: tuple[str, ...]) -> object:
+    """Return the query variable naming ``names`` by ``case.column``."""
+    values = [getattr(models.Branch.objects.get(name=name), case.column) for name in names]
+    return values if case.many else values[0]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("case", _FLAT_HOME_BRANCH_CASES, ids=lambda case: case.field)
+def test_library_flat_expanded_declared_filter_keeps_its_own_validation_over_http(
+    case: _FlatHomeBranchCase,
+) -> None:
+    """A flat expansion of a child's declared filter binds that filter's own form key.
+
+    ``BookFilter`` expands ``shelf = RelatedFilter(ShelfFilter)``, so each
+    ``ShelfFilter.home_branch*`` model-choice filter (``field_name="branch"``) also
+    appears flat as ``shelfHomeBranch*``. The flat field binds the expanded copy
+    (``shelf__home_branch*``), so the copy's own queryset decides validity: a
+    permitted branch filters the books, the restricted one answers "Select a valid
+    choice" exactly as the nested ``shelf: { homeBranch: ... }`` form does.
+    """
+    _seed_shelves_on_home_branches()
+    for shelf in models.Shelf.objects.order_by("code"):
+        models.Book.objects.create(title=f"{shelf.code} book", shelf=shelf)
+    query = f"""
+    query ($value: {case.variable_type}) {{
+      allLibraryBooks(filter: {{ {case.field}: {{ {case.lookup}: $value }} }}) {{
+        title
+      }}
+    }}
+    """
+
+    response = _post_graphql(
+        query,
+        variables={"value": _flat_home_branch_value(case, case.permitted)},
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert sorted(book["title"] for book in payload["data"]["allLibraryBooks"]) == (
+        case.permitted_books
+    )
+    _assert_invalid_choice(
+        query,
+        {"value": _flat_home_branch_value(case, case.restricted)},
+        case.form_key,
+    )
+
+
+def _seed_one_book_with_two_loans() -> tuple[models.Book, models.Loan, models.Loan]:
+    """One book with two loans: patron ``p1@x`` (note alpha) and patron ``p2@x`` (note beta)."""
+    branch = models.Branch.objects.create(name="Loans", city="Boston")
+    shelf = models.Shelf.objects.create(code="L-1", topic="general", branch=branch)
+    book = models.Book.objects.create(title="Two loans", shelf=shelf)
+    p1 = models.Patron.objects.create(name="p1", email="p1@x")
+    p2 = models.Patron.objects.create(name="p2", email="p2@x")
+    alpha = models.Loan.objects.create(book=book, patron=p1, note="alpha")
+    beta = models.Loan.objects.create(book=book, patron=p2, note="beta")
+    return book, alpha, beta
+
+
+@pytest.mark.django_db
+def test_library_flat_expanded_method_filter_runs_in_its_own_filterset_over_http():
+    """A flat expansion of a child's ``method=`` filter runs inside the child filter set.
+
+    ``LoanFilter`` expands ``patron = RelatedFilter(PatronFilter)``, so the declared
+    ``PatronFilter.email_must_have_at_sign`` (``method=``, its validator wired in
+    ``PatronFilter.__init__``) appears flat as ``patronEmailMustHaveAtSign``. The flat
+    copy runs the method inside a ``PatronFilter`` instance and keeps the loans whose
+    patron it matches; a value without ``@`` answers the child's ``missing_at_sign``
+    validation under the flat form key, as the nested ``patron: { emailMustHaveAtSign }``
+    form answers it under its own.
+    """
+    _seed_one_book_with_two_loans()
+    query = """
+    query ($value: String) {
+      allLibraryLoans(filter: { patronEmailMustHaveAtSign: { exact: $value } }) {
+        note
+      }
+    }
+    """
+
+    _assert_graphql_data(
+        query,
+        {"allLibraryLoans": [{"note": "alpha"}]},
+        variables={"value": "p1@x"},
+    )
+    _assert_graphql_data(query, {"allLibraryLoans": []}, variables={"value": "nobody@x"})
+    response = _post_graphql(query, variables={"value": "no-at-sign"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("data") is None, payload
+    (error,) = payload["errors"]
+    assert error["message"] == "Invalid filter input"
+    assert error["extensions"]["code"] == "FILTER_INVALID"
+    field_errors = error["extensions"]["errors"]["patron__email_must_have_at_sign"]
+    assert [entry["code"] for entry in field_errors] == ["missing_at_sign"]
+
+
+@pytest.mark.django_db
+def test_library_flat_leaves_over_a_to_many_relation_stay_independent_over_http():
+    """Each flat leaf is its own predicate; the nested branch needs one child row matching all.
+
+    ``BookFilter.loans`` is a reverse foreign key. Flat ``loansNote`` and ``loansId``
+    are satisfied by two different loans of the same book; the nested
+    ``loans: { note, id }`` branch requires a single loan to match both.
+    """
+    _book, alpha, _beta = _seed_one_book_with_two_loans()
+    flat = """
+    query ($id: Int) {
+      allLibraryBooks(filter: { loansNote: { exact: "beta" }, loansId: { exact: $id } }) {
+        title
+      }
+    }
+    """
+    nested = """
+    query ($id: Int) {
+      allLibraryBooks(filter: { loans: { note: { exact: "beta" }, id: { exact: $id } } }) {
+        title
+      }
+    }
+    """
+
+    _assert_graphql_data(
+        flat,
+        {"allLibraryBooks": [{"title": "Two loans"}]},
+        variables={"id": alpha.pk},
+    )
+    _assert_graphql_data(nested, {"allLibraryBooks": []}, variables={"id": alpha.pk})
+
+
 @pytest.mark.django_db
 def test_library_all_fields_filterset_sweeps_forward_relation_columns_only_over_http():
     """``fields = "__all__"`` keeps forward single-column relations, never M2M or reverse ones."""

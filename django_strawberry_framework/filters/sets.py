@@ -19,8 +19,9 @@ import copy
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
+from functools import cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Literal, NoReturn, TypeVar, cast
+from typing import TYPE_CHECKING, ClassVar, Literal, NoReturn, SupportsIndex, TypeVar, cast
 
 import django_filters
 from django.db import models
@@ -110,8 +111,11 @@ from .inputs import (
     LOGIC_OPERATORS_BY_PYTHON_ATTR,
     LOGIC_OPERATORS_BY_WIRE,
     LOOKUP_NAME_MAP,
+    FilterLookupTable,
+    FormKeyedFilter,
     LogicOperatorDescriptor,
     _field_specs,
+    filter_lookup_table,
     normalize_input_value,
 )
 
@@ -123,6 +127,7 @@ if TYPE_CHECKING:
     from types import MethodType
     from typing import TypeAlias
 
+    from django.forms import Field as FormField
     from django_filters.filterset import FilterSetOptions
 
     from ..types.base import DjangoType
@@ -152,15 +157,11 @@ _M = TypeVar("_M", bound=models.Model)
 # package types.
 _lookups_for_field_class_cache: dict[type[ModelField], list[str]] = {}
 
-# Reverse of ``LOOKUP_NAME_MAP``'s ``django_lookup -> (python_attr, ...)``
-# direction, built once at import so ``_form_key_for_python_attr`` is an O(1)
-# dict lookup instead of an O(n) linear scan on every normalized field. Built
-# from a ``reversed`` view so the FIRST ``django_lookup`` wins when two map to
-# the same ``python_attr`` -- matching the original first-match-wins scan.
-_FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
-    python_attr: django_lookup
-    for django_lookup, (python_attr, _) in reversed(LOOKUP_NAME_MAP.items())
-}
+# Every operator-bag lookup attr ``LOOKUP_NAME_MAP`` can generate; a mapping
+# whose keys all name one is an operator bag (``FilterSet._operator_bag_items``).
+_LOOKUP_PYTHON_ATTRS: frozenset[str] = frozenset(
+    python_attr for python_attr, _graphql_name in LOOKUP_NAME_MAP.values()
+)
 
 
 def _lookups_for_field(model_field: ModelField | None) -> list[str]:
@@ -1167,26 +1168,206 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
         return new_class
 
 
+@dataclass(frozen=True)
+class ChildProjection:
+    """Where an owner-bound expanded leaf runs: the child filter set, its filter's name, the relation.
+
+    ``relation`` is the ``RelatedFilter``'s ``field_name`` (the ORM path from the
+    parent model to the child model), the right-hand side of the
+    ``<relation>__in`` the projection restricts the parent by.
+    """
+
+    filterset: type[FilterSet]
+    name: str
+    relation: str
+
+
+class ProjectedChildFilter(Filter):
+    """A ``RelatedFilter`` expansion of a child filter whose behavior the child filter set owns.
+
+    Rebinding ``field_name`` reproduces a filter only while its behavior is a
+    function of the filter object alone (``field_name``, ``lookup_expr``,
+    ``exclude``, ``distinct``, the form field its class builds). django-filter
+    hangs two behaviors off the OWNING filter set instead: a ``method=`` resolves
+    on ``filter.parent`` (a string by attribute lookup; a callable by the model
+    its body was written for), and a filter set ``__init__`` override may replace
+    or mutate any of ``self.filters`` after the per-request deepcopy. A plain
+    copy of such a filter on the parent has no owner: the method resolves on the
+    parent class, and the child's ``__init__`` never runs for the copy.
+
+    ``_expand_related_filter`` therefore builds this copy for every owner-bound
+    child leaf (``_owner_bound_child``): an instance of the child filter's own
+    class (``_projected_class_for``), so input typing, value normalization and
+    family recognition see the class they always saw, carrying a
+    ``ChildProjection``. Bound to a parent filter set instance, its form field is
+    the one a CHILD filter set instance builds for the child filter (one child
+    instance per parent instance and child class, ``FilterSet._projection_child``;
+    a child ``__init__`` customization and a request-aware callable ``queryset``
+    both apply), and ``filter`` runs the child filter inside that instance, over the
+    child model's rows on the parent's database, then keeps the parent rows
+    whose relation reaches a matching child row (``_restrict_to_related``, the
+    restriction the nested branch applies). Each flat leaf stays its own
+    predicate, as every flat leaf does: two owner-bound leaves may be satisfied
+    by different child rows. Like every flat leaf it runs in the parent's join
+    context; scoping the child by its type's ``get_queryset`` is the nested
+    branch's (spec-027 Decision 8 step 3).
+
+    Unbound (the class-level template the input builder types at schema build,
+    before any parent instance exists), the form field is the child's own
+    class-level filter's, exactly what the plain copy answered.
+    """
+
+    _projection: ChildProjection
+    # The child filter's own class this projected class was built from
+    # (``_projected_class_for``); set on each built class, never on this base.
+    _projected_from: ClassVar[type[Filter]]
+
+    @override
+    def __reduce_ex__(self, protocol: SupportsIndex) -> tuple[object, ...]:
+        """Reduce through the child filter's own class, which pickle can name.
+
+        The projected class is built at runtime, so pickle cannot import it by
+        name; the copy rebuilds it from ``_projected_from`` (one class per
+        filter class, so the round trip lands on the same class). ``deepcopy``
+        reduces the same way.
+        """
+        return (_new_projected, (self._projected_from,), vars(self))
+
+    def _child(self) -> FilterSet:
+        """Return the child filter set instance this leaf runs in, shared per parent instance."""
+        # django-filter's ``BaseFilterSet.__init__`` stamps ``filter_.parent = self``
+        # on every per-request copy (never on the class-level template); only a
+        # package ``FilterSet`` expands a ``RelatedFilter``, so the parent is one.
+        parent = cast("FilterSet", getattr(self, "parent"))  # noqa: B009
+        return parent._projection_child(self._projection.filterset)
+
+    @property
+    @override
+    def field(self) -> FormField:
+        """The child filter's form field: the child instance's once bound, the child class's before."""
+        projection = self._projection
+        if getattr(self, "parent", None) is None:
+            return projection.filterset.base_filters[projection.name].field
+        return self._child().filters[projection.name].field
+
+    @override
+    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
+        """Run the child filter over the child rows; keep the parents reaching a match.
+
+        A child filter that returns its input BY IDENTITY applied no constraint
+        (django-filter's empty-value skip, a ``FilterMethod`` short circuit), so
+        the parent is returned unchanged too; restricting it to parents with
+        ANY child row would turn "no constraint" into "has a child". Every
+        inactive leaf takes that path: ``_apply_flat_leaves`` runs each filter
+        in ``cleaned_data``, supplied or not.
+        """
+        child = self._child()
+        # ``BaseFilterSet.__init__`` defaults a ``None`` queryset to the model's
+        # manager, so an instance's queryset is never ``None`` (typeshed: optional).
+        child_base = cast("models.QuerySet[models.Model]", child.queryset)
+        child_rows = child.filters[self._projection.name].filter(child_base, value)
+        if child_rows is child_base:
+            return qs
+        return _restrict_to_related(qs, self._projection.relation, child_rows)
+
+
+@cache
+def _projected_class_for(filter_cls: type[Filter]) -> type[ProjectedChildFilter]:
+    """Return the projected subclass of ``filter_cls``, one per class; a projected class is its own."""
+    if issubclass(filter_cls, ProjectedChildFilter):
+        return filter_cls
+    return cast(
+        "type[ProjectedChildFilter]",
+        type(
+            f"Projected{filter_cls.__name__}",
+            (ProjectedChildFilter, filter_cls),
+            {"_projected_from": filter_cls},
+        ),
+    )
+
+
+def _new_projected(filter_cls: type[Filter]) -> ProjectedChildFilter:
+    """Return an empty instance of ``filter_cls``'s projected class (``__reduce_ex__``'s rebuild)."""
+    return object.__new__(_projected_class_for(filter_cls))
+
+
+def _owner_bound_child(child_filterset: type[FilterSet], child_filter: Filter) -> bool:
+    """Whether ``child_filter``'s behavior belongs to ``child_filterset``, not to the filter object.
+
+    A ``method=`` filter resolves on, or was written for, its owner; every
+    filter of a filter set that overrides ``__init__`` may have been edited by
+    it (``FilterSet._customizes_instances``, the seam the optimizer closes for
+    the same reason); a projected copy already runs inside its owner and is
+    re-projected at the next hop. A ``RelatedFilter`` is a branch, never a flat
+    leaf, so it is copied as is.
+    """
+    if isinstance(child_filter, RelatedFilter):
+        return False
+    return (
+        isinstance(child_filter, ProjectedChildFilter)
+        or child_filter.method is not None
+        or child_filterset._customizes_instances()
+    )
+
+
+def _restrict_to_related(
+    queryset: models.QuerySet[_M],
+    relation: str,
+    related_rows: models.QuerySet[models.Model],
+) -> models.QuerySet[_M]:
+    """Keep the rows of ``queryset`` whose ``relation`` reaches a row of ``related_rows``.
+
+    The restriction is wrapped as ``pk__in=<parent-pk subquery>`` rather than
+    filtering ``<relation>__in=<related_rows>`` directly: for a many-side
+    relation (reverse FK / M2M) the direct form JOINs the child table onto the
+    parent queryset, so a parent with N matching children comes back N times
+    (duplicate nodes in lists / connections, corrupted pagination counts). The
+    pk subquery collapses those duplicates inside the ``IN`` clause with no
+    ``.distinct()`` (which would mutate consumer-visible queryset state) and
+    matches the ``Q(pk__in=...)`` shape ``_q_for_branch`` emits, so a related
+    branch answers identically whether it appears directly or nested under
+    ``and`` / ``or`` / ``not``, and an owner-bound flat leaf answers like the
+    branch. The subquery derives from ``queryset`` itself (not a fresh manager)
+    so custom default-manager filtering and the database alias carry through.
+    """
+    matching = queryset.filter(**{f"{relation}__in": related_rows}).values("pk")
+    return queryset.filter(pk__in=matching)
+
+
 def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Filter]:
     """Expand `f` against its target filterset's resolved filters.
 
-    Verbatim port of the cookbook's `expand_related_filter`. The
-    per-field deep-copy avoids mutating the target filterset's
-    instances when the parent rebinds `field_name` to the relation
-    path. Module-level helper because the expansion has no metaclass
-    state - moving it off the metaclass keeps the call site
-    (``get_filters``) free of ``cls.__class__.expand_related_filter
-    (cls, ...)`` indirection that obscured the function's purpose.
+    Port of the cookbook's `expand_related_filter`: each child filter is
+    deep-copied onto the parent under ``<filter_name>__<child name>`` with
+    ``field_name`` rebound to the relation path, so the target filterset's own
+    instances are never mutated. A child filter whose behavior the child filter
+    set owns (``_owner_bound_child``) is copied as a ``ProjectedChildFilter``
+    instead, since a rebind cannot carry a ``method=`` or a child ``__init__``.
+    Module-level helper because the expansion has no metaclass state - moving
+    it off the metaclass keeps the call site (``get_filters``) free of
+    ``cls.__class__.expand_related_filter(cls, ...)`` indirection that obscured
+    the function's purpose.
     """
     expanded: OrderedDict[str, Filter] = OrderedDict()
     target_filterset = f.filterset
     if not target_filterset:
         return expanded
     target_filters = target_filterset.get_filters()
+    relation = _bound_field_name(f)
     for child_name, field in target_filters.items():
         new_name = f"{filter_name}__{child_name}"
         field_copy = copy.deepcopy(field)
-        field_copy.field_name = f"{f.field_name}__{field.field_name}"
+        field_copy.field_name = f"{relation}__{field.field_name}"
+        if _owner_bound_child(target_filterset, field):
+            field_copy.__class__ = _projected_class_for(type(field_copy))
+            projected = cast("ProjectedChildFilter", field_copy)
+            projected._projection = ChildProjection(target_filterset, child_name, relation)
+            # django-filter's ``method`` setter shadows ``filter`` per INSTANCE with a
+            # ``FilterMethod`` (the package's list filters install theirs the same
+            # way); the copy carried that shadow, which would resolve the method on
+            # the parent. The child's own filter, inside the child instance, keeps
+            # its shadow; the projection's class-level ``filter`` runs here.
+            vars(projected).pop("filter", None)
         # Inherit the CHILD leaf's frozen provenance record and APPEND the child
         # filter's name as an expansion breadcrumb, without mutating the child's
         # record (a new frozen record via ``replace``). Origin +
@@ -1261,6 +1442,11 @@ class FilterSet(
     # ONLY through ``cls._expansion_snapshot()`` (a class's OWN ``__dict__``) so
     # a subclass never inherits its parent's classification.
     _expanded_snapshot: ClassVar[ExpansionSnapshot | None] = None
+    # Each operator-bag lookup's form key, grouped once per ``get_filters()``
+    # result (``inputs.py::filter_lookup_table``). The table names the
+    # ``get_filters()`` object it was built from and is rebuilt when that
+    # object changes, so an inherited or pre-clear table is never read.
+    _lookup_table: ClassVar[FilterLookupTable | None] = None
     # Recursion guard around `get_filters` so a self-referential
     # `RelatedFilter` does not blow the stack.
     _is_expanding_filters = False
@@ -1327,6 +1513,12 @@ class FilterSet(
     # ``get_queryset`` is async-only. ``None`` for instances built by
     # ``apply_sync`` or outside the apply pipeline (sync path stays sync).
     _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None
+
+    # The child filter set instances this instance's projected leaves
+    # (``ProjectedChildFilter``) run in, one per child class, built on first use
+    # by ``_projection_child``. Per instance, so a request never sees another
+    # request's child and each ``_q_for_branch`` sibling builds its own.
+    _projection_children: dict[type[FilterSet], FilterSet] | None = None
 
     # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
     # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
@@ -1987,16 +2179,12 @@ class FilterSet(
           individual entry is a separate concern handled by
           ``_generation_origin_for_field`` against the private normalized baseline;
           this identity check is the coarse whole-table-replacement gate.
-        * ``__init__`` override -- the standard place a consumer replaces or mutates
-          ``self.filters`` per request. A subclass that defines
-          its own ``__init__`` can swap a generated leaf for its own filter object
-          AFTER the per-request deepcopy. Since routing is decided at BUILD time, this
-          seam is closed HERE and only here: such a class is non-capable, so none of
+        * ``__init__`` override (``_customizes_instances``) -- the standard place a
+          consumer replaces or mutates ``self.filters`` per request. A subclass that
+          defines its own ``__init__`` can swap a generated leaf for its own filter
+          object AFTER the per-request deepcopy. Since routing is decided at BUILD
+          time, this seam is closed at build: such a class is non-capable, so none of
           its leaves is routable and the swapped-in filter runs on the outer queryset.
-          ``__init__`` is an instance method, so it is compared by object identity
-          directly (an unmodified subclass inherits ``FilterSet.__init__`` by identity;
-          ``FilterSet`` itself does not define one, so this is
-          ``filterset.BaseFilterSet.__init__``).
 
         ``FilterSet`` is referenced by name (not ``super()`` / ``__class__``)
         because this runs after class definition, when the module global is
@@ -2008,8 +2196,54 @@ class FilterSet(
             and getattr(cls.filter_for_lookup, "__func__", None)
             is cast("MethodType", FilterSet.filter_for_lookup).__func__
             and cls.FILTER_DEFAULTS is _PUBLIC_PACKAGE_FILTER_DEFAULTS
-            and cls.__init__ is FilterSet.__init__
+            and not cls._customizes_instances()
         )
+
+    def _projection_child(self, filterset_cls: type[FilterSet]) -> FilterSet:
+        """Return the ``filterset_cls`` instance this instance's projected leaves run in.
+
+        Built on first use and shared by every projected leaf of this instance
+        expanded from ``filterset_cls``: django-filter's form reads every
+        filter's ``.field``, so a per-leaf child would deep-copy the child's
+        filters and rerun its ``__init__`` once per leaf per request. The child
+        is unbound (no form data; only its filters run), seeded with the child
+        model's base rows on this instance's database, and carries this
+        instance's request, so a request-aware callable ``queryset`` and the
+        child ``__init__`` see the same request the parent does.
+        """
+        children = self._projection_children
+        if children is None:
+            children = self._projection_children = {}
+        child = children.get(filterset_cls)
+        if child is None:
+            # A ``RelatedFilter`` target always declares ``Meta.model``
+            # (``_iter_visibility_steps`` trusts the same).
+            child_model = cast("type[models.Model]", filterset_cls._meta.model)
+            # Never ``None`` on an instance (see ``ProjectedChildFilter.filter``).
+            parent_qs = cast("models.QuerySet[models.Model]", self.queryset)
+            child = filterset_cls(
+                queryset=base_queryset(child_model, using=parent_qs.db),
+                request=self.request,
+            )
+            children[filterset_cls] = child
+        return child
+
+    @classmethod
+    def _customizes_instances(cls) -> bool:
+        """Return True iff this class overrides ``__init__``, the per-request edit seam.
+
+        ``BaseFilterSet.__init__`` deep-copies ``base_filters`` into ``self.filters``;
+        a subclass ``__init__`` is where a consumer replaces or mutates those
+        instances (a validator appended to one filter's form field, a filter
+        swapped for another). The class-level filters therefore do not describe
+        what such a class's instances run, which is why the optimizer declines
+        to route its leaves (``_is_generation_capable``) and why
+        ``_expand_related_filter`` projects them through a child instance rather
+        than rebinding a copy (``_owner_bound_child``). ``__init__`` is compared
+        by identity: an unmodified subclass inherits ``FilterSet.__init__``
+        (``FilterSet`` defines none, so this is ``filterset.BaseFilterSet.__init__``).
+        """
+        return cls.__init__ is not FilterSet.__init__
 
     # basedpyright: typeshed types ``filter_for_lookup``'s class as never ``None``; upstream
     # returns ``(None, {})`` for a field with no ``FILTER_DEFAULTS`` entry. It rejects the ``None``
@@ -2430,7 +2664,12 @@ class FilterSet(
         via ``filter_instance.parent._owner_definition``. The owner is
         therefore not threaded as a parameter here.
 
-        Fail-loud input contracts (both raise the typed
+        Leaf form keys come from ``inputs.py::filter_lookup_table``, the one
+        place each operator-bag lookup's form key is decided
+        (``_leaf_form_entries``); nothing here re-derives a key from
+        ``(field, lookup)``.
+
+        Fail-loud input contracts (each raises the typed
         ``ConfigurationError`` instead of silently dropping predicates
         and skipping ``check_*`` gates -- the same permission + filter
         bypass ``_validate_logic_branch_shape`` rejects for logical
@@ -2438,6 +2677,8 @@ class FilterSet(
 
         * a NON-walkable top-level input (scalar / list / arbitrary
           object) raises instead of normalizing to ``{}``;
+        * a field or lookup the lookup table does not hold raises instead
+          of being written as a form key django-filter ignores;
         * a dict value that survives ``normalize_input_value`` on a
           NON-range filter raises via ``_require_range_patch_filter`` --
           the dict patch shape is reserved for the positional range
@@ -2468,8 +2709,8 @@ class FilterSet(
                 "skip every check_* permission gate.",
             )
 
-        all_filters: Mapping[str, Filter] = (
-            cls.get_filters() if cls._meta.model is not None else {}
+        lookups_by_attr = (
+            filter_lookup_table(cls).by_input_attr if cls._meta.model is not None else {}
         )
 
         # The dataclass-vs-dict walk, the ``None`` / ``UNSET`` active-input skip,
@@ -2481,8 +2722,8 @@ class FilterSet(
         # ``ActiveField`` is dispatched here by ``kind``: ``LOGIC`` copies
         # the raw sub-tree under its ``django-filter`` wire key, ``RELATED`` is
         # stripped (owned by ``_apply_related_constraints``, since the parent form
-        # cannot validate a nested-dict shape), and ``LEAF`` runs the per-field
-        # operator-bag / range normalization that stays local to the filter family.
+        # cannot validate a nested-dict shape), and ``LEAF`` normalizes each
+        # active lookup under the form key the lookup table holds for it.
         data: dict[str, object] = {}
         for field in iter_active_fields(cls, input_value, cls._input_traversal()):
             if field.kind == LOGIC:
@@ -2494,90 +2735,76 @@ class FilterSet(
                 # Related branches travel through `_apply_related_constraints`,
                 # not the parent form.
                 continue
-            django_source_path = field.spec.django_source_path if field.spec is not None else None
-            # Per spec-027 Decision 3 Layer 5 (per-field operator bag), top-
-            # level scalar fields wrap a nested ``<Field>FilterInputType``
-            # dataclass whose attrs map to ``django-filter`` lookups
-            # (``exact`` / ``i_contains`` / ``in_`` / ...). Iterate the bag
-            # to produce ``<source>__<lookup>`` form-data keys.
-            bag_items = cls._operator_bag_items(field.raw_value)
-            if bag_items is not None:
-                base_path = django_source_path or cls._form_key_for_python_attr(field.python_attr)
-                declared_form_key = (
-                    base_path if base_path in getattr(cls, "declared_filters", {}) else None
-                )
-                for lookup_attr, lookup_value in bag_items:
-                    # Mirror the classifier's active-input rule so a partially-
-                    # supplied operator bag (e.g.
-                    # ``title: { exact: UNSET, icontains: "foo" }``) does
-                    # not leak the UNSET sentinel through to
-                    # ``normalize_input_value``; a Strawberry input
-                    # dataclass defaults every unsupplied lookup to
-                    # ``UNSET`` rather than ``None``, so this is the
-                    # common case for any consumer who fills some but
-                    # not all lookups.
-                    if is_inactive_value(lookup_value, unset_sentinel=UNSET):
-                        continue
-                    django_lookup = cls._form_key_for_python_attr(lookup_attr)
-                    suffixed_key = f"{base_path}__{django_lookup}"
-                    if declared_form_key is not None:
-                        # Declared filters use their class attribute as the
-                        # django-filter form key regardless of lookup_expr.
-                        # Unlike generated filters, a declared
-                        # ``CharFilter(lookup_expr="icontains")`` registered
-                        # as ``custom`` is bound to ``custom``, not
-                        # ``custom__icontains``; appending the lookup here
-                        # creates an unknown form key that django-filter
-                        # silently ignores.
-                        form_key = declared_form_key
-                    else:
-                        # ``exact`` registers under the bare ``base_path`` form key but
-                        # may also be declared explicitly as ``base_path__exact``, so it
-                        # probes both; every other lookup only ever lives under its
-                        # suffixed key, so ``form_key`` and ``suffixed_key`` coincide and
-                        # a single lookup suffices.
-                        form_key = base_path if django_lookup == "exact" else suffixed_key
-                    filter_instance = all_filters.get(form_key)
-                    if filter_instance is None and form_key != suffixed_key:
-                        filter_instance = all_filters.get(suffixed_key)
-                        if filter_instance is not None:
-                            form_key = suffixed_key
-                    if filter_instance is None:
-                        data[form_key] = lookup_value
-                        continue
-                    normalized = normalize_input_value(
-                        filter_instance,
-                        lookup_value,
-                        field_name=form_key,
-                    )
-                    if isinstance(normalized, dict):
-                        cls._require_range_patch_filter(filter_instance, form_key, lookup_value)
-                        data.update(normalized)
-                    else:
-                        # An element-binding integer ``__in`` is range-coerced (and
-                        # empty-aware) by ``IntegerInFilter`` at filter time, not here
-                        # (``filter_for_lookup`` routes it there), so the normalized
-                        # list passes straight through.
-                        data[form_key] = normalized
-                continue
-            form_key = django_source_path or cls._form_key_for_python_attr(field.python_attr)
-            filter_instance = all_filters.get(form_key)
-            if filter_instance is None:
-                data[form_key] = field.raw_value
-                continue
-            normalized = normalize_input_value(
-                filter_instance,
+            for form_key, filter_instance, value in cls._leaf_form_entries(
+                lookups_by_attr,
+                field.python_attr,
                 field.raw_value,
-                field_name=form_key,
-            )
-            if isinstance(normalized, dict):
-                # Range-filter patch: multiple positional form keys for
-                # one Strawberry attribute.
-                cls._require_range_patch_filter(filter_instance, form_key, field.raw_value)
-                data.update(normalized)
-            else:
-                data[form_key] = normalized
+            ):
+                normalized = normalize_input_value(filter_instance, value, field_name=form_key)
+                if isinstance(normalized, dict):
+                    # Range-filter patch: positional form keys for one lookup.
+                    cls._require_range_patch_filter(filter_instance, form_key, value)
+                    data.update(normalized)
+                else:
+                    # An element-binding integer ``__in`` is range-coerced (and
+                    # empty-aware) by ``IntegerInFilter`` at filter time, not here
+                    # (``filter_for_lookup`` routes it there), so the normalized
+                    # list passes straight through.
+                    data[form_key] = normalized
         return data
+
+    @classmethod
+    def _leaf_form_entries(
+        cls,
+        lookups_by_attr: Mapping[str, Mapping[str, FormKeyedFilter]],
+        python_attr: str,
+        raw_value: object,
+    ) -> list[tuple[str, Filter, object]]:
+        """Return ``(form key, filter, value)`` for each active lookup of one leaf field.
+
+        Per spec-027 Decision 3 Layer 5 a leaf field carries a per-field operator
+        bag (``exact`` / ``i_contains`` / ``in_`` / ...). Each bag lookup's form
+        key was decided once, when ``inputs.py::filter_lookup_table`` grouped the
+        head, so the generated input and the form data never disagree. A scalar
+        value is shorthand for the head's ``exact`` lookup, or for its only
+        lookup. A field or lookup the table does not hold raises: it can only
+        come from a hand-built mapping, and writing it as an unknown form key
+        would apply nothing.
+        """
+        lookups = lookups_by_attr.get(python_attr)
+        if lookups is None:
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: {python_attr!r} is not a filter input "
+                "field; it would apply nothing.",
+            )
+        bag_items = cls._operator_bag_items(raw_value)
+        if bag_items is None:
+            entry = lookups.get("exact")
+            if entry is None and len(lookups) == 1:
+                entry = next(iter(lookups.values()))
+            if entry is None:
+                raise ConfigurationError(
+                    f"FilterSet {cls.__qualname__}: filter input field {python_attr!r} "
+                    f"has no exact lookup to take a bare value (lookups: "
+                    f"{sorted(lookups)!r}); pass an operator bag.",
+                )
+            return [(entry[0], entry[1], raw_value)]
+        entries: list[tuple[str, Filter, object]] = []
+        for lookup_attr, lookup_value in bag_items:
+            # A Strawberry input dataclass defaults every unsupplied lookup to
+            # ``UNSET`` rather than ``None``, so a partially supplied bag
+            # (``title: { exact: UNSET, icontains: "foo" }``) skips the rest.
+            if is_inactive_value(lookup_value, unset_sentinel=UNSET):
+                continue
+            entry = lookups.get(lookup_attr)
+            if entry is None:
+                raise ConfigurationError(
+                    f"FilterSet {cls.__qualname__}: filter input field {python_attr!r} "
+                    f"has no {lookup_attr!r} lookup (lookups: {sorted(lookups)!r}); it "
+                    "would apply nothing.",
+                )
+            entries.append((entry[0], entry[1], lookup_value))
+        return entries
 
     @classmethod
     def _require_range_patch_filter(
@@ -2674,34 +2901,28 @@ class FilterSet(
         #     ``normalize_input_value`` so it produces the positional
         #     ``{<field>_0, <field>_1}`` patch.
         # Disambiguate by the keys: a dict is an operator bag only when
-        # EVERY key names a known lookup attr (``_FORM_KEY_BY_PYTHON_ATTR``
+        # EVERY key names a known lookup attr (``_LOOKUP_PYTHON_ATTRS``
         # - ``start`` / ``end`` are absent). Strawberry-input dataclass
         # bags (the schema-driven path) always delegate unchanged.
         if isinstance(raw_value, dict):
-            if raw_value and all(key in _FORM_KEY_BY_PYTHON_ATTR for key in raw_value):
+            if raw_value and all(key in _LOOKUP_PYTHON_ATTRS for key in raw_value):
                 return list(raw_value.items())
             return None
         return FilterSet._iter_input_items(raw_value)
 
-    @staticmethod
-    def _form_key_for_python_attr(python_attr: str) -> str:
-        """Map a Strawberry dataclass attr back to a `django-filter` form key.
-
-        Looks the attr up in the precomputed ``_FORM_KEY_BY_PYTHON_ATTR``
-        reverse map (built once from ``LOOKUP_NAME_MAP`` at import).
-        Falls through to the attr name verbatim when no lookup pair
-        rewrites it. Used by ``_normalize_input`` both at the top-level
-        scalar branch and inside the per-field operator-bag iteration
-        (mapping ``i_contains`` -> ``icontains`` etc.); the two callers
-        share this single helper rather than duplicating the walk.
-        """
-        return _FORM_KEY_BY_PYTHON_ATTR.get(python_attr, python_attr)
-
     @classmethod
     @override
     def _permission_fallback_path(cls, python_attr: str) -> str:
-        """Map a lookup attr onto its django-filter form key (filter-family remap)."""
-        return cls._form_key_for_python_attr(python_attr)
+        """Gate a field with no ``FieldSpec`` on the path its generated field would gate on.
+
+        A direct mapping keyed by a head's own spelling (``books__title``), or
+        built before the input class, reads the head's gate path from
+        ``inputs.py::filter_lookup_table``; a key naming no head gates on itself
+        (``_normalize_input`` then rejects it).
+        """
+        if cls._meta.model is None:
+            return python_attr
+        return filter_lookup_table(cls).gate_paths.get(python_attr, python_attr)
 
     @classmethod
     def _iter_visibility_steps(
@@ -3138,7 +3359,10 @@ class FilterSet(
         upstream ``QuerySet`` return assertion. That is what makes every
         django-filter customization seam fail CLOSED to the outer invocation
         rather than smuggling consumer semantics into the correlated subquery: the
-        failure mode is a declined optimization, never a changed result set.
+        failure mode is a declined optimization, never a changed result set. For
+        an owner-bound expanded leaf (``ProjectedChildFilter``) the original
+        invocation is the child filter run inside its own filter set, projected
+        back through the relation.
 
         A routed framework-generated to-many leaf is invoked against
         ``correlated_inner_root(queryset)`` through the distinct-suppressing
@@ -3453,14 +3677,21 @@ class FilterSet(
             # metaclass collected (``sets_mixins.py::collect_related_declarations``).
             related_filter = cast("RelatedFilter", declaration)
             child_qs = child_qs_by_branch.get(field_name)
-            explicit = (
+            # ``_has_explicit_queryset`` records that ``queryset=`` was passed; the
+            # ``ModelChoiceFilter`` contract types it as a queryset.
+            explicit = cast(
+                "models.QuerySet[models.Model] | None",
                 related_filter.extra.get("queryset")
                 if related_filter._has_explicit_queryset
-                else None
+                else None,
             )
-            if child_qs is None and explicit is None:
-                continue
-            if child_qs is not None and explicit is not None:
+            if child_qs is None:
+                if explicit is None:
+                    continue
+                intersected = explicit
+            elif explicit is None:
+                intersected = child_qs
+            else:
                 # Django raises an opaque ``TypeError: Cannot combine
                 # queries on two different base models`` from
                 # ``Query.combine`` if the consumer-supplied
@@ -3493,8 +3724,6 @@ class FilterSet(
                         "operator rejects mixed model classes.",
                     )
                 intersected = explicit & child_qs
-            else:
-                intersected = child_qs if child_qs is not None else explicit
             # Build the parent restriction against the relation's ORM path
             # (``related_filter.field_name``), NOT the declared attribute name the
             # loop iterates by. The two diverge whenever a consumer gives a
@@ -3504,27 +3733,13 @@ class FilterSet(
             # non-existent relation and Django would raise ``FieldError``.
             # ``child_qs_by_branch`` stays keyed by the declared name (see
             # ``_derive_related_visibility_querysets_*``), so only this final
-            # ``.filter(...)`` switches to the ORM path.
-            #
-            # The restriction is wrapped as ``pk__in=<parent-pk subquery>``
-            # rather than filtering ``<rel>__in=<intersected>`` directly: for
-            # a many-side relation (reverse FK / M2M) the direct form JOINs
-            # the child table onto the parent queryset, so a parent with N
-            # matching children comes back N times - duplicate nodes in
-            # lists / connections and corrupted pagination counts. The pk
-            # subquery collapses those duplicates inside the ``IN`` clause
-            # (no ``.distinct()``, which would mutate consumer-visible
-            # queryset state) and matches the ``Q(pk__in=...)`` shape
-            # ``_q_for_branch`` already emits, so a related branch answers
-            # identically whether it appears directly or nested under
-            # ``and`` / ``or`` / ``not``. The subquery derives from
-            # ``constrained`` itself (not a fresh manager) so custom
-            # default-manager filtering and the queryset's database alias
-            # carry through unchanged.
-            matching_parent_pks = constrained.filter(
-                **{f"{related_filter.field_name}__in": intersected},
-            ).values("pk")
-            constrained = constrained.filter(pk__in=matching_parent_pks)
+            # restriction switches to the ORM path. The ``pk__in`` wrapping and
+            # its row-multiplicity rationale are ``_restrict_to_related``'s.
+            constrained = _restrict_to_related(
+                constrained,
+                _bound_field_name(related_filter),
+                intersected,
+            )
         return constrained
 
     @classmethod

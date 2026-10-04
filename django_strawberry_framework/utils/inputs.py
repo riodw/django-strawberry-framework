@@ -94,10 +94,13 @@ if TYPE_CHECKING:
 class GeneratedInputFieldSpec:
     """Per-generated-input-field metadata shared across the set families.
 
-    Carries the three names the runtime normalizers need to map between the
-    Strawberry input dataclass field, the GraphQL wire-format name, and the
-    Django ORM lookup path. Re-exported as ``FieldSpec`` by both
-    ``filters/inputs.py`` and ``orders/inputs.py``.
+    Carries the Strawberry input dataclass field, its GraphQL wire-format name,
+    and its ``django_source_path``. On the order side that path is the Django
+    ORM path the normalizer orders by. On the filter side it is only the
+    ``check_<path>_permission`` gate path (a declared head's own name, else its
+    filter's ``field_name``); filter form keys come from
+    ``filters/inputs.py::filter_lookup_table``. Re-exported as ``FieldSpec`` by
+    both ``filters/inputs.py`` and ``orders/inputs.py``.
     """
 
     python_attr: str
@@ -190,13 +193,13 @@ def emit_set_input_field_triples(
       and record ``related_source_path_of``'s path (``top_name`` for filters;
       ``field_name or top_name`` for orders).
     - **leaf**: ``leaf_of`` owns the family's leaf semantics (the filter side's
-      operator-bag class build + declared-vs-autogen source rule; the order
-      side's fixed ``Ordering | None``) and returns the final
+      operator-bag class build + lookup-table gate path; the order side's fixed
+      ``Ordering | None``) and returns the final
       ``(annotation, django_source_path)``.
 
     Each emitted field also lands its ``GeneratedInputFieldSpec`` in the
     family's ``field_specs`` provenance table keyed ``(set_cls, python_attr)``
-    (what the runtime normalizers walk). Family-specific PRE-filtering (the
+    (what the active-field walk and the permission gates read). Family-specific PRE-filtering (the
     filter side's expanded-child grouping and ``HIDE_FLAT_FILTERS`` skip)
     happens in ``entries`` before this scaffold - the same
     parameterization split ``GeneratedInputArgumentsFactory`` proved out for

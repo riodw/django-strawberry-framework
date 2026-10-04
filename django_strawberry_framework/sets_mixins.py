@@ -564,8 +564,8 @@ class ActiveInputPermissionMixin:
     ``run_active_input_permission_checks`` re-enters. Family-only work stays
     on overridable hooks:
 
-    - ``_permission_fallback_path`` -- filter remaps lookup attrs to form
-      keys; order uses the python attr verbatim.
+    - ``_permission_fallback_path`` -- filter reads a head's gate path from
+      its lookup table; order uses the python attr verbatim.
     - ``_check_permission_depth`` -- filter caps logical-branch nesting;
       order has no operator bag, so the default is a no-op (related
       recursion is already capped inside ``run_active_input_permission_checks``).
@@ -654,8 +654,8 @@ class ActiveInputPermissionMixin:
     def _permission_fallback_path(cls, python_attr: str) -> str:
         """Map a python attr to its permission source path when no field-spec exists.
 
-        Default: the attr IS the path (order side). ``FilterSet`` remaps
-        lookup attrs onto django-filter form keys.
+        Default: the attr IS the path (order side). ``FilterSet`` reads the
+        gate path its generated field would carry from its lookup table.
         """
         return verbatim_path(python_attr)
 

@@ -9,8 +9,8 @@ filter-instance -> Strawberry-annotation converter pair
 (``convert_filter_to_input_annotation`` /
 ``normalize_input_value``), the dataclass builder
 (``build_input_class``), the per-filterset operator-bag helpers
-(``_build_input_fields`` / ``_build_logic_fields`` /
-``construct_search``), and the module-global materialization /
+(``filter_lookup_table`` / ``_build_input_fields`` / ``_build_logic_fields``
+/ ``construct_search``), and the module-global materialization /
 namespace-clear pair (``materialize_input_class`` /
 ``clear_filter_input_namespace``).
 """
@@ -56,13 +56,14 @@ from ..utils.inputs import (
     optional_field_kwargs,
     set_input_type_name,
 )
-from ..utils.strings import graphql_camel_name, pascal_case_or_raise
+from ..utils.strings import flatten_lookup_path, graphql_camel_name, pascal_case_or_raise
 from .base import (
     ArrayFilter,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     ListFilter,
     RangeFilter,
+    RelatedFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
     TypedFilter,
@@ -116,10 +117,10 @@ LOOKUP_PREFIXES: dict[str, str] = {
 # Decision 3 Layer 5. Strawberry's auto-camel-case
 # cannot transform `icontains` to `iContains` (no underscore to split on),
 # and the Python keyword `in` cannot be a dataclass field - both are pinned
-# here. Consumed by `FilterSet._normalize_input` (mapping Strawberry-input
-# dataclass attrs back to `django-filter`'s form-data keys),
-# `_build_input_fields` (for `strawberry.field(name=...)` emission), and
-# `normalize_input_value` (for the runtime symmetric).
+# here. Consumed by `filter_lookup_table` (keying each head's lookups by their
+# Python attr, the names `FilterSet._normalize_input` reads), by
+# `_build_input_fields` (for `strawberry.field(name=...)` emission), and by
+# `FilterSet._operator_bag_items` (recognizing a hand-built operator bag).
 LOOKUP_NAME_MAP: dict[str, tuple[str, str]] = {
     "exact": ("exact", "exact"),
     "iexact": ("i_exact", "iExact"),
@@ -974,63 +975,165 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, object, dict[str, obj
     ]
 
 
+# One bag lookup's django-filter form key (its ``get_filters()`` name) and filter.
+FormKeyedFilter = tuple[str, Filter]
+
+
+@dataclass(frozen=True)
+class FilterLookupTable:
+    """Every operator-bag lookup's django-filter form key, decided once per filter set.
+
+    ``heads`` maps ``head -> lookup token -> (form key, filter)`` in
+    ``get_filters()`` order; ``_build_input_fields`` emits one input field per
+    head from it. ``by_input_attr`` maps ``input attr -> lookup attr -> (form
+    key, filter)``, keyed by each head's own spelling and by its flattened
+    generated-input attr; ``FilterSet._normalize_input`` reads it. Both views
+    hold the same entries, so the generated input and the form data it
+    normalizes to cannot disagree. ``gate_paths`` maps the same keys to the
+    head's ``check_<path>_permission`` path: a declared head, and an expansion
+    of a child's declared filter, gates on its own name (``shelf__home_branch``
+    fires ``check_shelf_home_branch_permission`` and, through the relation walk,
+    the child's ``check_home_branch_permission``, as the nested spelling does);
+    any other head gates on its filter's ``field_name`` (the ORM path), so
+    ``name`` and ``name__icontains`` share the ``name`` gate. ``source`` is the
+    ``get_filters()`` result the table was built from: the cache is valid only
+    while that object is.
+    """
+
+    source: Mapping[str, Filter]
+    heads: Mapping[str, Mapping[str, FormKeyedFilter]]
+    by_input_attr: Mapping[str, Mapping[str, FormKeyedFilter]]
+    gate_paths: Mapping[str, str]
+
+
+def _is_expanded_declared_filter(filter_instance: Filter) -> bool:
+    """Whether ``filter_instance`` is a ``RelatedFilter`` expansion of a declared child filter."""
+    from .sets import filter_generation_provenance
+
+    record = filter_generation_provenance(filter_instance)
+    return record is not None and record.origin == "declared" and bool(record.expanded_from)
+
+
+def _group_filters_by_head(
+    filterset_cls: type[FilterSet],
+    all_filters: Mapping[str, Filter],
+) -> OrderedDict[str, OrderedDict[str, FormKeyedFilter]]:
+    """Group ``get_filters()`` by input head, keeping each lookup's own form key.
+
+    A declared filter, and a ``RelatedFilter`` expansion of a child's declared
+    filter, is its own head: its name is its form key even when it ends in its
+    own lookup token (``name__exact``). A generated ``<path>__<lookup>`` entry
+    joins the ``<path>`` head under ``<lookup>``. Two filters claiming one
+    ``(head, lookup)`` slot would leave one unreachable from the generated
+    input, so that raises.
+    """
+    declared_filters = getattr(filterset_cls, "declared_filters", {})
+    grouped: OrderedDict[str, OrderedDict[str, FormKeyedFilter]] = OrderedDict()
+    for filter_name, filter_instance in all_filters.items():
+        # Skip expanded RelatedFilter entries (e.g., `self_link__self_link`
+        # under a self-referential filterset). The top-level
+        # `RelatedFilter` forward-ref already exposes the same target;
+        # the expanded duplicate would otherwise reach the leaf branch
+        # and trip the `ChoiceFilter` guard.
+        if "__" in filter_name and isinstance(filter_instance, RelatedFilter):
+            continue
+        lookup_expr = filter_instance.lookup_expr
+        if filter_name in declared_filters or _is_expanded_declared_filter(filter_instance):
+            head, lookup_token = filter_name, lookup_expr
+        else:
+            # django-filter names a generated filter ``<path>__<lookup>``, or the
+            # bare ``<path>`` for ``exact``; a trailing token that is not the
+            # filter's own lookup belongs to the path.
+            head, _, lookup_token = filter_name.rpartition("__")
+            if not head or lookup_token != lookup_expr:
+                head, lookup_token = filter_name, lookup_expr
+        bag = grouped.setdefault(head, OrderedDict())
+        prior = bag.get(lookup_token)
+        if prior is not None:
+            raise ConfigurationError(
+                f"{filterset_cls.__qualname__}: filters {prior[0]!r} and {filter_name!r} "
+                f"both bind the {lookup_token!r} lookup of input field {head!r}, so one "
+                "would be unreachable from the generated input. Rename one filter or "
+                "drop one via Meta.fields / Meta.exclude.",
+            )
+        bag[lookup_token] = (filter_name, filter_instance)
+    return grouped
+
+
+def filter_lookup_table(filterset_cls: type[FilterSet]) -> FilterLookupTable:
+    """Return ``filterset_cls``'s ``FilterLookupTable``, built once per ``get_filters()`` result.
+
+    The flattened generated-input attr of a ``<path>__<field>`` head is an alias
+    only when no head is literally spelled that way (a head's own spelling wins);
+    two heads sharing one alias raise, since one would be unreachable.
+    """
+    all_filters = filterset_cls.get_filters()
+    cached = filterset_cls._lookup_table
+    if cached is not None and cached.source is all_filters:
+        return cached
+    heads = _group_filters_by_head(filterset_cls, all_filters)
+    declared_filters = getattr(filterset_cls, "declared_filters", {})
+    by_input_attr: dict[str, Mapping[str, FormKeyedFilter]] = {}
+    gate_paths: dict[str, str] = {}
+    for head, bag in heads.items():
+        by_input_attr[head] = {
+            LOOKUP_NAME_MAP.get(token, (token, token))[0]: entry for token, entry in bag.items()
+        }
+        _form_key, sample_filter = next(iter(bag.values()))
+        # A declared head gates on its own name; so does an expansion of a child's
+        # declared filter, whose flat spelling must fire the gates its nested twin
+        # fires (``utils/permissions.py::_fire_flat_relation_path_gates`` walks the
+        # relation hops and fires the child's ``check_<name>_permission``).
+        gate_paths[head] = (
+            head
+            if head in declared_filters or _is_expanded_declared_filter(sample_filter)
+            else _bound_field_name(sample_filter)
+        )
+    alias_heads: dict[str, str] = {}
+    for head in heads:
+        input_attr = flatten_lookup_path(head)
+        if input_attr in heads:
+            continue
+        prior_head = alias_heads.setdefault(input_attr, head)
+        if prior_head != head:
+            raise ConfigurationError(
+                f"{filterset_cls.__qualname__}: filters {prior_head!r} and {head!r} both "
+                f"generate the input attribute {input_attr!r} (Django path separators "
+                "flatten to '_'), so one would be unreachable. Rename one filter or "
+                "drop one via Meta.fields / Meta.exclude.",
+            )
+        by_input_attr[input_attr] = by_input_attr[head]
+        gate_paths[input_attr] = gate_paths[head]
+    table = FilterLookupTable(
+        source=all_filters,
+        heads=heads,
+        by_input_attr=by_input_attr,
+        gate_paths=gate_paths,
+    )
+    filterset_cls._lookup_table = table
+    return table
+
+
 def _build_input_fields(
     filterset_cls: type[FilterSet],
     owner_definition: DjangoTypeDefinition | None = None,
 ) -> list[tuple[str, object, dict[str, object]]]:
     """Return per-field input triples for a filterset's top-level GraphQL input.
 
-    Walks ``filterset_cls.get_filters()`` (Layer-4 expansion), groups
-    entries by their top-level GraphQL field name, and emits one entry
-    per group: a forward-reference ``Annotated[...]`` for
-    ``RelatedFilter`` boundaries OR a per-field operator-bag dataclass
-    for leaf paths. Populates ``_field_specs`` for the runtime
-    normalizer.
+    Emits one entry per head of ``filter_lookup_table`` (the grouped Layer-4
+    ``get_filters()`` expansion): a forward-reference ``Annotated[...]`` for
+    ``RelatedFilter`` boundaries OR a per-field operator-bag dataclass for leaf
+    paths, one bag attr per lookup the table holds. Populates ``_field_specs``
+    for the active-field walk and the permission gates.
     """
-    from .base import RelatedFilter as _RelatedFilter
-
-    all_filters = filterset_cls.get_filters()
     # The metaclass stores ``related_filters`` from
     # ``sets_mixins.py::collect_related_declarations`` (``RelatedFilter`` only).
-    related_filters: Mapping[str, _RelatedFilter] = getattr(
+    related_filters: Mapping[str, RelatedFilter] = getattr(
         filterset_cls,
         "related_filters",
         OrderedDict(),
     )
-    declared_filters = getattr(filterset_cls, "declared_filters", {})
-    grouped: OrderedDict[str, OrderedDict[str, Filter]] = OrderedDict()
-    for filter_name, filter_instance in all_filters.items():
-        # Skip expanded RelatedFilter entries (e.g., `self_link__self_link`
-        # under a self-referential filterset). The top-level
-        # `RelatedFilter` forward-ref already exposes the same target;
-        # the expanded duplicate would otherwise reach the leaf branch
-        # and trip the `ChoiceFilter` guard. The top-level
-        # `self_link` itself is handled below via the
-        # `related_filters` lookup.
-        if "__" in filter_name and isinstance(filter_instance, _RelatedFilter):
-            continue
-        # Top-level GraphQL field for ``<root>__<lookup>``-shaped keys is
-        # the part before the LAST ``__``; the per-lookup token is what
-        # follows. ``django-filter`` expansion produces flat keys like
-        # ``galaxy__name`` (no lookup suffix when only ``exact``) -- we
-        # still group them under ``galaxy_name`` flattened.
-        if filter_name in declared_filters:
-            # A declared filter's class attribute is also the form-field key.
-            # Keep the complete name even when it happens to end in its own
-            # lookup token (e.g. ``name__exact``). Treating that suffix as an
-            # auto-generated lookup collapses the input onto ``name`` and the
-            # normalizer then emits ``name`` instead of the declared form key
-            # ``name__exact``; django-filter silently ignores the value.
-            head, lookup_token = filter_name, filter_instance.lookup_expr
-        elif "__" in filter_name:
-            head, _, lookup_token = filter_name.rpartition("__")
-            # If the trailing token is not the filter's actual lookup expression,
-            # it belongs to the path.
-            if lookup_token != filter_instance.lookup_expr:
-                head, lookup_token = filter_name, filter_instance.lookup_expr
-        else:
-            head, lookup_token = filter_name, filter_instance.lookup_expr
-        grouped.setdefault(head, OrderedDict())[lookup_token] = filter_instance
+    lookup_table = filter_lookup_table(filterset_cls)
 
     # ``HIDE_FLAT_FILTERS`` (default ``False`` -- matches
     # ``django-graphene-filters``'s ``conf.py`` default) controls whether the
@@ -1049,7 +1152,7 @@ def _build_input_fields(
     # consumer's own semantics (the reader stays thin).
     hide_flat_filters = bool(hide_flat_filters_setting())
 
-    def _visible_entries() -> Iterator[tuple[str, OrderedDict[str, Filter]]]:
+    def _visible_entries() -> Iterator[tuple[str, Mapping[str, FormKeyedFilter]]]:
         """Yield the grouped entries minus the ``HIDE_FLAT_FILTERS`` expanded children.
 
         A flat relational traversal path (``category__name``,
@@ -1062,7 +1165,7 @@ def _build_input_fields(
         This pre-filter stays filter-family semantics, BEFORE the shared
         emission scaffold.
         """
-        for top_name, lookup_bag in grouped.items():
+        for top_name, lookup_bag in lookup_table.heads.items():
             if (
                 hide_flat_filters
                 and "__" in top_name
@@ -1073,7 +1176,7 @@ def _build_input_fields(
 
     def _related_target_of(
         top_name: str,
-        _lookup_bag: OrderedDict[str, Filter],
+        _lookup_bag: Mapping[str, FormKeyedFilter],
     ) -> tuple[bool, type[FilterSet] | None]:
         rel_filter = related_filters.get(top_name)
         if rel_filter is None:
@@ -1083,15 +1186,14 @@ def _build_input_fields(
     def _leaf_of(
         top_name: str,
         python_attr: str,
-        lookup_bag: OrderedDict[str, Filter],
+        lookup_bag: Mapping[str, FormKeyedFilter],
     ) -> tuple[object, str]:
         # Leaf path: build a per-field operator-bag input class. Every
         # operator-bag leaf is optional (``optional_field_kwargs``); an
         # omitted ``default`` would build a REQUIRED field.
-        sample_filter = next(iter(lookup_bag.values()))
         bag_name = filterset_cls.type_name_for(python_attr)
         bag_specs: list[tuple[str, object, dict[str, object]]] = []
-        for lookup, leaf_filter in lookup_bag.items():
+        for lookup, (_form_key, leaf_filter) in lookup_bag.items():
             lookup_python_attr, lookup_graphql_name = LOOKUP_NAME_MAP.get(lookup, (lookup, lookup))
             model_field = _model_field_for_filter(filterset_cls, leaf_filter)
             annotation = convert_filter_to_input_annotation(
@@ -1108,17 +1210,9 @@ def _build_input_fields(
                 ),
             )
         bag_class = build_input_class(bag_name, bag_specs)
-        # ``django_source_path`` is the form-key prefix the normalizer emits
-        # into ``django-filter`` form data. For autogen filters whose form
-        # key derives from the field name (``name`` / ``name__icontains``)
-        # we use the filter's ``field_name``. For declared filters whose
-        # form key is the explicit class-attribute name (e.g.
-        # ``email_must_have_at_sign``) we use ``top_name`` so the
-        # downstream form receives the correct key.
-        django_source_path = (
-            top_name if top_name in declared_filters else _bound_field_name(sample_filter)
-        )
-        return bag_class | None, django_source_path
+        # The ``FieldSpec`` source path is the head's permission gate path;
+        # the form keys the normalizer emits come from the lookup table.
+        return bag_class | None, lookup_table.gate_paths[top_name]
 
     # The per-field emission scaffold (python-attr flatten -> camel-case ->
     # optional kwargs -> related lazy-ref vs leaf -> triple + ``FieldSpec``) is

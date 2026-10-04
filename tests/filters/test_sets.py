@@ -15,7 +15,9 @@ response cannot show.
 
 from __future__ import annotations
 
+import copy
 import datetime
+import pickle
 import uuid
 from collections import OrderedDict
 from typing import Any, NamedTuple
@@ -26,7 +28,7 @@ import strawberry
 from apps.kanban import filters as kanban_filters
 from apps.kanban import models as kanban_models
 from apps.library import models as library_models
-from apps.library.filters import BookFilter
+from apps.library.filters import BookFilter, LoanFilter, PatronFilter
 from apps.products.models import Category, Item
 from apps.scalars import models as scalar_models
 from django.db.models import Q
@@ -62,7 +64,10 @@ from django_strawberry_framework.filters.base import (
     RelationPkMultipleFilter,
     _GlobalIDMultipleChoiceField,
 )
-from django_strawberry_framework.filters.inputs import convert_filter_to_input_annotation
+from django_strawberry_framework.filters.inputs import (
+    _field_specs,
+    convert_filter_to_input_annotation,
+)
 from django_strawberry_framework.filters.sets import (
     _ALL_FAMILY_PROFILES,
     _AUDITED_DJANGO_FILTER_RANGE,
@@ -73,7 +78,9 @@ from django_strawberry_framework.filters.sets import (
     _PUBLIC_PACKAGE_FILTER_DEFAULTS,
     _SEQUENCE_LOOKUP_PROFILE,
     CandidateFilterMetadata,
+    ChildProjection,
     FilterGenerationProvenance,
+    ProjectedChildFilter,
     _candidate_metadata_for,
     _family_profile_for,
     _lookups_for_field,
@@ -3518,11 +3525,10 @@ def test_normalize_input_skips_none_valued_attrs():
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
-            fields = {"name": ["exact"]}
+            fields = {"name": ["exact"], "description": ["icontains"]}
 
-    data = CategoryFilter._normalize_input({"name": None, "i_contains": "foo"})
-    assert "name" not in data
-    assert data == {"icontains": "foo"}
+    data = CategoryFilter._normalize_input({"name": None, "description": {"i_contains": "foo"}})
+    assert data == {"description__icontains": "foo"}
 
 
 def test_normalize_input_maps_in_python_attr_to_in_form_data_key():
@@ -3531,13 +3537,8 @@ def test_normalize_input_maps_in_python_attr_to_in_form_data_key():
             model = Category
             fields = {"name": ["in"]}
 
-    data = CategoryFilter._normalize_input(
-        {
-            "in_": [1, 2, 3],
-        },
-    )
-    assert "in" in data
-    assert data["in"] == [1, 2, 3]
+    data = CategoryFilter._normalize_input({"name": {"in_": ["a", "b"]}})
+    assert data == {"name__in": ["a", "b"]}
 
 
 def test_normalize_input_maps_logic_keys_to_short_form():
@@ -4714,7 +4715,7 @@ def test_range_patch_dict_values_still_merge_positional_keys():
     }
     # The operator-bag branch merges the same patch through the guard.
     data = PatronFilter._normalize_input(
-        {"lifetime_fines_cents": _NameBag(range={"start": 1, "end": 5})},
+        {"lifetime_fines_cents_range": _NameBag(range={"start": 1, "end": 5})},
     )
     assert data == {"lifetime_fines_cents__range_0": 1, "lifetime_fines_cents__range_1": 5}
 
@@ -5197,8 +5198,8 @@ def test_derive_related_visibility_querysets_async_scopes_active_branch():
     assert result["shelves"].model is library_models.Shelf
 
 
-def test_normalize_input_operator_bag_passes_unmatched_lookup_through():
-    """An operator-bag lookup with no backing filter is written verbatim."""
+def test_normalize_input_operator_bag_rejects_a_lookup_the_field_lacks():
+    """An operator-bag lookup with no backing filter raises instead of applying nothing."""
     import dataclasses
 
     @dataclasses.dataclass
@@ -5210,10 +5211,13 @@ def test_normalize_input_operator_bag_passes_unmatched_lookup_through():
             model = Category
             fields = {"name": ["exact"]}
 
-    # ``gt`` is not a declared lookup for ``name`` -> no filter instance ->
-    # the value lands under the raw ``name__gt`` form key.
-    data = CategoryFilter._normalize_input({"name": _NameBag(gt=5)})
-    assert data == {"name__gt": 5}
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter._normalize_input({"name": _NameBag(gt=5)})
+    assert str(excinfo.value) == (
+        "FilterSet test_normalize_input_operator_bag_rejects_a_lookup_the_field_lacks."
+        "<locals>.CategoryFilter: filter input field 'name' has no 'gt' lookup "
+        "(lookups: ['exact']); it would apply nothing."
+    )
 
 
 @pytest.mark.django_db
@@ -5249,8 +5253,10 @@ def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
             model = library_models.Patron
             fields = []
 
+    # A declared filter is its own head, so its input field is the flattened
+    # declared name and its form key the declared name.
     data = PatronFilter._normalize_input(
-        {"lifetime_fines_cents": _FinesBag(range={"start": 1, "end": 5})},
+        {"lifetime_fines_cents_range": _FinesBag(range={"start": 1, "end": 5})},
     )
     # The dict-valued normalization result is merged key-by-key.
     assert data == {"lifetime_fines_cents__range_0": 1, "lifetime_fines_cents__range_1": 5}
@@ -5258,19 +5264,14 @@ def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
 
 @pytest.mark.django_db
 def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key():
-    """An ``exact`` operator-bag lookup resolves a filter declared under ``<field>__exact``.
+    """A filter declared under ``<field>__exact`` normalizes to that literal form key.
 
-    ``exact`` is the only lookup whose form key (the bare ``base_path``) can
-    differ from its ``<base_path>__exact`` suffixed key, so it is the one case
-    where ``_normalize_input`` probes a second key. ``django-filter`` strips the
-    ``__exact`` suffix from *generated* exact filters (they register under the
-    bare field name), but a filter declared explicitly under the
-    ``<field>__exact`` attribute name is merged into ``get_filters()`` under that
-    literal key (``BaseFilterSet.get_filters``'s trailing
-    ``filters.update(cls.declared_filters)``). With no bare-``name`` autogen
-    filter (``Meta.fields = []``), ``all_filters`` carries only ``name__exact``,
-    so the bare-key probe misses and the suffixed-key fallback must resolve the
-    declared ``CharFilter`` -- the genuine two-key-differ path.
+    ``django-filter`` strips the ``__exact`` suffix from *generated* exact
+    filters (they register under the bare field name), but a filter declared
+    explicitly under the ``<field>__exact`` attribute name is merged into
+    ``get_filters()`` under that literal key (``BaseFilterSet.get_filters``'s
+    trailing ``filters.update(cls.declared_filters)``). A declared filter is its
+    own head, so it is the ``name_exact`` input field and binds ``name__exact``.
     """
     import dataclasses
 
@@ -5288,12 +5289,7 @@ def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key():
             fields = []
 
     assert list(WeirdCategoryFilter.get_filters()) == ["name__exact"]
-    # ``base_path`` resolves to the bare ``name`` (from the field python attr),
-    # ``form_key`` starts as bare ``name`` (exact), ``suffixed_key`` is
-    # ``name__exact``; the bare probe misses, the suffixed probe resolves the
-    # declared filter and normalizes to the ``name__exact`` form-data key so
-    # the FilterSet form cleans and filters the attribute properly.
-    data = WeirdCategoryFilter._normalize_input({"name": _NameBag(exact="foo")})
+    data = WeirdCategoryFilter._normalize_input({"name_exact": _NameBag(exact="foo")})
     assert data == {"name__exact": "foo"}
 
     c1 = Category.objects.create(name="foo")
@@ -5316,6 +5312,291 @@ def test_normalize_input_top_level_range_filter_merges_positional_keys():
 
     data = FinesRangeFilter._normalize_input({"fines": {"start": 1, "end": 5}})
     assert data == {"fines_0": 1, "fines_1": 5}
+
+
+def _seed_dune_branches() -> None:
+    """Seed four branches whose names and cities overlap on ``dune``."""
+    for name, city in (
+        ("Dune", "x"),
+        ("Dune Messiah", "dune"),
+        ("Arrakis", "dune"),
+        ("dune", "y"),
+    ):
+        library_models.Branch.objects.create(name=name, city=city)
+
+
+def _assert_rows_match_oracle(
+    filterset_cls: type[FilterSet],
+    filter_input: dict[str, object],
+    oracle: Q,
+) -> None:
+    """Assert ``apply_sync`` returns exactly the rows the ORM oracle selects."""
+    model = filterset_cls._meta.model
+    rows = filterset_cls.apply_sync(filter_input, model.objects.all(), _make_info())
+    assert sorted(rows.values_list("pk", flat=True)) == sorted(
+        model.objects.filter(oracle).values_list("pk", flat=True),
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("bag", "form_data", "oracle"),
+    [
+        pytest.param(
+            {"i_contains": "dune"},
+            {"name__icontains": "dune"},
+            Q(name__icontains="dune"),
+            id="generated-lookup-alone",
+        ),
+        pytest.param(
+            {"i_exact": "dune"},
+            {"name": "dune"},
+            Q(name__iexact="dune"),
+            id="declared-lookup-alone",
+        ),
+        pytest.param(
+            {"i_exact": "dune", "i_contains": "messiah"},
+            {"name": "dune", "name__icontains": "messiah"},
+            Q(name__iexact="dune") & Q(name__icontains="messiah"),
+            id="both-lookups-and",
+        ),
+        pytest.param(
+            {"i_exact": "dune messiah", "i_contains": "dune"},
+            {"name": "dune messiah", "name__icontains": "dune"},
+            Q(name__iexact="dune messiah") & Q(name__icontains="dune"),
+            id="both-lookups-matching-rows",
+        ),
+    ],
+)
+def test_normalize_input_overlap_head_binds_each_lookup_to_its_own_filter(
+    bag: dict[str, object],
+    form_data: dict[str, object],
+    oracle: Q,
+):
+    """A head both declared and generated binds every bag lookup to its own form key.
+
+    ``name`` is the declared ``iexact`` filter AND the head of the generated
+    ``name__icontains``. Each lookup normalizes to its own ``get_filters()`` name,
+    so both lookups together AND two predicates, matching the ORM oracle.
+    """
+    _seed_dune_branches()
+
+    class OverlapBranchFilter(FilterSet):
+        name = CharFilter(lookup_expr="iexact")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["icontains"]}
+
+    assert OverlapBranchFilter._normalize_input({"name": bag}) == form_data
+    _assert_rows_match_oracle(OverlapBranchFilter, {"name": bag}, oracle)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("bag", "form_data", "oracle"),
+    [
+        pytest.param({"exact": "dune"}, {"name": "dune"}, Q(city="dune"), id="declared-exact"),
+        pytest.param(
+            {"i_contains": "dune"},
+            {"name__icontains": "dune"},
+            Q(name__icontains="dune"),
+            id="generated-icontains",
+        ),
+    ],
+)
+def test_normalize_input_declared_head_with_its_own_field_name(
+    bag: dict[str, object],
+    form_data: dict[str, object],
+    oracle: Q,
+):
+    """A declared head over another column keeps its lookup apart from the generated one."""
+    _seed_dune_branches()
+
+    class CityNameBranchFilter(FilterSet):
+        name = CharFilter(field_name="city")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["icontains"]}
+
+    assert CityNameBranchFilter._normalize_input({"name": bag}) == form_data
+    _assert_rows_match_oracle(CityNameBranchFilter, {"name": bag}, oracle)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("lookup", ["i_exact", "in_"])
+def test_normalize_input_declared_fk_head_keeps_the_generated_in_lookup(lookup: str):
+    """A declared head over a relation column keeps the generated ``__in`` lookup's own key."""
+    alpha = library_models.Branch.objects.create(name="Alpha")
+    beta = library_models.Branch.objects.create(name="Beta")
+    library_models.Shelf.objects.create(code="A1", branch=alpha)
+    library_models.Shelf.objects.create(code="B1", branch=beta)
+
+    class BranchNameShelfFilter(FilterSet):
+        branch = CharFilter(field_name="branch__name", lookup_expr="iexact")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"branch": ["exact", "in"]}
+
+    value, form_data, oracle = {
+        "i_exact": ("alpha", {"branch": "alpha"}, Q(branch__name__iexact="alpha")),
+        "in_": ([beta.pk], {"branch__in": [beta.pk]}, Q(branch__in=[beta.pk])),
+    }[lookup]
+    assert BranchNameShelfFilter._normalize_input({"branch": {lookup: value}}) == form_data
+    _assert_rows_match_oracle(BranchNameShelfFilter, {"branch": {lookup: value}}, oracle)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "form_data", "oracle"),
+    [
+        pytest.param(
+            {"branch_title": {"i_contains": "lph"}},
+            {"branch__title": "lph"},
+            Q(branch__name__icontains="lph"),
+            id="declared-child-icontains",
+        ),
+        pytest.param(
+            {"branch_name_exact": {"exact": "Alpha"}},
+            {"branch__name__exact": "Alpha"},
+            Q(branch__name="Alpha"),
+            id="declared-child-named-like-a-lookup",
+        ),
+        pytest.param(
+            {"branch_name": {"exact": "Beta"}},
+            {"branch__name": "Beta"},
+            Q(branch__name="Beta"),
+            id="generated-child-exact",
+        ),
+    ],
+)
+def test_normalize_input_flat_expanded_children_bind_their_expanded_form_keys(
+    filter_input: dict[str, object],
+    form_data: dict[str, object],
+    oracle: Q,
+):
+    """Each flat ``RelatedFilter`` expansion binds its own expanded ``get_filters()`` name."""
+    alpha = library_models.Branch.objects.create(name="Alpha")
+    beta = library_models.Branch.objects.create(name="Beta")
+    library_models.Shelf.objects.create(code="A1", branch=alpha)
+    library_models.Shelf.objects.create(code="B1", branch=beta)
+
+    class ChildBranchFilter(FilterSet):
+        title = CharFilter(field_name="name", lookup_expr="icontains")
+        name__exact = CharFilter(field_name="name", lookup_expr="exact")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class ParentShelfFilter(FilterSet):
+        branch = RelatedFilter(ChildBranchFilter, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = []
+
+    assert ParentShelfFilter._normalize_input(filter_input) == form_data
+    _assert_rows_match_oracle(ParentShelfFilter, filter_input, oracle)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "form_data"),
+    [
+        pytest.param(
+            {"branch__name": {"i_contains": "lph"}},
+            {"branch__name__icontains": "lph"},
+            id="head-spelling",
+        ),
+        pytest.param(
+            {"branch_name": {"i_contains": "lph"}},
+            {"branch__name__icontains": "lph"},
+            id="input-attr-spelling",
+        ),
+        pytest.param(
+            {"branch__name": "lph"},
+            {"branch__name__icontains": "lph"},
+            id="bare-value-takes-the-only-lookup",
+        ),
+        pytest.param({"code": "A1"}, {"code": "A1"}, id="bare-value-takes-exact"),
+    ],
+)
+def test_normalize_input_direct_mapping_without_a_built_input_class(
+    filter_input: dict[str, object],
+    form_data: dict[str, object],
+):
+    """A hand-built mapping on a never-built filter set reads the same lookup table."""
+
+    class DirectShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"branch__name": ["icontains"], "code": ["exact", "icontains"]}
+
+    assert DirectShelfFilter._normalize_input(filter_input) == form_data
+    assert not any(owner is DirectShelfFilter for owner, _attr in _field_specs)
+
+
+@pytest.mark.parametrize(
+    ("filter_input", "message"),
+    [
+        pytest.param(
+            {"nope": "x"},
+            "'nope' is not a filter input field; it would apply nothing.",
+            id="unknown-field",
+        ),
+        pytest.param(
+            {"name": "x"},
+            "filter input field 'name' has no exact lookup to take a bare value (lookups: "
+            "['i_contains', 'i_starts_with']); pass an operator bag.",
+            id="bare-value-without-exact",
+        ),
+        pytest.param(
+            {"name": {"gt": "x"}},
+            "filter input field 'name' has no 'gt' lookup (lookups: ['i_contains', "
+            "'i_starts_with']); it would apply nothing.",
+            id="unknown-lookup",
+        ),
+    ],
+)
+def test_normalize_input_rejects_what_the_lookup_table_does_not_hold(
+    filter_input: dict[str, object],
+    message: str,
+):
+    """A field or lookup with no filter behind it raises instead of applying nothing."""
+
+    class TwoLookupCategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["icontains", "istartswith"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        TwoLookupCategoryFilter._normalize_input(filter_input)
+    assert str(excinfo.value) == (
+        "FilterSet test_normalize_input_rejects_what_the_lookup_table_does_not_hold."
+        f"<locals>.TwoLookupCategoryFilter: {message}"
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        pytest.param({"nope": "x"}, id="top-level"),
+        pytest.param({"and_": [{"nope": "x"}]}, id="logic-arm"),
+    ],
+)
+def test_apply_sync_rejects_an_unknown_filter_field_at_every_depth(
+    filter_input: dict[str, object],
+):
+    """An unknown field raises wherever the mapping carries it, never applying nothing."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        BookFilter.apply_sync(filter_input, library_models.Book.objects.all(), _make_info())
+    assert str(excinfo.value) == (
+        "FilterSet BookFilter: 'nope' is not a filter input field; it would apply nothing."
+    )
 
 
 @pytest.mark.django_db
@@ -9188,3 +9469,435 @@ def test_unaudited_release_disables_routing_without_changing_results():
     assert list(unaudited_qs.values_list("pk", flat=True)) == list(
         audited_qs.values_list("pk", flat=True),
     )
+
+
+# ---------------------------------------------------------------------------
+# Owner-bound expanded leaves. ``_expand_related_filter`` rebinds a copy only
+# while the child filter's behavior is the filter object's own. A ``method=``
+# filter, every filter of a child that overrides ``__init__``, and an already
+# projected copy are expanded as ``ProjectedChildFilter``: the child filter run
+# inside a child filter set instance, projected back through the relation.
+# ---------------------------------------------------------------------------
+
+
+def _patron_child_with_method_string() -> type[FilterSet]:
+    class Child(FilterSet):
+        email = CharFilter(field_name="email", method="filter_email")
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"name": ["icontains"]}
+
+        def filter_email(
+            self,
+            queryset,
+            name,
+            value,
+        ):
+            return queryset.filter(email=value)
+
+    return Child
+
+
+def _patron_child_with_method_callable() -> type[FilterSet]:
+    class Child(FilterSet):
+        email = CharFilter(
+            field_name="email",
+            method=lambda queryset, name, value: queryset.filter(**{name: value}),
+        )
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"name": ["icontains"]}
+
+    return Child
+
+
+def _patron_child_with_init_override() -> type[FilterSet]:
+    class Child(FilterSet):
+        email = CharFilter(field_name="email")
+        loans = RelatedFilter(LoanFilter, field_name="loans")
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"name": ["icontains"]}
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    return Child
+
+
+def _patron_child_plain() -> type[FilterSet]:
+    class Child(FilterSet):
+        email = CharFilter(field_name="email")
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"name": ["icontains"]}
+
+    return Child
+
+
+class _OwnerBoundCase(NamedTuple):
+    """One child filter set shape, the leaf expanded under ``patron``, and the verdict."""
+
+    build_child: Any
+    leaf: str
+    projected: bool
+
+
+_OWNER_BOUND_CASES = {
+    "method_string": _OwnerBoundCase(_patron_child_with_method_string, "email", True),
+    "method_callable": _OwnerBoundCase(_patron_child_with_method_callable, "email", True),
+    "init_override_generated": _OwnerBoundCase(
+        _patron_child_with_init_override,
+        "name__icontains",
+        True,
+    ),
+    "init_override_declared": _OwnerBoundCase(_patron_child_with_init_override, "email", True),
+    "init_override_related_branch": _OwnerBoundCase(
+        _patron_child_with_init_override,
+        "loans",
+        False,
+    ),
+    "declared_plain": _OwnerBoundCase(_patron_child_plain, "email", False),
+    "generated_plain": _OwnerBoundCase(_patron_child_plain, "name__icontains", False),
+}
+
+
+@pytest.mark.parametrize("label", list(_OWNER_BOUND_CASES))
+def test_expand_related_filter_projects_owner_bound_children_only(label: str):
+    """A child leaf is projected iff its behavior belongs to the child filter set.
+
+    A ``method=`` (string or callable) and every leaf of a child overriding
+    ``__init__`` are projected; a plain declared or generated leaf is a rebound
+    copy; a child ``RelatedFilter`` is a branch, never a flat leaf, so it is
+    copied as is even under an ``__init__`` override. Either way the copy keeps
+    the child filter's class and carries the rebound ORM path.
+    """
+    case = _OWNER_BOUND_CASES[label]
+    child = case.build_child()
+
+    class Parent(FilterSet):
+        patron = RelatedFilter(child, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = []
+
+    child_filter = child.get_filters()[case.leaf]
+    copy = Parent.get_filters()[f"patron__{case.leaf}"]
+    assert isinstance(copy, ProjectedChildFilter) is case.projected
+    assert isinstance(copy, type(child_filter))
+    assert copy.field_name == f"patron__{child_filter.field_name}"
+    if case.projected:
+        projected = copy
+        assert isinstance(projected, ProjectedChildFilter)
+        assert projected._projection == ChildProjection(child, case.leaf, "patron")
+        # The per-instance ``FilterMethod`` shadow a ``method=`` installs is the
+        # child's; the projection's own ``filter`` runs on the parent.
+        assert "filter" not in vars(projected)
+
+
+def test_customizes_instances_is_the_init_seam():
+    """``_customizes_instances`` is the ``__init__`` half of ``_is_generation_capable``."""
+    plain = _patron_child_plain()
+    customized = _patron_child_with_init_override()
+    assert plain._customizes_instances() is False
+    assert plain._is_generation_capable() is True
+    assert customized._customizes_instances() is True
+    assert customized._is_generation_capable() is False
+
+
+def _seed_loans_for_two_patrons():
+    """One book with two loans: patron ``p1@x`` (note alpha) and ``p2@x`` (note beta)."""
+    shelf = _library_shelf()
+    book = library_models.Book.objects.create(shelf=shelf, title="Two loans")
+    p1 = library_models.Patron.objects.create(name="p1", email="p1@x")
+    p2 = library_models.Patron.objects.create(name="p2", email="p2@x")
+    alpha = library_models.Loan.objects.create(book=book, patron=p1, note="alpha")
+    beta = library_models.Loan.objects.create(book=book, patron=p2, note="beta")
+    return book, alpha, beta
+
+
+def test_projected_leaf_form_field_is_the_child_instance_field():
+    """The flat copy validates with the field the child instance builds.
+
+    ``PatronFilter.__init__`` appends the ``missing_at_sign`` validator to its
+    ``email_must_have_at_sign`` form field. Bound, the flat
+    ``patron__email_must_have_at_sign`` on ``LoanFilter`` answers through that
+    field, under the flat form key; unbound (the class-level template the input
+    builder types), it answers the child's class-level field, which the
+    ``__init__`` never touched.
+    """
+    LoanFilter.get_filters()
+    bound = LoanFilter(
+        data={"patron__email_must_have_at_sign": "no-at"},
+        queryset=library_models.Loan.objects.all(),
+        request=HttpRequest(),
+    )
+    assert bound.form.is_valid() is False
+    errors = bound.form.errors.get_json_data()
+    assert [entry["code"] for entry in errors["patron__email_must_have_at_sign"]] == [
+        "missing_at_sign",
+    ]
+    child = bound._projection_child(PatronFilter)
+    assert (
+        bound.filters["patron__email_must_have_at_sign"].field
+        is child.filters["email_must_have_at_sign"].field
+    )
+    template = LoanFilter.base_filters["patron__email_must_have_at_sign"]
+    assert isinstance(template, ProjectedChildFilter)
+    assert template.field is PatronFilter.base_filters["email_must_have_at_sign"].field
+    assert "parent" not in vars(template)
+
+
+@pytest.mark.django_db
+def test_projected_leaf_filters_through_the_child_filterset():
+    """The child's ``method=`` runs on the child rows; the parent keeps the rows reaching a match.
+
+    The ORM oracle is the ``<relation>__in`` projection. A value django-filter
+    treats as empty (``""``) makes the child filter return its input unchanged,
+    so the parent is unconstrained too, never restricted to parents with a child.
+    """
+    LoanFilter.get_filters()
+    book, alpha, _beta = _seed_loans_for_two_patrons()
+    library_models.Loan.objects.create(
+        book=library_models.Book.objects.create(shelf=book.shelf, title="Unloaned"),
+        patron=library_models.Patron.objects.create(name="p3", email="p3@x"),
+        note="gamma",
+    )
+
+    def _rows(value):
+        return list(
+            LoanFilter(
+                data={"patron__email_must_have_at_sign": value},
+                queryset=library_models.Loan.objects.order_by("id"),
+                request=HttpRequest(),
+            )
+            .qs.order_by("id")
+            .values_list("pk", flat=True),
+        )
+
+    oracle = library_models.Loan.objects.filter(
+        patron__in=library_models.Patron.objects.filter(email="p1@x"),
+    )
+    assert _rows("p1@x") == [alpha.pk] == list(oracle.values_list("pk", flat=True))
+    assert _rows("") == list(
+        library_models.Loan.objects.order_by("id").values_list("pk", flat=True),
+    )
+
+
+@pytest.mark.django_db
+def test_projected_leaf_matches_nothing_when_the_child_filter_matches_nothing():
+    """A child filter narrowing to no row (not the identity skip) projects to no parent."""
+
+    class Child(FilterSet):
+        nobody = CharFilter(field_name="email", method="filter_nobody")
+
+        class Meta:
+            model = library_models.Patron
+            fields = []
+
+        def filter_nobody(
+            self,
+            queryset,
+            name,
+            value,
+        ):
+            return queryset.none()
+
+    class Parent(FilterSet):
+        patron = RelatedFilter(Child, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = []
+
+    Parent.get_filters()
+    _seed_loans_for_two_patrons()
+    rows = Parent(
+        data={"patron__nobody": "anything"},
+        queryset=library_models.Loan.objects.all(),
+        request=HttpRequest(),
+    ).qs
+    assert list(rows) == []
+
+
+@pytest.mark.django_db
+def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate():
+    """A projected copy expanded again is projected through the intermediate child.
+
+    ``Book -> loans -> Loan -> patron -> Patron.email (method)``: the grandparent's
+    ``loans__patron__email`` runs ``LoanFilter``'s projected ``patron__email`` inside
+    a ``LoanFilter`` instance, which runs the method inside a child instance. Each
+    flat leaf stays its own predicate: ``loans__patron__email`` and ``loans__note``
+    are satisfied by two different loans of the same book.
+    """
+    patron_child = _patron_child_with_method_string()
+
+    class LoanChild(FilterSet):
+        patron = RelatedFilter(patron_child, field_name="patron")
+
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    class BookParent(FilterSet):
+        loans = RelatedFilter(LoanChild, field_name="loans")
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+    leaf = BookParent.get_filters()["loans__patron__email"]
+    assert isinstance(leaf, ProjectedChildFilter)
+    assert leaf._projection == ChildProjection(LoanChild, "patron__email", "loans")
+    assert leaf.field_name == "loans__patron__email"
+
+    book, _alpha, _beta = _seed_loans_for_two_patrons()
+    library_models.Book.objects.create(shelf=book.shelf, title="Unloaned")
+
+    def _titles(data):
+        return list(
+            BookParent(
+                data=data,
+                queryset=library_models.Book.objects.all(),
+                request=HttpRequest(),
+            )
+            .qs.order_by("title")
+            .values_list("title", flat=True),
+        )
+
+    assert _titles({"loans__patron__email": "p1@x"}) == ["Two loans"]
+    assert _titles({"loans__patron__email": "nobody@x"}) == []
+    assert _titles({"loans__patron__email": "p1@x", "loans__note": "beta"}) == ["Two loans"]
+    # An empty value is django-filter's skip at every hop: the loan-less book stays.
+    assert _titles({"loans__patron__email": ""}) == ["Two loans", "Unloaned"]
+
+
+def test_projected_leaf_is_never_routable():
+    """A projected generated many-side leaf gets a candidate row that is never routed.
+
+    Its class is the projected subclass, which no audited family names, so it is
+    ineligible; its generating child is non-capable, so it is not routable either.
+    """
+
+    class LoanChild(FilterSet):
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["icontains"]}
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+    class BookParent(FilterSet):
+        loans = RelatedFilter(LoanChild, field_name="loans")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    leaf = BookParent.get_filters()["loans__note__icontains"]
+    assert isinstance(leaf, ProjectedChildFilter)
+    assert _family_profile_for(leaf) is None
+    snapshot = BookParent._expansion_snapshot()
+    assert snapshot is not None
+    row = snapshot.candidates["loans__note__icontains"]
+    assert row.provenance.origin == "framework_default"
+    assert row.provenance.generation_capable is False
+    assert row.eligible is False
+    assert row.routable is False
+
+
+def test_projected_leaf_child_runs_on_the_parents_database_with_its_request():
+    """One child instance per parent instance, built on first use, on the parent's alias.
+
+    Every projected leaf of one parent instance expanded from ``PatronFilter``
+    runs in the same child instance, which seeds the child model's rows on the
+    parent queryset's alias and carries the parent's request; another parent
+    instance builds its own.
+    """
+    LoanFilter.get_filters()
+    request = HttpRequest()
+    parent = LoanFilter(
+        data={},
+        queryset=library_models.Loan.objects.using("shard_b"),
+        request=request,
+    )
+    assert parent._projection_children is None
+    leaf = parent.filters["patron__email_must_have_at_sign"]
+    sibling = parent.filters["patron__name__icontains"]
+    assert isinstance(leaf, ProjectedChildFilter)
+    assert isinstance(sibling, ProjectedChildFilter)
+    child = leaf._child()
+    assert isinstance(child, PatronFilter)
+    assert child.queryset is not None
+    assert child.queryset.db == "shard_b"
+    assert child.queryset.model is library_models.Patron
+    assert child.request is request
+    assert sibling._child() is child
+    assert parent._projection_children == {PatronFilter: child}
+    other = LoanFilter(data={}, queryset=library_models.Loan.objects.all(), request=request)
+    assert other.filters["patron__email_must_have_at_sign"]._child() is not child
+
+
+@pytest.mark.parametrize("how", ["pickle", "deepcopy"])
+def test_projected_leaf_copies_keep_their_projected_class_and_projection(how: str):
+    """A projected template survives ``pickle`` and ``deepcopy`` as the same class.
+
+    The projected class is built at runtime, so pickle cannot import it by name;
+    the round trip rebuilds it from the child filter's own class.
+    """
+    template = LoanFilter.get_filters()["patron__email_must_have_at_sign"]
+    assert isinstance(template, ProjectedChildFilter)
+    restored = pickle.loads(pickle.dumps(template)) if how == "pickle" else copy.deepcopy(template)
+    assert type(restored) is type(template)
+    assert restored._projection == template._projection
+    assert restored.method == "filter_email_must_have_at_sign"
+    assert "filter" not in vars(restored)
+
+
+def test_flat_expanded_declared_child_fires_the_gates_its_nested_twin_fires():
+    """``shelf__home_branch`` reaches the child's ``check_home_branch_permission`` flat as nested."""
+    fired: list[str] = []
+
+    class ChildShelfFilter(FilterSet):
+        home_branch = ModelChoiceFilter(
+            field_name="branch",
+            queryset=library_models.Branch.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+        def check_home_branch_permission(self, request):
+            fired.append("child.home_branch")
+
+        def check_branch_permission(self, request):
+            fired.append("child.branch")
+
+    class ParentBookFilter(FilterSet):
+        shelf = RelatedFilter(ChildShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+        def check_shelf_permission(self, request):
+            fired.append("parent.shelf")
+
+        def check_shelf_home_branch_permission(self, request):
+            fired.append("parent.shelf_home_branch")
+
+        def check_shelf_branch_permission(self, request):
+            fired.append("parent.shelf_branch")
+
+    ParentBookFilter.get_filters()
+    ParentBookFilter._run_permission_checks({"shelf__home_branch": 1}, HttpRequest())
+    assert sorted(fired) == ["child.home_branch", "parent.shelf", "parent.shelf_home_branch"]
+    fired.clear()
+    ParentBookFilter._run_permission_checks({"shelf": {"home_branch": 1}}, HttpRequest())
+    assert sorted(fired) == ["child.home_branch", "parent.shelf"]

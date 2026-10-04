@@ -80,14 +80,22 @@ def test_permission_family_config_stays_on_each_set_class():
 
 
 def test_permission_fallback_path_is_the_family_remap_hook():
-    """FilterSet remaps ``i_contains`` to ``icontains``; OrderSet does not.
+    """FilterSet gates a spec-less key on its head's gate path; OrderSet on the key itself.
 
-    The filter-side consumer consequence (anonymous ``iContains`` is gated) is
-    ``test_products_api.py::test_products_categories_name_permission_fires_for_non_exact_lookup``.
-    Order fields have no lookup suffix, so the OrderSet identity remap has no
-    GraphQL spelling.
+    ``BookFilter``'s flat ``shelf__home_branch`` is an expansion of the declared
+    ``ShelfFilter.home_branch`` (``field_name="branch"``) and keeps its declared
+    name as its gate path, so the flat spelling reaches ``check_home_branch_permission``
+    like the nested one; the generated ``shelf__code`` gates on its ORM path. A direct
+    mapping spelling the head (``shelf__home_branch``) or its input attr
+    (``shelf_home_branch``) gates on the same path. A key naming no head gates on itself.
     """
-    assert FilterSet._permission_fallback_path("i_contains") == "icontains"
+    from apps.library.filters import BookFilter
+
+    assert BookFilter._permission_fallback_path("shelf__home_branch") == "shelf__home_branch"
+    assert BookFilter._permission_fallback_path("shelf_home_branch") == "shelf__home_branch"
+    assert BookFilter._permission_fallback_path("shelf_code") == "shelf__code"
+    assert BookFilter._permission_fallback_path("i_contains") == "i_contains"
+    assert FilterSet._permission_fallback_path("i_contains") == "i_contains"
     assert OrderSet._permission_fallback_path("i_contains") == "i_contains"
 
 

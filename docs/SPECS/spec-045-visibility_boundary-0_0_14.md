@@ -329,7 +329,12 @@ The optimizer walker's own generated children seal under
 `_PREFETCH_CHILD_POLICY` on the nested-connection path (whose planner classifies
 a sliced child and degrades) and under `_LIST_RELATION_CHILD_POLICY` on a plain
 list relation, which also sets `require_shared_alias` but keeps the slice
-rejection.
+rejection. A consumer `OptimizerHint.prefetch(Prefetch(...))` on a relation whose
+target overrides `get_queryset` takes the plain-list path with the hinted
+queryset as the seed the hook narrows
+(`django_strawberry_framework/optimizer/walker.py::_scoped_hint_prefetch`): the
+seal adopts the seed's explicit `.using(...)` as the alias the hook must keep,
+serves a combined seed as its primary-key set and refuses a sliced one.
 
 **Enforcing symbols.**
 [`utils/querysets.py::_rebuilt_prefetch_or_defect`][querysets];

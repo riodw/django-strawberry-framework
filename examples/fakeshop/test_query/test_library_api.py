@@ -812,6 +812,77 @@ def test_library_force_select_book_hint_still_prefetches_when_book_is_hooked(
     assert "circulation_status" in hidden_book_sql[0].lower()
 
 
+@pytest.mark.django_db
+def test_library_prefetch_object_book_hint_is_scoped_by_book_type_get_queryset(
+    project_schema_override: Callable[[], None],
+):
+    """An ``OptimizerHint.prefetch(Prefetch(...))`` on ``Loan.book`` still passes ``BookType.get_queryset``.
+
+    ``FAKESHOP_TEST_LOAN_PREFETCH_OBJECT_BOOK`` replaces the shipped hint with a
+    consumer ``Prefetch("book", queryset=Book.objects.all())``, which does not
+    repeat the hook's repair-status filter. A hint chooses how the relation is
+    fetched, never which rows the target type admits: the hinted queryset is the
+    seed the hook narrows, so the book query carries the hook's filter and a loan
+    over a repair-status book resolves to no book. The wire shape of that hidden
+    non-null target matches the ``select_related()`` sibling
+    (``test_library_force_select_book_hint_still_prefetches_when_book_is_hooked``):
+    the masked non-null error at that loan's ``book`` path with ``data`` null, and
+    the hidden title never appears in the response body.
+    """
+    document = """
+    query {
+      allLibraryLoans {
+        book { title }
+      }
+    }
+    """
+    with override_settings(FAKESHOP_TEST_LOAN_PREFETCH_OBJECT_BOOK=True):
+        project_schema_override()
+        _seed_library_graph()
+
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(document)
+
+        repair_book = models.Book.objects.create(
+            title="Dune",
+            circulation_status=models.Book.CirculationStatus.REPAIR,
+            shelf=models.Shelf.objects.get(code="A-1"),
+        )
+        models.Loan.objects.create(
+            book=repair_book,
+            patron=models.Patron.objects.get(name="Ada"),
+            note="second checkout",
+        )
+
+        with CaptureQueriesContext(connection) as hidden_captured:
+            hidden_response = _post_graphql(document)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryLoans": [
+                {"book": {"title": "Kindred"}},
+            ],
+        },
+    }
+    book_sql = _sql_from_table(captured, "library_book")
+    assert len(book_sql) == 1, book_sql
+    # The hinted queryset selects every column, so only the WHERE clause can
+    # carry the hook's filter.
+    assert "circulation_status" in book_sql[0].lower().split(" where ", 1)[1]
+
+    assert hidden_response.status_code == 200
+    hidden_payload = hidden_response.json()
+    assert hidden_payload["data"] is None, hidden_payload
+    assert [error["path"] for error in hidden_payload["errors"]] == [
+        ["allLibraryLoans", 1, "book"],
+    ]
+    assert "Dune" not in hidden_response.content.decode()
+    hidden_book_sql = _sql_from_table(hidden_captured, "library_book")
+    assert len(hidden_book_sql) == 1, hidden_book_sql
+    assert "circulation_status" in hidden_book_sql[0].lower().split(" where ", 1)[1]
+
+
 #: One document posted twice by the plan-cache row, so the two requests differ
 #: in nothing but their ordinal. Neither ``MembershipCardType`` nor its
 #: ``patron`` target declares a ``get_queryset`` hook, so the plan this document

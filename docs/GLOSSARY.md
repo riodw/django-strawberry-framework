@@ -1456,7 +1456,7 @@ Supported modes:
 - `OptimizerHint.SKIP` — exclude a relation from automatic planning (the optimizer leaves it alone).
 - `OptimizerHint.select_related()` — force `select_related`.
 - `OptimizerHint.prefetch_related()` — force `prefetch_related`.
-- `OptimizerHint.prefetch(Prefetch(...))` — use a consumer-provided `Prefetch` object and stop walking below that relation. A combined `Prefetch` queryset is served as the set of primary keys it selects; one that set cannot represent raises `ConfigurationError` naming `OptimizerHint.prefetch(obj)` on `Type.field`.
+- `OptimizerHint.prefetch(Prefetch(...))` — use a consumer-provided `Prefetch` object and stop walking below that relation. A hint chooses how the relation is fetched, never which rows it admits: when the target type overrides `get_queryset`, the hook narrows the hinted queryset exactly as it narrows a generated one, keeping the queryset's explicit `.using(...)` and refusing a sliced one. A combined `Prefetch` queryset is served as the set of primary keys it selects; one that set cannot represent raises `ConfigurationError` naming `OptimizerHint.prefetch(obj)` on `Type.field`.
 - `OptimizerHint.strategy(...)` — select the nested-connection fetch backend for one Relay connection field; the backends and their selection rules are documented under "Nested connection indexing" in `docs/README.md`.
 
 Validation: ``OptimizerHint(...)`` rejects conflicting flag combinations at

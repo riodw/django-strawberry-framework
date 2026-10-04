@@ -93,7 +93,7 @@ What this slice buys, and the API shape it rejected, are in the [rationale file]
 - `OptimizerHint.SKIP` — exclude this relation from the plan entirely (consumer manages it manually).
 - `OptimizerHint.select_related()` — force `select_related` regardless of cardinality.
 - `OptimizerHint.prefetch_related()` — force `prefetch_related` regardless of cardinality.
-- `OptimizerHint.prefetch(Prefetch(...))` — use this specific `Prefetch` object instead of the auto-generated one.
+- `OptimizerHint.prefetch(Prefetch(...))` — use this specific `Prefetch` object instead of the auto-generated one. When the target type overrides `get_queryset`, the hook narrows the hinted queryset exactly as it narrows the generated one (`django_strawberry_framework/optimizer/walker.py::_scoped_hint_prefetch`): a hint chooses how the relation is fetched, never which rows it admits.
 - `OptimizerHint.strategy(...)` — select the fetch backend for one nested Relay connection. The backends and their selection rules belong to the nested-connection fetch seam, documented under "Nested connection indexing" in `docs/README.md`; this slice owns only the hint that carries the override.
 
 `OptimizerHint` is a frozen dataclass in the optimizer subpackage (`optimizer/hints.py`), re-exported from the top-level `__init__.py`. The API surface is one import: `from django_strawberry_framework import OptimizerHint`.

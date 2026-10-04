@@ -553,8 +553,9 @@ def _build_child_queryset(
     *,
     target_model: type[models.Model] | None = None,
     policy: _SealPolicy[models.Model] = _LIST_RELATION_CHILD_POLICY,
+    seed: QuerySet[models.Model] | None = None,
 ) -> QuerySet[models.Model]:
-    """Build the queryset used inside a generated ``Prefetch`` object.
+    """Build the queryset used inside a generated or hinted ``Prefetch`` object.
 
     ``policy`` is the seal the child's ``get_queryset`` return is held to. It
     defaults to ``_LIST_RELATION_CHILD_POLICY``, the plain-list-relation seal;
@@ -581,16 +582,27 @@ def _build_child_queryset(
     ``SyncMisuseError`` here (the optimizer walker is sync; a coroutine would
     otherwise leak into ``OptimizationPlan.apply``) - consistent with the
     connection field's documented "nested async ``get_queryset`` ->
-    ``relation_shapes = list``" recourse. The base queryset stays the related
+    ``relation_shapes = list``" recourse. The base queryset is the related
     model's own ``_default_manager.all()`` (NOT ``initial_queryset(target_type)``
     - the prefetch child is keyed on ``field.related_model``) and carries no
     explicit ``.using(...)``. A plan walk is a read with no write pipeline in
     force, so nothing pins an alias ahead of that seed either: the child's
     effective alias entering the hook is ``None`` on this path, and the hook
     cannot pin one of its own.
+
+    ``seed`` replaces that base with the queryset of a consumer
+    ``OptimizerHint.prefetch(Prefetch(...))``: the hint chooses how the relation
+    is fetched, never which rows the target type admits, so the hook narrows the
+    consumer's queryset exactly as it narrows the generated base. The seal adopts
+    the seed's explicit ``.using(...)`` as the alias the hook must keep, and a
+    hinted plan is never cached, so a routed seed answers to that one request.
     """
     # Every caller plans only a relation whose related model resolved.
-    queryset = base_queryset(cast("type[models.Model]", field.related_model))
+    queryset = (
+        seed
+        if seed is not None
+        else base_queryset(cast("type[models.Model]", field.related_model))
+    )
     if has_custom_qs:
         # The slice axis is the one axis the two child policies differ on, and it
         # differs because the paths do.
@@ -1324,10 +1336,14 @@ def _apply_hint(
         # prefetch_related resolves via getattr); the consumer-facing
         # lookup vocabulary in the match below stays ``django_name``.
         rebased_prefetch = _prefetch_hint_for_path(
-            _hint_prefetch_over_pk_set(
+            _scoped_hint_prefetch(
                 hint.prefetch_obj,
+                django_field=django_field,
                 django_name=django_name,
                 type_name=type_cls.__name__,
+                target_type=target_type,
+                target_definition=target_definition,
+                info=info,
             ),
             django_name=django_name,
             full_path=f"{prefix}{instance_accessor(django_field)}",
@@ -1404,6 +1420,40 @@ def _apply_hint(
         )
         return True
     return False
+
+
+def _scoped_hint_prefetch(
+    prefetch: _PrefetchAny,
+    *,
+    django_field: FieldMeta,
+    django_name: str,
+    type_name: str,
+    target_type: type[DjangoType] | None,
+    target_definition: DjangoTypeDefinition | None,
+    info: GraphQLResolveInfo | None,
+) -> _PrefetchAny:
+    """Return the consumer's hinted ``prefetch`` with its rows held to the target's visibility.
+
+    A target whose type overrides ``get_queryset`` gets its hook over the hinted
+    queryset through the same sealed child builder a generated ``Prefetch`` uses
+    (``_build_child_queryset``), so the relation's resolver keys, which the hint
+    records as optimizer-planned, are as scoped as a planned relation's. That
+    seal also serves a combined hinted queryset as its primary-key set and fails
+    a sliced one closed, because the hook narrows what it is handed. Any other
+    target keeps the hinted queryset, rewritten only when it is combined
+    (``_hint_prefetch_over_pk_set``).
+    """
+    if not _target_has_custom_get_queryset(target_type, target_definition):
+        return _hint_prefetch_over_pk_set(prefetch, django_name=django_name, type_name=type_name)
+    scoped = _build_child_queryset(
+        django_field,
+        target_type,
+        info,
+        has_custom_qs=True,
+        target_model=getattr(target_definition, "model", None),
+        seed=prefetch.queryset,
+    )
+    return Prefetch(prefetch.prefetch_through, queryset=scoped, to_attr=prefetch.to_attr)
 
 
 def _hint_prefetch_over_pk_set(

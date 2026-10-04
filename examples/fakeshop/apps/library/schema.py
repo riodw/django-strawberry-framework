@@ -157,6 +157,10 @@ class LoanType(DjangoType):
       ``prefetch_related()`` book hint with ``select_related()`` so live SQL can
       pin that ``BookType.get_queryset`` still forces a Prefetch. When absent,
       the book hint stays ``prefetch_related()``.
+    - ``FAKESHOP_TEST_LOAN_PREFETCH_OBJECT_BOOK``: replace the book hint with
+      ``OptimizerHint.prefetch(Prefetch("book", queryset=Book.objects.all()))``, a
+      consumer queryset that does not repeat ``BookType.get_queryset``'s filter, so
+      live SQL can pin that the hook still scopes the hinted rows.
     """
 
     class Meta:
@@ -172,6 +176,8 @@ class LoanType(DjangoType):
         _book_hint = (
             OptimizerHint.select_related()
             if getattr(settings, "FAKESHOP_TEST_LOAN_FORCE_SELECT_BOOK", False)
+            else OptimizerHint.prefetch(Prefetch("book", queryset=models.Book.objects.all()))
+            if getattr(settings, "FAKESHOP_TEST_LOAN_PREFETCH_OBJECT_BOOK", False)
             else OptimizerHint.prefetch_related()
         )
         optimizer_hints = {"book": _book_hint, "patron": OptimizerHint(skip=True)}

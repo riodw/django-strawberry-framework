@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, ClassVar, Literal, NoReturn, SupportsIndex, Ty
 
 import django_filters
 from django.db import models
+from django.db.models.constants import LOOKUP_SEP
 from django.db.models.fields.related import ManyToManyRel, ManyToOneRel, OneToOneRel
 from django_filters import (
     BaseInFilter,
@@ -77,6 +78,7 @@ from ..utils.input_values import (
     raise_set_traversal_depth_exceeded,
 )
 from ..utils.inputs import FILTERSET_FIELDS_ALIAS, promote_set_meta_fields
+from ..utils.permissions import DeclaredRelationHop, walk_declared_relation_path
 from ..utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
@@ -913,12 +915,16 @@ class CandidateFilterMetadata:
         ``__init__``);
       * ``provenance.generation_capable`` -- the class that actually GENERATED this
         instance was capable, which matters for a leaf a capable parent expanded out
-        of a NON-capable ``RelatedFilter`` child; and
+        of a NON-capable ``RelatedFilter`` child;
       * the installed ``django-filter`` release is inside the audited optimizer range
-        (``_DJANGO_FILTER_OPTIMIZER_AUDITED``).
+        (``_DJANGO_FILTER_OPTIMIZER_AUDITED``); and
+      * the leaf walks no declared ``RelatedFilter`` (``ExpansionSnapshot.walks``):
+        a walked leaf runs as the nested branch it spells
+        (``FilterSet._apply_walked_leaf``), never as a correlated ``EXISTS``.
 
-      A row with ``routable is False`` is never routed: its filter runs
-      django-filter's ORIGINAL outer invocation, unchanged. That is the whole
+      A row with ``routable is False`` is never routed: a walked leaf runs as its
+      nested branch, any other runs django-filter's ORIGINAL outer invocation,
+      unchanged. That is the whole
       fail-closed contract -- every SUPPORTED consumer customization seam (a declared
       filter, a custom subclass, ``method=``, ``Meta.filter_overrides``, a shadowed
       ``FILTER_DEFAULTS``, an overridden generation hook, an ``__init__`` that
@@ -939,6 +945,32 @@ class CandidateFilterMetadata:
 
 
 @dataclass(frozen=True)
+class FlatLeafWalk:
+    """The declared ``RelatedFilter`` branches a flat leaf walks, and what runs at their end.
+
+    A flat leaf whose ORM path crosses a declared branch (``shelf__topic``
+    through ``BookFilter.shelf``) is the nested branch spelled flat, and it runs
+    as one (``FilterSet._apply_walked_leaf``): against the deepest target's
+    visible rows, then folded outward through each hop's ``_constrain_by_branch``.
+
+    - ``hops`` -- the walked branches, outermost first.
+    - ``terminal`` -- the leaf's path relative to the deepest target
+      (``topic``), the ``field_name`` a copy of the leaf is rebound to; empty
+      when an owner-bound leaf runs as is in its owner.
+    - ``owner_name`` / ``owner_depth`` -- for a ``ProjectedChildFilter``, the
+      child filter it projects: its name in the filter set ``owner_depth`` hops
+      in, whose instance (``FilterSet._projection_child``) runs it. When that
+      filter walks declared branches of its own, they follow as further hops and
+      a copy of the owner instance's filter is rebound to ``terminal``.
+    """
+
+    hops: tuple[DeclaredRelationHop, ...]
+    terminal: str
+    owner_name: str | None = None
+    owner_depth: int = 0
+
+
+@dataclass(frozen=True)
 class ExpansionSnapshot:
     """One immutable snapshot owning BOTH the expanded filters and their metadata.
 
@@ -955,7 +987,11 @@ class ExpansionSnapshot:
       the read-only view so a snapshot holder cannot mutate the filter half.
     - ``candidates`` -- a read-only ``MappingProxyType`` of filter name ->
       ``CandidateFilterMetadata`` for EVERY framework-generated leaf (direct or
-      expanded). Names of declared / override / unstamped leaves are absent.
+      expanded). Names of declared / override / unstamped leaves are absent; a
+      name in ``walks`` is never ``routable``.
+    - ``walks`` -- a read-only ``MappingProxyType`` of filter name ->
+      ``FlatLeafWalk`` for every leaf whose ORM path walks a declared
+      ``RelatedFilter`` (``FilterSet._flat_leaf_walk``).
 
     The read-only mapping keeps a snapshot HOLDER from rewriting the published
     classification; it is not a claim that the filter objects themselves are frozen.
@@ -973,6 +1009,7 @@ class ExpansionSnapshot:
 
     filters: Mapping[str, Filter]
     candidates: Mapping[str, CandidateFilterMetadata]
+    walks: Mapping[str, FlatLeafWalk]
 
 
 def _candidate_metadata_for(
@@ -1170,16 +1207,16 @@ class FilterSetMetaclass(_FilterSetMetaclassBase):
 
 @dataclass(frozen=True)
 class ChildProjection:
-    """Where an owner-bound expanded leaf runs: the child filter set, its filter's name, the relation.
+    """Where an owner-bound expanded leaf runs: the child filter set, its filter's name, the branch.
 
-    ``relation`` is the ``RelatedFilter``'s ``field_name`` (the ORM path from the
-    parent model to the child model), the right-hand side of the
-    ``<relation>__in`` the projection restricts the parent by.
+    ``branch`` is the parent's declared ``RelatedFilter`` attribute the leaf was
+    expanded from (``patron``), the hop ``FilterSet._flat_leaf_walk`` folds the
+    child's matches back through.
     """
 
     filterset: type[FilterSet]
     name: str
-    relation: str
+    branch: str
 
 
 class ProjectedChildFilter(Filter):
@@ -1203,14 +1240,13 @@ class ProjectedChildFilter(Filter):
     the one a CHILD filter set instance builds for the child filter (one child
     instance per parent instance and child class, ``FilterSet._projection_child``;
     a child ``__init__`` customization and a request-aware callable ``queryset``
-    both apply), and ``filter`` runs the child filter inside that instance, over the
-    child model's rows on the parent's database, then keeps the parent rows
-    whose relation reaches a matching child row (``_restrict_to_related``, the
-    restriction the nested branch applies). Each flat leaf stays its own
-    predicate, as every flat leaf does: two owner-bound leaves may be satisfied
-    by different child rows. Like every flat leaf it runs in the parent's join
-    context; scoping the child by its type's ``get_queryset`` is the nested
-    branch's (spec-027 Decision 8 step 3).
+    both apply). It runs like every walked flat leaf
+    (``FilterSet._apply_walked_leaf``): the child filter runs inside a child
+    instance seeded with the deepest target type's visible rows, and the matches
+    fold back to the parent through each branch's restriction, so the leaf means
+    what its nested twin means. Each flat leaf stays its own predicate, as every
+    flat leaf does: two owner-bound leaves may be satisfied by different child
+    rows.
 
     Unbound (the class-level template the input builder types at schema build,
     before any parent instance exists), the form field is the child's own
@@ -1252,23 +1288,10 @@ class ProjectedChildFilter(Filter):
 
     @override
     def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
-        """Run the child filter over the child rows; keep the parents reaching a match.
-
-        A child filter that returns its input BY IDENTITY applied no constraint
-        (django-filter's empty-value skip, a ``FilterMethod`` short circuit), so
-        the parent is returned unchanged too; restricting it to parents with
-        ANY child row would turn "no constraint" into "has a child". Every
-        inactive leaf takes that path: ``_apply_flat_leaves`` runs each filter
-        in ``cleaned_data``, supplied or not.
-        """
-        child = self._child()
-        # ``BaseFilterSet.__init__`` defaults a ``None`` queryset to the model's
-        # manager, so an instance's queryset is never ``None`` (typeshed: optional).
-        child_base = cast("models.QuerySet[models.Model]", child.queryset)
-        child_rows = child.filters[self._projection.name].filter(child_base, value)
-        if child_rows is child_base:
-            return qs
-        return _restrict_to_related(qs, self._projection.relation, child_rows)
+        """Run this leaf the way its parent filter set runs every walked flat leaf."""
+        parent = cast("FilterSet", getattr(self, "parent"))  # noqa: B009
+        walk = cast("FlatLeafWalk", type(parent)._flat_leaf_walk(self))
+        return parent._apply_walked_leaf(qs, self, walk, value)
 
 
 @cache
@@ -1310,30 +1333,6 @@ def _owner_bound_child(child_filterset: type[FilterSet], child_filter: Filter) -
     )
 
 
-def _restrict_to_related(
-    queryset: models.QuerySet[_M],
-    relation: str,
-    related_rows: models.QuerySet[models.Model],
-) -> models.QuerySet[_M]:
-    """Keep the rows of ``queryset`` whose ``relation`` reaches a row of ``related_rows``.
-
-    The restriction is wrapped as ``pk__in=<parent-pk subquery>`` rather than
-    filtering ``<relation>__in=<related_rows>`` directly: for a many-side
-    relation (reverse FK / M2M) the direct form JOINs the child table onto the
-    parent queryset, so a parent with N matching children comes back N times
-    (duplicate nodes in lists / connections, corrupted pagination counts). The
-    pk subquery collapses those duplicates inside the ``IN`` clause with no
-    ``.distinct()`` (which would mutate consumer-visible queryset state) and
-    matches the ``Q(pk__in=...)`` shape ``_q_for_branch`` emits, so a related
-    branch answers identically whether it appears directly or nested under
-    ``and`` / ``or`` / ``not``, and an owner-bound flat leaf answers like the
-    branch. The subquery derives from ``queryset`` itself (not a fresh manager)
-    so custom default-manager filtering and the database alias carry through.
-    """
-    matching = queryset.filter(**{f"{relation}__in": related_rows}).values("pk")
-    return queryset.filter(pk__in=matching)
-
-
 def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Filter]:
     """Expand `f` against its target filterset's resolved filters.
 
@@ -1361,7 +1360,7 @@ def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[st
         if _owner_bound_child(target_filterset, field):
             field_copy.__class__ = _projected_class_for(type(field_copy))
             projected = cast("ProjectedChildFilter", field_copy)
-            projected._projection = ChildProjection(target_filterset, child_name, relation)
+            projected._projection = ChildProjection(target_filterset, child_name, filter_name)
             # django-filter's ``method`` setter shadows ``filter`` per INSTANCE with a
             # ``FilterMethod`` (the package's list filters install theirs the same
             # way); the copy carried that shadow, which would resolve the method on
@@ -1383,6 +1382,21 @@ def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[st
             )
         expanded[new_name] = field_copy
     return expanded
+
+
+def _hop_visibility_seed(
+    hop: DeclaredRelationHop,
+    parent_db: str | None,
+) -> tuple[type[DjangoType], models.QuerySet[models.Model]]:
+    """Return a walked hop's target type and the unscoped rows its ``get_queryset`` scopes."""
+    # Every walked hop is a ``RelatedFilter`` declared on a ``FilterSet``.
+    owner = cast("type[FilterSet]", hop.owner)
+    target_type, _child, child_base = owner._branch_visibility_seed(
+        hop.declared_attr,
+        cast("RelatedFilter", hop.related_obj),
+        parent_db,
+    )
+    return target_type, child_base
 
 
 class FilterSet(
@@ -1515,10 +1529,25 @@ class FilterSet(
     _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None
 
     # The child filter set instances this instance's projected leaves
-    # (``ProjectedChildFilter``) run in, one per child class, built on first use
-    # by ``_projection_child``. Per instance, so a request never sees another
-    # request's child and each ``_q_for_branch`` sibling builds its own.
-    _projection_children: dict[type[FilterSet], FilterSet] | None = None
+    # (``ProjectedChildFilter``) run in, one per child class, each beside the
+    # queryset it was seeded with, built on first use by ``_projection_child``.
+    # Per instance, so a request never sees another request's child and each
+    # ``_q_for_branch`` sibling builds its own.
+    _projection_children: (
+        dict[type[FilterSet], tuple[FilterSet, models.QuerySet[models.Model]]] | None
+    ) = None
+
+    # The visible rows of every declared branch target a walked flat leaf
+    # crosses (``FlatLeafWalk``), keyed by ``(target filter set, db alias)``:
+    # the target type's ``get_queryset`` over its model's rows, the right-hand
+    # side the nested branch uses. One map serves a whole request: ``apply_async``
+    # pre-fills it by awaiting every target the input's walked leaves cross, and
+    # ``_q_for_branch`` shares it with each logical-arm sibling.
+    _flat_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]] | None = None
+
+    # The names of the walked flat leaves this instance's form data supplies,
+    # read once by ``_walked_leaf_state``; ``None`` until then.
+    _present_walked: frozenset[str] | None = None
 
     # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
     # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
@@ -1575,6 +1604,20 @@ class FilterSet(
             all_filters = get_base()
             model = cls._meta.model
             candidates: dict[str, CandidateFilterMetadata] = {}
+            walks: dict[str, FlatLeafWalk] = {}
+
+            def _publishable() -> bool:
+                # The two-condition cache-write gate (own `related_filters` + no
+                # unresolved string lazy targets) is single-sited in
+                # `sets_mixins.should_cache_expansion`; read after the expansion,
+                # which resolves the targets it reads.
+                return should_cache_expansion(
+                    cls,
+                    related_attr="related_filters",
+                    target_slot="_filterset",
+                )
+
+            publish: bool | None = None
             if model is not None:
                 # During ``FilterSetMetaclass.__new__``, the new class does not
                 # own ``related_filters`` yet. Expanding an inherited map here
@@ -1631,6 +1674,19 @@ class FilterSet(
                 # through the correlated ``EXISTS`` adapter (a DIRECT leaf's
                 # ``generation_capable`` equals the parent's ``capable``, so the
                 # extra conjunct is a no-op there).
+                #
+                # The last conjunct is per leaf: the leaf walks no declared
+                # ``RelatedFilter`` (``FlatLeafWalk``). A walked leaf runs as the
+                # nested branch it spells, and a correlated ``EXISTS`` over its ORM
+                # path would match through rows the branch's target type hides.
+                # Walks are computed only for a snapshot that will be published,
+                # the build whose lazy targets have all resolved.
+                publish = _publishable()
+                if publish:
+                    for filter_name, filter_instance in all_filters.items():
+                        walk = cls._flat_leaf_walk(filter_instance)
+                        if walk is not None:
+                            walks[filter_name] = walk
                 capable = cls._is_generation_capable() and _DJANGO_FILTER_OPTIMIZER_AUDITED
                 for filter_name, filter_instance in all_filters.items():
                     row = _candidate_metadata_for(model, filter_instance)
@@ -1638,7 +1694,10 @@ class FilterSet(
                         continue
                     candidates[filter_name] = replace(
                         row,
-                        routable=capable and row.eligible and row.provenance.generation_capable,
+                        routable=capable
+                        and row.eligible
+                        and row.provenance.generation_capable
+                        and filter_name not in walks,
                     )
             # TODO(spec-060 Slice 1): Meta.search_fields - wire
             # `construct_search(all_filters)` from
@@ -1646,18 +1705,14 @@ class FilterSet(
             # The prefix map and `construct_search` landed with spec-027
             # Decision 2; spec-060 owns the consumer surface.
 
-            # The two-condition cache-write gate (own `related_filters` +
-            # no unresolved string lazy targets) is single-sited in
-            # `sets_mixins.should_cache_expansion`. Publish the
-            # filters AND the candidate metadata as ONE immutable snapshot,
-            # atomically, only after the whole build succeeded: a failure above
-            # (e.g. a strict-classification defect) publishes nothing, so stale
-            # metadata can never pair with a rebuilt ``base_filters``.
-            if should_cache_expansion(
-                cls,
-                related_attr="related_filters",
-                target_slot="_filterset",
-            ):
+            # Publish the filters, the candidate metadata and the walks as ONE
+            # immutable snapshot, atomically, only after the whole build
+            # succeeded: a failure above (e.g. a strict-classification defect)
+            # publishes nothing, so stale metadata can never pair with a rebuilt
+            # ``base_filters``.
+            if publish is None:
+                publish = _publishable()
+            if publish:
                 cls._expanded_filters = all_filters
                 cls._expanded_snapshot = ExpansionSnapshot(
                     # The snapshot exposes a READ-ONLY view of the filter map;
@@ -1665,6 +1720,7 @@ class FilterSet(
                     # ``base_filters`` / the ``_expanded_filters`` cache.
                     filters=MappingProxyType(all_filters),
                     candidates=MappingProxyType(candidates),
+                    walks=MappingProxyType(walks),
                 )
                 cls.base_filters = all_filters
             return all_filters
@@ -1698,6 +1754,84 @@ class FilterSet(
         snapshot's mapping as a non-candidate.
         """
         return cls.__dict__.get("_expanded_snapshot")
+
+    @classmethod
+    def _flat_leaf_walk(cls, filter_instance: Filter) -> FlatLeafWalk | None:
+        """Return the declared branches ``filter_instance`` walks from ``cls``, or ``None``.
+
+        A projected leaf (``ProjectedChildFilter``) walks its projection chain:
+        one hop per expansion, through the branch it was expanded from, ending at
+        the child filter it projects. Any other leaf walks its ORM path through
+        ``utils/permissions.py::walk_declared_relation_path``, the walk the
+        permission gates fire along, and runs at the deepest target as a copy
+        rebound to the rest of the path. ``None`` for a leaf that walks no
+        declared branch into a target column: a same-model leaf, a relation key
+        with nothing after its last branch, and a consumer ``method=`` filter of
+        ``cls``'s own, whose body receives the parent queryset and owns its
+        scoping.
+        """
+        if isinstance(filter_instance, ProjectedChildFilter):
+            hops: list[DeclaredRelationHop] = []
+            owner: type[FilterSet] = cls
+            current: Filter = filter_instance
+            name = ""
+            while isinstance(current, ProjectedChildFilter):
+                projection = current._projection
+                # ``collect_related_declarations`` stamps ``related_filters`` on every
+                # class; the branch a projection names is one of its owner's.
+                related_filter: RelatedFilter = getattr(owner, "related_filters")[  # noqa: B009
+                    projection.branch
+                ]
+                hops.append(
+                    DeclaredRelationHop(
+                        owner,
+                        projection.branch,
+                        related_filter,
+                        projection.filterset,
+                    ),
+                )
+                owner = projection.filterset
+                name = projection.name
+                current = owner.get_filters()[name]
+            # The projected child filter may itself walk its owner's branches (a
+            # plain expansion in a child that overrides ``__init__``).
+            inner = owner._flat_leaf_walk(current)
+            return FlatLeafWalk(
+                (*hops, *inner.hops) if inner is not None else tuple(hops),
+                inner.terminal if inner is not None else "",
+                owner_name=name,
+                owner_depth=len(hops),
+            )
+        field_name = filter_instance.field_name
+        if filter_instance.method is not None or not isinstance(field_name, str):
+            return None
+        walked, remainder = walk_declared_relation_path(
+            cls,
+            field_name,
+            related_attr=cls._permission.traversal.related_attr,
+            target_attr=cls._permission.target_attr,
+        )
+        if not walked or not remainder:
+            return None
+        return FlatLeafWalk(walked, LOOKUP_SEP.join(remainder))
+
+    @classmethod
+    def _flat_leaf_walks(cls) -> Mapping[str, FlatLeafWalk]:
+        """Return the walk of every walked flat leaf, by filter name.
+
+        The published snapshot's (``ExpansionSnapshot.walks``) when there is
+        one; before it is published (lazy targets not yet resolved), walked
+        from the filters as they stand.
+        """
+        snapshot = cls._expansion_snapshot()
+        if snapshot is not None:
+            return snapshot.walks
+        walks: dict[str, FlatLeafWalk] = {}
+        for name, filter_instance in cls.get_filters().items():
+            walk = cls._flat_leaf_walk(filter_instance)
+            if walk is not None:
+                walks[name] = walk
+        return walks
 
     # basedpyright: typeshed types ``get_fields`` as ``dict[str, Field]``; upstream returns an
     # ``OrderedDict`` of field name to lookup list, the shape this override keeps. It rejects the
@@ -2199,33 +2333,47 @@ class FilterSet(
             and not cls._customizes_instances()
         )
 
-    def _projection_child(self, filterset_cls: type[FilterSet]) -> FilterSet:
+    def _projection_child(
+        self,
+        filterset_cls: type[FilterSet],
+        seed: models.QuerySet[models.Model] | None = None,
+    ) -> FilterSet:
         """Return the ``filterset_cls`` instance this instance's projected leaves run in.
 
         Built on first use and shared by every projected leaf of this instance
         expanded from ``filterset_cls``: django-filter's form reads every
         filter's ``.field``, so a per-leaf child would deep-copy the child's
         filters and rerun its ``__init__`` once per leaf per request. The child
-        is unbound (no form data; only its filters run), seeded with the child
-        model's base rows on this instance's database, and carries this
+        is unbound (no form data; only its filters run) and carries this
         instance's request, so a request-aware callable ``queryset`` and the
         child ``__init__`` see the same request the parent does.
+
+        Its queryset is ``seed`` when given (the visible rows a running leaf
+        needs; a child seeded otherwise is rebuilt on them). Without one, it is
+        the target's visible rows when a walked leaf this instance's data
+        supplies crosses ``filterset_cls`` (``_walked_leaf_state``), else the
+        child model's rows on this instance's database: building a form never
+        runs a ``get_queryset`` for a leaf the input does not use.
         """
         children = self._projection_children
         if children is None:
             children = self._projection_children = {}
-        child = children.get(filterset_cls)
-        if child is None:
-            # A ``RelatedFilter`` target always declares ``Meta.model``
-            # (``_iter_visibility_steps`` trusts the same).
-            child_model = cast("type[models.Model]", filterset_cls._meta.model)
-            # Never ``None`` on an instance (see ``ProjectedChildFilter.filter``).
-            parent_qs = cast("models.QuerySet[models.Model]", self.queryset)
-            child = filterset_cls(
-                queryset=base_queryset(child_model, using=parent_qs.db),
-                request=self.request,
-            )
-            children[filterset_cls] = child
+        entry = children.get(filterset_cls)
+        if entry is not None and (seed is None or entry[1] is seed):
+            return entry[0]
+        if seed is None:
+            # Never ``None`` on an instance (``BaseFilterSet.__init__`` defaults it).
+            parent_db = cast("models.QuerySet[models.Model]", self.queryset).db
+            self._walked_leaf_state()
+            visibility = self._flat_visibility or {}
+            seed = visibility.get((filterset_cls, parent_db))
+            if seed is None:
+                # A ``RelatedFilter`` target always declares ``Meta.model``
+                # (``_iter_visibility_steps`` trusts the same).
+                child_model = cast("type[models.Model]", filterset_cls._meta.model)
+                seed = base_queryset(child_model, using=parent_db)
+        child = filterset_cls(queryset=seed, request=self.request)
+        children[filterset_cls] = (child, seed)
         return child
 
     @classmethod
@@ -2963,30 +3111,135 @@ class FilterSet(
         ):
             # ``related_filters`` holds only the ``RelatedFilter`` declarations the
             # metaclass collected (``sets_mixins.py::collect_related_declarations``).
-            related_filter = cast("RelatedFilter", declaration)
-            target_type = cls._target_type_for_related_filter(related_filter)
-            child_filterset = related_filter.filterset
-            if target_type is None or child_filterset is None:
-                child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
-                target_label = getattr(child_model, "__qualname__", "<unresolved>")
-                reason = (
-                    f"no DjangoType is registered for its target model {target_label}"
-                    if child_filterset is not None
-                    else "its target FilterSet could not be resolved"
-                )
-                raise ConfigurationError(
-                    f"FilterSet {cls.__qualname__}: related filter branch "
-                    f"{field_name!r} is present in the filter input but {reason}. "
-                    "The branch's visibility scoping runs the target type's "
-                    "get_queryset (spec-027 Decision 8 step 3); skipping it would "
-                    "silently return unfiltered rows. Register a DjangoType for "
-                    "the target model or remove the RelatedFilter.",
-                )
-            # Trusted, not checked here: a branch's child filterset declares
-            # ``Meta.model`` (a model-less child would fail inside ``base_queryset``).
-            child_model = cast("type[models.Model]", child_filterset._meta.model)
-            child_base = base_queryset(child_model, using=parent_db)
+            target_type, child_filterset, child_base = cls._branch_visibility_seed(
+                field_name,
+                cast("RelatedFilter", declaration),
+                parent_db,
+            )
             yield field_name, target_type, child_filterset, child_input, child_base
+
+    @classmethod
+    def _branch_visibility_seed(
+        cls,
+        field_name: str,
+        related_filter: RelatedFilter,
+        parent_db: str | None,
+    ) -> tuple[type[DjangoType], type[FilterSet], models.QuerySet[models.Model]]:
+        """Return one used branch's target type, child filter set and unscoped base rows.
+
+        The branch is in use (a nested key, or a flat leaf walking it), so a
+        target that cannot be resolved raises ``ConfigurationError`` instead of
+        being skipped: skipping would drop the visibility scoping and silently
+        return unfiltered parent rows.
+        """
+        target_type = cls._target_type_for_related_filter(related_filter)
+        child_filterset = related_filter.filterset
+        if target_type is None or child_filterset is None:
+            child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
+            target_label = getattr(child_model, "__qualname__", "<unresolved>")
+            reason = (
+                f"no DjangoType is registered for its target model {target_label}"
+                if child_filterset is not None
+                else "its target FilterSet could not be resolved"
+            )
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: related filter branch "
+                f"{field_name!r} is present in the filter input but {reason}. "
+                "The branch's visibility scoping runs the target type's "
+                "get_queryset (spec-027 Decision 8 step 3); skipping it would "
+                "silently return unfiltered rows. Register a DjangoType for "
+                "the target model or remove the RelatedFilter.",
+            )
+        # Trusted, not checked here: a branch's child filterset declares
+        # ``Meta.model`` (a model-less child would fail inside ``base_queryset``).
+        child_model = cast("type[models.Model]", child_filterset._meta.model)
+        return target_type, child_filterset, base_queryset(child_model, using=parent_db)
+
+    @classmethod
+    def _present_walked_names(
+        cls,
+        data: Mapping[str, object],
+        prefix: str | None = None,
+    ) -> frozenset[str]:
+        """Return the walked flat leaves form ``data`` supplies.
+
+        A leaf is supplied when ``data`` carries its form key or a key its widget
+        reads beside it (``<key>_0`` / ``<key>_1`` for a range, any ``<key>_``
+        suffix a multi-value widget appends). Over-reading a sibling's key only
+        derives a visibility the leaf then leaves unused (a leaf given no value
+        returns its input unchanged); a supplied leaf is never missed.
+        """
+        present: set[str] = set()
+        for name in cls._flat_leaf_walks():
+            key = f"{prefix}-{name}" if prefix else name
+            stem = f"{key}_"
+            if key in data or any(supplied.startswith(stem) for supplied in data):
+                present.add(name)
+        return frozenset(present)
+
+    def _flat_hop_rows(
+        self,
+        hop: DeclaredRelationHop,
+        parent_db: str | None,
+    ) -> models.QuerySet[models.Model]:
+        """Return the visible rows of ``hop``'s target, deriving them on first use."""
+        visibility = self._flat_visibility
+        if visibility is None:
+            visibility = self._flat_visibility = {}
+        key = (hop.target, parent_db)
+        rows = visibility.get(key)
+        if rows is None:
+            target_type, child_base = _hop_visibility_seed(hop, parent_db)
+            rows = apply_type_visibility_sync(target_type, child_base, self._apply_info)
+            visibility[key] = rows
+        return rows
+
+    def _walked_leaf_state(self) -> frozenset[str]:
+        """Return the walked flat leaves this instance's data supplies, their targets derived.
+
+        Read once per instance: every target a supplied walked leaf crosses gets
+        its visible rows in ``_flat_visibility`` (already there under
+        ``apply_async``, which awaits them; derived here otherwise), so a child
+        filter set seeded for a running leaf sees them, and a leaf the input does
+        not supply runs no ``get_queryset``.
+        """
+        present = self._present_walked
+        if present is None:
+            cls = type(self)
+            present = cls._present_walked_names(self.data or {}, self.form_prefix)
+            # Never ``None`` on an instance (``BaseFilterSet.__init__`` defaults it).
+            parent_db = cast("models.QuerySet[models.Model]", self.queryset).db
+            walks = cls._flat_leaf_walks()
+            for name in present:
+                for hop in walks[name].hops:
+                    self._flat_hop_rows(hop, parent_db)
+            self._present_walked = present
+        return present
+
+    @classmethod
+    async def _fill_flat_visibility_async(
+        cls,
+        input_value: object,
+        info: object,
+        into: dict[tuple[object, str | None], models.QuerySet[models.Model]],
+        *,
+        parent_db: str | None,
+    ) -> None:
+        """Await the visible rows of every target a walked leaf of ``input_value`` crosses.
+
+        One input level (``apply_async`` calls it for the top level and
+        ``_collect_nested_visibility_querysets_async`` for each logical arm), so
+        the sync ``.qs`` read finds every target in ``into`` and never runs an
+        async-only target ``get_queryset``.
+        """
+        walks = cls._flat_leaf_walks()
+        for name in cls._present_walked_names(cls._normalize_input(input_value)):
+            for hop in walks[name].hops:
+                key = (hop.target, parent_db)
+                if key in into:
+                    continue
+                target_type, child_base = _hop_visibility_seed(hop, parent_db)
+                into[key] = await apply_type_visibility_async(target_type, child_base, info)
 
     @classmethod
     def _derive_related_visibility_querysets_sync(
@@ -3111,6 +3364,8 @@ class FilterSet(
         *,
         parent_db: str | None = None,
         _depth: int = 0,
+        flat_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
+        | None = None,
     ) -> dict[int, dict[str, models.QuerySet[models.Model]]]:
         """Pre-walk logical branches and derive each branch's visibility map.
 
@@ -3136,6 +3391,10 @@ class FilterSet(
         pre-walk that exceeds the cap signals the same consumer-side
         misuse and surfaces the same typed ``ConfigurationError`` here
         rather than waiting for the sync recursion to discover it.
+
+        Given ``flat_visibility``, each arm also awaits the target visibility of
+        the walked flat leaves it supplies into it
+        (``_fill_flat_visibility_async``).
         """
         result: dict[int, dict[str, models.QuerySet[models.Model]]] = {}
         if is_inactive_value(input_value, unset_sentinel=UNSET):
@@ -3154,6 +3413,13 @@ class FilterSet(
                     parent_db=parent_db,
                     _depth=_depth,
                 )
+                if flat_visibility is not None:
+                    await cls._fill_flat_visibility_async(
+                        child_input,
+                        info,
+                        flat_visibility,
+                        parent_db=parent_db,
+                    )
                 # Recurse so deeper nesting (``or: [{or: [...]}]``) also
                 # lands in the stash.
                 nested = await cls._collect_nested_visibility_querysets_async(
@@ -3161,6 +3427,7 @@ class FilterSet(
                     info,
                     parent_db=parent_db,
                     _depth=_depth + 1,
+                    flat_visibility=flat_visibility,
                 )
                 result.update(nested)
         return result
@@ -3326,11 +3593,118 @@ class FilterSet(
         finally:
             filter_instance.distinct = original_distinct
 
+    def _apply_walked_leaf(
+        self,
+        queryset: models.QuerySet[_M],
+        filter_instance: Filter,
+        walk: FlatLeafWalk,
+        value: object,
+    ) -> models.QuerySet[_M]:
+        """Apply a flat leaf that walks declared branches as the nested branch chain it spells.
+
+        The leaf runs against the deepest target's visible rows (the target
+        type's ``get_queryset``, spec-027 Decision 8 step 3): rebound to its
+        target-relative path, or, owner-bound, as its child filter inside a
+        child filter set instance seeded with those rows. Each hop then folds
+        the matches outward through ``_constrain_by_branch``, the restriction
+        the nested branch applies (explicit ``RelatedFilter(queryset=...)``
+        intersected, ``pk__in`` on the parent), so the leaf can never match
+        through a row a target type hides or a declaration's ``queryset=``
+        excludes, and means what its nested twin means.
+
+        A leaf that returns its input BY IDENTITY applied no constraint
+        (django-filter's empty-value skip, a ``FilterMethod`` short circuit), so
+        the parent is returned unchanged: restricting it to parents with a
+        visible related row would turn "no constraint" into "has a child".
+        """
+        hops = walk.hops
+        parent_db = queryset.db
+        visible = [self._flat_hop_rows(hop, parent_db) for hop in hops]
+        if walk.owner_name is None:
+            leaf, seed = filter_instance, visible[-1]
+        else:
+            # A walk's hops resolve to filter sets (``_hop_visibility_seed`` raised otherwise).
+            child = self._projection_child(
+                cast("type[FilterSet]", hops[walk.owner_depth - 1].target),
+                seed=visible[walk.owner_depth - 1],
+            )
+            leaf = child.filters[walk.owner_name]
+            # Never ``None`` on an instance (``BaseFilterSet.__init__`` defaults it).
+            seed = cast("models.QuerySet[models.Model]", child.queryset)
+        if walk.terminal:
+            seed = visible[-1]
+            leaf = copy.copy(leaf)
+            leaf.field_name = walk.terminal
+            # The matches only feed the ``<relation>__in`` subquery of the fold,
+            # where a duplicate row is inert; ``distinct`` compensated the
+            # parent's join fan-out over the full path, which the walk no
+            # longer makes.
+            leaf.distinct = False
+        rows = leaf.filter(seed, value)
+        assert isinstance(rows, models.QuerySet), (
+            f"Expected '{type(self).__name__}' flat filter {filter_instance.field_name!r} to "
+            f"return a QuerySet, but got a {type(rows).__name__} instead."
+        )
+        if rows is seed:
+            return queryset
+        for index in range(len(hops) - 1, 0, -1):
+            hop = hops[index]
+            rows = cast("type[FilterSet]", hop.owner)._constrain_by_branch(
+                hop.declared_attr,
+                cast("RelatedFilter", hop.related_obj),
+                visible[index - 1],
+                rows,
+            )
+        return type(self)._constrain_by_branch(
+            hops[0].declared_attr,
+            cast("RelatedFilter", hops[0].related_obj),
+            queryset,
+            rows,
+        )
+
+    def _apply_unwalked_leaf(
+        self,
+        queryset: models.QuerySet[_M],
+        name: str,
+        value: object,
+        candidate: CandidateFilterMetadata | None,
+    ) -> models.QuerySet[_M]:
+        """Apply one flat leaf that walks no declared branch (see ``_apply_flat_leaves``)."""
+        filter_instance = self.filters[name]
+        if candidate is None or not candidate.routable:
+            queryset = filter_instance.filter(queryset, value)
+            assert isinstance(queryset, models.QuerySet), (
+                f"Expected '{type(self).__name__}.{name}' to return a QuerySet, "
+                f"but got a {type(queryset).__name__} instead."
+            )
+            return queryset
+        inner_root = correlated_inner_root(queryset)
+        result = self._invoke_suppressing_framework_distinct(
+            filter_instance,
+            inner_root,
+            value,
+        )
+        assert isinstance(result, models.QuerySet), (
+            f"Expected '{type(self).__name__}.{name}' to return a QuerySet, "
+            f"but got a {type(result).__name__} instead."
+        )
+        if result is inner_root:
+            return queryset
+        queryset, positive = attach_exists(queryset, result)
+        return queryset.filter(positive)
+
     def _apply_flat_leaves(self, queryset: models.QuerySet[_M]) -> models.QuerySet[_M]:
         """Apply flat leaves, mirroring ``BaseFilterSet.filter_queryset`` exactly.
 
         Iterates ``self.form.cleaned_data`` in insertion order (upstream's
-        order). A name is routed through the correlated ``EXISTS`` adapter ONLY
+        order). A leaf whose ORM path walks a declared ``RelatedFilter``
+        (``ExpansionSnapshot.walks``) is the nested branch spelled flat: when the
+        input supplies it, it runs as that branch (``_apply_walked_leaf``), and
+        when the input does not, it does not run at all, as an absent nested
+        branch does not. Every other leaf is applied by ``_apply_unwalked_leaf``,
+        below.
+
+        A name is routed through the correlated ``EXISTS`` adapter ONLY
         when its frozen candidate row says so: ``candidate.routable``, the
         BUILD-TIME verdict computed in ``FilterSet.get_filters`` and published in
         the immutable ``ExpansionSnapshot``. That single bit already requires the
@@ -3359,10 +3733,7 @@ class FilterSet(
         upstream ``QuerySet`` return assertion. That is what makes every
         django-filter customization seam fail CLOSED to the outer invocation
         rather than smuggling consumer semantics into the correlated subquery: the
-        failure mode is a declined optimization, never a changed result set. For
-        an owner-bound expanded leaf (``ProjectedChildFilter``) the original
-        invocation is the child filter run inside its own filter set, projected
-        back through the relation.
+        failure mode is a declined optimization, never a changed result set.
 
         A routed framework-generated to-many leaf is invoked against
         ``correlated_inner_root(queryset)`` through the distinct-suppressing
@@ -3408,32 +3779,15 @@ class FilterSet(
         candidates: Mapping[str, CandidateFilterMetadata] = (
             snapshot.candidates if snapshot is not None else {}
         )
+        walks = type(self)._flat_leaf_walks()
+        supplied = self._walked_leaf_state() if walks else frozenset[str]()
         cleaned_data: Mapping[str, object] = self.form.cleaned_data
         for name, value in cleaned_data.items():
-            candidate = candidates.get(name)
-            filter_instance = self.filters[name]
-            routed = candidate is not None and candidate.routable
-            if not routed:
-                queryset = filter_instance.filter(queryset, value)
-                assert isinstance(queryset, models.QuerySet), (
-                    f"Expected '{type(self).__name__}.{name}' to return a QuerySet, "
-                    f"but got a {type(queryset).__name__} instead."
-                )
-                continue
-            inner_root = correlated_inner_root(queryset)
-            result = self._invoke_suppressing_framework_distinct(
-                filter_instance,
-                inner_root,
-                value,
-            )
-            assert isinstance(result, models.QuerySet), (
-                f"Expected '{type(self).__name__}.{name}' to return a QuerySet, "
-                f"but got a {type(result).__name__} instead."
-            )
-            if result is inner_root:
-                continue
-            queryset, positive = attach_exists(queryset, result)
-            queryset = queryset.filter(positive)
+            walk = walks.get(name)
+            if walk is None:
+                queryset = self._apply_unwalked_leaf(queryset, name, value, candidates.get(name))
+            elif name in supplied:
+                queryset = self._apply_walked_leaf(queryset, self.filters[name], walk, value)
         return queryset
 
     @override
@@ -3497,6 +3851,10 @@ class FilterSet(
         depth = getattr(self, "_logic_depth", 0)
         info = getattr(self, "_apply_info", None)
         nested_map = getattr(self, "_nested_qs_by_branch_id", None)
+        # Every logical-arm sibling shares this instance's flat-leaf visibility
+        # map, so a target crossed in two arms runs its ``get_queryset`` once.
+        if self._flat_visibility is None:
+            self._flat_visibility = {}
         q = type(self)._evaluate_logic_tree(
             qs,
             self.data or {},
@@ -3504,6 +3862,7 @@ class FilterSet(
             info=info,
             _depth=depth,
             _nested_qs_by_branch_id=nested_map,
+            _flat_visibility=self._flat_visibility,
         )
         return qs.filter(q)
 
@@ -3517,6 +3876,8 @@ class FilterSet(
         *,
         _depth: int = 0,
         _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
+        _flat_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
+        | None = None,
     ) -> models.Q:
         """Build the ``Q`` expression for logical operator branches.
 
@@ -3527,7 +3888,8 @@ class FilterSet(
         ``_q_for_branch``; both helpers cap at ``cls._MAX_LOGIC_DEPTH``.
         ``_nested_qs_by_branch_id`` carries the pre-derived async
         visibility maps produced by ``_collect_nested_visibility_querysets_async``
-        (None on the sync path).
+        (None on the sync path); ``_flat_visibility`` is the request's flat-leaf
+        visibility map every sibling shares.
 
         Inactive children (``None`` / ``strawberry.UNSET``) inside sequence
         lists -- and an inactive single-element value -- are skipped, matching
@@ -3550,6 +3912,7 @@ class FilterSet(
                     info=info,
                     _depth=_depth + 1,
                     _nested_qs_by_branch_id=_nested_qs_by_branch_id,
+                    _flat_visibility=_flat_visibility,
                 )
                 for child_input in children
             ]
@@ -3567,6 +3930,8 @@ class FilterSet(
         *,
         _depth: int = 0,
         _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
+        _flat_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
+        | None = None,
     ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
 
@@ -3603,7 +3968,9 @@ class FilterSet(
         through). ``_nested_qs_by_branch_id`` is stashed on the sibling
         too so a deeper ``_q_for_branch`` call (via the sibling's own
         ``filter_queryset`` -> ``_evaluate_logic_tree``) can keep
-        consulting the pre-derived map.
+        consulting the pre-derived map. ``_flat_visibility`` is stashed the same
+        way, so the sibling's walked flat leaves read the targets the request
+        already derived (all of them under ``apply_async``).
 
         Perf note: constructing the
         sibling ``cls(...)`` per branch triggers django-filter's
@@ -3653,6 +4020,7 @@ class FilterSet(
         child_set._logic_depth = _depth
         child_set._apply_info = info
         child_set._nested_qs_by_branch_id = _nested_qs_by_branch_id
+        child_set._flat_visibility = _flat_visibility
         cls._validate_form_or_raise(child_set)
         return models.Q(pk__in=child_set.qs.values("pk"))
 
@@ -3665,82 +4033,107 @@ class FilterSet(
     ) -> models.QuerySet[_M]:
         """Constrain `parent_qs` by each active branch's intersected child qs.
 
-        The explicit `RelatedFilter(queryset=...)`
-        constraint AND-intersects with the visibility-scoped child qs
-        from step 3, then a ``pk__in=<parent-pk subquery>`` restriction
-        built from ``<rel>__in=<intersected>`` runs ONCE for every active
-        branch. Inactive branches do not constrain the parent.
+        Each active branch's visibility-scoped child qs from step 3 narrows the
+        parent through ``_constrain_by_branch`` (the explicit
+        `RelatedFilter(queryset=...)` constraint AND-intersected, then a
+        ``pk__in=<parent-pk subquery>`` restriction built from
+        ``<rel>__in=<intersected>``), ONCE per active branch. Inactive branches
+        do not constrain the parent.
         """
         constrained = parent_qs
         for field_name, declaration, _ in cls._iter_active_related_branches(input_value):
             # ``related_filters`` holds only the ``RelatedFilter`` declarations the
             # metaclass collected (``sets_mixins.py::collect_related_declarations``).
-            related_filter = cast("RelatedFilter", declaration)
-            child_qs = child_qs_by_branch.get(field_name)
-            # ``_has_explicit_queryset`` records that ``queryset=`` was passed; the
-            # ``ModelChoiceFilter`` contract types it as a queryset.
-            explicit = cast(
-                "models.QuerySet[models.Model] | None",
-                related_filter.extra.get("queryset")
-                if related_filter._has_explicit_queryset
-                else None,
-            )
-            if child_qs is None:
-                if explicit is None:
-                    continue
-                intersected = explicit
-            elif explicit is None:
-                intersected = child_qs
-            else:
-                # Django raises an opaque ``TypeError: Cannot combine
-                # queries on two different base models`` from
-                # ``Query.combine`` if the consumer-supplied
-                # ``RelatedFilter(queryset=...)`` is keyed on a
-                # different model class than the target filterset's
-                # ``_meta.model``. Surface a typed ``ConfigurationError``
-                # naming the filter and both models so a GraphQL consumer
-                # gets an actionable message instead of the raw
-                # ``TypeError``.
-                #
-                # The comparison uses ``is`` identity because Django's
-                # own ``Query.combine`` does the same (``self.model !=
-                # rhs.model``) - proxies and multi-table-inheritance
-                # children carry distinct ``model`` identities even
-                # though they share a database table with their
-                # concrete parent. Consumers who need to mix
-                # proxy / concrete must pass an explicit queryset of
-                # the target filterset's exact ``_meta.model`` class.
-                if explicit.model is not child_qs.model:
-                    raise ConfigurationError(
-                        f"RelatedFilter {cls.__qualname__}.{field_name}: "
-                        f"the explicit ``queryset=`` is keyed on "
-                        f"{explicit.model.__qualname__} but the target "
-                        f"filterset is keyed on "
-                        f"{child_qs.model.__qualname__}. Pass a queryset "
-                        f"of {child_qs.model.__qualname__} instances to "
-                        "``RelatedFilter(queryset=...)``; proxy and "
-                        "multi-table-inheritance children are NOT "
-                        "accepted because Django's queryset ``&`` "
-                        "operator rejects mixed model classes.",
-                    )
-                intersected = explicit & child_qs
-            # Build the parent restriction against the relation's ORM path
-            # (``related_filter.field_name``), NOT the declared attribute name the
-            # loop iterates by. The two diverge whenever a consumer gives a
-            # ``RelatedFilter`` a friendlier GraphQL name than its ORM accessor
-            # (e.g. ``visible_shelves = RelatedFilter(ShelfFilter, field_name="shelves")``);
-            # keying off the declared name would emit ``<declared>__in`` against a
-            # non-existent relation and Django would raise ``FieldError``.
-            # ``child_qs_by_branch`` stays keyed by the declared name (see
-            # ``_derive_related_visibility_querysets_*``), so only this final
-            # restriction switches to the ORM path. The ``pk__in`` wrapping and
-            # its row-multiplicity rationale are ``_restrict_to_related``'s.
-            constrained = _restrict_to_related(
+            constrained = cls._constrain_by_branch(
+                field_name,
+                cast("RelatedFilter", declaration),
                 constrained,
-                _bound_field_name(related_filter),
-                intersected,
+                child_qs_by_branch.get(field_name),
             )
         return constrained
+
+    @classmethod
+    def _constrain_by_branch(
+        cls,
+        field_name: str,
+        related_filter: RelatedFilter,
+        constrained: models.QuerySet[_M],
+        child_qs: models.QuerySet[models.Model] | None,
+    ) -> models.QuerySet[_M]:
+        """Keep the rows of ``constrained`` whose branch relation reaches a row of ``child_qs``.
+
+        The one place a branch's child rows narrow its parent, for a nested
+        branch (``_apply_related_constraints``) and a walked flat leaf
+        (``_apply_walked_leaf``) alike. The explicit ``RelatedFilter(queryset=...)``
+        AND-intersects ``child_qs``; with neither, the parent is unchanged.
+        """
+        # ``_has_explicit_queryset`` records that ``queryset=`` was passed; the
+        # ``ModelChoiceFilter`` contract types it as a queryset.
+        explicit = cast(
+            "models.QuerySet[models.Model] | None",
+            related_filter.extra.get("queryset")
+            if related_filter._has_explicit_queryset
+            else None,
+        )
+        if child_qs is None:
+            if explicit is None:
+                return constrained
+            intersected = explicit
+        elif explicit is None:
+            intersected = child_qs
+        else:
+            # Django raises an opaque ``TypeError: Cannot combine queries on two
+            # different base models`` from ``Query.combine`` if the
+            # consumer-supplied ``RelatedFilter(queryset=...)`` is keyed on a
+            # different model class than the target filterset's ``_meta.model``.
+            # Surface a typed ``ConfigurationError`` naming the filter and both
+            # models so a GraphQL consumer gets an actionable message instead of
+            # the raw ``TypeError``.
+            #
+            # The comparison uses ``is`` identity because Django's own
+            # ``Query.combine`` does the same (``self.model != rhs.model``) -
+            # proxies and multi-table-inheritance children carry distinct
+            # ``model`` identities even though they share a database table with
+            # their concrete parent. Consumers who need to mix proxy / concrete
+            # must pass an explicit queryset of the target filterset's exact
+            # ``_meta.model`` class.
+            if explicit.model is not child_qs.model:
+                raise ConfigurationError(
+                    f"RelatedFilter {cls.__qualname__}.{field_name}: "
+                    f"the explicit ``queryset=`` is keyed on "
+                    f"{explicit.model.__qualname__} but the target "
+                    f"filterset is keyed on "
+                    f"{child_qs.model.__qualname__}. Pass a queryset "
+                    f"of {child_qs.model.__qualname__} instances to "
+                    "``RelatedFilter(queryset=...)``; proxy and "
+                    "multi-table-inheritance children are NOT "
+                    "accepted because Django's queryset ``&`` "
+                    "operator rejects mixed model classes.",
+                )
+            intersected = explicit & child_qs
+        # The restriction runs against the relation's ORM path
+        # (``related_filter.field_name``), NOT the declared attribute name: the two
+        # diverge whenever a consumer gives a ``RelatedFilter`` a friendlier
+        # GraphQL name than its ORM accessor (``visible_shelves =
+        # RelatedFilter(ShelfFilter, field_name="shelves")``), and
+        # ``<declared>__in`` would name a non-existent relation.
+        #
+        # It is wrapped as ``pk__in=<parent-pk subquery>`` rather than filtering
+        # ``<relation>__in=<rows>`` directly: for a many-side relation (reverse FK
+        # / M2M) the direct form JOINs the child table onto the parent queryset,
+        # so a parent with N matching children comes back N times (duplicate
+        # nodes in lists / connections, corrupted pagination counts). The pk
+        # subquery collapses those duplicates inside the ``IN`` clause with no
+        # ``.distinct()`` (which would mutate consumer-visible queryset state) and
+        # matches the ``Q(pk__in=...)`` shape ``_q_for_branch`` emits, so a branch
+        # answers identically whether it appears directly or nested under ``and``
+        # / ``or`` / ``not``. The subquery derives from ``constrained`` itself
+        # (not a fresh manager) so custom default-manager filtering and the
+        # database alias carry through.
+        matching = constrained.filter(
+            **{f"{_bound_field_name(related_filter)}__in": intersected},
+        ).values("pk")
+        return constrained.filter(pk__in=matching)
 
     @classmethod
     def _apply_common_prelude(
@@ -3771,6 +4164,8 @@ class FilterSet(
         info: object,
         *,
         nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
+        flat_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
+        | None = None,
         run_permissions: bool = True,
     ) -> models.QuerySet[_M]:
         """Build the filterset, then run the perm check + form validate + lazy ``.qs`` read.
@@ -3778,7 +4173,9 @@ class FilterSet(
         The filterset is built over ``constrained`` with ``info`` stashed as
         ``_apply_info`` and the async-only pre-derived
         ``nested_qs_by_branch_id`` map (``None`` on the sync path) stashed as
-        ``_nested_qs_by_branch_id``. Its ``.qs`` is
+        ``_nested_qs_by_branch_id``, beside the awaited flat-leaf visibility map
+        ``flat_visibility`` (``None`` on the sync path, which derives it on
+        first use) stashed as ``_flat_visibility``. Its ``.qs`` is
         ``filter_queryset(constrained.all())`` (django-filter's
         ``BaseFilterSet.qs``), a filtered clone over ``constrained``'s own
         model, so the result keeps the model of the queryset passed in.
@@ -3808,6 +4205,7 @@ class FilterSet(
         )
         filterset_instance._apply_info = info
         filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
+        filterset_instance._flat_visibility = flat_visibility
         if run_permissions:
             cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
@@ -3890,7 +4288,9 @@ class FilterSet(
                get their visibility maps awaited BEFORE the sync ``.qs``
                read fans into ``_q_for_branch``. Without this step,
                ``_q_for_branch``'s sync derive would raise
-               ``SyncMisuseError`` mid-``.qs``.
+               ``SyncMisuseError`` mid-``.qs``. The same pre-walk (and
+               ``_fill_flat_visibility_async`` for the top level) awaits the
+               target visibility of every walked flat leaf the input supplies.
             3. Normalize the input and apply the related constraints via
                ``_apply_common_prelude`` (shared with ``apply_sync``).
             4. Route ``_apply_common_finalize`` (filterset build with the
@@ -3917,11 +4317,19 @@ class FilterSet(
             parent_db=queryset.db,
             _depth=_depth,
         )
+        flat_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]] = {}
+        await cls._fill_flat_visibility_async(
+            input_value,
+            info,
+            flat_visibility,
+            parent_db=queryset.db,
+        )
         nested_qs_by_branch_id = await cls._collect_nested_visibility_querysets_async(
             input_value,
             info,
             parent_db=queryset.db,
             _depth=_depth,
+            flat_visibility=flat_visibility,
         )
         data, request, constrained = cls._apply_common_prelude(
             input_value,
@@ -3937,6 +4345,7 @@ class FilterSet(
             request,
             info,
             nested_qs_by_branch_id=nested_qs_by_branch_id,
+            flat_visibility=flat_visibility,
             run_permissions=run_permissions,
         )
 

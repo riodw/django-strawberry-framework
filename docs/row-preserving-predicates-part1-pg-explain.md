@@ -16,9 +16,9 @@ docker compose -f docker-compose.postgres.yml down
 
 ## Provenance -- the query came from production code
 
-The SQL below is read directly off the compiled queryset produced by the real fakeshop `LoanFilter` (`examples/fakeshop/apps/library/filters.py`). No SQL is hand-written; the EXPLAIN executes the exact parameterized statement `qs.query.get_compiler(using=qs.db).as_sql()` returns.
+The SQL below is read directly off the compiled queryset produced by a `Loan` filter set declaring the fakeshop `LoanFilter`'s Medtrics `Meta.fields` path with no `RelatedFilter` (`medtrics_loan_filter` in `scripts/capture_pg_predicate_explain.py`; on `LoanFilter` itself the leaf walks the declared branches as a nested chain). No SQL is hand-written; the EXPLAIN executes the exact parameterized statement `qs.query.get_compiler(using=qs.db).as_sql()` returns.
 
-- FilterSet: `apps.library.filters.LoanFilter` (root model `Loan`)
+- FilterSet: `MedtricsLoanFilter` (root model `Loan`, no declared branch)
 - Active generated leaf: `book__loans__patron__email__icontains` = `'cardio'`
 - Relation path (Medtrics reverse-FK reproduction): `Loan.book` (to-one) -> `Book.loans` (to-many reverse FK -- the first multiplying hop) -> `Loan.patron` (to-one) -> `Patron.email` (scalar)
 - Applicator: `FilterSet._apply_flat_leaves` routes the eligible framework-generated to-many leaf through `optimizer/predicates.py`'s `correlated_inner_root` + `attach_exists`, with the framework-added `distinct` suppressed inside the existence body (`_invoke_suppressing_framework_distinct`).

@@ -3,9 +3,7 @@
 Guards, reserved-alias allocation, evaluated-outer parity, composite-pk
 correlation, and ``_base_manager`` start have no GraphQL envelope. Row-preserving
 EXISTS SQL without ``SELECT DISTINCT`` is
-``examples/fakeshop/test_query/test_library_api.py::test_genre_connection_flat_leaf_sql_shape_is_row_preserving``
-and
-``examples/fakeshop/test_query/test_library_api.py::test_library_loans_deep_leaf_sql_shape_is_row_preserving``.
+``examples/fakeshop/test_query/test_products_api.py::test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents``.
 """
 
 import pytest

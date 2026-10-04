@@ -2248,7 +2248,13 @@ def test_products_categories_empty_relay_global_id_in_matches_nothing():
 
 @pytest.mark.django_db
 def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents():
-    """A generated reverse-FK leaf returns one parent even when two children match."""
+    """A generated reverse-FK leaf returns one parent even when two children match.
+
+    ``CategoryFilter`` declares ``items__name`` in ``Meta.fields`` with no
+    ``items`` ``RelatedFilter``, so the leaf walks no declared branch: it runs as
+    a correlated ``EXISTS``, with no ``SELECT DISTINCT`` and no ``library_item``
+    join in the outer query.
+    """
     seed_data(1)
     category = models.Category.objects.filter(is_private=False).earliest("pk")
     models.Item.objects.create(
@@ -2262,11 +2268,18 @@ def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_paren
         is_private=False,
     )
 
-    _assert_graphql_data(
-        'query { allCategories(filter: { itemsName: { iContains: "duplicate-leaf" } }) '
-        "{ edges { node { name } } } }",
-        {"allCategories": {"edges": [{"node": {"name": category.name}}]}},
-    )
+    with CaptureQueriesContext(connection) as captured:
+        _assert_graphql_data(
+            'query { allCategories(filter: { itemsName: { iContains: "duplicate-leaf" } }) '
+            "{ edges { node { name } } } }",
+            {"allCategories": {"edges": [{"node": {"name": category.name}}]}},
+        )
+    filtered = [q["sql"] for q in captured.captured_queries if "duplicate-leaf" in q["sql"]]
+    assert len(filtered) == 1
+    sql = filtered[0]
+    assert sql.upper().count("EXISTS(") == 1
+    assert "SELECT DISTINCT" not in sql.upper()
+    assert "products_item" not in sql.split("WHERE")[0].lower()
 
 
 def _category_filter_input_field_names() -> set[str]:

@@ -2696,223 +2696,6 @@ def test_nested_related_filter_honors_target_get_queryset():
     ]
 
 
-def _seed_flat_twin_visibility_graph() -> None:
-    """Rows only a hidden related row can match, beside rows anyone can match.
-
-    ``ShelfType`` hides the ``topic="secret"`` shelf and ``BookType`` hides the
-    ``repair`` book from anonymous requests; ``BranchFilter.shelves`` carries an
-    explicit ``queryset=`` admitting only ``"permanent collection"`` shelves, which
-    binds staff too. ``Bob`` borrowed only the ``repair`` book.
-    """
-    branch = models.Branch.objects.create(name="Twin", city="Boston")
-    open_shelf = models.Shelf.objects.create(code="T-open", topic="general", branch=branch)
-    secret_shelf = models.Shelf.objects.create(code="T-secret", topic="secret", branch=branch)
-    on_secret = models.Book.objects.create(title="On secret shelf", shelf=secret_shelf)
-    in_repair = models.Book.objects.create(
-        title="In repair",
-        shelf=open_shelf,
-        circulation_status=models.Book.CirculationStatus.REPAIR,
-    )
-    patron = models.Patron.objects.create(name="Ada")
-    models.Loan.objects.create(book=on_secret, patron=patron, note="loan-on-secret")
-    models.Loan.objects.create(book=in_repair, patron=patron, note="loan-in-repair")
-    bob = models.Patron.objects.create(name="Bob", email="bob@x")
-    models.Loan.objects.create(book=in_repair, patron=bob, note="loan-bob")
-    genre = models.Genre.objects.create(name="Twin genre")
-    genre.books.add(on_secret)
-
-
-class _FlatTwinRow(NamedTuple):
-    """One flat relation leaf, its nested twin, and what each viewer may match."""
-
-    root: str
-    selection: str
-    flat: str
-    nested: str
-    anonymous: list[str]
-    staff: list[str]
-
-
-_FLAT_TWIN_ROWS = {
-    "one-hop-forward-fk": _FlatTwinRow(
-        "allLibraryBooks",
-        "title",
-        '{ shelfTopic: { exact: "secret" } }',
-        '{ shelf: { topic: { exact: "secret" } } }',
-        [],
-        ["On secret shelf"],
-    ),
-    "two-hop-forward-fk": _FlatTwinRow(
-        "allLibraryLoans",
-        "note",
-        '{ bookShelfTopic: { exact: "secret" } }',
-        '{ book: { shelf: { topic: { exact: "secret" } } } }',
-        [],
-        ["loan-on-secret"],
-    ),
-    "hop-target-own-visibility": _FlatTwinRow(
-        "allLibraryLoans",
-        "note",
-        "{ bookCirculationStatus: { exact: repair } }",
-        "{ book: { circulationStatus: { exact: repair } } }",
-        [],
-        ["loan-in-repair", "loan-bob"],
-    ),
-    "reverse-fk-to-many": _FlatTwinRow(
-        "allLibraryShelves",
-        "code",
-        "{ booksCirculationStatus: { exact: repair } }",
-        "{ books: { circulationStatus: { exact: repair } } }",
-        [],
-        ["T-open"],
-    ),
-    "explicit-queryset-constraint": _FlatTwinRow(
-        "allLibraryBranches",
-        "name",
-        '{ shelvesTopic: { exact: "general" } }',
-        '{ shelves: { topic: { exact: "general" } } }',
-        [],
-        [],
-    ),
-    "inside-logical-or": _FlatTwinRow(
-        "allLibraryBooks",
-        "title",
-        '{ or: [{ shelfTopic: { exact: "secret" } }] }',
-        '{ or: [{ shelf: { topic: { exact: "secret" } } }] }',
-        [],
-        ["On secret shelf"],
-    ),
-    "owner-bound-then-its-owners-branches": _FlatTwinRow(
-        "allLibraryLoans",
-        "note",
-        '{ patronLoansBookLoansPatronEmail: { iContains: "bob@" } }',
-        '{ patron: { loans: { bookLoansPatronEmail: { iContains: "bob@" } } } }',
-        [],
-        ["loan-on-secret", "loan-in-repair", "loan-bob"],
-    ),
-}
-
-
-def _flat_twin_names(row: _FlatTwinRow, filter_input: str, *, staff: bool) -> list[object]:
-    query = f"query {{ {row.root}(filter: {filter_input}) {{ {row.selection} }} }}"
-    response = _post_graphql_as_staff(query) if staff else _post_graphql(query)
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    return [record[row.selection] for record in payload["data"][row.root]]
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", sorted(_FLAT_TWIN_ROWS))
-@pytest.mark.parametrize("spelling", ["flat", "nested"])
-def test_flat_relation_leaf_answers_like_its_nested_twin_for_anonymous(shape: str, spelling: str):
-    """A flat relation leaf cannot use a related row the target type hides.
-
-    ``shelfTopic`` and ``shelf: { topic }`` are two spellings of one
-    ``RelatedFilter`` predicate. Each declared hop it walks applies the target
-    type's ``get_queryset`` and the declaration's explicit ``queryset=``, so the
-    anonymous request matches nothing the hidden row alone would make match, under
-    either spelling, at every depth, inside a logical arm, and for an owner-bound
-    leaf (``PatronFilter`` overrides ``__init__``, so its expanded
-    ``loans__book__loans__patron__email`` runs inside a ``PatronFilter`` instance,
-    walking that set's own branches) whose only match is through a hidden book.
-    """
-    _seed_flat_twin_visibility_graph()
-    row = _FLAT_TWIN_ROWS[shape]
-    filter_input = row.flat if spelling == "flat" else row.nested
-
-    assert _flat_twin_names(row, filter_input, staff=False) == row.anonymous
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("shape", sorted(_FLAT_TWIN_ROWS))
-@pytest.mark.parametrize("spelling", ["flat", "nested"])
-def test_flat_relation_leaf_answers_like_its_nested_twin_for_staff(shape: str, spelling: str):
-    """Staff see the hidden rows, so both spellings match them; the explicit constraint still binds."""
-    _seed_flat_twin_visibility_graph()
-    row = _FLAT_TWIN_ROWS[shape]
-    filter_input = row.flat if spelling == "flat" else row.nested
-
-    assert _flat_twin_names(row, filter_input, staff=True) == row.staff
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "filter_input",
-    [
-        "{ booksCirculationStatus: { exact: repair } }",
-        "{ books: { circulationStatus: { exact: repair } } }",
-    ],
-)
-async def test_flat_relation_leaf_answers_like_its_nested_twin_async(filter_input: str):
-    """The async apply path scopes a flat many-to-many leaf like its nested twin."""
-    branch = await models.Branch.objects.acreate(name="Twin", city="Boston")
-    shelf = await models.Shelf.objects.acreate(code="T-open", topic="general", branch=branch)
-    book = await models.Book.objects.acreate(
-        title="In repair",
-        shelf=shelf,
-        circulation_status=models.Book.CirculationStatus.REPAIR,
-    )
-    genre = await models.Genre.objects.acreate(name="Twin genre")
-    await genre.books.aadd(book)
-
-    payload = await _post_async_shipped(
-        f"query {{ allLibraryGenresConnection(filter: {filter_input})"
-        " { edges { node { name } } } }",
-    )
-
-    assert "errors" not in payload, payload
-    assert payload["data"]["allLibraryGenresConnection"]["edges"] == []
-
-
-@pytest.mark.django_db
-def test_flat_relation_leaf_given_an_empty_value_constrains_nothing():
-    """A flat relation leaf whose value django-filter skips leaves the parent rows alone.
-
-    ``booksTitle: { exact: "" }`` applies no constraint, so the shelf with no
-    book is still returned: the leaf is not "has a visible book".
-    """
-    branch = models.Branch.objects.create(name="Empty", city="Boston")
-    with_book = models.Shelf.objects.create(code="E-book", topic="general", branch=branch)
-    models.Shelf.objects.create(code="E-none", topic="general", branch=branch)
-    models.Book.objects.create(title="Present", shelf=with_book)
-
-    response = _post_graphql(
-        'query { allLibraryShelves(filter: { booksTitle: { exact: "" } }) { code } }',
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    assert [row["code"] for row in payload["data"]["allLibraryShelves"]] == ["E-book", "E-none"]
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize(
-    "filter_input",
-    ["{ booksSubtitle: { isNull: true } }", "{ books: { subtitle: { isNull: true } } }"],
-)
-def test_flat_relation_is_null_leaf_needs_a_related_row_like_its_nested_twin(filter_input: str):
-    """``isNull: true`` on a flat to-many leaf matches parents through a related row only.
-
-    The flat leaf is its nested twin: a shelf matches when one of its books has
-    no subtitle, and a shelf with no book at all does not match under either
-    spelling.
-    """
-    branch = models.Branch.objects.create(name="Null", city="Boston")
-    no_books = models.Shelf.objects.create(code="N-none", topic="general", branch=branch)
-    null_subtitle = models.Shelf.objects.create(code="N-null", topic="general", branch=branch)
-    with_subtitle = models.Shelf.objects.create(code="N-set", topic="general", branch=branch)
-    models.Book.objects.create(title="Untitled sequel", shelf=null_subtitle)
-    models.Book.objects.create(title="Titled", subtitle="Part two", shelf=with_subtitle)
-    assert not no_books.books.exists()
-
-    response = _post_graphql(f"query {{ allLibraryShelves(filter: {filter_input}) {{ code }} }}")
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    assert [row["code"] for row in payload["data"]["allLibraryShelves"]] == ["N-null"]
-
-
 @pytest.mark.django_db
 def test_apply_raises_graphqlerror_on_invalid_filter_input():
     """Form-validation rejection surfaces ``FILTER_INVALID``."""
@@ -4722,10 +4505,9 @@ def test_genre_connection_expanded_origin_pagination_is_row_preserving():
 
     Two genres each match the public flat ``booksTitle`` leaf (the flattened
     reverse-M2M ``books__title__icontains`` expansion) through TWO matching books
-    apiece. A join over the relation would fan each genre out to two rows,
-    inflating ``totalCount`` to 4 and duplicating edges. The leaf walks the
-    declared ``books`` branch, so the genres are restricted through ``pk__in``
-    over the matching books, a per-parent membership test:
+    apiece. Pre-cut-over each genre would fan out to two rows, inflating
+    ``totalCount`` to 4 and duplicating edges. Post-cut-over the correlated
+    ``EXISTS`` collapses the membership to a per-parent existence test:
     ``first: 1`` returns one edge with ``hasNextPage: true`` and a pre-slice
     ``totalCount`` of 2; following the ``after:`` cursor returns the second
     genre with ``hasNextPage: false``. This proves the connection's cursor
@@ -4791,11 +4573,12 @@ def test_genre_connection_expanded_origin_pagination_is_row_preserving():
 def test_genre_connection_nested_spelling_matches_flat_spelling():
     """The nested ``books: {title: ...}`` control equals the flat ``booksTitle`` leaf.
 
-    The nested spelling routes through ``_apply_related_constraints``; the flat
-    spelling walks the same declared ``books`` branch
-    (``FilterSet._apply_walked_leaf``). Over the shared expanded-origin fixture
-    both must return the SAME edges and ``totalCount`` - the nested path is the
-    row-preserving control that pins the flat path's parity.
+    The nested spelling routes through ``_apply_related_constraints`` (machinery
+    untouched by the flat-leaf cut-over); the flat spelling routes through the new
+    correlated-``EXISTS`` applicator. Over the shared expanded-origin fixture both
+    must return the SAME edges and ``totalCount`` - the nested path is the
+    row-preserving control that pins the flat path's parity, not new coverage for
+    the flat adapter.
     """
     _seed_two_matching_genres_over_two_books_each()
 
@@ -4830,78 +4613,70 @@ def test_genre_connection_nested_spelling_matches_flat_spelling():
     assert nested_count == flat_count
 
 
-def _captured_sql(query: str, table: str) -> list[str]:
-    """POST ``query`` and return the captured SQL statements naming ``table``."""
-    with CaptureQueriesContext(connection) as captured:
-        response = _post_graphql(query)
-    assert response.status_code == 200
-    assert "errors" not in response.json(), response.json()
-    return [q["sql"] for q in captured.captured_queries if table in q["sql"].lower()]
-
-
 @pytest.mark.django_db
-def test_genre_connection_flat_leaf_sql_shape_is_its_nested_twins():
-    """Live SQL over the expanded origin: the flat leaf compiles exactly as its nested twin.
+def test_genre_connection_flat_leaf_sql_shape_is_row_preserving():
+    """Live SQL over the expanded origin: no DISTINCT, correlated EXISTS, pinned count.
 
-    Capturing the connection POST (``totalCount`` + edges + ``pageInfo`` with
-    ``first: 1``) under both spellings: the ``library_genre`` root emits exactly
-    TWO queries - the page fetch and the count - and the flat ``booksTitle``
-    statements are byte-identical to the nested ``books: { title }`` ones. Neither
-    carries a ``SELECT DISTINCT`` or a correlated ``EXISTS``; the book and
-    membership tables live inside the ``pk IN`` subquery, never in the outer root
-    shape.
+    Capturing the flat-spelling connection POST (``totalCount`` + edges +
+    ``pageInfo`` with ``first: 1``): the ``library_genre`` root emits exactly TWO
+    queries - the page fetch and the count - and no others. Neither carries a
+    filter-driven ``SELECT DISTINCT`` (the distinct wrapper the pre-cut-over
+    ``distinct=True`` path would add); both carry the correlated ``EXISTS`` that
+    the flat-leaf adapter compiles. The membership + book tables live INSIDE the
+    ``EXISTS`` body, never in the outer root shape.
     """
     _seed_two_matching_genres_over_two_books_each()
 
-    query = """
-        query {
-          allLibraryGenresConnection(
-            filter: %s
-            orderBy: [{ name: ASC }]
-            first: 1
-          ) {
-            edges { node { name } }
-            pageInfo { hasNextPage endCursor }
-            totalCount
-          }
-        }
-    """
-    flat_sql = _captured_sql(query % '{ booksTitle: { iContains: "cardio" } }', "library_genre")
-    nested_sql = _captured_sql(
-        query % '{ books: { title: { iContains: "cardio" } } }',
-        "library_genre",
-    )
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(
+                filter: { booksTitle: { iContains: "cardio" } }
+                orderBy: [{ name: ASC }]
+                first: 1
+              ) {
+                edges { node { name } }
+                pageInfo { hasNextPage endCursor }
+                totalCount
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    assert "errors" not in response.json(), response.json()
 
+    genre_sql = [
+        q["sql"] for q in captured.captured_queries if "library_genre" in q["sql"].lower()
+    ]
     # Pinned query roles over the ``library_genre`` root:
-    #   [0] page fetch  - SELECT ... FROM library_genre WHERE id IN (...) LIMIT 2
-    #   [1] count       - SELECT COUNT(*) ... FROM library_genre WHERE id IN (...)
+    #   [0] page fetch  - SELECT ... FROM library_genre WHERE EXISTS(...) LIMIT 2
+    #   [1] count       - SELECT COUNT(*) ... FROM library_genre WHERE EXISTS(...)
     # Exactly two; totalCount gating (Decision 4) adds the count, first: 1 adds
     # no separate slice query.
-    assert len(flat_sql) == 2
-    assert flat_sql == nested_sql
-    for sql in flat_sql:
+    assert len(genre_sql) == 2
+    for sql in genre_sql:
         assert "SELECT DISTINCT" not in sql.upper()
-        assert "EXISTS(" not in sql.upper()
-        # The book + membership tables belong to the subquery, never the outer
-        # root FROM clause.
+        assert "EXISTS(" in sql.upper()
+        # The book + membership tables belong to the EXISTS body, never the
+        # outer root FROM clause.
         pre_where = sql.split("WHERE")[0]
         assert "library_book" not in pre_where.lower()
 
 
 @pytest.mark.django_db
 def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
-    """Live SQL over the direct deep origin: single query, its nested twin's shape.
+    """Live SQL over the direct deep origin: single query, no DISTINCT, EXISTS re-entry.
 
     The ``allLibraryLoans`` list field filtered on the reverse-FK deep leaf
-    ``bookLoansPatronEmail`` (``Meta.fields`` path ``book__loans__patron__email``,
-    which walks the declared ``book``, ``loans`` and ``patron`` branches) emits
-    exactly ONE query. Its outer shape owns
-    ``library_loan`` exactly once (the re-entry - a second ``library_loan`` alias
-    plus ``library_patron`` - lives inside the ``pk IN`` subqueries, after the
-    outer ``WHERE``). No ``SELECT DISTINCT`` and no correlated ``EXISTS``. The
-    outer alias set is ``library_loan`` alone: no ``JOIN`` and no
-    ``library_book`` before the outer ``WHERE``. Row preservation is read off the
-    payload too - both seeded loans come back, each exactly once.
+    ``bookLoansPatronEmail`` emits exactly ONE query. Its outer shape owns
+    ``library_loan`` exactly once (the membership re-entry - a second
+    ``library_loan`` alias plus ``library_patron`` - lives inside the ``EXISTS``
+    subquery, after the outer ``WHERE``). No filter-driven ``SELECT DISTINCT``.
+    The outer alias set is ``library_loan`` alone: no ``JOIN`` and no
+    ``library_book`` before the outer ``WHERE``, and the whole statement owns
+    exactly one ``EXISTS``. Row preservation is read off the payload too - both
+    seeded loans come back, each exactly once.
     """
     branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
     shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
@@ -4932,10 +4707,11 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
     assert len(loan_sql) == 1
     sql = loan_sql[0]
     assert "SELECT DISTINCT" not in sql.upper()
-    assert "EXISTS(" not in sql.upper()
+    assert "EXISTS(" in sql.upper()
+    assert sql.upper().count("EXISTS(") == 1
 
     # The outer query (everything before the outer WHERE) owns library_loan once;
-    # the re-entry and library_patron live inside the subqueries.
+    # the membership re-entry and library_patron live inside the EXISTS body.
     pre_where = sql.split("WHERE")[0]
     assert pre_where.count('FROM "library_loan"') == 1
     assert "library_book" not in pre_where.lower()
@@ -4949,8 +4725,8 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
 
     The central production oracle: ``note icontains "Cardio" OR
     book__loans__patron__email icontains "Cardio"`` unions a DIRECT scalar leaf
-    with a DEEP relational leaf that walks the declared ``book``, ``loans`` and
-    ``patron`` branches. Over the Medtrics graph the result is EXACTLY
+    with a DEEP relational leaf that routes through the row-preserving correlated
+    ``EXISTS``. Over the Medtrics graph the result is EXACTLY
     ``[relation_and_direct, relation_only, direct_only]`` (id-ordered, each once):
 
     - ``relation_and_direct`` + ``relation_only`` match the relational leaf via the
@@ -4960,10 +4736,9 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
     - ``unrelated`` matches neither and is excluded.
 
     The SQL-shape assertions pin the row-preserving guarantee at the wire: one
-    root query, ``pk IN`` subqueries for the relational arm (no correlated
-    ``EXISTS``), NO framework ``SELECT DISTINCT``, and NO ``library_loan``
-    self-join / ``library_patron`` join in the OUTER query (the re-entry lives
-    inside the subqueries).
+    root query, a correlated ``EXISTS`` for the relational arm, NO framework
+    ``SELECT DISTINCT``, and NO ``library_loan`` self-join / ``library_patron``
+    join in the OUTER query (the membership re-entry lives inside the ``EXISTS``).
     """
     graph = _seed_medtrics_loan_graph()
 
@@ -4998,12 +4773,12 @@ def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_htt
     assert len(loan_sql) == 1
     sql = loan_sql[0]
     assert "SELECT DISTINCT" not in sql.upper()
-    # The relational arm compiles to pk IN subqueries, never a correlated EXISTS.
-    assert "EXISTS(" not in sql.upper()
+    # The relational arm compiles to a correlated EXISTS re-entry.
+    assert "EXISTS(" in sql.upper()
 
     # The outer query (everything before the outer WHERE) owns library_loan once;
-    # no self-join and no patron join leak into the outer shape - the re-entry
-    # and library_patron live inside the subqueries.
+    # no self-join and no patron join leak into the outer shape - the membership
+    # re-entry and library_patron live inside the EXISTS subquery.
     pre_where = sql.split("WHERE")[0]
     assert pre_where.count('FROM "library_loan"') == 1
     assert "library_patron" not in pre_where.lower()
@@ -5080,20 +4855,19 @@ def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_ht
         end_cursor = conn_one["pageInfo"]["endCursor"]
         assert isinstance(end_cursor, str) and end_cursor
 
-        # The outer connection queries filter library_loan through pk IN
-        # subqueries, with no correlated EXISTS and no framework DISTINCT /
-        # self-join / patron join.
+        # The outer connection query owns library_loan once with a correlated
+        # EXISTS and no framework DISTINCT / self-join / patron join.
         loan_sql = [
             q["sql"]
             for q in captured.captured_queries
             if "library_loan" in q["sql"].lower() and "SELECT" in q["sql"].upper()
         ]
         assert loan_sql, captured.captured_queries
-        row_sql = [sql for sql in loan_sql if "library_patron" in sql.lower()]
+        row_sql = [sql for sql in loan_sql if "EXISTS(" in sql.upper()]
         assert len(row_sql) >= 1, loan_sql
         for sql in row_sql:
             assert "SELECT DISTINCT" not in sql.upper()
-            assert "EXISTS(" not in sql.upper()
+            assert sql.upper().count("EXISTS(") == 1
             pre_where = sql.split("WHERE")[0]
             assert pre_where.count('FROM "library_loan"') == 1
             assert "library_patron" not in pre_where.lower()

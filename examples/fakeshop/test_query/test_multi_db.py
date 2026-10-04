@@ -18,7 +18,7 @@ Resolver isolation and debug capture (per spec Goals item 3 + Test plan
   parent was pinned to.
 
 The suite also owns the alias pins that only a second database can prove: the
-walked relational leaf executing every hop on ``shard_b``, the write
+row-preserving relational leaf predicate executing wholly on ``shard_b``, the write
 alias for generated and serializer mutations, and the post-``OrderSet`` routing
 attestation. Four routing rows mount a consumer override on a ``.using("shard_b")``
 list field and cover an alias change, a hints change, an in-place rewrite of the
@@ -1002,19 +1002,18 @@ def _seed_loan_relation_graph_on_shard_b() -> dict[str, int]:
 
 
 @pytest.mark.django_db(databases=["default", "shard_b"])
-def test_walked_relational_leaf_executes_on_shard_b_alias(
+def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias(
     _build_loan_filter_test_schema: None,
 ):
-    """The walked relational leaf runs every hop on the ``shard_b`` alias.
+    """The correlated-``EXISTS`` relational-leaf predicate runs on the ``shard_b`` alias.
 
     The production ``LoanFilter`` deep leaf ``book__loans__patron__email`` (spelled
-    ``bookLoansPatronEmail`` on the wire) walks the declared ``book``, ``loans`` and
-    ``patron`` branches and is applied over a ``.using('shard_b')`` queryset. Each
-    hop's visible rows are seeded on ``queryset.db``, so the whole filter - outer
-    root scan AND every ``pk IN`` re-entry down to ``library_patron`` - must execute
-    on ``shard_b``: the seeded shard rows return row-preserved (both shared-book
-    loans, each once), and the captured ``shard_b`` SQL carries the re-entry with
-    no framework ``DISTINCT``.
+    ``bookLoansPatronEmail`` on the wire) is applied over a ``.using('shard_b')``
+    queryset. The predicate primitive pins its correlated ``EXISTS`` subquery to
+    ``queryset.db``, so the whole filter - outer root scan AND the ``EXISTS``
+    re-entry - must execute on ``shard_b``: the seeded shard rows return
+    row-preserved (both shared-book loans, each once), and the captured ``shard_b``
+    SQL carries the ``EXISTS`` with no framework ``DISTINCT``.
     """
     from django.db import connection as default_connection
     from django.test.utils import CaptureQueriesContext
@@ -1048,17 +1047,16 @@ def test_walked_relational_leaf_executes_on_shard_b_alias(
         pks["relation_b"],
     ]
 
-    # The re-entry down to library_patron ran on shard_b (each hop seeded on
-    # queryset.db), never on default.
+    # The correlated EXISTS re-entry ran on shard_b (the .using(queryset.db) pin),
+    # never on default.
     shard_loan_sql = [
         query["sql"]
         for query in shard_captured.captured_queries
-        if "library_loan" in query["sql"].lower() and "library_patron" in query["sql"].lower()
+        if "library_loan" in query["sql"].lower() and "EXISTS(" in query["sql"].upper()
     ]
     assert shard_loan_sql, shard_captured.captured_queries
     for sql in shard_loan_sql:
         assert "SELECT DISTINCT" not in sql.upper()
-        assert "EXISTS(" not in sql.upper()
     assert not [
         query["sql"]
         for query in default_captured.captured_queries

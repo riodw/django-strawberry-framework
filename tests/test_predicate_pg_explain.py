@@ -1,17 +1,19 @@
 """Postgres planner regression for the row-preserving correlated ``EXISTS`` predicate.
 
-Live HTTP already pins the emitted ``EXISTS`` SQL and the row-preserving payload
-(``examples/fakeshop/test_query/test_products_api.py::test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents``):
+Live HTTP already pins the emitted SQL and the row-preserving payload on the
+shipped ``allLibraryLoans`` ``LoanFilter`` leaf
+(``examples/fakeshop/test_query/test_library_api.py::test_library_loans_deep_leaf_sql_shape_is_row_preserving``
+and
+``examples/fakeshop/test_query/test_library_api.py::test_library_loans_filter_by_deep_to_many_email_is_row_preserving_over_http``):
 one root query, no ``SELECT DISTINCT``, membership tables inside ``EXISTS``,
-matching parents each once. Rungs 1-3 cannot observe
+matching loan ids each once. Rungs 1-3 cannot observe
 ``EXPLAIN (ANALYZE, BUFFERS)`` actual-row counts: that is not a GraphQL wire
 shape. This module is the guarded regression twin of
 ``scripts/capture_pg_predicate_explain.py`` (artifact
 ``docs/row-preserving-predicates-part1-pg-explain.md``): it drives the same
-``Loan`` filter set (``medtrics_loan_filter``: the Medtrics deep to-many leaf
-``book__loans__patron__email__icontains`` with no declared branch to walk) and
-asserts the top plan node's ACTUAL rows equal the production result with no
-outer multiplication.
+fakeshop ``LoanFilter`` deep to-many leaf
+``book__loans__patron__email__icontains`` and asserts the top plan node's
+ACTUAL rows equal the production result with no outer multiplication.
 
 The whole module is ``@pytest.mark.pg`` so the default SQLite suite auto-skips
 it (root ``conftest.py``).
@@ -20,11 +22,10 @@ it (root ``conftest.py``).
 import re
 
 import pytest
+from apps.library.filters import LoanFilter
 from apps.library.models import Book, Branch, Loan, Patron, Shelf
 from django.db import connection as db_connection
 from django.http import HttpRequest
-
-from scripts.capture_pg_predicate_explain import medtrics_loan_filter
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
@@ -56,10 +57,9 @@ def _seed():
 
 
 def _production_qs():
-    """Return the compiled ``.qs`` from the ``medtrics_loan_filter`` path."""
-    loan_filter = medtrics_loan_filter()
-    loan_filter.get_filters()  # publish the expansion snapshot (as apply_* does).
-    filterset = loan_filter(
+    """Return the compiled ``.qs`` from the real fakeshop ``LoanFilter`` path."""
+    LoanFilter.get_filters()  # publish the expansion snapshot (as apply_* does).
+    filterset = LoanFilter(
         data={_LEAF: _NEEDLE},
         queryset=Loan.objects.order_by("id"),
         request=HttpRequest(),
@@ -87,8 +87,10 @@ def test_emitted_leaf_is_a_single_distinct_free_correlated_exists():
 def test_explain_analyze_buffers_shows_no_outer_fan_out():
     """EXPLAIN(ANALYZE, BUFFERS) executes the emitted query with no outer multiplication.
 
-    The test above pins the distinct-free correlated ``EXISTS`` SQL; this row
-    is the planner half SQL text cannot show: the top plan node's
+    Live
+    ``examples/fakeshop/test_query/test_library_api.py::test_library_loans_deep_leaf_sql_shape_is_row_preserving``
+    already pins the distinct-free correlated ``EXISTS`` SQL over ``/graphql/``.
+    This row is the planner half that HTTP cannot see: the top plan node's
     ACTUAL row count equals both the production result count and the
     direct-invocation dedup oracle, and the plan text carries no ``DISTINCT``.
     A JOIN + outer-``DISTINCT`` rewrite would instead multiply the outer
@@ -98,7 +100,7 @@ def test_explain_analyze_buffers_shows_no_outer_fan_out():
     qs = _production_qs()
 
     production_pks = list(qs.values_list("pk", flat=True))
-    leaf = medtrics_loan_filter().get_filters()[_LEAF]
+    leaf = LoanFilter.get_filters()[_LEAF]
     oracle_pks = sorted(
         leaf.filter(Loan.objects.all(), _NEEDLE).distinct().values_list("pk", flat=True),
     )

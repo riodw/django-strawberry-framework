@@ -4,11 +4,10 @@ The [Part 1 plan][part1-plan] (``docs/row-preserving-predicates-part1-plan.md``,
 Slice C.3a and Sequencing step 9) requires a PostgreSQL
 ``EXPLAIN (ANALYZE, BUFFERS)`` artifact captured from the **actually emitted**
 distinct-free inner query -- "never an idealized hand-written query". This script
-drives the genuine production generation + apply path (a ``Loan`` filter set
-over the framework-generated deep to-many leaf
+drives the genuine production generation + apply path (a real fakeshop
+``LoanFilter`` over the framework-generated deep to-many leaf
 ``book__loans__patron__email__icontains`` -- the Medtrics reverse-FK
-reproduction shape, ``medtrics_loan_filter``), reads the SQL straight off the
-compiled queryset, runs
+reproduction shape), reads the SQL straight off the compiled queryset, runs
 ``EXPLAIN (ANALYZE, BUFFERS)`` on it against a real Postgres server, and writes
 ``docs/row-preserving-predicates-part1-pg-explain.md``.
 
@@ -33,15 +32,14 @@ vendor).
 from __future__ import annotations
 
 import sys
-from functools import cache
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACT_PATH = REPO_ROOT / "docs" / "row-preserving-predicates-part1-pg-explain.md"
 
 # The exact production leaf driven below -- a framework-generated deep to-many
-# path, the one fakeshop's ``LoanFilter.Meta.fields`` declares (the Medtrics
+# path declared on fakeshop's ``LoanFilter.Meta.fields`` (the Medtrics
 # reverse-FK reproduction: Loan -> book (to-one) -> loans (to-many reverse FK,
 # the first multiplying hop) -> patron (to-one) -> email (scalar)).
 LEAF = "book__loans__patron__email__icontains"
@@ -128,31 +126,8 @@ def _seed() -> dict[str, int]:
     }
 
 
-@cache
-def medtrics_loan_filter() -> Any:
-    """Return a ``Loan`` filter set declaring only the Medtrics path, with no branch.
-
-    fakeshop's ``LoanFilter`` declares the same ``Meta.fields`` path, but its
-    ``book`` / ``patron`` ``RelatedFilter`` branches (and ``BookFilter.loans``)
-    make that leaf walk them as the nested branch chain it spells. With no
-    declared branch the leaf is the eligible framework-generated to-many
-    candidate the correlated ``EXISTS`` serves. Built on first call, after
-    Django is configured.
-    """
-    from apps.library.models import Loan
-
-    from django_strawberry_framework.filters import FilterSet
-
-    class MedtricsLoanFilter(FilterSet):
-        class Meta:
-            model = Loan
-            fields: ClassVar[dict[str, list[str]]] = {"book__loans__patron__email": ["icontains"]}
-
-    return MedtricsLoanFilter
-
-
 def _drive_production_queryset() -> Any:
-    """Instantiate ``medtrics_loan_filter()`` and return its compiled ``.qs``.
+    """Instantiate the real fakeshop ``LoanFilter`` and return its compiled ``.qs``.
 
     This is the genuine production generation + apply path: the metaclass /
     ``get_filters`` build stamps generation provenance and publishes the
@@ -162,12 +137,12 @@ def _drive_production_queryset() -> Any:
     primitive with the framework-added ``distinct`` suppressed inside the
     existence body.
     """
+    from apps.library.filters import LoanFilter
     from apps.library.models import Loan
     from django.http import HttpRequest
 
-    loan_filter = medtrics_loan_filter()
-    loan_filter.get_filters()  # publish the expansion snapshot (as apply_* does).
-    filterset = loan_filter(
+    LoanFilter.get_filters()  # publish the expansion snapshot (as apply_* does).
+    filterset = LoanFilter(
         data={LEAF: NEEDLE},
         queryset=Loan.objects.order_by("id"),
         request=HttpRequest(),
@@ -250,9 +225,10 @@ def main() -> None:
         # production behavior: invoke the same leaf directly on the outer
         # queryset, then dedup) -- proves the row-preserving rewrite returns the
         # SAME rows it EXPLAINs.
+        from apps.library.filters import LoanFilter
         from apps.library.models import Loan
 
-        leaf = medtrics_loan_filter().get_filters()[LEAF]
+        leaf = LoanFilter.get_filters()[LEAF]
         production_pks = list(qs.values_list("pk", flat=True))
         oracle_pks = sorted(
             leaf.filter(Loan.objects.all(), NEEDLE).distinct().values_list("pk", flat=True),
@@ -303,15 +279,13 @@ def main() -> None:
     lines.append("")
     lines.append(
         "The SQL below is read directly off the compiled queryset produced by "
-        "a `Loan` filter set declaring the fakeshop `LoanFilter`'s Medtrics "
-        "`Meta.fields` path with no `RelatedFilter` (`medtrics_loan_filter` in "
-        "`scripts/capture_pg_predicate_explain.py`; on `LoanFilter` itself the "
-        "leaf walks the declared branches as a nested chain). No SQL is "
-        "hand-written; the EXPLAIN executes the exact parameterized statement "
-        "`qs.query.get_compiler(using=qs.db).as_sql()` returns.",
+        "the real fakeshop `LoanFilter` (`examples/fakeshop/apps/library/"
+        "filters.py`). No SQL is hand-written; the EXPLAIN executes the exact "
+        "parameterized statement `qs.query.get_compiler(using=qs.db).as_sql()` "
+        "returns.",
     )
     lines.append("")
-    lines.append("- FilterSet: `MedtricsLoanFilter` (root model `Loan`, no declared branch)")
+    lines.append("- FilterSet: `apps.library.filters.LoanFilter` (root model `Loan`)")
     lines.append(f"- Active generated leaf: `{LEAF}` = `{NEEDLE!r}`")
     lines.append(
         "- Relation path (Medtrics reverse-FK reproduction): "

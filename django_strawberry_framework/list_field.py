@@ -1259,12 +1259,11 @@ def _orderset_class_from_definition(definition: DjangoTypeDefinition) -> type[Or
 def _field_label(info: Info[object, object]) -> str:
     """Return the resolver field label without allowing consumer descriptors to escape."""
     try:
-        # A consumer ``info_class`` can shadow ``field_name`` with anything.
-        field_name: object = info.field_name
+        # A consumer ``info_class`` can shadow ``field_name`` with a descriptor that raises.
+        field_name = info.field_name
     except Exception:
         return "DjangoListField"
-    # basedpyright: trust boundary: that shadowing ``info_class`` can answer any object
-    return field_name if isinstance(field_name, str) and field_name else "DjangoListField"  # pyright: ignore[reportUnnecessaryIsInstance]
+    return field_name or "DjangoListField"
 
 
 def _resolver_root_and_info(

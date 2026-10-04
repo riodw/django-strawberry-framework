@@ -984,11 +984,14 @@ consumes, never a parallel implementation:
   target `Loan` again), the exact owning type's visibility — the
   definition recorded in the frozen plan, primary or secondary, never
   re-resolved through the registry — composes into the inner rows of the
-  `EXISTS` body exactly like any other registered-type hop. This is a
-  deliberate divergence from the generated `filter:` leaf's row-preserving
-  rewrite, which preserves the original filter invocation's
-  raw traversal (no hop visibility) — the same path yields different
-  inner constraints under `filter:` vs `search:`, by design, and the
+  `EXISTS` body exactly like any other registered-type hop. A flat
+  `filter:` leaf over the same path agrees wherever the path walks
+  declared `RelatedFilter` hops: `LoanFilter`'s `book__loans__patron__email`
+  walks `book`, `loans` and `patron`, so `LoanType` visibility scopes the
+  inner loans under `filter:` too (spec-027 Decision 8 step 3). Only a
+  traversal no `RelatedFilter` declares keeps the routed row-preserving
+  rewrite's raw traversal (no hop visibility), and there the same path
+  yields different inner constraints under `filter:` vs `search:`. The
   test plan pins the recursion case.
 - A related model with **no registered type** has no GraphQL surface and
   therefore no visibility contract to honor; the hop traverses the raw

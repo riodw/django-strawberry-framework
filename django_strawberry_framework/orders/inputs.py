@@ -366,13 +366,8 @@ def _ensure_field_specs(orderset_cls: type[OrderSet], input_value: object) -> No
     traversal = orderset_cls._input_traversal()
     if not any(iter_active_fields(orderset_cls, input_value, traversal)):
         return
-    if (
-        # basedpyright: trust boundary: the public ``normalize_input_value`` passes its
-        # ``orderset_cls`` argument through unchecked; the class check keeps a non-class caller
-        # out of the spec build
-        isinstance(orderset_cls, type)  # pyright: ignore[reportUnnecessaryIsInstance]
-        and callable(getattr(orderset_cls, "get_fields", None))
-        and not any(owner is orderset_cls for owner, _ in _field_specs)
+    if callable(getattr(orderset_cls, "get_fields", None)) and not any(
+        owner is orderset_cls for owner, _ in _field_specs
     ):
         _build_input_fields(orderset_cls)
 

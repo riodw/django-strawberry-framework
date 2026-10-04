@@ -95,8 +95,10 @@ class PropertyFilter(FilterSet):
 
 
 class EntryFilter(FilterSet):
-    # Explicit queryset: excludes properties named "Secret", acting as a scope
-    # boundary. Entries linked to a "Secret" property never appear in results.
+    # Explicit queryset: a scope boundary excluding properties named "Secret".
+    # ``property: { ... }`` and every flat ``property*`` leaf answer only from the
+    # properties it admits, so no property predicate matches a "Secret" entry; an
+    # unfiltered read still returns it.
     property = RelatedFilter(
         PropertyFilter,
         field_name="property",

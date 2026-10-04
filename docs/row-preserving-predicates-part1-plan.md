@@ -6,6 +6,32 @@
 floor as it stood when this plan was written, and is left standing rather than rewritten. A
 worker enacting the acceptance steps today pins the current exact floor, `Django==5.2.16`.
 
+**Routing-scope note.** The routed population is narrower than this plan's
+"expanded generated origin": a flat leaf whose ORM path walks a declared
+`RelatedFilter` hop (every flattened `RelatedFilter` copy, an owner-bound
+projected leaf, a `Meta.fields` traversal under a declared root such as
+`LoanFilter`'s `book__loans__patron__email`, and a relation-key leaf over a
+declared relation, its `isnull` included) answers over the rows each hop's
+target `get_queryset` and explicit `queryset=` admit, and is never routed
+through the correlated `EXISTS` adapter
+(`django_strawberry_framework/filters/sets.py::FilterSet._apply_flat_leaves`,
+spec-027 Decision 8 step 3). Each hop it walks is one correlated `EXISTS`
+built from the hop's visible rows
+(`django_strawberry_framework/optimizer/predicates.py::related_rows_exist`),
+the same restriction a nested `RelatedFilter` branch applies
+(`django_strawberry_framework/filters/sets.py::FilterSet._apply_related_constraints`);
+only the `and` / `or` / `not` arms of `_q_for_branch` compose a parent-pk
+`pk__in`. Only framework-generated leaves whose path walks no
+declared hop route, so the Boolean relation `isnull` routing below applies only
+to a relation no `RelatedFilter` declares. Every routing statement below about
+flattened `RelatedFilter` leaves, the public flat `booksTitle` / `genresName`
+inputs, the deep `book__loans__patron__email` leaf, the nested branch's
+`pk__in` composition and its `Exists` / `pk__in` equivalence records the plan
+as enacted, and is left standing rather than rewritten; the PG `EXPLAIN`
+artifact (`docs/row-preserving-predicates-part1-pg-explain.md`) captures a
+routed leaf and the walked `book__loans__patron__email` leaf as production
+emits them.
+
 ## Identity and completion ownership
 
 This document is the working plan for the **pre-card groundwork slice of
@@ -1017,15 +1043,9 @@ page, page one holds the first two IDs, page two holds only
 `direct_only`, `totalCount` stays three. The root SQL contains no
 `library_loan` self-join for `Book.loans`, no patron join, and no
 framework-added `DISTINCT` (the emitted outer query excludes both the
-membership and terminal tables); the row matching both the direct and
-relational branches remains one row. On fakeshop's `LoanFilter` every
-segment of `book__loans__patron__email` is a declared `RelatedFilter`
-(`LoanFilter.book`, `BookFilter.loans`, `LoanFilter.patron`), so the leaf
-runs as that nested branch chain ([spec-027][spec-027-filters] "A flat leaf that
-walks a declared branch is that branch spelled flat") and `pk IN`
-subqueries over each target's visible rows own those inner joins; over a
-`Loan` filter set declaring the same path with no `RelatedFilter`, one
-correlated `EXISTS` owns them. A test that only asserts three unique IDs after deduplication,
+membership and terminal tables); one correlated `EXISTS` owns those inner
+joins; the row matching both the direct and relational branches remains
+one row. A test that only asserts three unique IDs after deduplication,
 or merely checks that `DISTINCT` is absent, is insufficient.
 
 The same fixture serves three levels rather than three subtly different
@@ -1039,10 +1059,8 @@ the fakeshop tier (live `/graphql/` where the surface is reachable,
 (b) **card 060 integration test** — the live `/graphql/` `search:`
 request over the same rows (owned by the card); (c) **SQL-shape test** —
 package-tier (`tests/`) query-object inspection proving the result came
-from the walked branch chain's `pk IN` subqueries, not JOIN-plus-`DISTINCT`
-or a scalar aggregate, with the same-table re-entry inside the subqueries
-(the correlated-`EXISTS` same-table inner-alias shape of Slice B is pinned
-over a filter set declaring no branch). The
+from a correlated `EXISTS`, not JOIN-plus-`DISTINCT` or a scalar
+aggregate, including the same-table inner-alias shape (Slice B). The
 ordered oracles assert against **pks captured at fixture creation**,
 never insertion-order faith about pk allocation.
 
@@ -1116,11 +1134,12 @@ path):
    defect): the existing `Genre -> books` reverse-M2M surface over
    `allLibraryGenresConnection` (no models, no migrations): seed one genre
    linked to two books whose titles both match, filter via the **public
-   flat `booksTitle` input**, select `totalCount` + edges + page info,
-   assert one genre edge and root count of one. The flat leaf walks the
-   declared `books` branch, so it compiles byte-identical to the nested
-   `books: {title: ...}` spelling (`pk IN`, no `EXISTS`), and the live SQL
-   test pins that identity.
+   flat `booksTitle` input** (the defective path today), select
+   `totalCount` + edges + page info, assert one genre edge and root count
+   of one. The nested `books: {title: ...}` spelling rides along only as
+   the row-preserving control — it already goes through
+   `_apply_related_constraints` and cannot earn the new compiler's
+   coverage.
 2. **Direct deep generated origin**: a non-colliding direct deep to-many
    lookup added to the existing library `LoanFilter`
    (`examples/fakeshop/apps/library/filters.py` — the surface exists; no
@@ -1129,10 +1148,7 @@ path):
    the Medtrics-shaped **reverse-FK** path (`book__loans__patron__email`,
    the shared C.4 fixture) so live cardinality coverage is not earned
    solely through the `Book.genres` M2M: it asserts ordered edge IDs,
-   `totalCount`, and a page boundary with several matching children. Its
-   segments are all declared branches, so it runs as their nested chain;
-   the live correlated-`EXISTS` SQL proof is products' `itemsName`
-   (`CategoryFilter.Meta.fields` `items__name`, no `items` branch).
+   `totalCount`, and a page boundary with several matching children.
 
 Live-tier discipline (per `examples/fakeshop/test_query/README.md`):
 these suites route requests through the shared
@@ -1223,9 +1239,8 @@ make stale:
    (C.3 + C.3a).
 6. Prove the acceptance matrix against the test-local baseline oracle
    (C.4) before changing production routing.
-7. Cut over direct generated leaves that cross no declared
-   `RelatedFilter` (a flat leaf crossing one runs as that branch); remove
-   the framework-added global `distinct` per the multiset contract.
+7. Cut over direct and flattened generated leaves; remove the
+   framework-added global `distinct` per the multiset contract.
 8. Live proofs for both generated origins + SQL-shape assertions (C.5).
 9. Validate the **exact acceptance floor** and the current release
    (follow-up review, finding 5): run the Slice A classifier and Slice B

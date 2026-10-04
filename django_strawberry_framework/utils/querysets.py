@@ -308,9 +308,18 @@ def base_queryset(model: type[_ModelT], *, using: str | None = None) -> models.Q
 
     ``using`` pins the seed to a database alias: a sharded parent must seed
     its children on the SAME connection, and the conditional-on-``None`` shape
-    was being written out at each such site. ``relay.py`` deliberately does
-    not use this - it takes the raw manager and composes from there.
+    was being written out at each such site.
+
+    An abstract model has no default manager, so it raises ``ConfigurationError``
+    naming the model: a ``DjangoType`` over an abstract model serves rows only
+    from a consumer resolver that returns concrete instances.
     """
+    if model._meta.abstract:
+        raise ConfigurationError(
+            f"{model.__name__} is an abstract model and has no default manager to seed a "
+            f"queryset from. Point Meta.model at a concrete model, or resolve the field with "
+            f"a custom resolver that returns concrete rows.",
+        )
     manager = model._default_manager
     return manager.using(using).all() if using is not None else manager.all()
 

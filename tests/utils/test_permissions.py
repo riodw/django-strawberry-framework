@@ -28,6 +28,7 @@ from django_strawberry_framework.utils.permissions import (
     iter_input_items,
     request_from_info,
     run_active_input_permission_checks,
+    walk_declared_relation_path,
 )
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 
@@ -421,6 +422,10 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
         check_name_permission = "not-a-callable"
 
         @classmethod
+        def _permission_walk_gates(cls, input_value):
+            return ()
+
+        @classmethod
         def _active_permission_targets(cls, input_value):
             return ["name"], [("duck", _DuckRelated(), {"x": 1})]
 
@@ -550,6 +555,48 @@ def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
     ]
 
 
+def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_last_target():
+    """The walk reads the declared chain a flat path spells and hands back the rest.
+
+    The longest ``field_name`` match is one hop; the walk stops at a segment no
+    declaration claims and after a hop whose target is not a class; a
+    relation-key path consumes its last relation as a hop and leaves nothing.
+    """
+
+    class Category:
+        related_filters: dict[str, object] = {}
+
+    class Version:
+        related_filters: dict[str, object] = {}
+
+    class Item:
+        related_filters = {
+            "category": _Rel("category", Category, target_attr="filterset"),
+            "version": _Rel("target_version", Version, target_attr="filterset"),
+            "milestone": _Rel("target_version__milestone", Category, target_attr="filterset"),
+            "dangling": _Rel("dangling", None, target_attr="filterset"),
+        }
+
+    def _walk(path):
+        hops, remainder = walk_declared_relation_path(
+            Item,
+            path,
+            related_attr="related_filters",
+            target_attr="filterset",
+        )
+        return [(hop.owner, hop.declared_attr, hop.target) for hop in hops], remainder
+
+    assert _walk("name") == ([], ("name",))
+    assert _walk("category") == ([(Item, "category", Category)], ())
+    assert _walk("category__name") == ([(Item, "category", Category)], ("name",))
+    assert _walk("category__parent__name") == ([(Item, "category", Category)], ("parent", "name"))
+    assert _walk("target_version__milestone__name") == ([(Item, "milestone", Category)], ("name",))
+    assert _walk("target_version__milestone") == ([(Item, "milestone", Category)], ())
+    assert _walk("target_version__code") == ([(Item, "version", Version)], ("code",))
+    assert _walk("dangling__name") == ([(Item, "dangling", None)], ("name",))
+    assert _walk("undeclared__name") == ([], ("undeclared", "name"))
+
+
 def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name():
     """A hop is matched on ``field_name`` (ORM accessor), not the public attr name.
 
@@ -579,6 +626,35 @@ def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name()
         target_attr="filterset",
     )
     assert calls == ["Book.visible_shelves", "Shelf.code"]
+
+
+def test_fire_flat_relation_path_gates_fires_the_branch_gate_of_a_relation_key_leaf():
+    """A relation-key leaf (``shelves__isnull``) walks its declared branch, so its gate fires.
+
+    The leaf reads the branch's target rows like its nested twin does, so the
+    branch gate keyed on the PUBLIC attr fires; nothing remains on the target,
+    so no target field gate fires.
+    """
+    calls: list[str] = []
+
+    class Shelf:
+        check_shelves_permission = _record_gate(calls, "Shelf.shelves")
+
+    class Book:
+        related_filters = {
+            "visible_shelves": _Rel("shelves", Shelf, target_attr="filterset"),
+        }
+        check_visible_shelves_permission = _record_gate(calls, "Book.visible_shelves")
+
+    _fire_flat_relation_path_gates(
+        Book,
+        "shelves",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    assert calls == ["Book.visible_shelves"]
 
 
 def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
@@ -793,7 +869,7 @@ def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_str
     class _UnreadableSet:
         related_filters = {"category": _UnreadableRelation()}
 
-    with pytest.raises(ConfigurationError, match="unreadable related permission branch"):
+    with pytest.raises(ConfigurationError, match="unreadable related branch"):
         _fire_flat_relation_path_gates(
             _UnreadableSet,
             "category__name",
@@ -889,6 +965,10 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
 
     class _Parent:
         @classmethod
+        def _permission_walk_gates(cls, input_value):
+            return ()
+
+        @classmethod
         def _active_permission_targets(cls, input_value):
             # The fused single-pass contract ``run_active_input_permission_checks``
             # consumes: one call yields BOTH the per-field gate
@@ -948,6 +1028,10 @@ def test_run_active_input_permission_checks_caps_related_recursion():
 
     class _SelfRef:
         _MAX_LOGIC_DEPTH = 2
+
+        @classmethod
+        def _permission_walk_gates(cls, input_value):
+            return ()
 
         @classmethod
         def _active_permission_targets(cls, input_value):
@@ -1081,6 +1165,10 @@ def test_related_depth_error_survives_hostile_child_qualname():
 
     class _Parent:
         @classmethod
+        def _permission_walk_gates(cls, input_value):
+            return ()
+
+        @classmethod
         def _active_permission_targets(cls, input_value):
             return [], [("child", related, input_value)]
 
@@ -1114,6 +1202,10 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
     related = type("Related", (), {"child_set": _ChildWithoutDepthCap})()
 
     class _Parent:
+        @classmethod
+        def _permission_walk_gates(cls, input_value):
+            return ()
+
         @classmethod
         def _active_permission_targets(cls, input_value):
             return [], [("child", related, input_value)]
@@ -1237,6 +1329,10 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
         pass
 
     class _SampleFilter:
+        @classmethod
+        def _permission_walk_gates(cls, input_value):
+            return ()
+
         @classmethod
         def _active_permission_targets(cls, input_value):
             return [], [("duck", _DuckRelatedObj(), {"sub": 1})]

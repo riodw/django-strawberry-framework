@@ -491,7 +491,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
 ├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
-├── test_predicate_pg_explain.py  # Postgres planner regression for the row-preserving correlated ``EXISTS`` predicate.
+├── test_predicate_pg_explain.py  # Postgres planner regression for the row-preserving to-many filter predicates.
 ├── test_prove_failability.py     # Script tests for the failability-proof runner's refusals and restore proof.
 ├── test_registry.py              # TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
 ├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.
@@ -745,7 +745,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_list_field.py            # Package-side DjangoListField tests for construction-time validation, helper mechanics, and internals a live request cannot express.
 ├── test_permissions.py           # Package-only cascade-permission pins that no live GraphQL request can express.
 ├── test_pg_explain_artifact_footer.py  # The PG EXPLAIN artifact carries a regenerable, valid link-definition footer.
-├── test_predicate_pg_explain.py  # Postgres planner regression for the row-preserving correlated ``EXISTS`` predicate.
+├── test_predicate_pg_explain.py  # Postgres planner regression for the row-preserving to-many filter predicates.
 ├── test_prove_failability.py     # Script tests for the failability-proof runner's refusals and restore proof.
 ├── test_registry.py              # TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
 ├── test_relation_fixtures.py     # Smoke tests proving the shared ``Rp*`` relation fixtures work end to end.

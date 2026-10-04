@@ -1,16 +1,25 @@
-r"""Capture the Part 1 correlated-``EXISTS`` PostgreSQL EXPLAIN artifact.
+r"""Capture the row-preserving-predicate PostgreSQL EXPLAIN artifact.
 
 The [Part 1 plan][part1-plan] (``docs/row-preserving-predicates-part1-plan.md``,
 Slice C.3a and Sequencing step 9) requires a PostgreSQL
 ``EXPLAIN (ANALYZE, BUFFERS)`` artifact captured from the **actually emitted**
-distinct-free inner query -- "never an idealized hand-written query". This script
-drives the genuine production generation + apply path (a ``Loan`` filter set
-over the framework-generated deep to-many leaf
-``book__loans__patron__email__icontains`` -- the Medtrics reverse-FK
-reproduction shape, ``medtrics_loan_filter``), reads the SQL straight off the
-compiled queryset, runs
-``EXPLAIN (ANALYZE, BUFFERS)`` on it against a real Postgres server, and writes
-``docs/row-preserving-predicates-part1-pg-explain.md``.
+query -- "never an idealized hand-written query". This script drives the genuine
+production generation + apply path for the two shapes a flat filter leaf over a
+to-many path compiles to, reads the SQL straight off each compiled queryset,
+runs ``EXPLAIN (ANALYZE, BUFFERS)`` on it against a real Postgres server, and
+writes ``docs/row-preserving-predicates-part1-pg-explain.md``:
+
+- a routed leaf: fakeshop ``CategoryFilter``'s framework-generated reverse-FK
+  leaf ``items__name__icontains``, whose path no ``RelatedFilter`` declares, so
+  ``FilterSet._apply_flat_leaves`` routes it through ``optimizer/predicates.py``'s
+  ``correlated_inner_root`` + ``attach_exists`` (one ``EXISTS`` correlated on the
+  outer primary key);
+- a walked leaf: fakeshop ``LoanFilter``'s ``book__loans__patron__email__icontains``
+  (the Medtrics reverse-FK reproduction shape), whose path walks the declared
+  ``book``, ``loans`` and ``patron`` branches, so each hop is one correlated
+  ``EXISTS`` built from that hop's visible rows
+  (``optimizer/predicates.py::related_rows_exist``), correlated on the link
+  columns.
 
 Reproducible recipe (run from the repo root)::
 
@@ -27,31 +36,42 @@ Postgres target is the throwaway tmpfs server from
 ``docker-compose.postgres.yml``; the tracked ``examples/fakeshop/db.sqlite3``
 file is NEVER opened (the ``FAKESHOP_PG_DSN`` settings branch swaps the
 ``default`` alias to Postgres, and this script refuses to run on any other
-vendor).
+vendor). The filter sets run with no resolver ``info``, so every target type's
+``get_queryset`` answers for an anonymous viewer.
 """
 
 from __future__ import annotations
 
+import importlib
+import re
 import sys
-from functools import cache
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACT_PATH = REPO_ROOT / "docs" / "row-preserving-predicates-part1-pg-explain.md"
 
-# The exact production leaf driven below -- a framework-generated deep to-many
-# path, the one fakeshop's ``LoanFilter.Meta.fields`` declares (the Medtrics
-# reverse-FK reproduction: Loan -> book (to-one) -> loans (to-many reverse FK,
-# the first multiplying hop) -> patron (to-one) -> email (scalar)).
-LEAF = "book__loans__patron__email__icontains"
 NEEDLE = "cardio"
 
-# Deterministic dataset sizes (documented in the artifact).
+# The routed production leaf: a framework-generated reverse-FK path declared on
+# fakeshop's ``CategoryFilter.Meta.fields`` with no ``RelatedFilter`` over ``items``.
+CATEGORY_LEAF = "items__name__icontains"
+N_CATEGORIES = 60
+ITEMS_PER_CATEGORY = 5
+
+# The walked production leaf: a deep to-many path declared on fakeshop's
+# ``LoanFilter.Meta.fields`` (the Medtrics reverse-FK reproduction: Loan -> book
+# (to-one) -> loans (to-many reverse FK) -> patron (to-one) -> email (scalar)),
+# every relation of which a ``RelatedFilter`` declares.
+LOAN_LEAF = "book__loans__patron__email__icontains"
+LOAN_HOPS = ("book", "loans", "patron")
 N_BOOKS = 300
 LOANS_PER_BOOK = 3
 N_PATRONS = 60
-CARDIO_EVERY = 12  # patron i has a "cardio" email when i % CARDIO_EVERY == 0.
+
+CARDIO_EVERY = 12  # row i carries a "cardio" value when i % CARDIO_EVERY == 0.
+REPAIR_EVERY = 10  # book i is in repair (hidden by ``BookType``) when i % REPAIR_EVERY == 0.
 
 # Canonical reference-style link-definition footer required of every standing
 # markdown doc (AGENTS.md "Markdown link convention"; enforced by
@@ -87,7 +107,22 @@ LINK_DEFINITIONS_FOOTER = (
 )
 
 
-def _seed() -> dict[str, int]:
+@dataclass(frozen=True)
+class Capture:
+    """One production leaf's emitted SQL, its asserted shape, and its executed plan."""
+
+    display_sql: str
+    compiled_sql: str
+    compiled_params: tuple[object, ...]
+    exists_count: int
+    outer_tables: list[str]
+    production_pks: list[int]
+    oracle_pks: list[int]
+    explain_output: str
+    top_actual_rows: int
+
+
+def _seed_library() -> dict[str, int]:
     """Seed a deterministic library dataset; return row counts for the artifact."""
     from apps.library.models import Book, Branch, Loan, Patron, Shelf
 
@@ -105,7 +140,16 @@ def _seed() -> dict[str, int]:
         for index in range(N_PATRONS)
     )
     books = Book.objects.bulk_create(
-        Book(title=f"b{index}", shelf=shelf) for index in range(N_BOOKS)
+        Book(
+            title=f"b{index}",
+            shelf=shelf,
+            circulation_status=(
+                Book.CirculationStatus.REPAIR
+                if index % REPAIR_EVERY == 0
+                else Book.CirculationStatus.AVAILABLE
+            ),
+        )
+        for index in range(N_BOOKS)
     )
     loans = [
         Loan(
@@ -117,66 +161,80 @@ def _seed() -> dict[str, int]:
         for offset in range(LOANS_PER_BOOK)
     ]
     Loan.objects.bulk_create(loans)
-    cardio_patrons = sum(1 for index in range(N_PATRONS) if index % CARDIO_EVERY == 0)
     return {
-        "branches": 1,
-        "shelves": 1,
         "patrons": len(patrons),
-        "cardio_patrons": cardio_patrons,
+        "cardio_patrons": sum(1 for index in range(N_PATRONS) if index % CARDIO_EVERY == 0),
         "books": len(books),
+        "repair_books": sum(1 for index in range(N_BOOKS) if index % REPAIR_EVERY == 0),
         "loans": len(loans),
     }
 
 
-@cache
-def medtrics_loan_filter() -> Any:
-    """Return a ``Loan`` filter set declaring only the Medtrics path, with no branch.
+def _seed_products() -> dict[str, int]:
+    """Seed a deterministic products dataset; return row counts for the artifact."""
+    from apps.products.models import Category, Item
 
-    fakeshop's ``LoanFilter`` declares the same ``Meta.fields`` path, but its
-    ``book`` / ``patron`` ``RelatedFilter`` branches (and ``BookFilter.loans``)
-    make that leaf walk them as the nested branch chain it spells. With no
-    declared branch the leaf is the eligible framework-generated to-many
-    candidate the correlated ``EXISTS`` serves. Built on first call, after
-    Django is configured.
-    """
-    from apps.library.models import Loan
+    categories = Category.objects.bulk_create(
+        Category(name=f"pg-explain-{index}") for index in range(N_CATEGORIES)
+    )
+    items = Item.objects.bulk_create(
+        Item(
+            name=(
+                f"cardio-{category_index}-{offset}"
+                if (category_index * ITEMS_PER_CATEGORY + offset) % CARDIO_EVERY == 0
+                else f"neuro-{category_index}-{offset}"
+            ),
+            category=category,
+        )
+        for category_index, category in enumerate(categories)
+        for offset in range(ITEMS_PER_CATEGORY)
+    )
+    return {
+        "categories": len(categories),
+        "items": len(items),
+        "cardio_items": sum(1 for item in items if item.name.startswith("cardio")),
+    }
 
-    from django_strawberry_framework.filters import FilterSet
 
-    class MedtricsLoanFilter(FilterSet):
-        class Meta:
-            model = Loan
-            fields: ClassVar[dict[str, list[str]]] = {"book__loans__patron__email": ["icontains"]}
+def _production_qs(filterset_cls: Any, leaf: str, root: Any) -> Any:
+    """Instantiate a real fakeshop filter set and return its compiled ``.qs``.
 
-    return MedtricsLoanFilter
-
-
-def _drive_production_queryset() -> Any:
-    """Instantiate ``medtrics_loan_filter()`` and return its compiled ``.qs``.
-
-    This is the genuine production generation + apply path: the metaclass /
+    The genuine production generation + apply path: the metaclass /
     ``get_filters`` build stamps generation provenance and publishes the
     candidate snapshot, and ``.qs`` runs ``FilterSet.filter_queryset`` ->
-    ``_apply_flat_leaves``, which routes the eligible framework-generated
-    to-many leaf through ``optimizer/predicates.py``'s correlated-``EXISTS``
-    primitive with the framework-added ``distinct`` suppressed inside the
-    existence body.
+    ``_apply_flat_leaves``, which routes an eligible leaf walking no declared
+    hop and applies a leaf walking declared hops over each hop's visible rows.
     """
-    from apps.library.models import Loan
     from django.http import HttpRequest
 
-    loan_filter = medtrics_loan_filter()
-    loan_filter.get_filters()  # publish the expansion snapshot (as apply_* does).
-    filterset = loan_filter(
-        data={LEAF: NEEDLE},
-        queryset=Loan.objects.order_by("id"),
+    filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
+    filterset = filterset_cls(
+        data={leaf: NEEDLE},
+        queryset=root.order_by("id"),
         request=HttpRequest(),
     )
     return filterset.qs
 
 
+def _referenced_tables(qs: Any) -> list[str]:
+    """Return the tables the outer statement's ``FROM`` reads: aliases the SQL references.
+
+    A join Django set up and then trimmed (resolving an ``OuterRef`` on a
+    foreign-key column) stays in ``alias_map`` with a zero reference count and
+    is never emitted.
+    """
+    query = qs.query
+    return sorted(
+        {
+            query.alias_map[alias].table_name
+            for alias, refs in query.alias_refcount.items()
+            if refs
+        },
+    )
+
+
 def _extract_exists_subquery(sql: str) -> str:
-    """Return the ``EXISTS(...)`` correlated inner subquery text, brackets matched."""
+    """Return the first ``EXISTS(...)`` subquery text, brackets matched."""
     marker = "EXISTS("
     start = sql.upper().find(marker)
     if start == -1:
@@ -194,8 +252,106 @@ def _extract_exists_subquery(sql: str) -> str:
     return sql[start:]
 
 
+def _capture(qs: Any, oracle_pks: list[int]) -> Capture:
+    """Run ``EXPLAIN (ANALYZE, BUFFERS)`` on ``qs``'s exact statement and record its shape."""
+    from django.db import connection
+
+    display_sql = str(qs.query)
+    compiled_sql, compiled_params = qs.query.get_compiler(using=qs.db).as_sql()
+    with connection.cursor() as cursor:
+        cursor.execute("EXPLAIN (ANALYZE, BUFFERS) " + compiled_sql, compiled_params)
+        explain_output = "\n".join(row[0] for row in cursor.fetchall())
+    top = re.search(r"actual time=[\d.]+\.\.[\d.]+ rows=(\d+)", explain_output)
+    assert top is not None, "EXPLAIN output carries no actual row count"
+    return Capture(
+        display_sql=display_sql,
+        compiled_sql=compiled_sql,
+        compiled_params=tuple(compiled_params),
+        exists_count=display_sql.upper().count("EXISTS"),
+        outer_tables=_referenced_tables(qs),
+        production_pks=list(qs.values_list("pk", flat=True)),
+        oracle_pks=oracle_pks,
+        explain_output=explain_output,
+        top_actual_rows=int(top.group(1)),
+    )
+
+
+def _assert_row_preserving(capture: Capture, qs: Any, root_table: str) -> None:
+    """Fail loudly unless ``capture`` is a row-preserving, distinct-free ``EXISTS`` shape.
+
+    An artifact is only written for the real emitted query, so every invariant
+    the artifact reports is asserted first.
+    """
+    assert qs.query.distinct is False, "outer query carries DISTINCT"
+    assert "DISTINCT" not in capture.display_sql.upper(), "DISTINCT present in the emitted SQL"
+    assert capture.outer_tables == [root_table], (
+        f"outer statement should read only {root_table}, got {capture.outer_tables}"
+    )
+    assert capture.production_pks, "the seed guarantees matches, so the proof is non-vacuous"
+    assert capture.production_pks == capture.oracle_pks, "result diverged from the dedup oracle"
+    assert capture.top_actual_rows == len(capture.production_pks), (
+        f"top plan node returned {capture.top_actual_rows} rows, "
+        f"the result has {len(capture.production_pks)}: the outer rows multiplied"
+    )
+
+
+def _sql_block(lines: list[str], sql: str) -> None:
+    """Append ``sql`` as a fenced ``sql`` block."""
+    lines.extend(
+        (
+            "```sql",
+            sql,
+            "```",
+            "",
+        ),
+    )
+
+
+def _render_capture(lines: list[str], capture: Capture) -> None:
+    """Append the emitted SQL, the executed statement and its plan."""
+    lines.extend(("### Emitted SQL (full outer query, params inlined for display)", ""))
+    _sql_block(lines, capture.display_sql)
+    lines.append(
+        "The exact parameterized statement executed by `EXPLAIN` (as returned by "
+        "`qs.query.get_compiler(using=qs.db).as_sql()`):",
+    )
+    lines.append("")
+    _sql_block(lines, capture.compiled_sql)
+    lines.extend((f"Bind params: `{list(capture.compiled_params)!r}`", ""))
+    lines.extend(
+        (
+            "### EXPLAIN (ANALYZE, BUFFERS)",
+            "",
+            "```text",
+            capture.explain_output,
+            "```",
+        ),
+    )
+    lines.append("")
+
+
+def _shape_lines(capture: Capture, qs: Any, exists_line: str) -> list[str]:
+    """Return the shape-assertion bullets shared by both captures."""
+    return [
+        "Shape assertions (all passed before this file was written):",
+        "",
+        f"- outer `query.distinct` is `False`: **{qs.query.distinct is False}**",
+        exists_line,
+        "- no `DISTINCT` anywhere (outer query or any existence body): "
+        f"**{'DISTINCT' not in capture.display_sql.upper()}**",
+        "- the outer statement reads only the root table (every related table lives "
+        f"INSIDE an `EXISTS`): **{capture.outer_tables}**",
+        f"- the result equals the dedup oracle ({len(capture.production_pks)} rows): "
+        f"**{capture.production_pks == capture.oracle_pks}**",
+        "- the top plan node's actual row count equals the result "
+        f"({capture.top_actual_rows} rows), so no outer row is multiplied: "
+        f"**{capture.top_actual_rows == len(capture.production_pks)}**",
+        "",
+    ]
+
+
 def main() -> None:
-    """Drive the production path, run EXPLAIN, and write the artifact file."""
+    """Drive both production paths, run EXPLAIN, and write the artifact file."""
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
     from _bench_common import bootstrap_fakeshop_django
 
@@ -208,78 +364,94 @@ def main() -> None:
     if connection.vendor != "postgresql":  # defensive: never touch sqlite.
         sys.exit(f"Refusing to run: expected postgresql, got {connection.vendor!r}.")
 
+    # The composed fakeshop schema registers every DjangoType and binds every
+    # filter set to its owner type, so each declared hop resolves its target type.
+    importlib.import_module("config.schema")
+    from apps.library.filters import LoanFilter
+    from apps.library.models import Book, Loan
+    from apps.products.filters import CategoryFilter
+    from apps.products.models import Category
+
     with connection.cursor() as cursor:
         cursor.execute("SELECT version()")
         pg_version = cursor.fetchone()[0]
 
-    lines: list[str] = []
-
     # Everything below runs in ONE transaction that is rolled back, so the
     # throwaway database is left exactly as migrated.
     with transaction.atomic():
-        counts = _seed()
+        library_counts = _seed_library()
+        product_counts = _seed_products()
         with connection.cursor() as cursor:
-            cursor.execute("ANALYZE library_loan")
-            cursor.execute("ANALYZE library_book")
-            cursor.execute("ANALYZE library_patron")
+            for table in (
+                "library_loan",
+                "library_book",
+                "library_patron",
+                "products_category",
+                "products_item",
+            ):
+                cursor.execute(f"ANALYZE {table}")
 
-        qs = _drive_production_queryset()
-
-        # The human-readable emitted SQL (Django inlines the params for display).
-        display_sql = str(qs.query)
-        # The machine form actually executed by EXPLAIN: the SAME compiled query
-        # object, parameterized.
-        compiled_sql, compiled_params = qs.query.get_compiler(using=qs.db).as_sql()
-
-        upper = display_sql.upper()
-        exists_count = upper.count("EXISTS")
-        has_distinct = "DISTINCT" in upper
-        outer_tables = sorted({join.table_name for join in qs.query.alias_map.values()})
-        inner_subquery = _extract_exists_subquery(display_sql)
-
-        # Fail loudly if this is not the row-preserving correlated-EXISTS shape --
-        # an artifact must only be written for the real distinct-free inner query.
-        assert qs.query.distinct is False, "outer query carries DISTINCT"
-        assert exists_count == 1, f"expected exactly one EXISTS, got {exists_count}"
-        assert not has_distinct, "DISTINCT present -- not the distinct-free inner shape"
-        assert outer_tables == ["library_loan"], (
-            f"outer alias_map should hold only the root table, got {outer_tables}"
+        # Routed leaf: the oracle is the leaf invoked directly on the outer
+        # queryset, then deduplicated (the JOIN + DISTINCT idiom the routing replaces).
+        routed_qs = _production_qs(CategoryFilter, CATEGORY_LEAF, Category.objects.all())
+        routed_leaf = CategoryFilter.get_filters()[CATEGORY_LEAF]
+        routed = _capture(
+            routed_qs,
+            sorted(
+                routed_leaf.filter(Category.objects.all(), NEEDLE)
+                .distinct()
+                .values_list("pk", flat=True),
+            ),
+        )
+        _assert_row_preserving(routed, routed_qs, "products_category")
+        assert routed.exists_count == 1, f"expected exactly one EXISTS, got {routed.exists_count}"
+        assert '= ("products_category"."id")' in routed.display_sql, (
+            "the routed EXISTS is not correlated on the outer primary key"
         )
 
-        # Correctness cross-check against the test-local oracle (the old
-        # production behavior: invoke the same leaf directly on the outer
-        # queryset, then dedup) -- proves the row-preserving rewrite returns the
-        # SAME rows it EXPLAINs.
-        from apps.library.models import Loan
-
-        leaf = medtrics_loan_filter().get_filters()[LEAF]
-        production_pks = list(qs.values_list("pk", flat=True))
-        oracle_pks = sorted(
-            leaf.filter(Loan.objects.all(), NEEDLE).distinct().values_list("pk", flat=True),
+        # Walked leaf: the oracle is the same Django lookup over the rows an
+        # anonymous viewer sees (``BookType.get_queryset`` hides ``repair`` books;
+        # ``LoanType`` and ``PatronType`` hide nothing), then deduplicated.
+        walked_qs = _production_qs(LoanFilter, LOAN_LEAF, Loan.objects.all())
+        loan_leaf = LoanFilter.get_filters()[LOAN_LEAF]
+        visible_loans = Loan.objects.exclude(
+            book__circulation_status=Book.CirculationStatus.REPAIR,
         )
-        assert production_pks == oracle_pks, "row-preserving result diverged from oracle"
-
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "EXPLAIN (ANALYZE, BUFFERS) " + compiled_sql,
-                compiled_params,
-            )
-            explain_output = "\n".join(row[0] for row in cursor.fetchall())
+        walked = _capture(
+            walked_qs,
+            sorted(
+                loan_leaf.filter(visible_loans, NEEDLE).distinct().values_list("pk", flat=True),
+            ),
+        )
+        _assert_row_preserving(walked, walked_qs, "library_loan")
+        assert walked.exists_count == len(LOAN_HOPS), (
+            f"expected one EXISTS per declared hop ({len(LOAN_HOPS)}), got {walked.exists_count}"
+        )
+        assert '= ("library_loan"."book_id")' in walked.display_sql, (
+            "the outermost hop is not correlated on the outer row's book link column"
+        )
+        raw_pks = sorted(
+            loan_leaf.filter(Loan.objects.all(), NEEDLE).distinct().values_list("pk", flat=True),
+        )
+        hidden_matches = len(raw_pks) - len(walked.production_pks)
+        assert hidden_matches > 0, "the seed must put matches behind a hidden book"
 
         transaction.set_rollback(True)
 
     # ------------------------------------------------------------------
     # Render the artifact.
     # ------------------------------------------------------------------
-    lines.append("# Part 1 PostgreSQL EXPLAIN (ANALYZE, BUFFERS) artifact")
+    lines: list[str] = []
+    lines.append("# Row-preserving predicates: PostgreSQL EXPLAIN (ANALYZE, BUFFERS) artifact")
     lines.append("")
     lines.append(
-        "Mandatory planner evidence for the row-preserving-predicates Part 1 "
-        "plan (`docs/row-preserving-predicates-part1-plan.md`, Slice C.3a and "
-        "Sequencing step 9): the `EXPLAIN (ANALYZE, BUFFERS)` output for the "
-        "**actually emitted** distinct-free correlated-`EXISTS` inner query, "
-        "captured from the framework's compiled queryset on a real Postgres "
-        "server -- not a hand-written query.",
+        "Planner evidence for the row-preserving-predicates Part 1 plan "
+        "(`docs/row-preserving-predicates-part1-plan.md`, Slice C.3a and Sequencing "
+        "step 9) and for the declared-branch restriction of spec-027 Decision 8 "
+        "(`docs/SPECS/spec-027-filters-0_0_8.md`): the `EXPLAIN (ANALYZE, BUFFERS)` "
+        "output for the **actually emitted** query of each shape a flat filter leaf "
+        "over a to-many path compiles to, captured from the framework's compiled "
+        "queryset on a real Postgres server -- not a hand-written query.",
     )
     lines.append("")
     lines.append(
@@ -299,24 +471,27 @@ def main() -> None:
     lines.append("docker compose -f docker-compose.postgres.yml down")
     lines.append("```")
     lines.append("")
-    lines.append("## Provenance -- the query came from production code")
+    lines.append("## Provenance -- the queries came from production code")
     lines.append("")
     lines.append(
-        "The SQL below is read directly off the compiled queryset produced by "
-        "a `Loan` filter set declaring the fakeshop `LoanFilter`'s Medtrics "
-        "`Meta.fields` path with no `RelatedFilter` (`medtrics_loan_filter` in "
-        "`scripts/capture_pg_predicate_explain.py`; on `LoanFilter` itself the "
-        "leaf walks the declared branches as a nested chain). No SQL is "
-        "hand-written; the EXPLAIN executes the exact parameterized statement "
-        "`qs.query.get_compiler(using=qs.db).as_sql()` returns.",
+        "Each SQL statement below is read directly off the compiled queryset a real "
+        "fakeshop filter set produces (`examples/fakeshop/apps/products/filters.py`, "
+        "`examples/fakeshop/apps/library/filters.py`), with the composed fakeshop "
+        "schema loaded so every declared branch resolves its target type. No SQL is "
+        "hand-written; each EXPLAIN executes the exact parameterized statement "
+        "`qs.query.get_compiler(using=qs.db).as_sql()` returns. The filter sets run "
+        "with no resolver `info`, so every target type's `get_queryset` answers for "
+        "an anonymous viewer.",
     )
     lines.append("")
-    lines.append("- FilterSet: `MedtricsLoanFilter` (root model `Loan`, no declared branch)")
-    lines.append(f"- Active generated leaf: `{LEAF}` = `{NEEDLE!r}`")
+
+    lines.append("## Routed leaf: one `EXISTS` correlated on the outer primary key")
+    lines.append("")
+    lines.append("- FilterSet: `apps.products.filters.CategoryFilter` (root model `Category`)")
+    lines.append(f"- Active generated leaf: `{CATEGORY_LEAF}` = `{NEEDLE!r}`")
     lines.append(
-        "- Relation path (Medtrics reverse-FK reproduction): "
-        "`Loan.book` (to-one) -> `Book.loans` (to-many reverse FK -- the first "
-        "multiplying hop) -> `Loan.patron` (to-one) -> `Patron.email` (scalar)",
+        "- Relation path: `Category.items` (to-many reverse FK) -> `Item.name` "
+        "(scalar); no `RelatedFilter` declares `items`, so no target visibility applies",
     )
     lines.append(
         "- Applicator: `FilterSet._apply_flat_leaves` routes the eligible "
@@ -325,102 +500,95 @@ def main() -> None:
         "`distinct` suppressed inside the existence body "
         "(`_invoke_suppressing_framework_distinct`).",
     )
-    lines.append("")
-    lines.append("## Shape assertions (all passed before this file was written)")
-    lines.append("")
-    lines.append(f"- outer `query.distinct` is `False`: **{qs.query.distinct is False}**")
-    lines.append(f"- exactly one `EXISTS` in the emitted SQL: **{exists_count == 1}**")
     lines.append(
-        f"- no `DISTINCT` anywhere (outer or inner existence body): **{not has_distinct}**",
-    )
-    lines.append(
-        "- outer `alias_map` holds only the root table (membership + terminal "
-        f"tables live INSIDE the `EXISTS`): **{outer_tables}**",
-    )
-    lines.append(
-        f"- row-preserving result equals the dedup oracle "
-        f"({len(production_pks)} rows): **{production_pks == oracle_pks}**",
+        "- Dedup oracle: the same leaf invoked directly on `Category.objects.all()`, "
+        "then `.distinct()` (the membership `JOIN` + `DISTINCT` idiom the routing replaces).",
     )
     lines.append("")
-    lines.append("## Emitted SQL (full outer query, params inlined for display)")
-    lines.append("")
-    lines.append("```sql")
-    lines.append(display_sql)
-    lines.append("```")
-    lines.append("")
+    lines.extend(
+        _shape_lines(
+            routed,
+            routed_qs,
+            f"- exactly one `EXISTS`: **{routed.exists_count == 1}**, correlated on the "
+            'outer primary key (`U0."id" = ("products_category"."id")`): **True**',
+        ),
+    )
     lines.append(
-        "The correlated distinct-free inner query (the `EXISTS(...)` subquery "
-        "the plan requires evidence for) -- note it is correlated on the outer "
-        'pk (`U0."id" = ("library_loan"."id")`), re-enters `library_loan` '
-        "as a second alias (the same-table inner-alias shape), and carries no "
+        "The correlated distinct-free inner query -- it re-enters `products_category` "
+        "as `U0`, joins the membership table inside the subquery, and carries no "
         "`SELECT DISTINCT`:",
     )
     lines.append("")
-    lines.append("```sql")
-    lines.append(inner_subquery)
-    lines.append("```")
+    _sql_block(lines, _extract_exists_subquery(routed.display_sql))
+    _render_capture(lines, routed)
+
+    lines.append("## Walked leaf: one `EXISTS` per declared hop, built from the visible rows")
     lines.append("")
+    lines.append("- FilterSet: `apps.library.filters.LoanFilter` (root model `Loan`)")
+    lines.append(f"- Active `Meta.fields` leaf: `{LOAN_LEAF}` = `{NEEDLE!r}`")
     lines.append(
-        "The exact parameterized statement executed by `EXPLAIN` (as returned by "
-        "`qs.query.get_compiler(using=qs.db).as_sql()`):",
-    )
-    lines.append("")
-    lines.append("```sql")
-    lines.append(compiled_sql)
-    lines.append("```")
-    lines.append("")
-    lines.append(f"Bind params: `{list(compiled_params)!r}`")
-    lines.append("")
-    lines.append("## EXPLAIN (ANALYZE, BUFFERS)")
-    lines.append("")
-    lines.append("```text")
-    lines.append(explain_output)
-    lines.append("```")
-    lines.append("")
-    lines.append("## What the plan shows")
-    lines.append("")
-    lines.append(
-        "The framework's contribution is the *emitted SQL*: a single distinct-free "
-        "`EXISTS` correlated on the outer pk, with every membership/terminal join "
-        "(`library_book`, the second `library_loan` alias, `library_patron`) "
-        "confined INSIDE the subquery. How Postgres executes that `EXISTS` is the "
-        "planner's choice; this captured plan shows:",
-    )
-    lines.append("")
-    lines.append(
-        "- **No outer fan-out.** `library_book`, the second `library_loan` alias "
-        "(`u0`/`u2`), and `library_patron` are reached only through the pulled-up "
-        "existence branch; the final `library_loan` (the outer projection) is read "
-        "exactly once per qualifying pk via `library_loan_pkey` "
-        "(`Index Scan ... Index Cond: (id = u0.id)`), and the node's actual row "
-        "count equals the correct answer -- one row per matching loan, no "
-        "multiplication.",
+        "- Relation path (Medtrics reverse-FK reproduction): "
+        "`Loan.book` (to-one) -> `Book.loans` (to-many reverse FK) -> `Loan.patron` "
+        "(to-one) -> `Patron.email` (scalar); `LoanFilter.book`, `BookFilter.loans` "
+        "and `LoanFilter.patron` declare each relation, so the leaf walks three hops",
     )
     lines.append(
-        "- **The `HashAggregate (Group Key: u0.id)` is the planner's own "
-        "semi-join de-duplication of the EXISTS correlation column** -- it collapses "
-        'the *inner* match set ("which outer pks have at least one qualifying '
-        'related row"), NOT a framework-injected `DISTINCT` over a row-multiplied '
-        "OUTER result. The emitted SQL contains no `DISTINCT` (asserted above); "
-        "Postgres decorrelated the `EXISTS` into a semi-join and dedups on the "
-        "correlation key, which is the standard, cheap `EXISTS` execution shape.",
+        "- Applicator: `FilterSet._apply_flat_leaves` -> `FilterSet._apply_relation_leaf` "
+        "runs the leaf's terminal over the last hop's visible rows and folds each hop "
+        "outward with `FilterSet._reaches_hop`, one `EXISTS` per hop built from that "
+        "hop's visible rows and correlated on the hop's link columns "
+        "(`optimizer/predicates.py::related_rows_exist`); it is never routed.",
     )
     lines.append(
-        "- **Contrast with the pre-rewrite idiom this replaces:** a `JOIN` across "
-        "the membership/terminal tables followed by a global outer `DISTINCT` would "
-        "instead fan `library_loan` out on the OUTER side (one outer row per "
-        "matching child) and then collapse those duplicates with a `Unique` / "
-        "`HashAggregate` over the outer columns. Here the outer row set is never "
-        "multiplied in the first place, so no such outer collapse exists.",
+        "- Dedup oracle: the same leaf invoked directly on the loans whose book "
+        "`BookType.get_queryset` shows an anonymous viewer, then `.distinct()`. "
+        f"The raw-relation oracle (no visibility) matches {len(raw_pks)} loans, "
+        f"{hidden_matches} of them only through a `repair` book the viewer cannot see.",
+    )
+    lines.append("")
+    lines.extend(
+        _shape_lines(
+            walked,
+            walked_qs,
+            f"- one `EXISTS` per declared hop ({len(LOAN_HOPS)}: "
+            f"{', '.join(f'`{hop}`' for hop in LOAN_HOPS)}): "
+            f"**{walked.exists_count == len(LOAN_HOPS)}**, the outermost correlated on "
+            'the outer row\'s link column (`= ("library_loan"."book_id")`): **True**',
+        ),
     )
     lines.append(
-        "- `EXPLAIN (ANALYZE, BUFFERS)` reports the real executed shape (actual "
-        "rows, loops, and shared-buffer hits), so this is the planner's behavior "
-        "on the genuinely emitted statement, not an estimate over a hand-written "
-        "query. (The exact node choice -- decorrelated semi-join here vs. a "
-        "per-row `SubPlan` -- can vary by planner version and statistics; the "
-        "row-preserving invariants above hold either way because they follow from "
-        "the distinct-free correlated-`EXISTS` SQL, not from a particular plan.)",
+        "Each hop's subquery reads its target table's visible rows (the outermost "
+        "`library_book` carries `BookType.get_queryset`'s `repair` exclusion) and "
+        "nests the next hop inside it; no subquery re-enters the outer table to "
+        "correlate on its primary key, and nothing is joined onto the outer statement.",
+    )
+    lines.append("")
+    _render_capture(lines, walked)
+
+    lines.append("## What the plans show")
+    lines.append("")
+    lines.append(
+        "The framework's contribution is the *emitted SQL*: distinct-free `EXISTS` "
+        "subqueries with every related table confined inside them, so the outer "
+        "statement reads only the root table and returns each qualifying row once. "
+        "Each plan's top node reports exactly the result's row count (asserted above): "
+        "the outer row set is never multiplied, so no outer collapse over the root "
+        "columns exists. Contrast the idiom both shapes replace: a `JOIN` across the "
+        "membership tables followed by a global outer `DISTINCT` fans the root table "
+        "out on the OUTER side (one outer row per matching related row) and then "
+        "collapses those duplicates with a `Unique` / `HashAggregate` over the outer "
+        "columns.",
+    )
+    lines.append("")
+    lines.append(
+        "How Postgres executes each `EXISTS` is the planner's choice: it may "
+        "decorrelate one into a semi-join (a `Hash Semi Join`, or a `HashAggregate` "
+        "over the correlation column, which de-duplicates the *inner* match set, not "
+        "the outer rows) or keep a per-row `SubPlan`, and the choice varies by "
+        "planner version and statistics. The row-preserving invariants above hold "
+        "either way because they follow from the emitted SQL, not from a particular "
+        "plan; `EXPLAIN (ANALYZE, BUFFERS)` reports the real executed shape (actual "
+        "rows, loops and shared-buffer hits), not an estimate.",
     )
     lines.append("")
     lines.append("## Environment")
@@ -430,9 +598,12 @@ def main() -> None:
     lines.append(f"- Python: {sys.version.split()[0]}")
     lines.append(
         "- Seeded (deterministic, rolled back after capture): "
-        f"{counts['books']} books, {counts['patrons']} patrons "
-        f"({counts['cardio_patrons']} with a `cardio` email), "
-        f"{counts['loans']} loans ({LOANS_PER_BOOK} per book).",
+        f"{product_counts['categories']} categories, {product_counts['items']} items "
+        f"({product_counts['cardio_items']} with a `cardio` name); "
+        f"{library_counts['books']} books ({library_counts['repair_books']} in repair), "
+        f"{library_counts['patrons']} patrons "
+        f"({library_counts['cardio_patrons']} with a `cardio` email), "
+        f"{library_counts['loans']} loans ({LOANS_PER_BOOK} per book).",
     )
     lines.append("")
 
@@ -445,10 +616,11 @@ def main() -> None:
         encoding="utf-8",
     )
     print(f"Wrote {ARTIFACT_PATH.relative_to(REPO_ROOT)}")
-    print(
-        f"  outer distinct={qs.query.distinct}  exists={exists_count}  "
-        f"distinct_present={has_distinct}  rows={len(production_pks)}",
-    )
+    for name, capture in (("routed", routed), ("walked", walked)):
+        print(
+            f"  {name}: exists={capture.exists_count}  outer={capture.outer_tables}  "
+            f"rows={len(capture.production_pks)}  top_rows={capture.top_actual_rows}",
+        )
 
 
 if __name__ == "__main__":

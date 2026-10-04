@@ -4009,9 +4009,9 @@ def test_holder_sync_http_rejects_an_async_generator_resolver():
     """Sync HTTP refuses an async-generator resolver before GraphQL slices it."""
 
     async def _resolve(root: object, info: strawberry.Info[object, object]):
-        if False:
-            # basedpyright: the unreachable yield is what makes this resolver an async generator
-            yield None  # pyright: ignore[reportUnreachable]
+        # The yield over an empty iterable makes this resolver an async generator that yields nothing.
+        for _ in ():
+            yield None
 
     @strawberry.type
     class _GenQuery:

@@ -69,6 +69,7 @@ from .utils.directives import validated_field_directives
 from .utils.errors import GLOBALID_INVALID_ERROR_CODE, coded_error_extensions
 from .utils.execution_mode import async_execution
 from .utils.querysets import (
+    base_queryset,
     coerce_field_value_or_none,
     model_for,
     reject_async_in_sync_context,
@@ -299,12 +300,12 @@ def _resolve_real_pk(
 
         pipeline = current_write_pipeline()
         using = None if pipeline is None else pipeline.alias
-    # The default manager itself, or the queryset its ``using()`` pins to ``using``.
-    manager: models.Manager[models.Model] | models.QuerySet[models.Model]
-    manager = model_for(resolved_type)._default_manager
-    if using is not None:
-        manager = manager.using(using)
-    return manager.filter(**{id_attr: coerced_id}).values_list("pk", flat=True).first()
+    return (
+        base_queryset(model_for(resolved_type), using=using)
+        .filter(**{id_attr: coerced_id})
+        .values_list("pk", flat=True)
+        .first()
+    )
 
 
 def decode_model_global_id(

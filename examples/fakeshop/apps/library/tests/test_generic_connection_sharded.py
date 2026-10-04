@@ -62,13 +62,14 @@ def _isolate_registry():
 def _build_schema():
     """Build a schema whose ``branches`` root reads from ``shard_b``."""
 
-    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-    class TaggedItemNode(DjangoType):  # pyright: ignore[reportUnusedClass]
+    class TaggedItemNode(DjangoType):
         class Meta:
             model = TaggedItem
             fields = ("id", "tag")
             interfaces = (relay.Node,)
             connection = {"total_count": True}
+
+    assert registry.get(TaggedItem) is TaggedItemNode
 
     class BranchNode(DjangoType):
         class Meta:

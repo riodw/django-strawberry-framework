@@ -68,14 +68,15 @@ def _build_schema(*, strategy: str | None = None, total_count: bool = False):
     opts the target connection into a ``totalCount`` field.
     """
 
-    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-    class TaggedItemNode(DjangoType):  # pyright: ignore[reportUnusedClass]
+    class TaggedItemNode(DjangoType):
         class Meta:
             model = TaggedItem
             fields = ("id", "tag")
             interfaces = (relay.Node,)
             if total_count:
                 connection = {"total_count": True}
+
+    assert registry.get(TaggedItem) is TaggedItemNode
 
     class BranchNode(DjangoType):
         class Meta:
@@ -324,13 +325,14 @@ def _build_proxy_schema():
     ``Branch``'s concrete content type.
     """
 
-    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-    class TaggedItemNode(DjangoType):  # pyright: ignore[reportUnusedClass]
+    class TaggedItemNode(DjangoType):
         class Meta:
             model = TaggedItem
             fields = ("id", "tag")
             interfaces = (relay.Node,)
             connection = {"total_count": True}
+
+    assert registry.get(TaggedItem) is TaggedItemNode
 
     class ProxyBranchNode(DjangoType):
         class Meta:

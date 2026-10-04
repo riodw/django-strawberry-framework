@@ -6459,14 +6459,16 @@ def _relay_relation_isnull_holder_schema():
 
     from django_strawberry_framework import DjangoType, finalize_django_types
     from django_strawberry_framework.filters import FilterInput, FilterSet
+    from django_strawberry_framework.registry import registry
 
-    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-    class HolderRelayIsnullGenreType(DjangoType):  # pyright: ignore[reportUnusedClass]
+    class HolderRelayIsnullGenreType(DjangoType):
         class Meta:
             model = models.Genre
             fields = ("id", "name")
             interfaces = (relay.Node,)
             name = "HolderRelayIsnullGenreType"
+
+    assert registry.get(models.Genre) is HolderRelayIsnullGenreType
 
     class HolderBookIsnullFilter(FilterSet):
         class Meta:
@@ -6527,12 +6529,13 @@ def test_generic_relation_tags_resolve_over_http_with_optimizer():
                 fields = ("id", "name", "tags")
                 name = "HolderTaggedBranchType"
 
-        # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-        class HolderTaggedItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
+        class HolderTaggedItemType(DjangoType):
             class Meta:
                 model = models.TaggedItem
                 fields = ("id", "tag")
                 name = "HolderTaggedItemType"
+
+        assert registry.get(models.TaggedItem) is HolderTaggedItemType
 
         @strawberry.type
         class Query:

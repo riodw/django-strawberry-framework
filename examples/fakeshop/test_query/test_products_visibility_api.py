@@ -662,8 +662,7 @@ def _holder_patron_card_schema(*, optimizer: bool) -> strawberry.Schema:
 
     registry.clear()
 
-    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-    class HolderCardType(DjangoType):  # pyright: ignore[reportUnusedClass]
+    class HolderCardType(DjangoType):
         class Meta:
             model = MembershipCard
             fields = ("id", "barcode")
@@ -677,6 +676,8 @@ def _holder_patron_card_schema(*, optimizer: bool) -> strawberry.Schema:
             info: strawberry.Info,
         ) -> QuerySet[MembershipCard]:
             return queryset.exclude(barcode__startswith="HIDDEN")
+
+    assert registry.get(MembershipCard) is HolderCardType
 
     class HolderPatronType(DjangoType):
         class Meta:
@@ -754,8 +755,7 @@ async def test_async_reverse_one_to_one_custom_visibility_over_http():
 
     registry.clear()
 
-    # basedpyright: declared for its side effect: defining a ``DjangoType`` registers it
-    class HolderCardType(DjangoType):  # pyright: ignore[reportUnusedClass]
+    class HolderCardType(DjangoType):
         class Meta:
             model = MembershipCard
             fields = ("id", "barcode")
@@ -769,6 +769,8 @@ async def test_async_reverse_one_to_one_custom_visibility_over_http():
             info: strawberry.Info,
         ) -> QuerySet[MembershipCard]:
             return queryset.exclude(barcode__startswith="HIDDEN")
+
+    assert registry.get(MembershipCard) is HolderCardType
 
     class HolderPatronType(DjangoType):
         class Meta:

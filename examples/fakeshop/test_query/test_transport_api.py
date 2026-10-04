@@ -14,7 +14,10 @@ directions on a cookie-authenticated mutation (row 4), ``Vary: Cookie`` on an
 authenticated GET (row 5), Django's own exact routing policy including the
 ``APPEND_SLASH`` redirect (row 6), and ``graphql_ide=None`` /
 ``allow_queries_via_get=False`` on a second mount of the package view (row 7).
-An async probe adds the ``AsyncDjangoGraphQLView`` colour of row 1 + row 2.
+An async probe adds the ``AsyncDjangoGraphQLView`` colour of row 1 + row 2, and
+one more async row proves the view hands a sync ``get_queryset`` an evaluated
+session actor: anonymous, non-staff and staff sessions each read the right
+visibility verdict on the event loop instead of ``SynchronousOnlyOperation``.
 One further mount proves ``docs/README.md``'s combined production-profile
 recipe (row 7's two knobs plus introspection disabled through
 ``AddValidationRules``) as a single unit over the real fakeshop schema.
@@ -75,8 +78,10 @@ from typing import TYPE_CHECKING, ParamSpec, TypeVar, overload
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models
 from apps.products.services import create_users, seed_data
+from asgiref.sync import sync_to_async
 from cross_web import DjangoHTTPRequestAdapter
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -1321,6 +1326,51 @@ async def test_the_async_package_view_parses_a_multibyte_utf8_body_unchanged():
     assert response.status_code == 200
     payload = response.json()
     assert _MULTIBYTE_VALUE in payload["errors"][0]["message"], payload
+
+
+@pytest.mark.parametrize(
+    ("username", "expected_cities"),
+    [
+        pytest.param(None, ["Boston"], id="anonymous"),
+        pytest.param("regular_1", ["Boston"], id="regular-session"),
+        pytest.param("staff_1", ["Boston", "restricted"], id="staff-session"),
+    ],
+)
+@pytest.mark.django_db(transaction=True)
+async def test_the_async_package_view_hands_sync_hooks_an_evaluated_session_actor(
+    username: str | None,
+    expected_cities: list[str],
+):
+    """A sync ``get_queryset`` reading ``request.user`` sees the session actor on the async view.
+
+    ``BranchType.get_queryset`` is a plain sync hook whose staff split reads
+    ``info.context.request.user``, and under ``AsyncDjangoGraphQLView`` it runs on
+    the event loop. Django's ``request.user`` is a lazy object whose first read
+    loads the session and the user row, so a session-carrying request would raise
+    ``SynchronousOnlyOperation`` there unless the view evaluated the actor off the
+    loop first. All three verdicts ride one shipped root field: an anonymous
+    request and a non-staff session both keep the restricted branch hidden, and
+    the staff session sees it - so the hook read the real actor, not a fallback.
+    """
+    await sync_to_async(create_users)(1)
+    await library_models.Branch.objects.acreate(name="Main", city="Boston")
+    await library_models.Branch.objects.acreate(name="Annex", city="restricted")
+    client = AsyncClient()
+    if username is not None:
+        await client.aforce_login(await User.objects.aget(username=username))
+
+    with override_settings(ROOT_URLCONF=__name__):
+        response = await _post_bytes(
+            client,
+            json.dumps({"query": "{ allLibraryBranchesViaListField { city } }"}),
+            path="/async-graphql/",
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    cities = [row["city"] for row in payload["data"]["allLibraryBranchesViaListField"]]
+    assert sorted(cities) == expected_cities
 
 
 # ---------------------------------------------------------------------------

@@ -69,9 +69,8 @@ This module is ``channels``-free, and so is everything it imports:
 ``strawberry.django.views`` reaches only for the standard library, ``asgiref``,
 ``cross_web``, ``django``, ``strawberry.http``, and its own
 ``strawberry.django.context`` sibling; ``cross_web`` is part of that same
-existing hard dependency chain; and the two first-party imports (``conf``,
-``exceptions``) reach only ``django.conf`` / ``django.test.signals`` and the
-standard library. A WSGI-only project can therefore adopt the package's GraphQL
+existing hard dependency chain; and no first-party module it imports reaches
+for ``channels`` either. A WSGI-only project can therefore adopt the package's GraphQL
 HTTP endpoint without ever touching the soft ``channels`` dependency that
 ``routers.py::require_channels`` guards - both this body and upstream's
 re-execute under a simulated ``channels`` absence to keep that true. Like every
@@ -105,6 +104,7 @@ from django_strawberry_framework._boundary_ordering import (
 from django_strawberry_framework._request_body import body_exceeds_limit
 from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
+from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -999,6 +999,32 @@ _csrf_protected_run = csrf_protect(_run_after_csrf_check)
 _csrf_protected_async_run = csrf_protect(_async_run_after_csrf_check)
 
 
+def _evaluate_request_user(request: HttpRequest) -> None:
+    """Evaluate the request's lazy ``user`` so no later read of it performs I/O.
+
+    Django's ``AuthenticationMiddleware`` installs ``request.user`` as a
+    ``SimpleLazyObject`` whose first attribute read loads the session and the user
+    row. Under ``AsyncDjangoGraphQLView`` a synchronous consumer hook - a
+    ``get_queryset`` visibility filter, a plain sync resolver - runs on the event
+    loop, where that first read raises ``SynchronousOnlyOperation`` for any
+    request carrying a session cookie. The
+    async view therefore runs this function in one sync boundary before execution,
+    so every hook reads an already-evaluated actor.
+
+    Reading ``is_authenticated`` - the attribute every Django user, anonymous
+    included, defines - evaluates the proxy in place rather than replacing it with
+    ``await request.auser()``: ``request.user`` keeps its identity, and the separate
+    cache behind ``request.auser`` stays unprimed. That matters on Django 5.2, whose
+    synchronous ``login`` replaces ``request.user`` but not ``request.auser``: a
+    primed cache would keep answering the pre-login anonymous actor for the rest of
+    the request. A request with no ``user`` attribute (no
+    ``AuthenticationMiddleware``) has nothing to evaluate, and an exception from
+    the evaluation itself (a session or user store outage) propagates.
+    """
+    user: object = getattr(request, "user", None)
+    getattr(user, "is_authenticated", None)
+
+
 # basedpyright: the mixin defines no ``__init__`` (its base is ``object`` at run time), so
 # construction runs the Strawberry view's ``BaseView.__init__``, which chains to ``View``'s
 class DjangoGraphQLView(_RequestBodyBoundaryMixin, GraphQLView[Context, RootValue]):  # pyright: ignore[reportUnsafeMultipleInheritance]
@@ -1097,18 +1123,28 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView[Context
     It carries the same ``csrf_exempt``-then-``csrf_protect`` ordering as its sync
     twin, through the async continuation ``csrf_protect`` awaits; see
     :func:`_run_after_csrf_check`.
+
+    The one behavior the sync twin has no counterpart for: before upstream
+    executes the operation, the view evaluates ``request.user`` in one sync
+    boundary (:func:`_evaluate_request_user`), so a synchronous hook that reads the
+    request actor on the event loop - a ``get_queryset`` staff split, a plain sync
+    resolver - never performs the session and user lookup there. The sync view
+    needs nothing: its hooks already run in a sync context.
     """
 
     @override
     async def run(self, request: HttpRequest, *args: object, **kwargs: object) -> Any:
-        """Enforce the request boundary, then run CSRF, then upstream's ``run``.
+        """Enforce the request boundary, evaluate the actor, run CSRF, then upstream's ``run``.
 
-        The sync twin's docstring is the contract; the only difference is the
-        ``await``, and the only reason a second continuation function exists is
-        that ``csrf_protect`` decides whether to await by inspecting the callable
-        it wraps.
+        The sync twin's docstring is the contract for the boundary and CSRF
+        order. The differences are the ``await``; a second continuation function,
+        because ``csrf_protect`` decides whether to await by inspecting the
+        callable it wraps; and the actor evaluation, which runs once the body
+        boundary has admitted the request, so a refused body never costs a
+        session or user lookup.
         """
         self._enforce_request_boundary_once(request)
+        await run_in_one_sync_boundary(_evaluate_request_user, request)
         return await _csrf_protected_async_run(request, super().run, args, kwargs)
 
     @override

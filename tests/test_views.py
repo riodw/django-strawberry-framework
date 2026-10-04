@@ -15,6 +15,10 @@ What stays here:
   the cap keyword satisfies with a class attribute on the mixin);
 - the async twin's coroutine marking, pinned here so it does not depend on the
   live async probe surviving;
+- *where* the async twin evaluates the lazy request actor: in a worker thread,
+  never on the event loop, and without awaiting ``request.auser`` - the live
+  staff-session row in ``test_transport_api.py`` proves the verdict, but a wire
+  response cannot show which thread did the lookup or which accessor it used;
 - the body-cap knob: the ``max_request_body_bytes`` precedence ladder and
   its validation (properties of a pure function, not of a request), plus the
   enforcement branches whose subject is view-internal state a wire response
@@ -44,6 +48,7 @@ import json
 import logging
 import sys
 import tempfile
+import threading
 from io import BytesIO
 from unittest import mock
 
@@ -56,6 +61,7 @@ from cross_web import (
     HTTPException,
 )
 from django.conf import settings
+from django.contrib.auth.models import AnonymousUser
 from django.http import (
     HttpRequest,
     HttpResponse,
@@ -73,6 +79,7 @@ from django.test import (
     override_settings,
 )
 from django.urls import path
+from django.utils.functional import SimpleLazyObject
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
 from strawberry.http.base import BaseView
 
@@ -304,6 +311,41 @@ async def test_async_as_view_dispatches_fresh_and_middleware_prepared_instances(
     prepared_response = await callback(prepared_request)
     assert prepared_response.content == b"prepared"
     assert not hasattr(prepared_request, _BOUNDARY_PREPARED_VIEW)
+
+
+async def test_the_async_view_evaluates_the_lazy_actor_off_the_loop_without_auser():
+    """The actor is evaluated once, in a worker thread, through ``request.user`` itself.
+
+    The operation reads no actor, so the only reader of the lazy object is the
+    view's own evaluation: without it ``load_actor`` never runs. The thread
+    identity pins that the session and user lookup leaves the event loop, and the
+    untouched ``auser`` pins that the view evaluates the proxy in place instead of
+    priming ``request.auser``'s cache, which Django 5.2's synchronous ``login``
+    does not refresh.
+    """
+    loop_thread = threading.get_ident()
+    evaluating_threads: list[int] = []
+    auser_awaits: list[None] = []
+
+    def load_actor():
+        evaluating_threads.append(threading.get_ident())
+        return AnonymousUser()
+
+    async def auser():
+        auser_awaits.append(None)
+        return AnonymousUser()
+
+    request = AsyncRequestFactory().get("/graphql/", {"query": "{ ping }"})
+    request.user = SimpleLazyObject(load_actor)
+    request.auser = auser
+
+    response = await AsyncDjangoGraphQLView.as_view(schema=SCHEMA)(request)
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {"data": {"ping": "pong"}}
+    assert len(evaluating_threads) == 1
+    assert evaluating_threads[0] != loop_thread
+    assert auser_awaits == []
 
 
 def test_module_exports_exactly_the_two_view_classes_and_stays_off_the_package_root():

@@ -436,8 +436,8 @@ substrate — both leave graph-shaped authorization to consumer querysets, and
 both accept JOIN-plus-`DISTINCT` fan-out in that position. The borrowing here
 is internal: the substrate extracts and generalizes machinery this package
 already shipped and proved (the `utils/relations.py` classifier, the
-`optimizer/predicates.py` primitives, the exact-owner and alias-sharing rules
-pinned by the [search spec][spec-060]). Both upstream-shaped alternatives are
+`optimizer/predicates.py` primitives, the exact-owner rule pinned by the
+[search spec][spec-060]). Both upstream-shaped alternatives are
 rejected here: consumer-queryset authorization by Decision 7, JOIN-plus-`DISTINCT`
 fan-out by Decision 4.
 
@@ -680,8 +680,7 @@ pinned because the primitives make the naive alternative silently wrong:
 
 The compiler never adds `DISTINCT` and never adds a multiplying outer join —
 and it **enforces** that: `direct()` accepts to-one paths only (they
-legitimately join outer; the [search spec][spec-060] keeps to-one arms
-outer), and every `direct` leaf is classified pre-compilation with to-many
+legitimately join outer), and every `direct` leaf is classified pre-compilation with to-many
 paths (`first_many_index` non-null) rejected via typed
 [`ConfigurationError`][glossary-configurationerror] pointing at `related` /
 `same_related_row` — without the check, `direct(Q(genres__name__icontains=...))`
@@ -707,9 +706,11 @@ prefixed with the path — absolute conditions would make `path` advisory and
 let a stray condition on a different relation silently reintroduce the
 two-alias leak the construct exists to prevent. Ordinary flat filters keep
 Django semantics untouched; same-row grouping is opt-in for consumer
-predicates and preserved by search where visibility and terminal condition
-share a relation arm (the alias-sharing rule the [search spec][spec-060]
-already pins). Tests assert both result behavior and **inner-query** alias
+predicates. (Search keeps a hop's visibility and its terminal condition on
+one related row through the filter side's target-side restriction,
+`optimizer/predicates.py::related_rows_exist` over each hop's visible
+rows, not through this construct — [search spec][spec-060] Decision 12.)
+Tests assert both result behavior and **inner-query** alias
 sharing (the outer query holds only the reserved alias) — a result-only
 fixture can pass with two aliases accidentally landing on one child.
 **Rejected:** silently upgrading chained `.filter()` calls to same-row
@@ -1216,7 +1217,10 @@ version triplet stay untouched (Decision 10).
   `FieldDependencyPlan(columns=...)`; the expanded dependency vocabulary
   ships with its first consumer (Decision 8).
 - **Search** — card 060 ([spec][spec-060]), amended to consume
-  `GraphPathPlan` / `GraphPathPlanSet` / `PredicatePlan`;
+  `GraphPathPlan` / `GraphPathPlanSet` for path classification and arm
+  grouping; its relational arms restrict through the filter side's
+  `optimizer/predicates.py::related_rows_exist` over each hop's visible
+  rows (spec-060 Decision 12), not `PredicatePlan`;
   `LOOKUP_PREFIXES` rejection and the permission-dispatch plan stay
   060-local (Decision 2).
 - **Aggregation child scoping** — card 062, amended to consume `EdgeScope`.

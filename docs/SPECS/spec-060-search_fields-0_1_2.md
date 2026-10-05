@@ -13,13 +13,18 @@ argument. A non-empty input fans out across every declared path as one OR'd
 `icontains` predicate joined into the queryset by intersection — after
 visibility, alongside `filter:`, before `orderBy:`
 ([Decision 6](#decision-6--pipeline-position-visibility--filter--search--orderby)).
-Relation paths ride Django's standard `__` lookup traversal; no custom
-resolver machinery. Paths that cross a to-many relation compile
-row-preserving — a correlated `EXISTS` branch through the shared
-row-preserving predicate compiler, never a search-driven `.distinct()`
-([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)).
-Relational search is visibility-aware — a hidden related row can never
-qualify a visible root
+A relation path never runs in the root's join context: it runs as the
+related-branch chain it spells, on the restriction every declared
+[`RelatedFilter`][glossary-relatedfilter] branch and every walked flat
+filter leaf already use — the terminal `icontains` matched against the
+deepest hop's visible rows, then each hop folded outward as one
+correlated `EXISTS` over the rows that hop's target type lets the request
+see (`optimizer/predicates.py::related_rows_exist`) — so it is
+row-preserving with no search-driven `.distinct()`
+([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)),
+and a related row the hop target type's `get_queryset` hides, or a
+declared `RelatedFilter(queryset=...)` excludes, behaves exactly like no
+related row: it never makes a root match
 ([Decision 12](#decision-12--visibility-aware-relational-search)) — and
 search honors the declaring type's existing FilterSet permission gates
 ([Decision 13](#decision-13--search-honors-filterset-permission-gates)).
@@ -45,13 +50,18 @@ permission-gate proof), Slice 5 (**card-local docs + card wrap — version
 and release marketing deferred, GLOSSARY moves to a precise intermediate
 status**).
 
-This card consumes the row-preserving predicate groundwork already on
-`main`: the structured path-classification walker plus lookup validator in
-`utils/relations.py` (`classify_path`, `validate_lookup_expr`) and the
-shared correlated-`EXISTS` predicate compiler in `optimizer/predicates.py`,
-through which the generated to-many leaf filters already route. Search
-wires the `search:` surface onto that engine; it does not design a
-compilation strategy of its own.
+This card consumes machinery already on `main`: the structured
+path-classification walker plus lookup validator in `utils/relations.py`
+(`classify_path`, `validate_lookup_expr`), and the visible-row
+restriction every declared branch and walked flat filter leaf runs
+through — `utils/permissions.py::walk_declared_relation_path` (the
+declared hops a path walks), `filters/sets.py::FilterSet._branch_visibility_seed`
+(each declared hop's target type and base rows), and
+`optimizer/predicates.py::related_rows_exist` (the correlated `EXISTS`
+over a hop's visible rows, reached through `filters/sets.py::_reaches_related`
+and `filters/sets.py::_admitted_rows`). Search wires the `search:`
+surface onto that restriction; it designs neither a compilation strategy
+nor a visibility mechanism of its own.
 
 That groundwork is **this spec's pre-card slice ("Slice 0")**, planned in
 [`docs/row-preserving-predicates-part1-plan.md`][part1-plan], and **this
@@ -109,7 +119,10 @@ is the audit ledger. Load-bearing entries:
   strict finalize-time plan builder over the `utils/relations.py`
   classifier + lookup validator; takes the exact owning definition), the
   named path-driven permission-plan helper in `utils/permissions.py`
-  (Decision 13), the shared `active_search` predicate (canonical home
+  (Decision 13), the lift of the request-scoped hop visible-row
+  derivation off the filter-set instance (`FilterSet._hop_visible_rows` /
+  `FilterSet._scoped_rows` and their async pre-pass) so search and the
+  filter side share it (Decision 12), the shared `active_search` predicate (canonical home
   `utils/connections.py`, re-exported — Decision 3), the
   `SEARCH_MAX_LENGTH` cap, explicit rejection of the `LOOKUP_PREFIXES`
   vocabulary reserved to card 061, and unit tests under
@@ -118,17 +131,17 @@ is the audit ledger. Load-bearing entries:
   (including duplicate-path and padded-path rejection) in `types/base.py`,
   the `DjangoTypeDefinition.search_fields` + frozen-plan slots, phase-2.5
   `build_search_path_plan` in `types/finalizer.py` (exact-owner
-  definition passed in; assigned only after both path classification and
-  the post-`_bind_filtersets` permission-dispatch plan succeed —
-  retry-safe), promote `search_fields` from
+  definition passed in; assigned only after path classification and the
+  post-`_bind_filtersets` permission-dispatch plan and declared-prefix hop
+  resolution all succeed — retry-safe), promote `search_fields` from
   `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`
   ([Decision 8](#decision-8--metasearch_fields-promotes-in-this-card)).
 - [ ] **Slice 3 — connection wiring.** `CONNECTION_SEARCH_KWARG` in
   `utils/connections.py`, the synthesized nullable `search: String`
   argument in `connection.py::_synthesized_signature`, the sync/async
   search steps in `_pipeline_sync` / `_pipeline_async` (visibility-aware
-  and permission-gated), row-preserving to-many compilation through
-  `optimizer/predicates.py`
+  and permission-gated), row-preserving relational compilation through
+  `optimizer/predicates.py::related_rows_exist`
   ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)),
   the active-search non-queryset guard extension.
 - [ ] **Slice 4 — live activation + composability.** Uncomment all four
@@ -141,7 +154,8 @@ is the audit ledger. Load-bearing entries:
   Medtrics reproduction fixture, Decision 7), live HTTP tests under
   `examples/fakeshop/test_query/` covering the required-live-case list in
   the Test plan (to-many row preservation, the Category permission gate,
-  related-row visibility, phrase semantics, literals, cache isolation,
+  related-row visibility, the walked `queryset=` scope, undeclared hops,
+  filter-twin parity, phrase semantics, literals, cache isolation,
   nested-connection fallback), composability tests (`search` + `filter:`,
   `search` + visibility, `search` + `totalCount`, `search` + keyset
   cursors, `search` + selected relations, `search` + a consumer
@@ -225,14 +239,37 @@ viewer cannot see.
 - `optimizer/predicates.py` owns the row-preserving predicate compiler:
   correlated `EXISTS` branches rooted at the outer model's `_base_manager`
   on the queryset's own database alias, `_dst_`-reserved collision-checked
-  aliases, no `.distinct()`. The generated to-many leaf filters route
-  through it, so search and filters share one compilation story.
-- `filters/sets.py` already owns the related-visibility derivation and
-  permission machinery this card composes with:
-  `FilterSet._derive_related_visibility_querysets_sync` / `_async` run each
-  active branch's target-type `get_queryset` via
-  `utils/querysets.py::apply_type_visibility_sync` / `_async` (a sync/async
-  derivation split, pre-collected for async), and the
+  aliases, no `.distinct()`. Beside it,
+  `optimizer/predicates.py::related_rows_exist` is the target-side
+  sibling: a correlated `EXISTS` built from a given related queryset and
+  correlated on each link's own columns (one nested `EXISTS` per link),
+  through which every declared `RelatedFilter` branch restricts its
+  parent. Search's relational arms compile through it, not through the
+  outer-rooted primitive
+  ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)).
+- `filters/sets.py` already owns the related-visibility restriction and
+  permission machinery this card composes with. A nested branch runs its
+  target type's `get_queryset` through
+  `FilterSet._derive_related_visibility_querysets_sync` / `_async` and
+  restricts its parent through `related_rows_exist`. A flat leaf whose
+  path walks a declared `RelatedFilter` or crosses a relation whose model a
+  type scopes (`filters/sets.py::FilterSet._flat_leaf_walk`, over
+  `utils/permissions.py::walk_declared_relation_path` with
+  `undeclared=True`: one `utils/permissions.py::RelationHop` per declared
+  branch, then one per relation segment
+  `utils/relations.py::leading_relation_hops` reads past them, typed by
+  `utils/querysets.py::relation_target_type`) answers as Django's ORM
+  would if the rows each hop's target type hides did not exist
+  (`filters/sets.py::FilterSet._apply_active_leaf`): each hop's visible
+  rows (`filters/sets.py::FilterSet._hop_visible_rows`: a declared hop's
+  type resolved by `filters/sets.py::FilterSet._branch_visibility_seed`
+  and keyed `(id(declaration), alias)`, an undeclared hop's scope type
+  keyed `(type, alias)` by `filters/sets.py::FilterSet._scoped_rows`, an
+  unscoped one every row; pre-awaited under `apply_async`), the terminal
+  over the last hop's rows, and each hop folded outward with
+  `filters/sets.py::FilterSet._reaches_hop` (a declared hop's explicit
+  `queryset=` admitted and its intermediate models' visible rows passed
+  as `via=`, then the correlated `EXISTS`). The
   `_run_permission_checks` `FilterSet` inherits from
   `sets_mixins.py::ActiveInputPermissionMixin` fires
   `check_<field>_permission` gates for active input fields through the
@@ -277,16 +314,19 @@ viewer cannot see.
    every declared path, `.filter()`-joined into the queryset. Inactive
    input → the same queryset object back (no-op).
 4. Composition by intersection with `filter:`; strictly post-visibility at
-   the root AND visibility-aware inside every to-many hop, so hidden rows —
-   root or related — cannot be discovered by probing field values
+   the root AND visibility-aware at every relation hop, to-one and
+   to-many alike, so hidden rows — root or related — cannot be discovered
+   by probing field values: a related row the hop target type's
+   `get_queryset` hides, or a walked `RelatedFilter(queryset=...)`
+   excludes, behaves exactly like no related row
    ([Decision 12](#decision-12--visibility-aware-relational-search)).
 5. Search honors the declaring type's FilterSet `check_<field>_permission`
    gates: active search fires every applicable gate, and `Meta.search_fields`
    is the grant for paths with no corresponding gate
    ([Decision 13](#decision-13--search-honors-filterset-permission-gates)).
-6. Correct row cardinality, row-preserving: a declared path that traverses
-   a to-many relation compiles as a correlated `EXISTS` branch OR'd with
-   the direct-path predicates — one root model row stays one SQL row, and
+6. Correct row cardinality, row-preserving: every declared relation path
+   compiles as its branch chain's correlated `EXISTS` OR'd with the
+   direct-path predicates — one root model row stays one SQL row, and
    search adds no `.distinct()` and no outer fan-out (on a plain root
    queryset, `totalCount` stays a flat `COUNT(*)`).
 7. Promotion of `search_fields` out of `DEFERRED_META_KEYS` — the pipeline
@@ -337,7 +377,8 @@ Element classification:
 
 - **Borrowed verbatim**: the Meta key name and tuple-of-paths shape; the
   single nullable `search: String` argument name and type; `icontains` as
-  the sole lookup; Django `__` traversal for relation paths.
+  the sole lookup; the Django `__` spelling of relation paths (their
+  compilation is diverged, below).
 - **Engine-adapted**: argument generation moves from graphene's
   `Field.args` property merge to this package's synthesized-resolver
   signature (`connection.py::_synthesized_signature`, spec-030 Decision 6:
@@ -357,11 +398,11 @@ Element classification:
   no `search` key duplicated into the filter input type
   ([Decision 9](#decision-9--no-search-key-inside-the-filter-input-type));
   no `.distinct()` at all — upstream applies one unconditionally after
-  filtering, this package compiles row-multiplying paths as correlated
-  `EXISTS` branches so the fan-out never exists
+  filtering, this package compiles every relation path as its branch
+  chain's correlated `EXISTS` so the fan-out never exists
   ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct));
   relational search is visibility-aware and permission-gated — upstream
-  traverses raw relations
+  traverses raw relations in the root's join
   ([Decision 12](#decision-12--visibility-aware-relational-search),
   [Decision 13](#decision-13--search-honors-filterset-permission-gates));
   a documented input length cap with a typed error
@@ -404,10 +445,18 @@ Semantics:
 - `search: null` or omitted → no effect.
 - `search: "   "` (whitespace-only) → no effect (stripped check).
 - `search: "red dwarf"` → `Q(name__icontains="red dwarf") |
-  Q(description__icontains="red dwarf") | Q(galaxy__name__icontains="red
-  dwarf") | Q(galaxy__description__icontains="red dwarf")` applied via
-  `.filter(...)` — the whole input as one phrase (to-many paths compile as
-  `EXISTS` branches instead of raw `Q` traversals).
+  Q(description__icontains="red dwarf") | Q(<galaxy arm>)` applied in one
+  `.filter(...)` — the whole input as one phrase. The galaxy arm is the
+  branch chain `galaxy__name` / `galaxy__description` spell: `EXISTS` a
+  galaxy row the galaxy type's `get_queryset` shows (within a walked
+  `RelatedFilter(queryset=...)`) whose `name` or `description` contains
+  the phrase and which the body's `galaxy` link reaches. A relation path
+  is never a raw `Q(galaxy__name__icontains=...)` traversal of the root's
+  join.
+- A body whose only matching related row is hidden from the viewer (or
+  outside the walked branch's `queryset=`) does not match: the hidden row
+  behaves exactly like no row
+  ([Decision 12](#decision-12--visibility-aware-relational-search)).
 - Input longer than `SEARCH_MAX_LENGTH` (256 characters) → typed GraphQL
   error naming the cap ([Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal)).
 - A declared path gated by a FilterSet `check_<field>_permission` method →
@@ -448,7 +497,9 @@ visibility and permission composition
 ([Decision 12](#decision-12--visibility-aware-relational-search),
 [Decision 13](#decision-13--search-honors-filterset-permission-gates)) —
 it takes both from the same single-sited helpers the FilterSet consumes
-(`utils/querysets.py::apply_type_visibility_sync` / `_async`,
+(the visible-row restriction behind
+`filters/sets.py::FilterSet._apply_active_leaf`,
+`utils/querysets.py::apply_type_visibility_sync` / `_async`,
 `utils/permissions.py`), not by routing through `FilterSet.apply_sync`'s
 transactional form machinery, which would couple search to the presence
 and shape of a filterset.
@@ -456,14 +507,16 @@ and shape of a filterset.
 **`apply_search_*` is the complete runtime contract** — it receives the
 current queryset, the frozen path plan, and the raw input, and returns a
 queryset. It returns the original queryset **by identity** for inactive
-input, builds direct `Q` branches via `build_direct_search_q`, builds and
-attaches the to-many `EXISTS` branches through `optimizer/predicates.py`,
+input, builds direct `Q` branches via `build_direct_search_q`, builds each
+relational arm's correlated `EXISTS` through the visible-row restriction
+([Decision 12](#decision-12--visibility-aware-relational-search)),
 applies the final OR once, and contains no Strawberry or connection logic.
 A `Q`-only signature (`build_search_q(search_fields, value)`) is rejected
-as the public contract: it cannot carry
-the queryset/database alias the correlated inner root needs, cannot host
-alias allocation, and if it emitted raw `Q(genres__name__icontains=v)`
-traversals it would reintroduce the exact outer fan-out the card removes.
+as the public contract: it cannot carry the queryset, database alias, and
+`info` the per-hop visible-row derivation needs, and if it emitted raw
+`Q(genres__name__icontains=v)` traversals it would reintroduce both the
+outer fan-out the card removes and the hidden-row match Decision 12
+forbids.
 `build_direct_search_q` survives only as the internal direct-branch
 helper and must never be presented as the search compiler.
 
@@ -603,8 +656,9 @@ manufacture the phrase across the first parent's two children regardless
 of child order; a correctly correlated terminal predicate evaluated per
 related row cannot. The Test plan runs this through the live GraphQL
 surface (ordered edges + `totalCount`) and keeps the SQL-shape assertion
-in package tests proving the implementation is `EXISTS`, not a scalar
-aggregate that merely avoids outer fan-out. Because the existing
+in package tests proving the terminal predicate filters individual
+related rows inside the arm's `EXISTS`, not a scalar aggregate that
+merely avoids outer fan-out. Because the existing
 multi-word test data can pass under both phrase and term-AND contracts
 when one value contains both words, the test plan retains a distinct
 multi-field phrase case where separate words match different fields — so
@@ -646,9 +700,12 @@ after the filterset step and before the orderset step:
       ([Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal));
    3. the permission-gate pass
       ([Decision 13](#decision-13--search-honors-filterset-permission-gates));
-   4. compilation — direct paths as plain `Q` predicates, to-many paths
-      as correlated visibility-aware `EXISTS` branches, OR'd and
-      `.filter()`-joined
+   4. visibility derivation — every relational arm's hop visible rows,
+      once per request per hop and alias
+      ([Decision 12](#decision-12--visibility-aware-relational-search));
+   5. compilation — direct paths as plain `Q` predicates, every relation
+      path (to-one or to-many) as its branch chain's correlated `EXISTS`,
+      OR'd and `.filter()`-joined
       ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)).
 4. `OrderSet.apply_*` — unchanged.
 5. `_finalize_queryset` — deterministic total order + optimizer plan,
@@ -664,9 +721,13 @@ async-only, so the search step ships as sync/async twins —
 `apply_search_sync` awaiting nothing (and surfacing the existing
 `SyncMisuseError` when a hop's visibility hook is async-only, via
 `apply_type_visibility_sync`), `apply_search_async` awaiting
-`apply_type_visibility_async` per hop — mirroring the FilterSet's
-existing `_derive_related_visibility_querysets_sync` / `_async` split.
-Plan reading, `Q` construction, and `EXISTS` attachment remain shared,
+`apply_type_visibility_async` for every hop before the sync compile —
+the split the filter side already has
+(`filters/sets.py::FilterSet._hop_visible_rows` derives on first use;
+`filters/sets.py::FilterSet._derive_flat_hop_visibility_async` and
+`filters/sets.py::FilterSet._await_scoped_rows` pre-await every hop into
+the same request-wide map).
+Plan reading, `Q` construction, and the `EXISTS` fold remain shared,
 un-awaited helper code so the twins stay thin. **The permission-gate
 pass is NOT colorless-by-sharing**: it ships as one synchronous,
 path-driven gate runner that `apply_search_sync` calls directly, while
@@ -703,44 +764,59 @@ DISTINCT keeps the membership fan-out in the root query, forces `LEFT
 OUTER JOIN` promotion (the to-many arm is one arm of an OR), and turns
 `totalCount` into `COUNT(*)` over a `SELECT DISTINCT` subquery wrapper.
 
-This card instead compiles row-preserving through the shared predicate
-compiler (`optimizer/predicates.py`):
+This card instead compiles every relation path row-preserving through the
+restriction every declared `RelatedFilter` branch and every walked flat
+filter leaf already use, `optimizer/predicates.py::related_rows_exist`
+([Decision 12](#decision-12--visibility-aware-relational-search) owns the
+hop resolution and visibility):
 
 - At finalize time, the structured path walker classifies every declared
   path; the frozen search path plan on `DjangoTypeDefinition` records the
-  direct paths and the to-many path groups (grouped by identical complete
-  relation chain — for a same-value OR this grouping is a cost choice,
-  never a correctness one, since `EXISTS` distributes over OR; when in
-  doubt, one `EXISTS` per path is always correct). The plan carries **no
-  request data, no queryset, no database alias, and no router answer** —
-  those
-  bind at resolve time from the live queryset
+  direct (relation-free) paths and the relational arms. An arm is one
+  resolved hop chain plus the terminal field(s) searched at its end;
+  declared paths whose resolved hop chains are identical share one arm,
+  their terminals OR'd on the deepest hop's rows (for a same-value OR this
+  grouping is a cost choice, never a correctness one: an existence test
+  distributes over OR, so one arm per path is always correct). The plan
+  carries **no request data, no queryset, no database alias, and no
+  router answer** — those bind at resolve time from the live queryset
   ([Decision 12](#decision-12--visibility-aware-relational-search) pins
   the same rule for visibility querysets).
 - At resolve time, direct paths become ordinary `Q(<path>__icontains=v)`
-  predicates; each to-many group becomes a correlated `EXISTS` branch —
-  the outer model's `_base_manager` on `queryset.db`, correlated on the
-  root primary key, the group's `icontains` predicates OR'd inside the
-  subquery AND'd with the hop-visibility constraints of
-  [Decision 12](#decision-12--visibility-aware-relational-search) —
-  composed under Decision 12's one-`filter()`-call same-related-row rule,
-  never as successive `.filter()` calls — attached under a
-  `_dst_`-reserved alias. The direct predicates
-  and `EXISTS` branches OR together into the one search expression;
-  `.distinct()` is never applied.
+  predicates. Each arm filters its deepest hop's visible rows by the OR
+  of its terminals' `icontains`, then folds the match outward hop by hop
+  exactly as `filters/sets.py::FilterSet._apply_active_leaf` folds a
+  positive walked leaf: a hop keeps the visible rows of the hop before it
+  that reach a matched row (the walked `RelatedFilter(queryset=...)`
+  admitted first, `filters/sets.py::_admitted_rows`), through
+  `filters/sets.py::_reaches_related` — one correlated `EXISTS` built from
+  the matched rows (the target side) and correlated on each link's own
+  columns. The outermost hop's test over the live root queryset is the
+  arm's term, an `Exists` OR'd with the direct predicates into the one
+  search expression and applied in one `.filter()`; `.distinct()` is
+  never applied.
 
-Consequences: the root query keeps no membership join (the subquery owns
-its own alias map), one root row stays one SQL row through counting and
-pagination, and **search adds no distinct wrapper and no outer fan-out**.
-On a plain root queryset that means `totalCount` is a flat `COUNT(*)`; a
-consumer queryset that is already distinct, grouped, annotated, or
-projected may legitimately require a count subquery for ITS OWN shape —
-the invariant this card owns is only that search never introduces one.
-`_base_manager` is deliberate — the outer queryset has already applied
-visibility and the consumer manager; the inner row exists only to test
-relation existence for an already-qualified outer pk (against the
-composed hop-visibility constraints), so a filtered default manager could
-only introduce false negatives.
+Consequences: the root query keeps no membership join (each `EXISTS`
+owns its own alias map), one root row stays one SQL row through counting
+and pagination, and **search adds no distinct wrapper and no outer
+fan-out**. On a plain root queryset that means `totalCount` is a flat
+`COUNT(*)`; a consumer queryset that is already distinct, grouped,
+annotated, or projected may legitimately require a count subquery for
+ITS OWN shape — the invariant this card owns is only that search never
+introduces one. An arm term is a `WHERE` condition, never an
+`annotate()` / `alias()` entry, so search adds no selected column and no
+`query.annotations` entry. The `EXISTS` is built from the target rows,
+never from the outer model's manager: the outer queryset's own
+restrictions are not repeated inside it, intermediate link rows are read
+through `_base_manager` on the query's alias (as a join applies no
+manager either), and a `get_queryset` ending in `.distinct()` keeps its
+`DISTINCT` inside the subquery, where it changes no answer.
+`optimizer/predicates.py::attach_exists` (the outer-rooted correlated
+`EXISTS` with a reserved `.alias()`) is not on search's path: hop
+visibility and the declared `queryset=` scope already live in the
+target-side restriction, and an outer-rooted `EXISTS` carrying them
+would be a second visibility mechanism
+([Decision 12](#decision-12--visibility-aware-relational-search)).
 
 Two to-many search-path categories are proven independently (neither test
 subsumes the other):
@@ -755,7 +831,10 @@ subsumes the other):
   on the **existing** `LoanType`
   (`examples/fakeshop/apps/library/schema.py` — declared before `Book` /
   `Patron` to exercise finalization order, with real `LoanFilter` /
-  `LoanOrder` sidecars). Per
+  `LoanOrder` sidecars). Every hop of that path walks a declared
+  `RelatedFilter` (`LoanFilter.book`, `BookFilter.loans`,
+  `LoanFilter.patron`), so the search arm and the `LoanFilter` flat leaf
+  over the same path answer the same rows. Per
   [Decision 14](#decision-14--search-scope-is-type-definition-wide-and-immutable)
   that declaration is permanent, type-definition-wide public surface —
   NOT test-scoped — and attaches to every current and future connection
@@ -788,10 +867,10 @@ and prove its observable GraphQL cardinality (exact ordered IDs,
 structured Part 1 path plan created at type finalization — it never calls
 `lookup_spawns_duplicates()` during request execution and never collapses
 the plan to a `search_requires_distinct`-style boolean, because search
-must separate direct from row-multiplying arms, group compatible
-relational arms without reconstructing paths, compose hop visibility and
-terminal matching under the same-related-row rule (Decision 12), attach
-correlated `EXISTS` branches under reserved aliases, and preserve the
+must separate direct from relational arms, group arms with identical
+resolved hop chains without reconstructing paths, apply each hop's
+visibility and terminal matching to the same related rows (Decision 12),
+fold each arm outward as correlated `EXISTS` tests, and preserve the
 incoming queryset rather than normalizing it with `.distinct()`.
 
 Alternatives rejected: **blanket `.distinct()`** (upstream) and
@@ -801,7 +880,16 @@ retain the fan-out and the distinct-wrapper count; **post-processing
 insufficient semantic information; **`StringAgg`-style aggregation** —
 Postgres-specific and processes all child strings where `EXISTS` stops at
 the first match; **`.distinct("pk")`** — Postgres-specific, collides with
-ordering constraints, and still retains the fan-out.
+ordering constraints, and still retains the fan-out; **an outer-rooted
+correlated `EXISTS` (`optimizer/predicates.py::attach_exists`) carrying
+per-hop visibility membership predicates** — a second visibility
+mechanism beside the filter side's restriction, correct only while every
+hop's membership and the terminal predicate share one inner relation
+alias (Django allocates a fresh alias per `.filter()` call on a
+multi-valued relation), so a visible non-matching child and a hidden
+matching sibling could qualify the root; the target-side fold has no
+such alias dependency
+([Decision 12](#decision-12--visibility-aware-relational-search)).
 
 ### Decision 8 — `Meta.search_fields` promotes in this card
 
@@ -878,7 +966,7 @@ spacing untouched.
 per the add-settings-only-when-needed rule). An active input longer than
 the cap raises a typed GraphQL error naming the cap and the received
 length. Rationale: a client-controlled string is duplicated across every
-direct and `EXISTS` branch as a leading-wildcard `LIKE`; transport body
+direct predicate and relational arm as a leading-wildcard `LIKE`; transport body
 limits bound the request envelope, not a reasonable database pattern
 size, and an unbounded public contract is far harder to narrow after
 release than a generous cap is to widen. An abuse-case live test pins the
@@ -897,105 +985,179 @@ not implemented" posture.
 Root visibility does not imply related-row visibility: the pipeline's
 step-1 narrowing covers rows of the connection's root model, and
 [`apply_cascade_permissions`][glossary-apply_cascade_permissions]
-intentionally covers forward single-valued edges — but a to-many search
-path (`genres__name__icontains=v`) traverses the related tables as raw
-ORM relations. Visibility-blind, a visible parent could qualify **only
+intentionally covers forward single-valued edges only when a consumer
+calls it — but a relation path compiled in the root's join
+(`genres__name__icontains=v`) traverses the related tables as raw ORM
+relations. Visibility-blind, a visible parent could qualify **only
 because a related row hidden on its own GraphQL surface matched the
 search** — a related-data existence oracle. This package's posture
-rejects that: the contract is **search never qualifies a row, root or
-related, through data the viewer's GraphQL surface hides**.
+rejects that, as spec-027 Decision 8 step 3 does for every related filter
+constraint: the contract is **search never qualifies a row, root or
+related, through data the viewer's GraphQL surface hides — a related row
+the hop target type's `get_queryset` hides, or a walked
+`RelatedFilter(queryset=...)` excludes, behaves exactly like no related
+row**.
 
-Mechanism — reusing the single-sited machinery the FilterSet already
-consumes, never a parallel implementation:
+Mechanism — the visible-row restriction the filter side already runs
+every declared branch and every walked flat leaf through (spec-027
+Decision 8 step 3), never a parallel implementation. A relational search
+arm is the nested branch chain its path spells, answered over the rows
+each hop's target type lets the request see:
 
-- The frozen path plan records, for every relation hop in every declared
-  path, the hop's target model and whether a `DjangoType` is registered
-  for it — with one exact-owner exception. **When a hop's target model is
-  the plan's root model (path re-entry), the plan records the exact
-  owning `DjangoTypeDefinition` passed into
-  `build_search_path_plan(definition, paths)`, never a model-keyed
-  registry lookup.** A model-only `registry.get(model)` resolves the
-  PRIMARY type, and for a connection serving a secondary `DjangoType`
-  (explicitly supported — Decision 14 and the exact-owner tests) that
-  would silently swap the secondary's visibility hook for the primary's:
-  an inner row hidden under the secondary hook but visible under the
-  primary could then qualify the secondary connection. This is also why
-  the plan builder takes the owning definition rather than
-  `(type_name, model)` — a type name is diagnostic text, not an
-  identity-safe visibility target. Every OTHER related model resolves
-  through the registry's primary-type rule (the same resolution the model
-  registry already defines). The plan stores resolved type references,
-  never querysets, and never rediscovers a type from the model at request
-  time.
-- At resolve time, each hop whose target model has a registered type
-  derives that type's visibility-scoped queryset via
-  `utils/querysets.py::apply_type_visibility_sync` / `_async` (the same
-  helpers behind `FilterSet._derive_related_visibility_querysets_*`),
-  pinned to the live queryset's database alias, and composes it into the
-  predicate as a membership constraint on the hop — inside the correlated
-  `EXISTS` body for to-many groups, AND'd with the group's `icontains`
-  OR. A hidden related row then simply does not exist for the subquery.
-- **One relational arm compiles as one `Q` tree submitted in one
-  conjunctive `.filter()` call** on the correlated inner root — the
-  load-bearing ORM rule, not a style choice. Django deliberately treats
-  conditions split across successive `.filter()` calls on a multi-valued
-  relation as constraints on potentially different related rows
-  ([documented][django-spanning-multivalued]), and a compile-time probe
-  on the exact reproduction path confirmed the consequence: sequential
-  `book__loans__in=<visible loans>` then
-  `book__loans__patron__email__icontains=...` filters allocated two
-  separate inner `library_loan` relation aliases, while one filter
-  carrying both conjuncts shared one alias. The sequential form is a
-  related-data leak — a visible non-matching child satisfies the
-  visibility constraint while a hidden matching sibling satisfies the
-  terminal predicate, so the root qualifies solely through hidden data:
-  the precise existence oracle this decision exists to prevent.
-  Therefore: every hop-visibility membership predicate and the terminal
-  `icontains` predicate of one relational search arm (or same-chain
-  group) build into one structured `Q` tree applied in one `.filter()`
-  call; hop visibility is never implemented as a loop of successive
-  `.filter()` calls; and for direct to-one relational arms the visibility
-  constraint stays inside that arm's parentheses, never lifted outside
-  the final search OR. If a future compiler refactor cannot keep
-  single-call alias sharing an explicit invariant, it must fall back to
-  separately correlated nested existence predicates rather than rely on
-  accidental alias reuse. The package tests assert the shared inner
-  alias directly (one alias for the shared to-many path), not only the
-  result rows — a result-only test can pass by a fixture accidentally
-  making two aliases land on the same row.
-- **Direct relational branches carry per-branch visibility themselves**
-  — never delegated to cascade. `apply_cascade_permissions` is an
-  explicit helper a consumer may or may not call, search paths need not
-  be exposed output fields, and a type's custom `get_queryset` may narrow
-  only its own model, so "cascade covers the forward hops" is not a
-  framework invariant. For `search_fields = ("title", "category__name")`,
-  the `category__name` branch compiles as a structured
-  `(hop visibility AND terminal icontains)` branch — never a bare lookup
-  `Q` — with the registered Category type's visibility constraint AND'd
-  **only into that relational OR arm** (applying it to the whole query
-  would wrongly suppress an Item matching `title`). The same per-hop rule
-  covers a chain of forward hops before the first to-many hop, and every
-  hop inside the `EXISTS` body (cascade narrowing never reaches inside a
-  subquery). A live forward-FK search test on a type that does **not**
-  call cascade proves the claim holds beyond the staged fakeshop types.
+- **Hop resolution (finalize time, frozen in the plan).**
+  `build_search_path_plan(definition, paths)` reads each relation path as
+  the filter side reads a flat leaf's path, one `RelationHop`
+  (`utils/permissions.py::RelationHop`) per relation it crosses, declared
+  or not:
+  1. *Declared prefix.* When the declaring type has a `filterset_class`,
+     the plan walks the path with
+     `utils/permissions.py::walk_declared_relation_path` over that
+     FilterSet with `undeclared=True` — the visibility reading
+     `filters/sets.py::FilterSet._flat_leaf_walk` uses; the flat-path gates
+     read the same walk without it — after `_bind_filtersets` has bound
+     every child filter set's owner (the ordering Decision 13 pins). Each
+     declared hop is one hop exactly as the filter reads it: its relation
+     is the declaration's ORM `field_name`, its target type is the one
+     `filters/sets.py::FilterSet._branch_visibility_seed` resolves (the
+     child filter set's bound owner, else the registry's primary-first
+     answer), its scope is the declaration's explicit
+     `RelatedFilter(queryset=...)`, and a `field_name` spanning several
+     relations (`target_version__milestone`) is one hop whose intermediate
+     models pass through the rows their own types show
+     (`filters/sets.py::FilterSet._branch_via_types` over
+     `utils/querysets.py::relation_path_visibility_types`). The
+     finalize-time registered-target audit already guarantees every
+     declared target resolves.
+  2. *Undeclared hops.* Past the last declared hop — or from the root when
+     the type declares no `filterset_class`, or its FilterSet declares no
+     `RelatedFilter` for the path's first relation — every relation
+     segment is one undeclared hop. The segments come from
+     `utils/relations.py::leading_relation_hops` (the only path walker:
+     `classify_path`'s hops, so a `pk` segment on a model keyed by a
+     relation is that relation), and each hop's type is
+     `utils/querysets.py::relation_target_type` of the model the hop's
+     join reaches. With a FilterSet the walk records them itself
+     (`RelationHop.target_type`); without one, the plan calls
+     `relation_target_type` per `leading_relation_hops` hop with
+     `root=` the declaring type, so a hop re-entering the root model
+     answers for the exact owner. A hop scopes only when that type
+     declares a `get_queryset` of its own (`RelationHop.scope`,
+     `utils/querysets.py::relation_visibility_type`): a model with no
+     registered type, or a type keeping the identity default hook, reads
+     the raw relation, since scoping would change no row. Search consumes
+     that one resolution rather than carrying its own.
+
+  The terminal is the one concrete field left (Decision 2 validates
+  `icontains` on it). **A hop whose target model is the plan's root model
+  (path re-entry), declared or not, also records the exact owning
+  `DjangoTypeDefinition` passed into `build_search_path_plan`** when it
+  differs from the hop's resolved type, and its visible rows are the rows
+  BOTH hooks show. The two differ when the re-entry is a declared hop
+  whose child filter set is bound to another type, or an undeclared hop
+  past a declared one (the filter walk resolves re-entry against the set
+  the undeclared hops start from, whose bound type is not the search's
+  root). Why the exact owner: for a connection serving a secondary
+  `DjangoType` (explicitly supported — Decision 14 and the exact-owner
+  tests), the hop's resolved type alone could swap the secondary's
+  visibility hook for another type's: an inner row hidden under the
+  secondary hook but visible under the primary could then qualify the
+  secondary connection. Applying both keeps the filter side's answer and
+  the secondary's hook. This is also why the plan builder takes the
+  owning definition rather than `(type_name, model)` — a type name is
+  diagnostic text, not an identity-safe visibility target. The plan
+  stores resolved type references and scopes, never querysets, and never
+  rediscovers a type from the model at request time.
+- **Visible rows (resolve time).** A declared hop's visible rows are its
+  target type's `get_queryset` over the base rows
+  `_branch_visibility_seed` seeds on `queryset.db`; a scoped undeclared
+  hop's (and a scoped intermediate model's) are its scope type's
+  `get_queryset` over `utils/querysets.py::base_queryset(<model>,
+  using=queryset.db)`; both run through
+  `utils/querysets.py::apply_type_visibility_sync` / `_async`. An unscoped
+  undeclared hop reads every row of its model through `_base_manager`, as
+  Django's join reads them. Rows are derived once per request under the
+  filter side's keys — `(id(declaration), alias)` for a declared hop,
+  `(scope type, alias)` for an undeclared hop or intermediate model
+  (`filters/sets.py::FilterSet._hop_visible_rows`,
+  `filters/sets.py::FilterSet._scoped_rows`). That map lives on the
+  filter-set instance today, pre-awaited by
+  `filters/sets.py::FilterSet._derive_flat_hop_visibility_async` and
+  `filters/sets.py::FilterSet._await_scoped_rows`; Slice 1 lifts it into
+  one request-scoped helper the filter side and search both call with
+  already-resolved hops, so search never runs a `get_queryset` any other
+  way.
+- **The fold.** An arm filters its deepest hop's visible rows by its
+  terminals' OR'd `icontains`, then walks outward: for each hop from the
+  innermost to the second, the match becomes the visible rows of the hop
+  before it that reach a matched row the hop admits — the
+  `filters/sets.py::FilterSet._reaches_hop` step: a declared hop admits
+  the rows within its explicit `queryset=` (`filters/sets.py::_admitted_rows`)
+  and passes its intermediate models' visible rows as `via=`; an
+  undeclared hop admits the rows as they are — through
+  `filters/sets.py::_reaches_related`, the correlated `EXISTS` of
+  `optimizer/predicates.py::related_rows_exist(..., via=...)`. The
+  outermost hop's test over the live root queryset is the arm's term
+  inside the search OR. This is `FilterSet._apply_active_leaf`'s fold for
+  a positive lookup.
+- **Visible-world semantics.** The filter side answers a walked leaf as
+  Django's ORM would if the rows each hop's target type hides (and each
+  walked `queryset=` excludes) did not exist. A search arm is a positive
+  `icontains` existence test, so that answer is "some visible chain ends
+  in a row whose terminal contains the phrase": a hidden related row
+  behaves exactly like no related row. Search has no `isNull` or
+  `exclude` arm, so the filter fold's null extension and parent-level
+  negation never arise here.
+- **Same related row, structurally.** The terminal predicate filters the
+  deepest hop's visible rows themselves, and every hop keeps only rows
+  that reach a row already in the matched set, so visibility and the
+  match apply to the same related row at every level. No hop constraint
+  is a separate `.filter()` on a join the terminal predicate also uses,
+  and nothing depends on Django reusing a relation alias
+  ([documented][django-spanning-multivalued]: conditions in successive
+  `.filter()` calls on a multi-valued relation may match different
+  related rows). A root with a visible non-matching child and a hidden
+  matching sibling therefore cannot match: the hidden sibling is not in
+  the visible rows the terminal filters, and the visible child does not
+  pass the terminal.
+- **Every relational arm carries its own visibility — never delegated to
+  cascade.** `apply_cascade_permissions` is an explicit helper a consumer
+  may or may not call, search paths need not be exposed output fields,
+  and a type's custom `get_queryset` may narrow only its own model, so
+  "cascade covers the forward hops" is not a framework invariant. For
+  `search_fields = ("title", "category__name")`, the `category__name` arm
+  is its own `EXISTS` term **inside the search OR** (applying Category
+  visibility to the whole query would wrongly suppress an Item matching
+  `title`). To-one and to-many hops restrict alike, every hop of a chain
+  included; cascade narrowing reaches only the root rows. A live
+  forward-FK search test on a type that does **not** call cascade proves
+  the claim holds beyond the staged fakeshop types.
 - The per-hop rule **recurses onto the root model itself**: when a
   declared path re-enters the root model (the Decision 7 reverse-FK
   fixture does — `book__loans` from a `Loan` root makes the second hop's
-  target `Loan` again), the exact owning type's visibility — the
-  definition recorded in the frozen plan, primary or secondary, never
-  re-resolved through the registry — composes into the inner rows of the
-  `EXISTS` body exactly like any other registered-type hop. A flat
-  `filter:` leaf over the same path agrees: `LoanFilter`'s
-  `book__loans__patron__email` walks `book`, `loans` and `patron`, so
-  `LoanType` visibility scopes the inner loans under `filter:` too, and a
-  relation no `RelatedFilter` declares reads the registered type's visibility
-  the same way, re-entry into the filter set's own model reading the type
-  the set is bound to (`utils/querysets.py::relation_target_type`; spec-027
-  Decision 8 step 3). The test plan pins the recursion case.
+  target `Loan` again), the inner `Loan` rows are scoped like any other
+  hop's (above: the hop's resolved type, plus the exact owner when it
+  differs), and the test plan pins the recursion case.
+- **Filter parity.** Search and an `icontains` flat `filter:` leaf over
+  the same path read the same hops, target types, scopes and
+  intermediate rows and restrict through the same `EXISTS`, so they answer
+  the same rows: `LoanFilter`'s `book__loans__patron__email` walks `book`,
+  `loans` and `patron`, so `LoanType` visibility scopes the inner loans
+  under both, and a relation no `RelatedFilter` declares reads its
+  registered type's visibility under both
+  (`utils/querysets.py::relation_target_type`; spec-027 Decision 8
+  step 3). The one place search is stricter is a root re-entry whose
+  exact owner differs from the hop's resolved type, where it applies both
+  hooks.
 - A related model with **no registered type** has no GraphQL surface and
-  therefore no visibility contract to honor; the hop traverses the raw
-  relation. Declaring a search path across an unregistered model is the
-  author's explicit grant over that table's data — documented as such.
+  therefore no visibility contract to honor; neither does a type keeping
+  the identity default `get_queryset`, which hides nothing. Such an
+  undeclared hop reads the raw relation (every row of its model, still
+  inside a correlated `EXISTS`, never a join into the root), as the
+  filter side does. Declaring a search path across an unregistered model
+  is the author's explicit grant over that table's data — documented as
+  such. A declared `RelatedFilter` over an unregistered target is already
+  a finalize-time `ConfigurationError` on the filter side, so this case
+  arises only on undeclared hops.
 
 Color: related `get_queryset` hooks may be async-only, which is exactly
 why the search step ships as sync/async twins
@@ -1057,7 +1219,14 @@ Mechanism:
   through the existing `invoke_permission_method` primitive with its
   per-class fired sets, so aliases and repeated paths deduplicate exactly
   as the filter surface does — single-sited with the filter and order
-  sides, never a reimplementation.
+  sides, never a reimplementation. The gates come from the same
+  `utils/permissions.py::walk_declared_relation_path` reading the
+  Decision 12 declared hops use: `utils/permissions.py::relation_path_gates`
+  returns exactly the gates the path's nested filter twin fires (each
+  walked branch gate, then the last target set's gate for the path left
+  there), so search fires the gates its filter twin fires and the
+  branches whose visibility and `queryset=` scope the arm are the same
+  hops.
 - A firing gate raises its own error (the same loud `GraphQLError` the
   equivalent `filter:` input produces); the whole search request fails.
   Per-viewer silent path narrowing (dropping gated paths and searching
@@ -1146,9 +1315,9 @@ implement the original per-action policy.
 
 | Slice | Files touched | Delta |
 | --- | --- | --- |
-| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 061; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
-| 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call with the exact owning definition, permission-dispatch plan built after `_bind_filtersets` (assign only after both succeed, retry-safe) |
-| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-guard extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; guard coverage |
+| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); the lift of the request-scoped hop visible-row derivation off the filter-set instance (`FilterSet._hop_visible_rows` / `FilterSet._scoped_rows` and their async pre-pass), still called by the filter side (Decision 12); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 061; unit tests for plan shape (declared-prefix, undeclared-remainder and re-entry hop resolution), prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
+| 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call with the exact owning definition, permission-dispatch plan and declared-prefix hop resolution (Decision 12) built after `_bind_filtersets` (assign only after all succeed, retry-safe) |
+| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-guard extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) running every relational arm through `related_rows_exist` over each hop's visible rows; guard coverage |
 | 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")` and the acceptance-only `LoanType` reverse-FK search surface (Decision 7); live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
 | 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version triplet / README marketing / CHANGELOG defer to card 061 (Decision 10) |
 
@@ -1162,12 +1331,27 @@ implement the original per-action policy.
   acceptance oracle — no
   `django_filters.utils.get_model_field` second oracle, no hand-rolled
   `_meta.get_field` walk, no third reimplementation of to-many detection.
-- `optimizer/predicates.py` for the runtime `EXISTS` construction — search
-  never builds its own correlated subqueries, alias allocation, or
-  database-alias handling.
-- `utils/querysets.py::apply_type_visibility_sync` / `_async` for every
-  related-hop visibility derivation (Decision 12) — the same helpers the
-  FilterSet's `_derive_related_visibility_querysets_*` consume.
+- The filter side's visible-row restriction for every relational arm
+  (Decision 12): `utils/permissions.py::walk_declared_relation_path` for
+  the declared prefix and its undeclared hops (`undeclared=True`, over
+  `utils/relations.py::leading_relation_hops`, the only path walker),
+  `filters/sets.py::FilterSet._branch_visibility_seed` for each declared
+  hop's target type, `utils/querysets.py::relation_target_type` /
+  `utils/querysets.py::relation_visibility_type` for each undeclared hop
+  (`utils/querysets.py::relation_path_visibility_types` for a declared
+  hop's intermediate models), `filters/sets.py::_admitted_rows` for a
+  walked `queryset=`, and `filters/sets.py::_reaches_related` over
+  `optimizer/predicates.py::related_rows_exist` (with `via=`) for every
+  hop's `EXISTS`
+  — search never joins a relation into the root, never builds its own
+  correlated subquery or link correlation, and never routes a relational
+  arm through `optimizer/predicates.py::attach_exists`.
+- `utils/querysets.py::apply_type_visibility_sync` / `_async` over
+  `utils/querysets.py::base_queryset` for every hop's visible rows
+  (Decision 12), through the request-scoped derivation
+  `filters/sets.py::FilterSet._hop_visible_rows` /
+  `filters/sets.py::FilterSet._scoped_rows` perform (lifted in Slice 1) —
+  one `get_queryset` call per hop key and alias per request.
 - `utils/permissions.py` for the gate pass (Decision 13) — one new named
   path-driven helper beside the input-driven core, dispatching through
   the same `invoke_permission_method` primitive and per-class fired sets
@@ -1187,7 +1371,7 @@ implement the original per-action policy.
   re-exported by `filters/search.py` — and imported everywhere a
   search-presence test is needed.
 - The sync/async search steps share every un-awaited helper (plan
-  reading, `Q` construction, `EXISTS` attachment); visibility derivation
+  reading, `Q` construction, the `EXISTS` fold); visibility derivation
   forks by color, and the synchronous gate runner crosses to the async
   side only through `run_in_one_sync_boundary`, per the FilterSet
   precedent (Decision 6).
@@ -1214,13 +1398,46 @@ implement the original per-action policy.
   rejected at finalize — backend-dependent `icontains` casting is not a
   contract this card ships. Every accepted family gets execution tests on
   SQLite and PostgreSQL.
-- **To-many path** (`search_fields = ("tags__name",)`) — compiled as a
-  correlated `EXISTS` branch; a parent with two matching children yields
-  one edge, `totalCount` and page cardinality stay correct with no
+- **To-many path** (`search_fields = ("tags__name",)`) — compiled as the
+  branch chain's correlated `EXISTS`; a parent with two matching children
+  yields one edge, `totalCount` and page cardinality stay correct with no
   `.distinct()` (Decision 7).
 - **Hidden related row** — a root row whose only matching related row is
-  hidden by the related type's visibility hook does NOT match
-  (Decision 12).
+  hidden by the hop target type's `get_queryset` does NOT match, at any
+  hop depth, to-one or to-many; a root with a visible non-matching child
+  and a hidden matching sibling does NOT match (Decision 12).
+- **Declared `RelatedFilter(queryset=...)` on a walked hop** — a related
+  row outside the scope never makes a root match, for every viewer
+  including staff (fakeshop: `EntryFilter.property` excludes properties
+  named `"Secret"`, so `search_fields = (..., "property__name", ...)` on
+  `EntryType` never matches an entry through a `"Secret"` property, as
+  neither the nested `property` branch nor the flat `property__name`
+  filter leaf does) (Decision 12).
+- **Undeclared hop** — a relation segment the declaring type's FilterSet
+  declares no `RelatedFilter` for, or any hop on a type with no
+  `filterset_class`, reads the rows of its model's type
+  (`utils/querysets.py::relation_target_type`: the registry's
+  primary-first type, the exact owner on re-entry into the root model
+  from a filterset-less type), the same resolution the filter side
+  applies to an undeclared hop (Decision 12).
+- **Unscoped hop** — an undeclared hop to a model with no registered
+  `DjangoType`, or whose type keeps the identity default `get_queryset`,
+  reads the raw relation, every row of its model, as the filter side
+  does (`utils/querysets.py::relation_visibility_type` answers `None`);
+  for an unregistered model the declaration is the grant. A declared
+  `RelatedFilter` to an unregistered target is already a finalize-time
+  `ConfigurationError` (Decision 12).
+- **`pk` segment on a relation-keyed model** — a `pk` that names a
+  one-to-one primary key or a multi-table-inheritance parent link is
+  that relation, and reads its target's visibility like any other hop
+  (`utils/relations.py::leading_relation_hops`) (Decision 12).
+- **Multi-relation declared `field_name`** (`RelatedFilter(...,
+  field_name="target_version__milestone")`) — one hop, as the filter side
+  reads it: the target type's visibility and the `queryset=` scope apply
+  to the deepest model, and each intermediate model passes through the
+  rows its own type shows (`via=` rows from
+  `utils/querysets.py::relation_path_visibility_types`), matching the
+  nested and flat filter spellings (Decision 12).
 - **Gated path** — a declared path covered by a
   `check_<field>_permission` gate raises loudly for denied viewers on any
   active search (Decision 13).
@@ -1233,7 +1450,11 @@ implement the original per-action policy.
   type uses the secondary's plan, visibility hook, and SDL argument, and
   plan caching never collapses them by model identity. A search path that
   re-enters the root model composes the exact owning type's visibility —
-  primary or secondary — never a registry-primary fallback (Decision 12).
+  primary or secondary — and, when the hop's resolved type (the declared
+  branch's bound owner, or the type `relation_target_type` answers for an
+  undeclared hop past a declared one) differs from it, the inner rows
+  must be visible under both hooks
+  (Decision 12).
 - **Nested connection fields** — `search` joins the sidecar family, so a
   search-bearing nested connection is unwindowable under the current
   optimizer and falls back per parent exactly as `filter:` / `orderBy:`
@@ -1250,8 +1471,12 @@ implement the original per-action policy.
   supported; no gates exist, search is gated by visibility alone
   (Decision 1, Decision 13).
 - **Multi-database routing** — the runtime compiler binds `queryset.db`
-  from the live routed queryset; no database alias, queryset, or router
-  answer enters the frozen plan (Decision 7, Decision 12).
+  from the live routed queryset, every hop's base rows to that alias
+  (`base_queryset(<target model>, using=queryset.db)`, the alias
+  `_branch_visibility_seed` pins for the filter side), and every
+  intermediate link read to it (`related_rows_exist`'s `using`); no
+  database alias, queryset, or router answer enters the frozen plan
+  (Decision 7, Decision 12).
 - **Keyset-cursor connections** (`Meta.cursor_field`-declared) — search
   applies before slicing/fingerprinting; cursors remain stable within a
   fixed search value; changing the search string between pages is the same
@@ -1279,11 +1504,22 @@ the latter) — uses the live tier's `project_schema_override` / shared
 
 Unit (`tests/filters/test_search_fields.py`):
 
-- `build_search_path_plan`: flat path, relation path, to-many grouping by
-  complete relation chain (same-chain terminals share a group; divergent
-  later chains split, including paths sharing only their first to-many
-  hop); a root-model re-entry hop records the exact owning definition
-  passed in, never a registry-primary lookup (Decision 12); typo /
+- `build_search_path_plan`: flat path, relation path, arm grouping by
+  identical resolved hop chain (same-chain terminals share an arm;
+  divergent later chains split, including paths sharing only their first
+  hop); hop resolution (Decision 12), each its own case: a declared
+  prefix read through `walk_declared_relation_path(undeclared=True)` (a
+  renamed `RelatedFilter` matched on its ORM `field_name`, a
+  multi-relation `field_name` as one hop with its intermediate scope
+  types recorded, the child filter set's bound owner as the target type,
+  the explicit `queryset=` recorded as the hop's scope), undeclared hops
+  after a declared prefix, a type with no `filterset_class` (every hop
+  from `leading_relation_hops`, typed by `relation_target_type` with the
+  declaring type as `root=`), an undeclared hop to an unregistered model
+  and one to a type keeping the default `get_queryset` (both unscoped), a
+  `pk` segment on a relation-keyed model read as that relation, and a
+  root-model re-entry hop recording the exact owning definition passed
+  in beside a differing resolved type, declared and undeclared; typo /
   relation-terminal / non-text-terminal → raises with
   type/path/segment/model in the message; assign-after-success
   (a failing later path OR a failing permission plan leaves no partial
@@ -1312,21 +1548,22 @@ query-object inspection only):
 - SQL-shape invariants (the load-bearing regression checks — a
   result-count test alone cannot distinguish `EXISTS` from
   JOIN-plus-DISTINCT), asserted on a PLAIN root queryset: the root
-  query's `alias_map` excludes the membership and child tables,
-  `queryset.query.distinct is False`, the compiled SQL contains `EXISTS`
-  for a to-many declaration and none for a direct-only declaration, and
-  the count SQL is a flat `COUNT(*)` with no distinct-wrapper subquery.
+  query's `alias_map` excludes the membership and child tables (assert on
+  the outer level only, parenthesized subquery bodies stripped),
+  `queryset.query.distinct is False`, the compiled SQL carries an
+  `EXISTS` per relational arm (to-one and to-many alike) and none for a
+  direct-only declaration, and the count SQL is a flat `COUNT(*)` with no
+  distinct-wrapper subquery.
   A separate compatibility test proves search composes onto an
   already-distinct / annotated consumer queryset without corrupting its
   count (no flat-`COUNT(*)` assertion there — the invariant is only that
   search adds no wrapper).
 - **Deferred-loading compatibility.** Search composes onto a consumer
   queryset carrying `.only()` and onto one carrying `.defer()` without
-  widening or discarding the deferred field set, and the to-many branch
-  adds no selected column — the existence test attaches through
-  `.alias()`, never `.annotate()`, so `query.annotations` gains no
-  search entry and the reserved `_dst_` name never reaches the `SELECT`
-  list (Decision 7). Asserted for a direct-only and a to-many plan.
+  widening or discarding the deferred field set, and a relational arm
+  adds no selected column — its `EXISTS` is a `WHERE` condition, never an
+  `annotate()` / `alias()` entry, so `query.annotations` gains no search
+  entry (Decision 7). Asserted for a direct-only and a to-many plan.
 - **Selection-optimizer boundary (the two subsystems stay
   independent).** With an active to-many search, the built
   `OptimizationPlan` for the same selection compares equal to the
@@ -1346,14 +1583,17 @@ query-object inspection only):
   model where only the secondary declares a to-many path — each plan
   distinct, no registry fallback by model identity, plan caching keeps
   them apart.
-- Visibility composition mechanics: hop-visibility constraints present
-  inside the `EXISTS` body; unregistered-model hops traverse raw; the
-  **same-related-row alias assertion** (Decision 12) — for one relational
-  arm, the compiled inner query holds exactly one relation alias for the
-  shared to-many path (visibility membership + terminal predicate
-  submitted in one `.filter()`), asserted on a direct M2M path AND on the
-  `book__loans` root-model re-entry, because a result-only test cannot
-  rule out two aliases accidentally landing on the same row.
+- Visibility composition mechanics (Decision 12): each hop's visible
+  rows are derived once per request per hop and alias (a hop shared by
+  two arms, or by search and a supplied filter leaf, runs its
+  `get_queryset` once); the terminal predicate filters the deepest hop's
+  visible rows, so it and that hop's visibility constrain one related row
+  by construction; the walked `queryset=` scope is admitted at its hop;
+  an unscoped hop reads every row of its model; a multi-relation declared
+  hop passes its intermediate models' visible rows as `via=`; for one
+  path the search arm's `EXISTS` and the walked flat leaf's
+  (`FilterSet._apply_active_leaf`) compile to the same SQL; a root
+  re-entry with a differing resolved type intersects both hooks' rows.
 - Import hygiene (Decision 3): bare `import django_strawberry_framework`
   leaves `filters` / `orders` absent from `sys.modules` with the search
   wiring in place (the existing subprocess pin extends to cover it);
@@ -1371,8 +1611,9 @@ library cases in `test_library_api.py`, inline creates):
   absent on a non-declaring control, no nested `filter.search` key.
 - **The to-many proof** (library): one genre linked to two books whose
   titles both match, `allLibraryGenresConnection(search: ...)` → one edge
-  and `totalCount == 1`; emitted count and page SQL contain `EXISTS` and
-  no search-driven `SELECT DISTINCT`; a second page and `hasNextPage`
+  and `totalCount == 1`; emitted count and page SQL contain the arm's
+  `EXISTS` and no search-driven `SELECT DISTINCT`; a second page and
+  `hasNextPage`
   operate on root rows.
 - Direct-only, forward-relation (`category__name`-shaped), and to-many
   search; `filter:` + `search:` intersection; `search` + `orderBy` +
@@ -1398,9 +1639,10 @@ library cases in `test_library_api.py`, inline creates):
   ordered edge IDs `[relation_and_direct, relation_only, direct_only]`,
   `totalCount == 3`, both two-edge page boundaries, mixed
   direct/relational OR behavior (a row matching both branches appears
-  once), with the SQL-shape proof (correlated `EXISTS`, no membership or
-  patron join in the root, no search-driven `DISTINCT`) kept in package
-  tests. Ordered assertions compare against pks captured at fixture
+  once), with the SQL-shape proof (the branch chain's nested correlated
+  `EXISTS` with the same-table `Loan` re-entry inside it, no membership
+  or patron join in the root, no search-driven `DISTINCT`) kept in
+  package tests. Ordered assertions compare against pks captured at fixture
   creation, never insertion-order faith about pk allocation.
 - **The row-boundary phrase oracle** (Decision 4): one parent with two
   related rows `"red"` and `"dwarf"`, another with a single related row
@@ -1426,8 +1668,19 @@ library cases in `test_library_api.py`, inline creates):
   leak counterexample** (Decision 12) — a root with a visible
   non-matching child and a hidden matching child on the same to-many hop
   does NOT match, while the visible-matching-child control does, run on
-  a direct M2M path AND at the `book__loans` root-model re-entry (the
-  one-shared-alias structural assertion stays in package tests); and the
+  a direct M2M path AND at the `book__loans` root-model re-entry; the
+  **walked `queryset=` scope** — staff `search` on `EntryType` never
+  matches an entry through a `"Secret"` property, while a non-secret
+  property control matches; an **undeclared hop** (a path whose relation
+  the declaring type's FilterSet declares no `RelatedFilter` for, and the
+  no-`filterset_class` type) whose target hides the only matching row —
+  no match anonymous, match staff; a **hidden == absent oracle** — the
+  anonymous result equals the result with the hidden rows deleted inside
+  a rolled-back `atomic()` block; **filter-twin parity** — for `GenreType`
+  `books__title` and the `LoanType` reverse-FK path, the `search:` result
+  equals the nested branch's and (where the FilterSet exposes one) the
+  flat `iContains` filter leaf's over the same path and value, anonymous
+  and staff, each pair its own node id; and the
   **exact-owner re-entry proof** (Decision 12) — primary and secondary
   types registered over `Loan` with deliberately divergent `get_queryset`
   hooks, searching through the SECONDARY connection: an inner loan
@@ -1461,7 +1714,7 @@ library cases in `test_library_api.py`, inline creates):
   compatibility import).
 
 Performance evidence (non-gating artifact, Slice 4): a PostgreSQL
-before/after comparison of the `EXISTS` shape vs JOIN-plus-DISTINCT on
+before/after comparison of the arms' correlated `EXISTS` shape vs JOIN-plus-DISTINCT on
 identical data and indexes — root cardinality and fan-out recorded, page
 and count `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`, high- and
 low-selectivity terms, direct-only / one to-many group / several
@@ -1476,8 +1729,10 @@ compiler shape.
   `main`; release pending the joint `0.1.2` cut" and regenerate
   `docs/GLOSSARY.md` (Decision 10); README/docs README, GOAL/TODAY, and
   `CHANGELOG.md` release status stay untouched for card 061's joint cut.
-- The spec/public docs state the contracts explicitly: relational search
-  honors related-type visibility (Decision 12); search honors FilterSet
+- The spec/public docs state the contracts explicitly: a relation path
+  runs as the branch chain it spells, and a related row the hop target
+  type's `get_queryset` hides or a walked `RelatedFilter(queryset=...)`
+  excludes behaves exactly like no related row (Decision 12); search honors FilterSet
   field-permission gates and a filterset-less type's search is
   visibility-gated only (Decision 13); declared paths need not be exposed
   output fields — a declaration over an unregistered related model is an
@@ -1547,14 +1802,18 @@ compiler shape.
   returns to this card as a post-ship follow-up; the maintainer owns that
   call.
 - **`EXISTS` vs JOIN-plus-DISTINCT performance regime (Decision 7).** N
-  independent correlated `EXISTS` groups OR'd over a large, low-selectivity
-  root set can lose to one N-way JOIN + DISTINCT on some planners. No
+  independent arms' nested correlated `EXISTS` OR'd over a large,
+  low-selectivity root set can lose to one N-way JOIN + DISTINCT on some
+  planners (the filter side's PostgreSQL 16 measurements in
+  `docs/row-preserving-predicates-part1-pg-explain.md` cover single
+  restrictions, not an N-arm OR). No
   escape hatch ships in `0.1.2` (a `Meta.search_strategy` key stays in
   reserve); the call is deferred until a real workload demonstrates the
   regime — but the Slice 4 PostgreSQL plan artifact retains the evidence
   either way. Tests gate SQL structure, never wall-clock.
-- **Visibility-derivation cost (Decision 12).** Each visibility-bearing
-  hop derives a related visibility queryset per active search request.
+- **Visibility-derivation cost (Decision 12).** Each hop target with a
+  registered type derives its visible rows once per hop and alias per
+  active search request.
   The derivation is lazy queryset construction (no extra round trip when
   composed as a subquery constraint), but a consumer hook that does its
   own I/O pays that cost per request — the same contract the FilterSet's
@@ -1613,16 +1872,25 @@ compiler shape.
   `DjangoTypeDefinition`, and is promoted to `ALLOWED_META_KEYS`.
 - [ ] Every connection field serving a declaring type carries a nullable
   `search: String` argument that produces the OR'd predicate
-  row-preserving — direct paths as plain `Q`s, to-many paths as correlated
-  `EXISTS` branches, no search-driven `.distinct()` or outer fan-out, root
-  `alias_map` free of membership joins — post-visibility, intersecting
-  with `filter:`.
-- [ ] Relational search is visibility-aware (Decision 12) and honors
-  FilterSet permission gates (Decision 13), with live anonymous/staff and
-  hidden-related-row proofs.
+  row-preserving — direct paths as plain `Q`s, every relation path as its
+  branch chain's correlated `EXISTS` through
+  `optimizer/predicates.py::related_rows_exist` over each hop's visible
+  rows, no search-driven `.distinct()` or outer fan-out, root `alias_map`
+  free of membership joins — post-visibility, intersecting with `filter:`.
+- [ ] Relational search is visibility-aware through the filter side's
+  visible-row restriction — declared hops read by
+  `walk_declared_relation_path` with their bound-owner type and
+  `queryset=` scope, undeclared hops typed by `relation_target_type` and
+  scoped only by a type with its own `get_queryset`, as the filter side
+  reads them, a root re-entry scoped by both the resolved
+  type and the exact owner, the request-scoped hop derivation lifted and
+  shared, no second visibility mechanism (Decision 12) — and honors
+  FilterSet permission gates through `relation_path_gates` (Decision 13),
+  with live anonymous/staff, hidden-related-row, hidden == absent, walked
+  `queryset=`, undeclared-hop, and filter-twin parity proofs.
 - [ ] Five load-bearing mechanisms are in code and tests:
-  one-`filter()`-call same-related-row compilation (shared inner alias
-  asserted, leak counterexample live), exact-owner visibility for
+  same-related-row compilation by the target-side fold (the terminal
+  filters the deepest hop's visible rows; leak counterexample live), exact-owner visibility for
   root-model re-entry (secondary-type regression), the
   `run_in_one_sync_boundary` gate boundary on the async pipeline, the
   named path-driven permission-plan helper built after
@@ -1646,8 +1914,8 @@ compiler shape.
   matches its no-search control on query count and
   `select_related` / `prefetch_related` work, and search composes onto
   consumer `.only()` / `.defer()` querysets without widening the deferred
-  set or adding a selected column (the `EXISTS` attaches through
-  `.alias()`).
+  set or adding a selected column (every arm's `EXISTS` is a `WHERE`
+  condition).
 - [ ] The non-gating PostgreSQL plan-evidence artifact is retained.
 - [ ] The exact compatibility floor is proven: the live Medtrics-shaped
   search reproduction passes under Python 3.10 + `Django==5.2.16`, and
@@ -1694,6 +1962,7 @@ compiler shape.
 [glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
 [glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
 [glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-relatedfilter]: ../GLOSSARY.md#relatedfilter
 [glossary-single-upstream-parity]: ../GLOSSARY.md#single-upstream-parity
 [part1-plan]: ../row-preserving-predicates-part1-plan.md
 

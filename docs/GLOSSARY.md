@@ -1422,7 +1422,7 @@ Tuple / list of **non-relation** field names whose GraphQL nullability is forced
 
 **Status:** planned for `0.1.2`.
 
-Declarative search across model fields (and relation paths). Single `search: String` argument on connection fields fans out across the listed fields as an OR'd `icontains` filter — equivalent to `django-graphene-filters`'s `Meta.search_fields = ("name", "description", "category__name")` shape.
+Declarative search across model fields and relation paths. Single `search: String` argument on connection fields fans out across the listed paths as an OR'd `icontains` filter — the `django-graphene-filters` `Meta.search_fields = ("name", "description", "category__name")` shape. A relation path runs as the relation chain it spells, never in the root's join: each hop restricts over the rows its type's own [`get_queryset`](#get_queryset-visibility-hook) shows (and a walked [`RelatedFilter`](#relatedfilter) `queryset=`), so a hidden related row behaves exactly like no related row, as it does for the matching flat filter leaf.
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`FilterSet`](#filterset).
 

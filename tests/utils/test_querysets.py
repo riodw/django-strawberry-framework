@@ -24,9 +24,11 @@ from types import SimpleNamespace
 import pytest
 from apps.library.models import (
     Book,
+    Branch,
     LendingDesk,
     OpenVenue,
     Shelf,
+    TaggedItem,
     Venue,
     VenueBadge,
     VenueSponsor,
@@ -4891,6 +4893,12 @@ def test_prefetch_relation_target_unresolvable_paths_fail_open():
     # A dangling string FK keeps ``related_model`` a STRING (no raise): the
     # exact-type check fails, the helper returns None, Django keeps ownership.
     assert _prefetch_relation_target_or_none(_BrokenFkHolder, "rel") is None
+    # A miss on a model carrying a non-concrete relation that is NOT a reverse
+    # relation (a forward M2M, a GenericForeignKey, a GenericRelation): the
+    # accessor scan must skip it, since none of them has an accessor name.
+    assert _prefetch_relation_target_or_none(Book, "nope") is None
+    assert _prefetch_relation_target_or_none(TaggedItem, "nope") is None
+    assert _prefetch_relation_target_or_none(Branch, "nope") is None
 
 
 @pytest.mark.django_db

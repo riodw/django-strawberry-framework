@@ -2563,18 +2563,17 @@ def _reverse_relation_by_accessor_or_none(model: type[models.Model], part: str) 
     descriptor (and therefore Django's prefetch traversal, which resolves the
     lookup by attribute access) actually accepts. The accessor map is Django's
     own relation metadata (``get_accessor_name()`` over ``_meta.get_fields()``),
-    and only non-concrete reverse relations carry accessor names; ``model`` is
+    and only reverse relations (``ForeignObjectRel``) carry accessor names -- a
+    forward M2M, a ``GenericForeignKey`` and a ``GenericRelation`` are
+    non-concrete relations too, but have none; ``model`` is
     always an already-proven model class (the same proven ``parent_model`` walk
     the field-map path runs on), so no consumer dispatch is reachable. A miss
     returns ``None`` and the caller keeps the fail-open contract for genuinely
     unresolvable paths (generic FKs, lazy ``related_model`` strings, plain
     columns, unknown segments).
     """
-    candidates: list[Any] = model._meta.get_fields()
-    for candidate in candidates:
-        if not getattr(candidate, "is_relation", False):
-            continue
-        if getattr(candidate, "concrete", True):
+    for candidate in model._meta.get_fields():
+        if not isinstance(candidate, ForeignObjectRel):
             # Forward relations carry no accessor and are field-map names,
             # already resolved by ``_meta.get_field`` before this scan runs.
             continue

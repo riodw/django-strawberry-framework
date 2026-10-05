@@ -110,6 +110,7 @@ from ..utils.relations import (
 from .base import (
     _GLOBALID_RELATION_PK_ATTR,
     ArrayFilter,
+    EnumChoiceFilter,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     IntegerInFilter,
@@ -758,6 +759,9 @@ _FILTER_FAMILY_REGISTRY: Mapping[type[object], _FilterFamilyProfile] = MappingPr
         ModelChoiceFilter: _MODEL_CHOICE_PROFILE,
         MultipleChoiceFilter: _MULTIPLE_CHOICE_PROFILE,
         ChoiceFilter: _CHOICE_PROFILE,
+        # The package's generated choice ``exact`` class: ``ChoiceFilter`` plus the
+        # ``""``-is-a-value predicate, so it shares the choice family.
+        EnumChoiceFilter: _CHOICE_PROFILE,
         # Plain-lookup scalar Filter families, each enumerated by class (they share
         # only ``Filter`` as a base, which must never be a key). A scalar key here is
         # also the audited scalar base the dynamic-CSV validator accepts as the SECOND
@@ -2518,7 +2522,10 @@ class FilterSet(
 
         Non-relation fields defer to the upstream pair-return shape unless
         the field is the owner's own PK and the owner is Relay-Node-shaped
-        (own-PK branch per spec-027 Decision 4). For relation fields a
+        (own-PK branch per spec-027 Decision 4), the lookup is a choice
+        column's ``exact`` (``EnumChoiceFilter``, where the enum's ``BLANK``
+        member is a predicate), or it is an integer ``in`` / ``range``
+        (``IntegerInFilter`` / ``IntegerRangeFilter``). For relation fields a
         Relay-Node-shaped target maps to a ``(GlobalIDFilter, params)``
         pair (or ``GlobalIDMultipleChoiceFilter`` for multi-valued
         relations); a non-Relay target, or a model no ``DjangoType``
@@ -2582,6 +2589,11 @@ class FilterSet(
                 "only 'exact', 'in', and 'isnull'. Remove it from Meta.fields.",
             )
         if not field.is_relation:
+            if lookup_type == "exact" and default_class is ChoiceFilter:
+                # The ``exact`` input is the column's generated enum, so every member it
+                # carries is a value -- ``BLANK`` (``""``) included -- never django-filter's
+                # empty-value skip, which would widen a named member to every row.
+                return EnumChoiceFilter, params
             if lookup_type == "in" and isinstance(field, models.IntegerField):
                 # An element-binding integer ``__in`` routes through IntegerInFilter:
                 # it drops out-of-range members (an out-of-range value overflows the

@@ -229,8 +229,8 @@ def _input_field_type(type_name: str, field_name: str) -> JSONObject:
     Used to assert an input field's GraphQL nullability: a ``NON_NULL`` wrapper (``kind ==
     "NON_NULL"``, ``ofType`` the scalar) means a non-null ``String!``; a bare scalar (``kind
     == "SCALAR"``, ``name == "String"``) means a nullable, omittable ``String``. Pins, e.g.,
-    that an ``allow_blank=True`` required ``CharField`` is still ``String!`` (allow_blank is
-    absent from the SDL) and that two hooks differing only in ``allow_null`` emit
+    that an ``allow_blank=True`` required ``CharField`` is still ``String!`` (allow_blank does
+    not change a ``CharField``'s type) and that two hooks differing only in ``allow_null`` emit
     ``String!`` vs ``String``.
     """
     response = _post_graphql(
@@ -10495,7 +10495,7 @@ _CREATE_SHELF_VIA_FORM = (
     "result{ code } errors{ field messages } } }"
 )
 _CREATE_SHELF_MODEL = (
-    "mutation($d: ShelfAlt_ubranchesBranchCodeInput!){ createShelf(data:$d){ "
+    "mutation($d: ShelfAlt_ubranchesBranchCodeConditionInput!){ createShelf(data:$d){ "
     "result{ code } errors{ field messages } } }"
 )
 
@@ -11648,15 +11648,16 @@ def test_create_shelf_via_schema_hook_serializer_hidden_branch_is_relation_field
 def test_create_shelf_via_blank_code_serializer_accepts_empty_string_over_http():
     """An ``allow_blank=True`` required ``code`` is a non-null ``String!`` in the SDL but accepts ``""`` at runtime.
 
-    ``allow_blank`` is NOT a GraphQL concern: the generated input's ``code`` is still a
-    non-null ``String`` (a required ``CharField`` - allow_blank is absent from the SDL), and
-    the empty-string acceptance is enforced by the serializer at runtime. Introspection pins
+    On a ``CharField``, ``allow_blank`` does not change the input type: ``String`` already
+    carries ``""``, so the generated input's ``code`` is still a non-null ``String`` (a
+    required ``CharField``; ``allow_blank`` shows only in its description), and the
+    empty-string acceptance is enforced by the serializer at runtime. Introspection pins
     the non-null shape; posting ``code: ""`` then proves the serializer accepts + writes the
     blank (a plain required ``CharField`` would reject it with a field error).
     """
     branch = models.Branch.objects.create(name="BlankBranch", city="Boston")
 
-    # allow_blank is invisible in the SDL: the required code input is a non-null String!.
+    # allow_blank leaves the type alone: the required code input is a non-null String!.
     code_type = _input_field_type("BlankCodeShelfSerializerInput", "code")
     assert code_type["kind"] == "NON_NULL"
     assert code_type["ofType"]["name"] == "String"
@@ -11847,7 +11848,13 @@ def test_create_shelf_via_metadata_serializer_expanded_input_type_system_over_ht
         }
         """,
     ).json()["data"]["__type"]["enumValues"]
-    assert {v["name"] for v in enum_values} == {"low", "normal", "high"}
+    # ``allow_blank=True`` adds the ``BLANK`` member for the ``""`` DRF admits.
+    assert {v["name"] for v in enum_values} == {
+        "BLANK",
+        "low",
+        "normal",
+        "high",
+    }
 
     # Post through all three (the enum via a variable string, the JSON via an object).
     response = _post_graphql(
@@ -12781,10 +12788,12 @@ def test_golden_sdl_library_schema_hook_serializer_input():
     """
     assert _input_fields_sdl("ShelfMetadataSerializerInput") == [
         ("code", "String!", None),
+        ("condition", "ShelfTypeConditionEnum", "Constraints: allow_blank=true."),
         ("branchId", "Int!", None),
-        ("priority", "ShelfMetadataSerializerInputPriorityEnum", None),
+        ("priority", "ShelfMetadataSerializerInputPriorityEnum", "Constraints: allow_blank=true."),
         ("attributes", "JSON", None),
         ("accentColor", "String", None),
+        ("tags", "[String]", None),
         ("label", "String", "A short human label for the shelf. Constraints: max_length=40."),
     ]
     assert _type_fields_sdl("CreateShelfViaMetadataSerializerPayload") == [
@@ -13337,3 +13346,285 @@ def test_library_prefetch_child_over_unrelated_table_is_refused_over_http():
         "a prefetch child over an unrelated table would populate the relation with "
         "rows the related type's visibility hook never saw"
     ) in debug_message
+
+
+# ---------------------------------------------------------------------------
+# Blank-admitting choice column (``Shelf.condition``) and nullable list elements
+# ---------------------------------------------------------------------------
+
+
+def _enum_member_names(enum_name: str) -> list[str]:
+    """Return a generated enum's member names in declaration order, via introspection."""
+    payload = _post_graphql(
+        f'query {{ __type(name: "{enum_name}") {{ enumValues {{ name }} }} }}',
+    ).json()
+    assert "errors" not in payload, payload
+    return [value["name"] for value in payload["data"]["__type"]["enumValues"]]
+
+
+_SHELF_CONDITIONS = """
+query ($filter: ShelfFilterInputType) {
+  allLibraryShelves(filter: $filter) { code condition }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_shelf_condition_blank_member_reads_stored_empty_string_over_http():
+    """A ``blank=True`` choice column's enum carries ``BLANK``, and a stored ``""`` reads as it.
+
+    ``Shelf.condition`` defaults to ``""``, so an unassessed shelf is a blank row. Without
+    the member the enum could not serialize ``""`` and one blank row would null the whole
+    list; here it reads ``BLANK`` beside a declared member, on the root list and through
+    a nested relation.
+    """
+    branch = models.Branch.objects.create(name="ConditionBranch", city="Boston")
+    models.Shelf.objects.create(code="C-blank", branch=branch)
+    models.Shelf.objects.create(code="C-worn", branch=branch, condition="worn")
+
+    assert _enum_member_names("ShelfTypeConditionEnum") == [
+        "BLANK",
+        "good",
+        "worn",
+        "damaged",
+    ]
+    _assert_graphql_data(
+        _SHELF_CONDITIONS,
+        {
+            "allLibraryShelves": [
+                {"code": "C-blank", "condition": "BLANK"},
+                {"code": "C-worn", "condition": "worn"},
+            ],
+        },
+    )
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBranches { name shelves { code condition } }
+        }
+        """,
+        {
+            "allLibraryBranches": [
+                {
+                    "name": "ConditionBranch",
+                    "shelves": [
+                        {"code": "C-worn", "condition": "worn"},
+                        {"code": "C-blank", "condition": "BLANK"},
+                    ],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_shelf_condition_exact_blank_matches_only_blank_shelves_over_http():
+    """The generated choice ``exact`` treats ``BLANK`` as a value, never as "no filter".
+
+    django-filter skips an empty value, which would widen ``exact: BLANK`` to every row; the
+    generated ``EnumChoiceFilter`` compiles it to ``condition = ''``. ``in: [BLANK]`` is a
+    one-member list and matches the blank rows too, while a plain ``String`` ``exact: ""``
+    (``topic``) keeps django-filter's skip and applies no constraint.
+    """
+    branch = models.Branch.objects.create(name="FilterConditionBranch", city="Boston")
+    models.Shelf.objects.create(code="F-blank", branch=branch, topic="t")
+    models.Shelf.objects.create(code="F-good", branch=branch, topic="t", condition="good")
+    models.Shelf.objects.create(code="F-worn", branch=branch, topic="t", condition="worn")
+
+    _assert_graphql_data(
+        _SHELF_CONDITIONS,
+        {"allLibraryShelves": [{"code": "F-blank", "condition": "BLANK"}]},
+        variables={"filter": {"condition": {"exact": "BLANK"}}},
+    )
+    _assert_graphql_data(
+        _SHELF_CONDITIONS,
+        {"allLibraryShelves": [{"code": "F-good", "condition": "good"}]},
+        variables={"filter": {"condition": {"exact": "good"}}},
+    )
+    _assert_graphql_data(
+        _SHELF_CONDITIONS,
+        {
+            "allLibraryShelves": [
+                {"code": "F-blank", "condition": "BLANK"},
+                {"code": "F-worn", "condition": "worn"},
+            ],
+        },
+        variables={"filter": {"condition": {"in": ["BLANK", "worn"]}}},
+    )
+    _assert_graphql_data(
+        _SHELF_CONDITIONS,
+        {
+            "allLibraryShelves": [
+                {"code": "F-blank", "condition": "BLANK"},
+                {"code": "F-good", "condition": "good"},
+                {"code": "F-worn", "condition": "worn"},
+            ],
+        },
+        variables={"filter": {"topic": {"exact": ""}}},
+    )
+
+
+@pytest.mark.parametrize(
+    "branch_filter",
+    [{"shelvesCondition": {"exact": "BLANK"}}, {"shelves": {"condition": {"exact": "BLANK"}}}],
+    ids=["flat", "nested"],
+)
+@pytest.mark.django_db
+def test_branch_filter_through_shelves_condition_blank_matches_blank_shelves_over_http(
+    branch_filter: JSONObject,
+):
+    """``BLANK`` stays a predicate through a ``RelatedFilter``, flat or nested.
+
+    The child ``ShelfFilter``'s generated ``exact`` is the same ``EnumChoiceFilter``, so a
+    branch matches only through a blank shelf instead of the empty-value skip matching
+    every branch.
+    """
+    with_blank = models.Branch.objects.create(name="HasBlankShelf", city="Boston")
+    graded = models.Branch.objects.create(name="AllGraded", city="Boston")
+    models.Shelf.objects.create(code="HB-1", branch=with_blank, topic="permanent collection")
+    models.Shelf.objects.create(
+        code="AG-1",
+        branch=graded,
+        topic="permanent collection",
+        condition="good",
+    )
+    _assert_graphql_data(
+        """
+        query ($filter: BranchFilterInputType) {
+          allLibraryBranches(filter: $filter) { name }
+        }
+        """,
+        {"allLibraryBranches": [{"name": "HasBlankShelf"}]},
+        variables={"filter": branch_filter},
+    )
+
+
+@pytest.mark.django_db
+def test_shelf_condition_blank_writes_empty_string_through_every_write_flavor_over_http():
+    """``condition: BLANK`` writes ``""`` through the model, form and serializer mutations.
+
+    Each flavor's input is the column's one enum (``ShelfTypeConditionEnum``), so the member
+    a read returns is the member a write accepts; a declared member writes its own value.
+    """
+    branch = models.Branch.objects.create(name="WriteConditionBranch", city="Boston")
+    for input_name in (
+        "ShelfAlt_ubranchesBranchCodeConditionInput",
+        "ShelfRelationsFormInput",
+        "ShelfMetadataSerializerInput",
+    ):
+        condition_type = _input_field_type(input_name, "condition")
+        assert condition_type["name"] == "ShelfTypeConditionEnum", input_name
+
+    cases = (
+        ("createShelf", "ShelfAlt_ubranchesBranchCodeConditionInput"),
+        ("createShelfViaForm", "ShelfRelationsFormInput"),
+        ("createShelfViaMetadataSerializer", "ShelfMetadataSerializerInput"),
+    )
+    for field, input_name in cases:
+        for member, stored in (("BLANK", ""), ("damaged", "damaged")):
+            code = f"{field}-{member}"
+            response = _post_graphql(
+                f"mutation($d: {input_name}!) {{ {field}(data: $d) {{ "
+                "result { code condition } errors { field messages } } }",
+                variables={"d": {"code": code, "branchId": branch.pk, "condition": member}},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert "errors" not in payload, payload
+            result = payload["data"][field]
+            assert result["errors"] == [], (field, member)
+            assert result["result"] == {"code": code, "condition": member}
+            assert models.Shelf.objects.get(code=code).condition == stored
+
+
+@pytest.mark.django_db
+def test_serializer_only_choice_allow_blank_writes_blank_over_http():
+    """A serializer-only ``ChoiceField(allow_blank=True)`` publishes ``BLANK``, which writes ``""``.
+
+    ``ShelfMetadataSerializer.priority`` admits the blank DRF's ``ChoiceField`` returns on
+    ``allow_blank``; GraphQL enum coercion would reject ``""`` before the serializer runs, so
+    the generated enum carries the member and ``priority: BLANK`` reaches ``create()`` as
+    ``""`` (stamped into ``topic``).
+    """
+    branch = models.Branch.objects.create(name="PriorityBlankBranch", city="Boston")
+    assert _enum_member_names("ShelfMetadataSerializerInputPriorityEnum") == [
+        "BLANK",
+        "low",
+        "normal",
+        "high",
+    ]
+    response = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code topic } errors { field messages } } }",
+        variables={"d": {"code": "PriorityBlank", "branchId": branch.pk, "priority": "BLANK"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaMetadataSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "PriorityBlank", "topic": "priority:"}
+
+
+@pytest.mark.django_db
+def test_serializer_list_field_nullable_child_round_trips_null_element_over_http():
+    """``ListField(child=CharField(allow_null=True))`` publishes ``[String]`` and accepts ``null`` elements.
+
+    DRF validates each element through the child, which admits ``None``; the input's element
+    type must carry it or GraphQL coercion rejects ``["a", null]`` before the serializer runs.
+    ``tags`` is stamped into ``topic`` as JSON so the decoded list is readable.
+    """
+    branch = models.Branch.objects.create(name="TagsBranch", city="Boston")
+    tags_type = _input_field_type("ShelfMetadataSerializerInput", "tags")
+    assert tags_type["kind"] == "LIST"
+    assert tags_type["ofType"] == {"kind": "SCALAR", "name": "String"}
+    response = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code topic } errors { field messages } } }",
+        variables={"d": {"code": "TagsShelf", "branchId": branch.pk, "tags": ["a", None]}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaMetadataSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "TagsShelf", "topic": 'tags:["a", null]'}
+
+
+@pytest.mark.django_db
+def test_relay_node_read_of_a_book_on_a_blank_shelf_reads_blank_over_http():
+    """A Relay ``node`` refetch serializes the blank shelf it reaches as ``BLANK``."""
+    from apps.library.schema import BookType
+
+    branch = models.Branch.objects.create(name="NodeConditionBranch", city="Boston")
+    shelf = models.Shelf.objects.create(code="N-blank", branch=branch)
+    book = models.Book.objects.create(title="Node Blank", shelf=shelf)
+    _assert_graphql_data(
+        """
+        query ($id: ID!) {
+          node(id: $id) { ... on BookType { title shelf { code condition } } }
+        }
+        """,
+        {"node": {"title": "Node Blank", "shelf": {"code": "N-blank", "condition": "BLANK"}}},
+        variables={"id": global_id_for(BookType, book.pk)},
+    )
+
+
+@pytest.mark.django_db
+def test_update_shelf_condition_writes_blank_over_http():
+    """An update mutation's ``condition: BLANK`` clears an assessed shelf back to ``""``."""
+    branch = models.Branch.objects.create(name="UpdateConditionBranch", city="Boston")
+    shelf = models.Shelf.objects.create(code="U-worn", branch=branch, condition="worn")
+    response = _post_graphql(
+        "mutation($id: ID!, $d: ShelfConditionPartialInput!) { updateShelfCondition(id: $id, data: $d) { "
+        "result { code condition } errors { field messages } } }",
+        variables={"id": str(shelf.pk), "d": {"condition": "BLANK"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateShelfCondition"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "U-worn", "condition": "BLANK"}
+    shelf.refresh_from_db()
+    assert shelf.condition == ""

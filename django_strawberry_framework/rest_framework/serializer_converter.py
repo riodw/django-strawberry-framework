@@ -103,7 +103,7 @@ if TYPE_CHECKING:
     from typing import TypeAlias
 
     from ..types.base import DjangoType
-    from ..utils.typing import ConcreteField, ModelField
+    from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
 
     # DRF's stub generics are invariant in every parameter, so the all-``Any``
     # parametrization is the stub's universal field / serializer form.
@@ -399,7 +399,9 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
     """Map a ``ListField`` to ``list[<scalar child>]``, or raise for a non-scalar child.
 
     A ``ListField(child=IntegerField())`` becomes ``list[int]`` by recursing the
-    child through the SAME scalar registry. A relation / nested-serializer child
+    child through the SAME scalar registry; a child with ``allow_null=True`` makes the
+    element nullable (``list[int | None]``, SDL ``[Int]``), since DRF validates each
+    element through the child. A relation / nested-serializer child
     raises ``ConfigurationError`` (the spec-039 contract: only a scalar
     child is supported - a list of relation ids is expressed as
     ``PrimaryKeyRelatedField(many=True)``, not ``ListField(child=relation)``).
@@ -427,8 +429,15 @@ def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConve
             f"{type(child).__name__} does not resolve to a scalar annotation; only a "
             "scalar child is supported.",
         )
+    element = child_conversion.annotation
+    if child.allow_null:
+        # ``ListField.to_internal_value`` runs each element through the child, which
+        # admits ``None`` on ``allow_null=True``; the element type must carry it (the model
+        # ``ArrayField`` element follows ``base_field.null`` the same way). A converted
+        # scalar annotation is a runtime annotation.
+        element = cast("OptionalWidenable", element) | None
     return SerializerFieldConversion(
-        annotation=GenericAlias(list, (child_conversion.annotation,)),
+        annotation=GenericAlias(list, (element,)),
         kind=SCALAR,
         required=field.required,
     )
@@ -516,7 +525,12 @@ def convert_serializer_field(
     **Nullability:** the annotation nullability the build site applies
     follows ``field.allow_null`` (orthogonal to requiredness); this converter
     returns the BASE (non-nullable) scalar annotation and the build site widens.
-    ``allow_blank`` is not encoded.
+    A ``ListField``'s element nullability follows its child's ``allow_null`` and is
+    encoded here (``list[str | None]``). ``allow_blank`` does not change a ``CharField``'s
+    ``str`` (``String`` already carries ``""``); on a ``ChoiceField`` /
+    ``MultipleChoiceField`` it adds the generated enum's ``BLANK`` member at the build
+    site (``_serializer_choice_enum``), since enum coercion would otherwise reject ``""``
+    before the serializer runs (spec-039 Decision 7).
     """
     del is_input  # graphene-parity, accepted-and-ignored.
 
@@ -930,7 +944,10 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     grouped-form / value-sanitization / sanitize-collision rules the read-side model enum
     applies), so a serializer-only choice enum cannot drift from a model-choice enum. DRF's
     ``ChoiceField.choices`` is a value -> display mapping (already flattened), so its
-    ``.items()`` are the ``(value, label)`` pairs the builder expects. The enum is cached by
+    ``.items()`` are the ``(value, label)`` pairs the builder expects. ``allow_blank=True``
+    (``ChoiceField.to_internal_value`` returns ``""``) adds the ``BLANK`` member, so the
+    blank the serializer admits is reachable over the wire (``MultipleChoiceField`` too:
+    ``[BLANK]`` decodes to ``{""}``). The enum is cached by
     its descriptor-derived name so two inputs referencing the same serializer-only choice
     field share ONE enum object (Strawberry rejects two distinct types under one GraphQL
     name); a name reused with a DIFFERENT member set fails loud rather than silently reusing
@@ -943,6 +960,7 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
         list(choices.items()),
         enum_name,
         source_label=f"serializer field {field.field_name!r}",
+        include_blank=field.allow_blank,
     )
     cached = _SERIALIZER_CHOICE_ENUMS.get(enum_name)
     if cached is not None:

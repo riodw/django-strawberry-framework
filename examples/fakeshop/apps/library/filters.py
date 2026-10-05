@@ -122,6 +122,7 @@ class ShelfFilter(FilterSet):
             "id": ["exact", "in"],
             "code": ["exact", "icontains"],
             "topic": ["exact", "icontains"],
+            "condition": ["exact", "in"],
             "alt_branches": ["exact"],
         }
 

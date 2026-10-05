@@ -61,6 +61,7 @@ from django_strawberry_framework.filters import (
 )
 from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
+    EnumChoiceFilter,
     IntegerInFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
@@ -12670,3 +12671,84 @@ def test_expansion_origin_reads_the_branch_and_child_name_off_an_expanded_copy()
     assert "books" in child_cls.related_filters
     assert parent._expansion_origin("renamed_copy", copy_) is None
     assert parent._expansion_origin("title", parent.get_filters()["title"]) is None
+
+
+def test_enum_choice_filter_resolves_to_the_choice_family_profile():
+    """The generated choice ``exact`` class shares ``ChoiceFilter``'s audited family.
+
+    ``EnumChoiceFilter`` only adds the ``""``-is-a-value predicate, so it is an exact
+    registry key under the choice profile; without the key a generated to-many choice leaf
+    would resolve to no family and lose its row-preserving routing.
+    """
+    instance = object.__new__(EnumChoiceFilter)
+    assert _family_profile_for(instance) is _FILTER_FAMILY_REGISTRY[ChoiceFilter]
+
+
+def test_generated_choice_exact_over_to_many_path_is_an_eligible_enum_choice_leaf():
+    """A generated to-many choice ``exact`` is an eligible ``EnumChoiceFilter`` leaf."""
+
+    class BranchConditionFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"shelves__condition": ["exact"]}
+
+    leaf = BranchConditionFilter.get_filters()["shelves__condition"]
+    assert type(leaf) is EnumChoiceFilter
+    snapshot = BranchConditionFilter._expansion_snapshot()
+    assert snapshot is not None
+    assert snapshot.candidates["shelves__condition"].eligible is True
+
+
+class _GradedSpecimen(django_models.Model):
+    """An ``IntegerChoices`` column that admits ``None`` but never ``""``.
+
+    Query-build only (``managed = False``): binding ``''`` to the integer column raises
+    ``ValueError`` while the queryset is built, before any SQL runs.
+    """
+
+    class Grade(django_models.IntegerChoices):
+        LOW = 1, "Low"
+        HIGH = 2, "High"
+
+    grade = django_models.IntegerField(choices=Grade.choices, blank=True, null=True)
+
+    class Meta:
+        managed = False
+        app_label = "library"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("column", ["text", "integer"])
+def test_raw_empty_choice_form_value_applies_no_filter(column):
+    """A raw ``""`` (a DRF ``?field=`` querystring) keeps django-filter's empty-value skip.
+
+    Only the GraphQL ``BLANK`` member, normalized to ``BLANK_CHOICE``, filters ``= ''``; a
+    shared ``FilterSet`` used through ``DjangoFilterBackend`` reads an empty value as "no
+    filter" on a text column and never binds ``''`` to an integer column.
+    """
+    if column == "text":
+
+        class TextChoiceFilter(FilterSet):
+            class Meta:
+                model = library_models.Shelf
+                fields = {"condition": ["exact"]}
+
+        branch = library_models.Branch.objects.create(name="raw-choice")
+        library_models.Shelf.objects.create(code="blank", branch=branch)
+        library_models.Shelf.objects.create(code="good", branch=branch, condition="good")
+        queryset = library_models.Shelf.objects.order_by("id")
+        leaf = TextChoiceFilter.get_filters()["condition"]
+        kept = TextChoiceFilter(data={"condition": ""}, queryset=queryset).qs
+        assert list(kept.values_list("code", flat=True)) == ["blank", "good"]
+    else:
+
+        class IntegerChoiceFilter(FilterSet):
+            class Meta:
+                model = _GradedSpecimen
+                fields = {"grade": ["exact"]}
+
+        leaf = IntegerChoiceFilter.get_filters()["grade"]
+        queryset = _GradedSpecimen.objects.all()
+        kept = IntegerChoiceFilter(data={"grade": ""}, queryset=queryset).qs
+        assert "WHERE" not in str(kept.query)
+    assert type(leaf) is EnumChoiceFilter

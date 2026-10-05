@@ -58,7 +58,9 @@ from ..utils.inputs import (
 )
 from ..utils.strings import flatten_lookup_path, graphql_camel_name, pascal_case_or_raise
 from .base import (
+    BLANK_CHOICE,
     ArrayFilter,
+    EnumChoiceFilter,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     ListFilter,
@@ -663,7 +665,10 @@ def normalize_input_value(
     Returns one of three shapes:
 
     - a scalar value (``str`` / ``int`` / wire-form GlobalID string /
-      enum ``.value``) when the filter consumes a single form-data key.
+      enum ``.value``) when the filter consumes a single form-data key;
+      the ``BLANK`` member (value ``""``) of a generated choice ``exact``
+      (``EnumChoiceFilter``) becomes ``BLANK_CHOICE``, so it filters
+      ``= ''`` while a raw ``""`` keeps django-filter's empty-value skip.
       A GlobalID is kept in its base64 wire form (not pre-decoded to a
       bare ``node_id``) so the bound filter can validate its
       ``type_name`` before decoding;
@@ -730,8 +735,18 @@ def normalize_input_value(
     def _typed(_filter: Filter) -> object:
         return MRO_CONTINUE
 
-    def _choice(_filter: Filter) -> object:
-        return _unwrap_enum_member(raw_value)
+    def _choice(matched: Filter) -> object:
+        value = _unwrap_enum_member(raw_value)
+        if (
+            isinstance(matched, EnumChoiceFilter)
+            and isinstance(raw_value, enum.Enum)
+            and isinstance(value, str)
+            and value == ""
+        ):
+            # The enum's ``BLANK`` member: a value, never django-filter's empty skip.
+            # A raw ``""`` (not a member) stays ``""`` and keeps that skip.
+            return BLANK_CHOICE
+        return value
 
     def _catchall(_filter: Filter) -> object:
         return _unwrap_enum_member(raw_value)

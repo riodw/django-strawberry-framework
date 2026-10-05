@@ -127,8 +127,21 @@ class BranchNote(models.Model):
 class Shelf(models.Model):
     """A shelf inside a branch."""
 
+    class Condition(models.TextChoices):
+        GOOD = "good", "Good"
+        WORN = "worn", "Worn"
+        DAMAGED = "damaged", "Damaged"
+
     code = models.TextField()
     topic = models.TextField(blank=True, default="")
+    # A blank-admitting choice column: an unassessed shelf stores ``""``, so the
+    # generated enum carries a ``BLANK`` member beside the declared conditions.
+    condition = models.CharField(
+        max_length=20,
+        choices=Condition.choices,
+        blank=True,
+        default="",
+    )
     branch = models.ForeignKey(
         Branch,
         related_name="shelves",

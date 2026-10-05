@@ -1026,6 +1026,33 @@ def test_serializer_only_multiple_choicefield_becomes_list_enum():
     assert {member.value for member in inner} == {"a", "b"}
 
 
+def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member():
+    """``MultipleChoiceField(allow_blank=True)`` admits ``""`` per element, so its enum carries ``BLANK``."""
+
+    class MultiSer(serializers.Serializer):
+        tags = serializers.MultipleChoiceField(choices=[("a", "A")], allow_blank=True)
+
+    field = MultiSer().fields["tags"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
+    (inner,) = get_args(annotation)
+    assert {member.name: member.value for member in inner} == {"BLANK": "", "a": "a"}
+
+
+def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_member():
+    """A declared ``ChoiceField(allow_blank=True)`` over a plain column emits its enum with ``BLANK``."""
+
+    class DeclaredSer(serializers.ModelSerializer):
+        topic = serializers.ChoiceField(choices=[("x", "X")], allow_blank=True)
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("topic",)
+
+    field = DeclaredSer().fields["topic"]
+    _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
+    assert {member.name: member.value for member in annotation} == {"BLANK": "", "x": "x"}
+
+
 def test_serializer_only_filepathfield_stays_str_not_enum():
     """A ``FilePathField`` (a ``ChoiceField`` subclass with DYNAMIC choices) stays ``str``, never an enum."""
 

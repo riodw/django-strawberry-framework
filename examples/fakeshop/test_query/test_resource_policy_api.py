@@ -1898,7 +1898,7 @@ def test_one_variable_spliced_into_two_mutation_fields_is_charged_twice():
 #: bind specs - the same records the request-time decode walks - are what
 #: classify both spellings alike.
 _RAW_PK_SHELF_MODEL = (
-    "mutation S($d: ShelfAlt_ubranchesBranchCodeInput!) { createShelf(data: $d) "
+    "mutation S($d: ShelfAlt_ubranchesBranchCodeConditionInput!) { createShelf(data: $d) "
     "{ result { code } errors { field messages } } }"
 )
 _RAW_PK_SHELF_FORM = (
@@ -2051,7 +2051,7 @@ def test_raw_pk_relation_ids_across_fields_accumulate_in_the_aggregate():
     separate budget, not the per-field one misfiring.
     """
     mutation = """
-    mutation S($a: ShelfAlt_ubranchesBranchCodeInput!, $b: ShelfAlt_ubranchesBranchCodeInput!) {
+    mutation S($a: ShelfAlt_ubranchesBranchCodeConditionInput!, $b: ShelfAlt_ubranchesBranchCodeConditionInput!) {
       first: createShelf(data: $a) { result { code } }
       second: createShelf(data: $b) { result { code } }
     }
@@ -2074,7 +2074,7 @@ def test_a_global_id_relation_and_a_raw_pk_relation_share_one_aggregate():
     from differently-typed relation lists cannot spend more than one budget.
     """
     mutation = """
-    mutation M($s: ShelfAlt_ubranchesBranchCodeInput!, $d: BookGenresSerializerPartialInput!, $id: ID!) {
+    mutation M($s: ShelfAlt_ubranchesBranchCodeConditionInput!, $d: BookGenresSerializerPartialInput!, $id: ID!) {
       shelf: createShelf(data: $s) { result { code } }
       book: updateBookGenresViaSerializer(id: $id, data: $d) { node { title } }
     }
@@ -2105,7 +2105,7 @@ def test_a_nested_row_relation_list_at_the_bound_is_not_rejected():
 def test_a_membership_list_inside_a_generated_mutation_input_stays_membership():
     """Spec-keyed classification charges only RELATION fields as relations.
 
-    ``ShelfAlt_ubranchesBranchCodeInput.branchId`` is a raw-pk SINGLE relation
+    ``ShelfAlt_ubranchesBranchCodeConditionInput.branchId`` is a raw-pk SINGLE relation
     (one id, not a list); its sibling ``code`` is a scalar. Neither is a relation
     LIST, so a raw-pk write carrying only those reaches the resolver with no
     resource rejection - the control proving the spec signal charges only the
@@ -2114,7 +2114,7 @@ def test_a_membership_list_inside_a_generated_mutation_input_stays_membership():
     a two-id list) under the per-field bound of two.
     """
     mutation = (
-        "mutation S($d: ShelfAlt_ubranchesBranchCodeInput!) { createShelf(data: $d) "
+        "mutation S($d: ShelfAlt_ubranchesBranchCodeConditionInput!) { createShelf(data: $d) "
         "{ result { code } errors { field messages } } }"
     )
     payload = _post(

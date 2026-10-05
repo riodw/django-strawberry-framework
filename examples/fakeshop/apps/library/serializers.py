@@ -19,6 +19,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 ``UniqueTogetherValidator``.
 """
 
+import json
 from typing import Any, NoReturn, TypeAlias
 
 from django.db.models import Model
@@ -317,10 +318,12 @@ def nullability_schema_field_map(
 class BlankCodeShelfSerializer(serializers.ModelSerializer[Shelf]):
     """``Shelf`` serializer with an ``allow_blank=True`` required ``code``.
 
-    ``allow_blank`` is NOT a GraphQL concern (spec-039 Decision 7): a required
-    ``allow_blank=True`` ``CharField`` is still a non-null ``String!`` in the generated SDL
-    (``allow_blank`` is absent from the schema), and the empty-string acceptance is enforced
-    by the serializer at runtime. The live test introspects the ``code`` input as a non-null
+    On a ``CharField``, ``allow_blank`` does not change the input type (spec-039 Decision 7):
+    ``String`` already carries ``""``, so a required ``allow_blank=True`` ``CharField`` is
+    still a non-null ``String!`` in the generated SDL (``allow_blank`` shows only in the
+    field's description), and the empty-string acceptance is enforced by the serializer at
+    runtime. (A ``ChoiceField`` differs: its enum gains a ``BLANK`` member, see
+    ``ShelfMetadataSerializer.priority``.) The live test introspects the ``code`` input as a non-null
     ``String`` AND posts ``code: ""`` to prove the serializer accepts + writes it (a plain
     required ``CharField`` would reject the blank with a field error).
     """
@@ -398,28 +401,38 @@ register_serializer_field_converter(
 class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
     """A ``Shelf`` serializer exercising the expanded input type system live.
 
-    Three serializer-only WRITE-ONLY fields prove the expanded input type system over
+    Four serializer-only WRITE-ONLY fields prove the expanded input type system over
     ``/graphql/``:
 
-    * ``priority`` - a serializer-only ``ChoiceField`` -> a GENERATED GraphQL enum,
-      not the graphene-django ``String``;
+    * ``priority`` - a serializer-only ``ChoiceField(allow_blank=True)`` -> a GENERATED
+      GraphQL enum (not the graphene-django ``String``) whose ``BLANK`` member writes the
+      ``""`` the serializer admits;
     * ``attributes`` - a ``DictField`` -> ``strawberry.scalars.JSON``;
     * ``accent_color`` - a custom ``HexColorField`` mapped ONLY via the public converter
-      registry -> ``String``.
+      registry -> ``String``;
+    * ``tags`` - a ``ListField`` whose child admits ``None`` -> ``[String]`` (nullable
+      elements).
 
-    All three are ``write_only`` + ``required=False`` serializer-only extras (no ``Shelf``
+    All four are ``write_only`` + ``required=False`` serializer-only extras (no ``Shelf``
     column), decoded + validated then popped in ``create()`` (``Shelf`` has no such columns);
-    the resolved ``priority`` is stamped into ``topic`` so the live test can read the effect.
-    ``code`` + ``branch`` are the ordinary model-backed columns (auto-generated, so the
-    declared-field conflict policy leaves them alone).
+    the resolved ``priority`` or ``tags`` is stamped into ``topic`` so the live test can read
+    the effect. ``code`` + ``condition`` + ``branch`` are the ordinary model-backed columns
+    (auto-generated, so the declared-field conflict policy leaves them alone); ``condition``
+    is the blank-admitting choice column, so its input is the read side's enum.
     """
 
     priority = serializers.ChoiceField(
         choices=[("low", "Low"), ("normal", "Normal"), ("high", "High")],
+        allow_blank=True,
         required=False,
         write_only=True,
     )
     attributes = serializers.DictField(required=False, write_only=True)
+    tags = serializers.ListField(
+        child=serializers.CharField(allow_null=True),
+        required=False,
+        write_only=True,
+    )
     accent_color = HexColorField(required=False, write_only=True)
     # ``help_text`` + validation constraints thread into the input field's SDL
     # description (documentation only - DRF still enforces ``max_length`` at runtime).
@@ -437,10 +450,12 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
         model = Shelf
         fields = (
             "code",
+            "condition",
             "branch",
             "priority",
             "attributes",
             "accent_color",
+            "tags",
             "label",
         )
 
@@ -448,14 +463,17 @@ class ShelfMetadataSerializer(serializers.ModelSerializer[Shelf]):
     def create(self, validated_data: dict[str, object]) -> Shelf:
         # The serializer-only extras were decoded + validated (proving the enum / JSON /
         # registered-converter / described inputs), then dropped - ``Shelf`` has no such
-        # columns. The resolved ``priority`` is stamped into ``topic`` so the live test can
-        # read the effect.
+        # columns. The resolved ``priority`` or ``tags`` is stamped into ``topic`` so the
+        # live test can read the effect.
         priority = validated_data.pop("priority", None)
+        tags = validated_data.pop("tags", None)
         validated_data.pop("attributes", None)
         validated_data.pop("accent_color", None)
         validated_data.pop("label", None)
         if priority is not None:
             validated_data["topic"] = f"priority:{priority}"
+        if tags is not None:
+            validated_data["topic"] = f"tags:{json.dumps(tags)}"
         return super().create(validated_data)
 
 

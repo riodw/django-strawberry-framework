@@ -288,6 +288,7 @@ class ShelfType(DjangoType):
             "id",
             "code",
             "topic",
+            "condition",
             "branch",
             "books",
         )
@@ -1307,7 +1308,26 @@ class CreateShelf(DjangoMutation):
     class Meta:
         model = models.Shelf
         operation = "create"
-        fields = ("code", "branch", "alt_branches")
+        fields = (
+            "code",
+            "condition",
+            "branch",
+            "alt_branches",
+        )
+        permission_classes = []
+
+
+class UpdateShelfCondition(DjangoMutation):
+    """Update a ``Shelf``'s ``condition`` via the model pipeline.
+
+    ``ShelfType`` is non-Relay, so the update ``id`` is the raw pk. ``condition`` is the
+    blank-admitting choice column, so ``BLANK`` clears an assessed shelf back to ``""``.
+    """
+
+    class Meta:
+        model = models.Shelf
+        operation = "update"
+        fields = ("condition",)
         permission_classes = []
 
 
@@ -1749,8 +1769,8 @@ class CreateShelfViaBlankCodeSerializer(SerializerMutation):
     """Create a ``Shelf`` whose ``code`` is an ``allow_blank=True`` required ``CharField``.
 
     ``BlankCodeShelfSerializer`` constructs no-arg (default discovery works), so its input is
-    the canonical ``BlankCodeShelfSerializerInput``. ``allow_blank`` is absent from the SDL:
-    ``code`` is still a non-null ``String!`` (a required ``CharField``), and the empty-string
+    the canonical ``BlankCodeShelfSerializerInput``. ``allow_blank`` does not change ``code``'s
+    type: it is still a non-null ``String!`` (a required ``CharField``), and the empty-string
     acceptance is enforced by the serializer at runtime. The live test introspects ``code`` as
     a non-null ``String`` and posts ``code: ""`` to prove the serializer accepts + writes the
     blank (a plain required ``CharField`` would reject it with a field error).
@@ -2036,13 +2056,16 @@ class CreateBranchWithNestedShelves(SerializerMutation):
 class CreateShelfViaMetadataSerializer(SerializerMutation):
     """Create a ``Shelf`` via ``ShelfMetadataSerializer`` - the live type-system matrix.
 
-    The input carries a serializer-only ``ChoiceField`` -> a GENERATED enum (``priority``), a
-    ``DictField`` -> ``JSON`` (``attributes``), and a custom ``HexColorField`` mapped via the
-    public converter registry -> ``String`` (``accentColor``). The live test introspects each
-    input field's type (ENUM / JSON / String) and posts a create through them, proving the
-    expanded input type system - serializer-only enums, the expanded DRF scalar matrix, and the
-    sanctioned converter registry - end to end over ``/graphql/``. The resolved ``priority`` is
-    stamped into ``topic`` so the test can read the write effect.
+    The input carries a serializer-only ``ChoiceField(allow_blank=True)`` -> a GENERATED enum
+    with a ``BLANK`` member (``priority``), a ``DictField`` -> ``JSON`` (``attributes``), a
+    custom ``HexColorField`` mapped via the public converter registry -> ``String``
+    (``accentColor``), a ``ListField`` of nullable strings -> ``[String]`` (``tags``), and the
+    model-backed blank-admitting choice column ``condition`` -> the read side's enum. The live
+    test introspects each input field's type (ENUM / JSON / String) and posts a create through
+    them, proving the expanded input type system - serializer-only enums, the expanded DRF
+    scalar matrix, and the sanctioned converter registry - end to end over ``/graphql/``. The
+    resolved ``priority`` or ``tags`` is stamped into ``topic`` so the test can read the write
+    effect.
     """
 
     class Meta:
@@ -2078,6 +2101,7 @@ class Mutation:
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
     create_shelf = DjangoMutationField(CreateShelf)
+    update_shelf_condition = DjangoMutationField(UpdateShelfCondition)
     update_book_via_form = DjangoMutationField(UpdateBookViaForm)
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
     update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)

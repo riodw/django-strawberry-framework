@@ -1196,6 +1196,63 @@ def test_schema_fingerprint_sensitive_to_converter_extras():
     )
 
 
+@pytest.mark.parametrize(
+    "field_cls",
+    [serializers.ChoiceField, serializers.MultipleChoiceField],
+)
+def test_choice_fingerprint_folds_allow_blank(field_cls):
+    """Both choice flavors fingerprint ``allow_blank`` beside their values."""
+    from django_strawberry_framework.rest_framework.inputs import _fingerprint_choices
+
+    strict = field_cls(choices=[("r", "R")])
+    blank = field_cls(choices=[("r", "R")], allow_blank=True)
+    assert _fingerprint_choices(strict) == (("r",), False)
+    assert _fingerprint_choices(blank) == (("r",), True)
+
+
+def test_schema_fingerprint_sensitive_to_choice_allow_blank():
+    """``allow_blank`` adds the enum's ``BLANK`` member, so the choice fingerprint folds it.
+
+    The whole-field fingerprint also differs through the description's constraint summary;
+    the choice discriminant is asserted directly so the member-set axis stands on its own.
+    """
+    from django_strawberry_framework.rest_framework.inputs import (
+        _fingerprint_choices,
+        serializer_schema_fingerprint,
+    )
+
+    class Strict(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("r", "R")])
+
+    class Blank(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("r", "R")], allow_blank=True)
+
+    assert _fingerprint_choices(Strict().fields["color"]) == (("r",), False)
+    assert _fingerprint_choices(Blank().fields["color"]) == (("r",), True)
+    assert serializer_schema_fingerprint(dict(Strict().fields)) != serializer_schema_fingerprint(
+        dict(Blank().fields),
+    )
+
+
+@pytest.mark.parametrize(
+    "child_cls",
+    [serializers.CharField, serializers.IntegerField, serializers.BooleanField],
+)
+def test_schema_fingerprint_sensitive_to_list_child_allow_null(child_cls):
+    """A ``ListField`` child's ``allow_null`` decides element nullability, so it is fingerprinted."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class Strict(serializers.Serializer):
+        tags = serializers.ListField(child=child_cls())
+
+    class Nullable(serializers.Serializer):
+        tags = serializers.ListField(child=child_cls(allow_null=True))
+
+    assert serializer_schema_fingerprint(dict(Strict().fields)) != serializer_schema_fingerprint(
+        dict(Nullable().fields),
+    )
+
+
 # ===========================================================================
 # Opt-in nested serializer inputs
 # ===========================================================================

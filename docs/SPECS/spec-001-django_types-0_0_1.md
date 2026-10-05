@@ -206,22 +206,28 @@ The first `DjangoType` to read a given `(model, field_name)` wins the name. Sibl
 
 1. Check `registry.get_enum(field.model, field.name)`; if a cached enum exists, return it unchanged. The cache check comes first so a cached column never re-derives a name or re-runs the rejections.
 2. Compute `enum_name = f"{type_name}{PascalCase(field.name)}Enum"`.
-3. Delegate the build to `::build_enum_from_choices`, which owns every rule below.
+3. Delegate the build to `::build_enum_from_choices`, which owns every rule below, passing `include_blank=field.blank and field.empty_strings_allowed` (see "Blank member" below).
 4. Cache via `registry.register_enum(field.model, field.name, enum_cls)` and return the enum class.
 
-`build_enum_from_choices(choice_pairs, enum_name, *, source_label)` is the shared core, and it is shared on purpose: the DRF serializer `ChoiceField` / `MultipleChoiceField` path (`django_strawberry_framework/rest_framework/serializer_converter.py`) builds its enums through the same function, so the rejections and the sanitization rules cannot drift between the two flavors. `source_label` names the offending field in every raised message — `"Model.field"` on the read side, the serializer field name on the other — so both callers share one message shape. The two key spaces stay separate: the read side keys the cache on `(model, field_name)`, the serializer side on the descriptor-derived enum name.
+`build_enum_from_choices(choice_pairs, enum_name, *, source_label, include_blank=False)` is the shared core, and it is shared on purpose: the DRF serializer `ChoiceField` / `MultipleChoiceField` path (`django_strawberry_framework/rest_framework/serializer_converter.py`) builds its enums through the same function, so the rejections and the sanitization rules cannot drift between the two flavors. `source_label` names the offending field in every raised message — `"Model.field"` on the read side, the serializer field name on the other — so both callers share one message shape. The two key spaces stay separate: the read side keys the cache on `(model, field_name)`, the serializer side on the descriptor-derived enum name.
 
 The rejections, all `ConfigurationError`:
 
 - **Empty or unreadable choices.** A field declaring `choices` with an empty sequence has no members to build, and a sequence that cannot be read is refused the same way.
 - **A malformed entry.** Each entry must unpack to a `(value, label)` pair; a bare string, or anything else that does not unpack to two items, is refused.
 - **Django's grouped-choices form** (a sequence of `(group_label, [...inner_pairs])` tuples). The choices source must be a flat sequence of `(value, label)` pairs. Detection reads the *label* slot for a list / tuple, not the value slot: in the grouped form the value slot holds the human-readable group name, so testing it would false-negative.
-- **Two choice values that sanitize to the same member name.** The message names the colliding member and every value that produced it.
+- **Two choice values that sanitize to the same member name.** The message names the colliding member and every value that produced it. A declared `"BLANK"` value beside the blank member (declared `""` or added by `include_blank`) is this rejection.
 - **A value that cannot be converted to a member name.** The message names the field and the value.
 
-Member names are sanitized from the choice value, in this order: coerce to `str()` (so `IntegerChoices` produce identifiers); rewrite ASCII non-identifier characters to `_`; prefix `MEMBER_` when the result is empty or starts with a digit; prefix `_` when the result is a Python keyword; prefix `MEMBER_` when the result is a GraphQL-reserved enum value (`true` / `false` / `null`), starts with `__`, or is a name Python's `enum` reserves (`mro`, a `_sunder_` name, or the generated class's private `_<EnumName>__` namespace). The order is load-bearing: folding the keyword and reserved rewrites into one condition changes which values the collision rejection above reports.
+Member names are sanitized from the choice value, in this order: coerce to `str()` (so `IntegerChoices` produce identifiers); rewrite ASCII non-identifier characters to `_`; name the empty string `BLANK`; prefix `MEMBER_` when the result starts with a digit; prefix `_` when the result is a Python keyword; prefix `MEMBER_` when the result is a GraphQL-reserved enum value (`true` / `false` / `null`), starts with `__`, or is a name Python's `enum` reserves (`mro`, a `_sunder_` name, or the generated class's private `_<EnumName>__` namespace). The order is load-bearing: folding the keyword and reserved rewrites into one condition changes which values the collision rejection above reports.
 
 Sanitization runs on the value, not the label. Labels are display strings consumers may translate or restyle, and coupling the GraphQL schema to them is fragile; the `MEMBER_<digit>` prefix is the explicit cost of that choice. The rejected label-based alternative is in the [rationale file][spec-001-rationale].
+
+### Blank member
+
+A choice enum has one member per declared choice value plus a `BLANK` member for `""` when the field admits the empty string: a model column with `blank=True` whose type stores empty strings (`empty_strings_allowed`), or a serializer `ChoiceField` / `MultipleChoiceField` with `allow_blank=True`. `""` always sanitizes to `BLANK`, whether declared (an explicit `("", label)` pair) or admitted, so a declared `"BLANK"` value is the sanitize-collision `ConfigurationError`. The member is the same on read, filter input and every write flavor: a stored `""` reads as `BLANK`, `BLANK` writes `""`, and `null` keeps meaning `None` (`null=True, blank=True` publishes a nullable enum with a `BLANK` member; the two values stay distinct).
+
+`build_enum_from_choices` adds the member when `include_blank` is set and no declared value is `""`, prepending `("", "")` the way Django's `Field.formfield` prepends its blank choice. An `IntegerChoices` column with `blank=True` admits only `None`, never `""`, so it gets no member. The flag is a column property, so the `(model, field_name)` cache stays sound: the read type, the filter input, `DjangoMutation`, a model-backed form and an auto-generated `ModelSerializer` field all receive the one enum. A column with `blank=True` publishes the member whether or not its rows hold `""`, as `null=True` publishes a nullable type with no `NULL` rows.
 
 ### Value semantics
 
@@ -258,7 +264,7 @@ This is intentional, but it leaves the published schema name dependent on Python
 
 ### `null=True` interaction
 
-A nullable choice field widens to `EnumType | None`, matching the general scalar-nullability rule. The order inside `convert_scalar` is: scalar lookup -> choices branch (replaces `py_type` with the enum) -> `null` widening. So `CharField(choices=[...], null=True)` produces `<GeneratedEnum> | None`.
+A nullable choice field widens to `EnumType | None`, matching the general scalar-nullability rule. The order inside `convert_scalar` is: scalar lookup -> choices branch (replaces `py_type` with the enum) -> `null` widening. So `CharField(choices=[...], null=True)` produces `<GeneratedEnum> | None`, and `CharField(choices=[...], null=True, blank=True)` produces `<GeneratedEnum> | None` whose enum carries `BLANK`: `null` reads and writes `None`, `BLANK` reads and writes `""`.
 
 ### Test surface
 
@@ -271,6 +277,7 @@ Required tests, all in `tests/types/test_converters.py`:
 - `test_two_djangotypes_reading_same_choice_field_share_one_enum` — defining two `DjangoType`s over `ChoiceFixture` yields the same enum object on both annotations.
 - `test_grouped_choices_form_rejected` — declaring grouped choices on the fixture model and constructing a `DjangoType` over it raises `ConfigurationError`.
 - `test_choice_member_name_sanitization` — choice values like `"first-name"` and `"123abc"` produce identifier-safe member names.
+- `test_blank_admitting_text_choice_column_gets_blank_member` / `test_integer_choice_column_with_blank_gets_no_blank_member` / `test_declared_empty_choice_is_not_duplicated_by_include_blank` / `test_declared_blank_value_collides_with_blank_member` / `test_nullable_blank_choice_column_keeps_null_and_blank_distinct` — the "Blank member" rules above, one row each. Over the wire, `library.Shelf.condition` pins the read, filter and every write flavor in `examples/fakeshop/test_query/test_library_api.py`.
 - `test_choice_field_with_null_widens_to_enum_or_none` — a nullable choice column produces exactly `EnumType | None`. Pin the union shape (not `EnumType | None | None` or other widened variants) so a future ordering bug in `convert_scalar` surfaces immediately.
 
 ## Relation field conversion

@@ -613,9 +613,9 @@ def _sanitize_member_name(value: object, *, enum_name: str | None = None) -> str
 
     The choice value (DB-side, not the human label) is the input. We coerce
     to ``str`` so ``IntegerChoices`` work, replace any non-ASCII
-    identifier characters with ``_``, prefix with ``MEMBER_`` if the
-    result starts with a digit (or is empty), and prefix with an
-    underscore if it collides with a Python keyword. GraphQL-reserved enum
+    identifier characters with ``_``, name the empty string ``BLANK``,
+    prefix with ``MEMBER_`` if the result starts with a digit, and prefix
+    with an underscore if it collides with a Python keyword. GraphQL-reserved enum
     values (``true``, ``false``, ``null``), introspection-prefixed
     names, and names Python's ``enum`` reserves are also prefixed so Strawberry
     can build the schema without a raw ``enum`` crash or a silently dropped
@@ -625,8 +625,9 @@ def _sanitize_member_name(value: object, *, enum_name: str | None = None) -> str
     member names stay stable when consumers edit human-readable labels.
 
     Rules apply in this order: (1) ASCII non-identifier characters
-    rewritten to ``_``; (2) leading-digit or empty result prefixed with
-    ``MEMBER_``; (3) Python-keyword result prefixed with ``_``;
+    rewritten to ``_``; (2) the empty string becomes ``BLANK`` and a
+    leading-digit result is prefixed with ``MEMBER_``; (3) Python-keyword
+    result prefixed with ``_``;
     (4) GraphQL-reserved (``true`` / ``false`` / ``null``),
     ``__``-prefixed, or Python-``enum``-reserved (``mro``, ``_sunder_``, or the
     generated class's private namespace; see :func:`_is_enum_reserved_member`)
@@ -637,7 +638,11 @@ def _sanitize_member_name(value: object, *, enum_name: str | None = None) -> str
     categorises ambiguous values.
     """
     sanitized = _NON_IDENT.sub("_", str(value))
-    if not sanitized or sanitized[0].isdigit():
+    if not sanitized:
+        # ``""`` is the value a blank-admitting field stores, declared or admitted
+        # (``build_enum_from_choices``'s ``include_blank``), so both spell one member.
+        sanitized = "BLANK"
+    elif sanitized[0].isdigit():
         sanitized = f"MEMBER_{sanitized}"
     if keyword.iskeyword(sanitized):
         sanitized = f"_{sanitized}"
@@ -655,6 +660,7 @@ def build_enum_from_choices(
     enum_name: str,
     *,
     source_label: str,
+    include_blank: bool = False,
 ) -> type[Enum]:
     """Build a Strawberry ``Enum`` from a flat ``(value, label)`` choice sequence.
 
@@ -671,9 +677,18 @@ def build_enum_from_choices(
        nested tuple - detected on ``label`` being a list / tuple, the load-bearing
        distinction: in the grouped form the *value* slot is the group name, so testing
        it would false-negative);
-    3. sanitize member names from choice VALUES (not labels) so a label edit does not
-       churn the GraphQL schema; reject two values that sanitize to one member;
-    4. build the ``Enum`` and decorate with ``strawberry.enum``.
+    3. when ``include_blank`` is set and no declared value is ``""``, prepend the
+       ``("", "")`` pair (Django's ``Field.formfield`` prepends its blank choice the same
+       way): the field admits the empty string, so the enum must carry it;
+    4. sanitize member names from choice VALUES (not labels) so a label edit does not
+       churn the GraphQL schema; reject two values that sanitize to one member (``""``
+       sanitizes to ``BLANK``, so a declared ``"BLANK"`` value beside it is rejected);
+    5. build the ``Enum`` and decorate with ``strawberry.enum``.
+
+    ``include_blank`` is the caller's answer to "does this field admit the empty string?": a model
+    column with ``blank=True`` whose type stores empty strings
+    (``convert_choices_to_enum``), or a serializer field with ``allow_blank=True``
+    (``rest_framework/serializer_converter.py::_serializer_choice_enum``).
 
     ``source_label`` names the offending field in every raised message
     (``"Model.field"`` for the read side, the serializer field name for the serializer
@@ -734,6 +749,11 @@ def build_enum_from_choices(
                 "separate fields.",
             )
 
+    if include_blank and not any(
+        isinstance(value, str) and value == "" for value, _label in normalized_pairs
+    ):
+        normalized_pairs.insert(0, ("", ""))
+
     members: dict[str, object] = {}
     collisions: dict[str, list[object]] = {}
     for value, _label in normalized_pairs:
@@ -771,7 +791,8 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
     1. Cache check on ``(field.model, field.name)``; return cached on hit.
     2. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
     3. Delegate to the shared ``build_enum_from_choices`` core (empty / grouped-form
-       rejection, value-based sanitization, sanitize-collision guard, ``Enum`` build).
+       rejection, the ``BLANK`` member when the column admits ``""``, value-based
+       sanitization, sanitize-collision guard, ``Enum`` build).
     4. Cache via ``registry.register_enum`` and return the enum class.
 
     The first ``DjangoType`` to read a given ``(model, field_name)`` wins
@@ -790,6 +811,10 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
         model = field.model
         field_name = field.name
         choices = field.choices
+        # The column admits ``""`` when ``blank=True`` on a type that stores empty strings
+        # (Django's own text-column predicate); an ``IntegerChoices`` column with
+        # ``blank=True`` admits only ``None``, never ``""``.
+        include_blank = bool(field.blank and field.empty_strings_allowed)
     except BaseException as exc:
         raise ConfigurationError(
             f"Could not inspect choices for {_field_label(field)}.",
@@ -815,6 +840,7 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
         choice_source,
         enum_name,
         source_label=_field_label(field),
+        include_blank=include_blank,
     )
     registry.register_enum(model, field_name, enum_cls)
     return enum_cls

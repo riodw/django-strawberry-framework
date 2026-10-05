@@ -50,6 +50,7 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
         fields = (
             "code",
             "topic",
+            "condition",
             "branch",
             "alt_branches",
         )

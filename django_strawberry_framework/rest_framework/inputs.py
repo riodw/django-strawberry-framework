@@ -410,33 +410,34 @@ def _fingerprint_relation_target(field: DRFField) -> str | None:
     return None
 
 
-def _fingerprint_choices(field: DRFField) -> tuple[str, ...] | None:
-    """Return a ``ChoiceField``'s choice VALUES for the fingerprint, else ``None``.
+def _fingerprint_choices(field: DRFField) -> tuple[tuple[str, ...], bool] | None:
+    """Return a ``ChoiceField``'s choice VALUES and ``allow_blank`` for the fingerprint, else ``None``.
 
-    The generated enum's members come from the choice VALUES, so a hook that changes
-    the choices changes the SDL enum - folded into the fingerprint. Every
-    ``ChoiceField`` (incl. ``FilePathField``, whose choices are filesystem-dynamic but stable
-    within a single process between the two hook reads) is fingerprinted; a non-choice field
-    yields ``None``.
+    The generated enum's members come from the choice VALUES plus the ``BLANK`` member
+    ``allow_blank=True`` adds, so a hook that changes either changes the SDL enum - both
+    folded into the fingerprint. Every ``ChoiceField`` (incl. ``FilePathField``, whose choices
+    are filesystem-dynamic but stable within a single process between the two hook reads) is
+    fingerprinted; a non-choice field yields ``None``.
     """
     if isinstance(field, serializers.ChoiceField):
         # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
         choices: Mapping[object, object] = field.choices
-        return tuple(str(value) for value in choices)
+        return tuple(str(value) for value in choices), bool(field.allow_blank)
     return None
 
 
-def _fingerprint_converter_extra(field: DRFField) -> str | None:
+def _fingerprint_converter_extra(field: DRFField) -> tuple[object, ...] | None:
     """Return converter-affecting discriminants (``ModelField`` wrapped / ``ListField`` child), else ``None``.
 
-    A ``ModelField``'s wrapped ``model_field`` and a ``ListField``'s ``child`` determine the
-    generated annotation, so a hook that swaps them changes the SDL - folded into the
-    fingerprint.
+    A ``ModelField``'s wrapped ``model_field`` and a ``ListField``'s ``child`` (its class and
+    its ``allow_null``, which decides the element's nullability) determine the generated
+    annotation, so a hook that swaps them changes the SDL - folded into the fingerprint.
     """
     if isinstance(field, serializers.ModelField):
-        return type(getattr(field, "model_field", None)).__name__
+        return (type(getattr(field, "model_field", None)).__name__,)
     if isinstance(field, serializers.ListField):
-        return type(getattr(field, "child", None)).__name__
+        child: object = getattr(field, "child", None)
+        return type(child).__name__, bool(getattr(child, "allow_null", False))
     return None
 
 

@@ -14,6 +14,9 @@ five parity-floor primitives (spec-027 Decision 4):
 - `RelationPkFilter` / `RelationPkMultipleFilter`: their raw-primary-key
   siblings for a relation key whose target is not a Relay node (or has no
   `DjangoType`), typed and coerced through `relation_identity_column`.
+- `EnumChoiceFilter`: the generated `exact` filter of a choice column, where
+  the enum's `BLANK` member (sent as `BLANK_CHOICE`) is the `= ''` predicate
+  while a raw `""` keeps django-filter's empty-value skip.
 - `LazyRelatedClassMixin`: re-exported from the package-root
   `sets_mixins` module (shared with the future order / aggregate sets);
   imported here so `RelatedFilter` and the `filters` public surface keep
@@ -31,8 +34,15 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.forms import Field, MultipleChoiceField, MultiWidget, SelectMultiple, TextInput
-from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter, NumberFilter
+from django_filters import (
+    ChoiceFilter,
+    Filter,
+    ModelChoiceFilter,
+    MultipleChoiceFilter,
+    NumberFilter,
+)
 from django_filters.constants import EMPTY_VALUES
+from django_filters.fields import ChoiceField
 from django_filters.filters import BaseInFilter, BaseRangeFilter, FilterMethod
 from django_filters.utils import get_model_field
 from graphql import GraphQLError
@@ -419,6 +429,67 @@ class ArrayFilter(TypedFilter):
         if is_empty:
             return qs
         return _apply_lookup_predicate(self, qs, value)
+
+
+class _BlankChoice:
+    """Type of ``BLANK_CHOICE``, the form value of a choice enum's ``BLANK`` member."""
+
+    __slots__ = ()
+
+
+#: The form-data value ``normalize_input_value`` substitutes for a choice enum member
+#: whose value is ``""`` (``BLANK``). An object, not a string, so no querystring or raw
+#: form ``data`` can spell it: only the GraphQL member reaches ``EnumChoiceFilter`` as
+#: the ``= ''`` predicate, and a raw ``""`` keeps django-filter's empty-value skip.
+BLANK_CHOICE = _BlankChoice()
+
+
+class _EnumChoiceField(ChoiceField):
+    """``ChoiceField`` that also cleans ``BLANK_CHOICE`` to itself.
+
+    Every other value cleans exactly as django-filter's ``ChoiceField`` cleans it, so raw
+    form data (a DRF querystring through ``DjangoFilterBackend``) validates unchanged.
+    """
+
+    @override
+    def to_python(self, value: object) -> object:
+        """Return ``BLANK_CHOICE`` unchanged, else Django's cleaned string."""
+        if value is BLANK_CHOICE:
+            return value
+        return super().to_python(value)
+
+    @override
+    def validate(self, value: object) -> None:
+        """Accept ``BLANK_CHOICE``; validate every other value as ``ChoiceField`` does."""
+        if value is BLANK_CHOICE:
+            return
+        super().validate(value)
+
+
+class EnumChoiceFilter(ChoiceFilter):
+    """The generated ``exact`` filter of a choice column: every enum member is a predicate.
+
+    ``FilterSet.filter_for_lookup`` returns this class wherever django-filter would generate
+    a ``ChoiceFilter`` (an ``exact`` lookup on a column with ``choices``). Its GraphQL input
+    is the column's generated enum, whose ``BLANK`` member carries ``""`` when the column
+    admits the empty string (``types/converters.py::convert_choices_to_enum``).
+    django-filter's ``Filter.filter`` skips every ``EMPTY_VALUES`` value, so ``exact:
+    BLANK`` would silently widen to every row. The input normalizer
+    (``filters/inputs.py::normalize_input_value``) therefore sends that member as
+    ``BLANK_CHOICE``, which compiles to ``<field> = ''`` exactly as a named member does.
+    Every other value keeps ``ChoiceFilter``'s behavior, so a raw ``""`` (a querystring
+    ``?field=`` under ``DjangoFilterBackend``) and an omitted field still apply no
+    constraint, and so does a plain ``String`` filter's ``exact: ""``.
+    """
+
+    field_class = _EnumChoiceField
+
+    @override
+    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
+        """Apply ``<field> = ''`` for ``BLANK_CHOICE``, else ``ChoiceFilter.filter``."""
+        if value is BLANK_CHOICE:
+            return _apply_lookup_predicate(self, qs, "")
+        return super().filter(qs, value)
 
 
 def validate_range(value: object) -> None:

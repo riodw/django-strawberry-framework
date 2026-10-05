@@ -1346,7 +1346,10 @@ the relation / file rows below are package extensions graphene lacks, not parity
   column's scalar.
 - `JSONField` → `strawberry.scalars.JSON`; `ListField` → `list[<scalar child>]` — the
   `child` is converted **recursively through the same scalar registry**
-  (`ListField(child=IntegerField())` → `list[int]`); a `ListField` whose `child` is a
+  (`ListField(child=IntegerField())` → `list[int]`), and the element is nullable when the
+  child has `allow_null=True` (`ListField(child=CharField(allow_null=True))` →
+  `list[str | None]`, SDL `[String]`, the model `ArrayField` `base_field.null` rule); a
+  `ListField` whose `child` is a
   **relation field or a (nested) serializer** is **out of scope** →
   [`ConfigurationError`][glossary-configurationerror] naming the field (a relation list is
   expressed via `ManyRelatedField` / `PrimaryKeyRelatedField(many=True)`, and a nested
@@ -1492,14 +1495,18 @@ them separately:
   from *explicit `null`* — the difference between "apply the default / treat as not-provided
   under `partial=True`" and "set the value to `None`." An explicitly-supplied `None` is
   **preserved** as `None` in `provided_data`.
-- **`allow_blank` is not a GraphQL concern.** `allow_blank=True` (empty-string acceptance
-  for `CharField`-family fields) is a **serializer validation rule**, not a nullability axis;
-  it is **not** encoded in the GraphQL annotation and stays enforced by the serializer.
+- **`allow_blank` and the generated type.** `allow_blank=True` on a `CharField`-family
+  field is not reflected in the SDL type: `String` already carries `""`, so a required
+  `allow_blank=True` field stays `String!` and the serializer enforces acceptance. On a
+  `ChoiceField` / `MultipleChoiceField` it is reflected: the generated enum carries the
+  `BLANK` member for `""`, because GraphQL enum coercion would otherwise reject the empty
+  string before the serializer runs.
 
 Tests pin all three axes ([Test plan](#test-plan)): `required=True, allow_null=True` (the
 annotation is nullable, omission still triggers DRF's required error, explicit `null` is
 accepted), `required=False, default=…` (omittable, DRF applies the default), and
-`allow_blank=True` (not reflected in the SDL, enforced by the serializer).
+`allow_blank=True` (a `CharField` stays `String!` and the serializer enforces acceptance; a
+`ChoiceField` enum gains `BLANK`).
 
 **Two `Meta` namespaces — the mutation's vs the serializer's.** A
 [`SerializerMutation`][glossary-serializermutation]'s `Meta.fields` / `Meta.exclude`
@@ -2784,8 +2791,10 @@ same transport, different app.
     **omittable-as-missing** (omission reaches DRF as missing so `is_valid()` raises the
     required error; explicit `null` is accepted; the converter does not force a non-null
     field), `required=False, default=…` is **omittable** and lets DRF apply the default (no
-    fabricated GraphQL default), and `allow_blank=True` is **absent from the generated SDL**
-    (a serializer validation rule, not a GraphQL nullability axis); **two declared serializer
+    fabricated GraphQL default), and `allow_blank=True` leaves a `CharField` input
+    `String!` (a serializer validation rule, not a GraphQL nullability axis) while a
+    `ChoiceField` / `MultipleChoiceField` enum gains the `BLANK` member that writes `""`
+    (`createShelfViaMetadataSerializer` `priority: BLANK`); **two declared serializer
     fields colliding on one generated GraphQL input name** (`category` relation → `categoryId`
     clashing with a literal `category_id` → `categoryId`, or `foo_bar` + `fooBar` → `fooBar`)
     raise [`ConfigurationError`][glossary-configurationerror] **before materialization** (the
@@ -3150,7 +3159,10 @@ contract). A serializer-ONLY `ChoiceField` / `MultipleChoiceField` is upgraded a
 `resolve_serializer_field` build site to a GENERATED enum (`MultipleChoiceField` →
 `list[<enum>]`) via the shared `types/converters.py::build_enum_from_choices` core (the SAME
 grouped-form rejection, value-based sanitization, and sanitize-collision guard the model enum
-applies), so a serializer-only choice enum cannot drift from a model-choice enum. The enum is
+applies), so a serializer-only choice enum cannot drift from a model-choice enum.
+`allow_blank=True` passes `include_blank` to that core, so the enum carries the `BLANK`
+member for the `""` DRF's `ChoiceField.to_internal_value` admits (`[BLANK]` decodes to `{""}`
+on a `MultipleChoiceField`). The enum is
 cached by its descriptor-derived name (`<TypeName><Field>Enum`) so two inputs referencing one
 serializer-only choice field share one enum object; a name reused with a different member set
 fails loud. `FilePathField` (a `ChoiceField` subclass with dynamic filesystem-path choices) is
@@ -3370,8 +3382,8 @@ and bind another. `rest_framework/inputs.py::serializer_schema_fingerprint(field
 nested_configs=None)` returns an ordered, hashable tuple over EVERY SDL-affecting axis of each
 writable field: name, class, source, write-only flag, `required`, `allow_null`, relation
 target model, the description inputs (`help_text` + the constraint summary), the enumerable
-choice MEMBERS, and the converter discriminants (`ModelField` wrapped field / `ListField`
-child) — so a hook that changes a description, enum members, or converter behavior without
+choice MEMBERS (the choice values and `allow_blank`), and the converter discriminants
+(`ModelField` wrapped field / `ListField` child class and its `allow_null`) — so a hook that changes a description, enum members, or converter behavior without
 changing the coarse identity still trips the guard. `_validate_meta` captures it on
 `_ValidatedMutationMeta.schema_fingerprint` at class validation; both `build_input` AND
 `input_type_name` read the hook through the ONE guarded path

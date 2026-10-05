@@ -417,6 +417,107 @@ def test_choice_enum_name_derivation_wraps_a_hostile_type_name(choice_fixture_mo
         convert_choices_to_enum(field, _HostileTypeName())
 
 
+def _blank_choice_model(**column_kwargs):
+    """Return a fresh model whose ``status`` column carries ``column_kwargs``."""
+
+    class BlankChoiceFixture(models.Model):
+        status = models.TextField(**column_kwargs)
+
+        class Meta:
+            app_label = _unique_app_label("test_blank_choice_enums")
+
+    return BlankChoiceFixture
+
+
+def _member_map(enum_cls):
+    return {member.name: member.value for member in enum_cls}
+
+
+def test_blank_admitting_text_choice_column_gets_blank_member():
+    """A ``blank=True`` text choice column admits ``""``, so its enum carries ``BLANK``."""
+    model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")], blank=True)
+    enum_cls = convert_choices_to_enum(model._meta.get_field("status"), "BlankFixtureType")
+    assert _member_map(enum_cls) == {"BLANK": "", "good": "good", "worn": "worn"}
+    # The member is prepended, as Django's ``Field.formfield`` prepends its blank choice.
+    assert next(iter(enum_cls)).name == "BLANK"
+
+
+def test_non_blank_text_choice_column_gets_no_blank_member():
+    """A ``blank=False`` choice column does not admit ``""``, so no ``BLANK`` member."""
+    model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")])
+    enum_cls = convert_choices_to_enum(model._meta.get_field("status"), "NonBlankFixtureType")
+    assert _member_map(enum_cls) == {"good": "good", "worn": "worn"}
+
+
+@pytest.mark.parametrize(
+    "field_cls",
+    [models.IntegerField, models.PositiveSmallIntegerField, models.BigIntegerField],
+)
+def test_integer_choice_column_with_blank_gets_no_blank_member(field_cls):
+    """An integer column with ``blank=True`` admits only ``None``, never ``""``."""
+
+    class IntegerBlankChoiceFixture(models.Model):
+        rank = field_cls(choices=[(1, "One"), (2, "Two")], blank=True, null=True)
+
+        class Meta:
+            app_label = _unique_app_label("test_blank_choice_enums")
+
+    field = IntegerBlankChoiceFixture._meta.get_field("rank")
+    enum_cls = convert_choices_to_enum(field, "IntegerBlankFixtureType")
+    assert _member_map(enum_cls) == {"MEMBER_1": 1, "MEMBER_2": 2}
+
+
+@pytest.mark.parametrize(
+    "choices",
+    [[("", "Unassessed"), ("good", "Good")], [("good", "Good"), ("", "Unassessed")]],
+    ids=["declared-first", "declared-last"],
+)
+def test_blank_column_with_declared_empty_choice_has_one_blank_member(choices):
+    """A ``blank=True`` column that already declares ``""`` keeps exactly one ``BLANK``."""
+    model = _blank_choice_model(choices=choices, blank=True)
+    enum_cls = convert_choices_to_enum(model._meta.get_field("status"), "DeclaredEmptyFixtureType")
+    assert _member_map(enum_cls) == {"BLANK": "", "good": "good"}
+
+
+def test_declared_empty_choice_is_not_duplicated_by_include_blank():
+    """A declared ``("", label)`` already is the blank member; ``include_blank`` adds none."""
+    enum_cls = build_enum_from_choices(
+        [("", "Unassessed"), ("good", "Good")],
+        "DeclaredBlankEnum",
+        source_label="Fixture.status",
+        include_blank=True,
+    )
+    assert _member_map(enum_cls) == {"BLANK": "", "good": "good"}
+
+
+def test_declared_blank_value_collides_with_blank_member():
+    """A declared ``"BLANK"`` value and the blank member sanitize to one name: rejected."""
+    with pytest.raises(ConfigurationError, match=r"sanitize to the same enum member: 'BLANK'"):
+        build_enum_from_choices(
+            [("BLANK", "Blank"), ("good", "Good")],
+            "BlankCollisionEnum",
+            source_label="Fixture.status",
+            include_blank=True,
+        )
+    # Without the blank member the declared value is an ordinary member.
+    enum_cls = build_enum_from_choices(
+        [("BLANK", "Blank"), ("good", "Good")],
+        "BlankValueEnum",
+        source_label="Fixture.status",
+    )
+    assert _member_map(enum_cls) == {"BLANK": "BLANK", "good": "good"}
+
+
+def test_nullable_blank_choice_column_keeps_null_and_blank_distinct():
+    """``null=True, blank=True`` publishes a nullable enum whose ``BLANK`` member is ``""``."""
+    model = _blank_choice_model(choices=[("good", "Good")], blank=True, null=True)
+    annotation = convert_scalar(model._meta.get_field("status"), "NullableBlankFixtureType")
+    enum_cls = registry.get_enum(model, "status")
+    assert enum_cls is not None
+    assert annotation == enum_cls | None
+    assert enum_cls["BLANK"].value == ""
+
+
 def test_choice_member_name_sanitization():
     """Hyphenated, leading-digit, and keyword choice values produce safe identifiers.
 
@@ -430,8 +531,8 @@ def test_choice_member_name_sanitization():
     # Integer values from IntegerChoices.
     assert _sanitize_member_name(1) == "MEMBER_1"
     assert _sanitize_member_name(42) == "MEMBER_42"
-    # Empty / pure-symbol input still produces something importable.
-    assert _sanitize_member_name("") == "MEMBER_"
+    # The empty string (the value a blank-admitting field stores) is named ``BLANK``.
+    assert _sanitize_member_name("") == "BLANK"
 
 
 def test_sanitize_member_name_neutralizes_python_enum_reserved_shapes():

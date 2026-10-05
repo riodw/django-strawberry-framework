@@ -1436,7 +1436,7 @@ def _scope_relation_querysets_to_visibility(
     _scope_specs_over_serializer(_write_surface_specs(mutation_cls), serializer, info)
 
 
-def _pin_validator_querysets(serializer: Any, alias: str, *, path: str = "") -> None:
+def _pin_validator_querysets(serializer: DRFField, alias: str, *, path: str = "") -> None:
     """Recursively pin every queryset-backed DRF validator to the write alias.
 
     DRF uniqueness validators perform database reads during ``is_valid()``. Field
@@ -1469,7 +1469,8 @@ def _pin_validator_querysets(serializer: Any, alias: str, *, path: str = "") -> 
     def _pin_field(field: DRFField, field_path: str) -> None:
         field.validators = _pinned(field.validators, f"{serializer_name}.{field_path}")
         if isinstance(field, serializers.ListSerializer):
-            _pin_validator_querysets(field.child, alias, path=field_path)
+            # ``ListSerializer.__init__`` asserts a ``child``; drf-stubs keep the class-level None.
+            _pin_validator_querysets(cast("DRFField", field.child), alias, path=field_path)
             return
         if isinstance(field, serializers.BaseSerializer):
             _pin_validator_querysets(field, alias, path=field_path)
@@ -1483,6 +1484,10 @@ def _pin_validator_querysets(serializer: Any, alias: str, *, path: str = "") -> 
 
     owner = f"{serializer_name}{f'.{path}' if path else ''}"
     serializer.validators = _pinned(serializer.validators, owner)
+    if not isinstance(serializer, serializers.Serializer):
+        # A plain ``BaseSerializer`` (a read-only ``source="*"`` renderer, a list
+        # child) declares no ``fields``; its own validators are pinned above.
+        return
     for field_name, field in serializer.fields.items():
         field_path = f"{path}.{field_name}" if path else field_name
         _pin_field(field, field_path)

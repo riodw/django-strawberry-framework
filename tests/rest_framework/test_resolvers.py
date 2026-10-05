@@ -47,6 +47,7 @@ import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
+from apps.products.services import seed_data
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.http import HttpRequest
@@ -3596,6 +3597,44 @@ def test_validator_querysets_are_recursively_pinned_to_write_alias():
     assert serializer.fields["name"].validators[0].queryset._db == "shard_b"
     assert serializer.validators[0].queryset._db == "shard_b"
     assert serializer.fields["child"].fields["name"].validators[0].queryset._db == "shard_b"
+
+
+@pytest.mark.django_db
+def test_validator_pinning_leaves_a_read_only_base_serializer_field_alone():
+    """A nested plain ``BaseSerializer`` declares no ``.fields``, so the pinning walk stops at it.
+
+    Class validation drops read-only fields from the write surface, so a mutation over a
+    serializer that renders through a ``BaseSerializer`` subclass (``source="*"``) declares
+    cleanly; its write must reach ``is_valid()`` instead of raising on the pinning walk.
+    """
+    seed_data(1)
+
+    class SummarySerializer(serializers.BaseSerializer):
+        def to_representation(self, instance):
+            return {"name": instance.name}
+
+    class SummarizedItemSerializer(serializers.ModelSerializer):
+        summary = SummarySerializer(source="*", read_only=True)
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "summary")
+
+    category = product_models.Category.objects.first()
+    mutation_cls = _bind_item_serializer_mutation(SummarizedItemSerializer)
+    request = HttpRequest()
+    request.user = SimpleNamespace(username="u", is_authenticated=True)
+    info = SimpleNamespace(context=SimpleNamespace(request=request))
+
+    with write_pipeline("default", lock=False):
+        saved = serializer_resolvers._serializer_write_step(
+            mutation_cls,
+            info,
+            None,
+            {"name": "Summarized", "category": category.pk},
+        )
+    assert isinstance(saved, product_models.Item)
+    assert saved.name == "Summarized"
 
 
 def test_validator_queryset_pinning_replaces_shared_validator_per_serializer_instance():

@@ -5,6 +5,8 @@ MANDATORY FIRST ACTION EVERY SESSION NO EXCEPTIONS: READ START.md before first a
 
 This holds even when the prompt has its own instructions or names other files to read — do that work UNDER those rules never instead of them; if you already acted without reading them stop and read them now
 
+SUBAGENT MODEL + EFFORT: the Agent tool has a `model` parameter but NO effort parameter; reasoning effort (the only per-agent "temperature" Claude Code has) is set by `effort:` in the agent type's `.claude/agents/<name>.md` frontmatter, so a requested effort means dispatching (creating first if needed) an agent type whose frontmatter sets it, never `general-purpose`; full rule in AGENTS.md
+
 Repo: django-strawberry-framework — DRF-idiom Meta-class GraphQL framework for Django on Strawberry (the deliberate alternative to strawberry-graphql-django's decorator API); package source `django_strawberry_framework/` example project `examples/fakeshop/`
 
 <no_performance>

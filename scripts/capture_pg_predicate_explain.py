@@ -9,11 +9,12 @@ to-many path compiles to, reads the SQL straight off each compiled queryset,
 runs ``EXPLAIN (ANALYZE, BUFFERS)`` on it against a real Postgres server, and
 writes ``docs/row-preserving-predicates-part1-pg-explain.md``:
 
-- a routed leaf: fakeshop ``CategoryFilter``'s framework-generated reverse-FK
-  leaf ``items__name__icontains``, whose path no ``RelatedFilter`` declares, so
-  ``FilterSet._apply_flat_leaves`` routes it through ``optimizer/predicates.py``'s
-  ``correlated_inner_root`` + ``attach_exists`` (one ``EXISTS`` correlated on the
-  outer primary key);
+- a routed leaf: fakeshop ``ScalarSpecimenFilter``'s framework-generated
+  reverse-FK relation key ``children``, whose relation no ``RelatedFilter``
+  declares and whose target type (``ScalarSpecimenType``) keeps the identity
+  ``get_queryset``, so no visibility applies and ``FilterSet._apply_flat_leaves``
+  routes it through ``optimizer/predicates.py``'s ``correlated_inner_root`` +
+  ``attach_exists`` (one ``EXISTS`` correlated on the outer primary key);
 - a walked leaf: fakeshop ``LoanFilter``'s ``book__loans__patron__email__icontains``
   (the Medtrics reverse-FK reproduction shape), whose path walks the declared
   ``book``, ``loans`` and ``patron`` branches, so each hop is one correlated
@@ -42,9 +43,11 @@ vendor). The filter sets run with no resolver ``info``, so every target type's
 
 from __future__ import annotations
 
+import datetime
 import importlib
 import re
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,11 +57,12 @@ ARTIFACT_PATH = REPO_ROOT / "docs" / "row-preserving-predicates-part1-pg-explain
 
 NEEDLE = "cardio"
 
-# The routed production leaf: a framework-generated reverse-FK path declared on
-# fakeshop's ``CategoryFilter.Meta.fields`` with no ``RelatedFilter`` over ``items``.
-CATEGORY_LEAF = "items__name__icontains"
-N_CATEGORIES = 60
-ITEMS_PER_CATEGORY = 5
+# The routed production leaf: a framework-generated reverse-FK relation key declared
+# on fakeshop's ``ScalarSpecimenFilter.Meta.fields``; no ``RelatedFilter`` declares
+# ``children`` and ``ScalarSpecimenType`` scopes nothing, so the leaf is not walked.
+SPECIMEN_LEAF = "children"
+N_PARENTS = 60
+CHILDREN_PER_PARENT = 5
 
 # The walked production leaf: a deep to-many path declared on fakeshop's
 # ``LoanFilter.Meta.fields`` (the Medtrics reverse-FK reproduction: Loan -> book
@@ -170,33 +174,44 @@ def _seed_library() -> dict[str, int]:
     }
 
 
-def _seed_products() -> dict[str, int]:
-    """Seed a deterministic products dataset; return row counts for the artifact."""
-    from apps.products.models import Category, Item
+def _seed_scalars() -> tuple[dict[str, int], list[int]]:
+    """Seed deterministic parent / child specimens; return row counts and the routed needle.
 
-    categories = Category.objects.bulk_create(
-        Category(name=f"pg-explain-{index}") for index in range(N_CATEGORIES)
-    )
-    items = Item.objects.bulk_create(
-        Item(
-            name=(
-                f"cardio-{category_index}-{offset}"
-                if (category_index * ITEMS_PER_CATEGORY + offset) % CARDIO_EVERY == 0
-                else f"neuro-{category_index}-{offset}"
-            ),
-            category=category,
+    The needle is the primary key of every ``CARDIO_EVERY``-th child, the list the
+    ``children`` relation key is given.
+    """
+    from apps.scalars.models import ScalarSpecimen
+
+    moment = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+    def specimen(label: str, parent: Any = None) -> Any:
+        return ScalarSpecimen(
+            label=label,
+            occurred_on=moment.date(),
+            occurred_at=moment,
+            occurred_time=moment.time(),
+            external_id=uuid.UUID(int=0),
+            parent=parent,
         )
-        for category_index, category in enumerate(categories)
-        for offset in range(ITEMS_PER_CATEGORY)
+
+    parents = ScalarSpecimen.objects.bulk_create(
+        specimen(f"pg-explain-{index}") for index in range(N_PARENTS)
     )
-    return {
-        "categories": len(categories),
-        "items": len(items),
-        "cardio_items": sum(1 for item in items if item.name.startswith("cardio")),
-    }
+    children = ScalarSpecimen.objects.bulk_create(
+        specimen(f"pg-explain-{parent_index}-{offset}", parent)
+        for parent_index, parent in enumerate(parents)
+        for offset in range(CHILDREN_PER_PARENT)
+    )
+    needle = [child.pk for index, child in enumerate(children) if index % CARDIO_EVERY == 0]
+    return {"parents": len(parents), "children": len(children), "needle": len(needle)}, needle
 
 
-def _production_qs(filterset_cls: Any, leaf: str, root: Any) -> Any:
+def _production_qs(
+    filterset_cls: Any,
+    leaf: str,
+    root: Any,
+    value: object = NEEDLE,
+) -> Any:
     """Instantiate a real fakeshop filter set and return its compiled ``.qs``.
 
     The genuine production generation + apply path: the metaclass /
@@ -209,7 +224,7 @@ def _production_qs(filterset_cls: Any, leaf: str, root: Any) -> Any:
 
     filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
     filterset = filterset_cls(
-        data={leaf: NEEDLE},
+        data={leaf: value},
         queryset=root.order_by("id"),
         request=HttpRequest(),
     )
@@ -369,8 +384,8 @@ def main() -> None:
     importlib.import_module("config.schema")
     from apps.library.filters import LoanFilter
     from apps.library.models import Book, Loan
-    from apps.products.filters import CategoryFilter
-    from apps.products.models import Category
+    from apps.scalars.filters import ScalarSpecimenFilter
+    from apps.scalars.models import ScalarSpecimen
 
     with connection.cursor() as cursor:
         cursor.execute("SELECT version()")
@@ -380,32 +395,36 @@ def main() -> None:
     # throwaway database is left exactly as migrated.
     with transaction.atomic():
         library_counts = _seed_library()
-        product_counts = _seed_products()
+        specimen_counts, needle = _seed_scalars()
         with connection.cursor() as cursor:
             for table in (
                 "library_loan",
                 "library_book",
                 "library_patron",
-                "products_category",
-                "products_item",
+                "scalars_scalarspecimen",
             ):
                 cursor.execute(f"ANALYZE {table}")
 
         # Routed leaf: the oracle is the leaf invoked directly on the outer
         # queryset, then deduplicated (the JOIN + DISTINCT idiom the routing replaces).
-        routed_qs = _production_qs(CategoryFilter, CATEGORY_LEAF, Category.objects.all())
-        routed_leaf = CategoryFilter.get_filters()[CATEGORY_LEAF]
+        routed_qs = _production_qs(
+            ScalarSpecimenFilter,
+            SPECIMEN_LEAF,
+            ScalarSpecimen.objects.all(),
+            needle,
+        )
+        routed_leaf = ScalarSpecimenFilter.get_filters()[SPECIMEN_LEAF]
         routed = _capture(
             routed_qs,
             sorted(
-                routed_leaf.filter(Category.objects.all(), NEEDLE)
+                routed_leaf.filter(ScalarSpecimen.objects.all(), needle)
                 .distinct()
                 .values_list("pk", flat=True),
             ),
         )
-        _assert_row_preserving(routed, routed_qs, "products_category")
+        _assert_row_preserving(routed, routed_qs, "scalars_scalarspecimen")
         assert routed.exists_count == 1, f"expected exactly one EXISTS, got {routed.exists_count}"
-        assert '= ("products_category"."id")' in routed.display_sql, (
+        assert '= ("scalars_scalarspecimen"."id")' in routed.display_sql, (
             "the routed EXISTS is not correlated on the outer primary key"
         )
 
@@ -475,7 +494,7 @@ def main() -> None:
     lines.append("")
     lines.append(
         "Each SQL statement below is read directly off the compiled queryset a real "
-        "fakeshop filter set produces (`examples/fakeshop/apps/products/filters.py`, "
+        "fakeshop filter set produces (`examples/fakeshop/apps/scalars/filters.py`, "
         "`examples/fakeshop/apps/library/filters.py`), with the composed fakeshop "
         "schema loaded so every declared branch resolves its target type. No SQL is "
         "hand-written; each EXPLAIN executes the exact parameterized statement "
@@ -487,11 +506,18 @@ def main() -> None:
 
     lines.append("## Routed leaf: one `EXISTS` correlated on the outer primary key")
     lines.append("")
-    lines.append("- FilterSet: `apps.products.filters.CategoryFilter` (root model `Category`)")
-    lines.append(f"- Active generated leaf: `{CATEGORY_LEAF}` = `{NEEDLE!r}`")
     lines.append(
-        "- Relation path: `Category.items` (to-many reverse FK) -> `Item.name` "
-        "(scalar); no `RelatedFilter` declares `items`, so no target visibility applies",
+        "- FilterSet: `apps.scalars.filters.ScalarSpecimenFilter` (root model `ScalarSpecimen`)",
+    )
+    lines.append(
+        f"- Active generated relation key: `{SPECIMEN_LEAF}` = the primary keys of "
+        f"{len(needle)} children",
+    )
+    lines.append(
+        "- Relation path: `ScalarSpecimen.children` (to-many reverse FK onto the same "
+        "model); no `RelatedFilter` declares `children` and `ScalarSpecimenType` keeps "
+        "the identity `get_queryset`, so no target visibility applies and the leaf is "
+        "not walked",
     )
     lines.append(
         "- Applicator: `FilterSet._apply_flat_leaves` routes the eligible "
@@ -501,7 +527,7 @@ def main() -> None:
         "(`_invoke_suppressing_framework_distinct`).",
     )
     lines.append(
-        "- Dedup oracle: the same leaf invoked directly on `Category.objects.all()`, "
+        "- Dedup oracle: the same leaf invoked directly on `ScalarSpecimen.objects.all()`, "
         "then `.distinct()` (the membership `JOIN` + `DISTINCT` idiom the routing replaces).",
     )
     lines.append("")
@@ -510,13 +536,13 @@ def main() -> None:
             routed,
             routed_qs,
             f"- exactly one `EXISTS`: **{routed.exists_count == 1}**, correlated on the "
-            'outer primary key (`U0."id" = ("products_category"."id")`): **True**',
+            'outer primary key (`= ("scalars_scalarspecimen"."id")`): **True**',
         ),
     )
     lines.append(
-        "The correlated distinct-free inner query -- it re-enters `products_category` "
-        "as `U0`, joins the membership table inside the subquery, and carries no "
-        "`SELECT DISTINCT`:",
+        "The correlated distinct-free inner query -- it re-enters "
+        "`scalars_scalarspecimen` as `U0`, joins the children inside the subquery, and "
+        "carries no `SELECT DISTINCT`:",
     )
     lines.append("")
     _sql_block(lines, _extract_exists_subquery(routed.display_sql))
@@ -598,8 +624,9 @@ def main() -> None:
     lines.append(f"- Python: {sys.version.split()[0]}")
     lines.append(
         "- Seeded (deterministic, rolled back after capture): "
-        f"{product_counts['categories']} categories, {product_counts['items']} items "
-        f"({product_counts['cardio_items']} with a `cardio` name); "
+        f"{specimen_counts['parents']} parent specimens with "
+        f"{specimen_counts['children']} children ({specimen_counts['needle']} named by "
+        "the relation key); "
         f"{library_counts['books']} books ({library_counts['repair_books']} in repair), "
         f"{library_counts['patrons']} patrons "
         f"({library_counts['cardio_patrons']} with a `cardio` email), "

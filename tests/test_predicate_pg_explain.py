@@ -4,9 +4,10 @@ A flat filter leaf over a to-many path compiles to one of two shapes, both
 captured by ``scripts/capture_pg_predicate_explain.py`` (artifact
 ``docs/row-preserving-predicates-part1-pg-explain.md``) and pinned here:
 
-- a routed leaf (``CategoryFilter``'s generated ``items__name__icontains``, whose
-  path no ``RelatedFilter`` declares) is one ``EXISTS`` correlated on the outer
-  primary key (``optimizer/predicates.py::correlated_inner_root`` +
+- a routed leaf (``ScalarSpecimenFilter``'s generated reverse-FK relation key
+  ``children``, whose relation no ``RelatedFilter`` declares and whose target
+  type scopes nothing, so it is not walked) is one ``EXISTS`` correlated on the
+  outer primary key (``optimizer/predicates.py::correlated_inner_root`` +
   ``attach_exists``);
 - a walked leaf (``LoanFilter``'s ``book__loans__patron__email__icontains``,
   every relation of which a ``RelatedFilter`` declares) is one ``EXISTS`` per
@@ -22,13 +23,15 @@ The whole module is ``@pytest.mark.pg`` so the default SQLite suite auto-skips
 it (root ``conftest.py``).
 """
 
+import datetime
 import re
+import uuid
 
 import pytest
 from apps.library.filters import LoanFilter
 from apps.library.models import Book, Branch, Loan, Patron, Shelf
-from apps.products.filters import CategoryFilter
-from apps.products.models import Category, Item
+from apps.scalars.filters import ScalarSpecimenFilter
+from apps.scalars.models import ScalarSpecimen
 from django.db import connection as db_connection
 from django.http import HttpRequest
 from schema_reload import reload_all_project_schemas
@@ -36,7 +39,7 @@ from schema_reload import reload_all_project_schemas
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
 _NEEDLE = "cardio"
-_CATEGORY_LEAF = "items__name__icontains"
+_SPECIMEN_LEAF = "children"
 _LOAN_LEAF = "book__loans__patron__email__icontains"
 _LOAN_HOPS = ("book", "loans", "patron")
 
@@ -81,20 +84,38 @@ def _seed_library():
             )
 
 
-def _seed_products():
-    """Categories over items, every fourth item named ``cardio``."""
-    for category_index in range(10):
-        category = Category.objects.create(name=f"pg-explain-{category_index}")
-        for offset in range(4):
-            prefix = "cardio" if (category_index + offset) % 4 == 0 else "neuro"
-            Item.objects.create(name=f"{prefix}-{category_index}-{offset}", category=category)
+def _seed_specimens():
+    """Parent specimens with four children each; return the pks of every fourth child."""
+    moment = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    needle = []
+    for parent_index in range(10):
+        parent = None
+        for offset in range(5):
+            specimen = ScalarSpecimen.objects.create(
+                label=f"pg-explain-{parent_index}-{offset}",
+                occurred_on=moment.date(),
+                occurred_at=moment,
+                occurred_time=moment.time(),
+                external_id=uuid.UUID(int=0),
+                parent=parent,
+            )
+            if parent is None:
+                parent = specimen
+            elif (parent_index + offset) % 4 == 0:
+                needle.append(specimen.pk)
+    return needle
 
 
-def _production_qs(filterset_cls, leaf, root):
-    """Return the compiled ``.qs`` of a real fakeshop filter set for ``{leaf: _NEEDLE}``."""
+def _production_qs(
+    filterset_cls,
+    leaf,
+    root,
+    value=_NEEDLE,
+):
+    """Return the compiled ``.qs`` of a real fakeshop filter set for ``{leaf: value}``."""
     filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
     return filterset_cls(
-        data={leaf: _NEEDLE},
+        data={leaf: value},
         queryset=root.order_by("id"),
         request=HttpRequest(),
     ).qs
@@ -124,15 +145,15 @@ def _top_actual_rows(qs):
 
 def test_routed_leaf_is_a_single_distinct_free_exists_on_the_outer_pk():
     """The routed leaf compiles to one distinct-free ``EXISTS`` correlated on the outer pk."""
-    _seed_products()
-    qs = _production_qs(CategoryFilter, _CATEGORY_LEAF, Category.objects.all())
+    needle = _seed_specimens()
+    qs = _production_qs(ScalarSpecimenFilter, _SPECIMEN_LEAF, ScalarSpecimen.objects.all(), needle)
     sql = str(qs.query)
 
     assert qs.query.distinct is False
     assert sql.upper().count("EXISTS") == 1
     assert "DISTINCT" not in sql.upper()
-    assert _referenced_tables(qs) == {"products_category"}
-    assert '= ("products_category"."id")' in sql
+    assert _referenced_tables(qs) == {"scalars_scalarspecimen"}
+    assert '= ("scalars_scalarspecimen"."id")' in sql
 
 
 def test_walked_leaf_is_one_distinct_free_exists_per_declared_hop():
@@ -165,21 +186,27 @@ def test_explain_analyze_buffers_shows_no_outer_fan_out(shape):
     raw-relation answer by the matches behind a hidden book.
     """
     if shape == "routed":
-        _seed_products()
-        qs = _production_qs(CategoryFilter, _CATEGORY_LEAF, Category.objects.all())
-        leaf = CategoryFilter.get_filters()[_CATEGORY_LEAF]
-        oracle_root = Category.objects.all()
+        value = _seed_specimens()
+        qs = _production_qs(
+            ScalarSpecimenFilter,
+            _SPECIMEN_LEAF,
+            ScalarSpecimen.objects.all(),
+            value,
+        )
+        leaf = ScalarSpecimenFilter.get_filters()[_SPECIMEN_LEAF]
+        oracle_root = ScalarSpecimen.objects.all()
     else:
+        value = _NEEDLE
         _seed_library()
         qs = _production_qs(LoanFilter, _LOAN_LEAF, Loan.objects.all())
         leaf = LoanFilter.get_filters()[_LOAN_LEAF]
         oracle_root = Loan.objects.exclude(book__circulation_status=Book.CirculationStatus.REPAIR)
-        raw = set(leaf.filter(Loan.objects.all(), _NEEDLE).values_list("pk", flat=True))
+        raw = set(leaf.filter(Loan.objects.all(), value).values_list("pk", flat=True))
         assert len(raw) > qs.count()
 
     production_pks = list(qs.values_list("pk", flat=True))
     oracle_pks = sorted(
-        leaf.filter(oracle_root, _NEEDLE).distinct().values_list("pk", flat=True),
+        leaf.filter(oracle_root, value).distinct().values_list("pk", flat=True),
     )
     assert production_pks == oracle_pks
     assert production_pks  # the seed guarantees matches, so the proof is non-vacuous.

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cache
 from types import MappingProxyType
@@ -81,7 +81,7 @@ from ..utils.input_values import (
 )
 from ..utils.inputs import FILTERSET_FIELDS_ALIAS, promote_set_meta_fields
 from ..utils.permissions import (
-    DeclaredRelationHop,
+    RelationHop,
     relation_path_gates,
     walk_declared_relation_path,
 )
@@ -90,12 +90,15 @@ from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     base_queryset,
+    model_for,
+    relation_path_visibility_types,
     run_in_one_sync_boundary,
 )
 from ..utils.relations import (
     ClassifiedPath,
     classify_path,
     is_many_side_relation_kind,
+    leading_relation_hops,
     path_traverses_to_many,
     relation_kind,
 )
@@ -1010,12 +1013,13 @@ def _candidate_metadata_for(
       there is a genuine framework/configuration defect and PROPAGATES (never
       caught);
     - an EXPANDED leaf carries a relation PREFIX composed of one or more declared
-      ``RelatedFilter`` ``field_name`` segments, any of which may legitimately be
-      a non-model path (a declared ``field_name`` must never turn a
-      working declaration into a finalization failure). An unresolvable expanded
-      path therefore FAILS CLOSED (returns ``None`` -- no row), matching the
-      overriding invariant that the failure mode is a missed optimization, never
-      a changed result set.
+      ``RelatedFilter`` ``field_name`` segments (each a path of relations,
+      ``_require_relation_path``) followed by the child leaf's own path, which
+      the child filter set resolves against ITS model and the parent may not
+      (a child keyed on another model than the relation reaches). An
+      unresolvable expanded path therefore FAILS CLOSED (returns ``None`` -- no
+      row), matching the overriding invariant that the failure mode is a missed
+      optimization, never a changed result set.
 
     Eligibility is read off the plan + instance per
     ``CandidateFilterMetadata.eligible``: a many-side path, no consumer ``method``,
@@ -1324,6 +1328,7 @@ def _restrict_to_related(
     queryset: models.QuerySet[_M],
     relation: str,
     related_rows: models.QuerySet[models.Model],
+    via: Sequence[models.QuerySet[models.Model] | None] = (),
 ) -> models.QuerySet[_M]:
     """Keep the rows of ``queryset`` whose ``relation`` reaches a row of ``related_rows``.
 
@@ -1336,18 +1341,21 @@ def _restrict_to_related(
     so each restriction a filter set adds is one semi-join of its own. A nested
     branch and a flat leaf walking the branch both restrict through it, so the
     two spellings answer alike. The subquery compiles on ``queryset``'s
-    database alias, the one its intermediate rows are read on too.
+    database alias, the one its intermediate rows are read on too. ``via``
+    holds the rows each intermediate model of a ``relation`` spanning several
+    relations may pass through (``FilterSet._via_rows``).
     """
-    return queryset.filter(_reaches_related(queryset, relation, related_rows))
+    return queryset.filter(_reaches_related(queryset, relation, related_rows, via))
 
 
 def _reaches_related(
     queryset: models.QuerySet[_M],
     relation: str,
     related_rows: models.QuerySet[models.Model],
+    via: Sequence[models.QuerySet[models.Model] | None] = (),
 ) -> Exists:
     """Return the ``_restrict_to_related`` test itself, for a caller that composes or negates it."""
-    return related_rows_exist(queryset.model, relation, related_rows, using=queryset.db)
+    return related_rows_exist(queryset.model, relation, related_rows, using=queryset.db, via=via)
 
 
 def _admitted_rows(
@@ -1409,6 +1417,7 @@ def _restrict_through_branch(
     declared_attr: str,
     related_filter: RelatedFilter,
     child_rows: models.QuerySet[models.Model] | None,
+    via: Sequence[models.QuerySet[models.Model] | None] = (),
 ) -> models.QuerySet[_M]:
     """Keep the rows of ``queryset`` whose branch relation reaches an admitted child row.
 
@@ -1416,9 +1425,10 @@ def _restrict_through_branch(
     that declares it (``owner``, under ``declared_attr``), for a nested branch
     and a flat leaf walking the branch alike: ``_admitted_rows`` intersects
     ``child_rows`` with the declaration's explicit ``queryset=``, then
-    ``_restrict_to_related`` keeps the parents reaching a row of the result.
-    With neither ``child_rows`` nor an explicit queryset, ``queryset`` is
-    returned unchanged.
+    ``_restrict_to_related`` keeps the parents reaching a row of the result,
+    through the ``via`` rows of each intermediate model a multi-relation
+    ``field_name`` crosses. With neither ``child_rows`` nor an explicit
+    queryset, ``queryset`` is returned unchanged.
 
     The restriction follows the relation's ORM path (``related_filter.field_name``),
     NOT the declared attribute name. The two diverge whenever a consumer gives a
@@ -1430,7 +1440,7 @@ def _restrict_through_branch(
     admitted = _admitted_rows(owner, declared_attr, related_filter, child_rows)
     if admitted is None:
         return queryset
-    return _restrict_to_related(queryset, _bound_field_name(related_filter), admitted)
+    return _restrict_to_related(queryset, _bound_field_name(related_filter), admitted, via)
 
 
 def _relation_key_value(value: object, attname: str) -> object:
@@ -1451,20 +1461,20 @@ def _relation_key_value(value: object, attname: str) -> object:
 
 @dataclass(frozen=True)
 class _LeafChain:
-    """How an active flat leaf walking declared hops reads the related rows.
+    """How an active flat leaf walking relation hops reads the related rows.
 
     ``terminal`` runs over the visible rows of the last of ``hops`` (over the
     parent's own rows when ``hops`` is empty), already bound to the set whose
-    rows those are. ``key_hop`` is the last declared hop of a forward relation
-    key leaf, which ``terminal`` compares on the rows that hold the key: a row
-    it matches must also reach a visible row of ``key_hop``. ``key_attname``
+    rows those are. ``key_hop`` is the last hop of a forward relation key leaf,
+    which ``terminal`` compares on the rows that hold the key: a row it matches
+    must also reach a visible row of ``key_hop``. ``key_attname``
     names the target key column a to-many relation key leaf was re-read against
     (``_relation_key_value``).
     """
 
-    hops: tuple[DeclaredRelationHop, ...]
+    hops: tuple[RelationHop, ...]
     terminal: Filter
-    key_hop: DeclaredRelationHop | None = None
+    key_hop: RelationHop | None = None
     key_attname: str | None = None
 
     def terminal_value(self, value: object) -> object:
@@ -1472,6 +1482,83 @@ class _LeafChain:
         if self.key_attname is None:
             return value
         return _relation_key_value(value, self.key_attname)
+
+
+def _hop_model(hop: RelationHop) -> type[models.Model]:
+    """Return the model whose rows a resolved hop reaches.
+
+    A declared hop's target set's ``Meta.model``; an undeclared hop's ``model``.
+    """
+    if hop.declared:
+        # A resolved branch target is a ``FilterSet`` declaring ``Meta.model``.
+        return cast("type[models.Model]", cast("type[FilterSet]", hop.target)._meta.model)
+    # The walk records the model of every undeclared hop it appends.
+    return cast("type[models.Model]", hop.model)
+
+
+def _hop_relation(hop: RelationHop) -> str:
+    """Return the ORM path a hop crosses from the model it starts on."""
+    if hop.declared:
+        return _bound_field_name(cast("RelatedFilter", hop.related_obj))
+    return hop.declared_attr
+
+
+def _hop_source_model(hops: tuple[RelationHop, ...], index: int) -> type[models.Model]:
+    """Return the model ``hops[index]`` starts on: its owner set's model, else the previous hop's."""
+    owner = hops[index].owner
+    if owner is not None:
+        return cast("type[models.Model]", cast("type[FilterSet]", owner)._meta.model)
+    # Only an undeclared hop following another undeclared hop has no owner.
+    return _hop_model(hops[index - 1])
+
+
+class _UndeclaredHopSet:
+    """The filter-set face a walked leaf's terminal reads over an undeclared hop's rows.
+
+    No filter set owns the rows a relation no ``RelatedFilter`` declares reaches,
+    so the copy of a leaf that runs over them (``FilterSet._bound_terminal``) is
+    bound to this instead of a child filter set instance: ``_meta.model`` is the
+    hop's model (a raw-key or integer terminal coerces through it),
+    ``_owner_definition`` the definition of the type the rows answer for (a
+    GlobalID terminal validates against it) and ``request`` the walking set's.
+    """
+
+    def __init__(self, hop: RelationHop, request: object) -> None:
+        """Bind the face to ``hop``'s model and target type, with the walking set's request."""
+        self._meta = filterset.FilterSetOptions()
+        self._meta.model = _hop_model(hop)
+        self._owner_definition: DjangoTypeDefinition | None = (
+            hop.target_type.__django_strawberry_definition__
+            if hop.target_type is not None
+            else None
+        )
+        self.request = request
+
+
+def _require_relation_path(owner: type[FilterSet], declared_attr: str, f: RelatedFilter) -> None:
+    """Refuse a ``RelatedFilter`` whose ``field_name`` is not a path of relations on ``owner``'s model.
+
+    A branch restricts its parent through every segment of its ``field_name``
+    (``optimizer/predicates.py::related_rows_exist``), so each segment must be a
+    relation Django can join (``utils/relations.py::leading_relation_hops`` covers
+    them all): a column (``title__shelf``), a name the model does not carry, or
+    a ``GenericForeignKey`` is a declaration error, raised when the expansion is
+    built rather than on the first request that supplies the branch. Reads the
+    owner's model and the declaration's ``field_name`` only, never the target
+    filter set, so a lazily resolved target is unaffected.
+    """
+    field_name = _bound_field_name(f)
+    # Only model-backed sets expand their ``related_filters`` (see ``get_filters``).
+    model = cast("type[models.Model]", owner._meta.model)
+    hops = leading_relation_hops(model, field_name)
+    segments = field_name.split(LOOKUP_SEP)
+    if len(hops) < len(segments):
+        raise ConfigurationError(
+            f"FilterSet {owner.__qualname__}: RelatedFilter {declared_attr!r} has "
+            f"field_name {field_name!r}, but {segments[len(hops)]!r} is not a relation "
+            f"of the model the path has reached from {model.__qualname__}. A "
+            "RelatedFilter's field_name must name a path of relations.",
+        )
 
 
 def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Filter]:
@@ -1670,7 +1757,9 @@ class FilterSet(
     # async-only ``get_queryset`` never runs inside the sync ``.qs`` read; the
     # sync path derives each entry on first use. ``None`` until first read
     # (``_hop_visibility``).
-    _flat_hop_visibility: dict[tuple[int, str | None], models.QuerySet[models.Model]] | None = None
+    _flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]] | None = (
+        None
+    )
 
     # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
     # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
@@ -1748,6 +1837,7 @@ class FilterSet(
                     OrderedDict(),
                 )
                 for filter_name, f in related_filters_val.items():
+                    _require_relation_path(cls, filter_name, f)
                     expanded = _expand_related_filter(filter_name, f)
                     all_filters.update(expanded)
                 # Build candidate metadata in THIS same expansion pass, over the
@@ -3297,7 +3387,7 @@ class FilterSet(
         *,
         parent_db: str | None = None,
         _depth: int = 0,
-        flat_hop_visibility: dict[tuple[int, str | None], models.QuerySet[models.Model]]
+        flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
         | None = None,
     ) -> dict[int, dict[str, models.QuerySet[models.Model]]]:
         """Pre-walk logical branches and derive each branch's visibility map.
@@ -3533,19 +3623,23 @@ class FilterSet(
     def _flat_leaf_walk(
         cls,
         filter_instance: Filter,
-    ) -> tuple[tuple[DeclaredRelationHop, ...], str] | None:
-        """Return the declared hops a flat leaf's ORM path walks and the path left on the last target.
+    ) -> tuple[tuple[RelationHop, ...], str] | None:
+        """Return the hops a flat leaf's ORM path walks and the path left on the last target.
 
-        The hops are ``utils/permissions.py::walk_declared_relation_path``'s, the
-        chain the flat-path permission gates fire along, read over the filter's
-        ``field_name``; the path left is empty for a relation-key leaf (``shelf``,
-        ``shelf__branch``: nothing after the last declared relation). ``None`` for
-        a leaf that walks no declared ``RelatedFilter``: a same-model leaf, a path
-        whose first relation no declaration claims, a consumer ``method=``
-        declared on this set (its Python receives this set's queryset and owns
-        its own scoping; GOAL.md "Trust boundary"), a ``RelatedFilter`` (a
-        branch, never a leaf), and a ``ProjectedChildFilter``, whose hop is its
-        projection (``_projection_hop``).
+        The hops are ``utils/permissions.py::walk_declared_relation_path``'s
+        visibility reading (``undeclared=True``) of the filter's ``field_name``:
+        each declared ``RelatedFilter`` hop, the chain the flat-path permission
+        gates fire along, then one undeclared hop per relation segment past them
+        (``alt_shelves``, ``items`` in ``items__name``). The path left is empty
+        for a relation-key leaf (``shelf``, ``shelf__branch``, ``alt_shelves``:
+        nothing after the last relation). ``None`` for a leaf whose walk reads no
+        visibility: a same-model leaf, a path whose relations no declaration
+        claims and whose models no type scopes (``RelationHop.scope``), a
+        consumer ``method=`` declared on this set (its Python receives this
+        set's queryset and owns its own scoping; GOAL.md "Trust boundary"), a
+        ``RelatedFilter`` (a branch, never a leaf), and a
+        ``ProjectedChildFilter``, whose hop is its projection
+        (``_projection_hop``).
         """
         if (
             isinstance(filter_instance, (ProjectedChildFilter, RelatedFilter))
@@ -3557,19 +3651,20 @@ class FilterSet(
             _bound_field_name(filter_instance),
             related_attr=cls._permission.traversal.related_attr,
             target_attr=cls._permission.target_attr,
+            undeclared=True,
         )
-        if not hops:
+        if not any(hop.declared or hop.scope is not None for hop in hops):
             return None
         return hops, LOOKUP_SEP.join(remainder)
 
     @classmethod
-    def _projection_hop(cls, projection: ChildProjection) -> DeclaredRelationHop:
+    def _projection_hop(cls, projection: ChildProjection) -> RelationHop:
         """Return the declared hop a ``ProjectedChildFilter`` of this set runs its child across."""
         # ``related_filters`` is the metaclass's name-keyed ``RelatedFilter`` map
         # (``sets_mixins.py::collect_related_declarations``); the projection was
         # expanded from one of its entries.
         related: Mapping[str, RelatedFilter] = getattr(cls, "related_filters", {})
-        return DeclaredRelationHop(
+        return RelationHop(
             cls,
             projection.branch,
             related[projection.branch],
@@ -3577,7 +3672,7 @@ class FilterSet(
         )
 
     @classmethod
-    def _visibility_hops(cls, filter_instance: Filter) -> tuple[DeclaredRelationHop, ...]:
+    def _visibility_hops(cls, filter_instance: Filter) -> tuple[RelationHop, ...]:
         """Return every declared hop whose target visibility an active ``filter_instance`` reads.
 
         A walked leaf reads its walk's hops (``_flat_leaf_walk``); a
@@ -3710,7 +3805,7 @@ class FilterSet(
         cls,
         input_value: object,
         info: object,
-        into: dict[tuple[int, str | None], models.QuerySet[models.Model]],
+        into: dict[tuple[object, str | None], models.QuerySet[models.Model]],
         *,
         parent_db: str | None,
     ) -> None:
@@ -3735,18 +3830,108 @@ class FilterSet(
             for hop in cls._visibility_hops(filter_instance)
         )
         for hop in hops:
-            key = (id(hop.related_obj), parent_db)
-            if key in into:
+            if not hop.declared:
+                await cls._await_scoped_rows(hop.scope, info, into, parent_db)
                 continue
             owner = cast("type[FilterSet]", hop.owner)
+            related_filter = cast("RelatedFilter", hop.related_obj)
+            for scope in owner._branch_via_types(related_filter):
+                await cls._await_scoped_rows(scope, info, into, parent_db)
+            key = (id(related_filter), parent_db)
+            if key in into:
+                continue
             target_type, _child, child_base = owner._branch_visibility_seed(
                 hop.declared_attr,
-                cast("RelatedFilter", hop.related_obj),
+                related_filter,
                 parent_db,
             )
             into[key] = await apply_type_visibility_async(target_type, child_base, info)
+        for _name, declaration, _child_input in cls._iter_active_related_branches(input_value):
+            # ``related_filters`` holds only ``RelatedFilter`` declarations.
+            for scope in cls._branch_via_types(cast("RelatedFilter", declaration)):
+                await cls._await_scoped_rows(scope, info, into, parent_db)
 
-    def _hop_visibility(self) -> dict[tuple[int, str | None], models.QuerySet[models.Model]]:
+    @classmethod
+    def _branch_via_types(
+        cls,
+        related_filter: RelatedFilter,
+    ) -> tuple[type[DjangoType] | None, ...]:
+        """Return the type scoping each intermediate model a branch of this set crosses.
+
+        A declaration whose ``field_name`` spans several relations
+        (``target_version__milestone``) passes through the rows of each model
+        before the last; each answers for its type
+        (``utils/querysets.py::relation_path_visibility_types``, re-entry into
+        this set's own model reading the type this set is bound to). Empty for a
+        single relation.
+        """
+        relation = _bound_field_name(related_filter)
+        if LOOKUP_SEP not in relation:
+            return ()
+        owner = cls._owner_definition
+        return relation_path_visibility_types(
+            # A branch's declaring set is model-backed (``related_filters`` is collected
+            # for model-backed sets only).
+            cast("type[models.Model]", cls._meta.model),
+            relation.rpartition(LOOKUP_SEP)[0],
+            root=owner.origin if owner is not None else None,
+        )
+
+    @classmethod
+    def _via_rows(
+        cls,
+        related_filter: RelatedFilter,
+        info: object,
+        visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]],
+        parent_db: str | None,
+    ) -> tuple[models.QuerySet[models.Model] | None, ...]:
+        """Return the rows each intermediate model of a branch of this set may pass through.
+
+        One entry per model ``_branch_via_types`` reads: the rows its type lets
+        the request see (``_scoped_rows``), ``None`` for a model no type scopes.
+        """
+        return tuple(
+            None if scope is None else cls._scoped_rows(scope, info, visibility, parent_db)
+            for scope in cls._branch_via_types(related_filter)
+        )
+
+    @staticmethod
+    def _scoped_rows(
+        scope: type[DjangoType],
+        info: object,
+        visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]],
+        parent_db: str | None,
+    ) -> models.QuerySet[models.Model]:
+        """Return the rows of ``scope``'s model its ``get_queryset`` lets this request see.
+
+        The visibility of a model no declaration owns (an undeclared hop, an
+        intermediate model of a multi-relation branch), keyed by
+        ``(scope, parent_db)`` in the request-wide hop map: read from it when
+        present (``apply_async`` pre-fills it, ``_await_scoped_rows``), derived
+        and stored on first use otherwise.
+        """
+        key = (scope, parent_db)
+        rows = visibility.get(key)
+        if rows is None:
+            seed = base_queryset(model_for(scope), using=parent_db)
+            rows = apply_type_visibility_sync(scope, seed, info)
+            visibility[key] = rows
+        return rows
+
+    @staticmethod
+    async def _await_scoped_rows(
+        scope: type[DjangoType] | None,
+        info: object,
+        into: dict[tuple[object, str | None], models.QuerySet[models.Model]],
+        parent_db: str | None,
+    ) -> None:
+        """Await ``_scoped_rows``'s rows of ``scope`` into the hop map; nothing for ``None``."""
+        if scope is None or (scope, parent_db) in into:
+            return
+        seed = base_queryset(model_for(scope), using=parent_db)
+        into[scope, parent_db] = await apply_type_visibility_async(scope, seed, info)
+
+    def _hop_visibility(self) -> dict[tuple[object, str | None], models.QuerySet[models.Model]]:
         """Return this instance's request-wide hop visibility map, creating it on first read."""
         visibility = self._flat_hop_visibility
         if visibility is None:
@@ -3755,18 +3940,25 @@ class FilterSet(
 
     def _hop_visible_rows(
         self,
-        hop: DeclaredRelationHop,
+        hop: RelationHop,
         parent_db: str | None,
     ) -> models.QuerySet[models.Model]:
         """Return ``hop``'s target rows its ``DjangoType.get_queryset`` lets this request see.
 
-        The nested branch's step 3 for one hop: the target type is resolved
-        and seeded on ``parent_db`` by ``_branch_visibility_seed``, then scoped
-        by ``apply_type_visibility_sync`` with this instance's resolver ``info``.
-        Read from the request-wide map when present (``apply_async`` pre-fills
-        it), derived and stored on first use otherwise.
+        The nested branch's step 3 for one declared hop: the target type is
+        resolved and seeded on ``parent_db`` by ``_branch_visibility_seed``, then
+        scoped by ``apply_type_visibility_sync`` with this instance's resolver
+        ``info``. Read from the request-wide map when present (``apply_async``
+        pre-fills it), derived and stored on first use otherwise. An undeclared
+        hop reads its scoping type's rows (``_scoped_rows``), or, when no type
+        scopes its model, every row of it, as Django's join reads them.
         """
         visibility = self._hop_visibility()
+        if not hop.declared:
+            scope = hop.scope
+            if scope is None:
+                return _hop_model(hop)._base_manager.using(parent_db)
+            return self._scoped_rows(scope, self._apply_info, visibility, parent_db)
         key = (id(hop.related_obj), parent_db)
         rows = visibility.get(key)
         if rows is None:
@@ -3819,7 +4011,10 @@ class FilterSet(
         original invocation over ``queryset`` probes it, and an active one raises
         at ``_apply_active_leaf``.
         """
-        if any(hop.target is None for hop in type(self)._visibility_hops(filter_instance)):
+        if any(
+            hop.declared and hop.target is None
+            for hop in type(self)._visibility_hops(filter_instance)
+        ):
             return filter_instance.filter(queryset, value) is not queryset
         # ``_apply_relation_leaf`` probes only a leaf ``_flat_leaf_walk`` reads or a
         # ``ProjectedChildFilter``, which always carries its projection hop.
@@ -3835,9 +4030,7 @@ class FilterSet(
         """The unscoped rows ``chain``'s terminal is written for: its last hop target's, else ``queryset``."""
         if not chain.hops:
             return cast("models.QuerySet[models.Model]", queryset)
-        # A resolved hop's target is a ``RelatedFilter`` target set declaring ``Meta.model``.
-        target_set = cast("type[FilterSet]", chain.hops[-1].target)
-        return base_queryset(cast("type[models.Model]", target_set._meta.model), using=queryset.db)
+        return base_queryset(_hop_model(chain.hops[-1]), using=queryset.db)
 
     def _apply_relation_leaf(
         self,
@@ -3866,20 +4059,26 @@ class FilterSet(
     def _bound_terminal(
         self,
         filter_instance: Filter,
-        target: type[object] | None,
+        hop: RelationHop,
         field_name: str,
     ) -> Filter:
-        """Return a copy of ``filter_instance`` filtering ``field_name`` as a filter of the ``target`` set.
+        """Return a copy of ``filter_instance`` filtering ``field_name`` over the rows ``hop`` reaches.
 
-        The target set (``_projection_child``) is the ``parent`` a live-``field_name``
-        filter resolves its model and owner against. A shallow copy of the
+        The copy's ``parent``, which a live-``field_name`` filter resolves its
+        model and owner against, is the hop's target set instance
+        (``_projection_child``), or for an undeclared hop the face its rows offer
+        in place of one (``_UndeclaredHopSet``). A shallow copy of the
         per-request filter, so the form field it already built carries over and
         this set's own instance is untouched.
         """
         terminal = copy.copy(filter_instance)
         terminal.field_name = field_name
-        # The walk continues only past a hop whose target resolved to a set class.
-        target_set = self._projection_child(cast("type[FilterSet]", target))
+        target_set = (
+            # The walk continues only past a declared hop whose target resolved to a set class.
+            self._projection_child(cast("type[FilterSet]", hop.target))
+            if hop.declared
+            else _UndeclaredHopSet(hop, self.request)
+        )
         # django-filter stamps ``parent`` on every per-request filter; the stubs omit it.
         setattr(terminal, "parent", target_set)  # noqa: B010
         return terminal
@@ -3890,8 +4089,10 @@ class FilterSet(
         A ``ProjectedChildFilter`` reads its projection's hop, then whatever its
         child filter reads in the child set (its own hops, or none: the child
         filter itself runs over the hop's visible rows). A walked leaf reads its
-        walk's hops (``_flat_leaf_walk``) and runs, as a filter of the last
-        hop's target set, over the path left on that target. A relation-key
+        walk's hops (``_flat_leaf_walk``, declared and undeclared) and runs, as
+        a filter of the last hop's target set (or of the face an undeclared
+        hop's rows offer, ``_UndeclaredHopSet``), over the path left on that
+        target. A relation-key
         leaf compares the last hop's key, re-read so the comparison sees only
         rows the hop shows: an ``isnull`` leaf tests the target's primary key
         (a visible row's key is never ``NULL``, so only "no visible related row"
@@ -3900,8 +4101,8 @@ class FilterSet(
         visible row (``_LeafChain.key_hop``); a leaf on a to-many path compares
         the target rows' own key column, the column Django's relation lookup
         compares (``_relation_key_value`` reads model-choice values there).
-        Every hop's target set resolves: a caller derives (or checks) the hops
-        first.
+        Every declared hop's target set resolves: a caller derives (or checks)
+        the hops first.
         """
         if isinstance(filter_instance, ProjectedChildFilter):
             projection = filter_instance._projection
@@ -3920,22 +4121,20 @@ class FilterSet(
         if target_path:
             return _LeafChain(
                 hops,
-                self._bound_terminal(filter_instance, last.target, target_path),
+                self._bound_terminal(filter_instance, last, target_path),
             )
-        target_model = cast("type[FilterSet]", last.target)._meta.model
-        # A ``RelatedFilter`` target declares ``Meta.model`` (see ``_projection_child``).
-        target_pk = cast("type[models.Model]", target_model)._meta.pk
+        target_pk = _hop_model(last)._meta.pk
         if filter_instance.lookup_expr == "isnull":
             return _LeafChain(
                 hops,
-                self._bound_terminal(filter_instance, last.target, target_pk.name),
+                self._bound_terminal(filter_instance, last, target_pk.name),
             )
-        owner_model = cast("type[models.Model]", cast("type[FilterSet]", last.owner)._meta.model)
-        relation = _bound_field_name(cast("RelatedFilter", last.related_obj))
+        owner_model = _hop_source_model(hops, len(hops) - 1)
+        relation = _hop_relation(last)
         if not path_traverses_to_many(owner_model, relation):
             folded = hops[:-1]
             terminal = (
-                self._bound_terminal(filter_instance, folded[-1].target, relation)
+                self._bound_terminal(filter_instance, folded[-1], relation)
                 if folded
                 else filter_instance
             )
@@ -3955,23 +4154,34 @@ class FilterSet(
             and not getattr(filter_instance, _GLOBALID_RELATION_PK_ATTR, False)
         ):
             key_name, key_attname = targets[0].name, targets[0].attname
-        terminal = self._bound_terminal(filter_instance, last.target, key_name)
+        terminal = self._bound_terminal(filter_instance, last, key_name)
         setattr(terminal, _GLOBALID_RELATION_PK_ATTR, False)
         return _LeafChain(hops, terminal, key_attname=key_attname)
 
     def _reaches_hop(
         self,
         outer: models.QuerySet[_M],
-        hop: DeclaredRelationHop,
+        hop: RelationHop,
         rows: models.QuerySet[models.Model],
     ) -> Exists:
-        """Return ``EXISTS`` "the ``outer`` row reaches a row of ``rows`` ``hop``'s declaration admits"."""
+        """Return ``EXISTS`` "the ``outer`` row reaches a row of ``rows`` ``hop`` admits".
+
+        A declared hop admits the rows within its explicit ``queryset=``
+        (``_admitted_rows``) and passes through the visible rows of each
+        intermediate model its ``field_name`` crosses (``_via_rows``); an
+        undeclared hop admits ``rows`` as they are.
+        """
+        if not hop.declared:
+            return _reaches_related(outer, hop.declared_attr, rows)
         related_filter = cast("RelatedFilter", hop.related_obj)
+        # A declared hop's owner is the ``FilterSet`` declaring it.
+        owner = cast("type[FilterSet]", hop.owner)
         admitted = cast(
             "models.QuerySet[models.Model]",
-            _admitted_rows(hop.owner, hop.declared_attr, related_filter, rows),
+            _admitted_rows(owner, hop.declared_attr, related_filter, rows),
         )
-        return _reaches_related(outer, _bound_field_name(related_filter), admitted)
+        via = owner._via_rows(related_filter, self._apply_info, self._hop_visibility(), outer.db)
+        return _reaches_related(outer, _bound_field_name(related_filter), admitted, via)
 
     def _apply_active_leaf(
         self,
@@ -4019,7 +4229,7 @@ class FilterSet(
             terminal.method is None and terminal.lookup_expr == "isnull" and value is True
         )
         if not chain.hops:
-            key_hop = cast("DeclaredRelationHop", chain.key_hop)
+            key_hop = cast("RelationHop", chain.key_hop)
             if negate:
                 inner = self._filter_child_rows(terminal, correlated_inner_root(queryset), value)
                 inner = inner.filter(
@@ -4262,7 +4472,7 @@ class FilterSet(
         *,
         _depth: int = 0,
         _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
-        _flat_hop_visibility: dict[tuple[int, str | None], models.QuerySet[models.Model]]
+        _flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
         | None = None,
     ) -> models.Q:
         """Build the ``Q`` expression for logical operator branches.
@@ -4317,7 +4527,7 @@ class FilterSet(
         *,
         _depth: int = 0,
         _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
-        _flat_hop_visibility: dict[tuple[int, str | None], models.QuerySet[models.Model]]
+        _flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
         | None = None,
     ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
@@ -4394,7 +4604,15 @@ class FilterSet(
                 parent_db=queryset.db,
                 _depth=_depth,
             )
-        constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)
+        if _flat_hop_visibility is None:
+            _flat_hop_visibility = {}
+        constrained = cls._apply_related_constraints(
+            child_input,
+            queryset,
+            child_qs_by_branch,
+            info,
+            _flat_hop_visibility,
+        )
         child_data = cls._normalize_input(child_input)
         # basedpyright: typeshed narrows ``request`` to ``HttpRequest``; upstream only stores it,
         # and the context request need not be a Django one. It rejects ``object`` for
@@ -4417,6 +4635,8 @@ class FilterSet(
         input_value: object,
         parent_qs: models.QuerySet[_M],
         child_qs_by_branch: Mapping[str, models.QuerySet[models.Model]],
+        info: object,
+        hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]],
     ) -> models.QuerySet[_M]:
         """Constrain `parent_qs` by each active branch's intersected child qs.
 
@@ -4425,8 +4645,10 @@ class FilterSet(
         from step 3, then the parent keeps the rows reaching an intersected
         child row through one correlated ``EXISTS`` per active branch
         (``_restrict_through_branch``, the restriction a flat leaf walking
-        the branch applies too). Inactive branches do not constrain the
-        parent.
+        the branch applies too), passing through only the visible rows of each
+        intermediate model a multi-relation branch crosses (``_via_rows``, read
+        from and stored in the request-wide ``hop_visibility`` map). Inactive
+        branches do not constrain the parent.
         """
         constrained = parent_qs
         for field_name, declaration, _ in cls._iter_active_related_branches(input_value):
@@ -4440,6 +4662,12 @@ class FilterSet(
                 field_name,
                 cast("RelatedFilter", declaration),
                 child_qs_by_branch.get(field_name),
+                cls._via_rows(
+                    cast("RelatedFilter", declaration),
+                    info,
+                    hop_visibility,
+                    parent_qs.db,
+                ),
             )
         return constrained
 
@@ -4450,16 +4678,24 @@ class FilterSet(
         queryset: models.QuerySet[_M],
         info: object,
         child_qs_by_branch: Mapping[str, models.QuerySet[models.Model]],
+        hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]],
     ) -> tuple[dict[str, object], object, models.QuerySet[_M]]:
         """Return the form data, request and constrained queryset shared by both apply paths.
 
         Captures the verbatim normalize / request / related-constraints
         sequence both apply paths run identically, before the filterset is
-        built by ``_apply_common_finalize``.
+        built by ``_apply_common_finalize``. ``hop_visibility`` is the
+        request-wide hop visibility map the filter set instance reads next.
         """
         data = cls._normalize_input(input_value)
         request = cls._request_from_info(info)
-        constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
+        constrained = cls._apply_related_constraints(
+            input_value,
+            queryset,
+            child_qs_by_branch,
+            info,
+            hop_visibility,
+        )
         return data, request, constrained
 
     @classmethod
@@ -4472,7 +4708,7 @@ class FilterSet(
         info: object,
         *,
         nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet[models.Model]]] | None = None,
-        flat_hop_visibility: dict[tuple[int, str | None], models.QuerySet[models.Model]]
+        flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]]
         | None = None,
         run_permissions: bool = True,
     ) -> models.QuerySet[_M]:
@@ -4558,11 +4794,13 @@ class FilterSet(
             parent_db=queryset.db,
             _depth=_depth,
         )
+        hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]] = {}
         data, request, constrained = cls._apply_common_prelude(
             input_value,
             queryset,
             info,
             child_qs_by_branch,
+            hop_visibility,
         )
         return cls._apply_common_finalize(
             input_value,
@@ -4570,6 +4808,7 @@ class FilterSet(
             data,
             request,
             info,
+            flat_hop_visibility=hop_visibility,
             run_permissions=run_permissions,
         )
 
@@ -4627,7 +4866,7 @@ class FilterSet(
             parent_db=queryset.db,
             _depth=_depth,
         )
-        flat_hop_visibility: dict[tuple[int, str | None], models.QuerySet[models.Model]] = {}
+        flat_hop_visibility: dict[tuple[object, str | None], models.QuerySet[models.Model]] = {}
         await cls._derive_flat_hop_visibility_async(
             input_value,
             info,
@@ -4646,6 +4885,7 @@ class FilterSet(
             queryset,
             info,
             child_qs_by_branch,
+            flat_hop_visibility,
         )
         return await run_in_one_sync_boundary(
             cls._apply_common_finalize,

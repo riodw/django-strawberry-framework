@@ -985,14 +985,13 @@ consumes, never a parallel implementation:
   definition recorded in the frozen plan, primary or secondary, never
   re-resolved through the registry — composes into the inner rows of the
   `EXISTS` body exactly like any other registered-type hop. A flat
-  `filter:` leaf over the same path agrees wherever the path walks
-  declared `RelatedFilter` hops: `LoanFilter`'s `book__loans__patron__email`
-  walks `book`, `loans` and `patron`, so `LoanType` visibility scopes the
-  inner loans under `filter:` too (spec-027 Decision 8 step 3). Only a
-  traversal no `RelatedFilter` declares keeps the routed row-preserving
-  rewrite's raw traversal (no hop visibility), and there the same path
-  yields different inner constraints under `filter:` vs `search:`. The
-  test plan pins the recursion case.
+  `filter:` leaf over the same path agrees: `LoanFilter`'s
+  `book__loans__patron__email` walks `book`, `loans` and `patron`, so
+  `LoanType` visibility scopes the inner loans under `filter:` too, and a
+  relation no `RelatedFilter` declares reads the registered type's visibility
+  the same way, re-entry into the filter set's own model reading the type
+  the set is bound to (`utils/querysets.py::relation_target_type`; spec-027
+  Decision 8 step 3). The test plan pins the recursion case.
 - A related model with **no registered type** has no GraphQL surface and
   therefore no visibility contract to honor; the hop traverses the raw
   relation. Declaring a search path across an unregistered model is the

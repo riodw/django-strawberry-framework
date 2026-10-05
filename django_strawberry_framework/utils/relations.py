@@ -559,6 +559,38 @@ def _classify_path_cached(model: type[models.Model], field_path: str) -> Classif
     return classify_path(model, field_path)
 
 
+def leading_relation_hops(
+    model: type[models.Model],
+    field_path: str,
+) -> tuple[RelationPathHop, ...]:
+    """Return ``classify_path``'s hops for the longest leading part of ``field_path`` it classifies.
+
+    The relation segments a path crosses before whatever follows them: a column,
+    a transform or key path past it (``created__year``, ``data__key``), or a
+    segment that resolves to nothing. Each hop's ``target_model`` is the model
+    Django's join reaches, and the hops cover ``field_path``'s first
+    ``len(hops)`` segments. Empty when even the first segment does not classify
+    as a relation.
+    """
+    segments = field_path.split(LOOKUP_SEP)
+    for end in range(len(segments), 0, -1):
+        hops = _classified_hops(model, LOOKUP_SEP.join(segments[:end]))
+        if hops is not None:
+            return hops
+    return ()
+
+
+def _classified_hops(
+    model: type[models.Model],
+    field_path: str,
+) -> tuple[RelationPathHop, ...] | None:
+    """Return the cached classification's hops for ``field_path``, ``None`` when it does not classify."""
+    try:
+        return _classify_path_cached(model, field_path).hops
+    except PathResolutionError:
+        return None
+
+
 def _traverses_to_many(
     classify: Callable[[type[models.Model], str], ClassifiedPath],
     model: type[models.Model],

@@ -53,6 +53,8 @@ from ..exceptions import ConfigurationError, OptimizerError
 from ..utils.relations import m2m_through_link_fields, relation_kind, relation_link
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from django.contrib.contenttypes.fields import GenericRelation
     from django.db import models
     from django.db.models import QuerySet
@@ -196,11 +198,14 @@ class _CorrelationStep:
     ``pairs`` are ``(inner column, outer column)`` pairs, index for index;
     ``restriction`` is the constant filter the link carries (a
     ``GenericRelation``'s content type), empty for every other link.
+    ``segment`` is the index of the path segment whose target rows the link
+    reads, ``None`` for a many-to-many's join-table link.
     """
 
     model: type[models.Model]
     pairs: tuple[tuple[ConcreteField, ConcreteField], ...]
     restriction: tuple[tuple[str, object], ...] = ()
+    segment: int | None = None
 
 
 def _column_ref(field: ConcreteField) -> str:
@@ -232,7 +237,7 @@ def _correlation_steps(
     """
     steps: list[_CorrelationStep] = []
     current = model
-    for segment in relation_path.split(LOOKUP_SEP):
+    for index, segment in enumerate(relation_path.split(LOOKUP_SEP)):
         field = cast("ModelField", current._meta.get_field(segment))
         kind = relation_kind(field)
         if kind == "many":
@@ -242,8 +247,13 @@ def _correlation_steps(
                 (
                     getattr(source_fk, "model", None),
                     tuple(zip(source.carriers, source.targets, strict=True)),
+                    None,
                 ),
-                (field.related_model, tuple(zip(target.targets, target.carriers, strict=True))),
+                (
+                    field.related_model,
+                    tuple(zip(target.targets, target.carriers, strict=True)),
+                    index,
+                ),
             ]
         else:
             link = relation_link(field)
@@ -252,8 +262,8 @@ def _correlation_steps(
                 if kind == "forward_single"
                 else zip(link.carriers, link.targets, strict=True)
             )
-            links = [(field.related_model, tuple(pairs))]
-        for link_model, pairs in links:
+            links = [(field.related_model, tuple(pairs), index)]
+        for link_model, pairs, link_segment in links:
             if not pairs or not isinstance(link_model, type):
                 raise ConfigurationError(
                     f"{model.__qualname__}.{relation_path}: segment {segment!r} is not a "
@@ -273,7 +283,12 @@ def _correlation_steps(
                     (f"{content_type_field}__model", declaring._meta.model_name),
                 )
             steps.append(
-                _CorrelationStep(cast("type[models.Model]", link_model), pairs, restriction),
+                _CorrelationStep(
+                    cast("type[models.Model]", link_model),
+                    pairs,
+                    restriction,
+                    link_segment,
+                ),
             )
         current = steps[-1].model
     return tuple(steps)
@@ -294,6 +309,7 @@ def related_rows_exist(
     rows: QuerySet[models.Model],
     *,
     using: str,
+    via: Sequence[QuerySet[models.Model] | None] = (),
 ) -> Exists:
     """Return ``EXISTS`` "the outer ``model`` row reaches a row of ``rows`` through ``relation_path``".
 
@@ -301,8 +317,12 @@ def related_rows_exist(
     each link's own columns (``_correlation_steps``): the outer table is never
     re-scanned and nothing the outer queryset already applied is embedded, so
     every restriction an outer queryset carries costs one semi-join on its own.
-    A multi-link path nests one ``EXISTS`` per link, the intermediate rows read
-    through ``_base_manager`` on ``using`` (a join applies no manager either).
+    A multi-link path nests one ``EXISTS`` per link. ``via`` is empty or holds,
+    index for index, the rows each segment before the last may pass through
+    (the intermediate rows a visibility hook lets the request see); a segment
+    whose entry is ``None``, every segment when ``via`` is empty, and a
+    many-to-many's join table are read through ``_base_manager`` on ``using``
+    (a join applies no manager either).
     The test is row-preserving and keeps any ``DISTINCT`` ``rows`` carry inside
     the subquery, where it changes no answer. Negated (``~``), it is the
     relation's ``NOT EXISTS``, which a ``NULL`` link column cannot empty the way
@@ -311,5 +331,8 @@ def related_rows_exist(
     *outer_steps, last = _correlation_steps(model, relation_path)
     query = _correlated(rows, last)
     for step in reversed(outer_steps):
-        query = _correlated(step.model._base_manager.using(using), step).filter(Exists(query))
+        through = via[step.segment] if via and step.segment is not None else None
+        if through is None:
+            through = step.model._base_manager.using(using)
+        query = _correlated(through, step).filter(Exists(query))
     return Exists(query)

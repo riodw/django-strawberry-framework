@@ -55,7 +55,7 @@ class BranchFilterByPath(FilterSet):
 class SelfReferentialBranchFilter(FilterSet):
     """References itself by unqualified name - exercises the cycle guard."""
 
-    self_link = RelatedFilter("SelfReferentialBranchFilter", field_name="id")
+    self_link = RelatedFilter("SelfReferentialBranchFilter", field_name="shelves__branch")
 
     class Meta:
         model = models.Branch

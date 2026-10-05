@@ -54,13 +54,15 @@ from .input_values import (
     iter_input_items,
     related_declaration_mapping,
 )
-from .querysets import reject_async_in_sync_context
+from .querysets import reject_async_in_sync_context, relation_target_type
+from .relations import leading_relation_hops
 from .strings import flatten_lookup_path
 
 if TYPE_CHECKING:
     from django.db import models
 
     from ..sets_mixins import ActiveInputPermissionMixin
+    from ..types.base import DjangoType
     from .input_values import FieldSpecMap, RelatedBranch
 
 # Recourse text shared by every ``check_<field>_permission`` async-guard raise. A
@@ -577,18 +579,45 @@ def _fire_gate_on_class(
 
 
 @dataclass(frozen=True)
-class DeclaredRelationHop:
-    """One declared related branch a flat source path walks through.
+class RelationHop:
+    """One relation a flat source path walks through: a declared branch, or a relation none declares.
 
-    ``owner`` declares ``related_obj`` (a ``RelatedFilter`` / ``RelatedOrder``)
-    under the public attribute ``declared_attr``; ``target`` is the child set
-    class the declaration resolves, ``None`` when it resolves none.
+    A declared hop: ``owner`` declares ``related_obj`` (a ``RelatedFilter`` /
+    ``RelatedOrder``) under the public attribute ``declared_attr``; ``target`` is
+    the child set class the declaration resolves, ``None`` when it resolves none.
+
+    An undeclared hop (``related_obj`` is ``None``): the relation segment
+    ``declared_attr`` of the model the walk has reached (``owner`` is the set
+    whose model that is, ``None`` past another undeclared hop), reaching
+    ``model``, whose rows answer for ``target_type``
+    (``utils/querysets.py::relation_target_type``; ``None`` when no type is
+    registered for it).
     """
 
-    owner: type[object]
+    owner: type[object] | None
     declared_attr: str
-    related_obj: object
+    related_obj: object | None
     target: type[object] | None
+    model: type[models.Model] | None = None
+    target_type: type[DjangoType] | None = None
+
+    @property
+    def declared(self) -> bool:
+        """Whether a ``RelatedFilter`` / ``RelatedOrder`` declares this hop."""
+        return self.related_obj is not None
+
+    @property
+    def scope(self) -> type[DjangoType] | None:
+        """The type whose ``get_queryset`` scopes an undeclared hop's rows, ``None`` when none does.
+
+        ``target_type`` when it declares a ``get_queryset`` of its own (the
+        identity default changes no row), as
+        ``utils/querysets.py::relation_visibility_type`` reads it.
+        """
+        target_type = self.target_type
+        if target_type is None or not target_type.has_custom_get_queryset():
+            return None
+        return target_type
 
 
 def walk_declared_relation_path(
@@ -597,7 +626,8 @@ def walk_declared_relation_path(
     *,
     related_attr: str,
     target_attr: str,
-) -> tuple[tuple[DeclaredRelationHop, ...], tuple[str, ...]]:
+    undeclared: bool = False,
+) -> tuple[tuple[RelationHop, ...], tuple[str, ...]]:
     """Read a flat ``source_path`` as the declared branch chain it spells, plus the rest.
 
     The one reading of a flat relation path (``category__name``,
@@ -620,9 +650,17 @@ def walk_declared_relation_path(
     stops at the first segment no declaration claims, and after a hop whose
     target does not resolve to a class; the unconsumed segments are returned as
     the remainder, a path relative to the deepest hop's target.
+
+    ``undeclared=True`` is the visibility reading: past the last declared hop the
+    walk goes on through every relation segment of the model reached, one
+    undeclared hop each (``RelationHop``), until a segment that is not a relation.
+    A relation reaching the model of the set the undeclared hops start from
+    answers for the type that set is bound to
+    (``utils/querysets.py::relation_target_type``). The gates read the declared
+    walk alone: an undeclared hop has no branch gate.
     """
     segments = tuple(source_path.split(LOOKUP_SEP))
-    hops: list[DeclaredRelationHop] = []
+    hops: list[RelationHop] = []
     current_cls: type[object] = owning_cls
     index = 0
     while index < len(segments):
@@ -647,12 +685,58 @@ def walk_declared_relation_path(
         consumed, declared_attr, related_obj = max(matches, key=lambda match: match[0])
         target: object = getattr(related_obj, target_attr, None)
         resolved = target if isinstance(target, type) else None
-        hops.append(DeclaredRelationHop(current_cls, declared_attr, related_obj, resolved))
+        hops.append(RelationHop(current_cls, declared_attr, related_obj, resolved))
         index += consumed
         if resolved is None:
-            break
+            return tuple(hops), segments[index:]
         current_cls = resolved
+    if undeclared:
+        index = _walk_undeclared_hops(current_cls, segments, index, hops)
     return tuple(hops), segments[index:]
+
+
+def _set_model(set_cls: type[object]) -> type[models.Model] | None:
+    """Return the ``Meta.model`` a filter / order set class carries, ``None`` when it has none."""
+    model: object = getattr(getattr(set_cls, "_meta", None), "model", None)
+    return model if isinstance(model, type) else None
+
+
+def _bound_type(set_cls: type[object]) -> type[DjangoType] | None:
+    """Return the ``DjangoType`` a set class is bound to (``_owner_definition.origin``), if any."""
+    definition: object = getattr(set_cls, "_owner_definition", None)
+    origin: object = getattr(definition, "origin", None)
+    return cast("type[DjangoType]", origin) if isinstance(origin, type) else None
+
+
+def _walk_undeclared_hops(
+    set_cls: type[object],
+    segments: tuple[str, ...],
+    index: int,
+    hops: list[RelationHop],
+) -> int:
+    """Append an undeclared hop for each relation segment from ``index`` on; return where it stopped.
+
+    The hops are ``utils/relations.py::leading_relation_hops``'s over the rest of
+    the path from ``set_cls``'s model, so each reaches the model Django's join
+    reaches. A ``pk`` segment names the primary key, a relation on a model keyed
+    by one (a one-to-one primary key, a multi-table-inheritance child), and is
+    recorded under that field's name.
+    """
+    model = _set_model(set_cls)
+    if model is None:
+        # A set with no ``Meta.model`` has no relation to walk.
+        return index
+    root = _bound_type(set_cls)
+    owner: type[object] | None = set_cls
+    for hop in leading_relation_hops(model, LOOKUP_SEP.join(segments[index:])):
+        name = model._meta.pk.name if hop.segment == "pk" else hop.segment
+        target_type = relation_target_type(hop.target_model, root=root)
+        hops.append(
+            RelationHop(owner, name, None, None, model=hop.target_model, target_type=target_type),
+        )
+        owner, model = None, hop.target_model
+        index += 1
+    return index
 
 
 def relation_path_gates(
@@ -685,7 +769,8 @@ def relation_path_gates(
         related_attr=related_attr,
         target_attr=target_attr,
     )
-    gates = [(hop.owner, hop.declared_attr) for hop in hops]
+    # The declared reading's hops all carry the set that declares them.
+    gates = [(cast("type[object]", hop.owner), hop.declared_attr) for hop in hops]
     target = hops[-1].target if hops else None
     if target is not None:
         terminal = LOOKUP_SEP.join(remainder) if remainder else _key_gate_path(target)

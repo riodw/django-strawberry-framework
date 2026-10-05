@@ -103,7 +103,7 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
             fields = {"note": ["exact"]}
 
     class BFilter(FilterSet):
-        d = RelatedFilter(DFilter, field_name="loans")
+        d = RelatedFilter(DFilter, field_name="books__loans")
 
         class Meta:
             model = library_models.Shelf
@@ -118,7 +118,7 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
 
     class AFilter(FilterSet):
         b = RelatedFilter(BFilter, field_name="shelves")
-        c = RelatedFilter(CFilter, field_name="books")
+        c = RelatedFilter(CFilter, field_name="shelves__books")
 
         class Meta:
             model = library_models.Branch

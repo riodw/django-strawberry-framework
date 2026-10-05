@@ -8,6 +8,7 @@ holder at ``/graphql-test/`` because the shipped query exposes typed
 """
 
 import base64
+import contextlib
 import importlib
 import json
 import string
@@ -1508,37 +1509,156 @@ def test_library_shelves_filter_by_forward_m2m_primary_keys_over_http():
     )
 
 
-@pytest.mark.django_db
-def test_library_relation_key_is_no_existence_oracle_for_hidden_or_missing_rows_over_http():
-    """A hidden target pk and a missing one both reach the predicate: no validation error.
+def _seed_shelves_on_alt_branches() -> dict[str, models.Branch]:
+    """``A-1`` lists the ``visible`` branch as an alternate, ``B-2`` the ``restricted`` one."""
+    home = models.Branch.objects.create(name="Home", city="Boston")
+    branches = {
+        "visible": models.Branch.objects.create(name="Visible", city="Boston"),
+        "hidden": models.Branch.objects.create(name="Hidden", city="restricted"),
+    }
+    models.Shelf.objects.create(code="A-1", topic="general", branch=home).alt_branches.add(
+        branches["visible"],
+    )
+    models.Shelf.objects.create(code="B-2", topic="general", branch=home).alt_branches.add(
+        branches["hidden"],
+    )
+    return branches
 
-    The anonymous request cannot see the ``city="restricted"`` branch, but a shelf the
-    request CAN see still matches by that branch's pk, exactly as a GlobalID relation
-    leaf matches by value; a pk no row carries matches nothing. Neither answers "Select
-    a valid choice", so the response never tells a hidden row from a missing one. An
-    explicit empty list matches nothing, and a missing member beside a real one is
-    dropped.
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("members", "codes"),
+    [
+        (["hidden"], []),
+        (["missing"], []),
+        ([], []),
+        (["missing", "visible"], ["A-1"]),
+        (["hidden", "visible"], ["A-1"]),
+    ],
+    ids=[
+        "hidden",
+        "missing",
+        "empty",
+        "missing-beside-visible",
+        "hidden-beside-visible",
+    ],
+)
+def test_library_relation_key_is_no_existence_oracle_for_hidden_or_missing_rows_over_http(
+    members: list[str],
+    codes: list[str],
+):
+    """A hidden target pk and a missing one answer alike: no row, and no validation error.
+
+    The anonymous request cannot see the ``city="restricted"`` branch, so a shelf
+    listing it as an alternate matches no more than a pk no row carries:
+    ``BranchFilter`` declares no ``RelatedFilter`` over ``alt_branches``, and the
+    relation still reads ``BranchType.get_queryset``. Neither answers "Select a
+    valid choice", so the response never tells a hidden row from a missing one.
+    An explicit empty list matches nothing, and a hidden or missing member beside
+    a visible one is dropped.
+    """
+    branches = _seed_shelves_on_alt_branches()
+    pks = {"missing": branches["hidden"].pk + 1000, **{k: v.pk for k, v in branches.items()}}
+    _assert_graphql_data(
+        _SHELVES_BY_ALT_BRANCHES,
+        {"allLibraryShelves": [{"code": code} for code in codes]},
+        variables={"ids": [pks[member] for member in members]},
+    )
+
+
+@pytest.mark.django_db
+def test_library_relation_key_matches_a_restricted_branch_for_staff_over_http():
+    """Staff see the ``restricted`` branch, so its pk matches the shelf listing it."""
+    branches = _seed_shelves_on_alt_branches()
+    staff = User.objects.create_user(username="staff", password="pw", is_staff=True)
+    client = TestClient()
+    with client.login(staff):
+        result = client.query(_SHELVES_BY_ALT_BRANCHES, variables={"ids": [branches["hidden"].pk]})
+    assert result.data == {"allLibraryShelves": [{"code": "B-2"}]}
+
+
+#: Each relation-key spelling over a relation no ``RelatedFilter`` declares, with the
+#: list field it filters and the response key naming each row.
+_UNDECLARED_RELATION_SPELLINGS = {
+    "alt-branches": (
+        "query ($ids: [Int!]) { rows: allLibraryShelves(filter: { altBranches: { exact: $ids } })"
+        " { key: code } }",
+        "hidden_branch",
+    ),
+    "alt-shelves": (
+        "query ($ids: [Int!]) { rows: allLibraryBranches(filter: { altShelves: { exact: $ids } })"
+        " { key: name } }",
+        "secret_shelf",
+    ),
+    "branch-alt-shelves-flat": (
+        "query ($ids: [Int!]) { rows: allLibraryShelves("
+        "filter: { branchAltShelves: { exact: $ids } }) { key: code } }",
+        "secret_shelf",
+    ),
+    "branch-alt-shelves-nested": (
+        "query ($ids: [Int!]) { rows: allLibraryShelves("
+        "filter: { branch: { altShelves: { exact: $ids } } }) { key: code } }",
+        "secret_shelf",
+    ),
+}
+
+
+def _seed_undeclared_relation_world() -> dict[str, Model]:
+    """Hidden rows linked through relations no ``RelatedFilter`` declares.
+
+    ``B-2`` lists the ``restricted`` branch as an alternate; the ``secret`` shelf
+    lists ``Linked`` as an alternate branch, and ``L-1`` sits on ``Linked``.
     """
     home = models.Branch.objects.create(name="Home", city="Boston")
-    visible = models.Branch.objects.create(name="Visible", city="Boston")
-    hidden = models.Branch.objects.create(name="Hidden", city="restricted")
-    near = models.Shelf.objects.create(code="A-1", topic="general", branch=home)
-    far = models.Shelf.objects.create(code="B-2", topic="general", branch=home)
-    near.alt_branches.add(visible)
-    far.alt_branches.add(hidden)
-    missing = hidden.pk + 1000
+    linked = models.Branch.objects.create(name="Linked", city="Boston")
+    hidden_branch = models.Branch.objects.create(name="Vault", city="restricted")
+    models.Shelf.objects.create(code="B-2", topic="general", branch=home).alt_branches.add(
+        hidden_branch,
+    )
+    models.Shelf.objects.create(code="L-1", topic="general", branch=linked)
+    secret_shelf = models.Shelf.objects.create(code="S-9", topic="secret", branch=home)
+    secret_shelf.alt_branches.add(linked)
+    return {"hidden_branch": hidden_branch, "secret_shelf": secret_shelf}
 
-    for ids, codes in (
-        ([hidden.pk], ["B-2"]),
-        ([missing], []),
-        ([], []),
-        ([missing, visible.pk], ["A-1"]),
-    ):
-        _assert_graphql_data(
-            _SHELVES_BY_ALT_BRANCHES,
-            {"allLibraryShelves": [{"code": code} for code in codes]},
-            variables={"ids": ids},
-        )
+
+def _keys_as(client: TestClient, query: str, ids: list[int]) -> list[str]:
+    """Return the ``key`` of every row ``query`` returns to ``client`` for ``ids``."""
+    data = client.query(query, variables={"ids": ids}).data
+    assert data is not None
+    return [row["key"] for row in data["rows"]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("spelling", list(_UNDECLARED_RELATION_SPELLINGS))
+def test_library_undeclared_relation_key_answers_as_if_hidden_rows_were_absent_over_http(
+    spelling: str,
+):
+    """A relation-key leaf over an undeclared relation reads its target type's visibility.
+
+    Anonymous gets exactly what staff get once every row the anonymous request
+    cannot see (``restricted`` branches, ``secret`` shelves) is deleted; staff
+    with those rows present prove the hidden row is the only link. Flat and
+    nested spellings through the declared ``branch`` hop agree.
+    """
+    from django.db import transaction
+
+    query, hidden_key = _UNDECLARED_RELATION_SPELLINGS[spelling]
+    pk = _seed_undeclared_relation_world()[hidden_key].pk
+    staff = User.objects.create_user(username="staff", password="pw", is_staff=True)
+    client = TestClient()
+
+    class _RollbackError(Exception):
+        pass
+
+    with client.login(staff):
+        assert _keys_as(client, query, [pk])
+        absent: list[str] = []
+        with contextlib.suppress(_RollbackError), transaction.atomic():
+            models.Branch.objects.filter(city="restricted").delete()
+            models.Shelf.objects.filter(topic="secret").delete()
+            absent = _keys_as(client, query, [pk])
+            raise _RollbackError
+    assert _keys_as(TestClient(), query, [pk]) == absent == []
 
 
 @pytest.mark.django_db
@@ -2915,6 +3035,47 @@ async def test_flat_relation_leaf_answers_like_its_nested_twin_async(filter_inpu
 
     assert "errors" not in payload, payload
     assert payload["data"]["genres"]["edges"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("staff", [False, True], ids=["anonymous", "staff"])
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        "{ books: { shelfAltBranches: { exact: [%d] } } }",
+        "{ books: { shelf: { altBranches: { exact: [%d] } } } }",
+    ],
+    ids=["flat", "nested"],
+)
+async def test_undeclared_relation_key_reads_its_target_visibility_async(
+    filter_input: str,
+    staff: bool,
+):
+    """The async apply path scopes a key over an undeclared relation by the target type.
+
+    ``ShelfFilter`` declares no ``RelatedFilter`` over ``alt_branches``; the only
+    link from the genre to the ``restricted`` branch runs through it, so only staff
+    match.
+    """
+    home = await models.Branch.objects.acreate(name="Home", city="Boston")
+    hidden = await models.Branch.objects.acreate(name="Vault", city="restricted")
+    shelf = await models.Shelf.objects.acreate(code="A-1", topic="general", branch=home)
+    await shelf.alt_branches.aadd(hidden)
+    book = await models.Book.objects.acreate(title="Open", shelf=shelf)
+    genre = await models.Genre.objects.acreate(name="Linked genre")
+    await genre.books.aadd(book)
+    user = None
+    if staff:
+        user = await User.objects.acreate_user(username="staff", password="pw", is_staff=True)
+
+    payload = await _post_async_genres(
+        "query { genres(filter: %s) { edges { node { name } } } }" % (filter_input % hidden.pk),
+        user=user,
+    )
+
+    assert "errors" not in payload, payload
+    expected = [{"node": {"name": "Linked genre"}}] if staff else []
+    assert payload["data"]["genres"]["edges"] == expected
 
 
 class _VisibleWorld(NamedTuple):

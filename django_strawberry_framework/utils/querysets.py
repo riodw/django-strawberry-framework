@@ -4700,6 +4700,65 @@ def related_visibility_queryset_or_default(
     return queryset
 
 
+def relation_target_type(
+    related_model: type[models.Model],
+    *,
+    root: type[DjangoType] | None = None,
+) -> type[DjangoType] | None:
+    """Return the ``DjangoType`` a relation path reaching ``related_model`` rows answers for.
+
+    The resolution for a relation hop no ``RelatedFilter`` / ``RelatedOrder``
+    declares: a relation-key leaf over such a relation, a flat path crossing one,
+    and each intermediate model of a declaration whose ``field_name`` spans
+    several relations. ``root`` is the exact type the walking set is bound to: a
+    path re-entering its model answers with ``root`` itself, never the model's
+    primary type, so a set bound to a secondary type reads the secondary's hook.
+    Any other model answers with ``registry.get``'s type; ``None`` when it has none.
+    """
+    from ..registry import registry
+
+    if root is not None and model_for(root) is related_model:
+        return root
+    return registry.get(related_model)
+
+
+def relation_visibility_type(
+    related_model: type[models.Model],
+    *,
+    root: type[DjangoType] | None = None,
+) -> type[DjangoType] | None:
+    """Return the type whose ``get_queryset`` scopes ``related_model`` rows a path reaches, or ``None``.
+
+    ``relation_target_type``'s type when it declares a ``get_queryset`` of its
+    own. ``None`` for a model with no registered type and for a type keeping the
+    identity default hook (scoping would change no row): such a hop reads the
+    raw relation, as Django's join does.
+    """
+    related_type = relation_target_type(related_model, root=root)
+    if related_type is None or not related_type.has_custom_get_queryset():
+        return None
+    return related_type
+
+
+def relation_path_visibility_types(
+    model: type[models.Model],
+    relation_path: str,
+    *,
+    root: type[DjangoType] | None = None,
+) -> tuple[type[DjangoType] | None, ...]:
+    """Return ``relation_visibility_type`` of each model ``relation_path`` reaches from ``model``.
+
+    One entry per relation hop ``utils/relations.py::leading_relation_hops``
+    reads, in path order, each for the model that hop's join reaches.
+    """
+    from .relations import leading_relation_hops
+
+    return tuple(
+        relation_visibility_type(hop.target_model, root=root)
+        for hop in leading_relation_hops(model, relation_path)
+    )
+
+
 def _stringified(pks: Iterable[object]) -> set[str]:
     """Stringify a pk collection into the type-agnostic comparison basis.
 

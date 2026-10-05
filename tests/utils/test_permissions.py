@@ -555,6 +555,21 @@ def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
     ]
 
 
+def test_undeclared_walk_reads_no_relation_of_a_set_with_no_model():
+    """The visibility reading walks undeclared relations off the set's model; a model-less set has none."""
+
+    class Modelless:
+        related_filters: dict[str, object] = {}
+
+    assert walk_declared_relation_path(
+        Modelless,
+        "shelves__code",
+        related_attr="related_filters",
+        target_attr="filterset",
+        undeclared=True,
+    ) == ((), ("shelves", "code"))
+
+
 def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_last_target():
     """The walk reads the declared chain a flat path spells and hands back the rest.
 

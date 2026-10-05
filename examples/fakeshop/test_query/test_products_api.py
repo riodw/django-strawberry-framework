@@ -32,6 +32,7 @@ against the GraphQL result, which both pins the filter behaviour and stays
 robust across Faker versions.
 """
 
+import contextlib
 import json
 import string
 from collections.abc import Callable
@@ -2560,6 +2561,43 @@ def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_paren
         "{ edges { node { name } } } }",
         {"allCategories": {"edges": [{"node": {"name": category.name}}]}},
     )
+
+
+_CATEGORIES_BY_ITEM_NAME = (
+    'query { allCategories(filter: { itemsName: { iContains: "zz-private-leaf" } }) '
+    "{ edges { node { name } } } }"
+)
+
+
+@pytest.mark.django_db
+def test_products_categories_items_name_leaf_never_matches_through_a_private_item():
+    """``itemsName`` matches a category only through an item ``ItemType`` lets the viewer see.
+
+    ``CategoryFilter`` declares no ``RelatedFilter`` over ``items``; the path still
+    reads ``ItemType.get_queryset``. Staff see the private item and its public
+    category; anonymous gets what staff get with the private item deleted.
+    """
+    from django.db import transaction
+
+    seed_data(1)
+    category = models.Category.objects.filter(is_private=False).earliest("pk")
+    models.Item.objects.create(name="zz-private-leaf", category=category, is_private=True)
+    staff = _staff_client()
+    found = {"allCategories": {"edges": [{"node": {"name": category.name}}]}}
+    _assert_graphql_data(_CATEGORIES_BY_ITEM_NAME, found, client=staff)
+
+    class _RollbackError(Exception):
+        pass
+
+    with contextlib.suppress(_RollbackError), transaction.atomic():
+        models.Item.objects.filter(is_private=True).delete()
+        _assert_graphql_data(
+            _CATEGORIES_BY_ITEM_NAME,
+            {"allCategories": {"edges": []}},
+            client=staff,
+        )
+        raise _RollbackError
+    _assert_graphql_data(_CATEGORIES_BY_ITEM_NAME, {"allCategories": {"edges": []}})
 
 
 def _category_filter_input_field_names() -> set[str]:

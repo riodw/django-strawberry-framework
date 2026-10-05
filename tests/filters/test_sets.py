@@ -4407,13 +4407,21 @@ def test_apply_related_constraints_runs_active_branch_only():
 
     # Inactive branch: no constraint applied.
     parent_qs = library_models.Branch.objects.all()
-    constrained = BranchFilter._apply_related_constraints({"name": "alpha"}, parent_qs, {})
+    constrained = BranchFilter._apply_related_constraints(
+        {"name": "alpha"},
+        parent_qs,
+        {},
+        None,
+        {},
+    )
     assert "shelves__in" not in str(constrained.query)
 
     # Active branch: constraint applied.
     constrained_active = BranchFilter._apply_related_constraints(
         {"shelves": {"code": "active"}},
         parent_qs,
+        {},
+        None,
         {},
     )
     # The active branch must restrict the parent count to branches whose
@@ -4534,6 +4542,8 @@ def test_apply_related_constraints_model_mismatch_raises_configuration_error():
             {"shelves": {"code": "active"}},
             library_models.Branch.objects.all(),
             {"shelves": child_shelf_qs},
+            None,
+            {},
         )
     msg = str(excinfo.value)
     assert "Book" in msg
@@ -4584,6 +4594,8 @@ def test_apply_related_constraints_proxy_model_is_rejected():
             {"shelves": {"code": "active"}},
             library_models.Branch.objects.all(),
             {"shelves": child_shelf_qs},
+            None,
+            {},
         )
     assert "ShelfProxy" in str(excinfo.value)
     assert "Shelf" in str(excinfo.value)
@@ -5298,6 +5310,8 @@ def test_apply_related_constraints_skips_branch_without_qs_or_explicit():
     constrained = BranchFilter._apply_related_constraints(
         {"shelves": {"code": "x"}},
         parent_qs,
+        {},
+        None,
         {},
     )
     assert "shelves__in" not in str(constrained.query)
@@ -7170,8 +7184,13 @@ def test_candidate_snapshot_omits_declared_and_method_filters():
     assert "note_method" not in snapshot.candidates
 
 
-def test_candidate_snapshot_skips_expanded_leaf_under_non_relation_prefix():
-    """Expanded children of a ``RelatedFilter`` with a non-relation prefix get no row (no raise)."""
+def test_candidate_snapshot_skips_expanded_leaf_the_parent_model_cannot_resolve():
+    """An expanded child leaf whose rebased path does not resolve on the parent gets no row (no raise).
+
+    ``shelf`` is a relation, so the declaration builds, but the child filter set
+    is keyed on ``Genre``: its ``name`` leaf rebased to ``shelf__name`` names no
+    column of ``Shelf``. The candidate classification fails closed for it.
+    """
 
     class GenreFilter(FilterSet):
         class Meta:
@@ -7179,25 +7198,16 @@ def test_candidate_snapshot_skips_expanded_leaf_under_non_relation_prefix():
             fields = {"name": ["icontains"]}
 
     class BookFilter(FilterSet):
-        # ``field_name="id"`` is a bare local column (resolves, but no relation
-        # hop); ``field_name="does_not_exist"`` does not resolve at all. Both are
-        # permitted non-model declared prefixes: their expanded,
-        # inherited-framework-origin children must NOT be classified (no raise)
-        # and get no candidate row.
-        local_prefix = RelatedFilter(GenreFilter, field_name="id")
-        missing_prefix = RelatedFilter(GenreFilter, field_name="does_not_exist")
+        mismatched = RelatedFilter(GenreFilter, field_name="shelf")
 
         class Meta:
             model = library_models.Book
             fields = {"title": ["exact"]}
 
-    # Must not raise despite ``id__name`` / ``does_not_exist__name`` being
-    # unclassifiable against Book.
     BookFilter.get_filters()
     snapshot = BookFilter._expansion_snapshot()
     assert snapshot is not None
-    assert "local_prefix__name__icontains" not in snapshot.candidates
-    assert "missing_prefix__name__icontains" not in snapshot.candidates
+    assert "mismatched__name__icontains" not in snapshot.candidates
     # The direct framework-generated leaf still gets its row.
     assert "title" in snapshot.candidates
 
@@ -10456,14 +10466,17 @@ def _genre_world(*, register_type=True):
     return genres, {"visible_x": visible_x, "hidden_x": hidden_x, "hidden_y": hidden_y}
 
 
-def _genre_parent():
+def _genre_parent(*, declared=True):
+    """Genres filtered through ``books``, declared as ``visible_books`` unless ``declared`` is off."""
+
     class BookChild(FilterSet):
         class Meta:
             model = library_models.Book
             fields = {"title": ["exact"], "subtitle": ["exact", "isnull"]}
 
     class GenreParent(FilterSet):
-        visible_books = RelatedFilter(BookChild, field_name="books")
+        if declared:
+            visible_books = RelatedFilter(BookChild, field_name="books")
         without_title = CharFilter(field_name="books__title", exclude=True)
 
         class Meta:
@@ -10518,9 +10531,14 @@ def test_reverse_m2m_flat_leaf_answers_as_if_hidden_books_were_absent(
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
 @pytest.mark.parametrize("book", ["visible_x", "hidden_x", "hidden_y"])
-def test_reverse_m2m_relation_key_membership_never_matches_a_hidden_book(book):
-    """``books: [pk]`` matches a genre only through a visible book; a hidden pk matches nothing."""
+def test_reverse_m2m_relation_key_membership_never_matches_a_hidden_book(book, declared):
+    """``books: [pk]`` matches a genre only through a visible book; a hidden pk matches nothing.
+
+    Whether or not a ``RelatedFilter`` declares ``books``: an undeclared relation
+    reads ``BookType``'s visibility through the registry.
+    """
     _genres, books = _genre_world()
     pk = books[book].pk
     expected = _absent_world(
@@ -10528,7 +10546,11 @@ def test_reverse_m2m_relation_key_membership_never_matches_a_hidden_book(book):
         {"books__in": [pk]},
         hidden=[library_models.Book.objects.filter(circulation_status="repair")],
     )
-    got = _applied(_genre_parent(), {"books": {"exact": [pk]}}, library_models.Genre.objects.all())
+    got = _applied(
+        _genre_parent(declared=declared),
+        {"books": {"exact": [pk]}},
+        library_models.Genre.objects.all(),
+    )
     assert got == expected
     assert bool(got) is (book == "visible_x")
 
@@ -10701,6 +10723,7 @@ def test_inactive_relation_key_leaf_runs_no_get_queryset():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
 @pytest.mark.parametrize("book", ["visible_x", "hidden_x"])
 @pytest.mark.parametrize(
     ("filter_name", "value"),
@@ -10717,11 +10740,18 @@ def test_inactive_relation_key_leaf_runs_no_get_queryset():
         "globalid",
     ],
 )
-def test_to_many_relation_key_filters_compare_the_visible_target_key(filter_name, value, book):
+def test_to_many_relation_key_filters_compare_the_visible_target_key(
+    filter_name,
+    value,
+    book,
+    declared,
+):
     """Model-choice, ``in`` and GlobalID relation keys over ``Genre.books`` match only a visible book.
 
     Each cleans to model instances, a list, a queryset, or a node id; each is
-    re-read against the target's own key over the visible books.
+    re-read against the target's own key over the visible books. Over an
+    undeclared ``books`` the re-read copy runs over the rows ``BookNode`` shows,
+    and the GlobalID still validates against ``BookNode``.
     """
     genres, books = _genre_world(register_type=False)
     node = type(
@@ -10741,6 +10771,8 @@ def test_to_many_relation_key_filters_compare_the_visible_target_key(filter_name
         },
     )
     apply_interfaces(node, node.__django_strawberry_definition__)
+    # Finalization records the strategy an undeclared hop's GlobalID validates under.
+    node.__django_strawberry_definition__.effective_globalid_strategy = "type"
 
     class BookChild(FilterSet):
         class Meta:
@@ -10748,7 +10780,8 @@ def test_to_many_relation_key_filters_compare_the_visible_target_key(filter_name
             fields = {"title": ["exact"]}
 
     class GenreKeys(FilterSet):
-        visible_books = RelatedFilter(BookChild, field_name="books")
+        if declared:
+            visible_books = RelatedFilter(BookChild, field_name="books")
         has_book = ModelChoiceFilter(
             field_name="books",
             queryset=library_models.Book.objects.all(),
@@ -10797,14 +10830,17 @@ def _world_of_genre_favorites():
     return {"open": open_genre, "secret": secret}, profiles
 
 
-def _profile_parent():
+def _profile_parent(*, declared=True):
+    """Profiles filtered through ``favorite_genre``, declared as ``favorite`` unless ``declared`` is off."""
+
     class GenreChild(FilterSet):
         class Meta:
             model = library_models.Genre
             fields = {"name": ["exact", "isnull"]}
 
     class ProfileParent(FilterSet):
-        favorite = RelatedFilter(GenreChild, field_name="favorite_genre")
+        if declared:
+            favorite = RelatedFilter(GenreChild, field_name="favorite_genre")
         favored = ModelChoiceFilter(
             field_name="favorite_genre",
             queryset=library_models.Genre.objects.all(),
@@ -10825,6 +10861,7 @@ def _profile_parent():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
 @pytest.mark.parametrize(
     ("filter_input", "lookups", "exclude"),
     [
@@ -10850,6 +10887,7 @@ def test_nullable_to_field_forward_fk_leaf_answers_as_if_hidden_genres_were_abse
     filter_input,
     lookups,
     exclude,
+    declared,
 ):
     """A ``to_field`` FK leaf matches Django's answer once the hidden genre is deleted (``SET_NULL``)."""
     _genres, _profiles = _world_of_genre_favorites()
@@ -10859,14 +10897,19 @@ def test_nullable_to_field_forward_fk_leaf_answers_as_if_hidden_genres_were_abse
         exclude=exclude,
         hidden=[library_models.Genre.objects.filter(name__startswith="secret")],
     )
-    got = _applied(_profile_parent(), filter_input, library_models.PatronProfile.objects.all())
+    got = _applied(
+        _profile_parent(declared=declared),
+        filter_input,
+        library_models.PatronProfile.objects.all(),
+    )
     assert got == expected
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
 @pytest.mark.parametrize("genre", ["open", "secret"])
 @pytest.mark.parametrize("filter_name", ["favorite_genre", "favored", "not_favored"])
-def test_forward_relation_key_membership_reads_the_visible_target(filter_name, genre):
+def test_forward_relation_key_membership_reads_the_visible_target(filter_name, genre, declared):
     """A raw-key, model-choice or excluding key over a ``to_field`` FK treats a hidden genre as no genre."""
     genres, _profiles = _world_of_genre_favorites()
     pk = genres[genre].pk
@@ -10879,15 +10922,20 @@ def test_forward_relation_key_membership_reads_the_visible_target(filter_name, g
         exclude=filter_name == "not_favored",
         hidden=[library_models.Genre.objects.filter(name__startswith="secret")],
     )
-    got = _applied(_profile_parent(), filter_input, library_models.PatronProfile.objects.all())
+    got = _applied(
+        _profile_parent(declared=declared),
+        filter_input,
+        library_models.PatronProfile.objects.all(),
+    )
     assert got == expected
 
 
-def _relation_kind_case(kind):
+def _relation_kind_case(kind, *, declared=True):
     """Seed one relation kind; return ``(parent filterset, parent model, hidden rows, cases)``.
 
     Each case is ``(filter_input, lookups, exclude)``: the leaf, and the Django
-    lookup it spells over the parent model.
+    lookup it spells over the parent model. ``declared`` off leaves the relation
+    to the walk's undeclared hops (no ``RelatedFilter`` names it).
     """
     child_fields = {"title": ["exact"], "subtitle": ["isnull"]}
     if kind in {"forward-m2m", "hidden-reverse-m2m"}:
@@ -10968,11 +11016,12 @@ def _relation_kind_case(kind):
         {"Meta": type("Meta", (), {"model": child_model, "fields": child_fields})},
     )
     path = f"{relation}__{terminal[0]}"
+    branch = {"visible": RelatedFilter(child, field_name=relation)} if declared else {}
     parent = type(
         "Parent",
         (FilterSet,),
         {
-            "visible": RelatedFilter(child, field_name=relation),
+            **branch,
             "excluding": CharFilter(field_name=path, exclude=True),
             "key_isnull": BooleanFilter(field_name=relation, lookup_expr="isnull"),
             "Meta": type("Meta", (), {"model": parent_model, "fields": {path: ["exact"]}}),
@@ -10989,6 +11038,7 @@ def _relation_kind_case(kind):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
 @pytest.mark.parametrize(
     "kind",
     [
@@ -11001,12 +11051,514 @@ def _relation_kind_case(kind):
         "nullable-fk-hidden-reverse-mti-outer",
     ],
 )
-def test_every_relation_kind_answers_as_if_hidden_rows_were_absent(kind):
+def test_every_relation_kind_answers_as_if_hidden_rows_were_absent(kind, declared):
     """Positive, excluding and relation-key leaves over each relation kind match Django with the rows deleted."""
-    parent, parent_model, hidden, cases = _relation_kind_case(kind)
+    parent, parent_model, hidden, cases = _relation_kind_case(kind, declared=declared)
     for filter_input, lookups, exclude in cases:
         expected = _absent_world(parent_model, lookups, exclude=exclude, hidden=hidden)
         assert _applied(parent, filter_input, parent_model.objects.all()) == expected, filter_input
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_input", "lookups", "exclude"),
+    [
+        ({"books__title": "x"}, {"books__title": "x"}, False),
+        ({"books__subtitle": {"is_null": True}}, {"books__subtitle__isnull": True}, False),
+        ({"books__subtitle": {"is_null": False}}, {"books__subtitle__isnull": False}, False),
+        ({"without_title": "x"}, {"books__title": "x"}, True),
+        ({"books": {"is_null": True}}, {"books__isnull": True}, False),
+        ({"books": {"is_null": False}}, {"books__isnull": False}, False),
+    ],
+    ids=[
+        "positive",
+        "isnull-true",
+        "isnull-false",
+        "exclude",
+        "key-isnull-true",
+        "key-isnull-false",
+    ],
+)
+def test_undeclared_reverse_m2m_leaf_answers_as_if_hidden_books_were_absent(
+    filter_input,
+    lookups,
+    exclude,
+):
+    """With no ``RelatedFilter`` over ``Genre.books``, each leaf still reads ``BookType``'s rows.
+
+    The relation is an undeclared hop whose target type comes from the registry,
+    so every lookup answers as Django does with the hidden books deleted.
+    """
+    _genre_world()
+    expected = _absent_world(
+        library_models.Genre,
+        lookups,
+        exclude=exclude,
+        hidden=[library_models.Book.objects.filter(circulation_status="repair")],
+    )
+    got = _applied(
+        _genre_parent(declared=False),
+        filter_input,
+        library_models.Genre.objects.all(),
+    )
+    assert got == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("filter_cls", "lookup", "wrap"),
+    [
+        (GlobalIDMultipleChoiceFilter, "exact", lambda value: [value]),
+        (GlobalIDMultipleChoiceFilter, "in", lambda value: [value]),
+        (GlobalIDFilter, "exact", lambda value: value),
+    ],
+    ids=["multiple-exact", "multiple-in", "single-exact"],
+)
+def test_undeclared_globalid_relation_key_still_validates_against_the_target_type(
+    filter_cls,
+    lookup,
+    wrap,
+):
+    """An undeclared GlobalID key runs over the target rows yet rejects another type's id."""
+    _genres, books = _genre_world(register_type=False)
+    node = type(
+        "BookNode",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Book, "interfaces": (strawberry.relay.Node,)},
+            ),
+            "get_queryset": classmethod(
+                lambda cls, queryset, info, **kwargs: queryset.exclude(
+                    circulation_status="repair",
+                ),
+            ),
+        },
+    )
+    apply_interfaces(node, node.__django_strawberry_definition__)
+    node.__django_strawberry_definition__.effective_globalid_strategy = "type"
+
+    class GenreKeys(FilterSet):
+        has_book_global = filter_cls(field_name="books", lookup_expr=lookup)
+
+        class Meta:
+            model = library_models.Genre
+            fields = {"name": ["exact"]}
+
+    GenreKeys.get_filters()
+    wrong = strawberry.relay.to_base64("ShelfNode", str(books["visible_x"].pk))
+    with pytest.raises(GraphQLError, match="GlobalID type mismatch: filter expects BookNode"):
+        _applied(GenreKeys, {"has_book_global": wrap(wrong)}, library_models.Genre.objects.all())
+
+
+@pytest.mark.parametrize(
+    ("register", "custom_hook"),
+    [(False, False), (True, False)],
+    ids=["unregistered-target", "identity-hook-target"],
+)
+def test_undeclared_relation_no_type_scopes_is_not_walked(register, custom_hook):
+    """A relation whose target no type scopes keeps Django's own join: the leaf walks no hop.
+
+    Neither an unregistered target model nor a type keeping the identity
+    ``get_queryset`` changes a row, so the leaf keeps its original invocation
+    (and its routing); a target type with a hook of its own is walked.
+    """
+    if register:
+        type(
+            "ShelfType",
+            (DjangoType,),
+            {"Meta": type("Meta", (), {"model": library_models.Shelf})},
+        )
+
+    class BranchKeys(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"alt_shelves": ["exact"], "alt_shelves__code": ["exact"]}
+
+    filters = BranchKeys.get_filters()
+    assert BranchKeys._flat_leaf_walk(filters["alt_shelves"]) is None
+    assert BranchKeys._flat_leaf_walk(filters["alt_shelves__code"]) is None
+
+
+def test_undeclared_relation_to_a_hooked_type_walks_one_hop_per_relation():
+    """Each relation segment past the declared hops is one undeclared hop; a column ends the walk."""
+    _hide(library_models.Book, circulation_status="repair")
+
+    class BranchPaths(FilterSet):
+        by_pk = NumberFilter(field_name="pk")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"shelves__books__title": ["exact"]}
+
+    filters = BranchPaths.get_filters()
+    walk = BranchPaths._flat_leaf_walk(filters["shelves__books__title"])
+    assert walk is not None
+    hops, rest = walk
+    assert [(hop.declared, hop.declared_attr, hop.model) for hop in hops] == [
+        (False, "shelves", library_models.Shelf),
+        (False, "books", library_models.Book),
+    ]
+    assert [hop.owner for hop in hops] == [BranchPaths, None]
+    assert rest == "title"
+    assert BranchPaths._flat_leaf_walk(filters["by_pk"]) is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shelf", ["open", "secret"])
+@pytest.mark.parametrize("book", ["visible", "hidden"])
+def test_relation_key_past_two_undeclared_hops_reads_both_targets(book, shelf):
+    """``books__shelf`` on a genre matches only a visible shelf of a visible book."""
+    _hide(library_models.Book, circulation_status="repair")
+    _hide(library_models.Shelf, topic="secret")
+    branch = library_models.Branch.objects.create(name="home")
+    target = library_models.Shelf.objects.create(branch=branch, code="s", topic=shelf)
+    genre = library_models.Genre.objects.create(name="g")
+    genre.books.add(_book("b", shelf=target, hidden=book == "hidden"))
+
+    class GenreKeys(FilterSet):
+        class Meta:
+            model = library_models.Genre
+            fields = {"books__shelf": ["exact"]}
+
+    GenreKeys.get_filters()
+    expected = _absent_world(
+        library_models.Genre,
+        {"books__shelf": target.pk},
+        hidden=[
+            library_models.Book.objects.filter(circulation_status="repair"),
+            library_models.Shelf.objects.filter(topic="secret"),
+        ],
+    )
+    got = _applied(
+        GenreKeys,
+        {"books__shelf": {"exact": target.pk}},
+        library_models.Genre.objects.all(),
+    )
+    assert got == expected
+    assert bool(got) is (book == "visible" and shelf == "open")
+
+
+@pytest.mark.parametrize(
+    ("parent_model", "field_name", "segment"),
+    [
+        (library_models.Book, "title__shelf", "title"),
+        (library_models.Book, "shelf__nowhere", "nowhere"),
+        (library_models.TaggedItem, "content_object", "content_object"),
+    ],
+    ids=["column", "missing", "generic-foreign-key"],
+)
+def test_branch_declared_over_a_non_relation_path_is_refused_at_expansion(
+    parent_model,
+    field_name,
+    segment,
+):
+    """A ``RelatedFilter`` whose ``field_name`` crosses a non-relation fails when the expansion builds.
+
+    The check reads the parent model only: the unresolvable string target is
+    never looked up.
+    """
+    parent = type(
+        "Parent",
+        (FilterSet,),
+        {
+            "misdeclared": RelatedFilter("NoSuchFilterSet", field_name=field_name),
+            "Meta": type("Meta", (), {"model": parent_model, "fields": {"id": ["exact"]}}),
+        },
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match=rf"RelatedFilter 'misdeclared' has field_name '{field_name}', but '{segment}' is not",
+    ):
+        parent.get_filters()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("patron", ["open", "secret"])
+def test_pk_segment_on_a_model_keyed_by_a_relation_is_that_relation(patron):
+    """``pk`` on a model whose primary key is a one-to-one is the relation it names.
+
+    ``PatronProfile`` is keyed by ``patron``: a ``pk`` filter is a forward key over
+    ``Patron`` and matches only a patron the patron type lets the viewer see.
+    """
+    _hide(library_models.Patron, name="secret")
+    profiles = {
+        name: library_models.PatronProfile.objects.create(
+            patron=library_models.Patron.objects.create(name=name, email=f"{name}@x"),
+        )
+        for name in ("open", "secret")
+    }
+
+    class ProfileKeys(FilterSet):
+        by_pk = NumberFilter(field_name="pk")
+
+        class Meta:
+            model = library_models.PatronProfile
+            fields = {"postal_code": ["exact"]}
+
+    ProfileKeys.get_filters()
+    pk = profiles[patron].pk
+    expected = _absent_world(
+        library_models.PatronProfile,
+        {"pk": pk},
+        hidden=[library_models.Patron.objects.filter(name="secret")],
+    )
+    got = _applied(ProfileKeys, {"by_pk": pk}, library_models.PatronProfile.objects.all())
+    assert got == expected == ({pk} if patron == "open" else set())
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("venue", ["open", "closed"])
+@pytest.mark.parametrize(
+    ("filter_name", "value"),
+    [("opened_year", 2020), ("opened_month", 6)],
+    ids=["year", "month"],
+)
+def test_undeclared_hop_before_a_transform_reads_its_target_visibility(filter_name, value, venue):
+    """A path that runs past an undeclared relation into a transform still walks the relation.
+
+    ``venue__opened_on__year`` / ``__month`` do not classify whole (``opened_on`` is a
+    column with a transform after it); its leading ``venue`` hop does, and a
+    ``Closed`` venue the venue type hides counts as no venue.
+    """
+    _hide(library_models.Venue, name__startswith="Closed")
+    target = library_models.Venue.objects.create(
+        name="Open" if venue == "open" else "Closed",
+        opened_on=datetime.date(2020, 6, 1),
+    )
+    ticket = library_models.RepairTicket.objects.create(code="t", venue=target)
+
+    class TicketPaths(FilterSet):
+        opened_year = NumberFilter(field_name="venue__opened_on__year")
+        opened_month = NumberFilter(field_name="venue__opened_on__month")
+
+        class Meta:
+            model = library_models.RepairTicket
+            fields = {"code": ["exact"]}
+
+    TicketPaths.get_filters()
+    got = _applied(TicketPaths, {filter_name: value}, library_models.RepairTicket.objects.all())
+    assert got == ({ticket.pk} if venue == "open" else set())
+
+
+def _books_through_shelf_branches(shelf_hook=None):
+    """Books whose ``branch`` branch is declared over ``shelf__branch``; ``secret`` shelves are hidden.
+
+    ``open`` sits on an open shelf, ``on_secret`` on a secret shelf; both shelves
+    belong to the branch named ``open``. ``shelf_hook`` replaces the shelf
+    type's sync ``get_queryset`` (an async-only one, say).
+    """
+
+    def hide_secret(cls, queryset, info, **kwargs):
+        return queryset.exclude(topic="secret")
+
+    type(
+        "ShelfType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": library_models.Shelf}),
+            "get_queryset": classmethod(shelf_hook or hide_secret),
+        },
+    )
+    _hide(library_models.Branch, city="restricted")
+    branch = library_models.Branch.objects.create(name="open", city="here")
+    books = {
+        "open": _book(
+            "open",
+            shelf=library_models.Shelf.objects.create(branch=branch, code="o", topic="t"),
+        ),
+        "on_secret": _book(
+            "on_secret",
+            shelf=library_models.Shelf.objects.create(branch=branch, code="s", topic="secret"),
+        ),
+    }
+
+    class BranchChild(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class BookParent(FilterSet):
+        branch = RelatedFilter(BranchChild, field_name="shelf__branch")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    BookParent.get_filters()
+    return BookParent, books
+
+
+_THROUGH_SHELF_INPUTS = [
+    {"branch": {"name": "open"}},
+    {"branch__name": "open"},
+    {"or_": [{"branch": {"name": "open"}}]},
+    {"or_": [{"branch__name": "open"}]},
+]
+_THROUGH_SHELF_IDS = [
+    "nested",
+    "flat",
+    "nested-in-or-arm",
+    "flat-in-or-arm",
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("filter_input", _THROUGH_SHELF_INPUTS, ids=_THROUGH_SHELF_IDS)
+def test_multi_relation_branch_passes_only_through_visible_intermediate_rows(filter_input):
+    """``RelatedFilter(field_name="shelf__branch")`` never reaches a branch through a hidden shelf."""
+    parent, books = _books_through_shelf_branches()
+    expected = _absent_world(
+        library_models.Book,
+        {"shelf__branch__name": "open"},
+        hidden=[library_models.Shelf.objects.filter(topic="secret")],
+    )
+    assert expected == {books["open"].pk}
+    assert _applied(parent, filter_input, library_models.Book.objects.all()) == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("filter_input", _THROUGH_SHELF_INPUTS, ids=_THROUGH_SHELF_IDS)
+def test_apply_async_awaits_the_intermediate_model_get_queryset(filter_input):
+    """An async-only intermediate ``get_queryset`` is awaited up front, nested, flat and in arms."""
+    import asyncio
+
+    from asgiref.sync import sync_to_async
+
+    async def hide_secret_async(cls, queryset, info, **kwargs):
+        return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
+
+    parent, books = _books_through_shelf_branches(hide_secret_async)
+    qs = asyncio.run(
+        parent.apply_async(filter_input, library_models.Book.objects.all(), _make_info()),
+    )
+    assert set(qs.values_list("pk", flat=True)) == {books["open"].pk}
+    with pytest.raises(RuntimeError, match="use apply_async instead"):
+        list(parent.apply(filter_input, library_models.Book.objects.all(), _make_info()))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "filter_input",
+    [
+        {"alt_shelves": {"exact": None}},
+        {"alt_shelves__code": "match"},
+        {"or_": [{"alt_shelves__code": "match"}]},
+        {"alt_shelves": {"exact": None}, "alt_shelves__code": "match"},
+    ],
+    ids=[
+        "key",
+        "column",
+        "column-in-or-arm",
+        "key-and-column",
+    ],
+)
+def test_apply_async_awaits_the_undeclared_hop_get_queryset(filter_input):
+    """An async-only ``get_queryset`` behind an undeclared hop is awaited before the ``.qs`` read."""
+    import asyncio
+
+    from asgiref.sync import sync_to_async
+
+    async def hide_secret_async(cls, queryset, info, **kwargs):
+        return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
+
+    type(
+        "ShelfType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": library_models.Shelf}),
+            "get_queryset": classmethod(hide_secret_async),
+        },
+    )
+    home = library_models.Branch.objects.create(name="home")
+    away = library_models.Branch.objects.create(name="away")
+    open_shelf = library_models.Shelf.objects.create(branch=home, code="match", topic="open")
+    secret = library_models.Shelf.objects.create(branch=away, code="match", topic="secret")
+    alpha = library_models.Branch.objects.create(name="alpha")
+    beta = library_models.Branch.objects.create(name="beta")
+    open_shelf.alt_branches.add(alpha)
+    secret.alt_branches.add(beta)
+    if "alt_shelves" in filter_input:
+        filter_input = {**filter_input, "alt_shelves": {"exact": [open_shelf.pk, secret.pk]}}
+
+    class BranchKeys(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"alt_shelves": ["exact"], "alt_shelves__code": ["exact"]}
+
+    BranchKeys.get_filters()
+    qs = asyncio.run(
+        BranchKeys.apply_async(filter_input, library_models.Branch.objects.all(), _make_info()),
+    )
+    assert list(qs.values_list("name", flat=True)) == ["alpha"]
+    with pytest.raises(RuntimeError, match="use apply_async instead"):
+        list(BranchKeys.apply(filter_input, library_models.Branch.objects.all(), _make_info()))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "column",
+        "column-in-or-arm",
+        "key-of-secret",
+        "key-of-private",
+    ],
+)
+def test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook(spelling):
+    """A path back into the set's own model reads the type the set is bound to, not the primary.
+
+    ``ShelfKeys`` is bound to the secondary type, which hides ``private`` shelves;
+    the primary hides ``secret`` ones. ``books__shelf__code`` re-enters ``Shelf``.
+    """
+    hooks = {"primary": "secret", "secondary": "private"}
+    types = {
+        role: type(
+            f"Shelf{role.title()}Type",
+            (DjangoType,),
+            {
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {"model": library_models.Shelf, "primary": role == "primary"},
+                ),
+                "get_queryset": classmethod(
+                    lambda cls, queryset, info, topic=topic, **kwargs: queryset.exclude(
+                        topic=topic,
+                    ),
+                ),
+            },
+        )
+        for role, topic in hooks.items()
+    }
+    shelves = {
+        topic: library_models.Shelf.objects.create(
+            branch=library_models.Branch.objects.create(name=topic),
+            code="x",
+            topic=topic,
+        )
+        for topic in ("secret", "private")
+    }
+    for shelf in shelves.values():
+        _book(shelf.topic, shelf=shelf)
+
+    class ShelfKeys(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"books__shelf__code": ["exact"], "books__shelf": ["exact"]}
+
+    ShelfKeys._owner_definition = types["secondary"].__django_strawberry_definition__
+    ShelfKeys.get_filters()
+    filter_input = {
+        "column": {"books__shelf__code": "x"},
+        "column-in-or-arm": {"or_": [{"books__shelf__code": "x"}]},
+        "key-of-secret": {"books__shelf": {"exact": shelves["secret"].pk}},
+        "key-of-private": {"books__shelf": {"exact": shelves["private"].pk}},
+    }[spelling]
+    expected = set() if spelling == "key-of-private" else {shelves["secret"].pk}
+    assert _applied(ShelfKeys, filter_input, library_models.Shelf.objects.all()) == expected
 
 
 def _shelf_branch_world():
@@ -11249,8 +11801,12 @@ def test_explicit_queryset_boundary_counts_as_absent_for_isnull_and_exclude():
     assert _applied(BookParent, {"not_topic": "t"}, base) == {books["outside"].pk}
 
 
-def test_walked_leaf_restriction_compiles_on_the_parent_database_alias():
-    """The visibility seed and every correlated link of a walked leaf read the parent queryset's alias."""
+@pytest.mark.parametrize("declared", [True, False], ids=["declared", "undeclared"])
+def test_walked_leaf_restriction_compiles_on_the_parent_database_alias(declared):
+    """The visibility seed and every correlated link of a walked leaf read the parent queryset's alias.
+
+    A declared hop and an undeclared one alike.
+    """
     seen = []
 
     def get_queryset(cls, queryset, info, **kwargs):
@@ -11265,7 +11821,7 @@ def test_walked_leaf_restriction_compiles_on_the_parent_database_alias():
             "get_queryset": classmethod(get_queryset),
         },
     )
-    parent = _genre_parent()
+    parent = _genre_parent(declared=declared)
     for filter_input in (
         {"books__title": "x"},
         {"books": {"is_null": True}},

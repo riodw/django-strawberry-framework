@@ -16,77 +16,79 @@ docker compose -f docker-compose.postgres.yml down
 
 ## Provenance -- the queries came from production code
 
-Each SQL statement below is read directly off the compiled queryset a real fakeshop filter set produces (`examples/fakeshop/apps/products/filters.py`, `examples/fakeshop/apps/library/filters.py`), with the composed fakeshop schema loaded so every declared branch resolves its target type. No SQL is hand-written; each EXPLAIN executes the exact parameterized statement `qs.query.get_compiler(using=qs.db).as_sql()` returns. The filter sets run with no resolver `info`, so every target type's `get_queryset` answers for an anonymous viewer.
+Each SQL statement below is read directly off the compiled queryset a real fakeshop filter set produces (`examples/fakeshop/apps/scalars/filters.py`, `examples/fakeshop/apps/library/filters.py`), with the composed fakeshop schema loaded so every declared branch resolves its target type. No SQL is hand-written; each EXPLAIN executes the exact parameterized statement `qs.query.get_compiler(using=qs.db).as_sql()` returns. The filter sets run with no resolver `info`, so every target type's `get_queryset` answers for an anonymous viewer.
 
 ## Routed leaf: one `EXISTS` correlated on the outer primary key
 
-- FilterSet: `apps.products.filters.CategoryFilter` (root model `Category`)
-- Active generated leaf: `items__name__icontains` = `'cardio'`
-- Relation path: `Category.items` (to-many reverse FK) -> `Item.name` (scalar); no `RelatedFilter` declares `items`, so no target visibility applies
+- FilterSet: `apps.scalars.filters.ScalarSpecimenFilter` (root model `ScalarSpecimen`)
+- Active generated relation key: `children` = the primary keys of 25 children
+- Relation path: `ScalarSpecimen.children` (to-many reverse FK onto the same model); no `RelatedFilter` declares `children` and `ScalarSpecimenType` keeps the identity `get_queryset`, so no target visibility applies and the leaf is not walked
 - Applicator: `FilterSet._apply_flat_leaves` routes the eligible framework-generated to-many leaf through `optimizer/predicates.py`'s `correlated_inner_root` + `attach_exists`, with the framework-added `distinct` suppressed inside the existence body (`_invoke_suppressing_framework_distinct`).
-- Dedup oracle: the same leaf invoked directly on `Category.objects.all()`, then `.distinct()` (the membership `JOIN` + `DISTINCT` idiom the routing replaces).
+- Dedup oracle: the same leaf invoked directly on `ScalarSpecimen.objects.all()`, then `.distinct()` (the membership `JOIN` + `DISTINCT` idiom the routing replaces).
 
 Shape assertions (all passed before this file was written):
 
 - outer `query.distinct` is `False`: **True**
-- exactly one `EXISTS`: **True**, correlated on the outer primary key (`U0."id" = ("products_category"."id")`): **True**
+- exactly one `EXISTS`: **True**, correlated on the outer primary key (`= ("scalars_scalarspecimen"."id")`): **True**
 - no `DISTINCT` anywhere (outer query or any existence body): **True**
-- the outer statement reads only the root table (every related table lives INSIDE an `EXISTS`): **['products_category']**
+- the outer statement reads only the root table (every related table lives INSIDE an `EXISTS`): **['scalars_scalarspecimen']**
 - the result equals the dedup oracle (25 rows): **True**
 - the top plan node's actual row count equals the result (25 rows), so no outer row is multiplied: **True**
 
-The correlated distinct-free inner query -- it re-enters `products_category` as `U0`, joins the membership table inside the subquery, and carries no `SELECT DISTINCT`:
+The correlated distinct-free inner query -- it re-enters `scalars_scalarspecimen` as `U0`, joins the children inside the subquery, and carries no `SELECT DISTINCT`:
 
 ```sql
-EXISTS(SELECT 1 AS "a" FROM "products_category" "U0" INNER JOIN "products_item" "U1" ON ("U0"."id" = "U1"."category_id") WHERE ("U0"."id" = ("products_category"."id") AND UPPER("U1"."name"::text) LIKE UPPER(%cardio%)) LIMIT 1)
+EXISTS(SELECT 1 AS "a" FROM "scalars_scalarspecimen" "U0" INNER JOIN "scalars_scalarspecimen" "U1" ON ("U0"."id" = "U1"."parent_id") WHERE ("U0"."id" = ("scalars_scalarspecimen"."id") AND "U1"."id" IN (61, 73, 85, 97, 109, 121, 133, 145, 157, 169, 181, 193, 205, 217, 229, 241, 253, 265, 277, 289, 301, 313, 325, 337, 349)) LIMIT 1)
 ```
 
 ### Emitted SQL (full outer query, params inlined for display)
 
 ```sql
-SELECT "products_category"."id", "products_category"."name", "products_category"."description", "products_category"."is_private", "products_category"."created_date", "products_category"."updated_date" FROM "products_category" WHERE EXISTS(SELECT 1 AS "a" FROM "products_category" "U0" INNER JOIN "products_item" "U1" ON ("U0"."id" = "U1"."category_id") WHERE ("U0"."id" = ("products_category"."id") AND UPPER("U1"."name"::text) LIKE UPPER(%cardio%)) LIMIT 1) ORDER BY "products_category"."id" ASC
+SELECT "scalars_scalarspecimen"."id", "scalars_scalarspecimen"."label", "scalars_scalarspecimen"."flag", "scalars_scalarspecimen"."score", "scalars_scalarspecimen"."price", "scalars_scalarspecimen"."occurred_on", "scalars_scalarspecimen"."occurred_at", "scalars_scalarspecimen"."occurred_time", "scalars_scalarspecimen"."payload", "scalars_scalarspecimen"."external_id", "scalars_scalarspecimen"."signed_big", "scalars_scalarspecimen"."unsigned_big", "scalars_scalarspecimen"."parent_id", "scalars_scalarspecimen"."tag_id" FROM "scalars_scalarspecimen" WHERE EXISTS(SELECT 1 AS "a" FROM "scalars_scalarspecimen" "U0" INNER JOIN "scalars_scalarspecimen" "U1" ON ("U0"."id" = "U1"."parent_id") WHERE ("U0"."id" = ("scalars_scalarspecimen"."id") AND "U1"."id" IN (61, 73, 85, 97, 109, 121, 133, 145, 157, 169, 181, 193, 205, 217, 229, 241, 253, 265, 277, 289, 301, 313, 325, 337, 349)) LIMIT 1) ORDER BY "scalars_scalarspecimen"."id" ASC
 ```
 
 The exact parameterized statement executed by `EXPLAIN` (as returned by `qs.query.get_compiler(using=qs.db).as_sql()`):
 
 ```sql
-SELECT "products_category"."id", "products_category"."name", "products_category"."description", "products_category"."is_private", "products_category"."created_date", "products_category"."updated_date" FROM "products_category" WHERE EXISTS(SELECT %s AS "a" FROM "products_category" "U0" INNER JOIN "products_item" "U1" ON ("U0"."id" = "U1"."category_id") WHERE ("U0"."id" = ("products_category"."id") AND UPPER("U1"."name"::text) LIKE UPPER(%s)) LIMIT 1) ORDER BY "products_category"."id" ASC
+SELECT "scalars_scalarspecimen"."id", "scalars_scalarspecimen"."label", "scalars_scalarspecimen"."flag", "scalars_scalarspecimen"."score", "scalars_scalarspecimen"."price", "scalars_scalarspecimen"."occurred_on", "scalars_scalarspecimen"."occurred_at", "scalars_scalarspecimen"."occurred_time", "scalars_scalarspecimen"."payload", "scalars_scalarspecimen"."external_id", "scalars_scalarspecimen"."signed_big", "scalars_scalarspecimen"."unsigned_big", "scalars_scalarspecimen"."parent_id", "scalars_scalarspecimen"."tag_id" FROM "scalars_scalarspecimen" WHERE EXISTS(SELECT %s AS "a" FROM "scalars_scalarspecimen" "U0" INNER JOIN "scalars_scalarspecimen" "U1" ON ("U0"."id" = "U1"."parent_id") WHERE ("U0"."id" = ("scalars_scalarspecimen"."id") AND "U1"."id" IN (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)) LIMIT 1) ORDER BY "scalars_scalarspecimen"."id" ASC
 ```
 
-Bind params: `[Int4(1), '%cardio%']`
+Bind params: `[Int4(1), 61, 73, 85, 97, 109, 121, 133, 145, 157, 169, 181, 193, 205, 217, 229, 241, 253, 265, 277, 289, 301, 313, 325, 337, 349]`
 
 ### EXPLAIN (ANALYZE, BUFFERS)
 
 ```text
-Sort  (cost=10.73..10.74 rows=1 width=39) (actual time=0.080..0.081 rows=25 loops=1)
-  Sort Key: products_category.id
-  Sort Method: quicksort  Memory: 26kB
-  Buffers: shared hit=55
-  ->  Nested Loop  (cost=10.49..10.72 rows=1 width=39) (actual time=0.064..0.076 rows=25 loops=1)
-        Buffers: shared hit=55
-        ->  HashAggregate  (cost=10.35..10.36 rows=1 width=16) (actual time=0.061..0.063 rows=25 loops=1)
+Sort  (cost=24.82..24.89 rows=25 width=108) (actual time=0.126..0.128 rows=25 loops=1)
+  Sort Key: scalars_scalarspecimen.id
+  Sort Method: quicksort  Memory: 28kB
+  Buffers: shared hit=59
+  ->  Nested Loop  (cost=17.72..24.24 rows=25 width=108) (actual time=0.090..0.116 rows=25 loops=1)
+        Buffers: shared hit=59
+        ->  HashAggregate  (cost=17.57..17.82 rows=25 width=16) (actual time=0.086..0.090 rows=25 loops=1)
               Group Key: "U0".id
               Batches: 1  Memory Usage: 24kB
-              Buffers: shared hit=5
-              ->  Hash Join  (cost=8.51..10.35 rows=1 width=16) (actual time=0.051..0.057 rows=25 loops=1)
-                    Hash Cond: ("U0".id = "U1".category_id)
-                    Buffers: shared hit=5
-                    ->  Seq Scan on products_category "U0"  (cost=0.00..1.60 rows=60 width=8) (actual time=0.002..0.004 rows=60 loops=1)
-                          Buffers: shared hit=1
-                    ->  Hash  (cost=8.50..8.50 rows=1 width=8) (actual time=0.047..0.047 rows=25 loops=1)
-                          Buckets: 1024  Batches: 1  Memory Usage: 9kB
-                          Buffers: shared hit=4
-                          ->  Seq Scan on products_item "U1"  (cost=0.00..8.50 rows=1 width=8) (actual time=0.003..0.045 rows=25 loops=1)
-                                Filter: (upper(name) ~~ '%CARDIO%'::text)
-                                Rows Removed by Filter: 275
-                                Buffers: shared hit=4
-        ->  Index Scan using products_category_pkey on products_category  (cost=0.14..0.36 rows=1 width=39) (actual time=0.000..0.000 rows=1 loops=25)
+              Buffers: shared hit=9
+              ->  Merge Join  (cost=13.19..17.51 rows=25 width=16) (actual time=0.058..0.079 rows=25 loops=1)
+                    Merge Cond: ("U0".id = "U1".parent_id)
+                    Buffers: shared hit=9
+                    ->  Index Only Scan using scalars_scalarspecimen_pkey on scalars_scalarspecimen "U0"  (cost=0.15..23.55 rows=360 width=8) (actual time=0.006..0.015 rows=59 loops=1)
+                          Heap Fetches: 59
+                          Buffers: shared hit=2
+                    ->  Sort  (cost=13.04..13.11 rows=25 width=8) (actual time=0.050..0.052 rows=25 loops=1)
+                          Sort Key: "U1".parent_id
+                          Sort Method: quicksort  Memory: 25kB
+                          Buffers: shared hit=7
+                          ->  Seq Scan on scalars_scalarspecimen "U1"  (cost=0.06..12.46 rows=25 width=8) (actual time=0.011..0.046 rows=25 loops=1)
+                                Filter: (id = ANY ('{61,73,85,97,109,121,133,145,157,169,181,193,205,217,229,241,253,265,277,289,301,313,325,337,349}'::bigint[]))
+                                Rows Removed by Filter: 335
+                                Buffers: shared hit=7
+        ->  Index Scan using scalars_scalarspecimen_pkey on scalars_scalarspecimen  (cost=0.15..0.27 rows=1 width=108) (actual time=0.001..0.001 rows=1 loops=25)
               Index Cond: (id = "U0".id)
               Buffers: shared hit=50
 Planning:
-  Buffers: shared hit=27
-Planning Time: 0.106 ms
-Execution Time: 0.094 ms
+  Buffers: shared hit=46
+Planning Time: 0.277 ms
+Execution Time: 0.154 ms
 ```
 
 ## Walked leaf: one `EXISTS` per declared hop, built from the visible rows
@@ -125,47 +127,47 @@ Bind params: `[Int4(1), 'repair', Int4(1), Int4(1), '%cardio%']`
 ### EXPLAIN (ANALYZE, BUFFERS)
 
 ```text
-Sort  (cost=27.03..27.14 rows=45 width=34) (actual time=0.176..0.181 rows=180 loops=1)
+Sort  (cost=27.03..27.14 rows=45 width=34) (actual time=0.410..0.421 rows=180 loops=1)
   Sort Key: library_loan.id
   Sort Method: quicksort  Memory: 36kB
   Buffers: shared hit=376
-  ->  Nested Loop  (cost=18.44..25.80 rows=45 width=34) (actual time=0.101..0.158 rows=180 loops=1)
+  ->  Nested Loop  (cost=18.44..25.80 rows=45 width=34) (actual time=0.223..0.368 rows=180 loops=1)
         Buffers: shared hit=376
-        ->  HashAggregate  (cost=18.16..18.30 rows=14 width=16) (actual time=0.097..0.102 rows=60 loops=1)
+        ->  HashAggregate  (cost=18.16..18.30 rows=14 width=16) (actual time=0.221..0.231 rows=60 loops=1)
               Group Key: "W0".id
               Batches: 1  Memory Usage: 32kB
               Buffers: shared hit=196
-              ->  Nested Loop  (cost=14.69..18.13 rows=14 width=16) (actual time=0.052..0.091 rows=60 loops=1)
+              ->  Nested Loop  (cost=14.69..18.13 rows=14 width=16) (actual time=0.115..0.206 rows=60 loops=1)
                     Buffers: shared hit=196
-                    ->  HashAggregate  (cost=14.54..14.69 rows=15 width=8) (actual time=0.050..0.055 rows=75 loops=1)
+                    ->  HashAggregate  (cost=14.54..14.69 rows=15 width=8) (actual time=0.112..0.122 rows=75 loops=1)
                           Group Key: "V0".book_id
                           Batches: 1  Memory Usage: 32kB
                           Buffers: shared hit=46
-                          ->  Nested Loop  (cost=4.27..14.50 rows=15 width=8) (actual time=0.006..0.041 rows=75 loops=1)
+                          ->  Nested Loop  (cost=4.27..14.50 rows=15 width=8) (actual time=0.012..0.094 rows=75 loops=1)
                                 Buffers: shared hit=46
-                                ->  Seq Scan on library_patron "U0"  (cost=0.00..1.90 rows=1 width=8) (actual time=0.002..0.014 rows=5 loops=1)
+                                ->  Seq Scan on library_patron "U0"  (cost=0.00..1.90 rows=1 width=8) (actual time=0.005..0.035 rows=5 loops=1)
                                       Filter: (upper(email) ~~ '%CARDIO%'::text)
                                       Rows Removed by Filter: 55
                                       Buffers: shared hit=1
-                                ->  Bitmap Heap Scan on library_loan "V0"  (cost=4.27..12.45 rows=15 width=16) (actual time=0.002..0.004 rows=15 loops=5)
+                                ->  Bitmap Heap Scan on library_loan "V0"  (cost=4.27..12.45 rows=15 width=16) (actual time=0.004..0.009 rows=15 loops=5)
                                       Recheck Cond: (patron_id = "U0".id)
                                       Heap Blocks: exact=40
                                       Buffers: shared hit=45
-                                      ->  Bitmap Index Scan on library_loan_patron_id_f216afaf  (cost=0.00..4.26 rows=15 width=0) (actual time=0.001..0.001 rows=15 loops=5)
+                                      ->  Bitmap Index Scan on library_loan_patron_id_f216afaf  (cost=0.00..4.26 rows=15 width=0) (actual time=0.002..0.002 rows=15 loops=5)
                                             Index Cond: (patron_id = "U0".id)
                                             Buffers: shared hit=5
-                    ->  Index Scan using library_book_pkey on library_book "W0"  (cost=0.15..0.23 rows=1 width=8) (actual time=0.000..0.000 rows=1 loops=75)
+                    ->  Index Scan using library_book_pkey on library_book "W0"  (cost=0.15..0.23 rows=1 width=8) (actual time=0.001..0.001 rows=1 loops=75)
                           Index Cond: (id = "V0".book_id)
                           Filter: ((circulation_status)::text <> 'repair'::text)
                           Rows Removed by Filter: 0
                           Buffers: shared hit=150
-        ->  Index Scan using library_loan_book_id_2771127e on library_loan  (cost=0.28..0.51 rows=3 width=34) (actual time=0.000..0.001 rows=3 loops=60)
+        ->  Index Scan using library_loan_book_id_2771127e on library_loan  (cost=0.28..0.51 rows=3 width=34) (actual time=0.001..0.002 rows=3 loops=60)
               Index Cond: (book_id = "V0".book_id)
               Buffers: shared hit=180
 Planning:
   Buffers: shared hit=29
-Planning Time: 0.171 ms
-Execution Time: 0.198 ms
+Planning Time: 0.380 ms
+Execution Time: 0.459 ms
 ```
 
 ## What the plans show
@@ -179,7 +181,7 @@ How Postgres executes each `EXISTS` is the planner's choice: it may decorrelate 
 - PostgreSQL: PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
 - Django: 6.1
 - Python: 3.14.2
-- Seeded (deterministic, rolled back after capture): 60 categories, 300 items (25 with a `cardio` name); 300 books (30 in repair), 60 patrons (5 with a `cardio` email), 900 loans (3 per book).
+- Seeded (deterministic, rolled back after capture): 60 parent specimens with 300 children (25 named by the relation key); 300 books (30 in repair), 60 patrons (5 with a `cardio` email), 900 loans (3 per book).
 
 <!-- LINK DEFINITIONS -->
 

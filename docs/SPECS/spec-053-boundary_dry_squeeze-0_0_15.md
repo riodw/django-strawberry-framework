@@ -468,7 +468,13 @@ consumer inventory to cover: the `_context` names
 and `connection.py`) and `extension.mutation_payload_child_selections`
 (used by `mutations/resolvers.py`); the `nested_planner` / `plans` /
 `selections` symbols `connection.py` uses; `predicates.attach_exists` /
-`predicates.correlated_inner_root` (used by `filters/sets.py`);
+`predicates.correlated_inner_root` / `predicates.related_rows_exist` (used
+by `filters/sets.py`), `predicates.visible_row_exists` /
+`predicates.visible_value` (used by `orders/sets.py`) and
+`predicates.visible_value_path` (used by `connection.py`), with
+`tests/filters/test_sets.py` and `tests/optimizer/test_predicates.py`
+importing the module directly (the latter including the private alias
+helpers, which stay outside the contract);
 `field_meta.FieldMeta`; `hints.OptimizerHint`; the optimizer `logger`. Pure re-export + retarget; no
 symbol moves, no behavior change. After this, contract 2 of Decision 3 is
 enforceable.

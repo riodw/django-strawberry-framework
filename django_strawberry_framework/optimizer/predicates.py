@@ -7,7 +7,8 @@ predicate bodies, does NO ``OR`` grouping, and never calls ``.filter()``,
 ``.exclude()``, or ``.distinct()`` on the outer queryset - ``.alias()`` is its
 only outer mutation. Predicate meaning stays with the caller: the FilterSet
 flat-leaf applicator (``filters/sets.py::FilterSet._apply_flat_leaves``) applies
-one original filter invocation inside the correlated root, and the search-fields
+one original filter invocation inside the outer-side correlated root
+(``correlated_inner_root``, correlated on the outer pk), and the search-fields
 feature (docs/SPECS/spec-060-search_fields-0_1_2.md) builds its own same-value search
 disjunctions. Keeping those semantics outside this module also keeps request
 values out of the selection optimizer's cross-request ``OptimizationPlan`` cache.
@@ -86,8 +87,12 @@ def correlated_inner_root(queryset: QuerySet[_M]) -> QuerySet[_M]:
       inner root (on a hint-less outer queryset ``.db`` invokes the router at
       build time). The inner never executes independently - the pin keeps the
       alias pair consistent, it does not re-run routing.
-    - ``pk=OuterRef("pk")`` is the default and ONLY correlation implementation;
-      composite primary keys compile to a tuple comparison on supported Django.
+    - ``pk=OuterRef("pk")`` is this OUTER-SIDE builder's only correlation: the
+      inner root is the outer model again, so a caller replays a filter written
+      against the outer model inside it; composite primary keys compile to a
+      tuple comparison on supported Django. ``related_rows_exist`` is the
+      TARGET-SIDE builder, built from related rows and correlated on each
+      link's own columns.
     """
     model = queryset.model
     return model._base_manager.using(queryset.db).filter(pk=OuterRef("pk"))

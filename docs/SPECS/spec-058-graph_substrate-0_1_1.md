@@ -30,9 +30,9 @@ Status: **PLANNED — no slice built yet; the consumer-card amendments are
 recorded on cards 059 / 060 / 062 / 069 / 072.**
 Five slices: Slice 1 (**`graph/` package + operation dependency memo**),
 Slice 2 (**`GraphPathPlan` + path/lookup splitter + `RowIdentityProof`
-vocabulary**), Slice 3 (**`PredicatePlan` compiler** — sequential-fold
-boolean composition, correlated branches, same-related-row groups,
-exact-owner re-entry), Slice 4 (**`EdgeScope` + `FieldDependencyPlan` + Meta
+vocabulary**), Slice 3 (**`PredicatePlan` compiler** — one-`.filter()`
+boolean composition, target-side correlated branches, same-related-row
+groups, exact-owner re-entry), Slice 4 (**`EdgeScope` + `FieldDependencyPlan` + Meta
 surface + live fakeshop activation**), Slice 5 (**docs + glossary entries +
 tracked-path constants + card wrap**).
 
@@ -160,10 +160,19 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   identities — the baseline the sibling card's gate closes).
 - [ ] **Slice 3 — `PredicatePlan` compiler.** First, **relocate the
   row-preserving primitives to
-  `django_strawberry_framework/utils/predicates.py`** (a pure ORM leaf
-  importing only Django and the package exceptions), leaving
-  `optimizer/predicates.py` as a re-export shim so `filters/sets.py` and
-  every existing `optimizer/predicates.py::` symbol reference keep working
+  `django_strawberry_framework/utils/predicates.py`** — the whole of
+  `optimizer/predicates.py` moves: both `EXISTS` builders (the outer-side
+  `correlated_inner_root` + `attach_exists` with their reserved-alias
+  allocator, and the target-side `related_rows_exist` with its link
+  correlation) and the `OrderSet` value helpers (`visible_row_exists`,
+  `visible_value`, `visible_value_path`); nothing stays behind. The new
+  module is an ORM leaf importing only Django, the package exceptions, and
+  its `utils/` siblings `utils/relations.py` (link columns) and
+  `utils/querysets.py` (`VisibleRowExists`), neither of which imports
+  `optimizer/`, `filters/`, or `graph/` at module level.
+  `optimizer/predicates.py` stays as a re-export shim of every public name
+  so `filters/sets.py`, `orders/sets.py`, `connection.py`, and every
+  existing `optimizer/predicates.py::` symbol reference keep working
   (Decision 2; Slice 5 sweeps the references). Then `graph/predicates.py`:
   `any_of` / `all_of` / `not_` (zero-branch `any_of()` / `all_of()` raise
   [`ConfigurationError`][glossary-configurationerror] — an empty group is a
@@ -175,23 +184,27 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   outer `Q` multiplies rows — the exact defect the API promises to prevent),
   `related(path, Q)` correlated branches,
   `same_related_row(path, conditions)` with **path-relative** conditions,
-  compilation as a strictly sequential fold through
-  `utils/predicates.py::correlated_inner_root` and
-  `utils/predicates.py::attach_exists` (each attach consumes the
-  previous call's returned queryset), one combined outer `.filter()` per
-  compiled plan (a plan with no correlated branches skips attachment and
-  applies its single combined `.filter()` directly), the
+  every correlated branch compiled target-side through
+  `utils/predicates.py::related_rows_exist` — its conditions filter the
+  deepest hop's visible rows and the test folds outward one nested
+  `EXISTS` per link, through each earlier hop's visible rows (`via=`) —
+  the whole boolean tree compiled into one `Q` applied by one outer
+  `.filter()` (no annotation, no reserved alias), the
   `graph.apply(plan, queryset, owner=...)` input contract, no
   framework-introduced `DISTINCT`, `RowIdentityProof` output on
   every compiled shape
   ([Decision 4](#decision-4--predicateplan-compiles-through-the-shipped-row-preserving-primitives),
   [Decision 5](#decision-5--same_related_row-is-explicit-path-relative-and-flat-semantics-never-change)).
   Package tests under `tests/graph/test_predicates.py` covering the R4/R5/R9
-  SQL-shape and raise-path assertions (N distinct reserved aliases for N
-  correlated branches, inner-query alias sharing, `NOT EXISTS`, no
-  compiler-added multiplying outer join or `DISTINCT`); the *result
-  semantics* of R4/R5/R9 land live in Slice 4 — Slice 3 is not accepted with
-  a package-only stand-in for live-reachable behavior.
+  SQL-shape and raise-path assertions (N correlated branches compile to N
+  `EXISTS` terms in the one outer `WHERE` with `query.annotations`
+  untouched, one nested `EXISTS` per link of a branch path, a scoped hop's
+  hook restriction inside that hop's body and an unscoped hop read through
+  `_base_manager`, same-row conditions on the deepest body's one base
+  table, `NOT EXISTS`, no compiler-added multiplying outer join or
+  `DISTINCT`); the *result semantics* of R4/R5/R9 land live in Slice 4 —
+  Slice 3 is not accepted with a package-only stand-in for live-reachable
+  behavior.
 - [ ] **Slice 4 — `EdgeScope` + `FieldDependencyPlan` + Meta surface + live
   activation.** `graph/edges.py`: frozen `EdgeScope` keyed on
   `(owner definition, relation field, target definition, context)` whose
@@ -313,25 +326,71 @@ of the first foundation card.
   `Schema._subscribe` exits the `executing()` extension bracket before
   iterating results, so per-event resolution runs after any
   `on_execute`-installed state is reset; `consumers.py` ships that path.
-- **Row-preserving primitives are shipped and proven.**
-  `optimizer/predicates.py::correlated_inner_root` builds the inner queryset
-  over the outer model's `_base_manager`, pins `queryset.db`, and correlates
-  on `pk` via `OuterRef("pk")` — documented as the only correlation
-  implementation, depth-1 by construction;
-  `optimizer/predicates.py::attach_exists` attaches `Exists` under a
-  reserved unselected alias and returns the `Q(alias=True)` branch. Reserved
-  aliases are allocated against the *current* queryset's annotations, and a
-  duplicate `.alias()` silently overwrites — which is why compilation must
-  fold sequentially (Decision 4). `filters/sets.py::FilterSet._apply_flat_leaves`
-  consumes the primitives for audited framework-generated to-many leaves.
-  `optimizer/predicates.py::related_rows_exist` is the target-side sibling:
-  an `EXISTS` built from a given related queryset and correlated on each
-  link's own columns, one nested `EXISTS` per link; every declared
-  `RelatedFilter` branch restricts through it
-  (`filters/sets.py::FilterSet._apply_related_constraints` for a nested
-  branch, `filters/sets.py::FilterSet._reaches_hop` for each hop a flat
-  leaf walks). The PostgreSQL proof of both shapes is recorded in
-  [`docs/row-preserving-predicates-part1-pg-explain.md`][row-preserving-pg].
+- **Two row-preserving `EXISTS` builders are shipped and proven**, both in
+  `optimizer/predicates.py`, with distinct roles:
+  - **Outer-side** — the inner query is the outer model again.
+    `optimizer/predicates.py::correlated_inner_root` builds it over the
+    outer model's `_base_manager`, pins `queryset.db`, and correlates on
+    `pk` via `OuterRef("pk")`; the caller runs its own filter invocation,
+    written against the outer model, inside that root.
+    `optimizer/predicates.py::attach_exists` attaches the result as `Exists`
+    under a reserved unselected `_dst_predicate_<n>` alias (`.alias()` is its
+    only outer mutation; inner/outer model, database alias, and combinator
+    are guarded with `OptimizerError`) and returns the `Q(alias=True)` branch
+    for the caller to place. Reserved aliases are allocated against the
+    *current* queryset's effective names (fields, attnames, `pk`,
+    annotations, `extra`, `values_select`), and a duplicate `.alias()`
+    silently overwrites, so successive attachments must each consume the
+    previous returned queryset, and the branches must land in the outer
+    query through one `.filter()` (separate calls would AND what the caller
+    OR'd). Consumers: `filters/sets.py::FilterSet._apply_flat_leaves`
+    routes audited framework-generated to-many leaves through both
+    (replaying the original `django-filter` invocation inside the root);
+    `filters/sets.py::FilterSet._apply_active_leaf` negates an excluding
+    relation-key leaf that walks no hop before its key over
+    `correlated_inner_root` as a bare `~Exists`, without `attach_exists`.
+  - **Target-side** — `optimizer/predicates.py::related_rows_exist` builds
+    the test FROM a given related queryset (the visible rows) and correlates
+    it to the outer row on each link's own columns
+    (`utils/relations.py::relation_link`): the outer table is never
+    re-read, nothing the outer queryset applied is embedded, and a
+    multi-link path nests one `EXISTS` per link (a many-to-many is two
+    links through its join table; a `GenericRelation` link also carries its
+    content-type restriction; a `GenericForeignKey` segment raises
+    [`ConfigurationError`][glossary-configurationerror]). `via=` carries,
+    index for index, the rows each earlier segment may pass through; a
+    `None` entry, an empty `via`, and a join table read `_base_manager` on
+    `using`. A `DISTINCT` the rows carry stays inside the subquery, and
+    negated it is `NOT EXISTS`, which a `NULL` link column cannot empty.
+    The result is a plain `Exists` expression placed in a `WHERE`, never an
+    annotation. Consumers: every declared `RelatedFilter` branch
+    (`filters/sets.py::FilterSet._apply_related_constraints` through
+    `filters/sets.py::_restrict_through_branch`), every hop a walked flat
+    leaf folds outward through (`filters/sets.py::FilterSet._reaches_hop`,
+    declared hops with their explicit `queryset=` and intermediate visible
+    rows, `filters/sets.py::FilterSet._via_rows`; undeclared hops with the
+    hop's rows as they are); the planned search arms are specified onto it
+    too ([search spec][spec-060] Decision 12).
+  - **`OrderSet` value helpers** sit beside them:
+    `optimizer/predicates.py::visible_row_exists` is the order-side test
+    "the row an outer join already reached is one of these rows",
+    correlated on that joined row's `pk` (its exact type,
+    `utils/querysets.py::VisibleRowExists`, is admitted by the visibility
+    seal by identity); `optimizer/predicates.py::visible_value` reads a
+    field path as `NULL` wherever any such test fails
+    (`orders/sets.py::OrderSet._resolve_order_expressions`);
+    `optimizer/predicates.py::visible_value_path` finds that guarded path
+    so `connection.py::_keyset_order_state` refuses it as a nullable keyset
+    column.
+
+  The measured PostgreSQL 16 shapes are recorded in
+  [`docs/row-preserving-predicates-part1-pg-explain.md`][row-preserving-pg]
+  (one routed outer-side `EXISTS`; a walked three-hop target-side fold) and
+  in the spec-027 rationale's
+  [restriction-shape measurements][spec-027-restriction-measured]: under a
+  plain-filter hook the target-side `EXISTS` gets the same plan as the
+  child-side `IN`, and every `IN` shape loses where Decision 4's rejections
+  record.
 - **Strict path classification is shipped, for pure model paths only.**
   `django_strawberry_framework/utils/relations.py` classifies every relation
   kind, records the first multiplying hop and the complete chain; lookup
@@ -413,9 +472,13 @@ of the first foundation card.
   after-the-fact rewrite.
 - **A general child-collection cascade.** `apply_cascade_permissions` keeps
   its forward-only contract; `EdgeScope` is additive.
-- **Nested correlation.** All correlated bodies are depth-1 relative to the
-  queryset passed to `graph.apply`; compiling a plan inside another subquery
-  is out of scope for `0.1.1` (Decision 4).
+- **Plans compiled inside another subquery, and plans nested inside a
+  branch.** A branch nests one `EXISTS` per link of its own path, and its
+  outermost body correlates to the row of the queryset passed to
+  `graph.apply` (Decision 4). Applying a plan to a queryset that is itself
+  a correlated subquery body (an `OuterRef` reaching past `graph.apply`'s
+  input), and a `PredicatePlan` construct inside a branch's conditions
+  (which are plain `Q`), are out of scope for `0.1.1`.
 - **A per-event subscription memo scope.** Subscriptions fall back to
   per-call compute in `0.1.1` (Decision 3); promoting to a per-event scope
   is deferred and must arrive with an explicit invalidation rule.
@@ -528,10 +591,12 @@ The layering is one-directional: `optimizer/`, `filters/`, and `types/`
 import `graph/`; `graph/` imports neither `optimizer/` nor the type
 registry. That rule is buildable only because Slice 3 **relocates the
 row-preserving primitives to
-`django_strawberry_framework/utils/predicates.py`** — a pure ORM leaf whose
-only package import is the exceptions module — leaving
-`optimizer/predicates.py` as a re-export shim so `filters/sets.py` and
-every existing symbol reference keep working. Without the move,
+`django_strawberry_framework/utils/predicates.py`** — both `EXISTS` builders
+and the `OrderSet` value helpers, in an ORM leaf whose package imports are
+the exceptions module and its `utils/` siblings `utils/relations.py` and
+`utils/querysets.py` — leaving `optimizer/predicates.py` as a re-export shim
+so `filters/sets.py`, `orders/sets.py`, `connection.py`, and every existing
+symbol reference keep working. Without the move,
 `graph/ -> optimizer.predicates` executes
 `optimizer/__init__ -> extension -> graph` (a hard import cycle, since
 Slice 1 makes the extension a `graph/` consumer); and because
@@ -636,41 +701,66 @@ feature must not depend on an opt-in extension.
 
 ### Decision 4 — `PredicatePlan` compiles through the shipped row-preserving primitives
 
-Every correlated branch compiles via
-`utils/predicates.py::correlated_inner_root` + `attach_exists` (relocated
-from `optimizer/predicates.py` in Slice 3, which keeps a re-export shim —
-Decision 2) — the primitives already proven on PostgreSQL
-([`docs/row-preserving-predicates-part1-pg-explain.md`][row-preserving-pg]).
+Every correlated branch — `related(path, Q)` and
+`same_related_row(path, conditions)` — compiles **target-side** through
+`utils/predicates.py::related_rows_exist` (relocated from
+`optimizer/predicates.py` in Slice 3, which keeps a re-export shim —
+Decision 2): the restriction every declared `RelatedFilter` branch and
+every walked flat filter leaf already use, and the one search's relational
+arms are specified onto ([search spec][spec-060] Decision 12), measured on
+PostgreSQL 16
+([`docs/row-preserving-predicates-part1-pg-explain.md`][row-preserving-pg],
+[spec-027 restriction-shape measurements][spec-027-restriction-measured]).
 Predicate *meaning* stays with the caller; the compiler owns validated
-relation planning and row-preserving attachment. Compilation mechanics, each
-pinned because the primitives make the naive alternative silently wrong:
+relation planning and row-preserving composition. Compilation mechanics,
+each pinned because the naive alternative is silently wrong:
 
-- **Sequential fold.** Reserved-alias allocation reads the *current*
-  queryset's annotations, and a duplicate `.alias()` silently overwrites —
-  compiling branches in parallel against the original queryset collapses
-  aliases and **under-restricts** (a security failure). Each `attach_exists`
-  consumes the queryset returned by the previous; tests assert N distinct
-  reserved aliases for N correlated branches.
-- **One outer `.filter()`.** `attach_exists` returns only `Q(alias=True)`;
-  applying branches in separate `.filter()` calls degrades OR to AND. A
-  compiled plan attaches all aliases, then applies exactly one combined
-  `.filter()`; `graph.apply` returns immediately after that single
-  application.
-- **Depth-1 correlation only.** `OuterRef("pk")` is the only correlation
-  implementation; per-hop visibility composes as an uncorrelated
-  `Q(hop__in=<visible queryset>)` membership inside the correlated body (no
-  added depth). Nested correlation is out of scope (see Non-goals).
-- **Input contract, checked pre-fold.** `graph.apply` validates **before
-  the first attachment**: `queryset.model` is the model of `owner`'s
-  `DjangoTypeDefinition`; the queryset is unsliced; no combinator; a
-  model-row iterable (`values()` querysets refused — `.alias()` on one does
-  not error, it silently builds a nonsense predicate). Each failure raises
-  a typed [`ConfigurationError`][glossary-configurationerror] naming the
-  recourse — never a raw Django `TypeError` or an optimizer-internal
-  `OptimizerError` from a consumer-facing builder. The checks deliberately
-  duplicate the primitive's own guards rather than delegating: the
-  primitive's guards raise `OptimizerError` and fire mid-fold, leaving a
-  partially aliased queryset.
+- **A branch is one target-side test over each hop's visible rows.** The
+  branch path is classified into its `GraphPathPlan` (Slice 2). A hop whose
+  target type — the exact owner on a re-entered model (Decision 6) —
+  declares its own `get_queryset` reads that hook's rows over
+  `base_queryset(<hop model>, using=queryset.db)`; a hop whose type keeps
+  the identity hook, or whose model has no registered type, reads
+  `_base_manager` on that alias, as Django's join does. The branch's
+  conditions are **path-relative** (`related`'s `Q` and
+  `same_related_row`'s tuple alike) and filter the deepest hop's rows in one
+  `.filter()` call; the compiler then calls
+  `related_rows_exist(queryset.model, path, <filtered deepest rows>, using=queryset.db, via=<earlier hops' rows>)`
+  with `None` for each unscoped earlier hop, which folds the test outward
+  one nested `EXISTS` per link, each correlated on its link's own columns.
+  The branch therefore answers as Django's ORM answers the same path in a
+  world where every row a hop's target type hides does not exist — the
+  filter side's visible-world rule. A relation a *condition* names is the
+  caller's own predicate: Django joins it inside the deepest body (it cannot
+  multiply outer rows there), and no hop visibility applies to it; a path
+  that needs hop visibility goes in `path`.
+- **One outer `.filter()`.** Each branch compiles to an `Exists`
+  expression and each `direct` leaf to its `Q`; `any_of` / `all_of` /
+  `not_` combine them as `Q` objects, and `graph.apply` applies the result
+  with exactly one `.filter()` and returns. Separate `.filter()` calls
+  would AND what `any_of` OR'd. A branch adds no annotation, no `.alias()`,
+  and no reserved name, so N branches compile to N `EXISTS` terms in one
+  `WHERE` and cannot collide; the fold `attach_exists` imposes on its
+  callers (each attachment consuming the previous returned queryset,
+  Current state) never arises in the compiler.
+- **What nests, what does not.** A branch path nests one `EXISTS` per link
+  (a many-to-many is two, through its join table), each body correlated to
+  the body enclosing it and the outermost to the row of `graph.apply`'s
+  input. The outer-side `OuterRef("pk")` root is not a compiler shape. A
+  plan inside another subquery, and a plan construct inside a branch's
+  conditions, are out of scope (see Non-goals).
+- **Input contract, checked pre-compile.** `graph.apply` validates
+  **before building any test**: `queryset.model` is the model of `owner`'s
+  `DjangoTypeDefinition`; the queryset is unsliced (Django refuses
+  `.filter()` on a sliced queryset with a raw `TypeError`); no combinator
+  (Django refuses `.filter()` after `union()` / `intersection()` /
+  `difference()`); a model-row iterable (`values()` querysets refused: the
+  output is a visibility hook's or an edge child queryset's model rows, and
+  `values` is one of the window gate's refusal reasons). Each failure
+  raises a typed [`ConfigurationError`][glossary-configurationerror] naming
+  the recourse — never a raw Django error from a consumer-facing builder.
+  Every hop's rows are read on `queryset.db`, so the whole test compiles on
+  the input's database alias.
 - **Structural/request split.** `GraphPathPlan` is structural: finalize-
   frozen, hashable, cacheable. `PredicatePlan` is **request-bound**: built
   per request from request-derived values, never cached, never a component
@@ -685,34 +775,65 @@ paths (`first_many_index` non-null) rejected via typed
 [`ConfigurationError`][glossary-configurationerror] pointing at `related` /
 `same_related_row` — without the check, `direct(Q(genres__name__icontains=...))`
 lands the M2M join in the outer query with no `DISTINCT` and multiplies
-rows. The tested invariant is "no *compiler-admitted* multiplying table in
-the outer `alias_map`, no compiler-added `DISTINCT`" — not a blanket
-property of the consumer's queryset. **Rejected:** introspecting and rewriting arbitrary consumer joins
-(a fingerprint is not a trust boundary — the settled part-1 posture); a new
-query language over the ORM (violates GOAL.md's no-abstraction-layer
-constraint); routing through the FilterSet applicators
-(django-filter-coupled and gated on the audited version range — precedent,
-not the reuse target).
+rows. A hook ending in `.distinct()` keeps its `DISTINCT` inside that hop's
+body, where it changes no answer. The tested invariant is "no
+*compiler-admitted* multiplying table in the outer `alias_map`, no
+compiler-added `DISTINCT`" — not a blanket property of the consumer's
+queryset.
+
+**Rejected:** a per-hop `IN` membership (`Q(hop__in=<visible rows>)` inside
+an outer-rooted correlated body — the child-side `IN` of the spec-027
+measurements): it matches the target-side `EXISTS` only while every hook is
+a plain filter; a hook ending in `.distinct()` (the usual many-to-many
+permission idiom) makes `IN` materialize the whole visible set (48.76 ms
+against 0.15 ms on the 200,000-book fixture); it projects the reverse key
+through a `LEFT OUTER JOIN`, so negated it is `NOT IN (..., NULL)` and
+matches no row at all; and it is correct only while every hop membership
+and the terminal share one inner relation alias, which Django does not
+guarantee across `.filter()` calls on a multi-valued relation (the
+[search spec][spec-060] Decision 7 rejects the same shape). **Rejected:**
+a parent-side `IN` (`pk IN (SELECT pk FROM <parent> ...)` built from the
+queryset handed in): it re-scans the parent per restriction and embeds
+every earlier restriction, so the k-th carries 2^(k-1) copies (970.64 ms
+against 155.53 ms on the three-leaf count scenario). **Rejected:** the
+outer-side root (`correlated_inner_root` + `attach_exists`) for branches
+whose hops no type scopes: it exists so a routed flat leaf can replay a
+`django-filter` invocation written against the outer model, whereas a
+plan's conditions are path-relative and compiler-owned; `related_rows_exist`
+already reads an unscoped hop through `_base_manager`, so one compile shape
+serves both and a target type gaining a `get_queryset` changes which rows a
+hop reads, never the SQL shape or the alias bookkeeping. **Rejected:**
+introspecting and rewriting arbitrary consumer joins (a fingerprint is not a
+trust boundary — the settled part-1 posture); a new query language over the
+ORM (violates GOAL.md's no-abstraction-layer constraint); routing through
+the FilterSet applicators (django-filter-coupled and gated on the audited
+version range — precedent, not the reuse target).
 
 ### Decision 5 — `same_related_row` is explicit, path-relative, and flat semantics never change
 
 `graph.same_related_row(path, conditions)` compiles all conditions into one
-correlated body sharing one related-row chain — the construct that makes the
+`.filter()` over the visible rows of the path's last hop, inside one
+target-side test (one nested `EXISTS` per link, Decision 4), so a single
+related row must satisfy every condition — the construct that makes the
 exact `(block_id, rotation_id)`-style grant expressible and the
-split-`.filter()` false positive impossible. **Conditions are relative to
-`path`**: the compiler rewrites every `Q` leaf key to
-`path + LOOKUP_SEP + key`, and rejects with a typed error any leaf already
-prefixed with the path — absolute conditions would make `path` advisory and
-let a stray condition on a different relation silently reintroduce the
-two-alias leak the construct exists to prevent. Ordinary flat filters keep
-Django semantics untouched; same-row grouping is opt-in for consumer
-predicates. (Search keeps a hop's visibility and its terminal condition on
-one related row through the filter side's target-side restriction,
-`optimizer/predicates.py::related_rows_exist` over each hop's visible
-rows, not through this construct — [search spec][spec-060] Decision 12.)
+split-`.filter()` false positive impossible. Two `related` branches over
+one path under `all_of` stay two tests that two different rows may
+satisfy: the split meaning, spelled explicitly. **Conditions are relative to
+`path`**: they apply unchanged to the last hop's rows, and the compiler
+rejects with a typed error any leaf already prefixed with the path —
+absolute conditions would make `path` advisory and let a stray condition on
+a different relation silently reintroduce the two-alias leak the construct
+exists to prevent. Ordinary flat filters keep Django semantics untouched;
+same-row grouping is opt-in for consumer predicates. (Search keeps a hop's
+visibility and its terminal condition on one related row through the same
+target-side restriction, `optimizer/predicates.py::related_rows_exist` over
+each hop's visible rows, without this construct —
+[search spec][spec-060] Decision 12.)
 Tests assert both result behavior and **inner-query** alias
-sharing (the outer query holds only the reserved alias) — a result-only
-fixture can pass with two aliases accidentally landing on one child.
+sharing (every condition reads the one base-table alias of the deepest
+body; the outer query holds no related table and no annotation) — a
+result-only fixture can pass with two aliases accidentally landing on one
+child.
 **Rejected:** silently upgrading chained `.filter()` calls to same-row
 semantics (breaks documented Django behavior and every existing consumer);
 absolute-path conditions (unenforceable contract).
@@ -833,7 +954,8 @@ No path may fail open:
   loudly with a typed error inside `_build_child_queryset` immediately
   after the factory returns — in particular a returned *queryset* is
   refused by type, never adopted. Compiled application through
-  `graph.apply` adds only reserved aliases and one `.filter()`, so the
+  `graph.apply` adds only one `.filter()` whose to-many terms are `EXISTS`
+  expressions (no annotation, no multiplying join, no `DISTINCT`), so the
   composed child queryset stays window-gate-compatible by construction;
   `nested_fetch.py::unwindowable_child_queryset_reason` is still asserted
   post-composition in tests as the *predicate*, never relied on as the
@@ -964,7 +1086,7 @@ shipped precedent's error timing for checks available at type creation).
 |---|---|---|
 | 1 | `graph/__init__.py`, `graph/memo.py` (store owner); two-line delegation in `optimizer/extension.py::DjangoOptimizerExtension.on_execute`; new `extensions/graph.py::GraphSubstrateExtension` | live `examples/fakeshop/test_query/` (isolation, five-roots, keying, no-extension fallback); `tests/graph/test_memo.py` (single-flight, cancellation, raise paths, absent store) |
 | 2 | `graph/paths.py` (plan, plan set, path/lookup splitter), `graph/proofs.py` over `utils/relations.py` | `tests/graph/test_paths.py` + window-gate characterization |
-| 3 | `graph/predicates.py` over `optimizer/predicates.py` | `tests/graph/test_predicates.py` (SQL-shape: alias count, inner alias sharing, `NOT EXISTS`, no compiler `DISTINCT`; raise paths) |
+| 3 | `utils/predicates.py` (relocated `optimizer/predicates.py`, both `EXISTS` builders + `OrderSet` value helpers; `optimizer/predicates.py` re-export shim); `graph/predicates.py` over `utils/predicates.py::related_rows_exist` | `tests/graph/test_predicates.py` (SQL-shape: one `EXISTS` term per branch in one `WHERE`, no annotation, one nested `EXISTS` per link, hop visibility inside each hop's body, inner alias sharing, `NOT EXISTS`, no compiler `DISTINCT`; raise paths) |
 | 4 | `graph/edges.py`, `graph/dependencies.py`; `Meta.edge_scopes` in `types/base.py` (+ `types/finalizer.py` residue, `types/definition.py` slot); owner threading + edge composition in `optimizer/walker.py::_build_child_queryset` and `optimizer/nested_planner.py` (injected-callable signature); second application in `connection.py::_build_relation_connection_resolver`; visibility + scope on the list-resolver cache-miss branch in `types/resolvers.py`; `examples/fakeshop/apps/library/models.py` (`Loan.confidential`) + migration file; library schema fixtures (LoanType hook + `primary = True`, BookType hook rewrite + `edge_scopes`, R9 secondary Loan type + connection under `FAKESHOP_TEST_LOAN_CONNECTION`) | `tests/graph/test_edges.py`, `tests/graph/test_dependencies.py`; live `examples/fakeshop/test_query/` (R3 incl. `filter:` fallback, R4/R5/R9 result semantics, 1-vs-100 parents); re-baselined `test_library_api.py` / `test_optimizer_auto_api.py`; schema-module tuple sweep |
 | 5 | `docs/TREE.md` + tracked-path constants regenerate, glossary DB + regenerate, `test_query/README.md`, card-amendment audit + wrap | render-clean checks |
 
@@ -985,9 +1107,18 @@ ownership partition applies.
   `classify_path` stays uncached by contract. The splitter derives no
   relation kinds, and it lands in the substrate precisely so no consumer
   builds a private twin.
-- Correlated compilation: only `utils/predicates.py::correlated_inner_root`
-  / `attach_exists` (relocated in Slice 3; `optimizer/predicates.py` stays
-  as the re-export shim) — no second `EXISTS` builder. The FilterSet
+- Correlated compilation: the two shipped `EXISTS` builders (relocated to
+  `utils/predicates.py` in Slice 3; `optimizer/predicates.py` stays as the
+  re-export shim) and no third. The target-side
+  `utils/predicates.py::related_rows_exist` serves every test built from a
+  related queryset — every `PredicatePlan` branch, every declared
+  `RelatedFilter` branch, every walked flat-leaf hop, every search arm. The
+  outer-side `utils/predicates.py::correlated_inner_root` /
+  `utils/predicates.py::attach_exists` pair serves a caller that replays a
+  filter invocation written against the outer model inside the subquery —
+  the routed flat leaf and the excluding relation-key leaf; the compiler
+  never calls it. The `OrderSet` value helpers (`visible_row_exists`,
+  `visible_value`) stay the only order-side visibility test. The FilterSet
   applicators (`_apply_flat_leaves`, `_apply_related_constraints`) are
   precedent, not the reuse target.
 - Request resolution: only
@@ -1021,13 +1152,15 @@ ownership partition applies.
   survive the phase; the memo is inert while such a phase is open — values
   computed there are returned to the caller but never stored.
 - **`same_related_row` negation** keeps quantifier semantics explicit:
-  `not_(same_related_row(...))` is "no single related row satisfies all
-  conditions" — a root with **zero** related rows satisfies it.
-- **`not_` over correlated branches** compiles as `~Q(alias=True)` on the
-  reserved alias (a two-valued `EXISTS` annotation — no NULL hazard, and
-  `NOT EXISTS` short-circuits); negation is never applied to the relation
-  path itself (a path `exclude` triggers `split_exclude` and different
-  semantics), and the alias is attached even in a negated context.
+  `not_(same_related_row(...))` is "no single visible related row
+  satisfies all conditions" — a root with **zero** related rows, or only
+  rows a hop's target type hides, satisfies it.
+- **`not_` over correlated branches** compiles as `~Exists(...)` on the
+  branch's target-side test — a two-valued `NOT EXISTS`, which a `NULL`
+  link column cannot empty the way it empties a `NOT IN`, and which
+  short-circuits; negation is never applied to the relation path itself (a
+  path `exclude` triggers `split_exclude` and different semantics), and
+  the negated branch reads the same visible rows as its positive twin.
 - **`not_` over `direct` inherits Django three-valued semantics:** rows with
   `NULL` in the tested column satisfy neither `Q(field=x)` nor its negation
   — `any_of(direct(q), not_(direct(q)))` is not "all rows". Documented, not
@@ -1059,7 +1192,7 @@ ownership partition applies.
   supported payload — bind its scalar fields instead.
 - **Consumer duplicates are preserved:** predicate application never
   collapses a consumer's intentional multiset (no injected `DISTINCT`) and
-  never multiplies it (correlated attachment only).
+  never multiplies it (correlated `EXISTS` terms only).
 - **ASCII-only applies to `.py` sources** in the new package; module
   docstrings are mandatory (TREE.md render fails without them).
 
@@ -1122,14 +1255,23 @@ raise paths, and interleavings a real query cannot produce.
 - **R4 — same-related-row (package SQL-shape, Slice 3; live result
   semantics, Slice 4):** the split-`.filter()` false positive demonstrated
   as baseline; the same-row plan does not qualify the root; the **inner**
-  query shares one relation alias inside one correlated body; pre-prefixed
-  condition leaves rejected; negation semantics (including the
-  zero-related-rows case) pinned.
+  query shares one relation alias (every condition reads the deepest
+  body's one base-table alias) while the outer query holds only the root
+  table; two `related` branches over one path under `all_of` compile to two
+  `EXISTS` terms; pre-prefixed condition leaves rejected; negation semantics
+  (including the zero-related-rows and hidden-rows-only cases, compiled as
+  `NOT EXISTS`) pinned.
 - **R5 — predicate cardinality (package SQL-shape, Slice 3; live result
   semantics, Slice 4):** baseline custom `Q` fan-out demonstrated; the
-  compiled plan returns one row per root; N correlated branches produce N
-  distinct reserved aliases; the compiler adds no multiplying outer table
-  and no `DISTINCT`; `direct` over a to-many path (e.g.
+  compiled plan returns one row per root; N correlated branches compile to
+  N `EXISTS` terms in the outer query's one `WHERE`, with
+  `query.annotations` unchanged and the outer `alias_map` holding the root
+  table plus only the to-one tables `direct` leaves join; a multi-link
+  branch nests one `EXISTS` per link (a many-to-many two, through its join
+  table); a scoped hop's hook restriction sits inside that hop's body (a
+  `.distinct()` hook's `DISTINCT` included) while an unscoped hop reads its
+  table unrestricted; the compiler adds no multiplying outer table and no
+  `DISTINCT`; `direct` over a to-many path (e.g.
   `Q(genres__name__icontains=...)`) rejected with the typed error; on a
   plain-root fixture, a direct `COUNT(*)` over the row-preserving root.
 - **R6 (package half) — dependency normalization
@@ -1174,6 +1316,15 @@ version triplet stay untouched (Decision 10).
   ordinary execution risk: the amendments are prose obligations, so a card
   that starts without re-reading its own scope can still build a private
   twin.
+- **Hop visibility needs the request.** A branch reads each hop's rows
+  through the hop target type's `get_queryset`, which takes `info`, while
+  `graph.apply(plan, queryset, owner=...)` receives none; the consumer hook
+  calling it (and `_build_child_queryset` for an edge scope) holds `info`.
+  Open: thread `info` through `graph.apply` or bind it when the plan is
+  built. Related: a branch whose path re-enters the owner's own model,
+  compiled inside that owner's `get_queryset`, reads the re-entered hop
+  through the same hook (Decision 6) and recurses; Slice 3 must refuse or
+  bound that shape.
 - **Consumer row-identity assertion.** Should a consumer be able to assert a
   validated row-identity contract for a custom queryset (unlocking windows
   over shapes the framework didn't build)? Preferred for `0.1.1`: no —
@@ -1246,11 +1397,14 @@ version triplet stay untouched (Decision 10).
   exception-propagation-then-retry, absent-store degradation, subscription
   recompute, request isolation, alias/viewer keying (R2 matrix green);
   works with and without the optimizer extension.
-- [ ] `PredicatePlan` compiles as a sequential fold with one combined outer
-  `.filter()`, N distinct reserved aliases for N branches, typed input
-  errors, `direct` over a to-many path rejected, and SQL-shape assertions
-  green (R4, R5, R9); path-relative `same_related_row` with
-  pre-prefixed-leaf rejection.
+- [ ] `PredicatePlan` compiles every correlated branch target-side through
+  `utils/predicates.py::related_rows_exist` over each hop's visible rows,
+  the whole tree as one `Q` under one outer `.filter()` (N `EXISTS` terms
+  for N branches, no annotation or reserved alias), typed input errors,
+  `direct` over a to-many path rejected, and SQL-shape assertions green
+  (R4, R5, R9); path-relative `same_related_row` with pre-prefixed-leaf
+  rejection; the Slice 3 relocation moves both `EXISTS` builders and the
+  `OrderSet` value helpers behind the `optimizer/predicates.py` shim.
 - [ ] `Meta.edge_scopes` validates two-stage at type creation (net-new
   ALLOWED key), factories return predicates compiled narrow-only via
   `graph.apply` after target visibility at `_build_child_queryset` with the
@@ -1318,6 +1472,7 @@ version triplet stay untouched (Decision 10).
 [row-preserving-pg]: ../row-preserving-predicates-part1-pg-explain.md
 
 <!-- docs/SPECS/ -->
+[spec-027-restriction-measured]: appx/spec-027-filters-0_0_8-rationale.md#restriction-shape-measured
 [spec-059]: spec-059-fieldset-0_1_1.md
 [spec-060]: spec-060-search_fields-0_1_2.md
 [spec-068]: spec-068-structural_templates-0_1_6.md

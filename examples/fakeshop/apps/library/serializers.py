@@ -38,7 +38,8 @@ from .models import Book, Branch, Genre, Shelf
 
 #: A serializer's name-to-field map. The four ``Any``s are DRF ``Field``'s generics, which
 #: no single binding fits across a heterogeneous map.
-FieldMap: TypeAlias = dict[str, serializers.Field[Any, Any, Any, Any]]
+# basedpyright: drf-stubs' Field TypeVars are invariant; no other argument takes every field
+FieldMap: TypeAlias = dict[str, serializers.Field[Any, Any, Any, Any]]  # pyright: ignore[reportExplicitAny]
 
 
 class TenantShelfSerializer(serializers.ModelSerializer[Shelf]):
@@ -59,7 +60,8 @@ class TenantShelfSerializer(serializers.ModelSerializer[Shelf]):
         model = Shelf
         fields = ("code", "branch")
 
-    def __init__(self, *args: Any, tenant: str | None = None, **kwargs: Any) -> None:
+    # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
+    def __init__(self, *args: Any, tenant: str | None = None, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
         # ``tenant`` is required: a no-arg construction (DRF's default ``.fields``
         # discovery) raises here, forcing the get_serializer_for_schema() override.
         if tenant is None:
@@ -190,9 +192,11 @@ class TargetedShelfSerializer(serializers.ModelSerializer[Shelf]):
 
     def __init__(
         self,
-        *args: Any,
+        # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
+        *args: Any,  # pyright: ignore[reportExplicitAny]
         target_model: type[Model] | None = None,
-        **kwargs: Any,
+        # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
+        **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
         self._target_model = target_model
         super().__init__(*args, **kwargs)
@@ -262,9 +266,11 @@ class NoteShelfSerializer(serializers.ModelSerializer[Shelf]):
 
     def __init__(
         self,
-        *args: Any,
+        # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
+        *args: Any,  # pyright: ignore[reportExplicitAny]
         note_allow_null: bool | None = None,
-        **kwargs: Any,
+        # basedpyright: verbatim forward to ModelSerializer.__init__; object fails its typed params
+        **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
         self._note_allow_null = note_allow_null
         super().__init__(*args, **kwargs)

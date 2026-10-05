@@ -26,7 +26,9 @@ from django.test import Client
 from django_strawberry_framework.testing import TestClient
 
 #: A parsed GraphQL JSON object (response envelope, ``data``, or variables).
-JSONObject: TypeAlias = dict[str, Any]
+# basedpyright: live suites chain subscripts into a parsed response (``data["a"]["b"][0]``);
+# a recursive JSON alias would turn every hop of every chain into a narrowing site
+JSONObject: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
 
 
 def post_graphql(

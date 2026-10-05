@@ -26,7 +26,6 @@ under a nested connection, whose seal licenses a slice the rewrite cannot carry.
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 import pytest
 import strawberry
@@ -41,6 +40,8 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from graphql_client import JSONObject, post_graphql
 from strategy_schemas import make_django_type
+from strawberry.extensions import SchemaExtension
+from typing_extensions import TypedDict, Unpack
 
 from django_strawberry_framework import (
     DjangoListField,
@@ -64,7 +65,7 @@ _ERROR_POLICY_PASS_THROUGH = {
     "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
 }
 
-_CURRENT: dict[str, Any] = {"schema": None}
+_CURRENT: dict[str, DjangoSchema | None] = {"schema": None}
 
 
 def _graphql_view(request: HttpRequest):
@@ -76,7 +77,9 @@ def _graphql_view(request: HttpRequest):
 urlpatterns = [path("graphql-test/", _graphql_view)]
 
 
-def _library_schema(extensions: list[Any]) -> DjangoSchema:
+def _library_schema(
+    extensions: list[type[SchemaExtension] | Callable[[], SchemaExtension]],
+) -> DjangoSchema:
     """The library app's own ``Query`` and ``Mutation``, carrying ``extensions`` only."""
     from apps.library.schema import Mutation, Query
 
@@ -116,7 +119,15 @@ def _post(
     return response.json()
 
 
-def _data(query: str, **kwargs: Any) -> JSONObject:
+class _PostOptions(TypedDict, total=False):
+    """The keyword options :func:`_data` forwards to :func:`_post`."""
+
+    optimizer: bool
+    variables: JSONObject | None
+    schema: DjangoSchema | None
+
+
+def _data(query: str, **kwargs: Unpack[_PostOptions]) -> JSONObject:
     payload = _post(query, **kwargs)
     assert "errors" not in payload, payload
     return payload["data"]
@@ -231,7 +242,7 @@ def _visible_genres(shape: str) -> set[str]:
 def _install(
     monkeypatch: pytest.MonkeyPatch,
     type_name: str,
-    body: Callable[[QuerySet[Model], Any], QuerySet[Model, object]],
+    body: Callable[[QuerySet[Model], strawberry.Info[object, object]], QuerySet[Model, object]],
 ) -> None:
     """Make ``type_name``'s ``get_queryset`` return ``body(queryset, info)``."""
     from apps.library import schema as library_schema
@@ -266,7 +277,7 @@ def _both_hooks(
     shape: str,
     column: str,
     query: str,
-    **kwargs: object,
+    **kwargs: Unpack[_PostOptions],
 ) -> JSONObject:
     """The data the combined hook serves, after asserting the uncombined hook serves the same rows.
 
@@ -659,7 +670,14 @@ _NESTED_CONNECTION = """
 """
 
 
-def _expected_nested_pages(shape: str) -> dict[str, dict[str, Any]]:
+class _NestedPage(TypedDict):
+    """One genre's nested ``booksConnection`` window: its titles and whether more remain."""
+
+    titles: list[str]
+    has_next: bool
+
+
+def _expected_nested_pages(shape: str) -> dict[str, _NestedPage]:
     """Each genre's first two visible books in primary-key order, and whether more remain."""
     pages = {}
     for name, titles in _BOOKS_BY_GENRE.items():
@@ -668,7 +686,7 @@ def _expected_nested_pages(shape: str) -> dict[str, dict[str, Any]]:
     return pages
 
 
-def _nested_pages(data: JSONObject) -> dict[str, dict[str, Any]]:
+def _nested_pages(data: JSONObject) -> dict[str, _NestedPage]:
     return {
         row["name"]: {
             "titles": [edge["node"]["title"] for edge in row["booksConnection"]["edges"]],

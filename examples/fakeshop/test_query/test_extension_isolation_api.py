@@ -32,7 +32,6 @@ import json
 import logging
 from collections.abc import Callable
 from types import MethodType, SimpleNamespace
-from typing import Any
 
 import pytest
 import strawberry
@@ -43,6 +42,7 @@ from django.http.response import HttpResponseBase
 from django.test import AsyncClient, Client
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
+from graphql import GraphQLError
 from strawberry.extensions.base_extension import SchemaExtension
 from typing_extensions import override
 
@@ -430,9 +430,25 @@ def _nesting_schema():
 _OPTIMIZER = DjangoOptimizerExtension()
 _NESTER = _Nester()
 
-#: What the worker records between the request that started it and the one that
-#: reads it back.
-_SURVIVOR: dict[str, Any] = {}
+
+class _SurvivorRecord:
+    """What the worker records between the request that started it and the one reading it back.
+
+    An attribute not yet recorded raises on read, so a stale run cannot answer for this one.
+    """
+
+    release: asyncio.Event
+    worker: asyncio.Future[None]
+    rows_bound: int
+    errors: list[GraphQLError] | None
+    plan_published: bool
+
+    def clear(self) -> None:
+        """Forget everything recorded, before a new request starts a worker."""
+        vars(self).clear()
+
+
+_SURVIVOR = _SurvivorRecord()
 
 #: The operation the worker runs for itself, on a context of its own.
 SURVIVOR_QUERY = "{ allItems(first: 1) { edges { node { name category { name } } } } }"
@@ -479,33 +495,33 @@ def _survivor_schema():
             release = asyncio.Event()
             schema = info.schema
             _SURVIVOR.clear()
-            _SURVIVOR["release"] = release
+            _SURVIVOR.release = release
 
             async def worker() -> None:
                 """Read a bound and run a whole operation, after this request ended."""
                 await release.wait()
-                _SURVIVOR["rows_bound"] = policy_from_info(
+                _SURVIVOR.rows_bound = policy_from_info(
                     SimpleNamespace(context={}),
                 ).max_list_rows
                 context: dict[str, object] = {}
                 result = await schema.execute(SURVIVOR_QUERY, context_value=context)
-                _SURVIVOR["errors"] = result.errors
-                _SURVIVOR["plan_published"] = (
+                _SURVIVOR.errors = result.errors
+                _SURVIVOR.plan_published = (
                     get_context_value(context, DST_OPTIMIZER_PLAN) is not None
                 )
 
-            _SURVIVOR["worker"] = asyncio.ensure_future(worker())
+            _SURVIVOR.worker = asyncio.ensure_future(worker())
             return "spawned"
 
         @strawberry.field
         async def survivor_report(self) -> _SurvivorReport:
             """Let the worker run now that its request is over, and report what it saw."""
-            _SURVIVOR["release"].set()
-            await _SURVIVOR["worker"]
-            assert _SURVIVOR["errors"] is None, _SURVIVOR["errors"]
+            _SURVIVOR.release.set()
+            await _SURVIVOR.worker
+            assert _SURVIVOR.errors is None, _SURVIVOR.errors
             return _SurvivorReport(
-                rows_bound=_SURVIVOR["rows_bound"],
-                plan_published=_SURVIVOR["plan_published"],
+                rows_bound=_SURVIVOR.rows_bound,
+                plan_published=_SURVIVOR.plan_published,
             )
 
     finalize_django_types()

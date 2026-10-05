@@ -54,7 +54,8 @@ class ShelfRelationsForm(forms.ModelForm[models.Shelf]):
             "alt_branches",
         )
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
         super().__init__(*args, **kwargs)
         branch = self.fields["branch"]
         if not isinstance(branch, forms.ModelChoiceField):

@@ -37,7 +37,6 @@ because the payload is authenticated-encrypted opaque bytes (the codec contract)
 
 import base64
 from collections.abc import Callable, Mapping
-from typing import Any
 
 import pytest
 import strawberry
@@ -61,7 +60,7 @@ from django_strawberry_framework import DjangoConnectionField, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
-_CURRENT: dict[str, Any] = {"schema": None}
+_CURRENT: dict[str, strawberry.Schema | None] = {"schema": None}
 
 
 def _holder_view(request: HttpRequest) -> HttpResponseBase:

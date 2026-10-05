@@ -14,7 +14,7 @@ import json
 import string
 import sys
 from collections.abc import Callable, Mapping
-from typing import Any, NamedTuple, TypeAlias
+from typing import NamedTuple, TypeAlias
 
 import pytest
 import strawberry
@@ -6947,7 +6947,7 @@ def _nodes_query(ids: tuple[str, ...]) -> str:
         """
 
 
-_CURRENT: dict[str, Any] = {"schema": None}
+_CURRENT: dict[str, strawberry.Schema | None] = {"schema": None}
 
 
 def _holder_graphql_view(request: HttpRequest):

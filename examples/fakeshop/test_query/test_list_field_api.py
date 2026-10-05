@@ -10,9 +10,9 @@ instead of lazy-loading it.
 from __future__ import annotations
 
 import datetime
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, SupportsIndex, TypeAlias, overload
+from typing import TYPE_CHECKING, SupportsIndex, TypeAlias, cast, overload
 
 import pytest
 import strawberry
@@ -90,7 +90,15 @@ _ERROR_POLICY_PASS_THROUGH = {
     "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
 }
 
-_CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
+
+class _CurrentView(TypedDict):
+    """The schema and view class the module's ``/graphql-test/`` route serves next."""
+
+    schema: DjangoSchema | strawberry.Schema | None
+    view_class: type[View] | None
+
+
+_CURRENT: _CurrentView = {"schema": None, "view_class": None}
 
 
 def _graphql_view(request: HttpRequest):
@@ -126,7 +134,7 @@ def _post_sync_response(
     *,
     variables: JSONObject | None = None,
     client: Client | None = None,
-    extra_settings: dict[str, Any] | None = None,
+    extra_settings: Mapping[str, object] | None = None,
     view_class: type[View] | None = None,
 ):
     """Post to the test mount and return the RAW ``HttpResponse``.
@@ -137,7 +145,7 @@ def _post_sync_response(
     """
     _CURRENT["schema"] = schema
     _CURRENT["view_class"] = view_class
-    override_dict: dict[str, Any] = {"ROOT_URLCONF": __name__}
+    override_dict: dict[str, object] = {"ROOT_URLCONF": __name__}
     if extra_settings:
         override_dict.update(extra_settings)
     try:
@@ -161,7 +169,7 @@ def _post_sync(
     *,
     variables: JSONObject | None = None,
     client: Client | None = None,
-    extra_settings: dict[str, Any] | None = None,
+    extra_settings: Mapping[str, object] | None = None,
     view_class: type[View] | None = None,
 ) -> JSONObject:
     response = _post_sync_response(
@@ -3035,7 +3043,7 @@ def test_holder_target_without_orderset_or_model_ordering():
     assert "'orderBy'" not in p_err["errors"][0]["message"]
 
 
-_PARITY_CAPTURE: dict[str, Any] = {}
+_PARITY_CAPTURE: dict[str, tuple[str, int, int | None]] = {}
 
 
 def _query_marks(queryset: models.QuerySet[models.Model, object]) -> tuple[str, int, int | None]:
@@ -3164,7 +3172,7 @@ def _parity_run(
     *,
     schema: DjangoSchema | None = None,
     client: Client | None = None,
-    extra_settings: dict[str, Any] | None = None,
+    extra_settings: Mapping[str, object] | None = None,
 ):
     """Execute one live request, returning ``(response, branch_sql, visibility_calls)``.
 
@@ -3573,7 +3581,7 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch: pytes
 # 26. Ordering never writes the consumer context
 # ---------------------------------------------------------------------------
 
-_CONTEXT_CAPTURE: dict[str, Any] = {}
+_CONTEXT_CAPTURE: dict[str, object] = {}
 
 
 @dataclass
@@ -3670,14 +3678,14 @@ def test_holder_ordering_leaves_the_consumer_context_exactly_as_found(
     library_models.Genre.objects.create(name="Fiction")
     schema = _build_context_schema()
 
-    observed: dict[str, Any] = {}
+    observed: dict[str, set[str]] = {}
     for label, query in (("control", control_query), ("ordered", ordered_query)):
         marker = object()
         _CONTEXT_CAPTURE.clear()
         _CONTEXT_CAPTURE["marker"] = marker
         payload = _post_sync(schema, query, client=client, view_class=_CapturingContextView)
         assert "errors" not in payload, (label, payload)
-        context = _CONTEXT_CAPTURE["context"]
+        context = cast("_MarkedContext", _CONTEXT_CAPTURE["context"])
         assert context.consumer_marker is marker
         observed[label] = set(vars(context))
     assert observed["ordered"] == observed["control"], observed

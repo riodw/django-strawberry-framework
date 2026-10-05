@@ -2,7 +2,7 @@
 
 import inspect
 from collections.abc import Callable
-from typing import Any
+from types import ModuleType
 from unittest.mock import patch
 
 import pytest
@@ -87,9 +87,9 @@ def test_discover_providers_handles_module_without_provider_class():
 def test_discover_providers_handles_import_error():
     """If ``__import__`` raises ImportError on a sub-package, discover_providers continues."""
     fake = Faker()
-    real_import = __import__
+    real_import: Callable[..., ModuleType] = __import__
 
-    def boom_import(name: str, *args: Any, **kwargs: Any):
+    def boom_import(name: str, *args: object, **kwargs: object):
         if name == "faker.providers.bank":
             raise ImportError("synthetic")
         return real_import(name, *args, **kwargs)
@@ -102,9 +102,9 @@ def test_discover_providers_handles_import_error():
 def test_discover_providers_handles_unsignaturable_method():
     """When ``inspect.signature`` raises, discover_providers continues."""
     fake = Faker()
-    real_signature = inspect.signature
+    real_signature: Callable[..., inspect.Signature] = inspect.signature
 
-    def boom_signature(obj: Callable[..., object], *args: Any, **kwargs: Any):
+    def boom_signature(obj: Callable[..., object], *args: object, **kwargs: object):
         # Trigger only on an arbitrary callable so the rest still runs.
         if getattr(obj, "__name__", "") == "name":
             raise ValueError("synthetic")

@@ -168,7 +168,8 @@ class OverriddenScalarSpecimenType(DjangoType):
     quantity: float | None
     token: str
     score: int = strawberry.field(resolver=_override_specimen_score)
-    note: auto
+    # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+    note: auto  # pyright: ignore[reportExplicitAny]
 
     @strawberry.field
     @staticmethod

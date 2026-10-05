@@ -18,7 +18,7 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
 
 import pytest
 import strawberry
@@ -64,10 +64,9 @@ from django_strawberry_framework.utils.context import get_context_value, stash_o
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Generator
+    from collections.abc import AsyncGenerator, Coroutine, Generator, Iterable, Mapping
 
     from django.db.models.sql.compiler import _AsSqlType
-    from django.views import View
 
 _ListResolver: TypeAlias = Callable[[object, strawberry.Info[object, object]], object]
 # ``BranchOrder.apply_async`` replaced by a classmethod whose result the seal must judge.
@@ -81,10 +80,21 @@ _ApplyAsyncOverride: TypeAlias = Callable[
     object,
 ]
 
+#: An async view class the module route can serve in place of the stock view.
+_ContextViewClass: TypeAlias = "type[_CapturingAsyncContextView] | type[_FrozenAsyncContextView]"
+
 #: A ``Meta.ordering`` value: what ``Options.ordering`` holds, one tuple of terms.
 _ModelOrdering: TypeAlias = tuple[str | Combinable, ...]
 
-_CURRENT: dict[str, Any] = {"schema": None, "view_class": None}
+
+class _CurrentView(TypedDict):
+    """The schema and view class the module's ``/graphql-async/`` route serves next."""
+
+    schema: DjangoSchema | strawberry.Schema | None
+    view_class: _ContextViewClass | None
+
+
+_CURRENT: _CurrentView = {"schema": None, "view_class": None}
 
 _ERROR_POLICY_PASS_THROUGH = {
     "DEBUG": True,
@@ -112,12 +122,12 @@ async def _post_async(
     *,
     variables: JSONObject | None = None,
     client: AsyncClient | None = None,
-    extra_settings: dict[str, Any] | None = None,
-    view_class: type[View] | None = None,
+    extra_settings: Mapping[str, object] | None = None,
+    view_class: _ContextViewClass | None = None,
 ) -> JSONObject:
     _CURRENT["schema"] = schema
     _CURRENT["view_class"] = view_class
-    override_dict: dict[str, Any] = {"ROOT_URLCONF": __name__}
+    override_dict: dict[str, object] = {"ROOT_URLCONF": __name__}
     if extra_settings:
         override_dict.update(extra_settings)
     try:
@@ -152,7 +162,7 @@ class _AwaitableChild:
 class _ClosableAsyncIterator:
     """Async iterator that counts calls to __anext__ and aclose for lifecycle assertions."""
 
-    def __init__(self, items: list[Any]) -> None:
+    def __init__(self, items: Iterable[object]) -> None:
         self.items = list(items)
         self.index = 0
         self.next_count = 0
@@ -652,7 +662,12 @@ async def test_async_http_partial_async_generator_resolver_is_bounded():
     await sync_to_async(library_models.Branch.objects.create)(name="Bravo", city="Boston")
     rows = await sync_to_async(lambda: list(library_models.Branch.objects.order_by("name")))()
 
-    holder: dict[str, Any] = {"next_count": 0, "closed": False, "gen": None}
+    class _GenHolder(TypedDict):
+        next_count: int
+        closed: bool
+        gen: AsyncGenerator[library_models.Branch, None] | None
+
+    holder: _GenHolder = {"next_count": 0, "closed": False, "gen": None}
 
     async def _rows():
         try:
@@ -943,7 +958,11 @@ async def test_async_deadline_rejection_closes_the_source_it_never_advanced(argu
         for i in range(3)
     ]
 
-    holder: dict[str, Any] = {"it": None, "awaited": False}
+    class _DeadlineHolder(TypedDict):
+        it: _ClosableAsyncIterator | None
+        awaited: bool
+
+    holder: _DeadlineHolder = {"it": None, "awaited": False}
 
     async def _resolver(root: object, info: strawberry.Info[object, object]):
         it = _ClosableAsyncIterator(branches)
@@ -1000,7 +1019,7 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_through_the_context()
     for i in range(5):
         await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
 
-    holder: dict[str, Any] = {"awaited": False}
+    holder: dict[str, bool] = {"awaited": False}
 
     async def _resolver(root: object, info: strawberry.Info[object, object]):
         await asyncio.sleep(0)
@@ -1074,7 +1093,7 @@ async def test_async_a_resolver_cannot_buy_more_wall_clock_through_the_context(
     for i in range(3):
         await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
 
-    holder: dict[str, Any] = {"awaited": False}
+    holder: dict[str, bool] = {"awaited": False}
 
     async def _resolver(root: object, info: strawberry.Info[object, object]):
         await asyncio.sleep(_SHORT_DEADLINE_SECONDS * 3)
@@ -1205,7 +1224,9 @@ def _record_table_sql(monkeypatch: pytest.MonkeyPatch, table: str = "library_bra
     recorded: list[str] = []
     original_execute_sql = SQLCompiler.execute_sql
 
-    def _recording_execute_sql(self: SQLCompiler, *args: Any, **kwargs: Any) -> object:
+    # basedpyright: blind forwarder into the overloaded SQLCompiler.execute_sql; an ``object``
+    # argument matches none of its Literal ``result_type`` overloads
+    def _recording_execute_sql(self: SQLCompiler, *args: Any, **kwargs: Any) -> object:  # pyright: ignore[reportExplicitAny]
         if type(self) is SQLCompiler:
             try:
                 sql = self.as_sql()[0]
@@ -2168,7 +2189,7 @@ async def test_async_rejection_reports_the_published_name_without_extra_converte
     assert _CountingConverter.calls - before == per_success
 
 
-_CONTEXT_CAPTURE: dict[str, Any] = {}
+_CONTEXT_CAPTURE: dict[str, object] = {}
 
 
 @dataclass
@@ -2260,14 +2281,14 @@ async def test_async_ordering_leaves_the_consumer_context_exactly_as_found(
     await sync_to_async(library_models.Genre.objects.create)(name="Fiction")
     schema = _build_context_schema()
 
-    observed: dict[str, Any] = {}
+    observed: dict[str, set[str]] = {}
     for label, query in (("control", control_query), ("ordered", ordered_query)):
         marker = object()
         _CONTEXT_CAPTURE.clear()
         _CONTEXT_CAPTURE["marker"] = marker
         payload = await _post_async(schema, query, view_class=_CapturingAsyncContextView)
         assert "errors" not in payload, (label, payload)
-        context = _CONTEXT_CAPTURE["context"]
+        context = cast("_MarkedContext", _CONTEXT_CAPTURE["context"])
         assert context.consumer_marker is marker
         observed[label] = set(vars(context))
     assert observed["ordered"] == observed["control"], observed
@@ -2431,7 +2452,7 @@ async def test_async_a_resolver_cannot_widen_the_row_bound_by_writing_a_policy_i
     for i in range(5):
         await sync_to_async(library_models.Branch.objects.create)(name=f"B{i}", city="Boston")
 
-    holder: dict[str, Any] = {"awaited": False}
+    holder: dict[str, bool] = {"awaited": False}
 
     async def _widen(root: object, info: strawberry.Info[object, object]) -> str:
         await asyncio.sleep(0)

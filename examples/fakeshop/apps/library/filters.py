@@ -190,7 +190,8 @@ class PatronFilter(FilterSet):
         model = models.Patron
         fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
         super().__init__(*args, **kwargs)
         # Wire the validator on the underlying ``forms.CharField`` so
         # ``form.is_valid()`` fires the "missing @" gate on inputs without

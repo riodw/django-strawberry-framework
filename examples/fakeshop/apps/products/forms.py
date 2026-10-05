@@ -115,7 +115,8 @@ class StampedItemModelForm(forms.ModelForm[Item]):
         model = Item
         fields = ("name", "category")
 
-    def __init__(self, *args: Any, user: User | AnonymousUser, **kwargs: Any) -> None:
+    # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
+    def __init__(self, *args: Any, user: User | AnonymousUser, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
         self._user = user
         super().__init__(*args, **kwargs)
 
@@ -170,9 +171,11 @@ class DefaultCategoryItemModelForm(forms.ModelForm[Item]):
 
     def __init__(
         self,
-        *args: Any,
+        # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
+        *args: Any,  # pyright: ignore[reportExplicitAny]
         category: Category | None = None,
-        **kwargs: Any,
+        # basedpyright: verbatim forward to ModelForm.__init__; object fails its typed params
+        **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
         super().__init__(*args, **kwargs)
         if category is not None:

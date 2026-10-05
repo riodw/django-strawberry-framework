@@ -6522,16 +6522,9 @@ async def _async_shipped_graphql_view(request: HttpRequest):
 
 
 async def _async_holder_graphql_view(request: HttpRequest):
-    """The holder schema on an async view that resolves the session user first.
-
-    The library ``get_queryset`` hooks are plain ``def`` methods reading
-    ``request.user``; on the event loop that lazy object would load the session
-    synchronously, so the view awaits ``request.auser()`` before execution, as an
-    async Django view serving sync visibility hooks does.
-    """
+    """The holder schema on the async view, whose sync library hooks read ``request.user``."""
     schema = _CURRENT["schema"]
     assert schema is not None
-    request.user = await request.auser()
     return await AsyncDjangoGraphQLView.as_view(schema=schema)(request)
 
 

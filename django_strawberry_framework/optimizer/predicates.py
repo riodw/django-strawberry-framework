@@ -53,12 +53,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Case, Exists, F, OuterRef, Q, When
 from django.db.models.constants import LOOKUP_SEP
 
 from ..exceptions import ConfigurationError, OptimizerError
 from ..utils.querysets import VisibleRowExists
-from ..utils.relations import m2m_through_link_fields, relation_kind, relation_link
+from ..utils.relations import m2m_through_link_fields, relation_bool, relation_kind, relation_link
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -67,7 +68,7 @@ if TYPE_CHECKING:
     from django.db import models
     from django.db.models import QuerySet
 
-    from ..utils.typing import ConcreteField, ModelField
+    from ..utils.typing import ConcreteField, ForeignKeyField, ModelField
 
 _M = TypeVar("_M", bound="models.Model")
 
@@ -211,13 +212,17 @@ class _CorrelationStep:
     ``restriction`` is the constant filter the link carries (a
     ``GenericRelation``'s content type), empty for every other link.
     ``segment`` is the index of the path segment whose target rows the link
-    reads, ``None`` for a many-to-many's join-table link.
+    reads, ``None`` for a many-to-many's join-table link. ``referenced`` marks a
+    link whose outer columns are a foreign key onto the inner ones (a forward
+    single relation, a many-to-many's target link), so a set outer link
+    names an existing inner row.
     """
 
     model: type[models.Model]
     pairs: tuple[tuple[ConcreteField, ConcreteField], ...]
     restriction: tuple[tuple[str, object], ...] = ()
     segment: int | None = None
+    referenced: bool = False
 
 
 def _column_ref(field: ConcreteField) -> str:
@@ -260,11 +265,13 @@ def _correlation_steps(
                     getattr(source_fk, "model", None),
                     tuple(zip(source.carriers, source.targets, strict=True)),
                     None,
+                    False,
                 ),
                 (
                     field.related_model,
                     tuple(zip(target.targets, target.carriers, strict=True)),
                     index,
+                    True,
                 ),
             ]
         else:
@@ -274,8 +281,15 @@ def _correlation_steps(
                 if kind == "forward_single"
                 else zip(link.carriers, link.targets, strict=True)
             )
-            links = [(field.related_model, tuple(pairs), index)]
-        for link_model, pairs, link_segment in links:
+            links = [
+                (
+                    field.related_model,
+                    tuple(pairs),
+                    index,
+                    kind == "forward_single",
+                ),
+            ]
+        for link_model, pairs, link_segment, referenced in links:
             if not pairs or not isinstance(link_model, type):
                 raise ConfigurationError(
                     f"{model.__qualname__}.{relation_path}: segment {segment!r} is not a "
@@ -300,6 +314,7 @@ def _correlation_steps(
                     pairs,
                     restriction,
                     link_segment,
+                    referenced,
                 ),
             )
         current = steps[-1].model
@@ -348,6 +363,59 @@ def related_rows_exist(
             through = step.model._base_manager.using(using)
         query = _correlated(through, step).filter(Exists(query))
     return Exists(query)
+
+
+def correlates_related_rows(
+    model: type[models.Model],
+    relation_path: str,
+    rows_model: type[models.Model],
+) -> bool:
+    """Return whether ``related_rows_exist`` reads rows of ``rows_model`` as rows ``relation_path`` reaches.
+
+    The test keeps the given rows whose target-side columns of the path's last
+    link equal the outer row's, each named ``pk`` or by its attname
+    (``_column_ref``). Rows of ``rows_model`` answer for the rows the link
+    reaches when both hold:
+
+    - each row is one of the link's target rows: ``rows_model`` is the target,
+      a proxy on its table, or a multi-table-inheritance descendant of it. An
+      ancestor's rows include rows no target row extends, so it qualifies only
+      when the outer row references the target (``_CorrelationStep.referenced``:
+      a forward link, or a many-to-many's join row), which proves the target
+      row exists; on a reverse link its own row would match itself.
+    - each column name means the same stored column on ``rows_model``: ``pk``
+      the column the target's key is stored in (``_stored_column``, following
+      parent links, so a descendant keyed on a column of its own fails), any
+      other name the very field the target carries (an ancestor lacks one the
+      target declares below it).
+    """
+    last = _correlation_steps(model, relation_path)[-1]
+    # ``ModelBase.__new__`` sets ``_meta.concrete_model`` on every model class.
+    rows = cast("type[models.Model]", rows_model._meta.concrete_model)
+    target = cast("type[models.Model]", last.model._meta.concrete_model)
+    if not issubclass(rows, target) and not (last.referenced and issubclass(target, rows)):
+        return False
+    return all(
+        _stored_column(rows_model._meta.pk) is _stored_column(inner)
+        if inner.primary_key
+        else _carries(rows_model, inner)
+        for inner, _outer in last.pairs
+    )
+
+
+def _stored_column(field: ConcreteField | None) -> ConcreteField | None:
+    """Return the field whose column stores ``field``'s value, following parent links upward."""
+    while field is not None and relation_bool(field.remote_field, "parent_link"):
+        field = cast("ForeignKeyField", field).target_field
+    return field
+
+
+def _carries(rows_model: type[models.Model], field: ModelField) -> bool:
+    """Return whether ``rows_model`` resolves ``field``'s name to ``field`` itself (own or inherited)."""
+    try:
+        return rows_model._meta.get_field(field.name) is field
+    except FieldDoesNotExist:
+        return False
 
 
 def visible_row_exists(rows: QuerySet[models.Model], joined_path: str) -> VisibleRowExists:

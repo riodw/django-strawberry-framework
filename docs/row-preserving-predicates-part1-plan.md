@@ -218,8 +218,7 @@ django-filter behavior, NOT to forbid custom filters, and NOT to add a consumer
 - **Routing is a BUILD-TIME verdict, frozen once.** The capability token and the semantic
   fingerprint are RETIRED, replaced by a single frozen boolean
   `django_strawberry_framework/filters/sets.py::CandidateFilterMetadata.routable` =
-  `eligible AND` owning-class-capable `AND provenance.generation_capable AND`
-  audited-release. `FilterSet._apply_flat_leaves` consults only that bit. Every supported
+  `eligible AND` owning-class-capable `AND` audited-release. `FilterSet._apply_flat_leaves` consults only that bit. Every supported
   customization seam is refused at build time, which is where each was already detectable.
 - **Process-wide monkeypatching of django-filter's own classes is UNSUPPORTED.** Code able
   to replace `CharFilter.filter` can equally replace this package's own methods, so no
@@ -638,9 +637,14 @@ working, intentionally ineligible declaration into a finalization failure
 — violating both "ineligible leaves keep today's behavior byte-for-byte"
 and "the failure mode is a missed optimization." Therefore:
 
-- framework-default-generated direct and expanded leaves are strict
-  candidates; a path-resolution failure **there** is a
-  framework/configuration defect and raises;
+- framework-default-generated direct leaves are strict candidates; a
+  path-resolution failure **there** is a framework/configuration defect
+  and raises;
+- an expanded leaf gets no row at all: a plain copy walks its declared
+  `RelatedFilter` hop and a projected copy runs the child filter in the
+  child set, so both answer through the branch and no row could route
+  either
+  (`django_strawberry_framework/filters/sets.py::_candidate_metadata_for`);
 - declared/custom and `filter_overrides` leaves are immediately
   ineligible and are **never fed to the strict classifier** — their
   metadata row carries `path_plan=None` (equivalently, the candidate
@@ -694,7 +698,7 @@ carries: the final classified path rooted at the owning
 `FilterSet._meta.model` (Slice A), the provenance record (origin +
 framework-added-`distinct` bit), the leaf-intrinsic `eligible` bit, and the frozen
 `routable` verdict (see the authorization state machine below). Eligible =
-framework-generated leaf (direct or expanded, per the provenance record), no consumer
+direct framework-generated leaf (per the provenance record), no consumer
 `method`, an AUDITED supported family, and a path that crosses a many-side hop.
 Eligibility is never inferred from a class name or from `method is None`. Ineligible
 and non-routable leaves keep today's behavior byte-for-byte — the failure mode is a
@@ -708,7 +712,7 @@ re-verification (Rev 15):
 
 ```text
 generation site
-    -> construction provenance (origin + generating class's capability)
+    -> construction provenance (origin)
 declaration/expansion ownership boundary
     -> origin transition
 atomic snapshot build
@@ -827,14 +831,11 @@ not routable / no snapshot row
   - **Provenance.** The leaf carries a framework-generated origin
     (`framework_default` / `package_replacement`) stamped at its construction site, so a
     consumer-returned or declared object is excluded by construction.
-  - **Capability of the owning AND generating class.**
+  - **Capability of the owning class.**
     `django_strawberry_framework/filters/sets.py::FilterSet._is_generation_capable`
-    proves the class building the snapshot overrode none of `filter_for_field` /
-    `filter_for_lookup` / `FILTER_DEFAULTS` / `__init__`, and
-    `FilterGenerationProvenance.generation_capable` — captured at the generation site and
-    inherited through `_expand_related_filter` — proves the same of the class that
-    actually generated the instance. The second conjunct matters for a leaf a capable
-    PARENT expanded out of a non-capable `RelatedFilter` CHILD. `__init__` is the
+    proves the class building the snapshot, which generated every leaf holding a row,
+    overrode none of `filter_for_field` / `filter_for_lookup` / `FILTER_DEFAULTS` /
+    `__init__`. `__init__` is the
     standard place a consumer replaces `self.filters` per request (round-4 Blocker 1);
     since routing is decided at build time, that gate is now the ONLY thing closing this
     seam, which is why it must not be weakened.

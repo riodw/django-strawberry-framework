@@ -32,6 +32,7 @@ from apps.library import models as library_models
 from apps.library.filters import BookFilter, LoanFilter, PatronFilter
 from apps.products.models import Category, Item
 from apps.scalars import models as scalar_models
+from django.db import models as django_models
 from django.db.models import Q
 from django.http import HttpRequest
 from django_filters import (
@@ -123,6 +124,99 @@ class ShelfProxy(library_models.Shelf):
     class Meta:
         proxy = True
         app_label = "library"
+
+
+class _CrDesk(django_models.Model):
+    """Root of a test-local multi-table-inheritance line the target-model check reads.
+
+    Fakeshop's ``Venue`` line has no forward relation onto a column a child
+    declares, and no child keyed on anything but its parent link, so these
+    models stand in for the shapes the check refuses there. ``managed = False``:
+    the check runs at expansion and reads no table.
+    """
+
+    name = django_models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _CrKioskDesk(_CrDesk):
+    """An MTI child declaring its own unique ``kiosk_code``."""
+
+    kiosk_code = django_models.TextField(unique=True)
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _CrOwnKeyDesk(_CrDesk):
+    """An MTI child keyed on its own ``code``, so its parent link is not its primary key."""
+
+    code = django_models.TextField(primary_key=True)
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _CrLamp(django_models.Model):
+    """A lamp keyed to desks by their key and to kiosk desks by the child's ``kiosk_code``.
+
+    One relation per link shape onto each side: a foreign key, a one-to-one and
+    a many-to-many onto ``_CrDesk``'s key, and the same three onto
+    ``_CrKioskDesk.kiosk_code``.
+    """
+
+    desk = django_models.ForeignKey(
+        _CrDesk,
+        on_delete=django_models.CASCADE,
+        related_name="lamps",
+    )
+    spare_desk = django_models.OneToOneField(
+        _CrDesk,
+        on_delete=django_models.CASCADE,
+        related_name="spare_lamp",
+    )
+    desks = django_models.ManyToManyField(_CrDesk, related_name="shared_lamps")
+    kiosk = django_models.ForeignKey(
+        _CrKioskDesk,
+        on_delete=django_models.CASCADE,
+        to_field="kiosk_code",
+        related_name="kiosk_lamps",
+    )
+    spare_kiosk = django_models.OneToOneField(
+        _CrKioskDesk,
+        on_delete=django_models.CASCADE,
+        to_field="kiosk_code",
+        related_name="spare_kiosk_lamp",
+    )
+    kiosks = django_models.ManyToManyField(
+        _CrKioskDesk,
+        through="_CrLampKiosk",
+        related_name="shared_kiosk_lamps",
+    )
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _CrLampKiosk(django_models.Model):
+    """The ``_CrLamp.kiosks`` join row, keyed to the kiosk desk by its ``kiosk_code``."""
+
+    lamp = django_models.ForeignKey(_CrLamp, on_delete=django_models.CASCADE)
+    kiosk = django_models.ForeignKey(
+        _CrKioskDesk,
+        on_delete=django_models.CASCADE,
+        to_field="kiosk_code",
+    )
+
+    class Meta:
+        app_label = "products"
+        managed = False
 
 
 @pytest.fixture(autouse=True)
@@ -1710,10 +1804,10 @@ def test_direct_forward_fk_relation_override_on_relay_target_is_honored():
 def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
     """A shadowed class-level ``FILTER_DEFAULTS`` relation override is honored too.
 
-    The capability check already makes a ``FILTER_DEFAULTS`` shadow non-routable
-    (``generation_capable=False``), but before the fix the Relay conversion
-    STILL discarded the consumer's class and stamped ``package_replacement``. The
-    ownership oracle now detects the shadow and leaves the selection unchanged.
+    A ``FILTER_DEFAULTS`` shadow makes the class non-capable
+    (``_is_generation_capable``), which declines routing but not the Relay
+    conversion: the ownership oracle is what keeps the consumer's class, stamping
+    ``override_generated`` instead of ``package_replacement``.
     """
     import django_filters
     from django.db import models as django_models
@@ -1751,7 +1845,7 @@ def test_filter_defaults_shadow_relation_override_on_relay_target_is_honored():
     record = filter_generation_provenance(leaf)
     assert record is not None
     assert record.origin == "override_generated"
-    assert record.generation_capable is False
+    assert BookFilter._is_generation_capable() is False
     snapshot = BookFilter._expansion_snapshot()
     assert snapshot is not None
     assert "genres" not in snapshot.candidates
@@ -6670,13 +6764,10 @@ def test_generation_provenance_framework_default_for_generated_leaf():
 
     leaf = BookFilter.get_filters()["title__icontains"]
     record = filter_generation_provenance(leaf)
-    # ``BookFilter`` overrides no generation seam, so the capability bit captured
-    # at the generation site is ``True``.
     assert record == FilterGenerationProvenance(
         origin="framework_default",
         framework_added_distinct=False,
         expanded_from=(),
-        generation_capable=True,
     )
 
 
@@ -7005,7 +7096,6 @@ def test_borrowed_generated_leaf_becomes_declared_and_fails_closed():
     source_leaf = SourceBookFilter.base_filters["loans__note__icontains"]
     source_record = filter_generation_provenance(source_leaf)
     assert source_record.origin == "framework_default"
-    assert source_record.generation_capable is True
 
     borrowed = copy.deepcopy(source_leaf)
     # Precondition the fix must correct: the deepcopy still reads as an eligible
@@ -7117,38 +7207,46 @@ def test_inherited_declaration_without_record_is_backfilled():
 # ---------------------------------------------------------------------------
 
 
-def test_candidate_snapshot_expanded_to_many_leaf_is_eligible_and_to_one_is_not():
-    """An expanded to-many leaf is eligible; a flat to-one leaf has a row but is not."""
+def test_candidate_snapshot_rows_cover_direct_leaves_only():
+    """A direct to-many leaf's row is eligible, a direct to-one leaf's is not, an expansion has none."""
 
-    class GenreFilter(FilterSet):
+    class ShelfFilter(FilterSet):
         class Meta:
-            model = library_models.Genre
-            fields = {"name": ["icontains"]}
+            model = library_models.Shelf
+            fields = {"code": ["icontains"]}
 
     class BookFilter(FilterSet):
-        genres = RelatedFilter(GenreFilter, field_name="genres")
+        shelf = RelatedFilter(ShelfFilter, field_name="shelf")
 
         class Meta:
             model = library_models.Book
-            fields = {"title": ["icontains"]}
+            fields = {"title": ["icontains"], "genres__name": ["icontains"]}
 
     BookFilter.get_filters()
     snapshot = BookFilter._expansion_snapshot()
     assert snapshot is not None
 
-    expanded_row = snapshot.candidates["genres__name__icontains"]
-    assert expanded_row.eligible is True
-    assert expanded_row.path_plan.first_many_index is not None
+    to_many_row = snapshot.candidates["genres__name__icontains"]
+    assert to_many_row.eligible is True
+    assert to_many_row.path_plan.first_many_index is not None
     # Classified against the ROOT model (Book), on the model-field path.
-    assert expanded_row.path_plan.model is library_models.Book
-    assert expanded_row.path_plan.path == "genres__name"
-    assert expanded_row.provenance.origin == "framework_default"
-    assert expanded_row.provenance.expanded_from == ("name__icontains",)
+    assert to_many_row.path_plan.model is library_models.Book
+    assert to_many_row.path_plan.path == "genres__name"
+    assert to_many_row.provenance.origin == "framework_default"
+    assert to_many_row.provenance.expanded_from == ()
 
     to_one_row = snapshot.candidates["title__icontains"]
     assert to_one_row.eligible is False
     assert to_one_row.path_plan.first_many_index is None
     assert to_one_row.provenance.origin == "framework_default"
+
+    # The expansion is a framework-generated leaf of the child set, and still rowless.
+    expanded = snapshot.filters["shelf__code__icontains"]
+    expanded_record = filter_generation_provenance(expanded)
+    assert expanded_record is not None
+    assert expanded_record.origin == "framework_default"
+    assert expanded_record.expanded_from == ("code__icontains",)
+    assert "shelf__code__icontains" not in snapshot.candidates
 
 
 def test_candidate_snapshot_omits_declared_and_method_filters():
@@ -7182,34 +7280,6 @@ def test_candidate_snapshot_omits_declared_and_method_filters():
     # ... but declared / method-carrying declared leaves do NOT (fail closed).
     assert "title_search" not in snapshot.candidates
     assert "note_method" not in snapshot.candidates
-
-
-def test_candidate_snapshot_skips_expanded_leaf_the_parent_model_cannot_resolve():
-    """An expanded child leaf whose rebased path does not resolve on the parent gets no row (no raise).
-
-    ``shelf`` is a relation, so the declaration builds, but the child filter set
-    is keyed on ``Genre``: its ``name`` leaf rebased to ``shelf__name`` names no
-    column of ``Shelf``. The candidate classification fails closed for it.
-    """
-
-    class GenreFilter(FilterSet):
-        class Meta:
-            model = library_models.Genre
-            fields = {"name": ["icontains"]}
-
-    class BookFilter(FilterSet):
-        mismatched = RelatedFilter(GenreFilter, field_name="shelf")
-
-        class Meta:
-            model = library_models.Book
-            fields = {"title": ["exact"]}
-
-    BookFilter.get_filters()
-    snapshot = BookFilter._expansion_snapshot()
-    assert snapshot is not None
-    assert "mismatched__name__icontains" not in snapshot.candidates
-    # The direct framework-generated leaf still gets its row.
-    assert "title" in snapshot.candidates
 
 
 def test_candidate_snapshot_omits_override_generated_leaf():
@@ -7450,7 +7520,8 @@ def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh():
     BookFilter.get_filters()
     snapshot = BookFilter._expansion_snapshot()
     assert snapshot is not None
-    assert "genres__name__icontains" in snapshot.candidates
+    assert "genres__name__icontains" in snapshot.filters
+    assert "title" in snapshot.candidates
 
     registry.clear()
 
@@ -7464,14 +7535,15 @@ def test_expansion_snapshot_reset_by_registry_clear_and_rebuilt_fresh():
     rebuilt = BookFilter._expansion_snapshot()
     assert rebuilt is not None
     assert rebuilt is not snapshot
-    assert "genres__name__icontains" in rebuilt.candidates
+    assert "genres__name__icontains" in rebuilt.filters
+    assert "title" in rebuilt.candidates
 
 
 # ---------------------------------------------------------------------------
 # Build-time capability gate, NOT name-only.
 #
-# An eligible frozen candidate row is ROUTABLE only when the class that owns AND
-# the class that generated it overrode none of the package generation seams
+# An eligible frozen candidate row is ROUTABLE only when the class that owns it
+# overrode none of the package generation seams
 # (``filter_for_field`` / ``filter_for_lookup`` / ``FILTER_DEFAULTS`` /
 # ``__init__``) and the installed django-filter release is audited. Each
 # django-filter customization seam below is a SUPPORTED extension point: it keeps
@@ -7897,15 +7969,15 @@ def test_is_generation_capable_false_for_plain_function_seam_override():
 
 
 # ---------------------------------------------------------------------------
-# Capability travels through the RelatedFilter EXPANSION boundary.
+# A RelatedFilter EXPANSION is never routed, whatever the child's capability.
 #
 # ``get_filters._build`` reads ``_is_generation_capable()`` on the PARENT
-# building the snapshot, but an expanded leaf was generated by the CHILD. The
-# child's capability is captured at its generation site on
-# ``FilterGenerationProvenance.generation_capable`` and inherited through
-# ``_expand_related_filter``; the routable verdict requires it, so a non-capable
-# child's leaf expanded into a capable parent stays non-routable (fail closed)
-# while a fully-capable pair still routes through the correlated ``EXISTS``.
+# building the snapshot, but an expanded leaf was generated by the CHILD. No
+# capability crosses the expansion boundary because no expanded leaf gets a
+# candidate row: a plain copy walks its declared hop (``_flat_leaf_walk``) and a
+# ``ProjectedChildFilter`` runs the child filter in the child set, so both
+# answer through the branch, and a non-capable child's custom filter never
+# reaches the correlated ``EXISTS`` adapter.
 # ---------------------------------------------------------------------------
 
 
@@ -7938,17 +8010,9 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     A CHILD ``FilterSet`` overriding ``filter_for_lookup`` (so the
     child is NOT generation-capable) still gets the inherited package
     ``filter_for_field`` stamp ``origin="framework_default"`` on its custom
-    generated instance, and that ``generation_capable=False`` bit is captured at
-    the child's generation site and carried through the ``RelatedFilter``
-    expansion (asserted via the expanded row's provenance below).
-
-    The custom child class is an unaudited ``CharFilter`` subclass, so under the
-    exact-class family gate it resolves to NO profile and
-    the expanded ``loans__note__icontains`` row is INELIGIBLE -- a fail-closed
-    FAMILY-gate layer that subsumes the capability gate: even were it eligible, the
-    propagated ``generation_capable=False`` would still make it non-routable. Either
-    way the consumer's custom child filter is never routed through the correlated
-    ``EXISTS`` adapter.
+    generated instance, an unaudited ``CharFilter`` subclass with no family
+    profile. The expanded copy gets no candidate row, so the consumer's custom
+    child filter is never routed through the correlated ``EXISTS`` adapter.
 
     At request time the leaf walks the declared ``loans`` hop, so it runs as its
     branch (``FilterSet._apply_relation_leaf``): the custom child filter runs over
@@ -7983,17 +8047,11 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
     assert ParentBookFilter._is_generation_capable() is True
     assert ChildLoanFilter._is_generation_capable() is False
 
-    ParentBookFilter.get_filters()
-    # The expanded leaf is the consumer's custom class and framework-origin, but
-    # fail-closed on TWO agreeing layers: ineligible (unaudited subclass resolves
-    # to no family) AND non-routable (the child was not generation-capable).
     leaf = ParentBookFilter.get_filters()["loans__note__icontains"]
     assert isinstance(leaf, CustomChildGenerated)
+    assert filter_generation_provenance(leaf).origin == "framework_default"
     assert _family_profile_for(leaf) is None  # unaudited subclass -> no family
-    row = ParentBookFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    assert row.eligible is False  # ...so the leaf never becomes an eligible candidate
-    assert row.provenance.generation_capable is False  # ...and the child bit propagated
-    assert row.routable is False
+    assert "loans__note__icontains" not in ParentBookFilter._expansion_snapshot().candidates
 
     result = ParentBookFilter(
         data={"loans__note__icontains": "cardio"},
@@ -8007,17 +8065,15 @@ def test_capability_gate_related_filter_expands_non_capable_child_fails_closed()
 
 
 @pytest.mark.django_db
-def test_capability_gate_related_filter_expands_capable_child_row_is_routable():
-    """Positive control: a capable PARENT + capable CHILD over a to-many path freeze ROUTABLE.
+def test_capability_gate_related_filter_expands_capable_child_runs_as_branch():
+    """A capable PARENT + capable CHILD over a to-many path: the expansion runs as its branch.
 
     The mirror of the fail-closed expansion test. With a fully capable child
     ``FilterSet`` (no generation-seam override), the expanded
-    ``loans__note__icontains`` row carries ``generation_capable=True``, so the
-    capable parent freezes it ROUTABLE: the capability gate does not over-block
-    the expansion case. At request time the leaf walks the declared ``loans``
-    hop, which takes precedence over the row (``FilterSet._apply_flat_leaves``):
-    it runs as its branch, distinct-free, and the two matching loans keep the
-    book once.
+    ``loans__note__icontains`` leaf is an audited family on a to-many path and
+    still gets no candidate row: it walks the declared ``loans`` hop
+    (``FilterSet._apply_flat_leaves``), so it runs as its branch, distinct-free,
+    and the two matching loans keep the book once.
     """
     _register_plain_types(library_models.Loan)
     matched = _seed_matched_book_two_cardio_loans()
@@ -8037,11 +8093,9 @@ def test_capability_gate_related_filter_expands_capable_child_row_is_routable():
     assert ParentBookFilter._is_generation_capable() is True
     assert ChildLoanFilter._is_generation_capable() is True
 
-    ParentBookFilter.get_filters()
-    row = ParentBookFilter._expansion_snapshot().candidates["loans__note__icontains"]
-    assert row.eligible is True
-    assert row.provenance.generation_capable is True
-    assert row.routable is True
+    leaf = ParentBookFilter.get_filters()["loans__note__icontains"]
+    assert _family_profile_for(leaf) is not None
+    assert "loans__note__icontains" not in ParentBookFilter._expansion_snapshot().candidates
 
     instance = ParentBookFilter(
         data={"loans__note__icontains": "cardio"},
@@ -9930,11 +9984,11 @@ def test_projected_leaf_reprojects_at_the_next_hop_and_stays_its_own_predicate()
     assert _titles({"loans__patron__email": ""}) == ["Two loans", "Unloaned"]
 
 
-def test_projected_leaf_is_never_routable():
-    """A projected generated many-side leaf gets a candidate row that is never routed.
+def test_projected_leaf_gets_no_candidate_row():
+    """A projected generated many-side leaf gets no candidate row.
 
-    Its class is the projected subclass, which no audited family names, so it is
-    ineligible; its generating child is non-capable, so it is not routable either.
+    Its class is the projected subclass, which no audited family names, and it is
+    a ``RelatedFilter`` expansion, so the snapshot holds no row for it.
     """
 
     class LoanChild(FilterSet):
@@ -9955,13 +10009,10 @@ def test_projected_leaf_is_never_routable():
     leaf = BookParent.get_filters()["loans__note__icontains"]
     assert isinstance(leaf, ProjectedChildFilter)
     assert _family_profile_for(leaf) is None
+    assert filter_generation_provenance(leaf).origin == "framework_default"
     snapshot = BookParent._expansion_snapshot()
     assert snapshot is not None
-    row = snapshot.candidates["loans__note__icontains"]
-    assert row.provenance.origin == "framework_default"
-    assert row.provenance.generation_capable is False
-    assert row.eligible is False
-    assert row.routable is False
+    assert "loans__note__icontains" not in snapshot.candidates
 
 
 def test_projected_leaf_child_runs_on_the_parents_database_with_its_request():
@@ -11273,6 +11324,233 @@ def test_branch_declared_over_a_non_relation_path_is_refused_at_expansion(
         match=rf"RelatedFilter 'misdeclared' has field_name '{field_name}', but '{segment}' is not",
     ):
         parent.get_filters()
+
+
+def _branch_parent(
+    parent_model,
+    field_name,
+    child_model,
+    child_field="id",
+):
+    """A ``parent_model`` set declaring ``branch = RelatedFilter(<set on child_model>, field_name)``."""
+    child = type(
+        "Child",
+        (FilterSet,),
+        {"Meta": type("Meta", (), {"model": child_model, "fields": {child_field: ["exact"]}})},
+    )
+    return type(
+        "Parent",
+        (FilterSet,),
+        {
+            "branch": RelatedFilter(child, field_name=field_name),
+            "Meta": type("Meta", (), {"model": parent_model, "fields": {"id": ["exact"]}}),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "parent_model",
+        "field_name",
+        "child_model",
+        "reached",
+    ),
+    [
+        (
+            library_models.Book,
+            "shelf",
+            library_models.Genre,
+            library_models.Shelf,
+        ),
+        (
+            library_models.Book,
+            "genres",
+            library_models.Shelf,
+            library_models.Genre,
+        ),
+        (
+            library_models.Book,
+            "loans",
+            library_models.Patron,
+            library_models.Loan,
+        ),
+        (
+            library_models.Venue,
+            "lendingdesk",
+            library_models.Venue,
+            library_models.LendingDesk,
+        ),
+        (
+            library_models.LendingDesk,
+            "selfservedesk",
+            library_models.LendingDesk,
+            library_models.SelfServeDesk,
+        ),
+        (
+            library_models.LendingDesk,
+            "selfservedesk",
+            library_models.Venue,
+            library_models.SelfServeDesk,
+        ),
+        (
+            _CrLamp,
+            "kiosk",
+            _CrDesk,
+            _CrKioskDesk,
+        ),
+        (
+            _CrLamp,
+            "spare_kiosk",
+            _CrDesk,
+            _CrKioskDesk,
+        ),
+        (
+            _CrLamp,
+            "kiosks",
+            _CrDesk,
+            _CrKioskDesk,
+        ),
+        (
+            _CrLamp,
+            "desk",
+            _CrOwnKeyDesk,
+            _CrDesk,
+        ),
+        (
+            _CrLamp,
+            "spare_desk",
+            _CrOwnKeyDesk,
+            _CrDesk,
+        ),
+        (
+            _CrLamp,
+            "desks",
+            _CrOwnKeyDesk,
+            _CrDesk,
+        ),
+    ],
+    ids=[
+        "unrelated-forward",
+        "unrelated-many-to-many",
+        "unrelated-reverse",
+        "mti-ancestor-across-a-reverse-link",
+        "mti-parent-across-a-reverse-link",
+        "mti-grandparent-across-a-reverse-link",
+        "mti-ancestor-without-the-foreign-key-to-field",
+        "mti-ancestor-without-the-one-to-one-to-field",
+        "mti-ancestor-without-the-many-to-many-to-field",
+        "mti-descendant-keyed-off-its-parent-link-by-foreign-key",
+        "mti-descendant-keyed-off-its-parent-link-by-one-to-one",
+        "mti-descendant-keyed-off-its-parent-link-by-many-to-many",
+    ],
+)
+def test_branch_whose_target_set_model_the_relation_cannot_correlate_is_refused(
+    parent_model,
+    field_name,
+    child_model,
+    reached,
+):
+    """A target set keyed on a model whose rows the relation's columns do not name fails at expansion.
+
+    The branch correlates the target set's rows by the relation's own link
+    columns (``optimizer/predicates.py::correlates_related_rows``): on an
+    unrelated model, on an MTI ancestor lacking a column the target declares,
+    or on an MTI descendant whose key is not its parent link, those columns
+    hold other rows' values, and across a reverse link an ancestor's row
+    matches itself whether or not a target row extends it.
+    """
+    parent = _branch_parent(parent_model, field_name, child_model)
+    with pytest.raises(
+        ConfigurationError,
+        match=(
+            rf"FilterSet Parent: RelatedFilter 'branch' has field_name '{field_name}', "
+            rf"which reaches {reached.__qualname__}, but its target FilterSet Child is "
+            rf"keyed on {child_model.__qualname__}\."
+        ),
+    ):
+        parent.get_filters()
+
+
+def test_branch_whose_target_set_declares_no_model_is_refused():
+    """A target set with no ``Meta.model`` has no rows to correlate, so the expansion refuses it."""
+    child = type("Child", (FilterSet,), {"name": CharFilter(field_name="name")})
+    parent = type(
+        "Parent",
+        (FilterSet,),
+        {
+            "branch": RelatedFilter(child, field_name="shelf"),
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Book, "fields": {"id": ["exact"]}},
+            ),
+        },
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match=r"which reaches Shelf, but its target FilterSet Child declares no Meta\.model\.",
+    ):
+        parent.get_filters()
+
+
+@pytest.mark.parametrize(
+    ("parent_model", "field_name", "child_model"),
+    [
+        (library_models.Book, "shelf", library_models.Shelf),
+        (library_models.RepairTicket, "venue", library_models.OpenVenue),
+        (library_models.BranchSignage, "branch", library_models.Branch),
+        (library_models.BranchSignage, "branch", library_models.ProxyBranch),
+        (library_models.RepairTicket, "venue", library_models.LendingDesk),
+        (library_models.RepairTicket, "venue", library_models.SelfServeDesk),
+        (library_models.VenueSponsor, "venues", library_models.LendingDesk),
+        (library_models.SelfServeDesk, "lendingdesk_ptr", library_models.Venue),
+    ],
+    ids=[
+        "the-target",
+        "proxy-of-the-target",
+        "concrete-model-of-a-proxy-target",
+        "sibling-proxy-of-a-proxy-target",
+        "mti-child",
+        "mti-grandchild",
+        "mti-child-across-a-many-to-many",
+        "mti-ancestor-across-a-forward-link",
+    ],
+)
+def test_branch_whose_target_set_model_the_relation_correlates_expands(
+    parent_model,
+    field_name,
+    child_model,
+):
+    """The target, a proxy on its table, an MTI descendant, or a forward link's MTI ancestor expands."""
+    parent = _branch_parent(parent_model, field_name, child_model)
+    assert "branch__id" in parent.get_filters()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", ["kiosk", "other kiosk", "plain"])
+def test_branch_across_a_forward_link_with_a_set_on_the_ancestor_answers_like_the_join(name):
+    """A ``Venue`` set reached through ``lendingdesk_ptr`` matches the venue row of each kiosk's desk.
+
+    The forward parent link references the desk, whose key is stored in the
+    venue's, so the branch answers as Django's ``lendingdesk_ptr__name`` join
+    does: each kiosk matches its own name only, and no kiosk matches a plain venue's.
+    """
+    _register_plain_types(library_models.Venue)
+    library_models.Venue.objects.create(name="plain")
+    for kiosk in ("kiosk", "other kiosk"):
+        library_models.SelfServeDesk.objects.create(name=kiosk, kiosk_code=kiosk)
+    parent = _branch_parent(
+        library_models.SelfServeDesk,
+        "lendingdesk_ptr",
+        library_models.Venue,
+        "name",
+    )
+    parent.get_filters()
+    base = library_models.SelfServeDesk.objects.all()
+    expected = _absent_world(library_models.SelfServeDesk, {"lendingdesk_ptr__name": name})
+    assert _applied(parent, {"branch__name": name}, base) == expected
+    assert _applied(parent, {"branch": {"name": name}}, base) == expected
+    assert len(expected) == (0 if name == "plain" else 1)
 
 
 @pytest.mark.django_db

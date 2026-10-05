@@ -190,8 +190,18 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   `EXISTS` per link, through each earlier hop's visible rows (`via=`) —
   the whole boolean tree compiled into one `Q` applied by one outer
   `.filter()` (no annotation, no reserved alias), the
-  `graph.apply(plan, queryset, owner=...)` input contract, no
-  framework-introduced `DISTINCT`, `RowIdentityProof` output on
+  `graph.apply(plan, queryset, info, owner=...)` input contract and its
+  color twin `graph.apply_async` (each hop's type resolved by
+  `utils/querysets.py::relation_target_type` with `root=` the owner, each
+  scoped hop's hook run through
+  `utils/querysets.py::apply_type_visibility_sync` /
+  `utils/querysets.py::apply_type_visibility_async` with that `info`, once
+  per `(hop type, alias)` per compile; the sync form meets an async-only
+  hop hook with [`SyncMisuseError`][glossary-syncmisuseerror]), the
+  compiler-owned re-entrancy set in `graph/predicates.py` refusing a hop
+  whose hook the compiler is already running
+  ([Decision 6](#decision-6--exact-owner-identity-on-root-model-re-entry)),
+  no framework-introduced `DISTINCT`, `RowIdentityProof` output on
   every compiled shape
   ([Decision 4](#decision-4--predicateplan-compiles-through-the-shipped-row-preserving-primitives),
   [Decision 5](#decision-5--same_related_row-is-explicit-path-relative-and-flat-semantics-never-change)).
@@ -202,7 +212,11 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   hook restriction inside that hop's body and an unscoped hop read through
   `_base_manager`, same-row conditions on the deepest body's one base
   table, `NOT EXISTS`, no compiler-added multiplying outer join or
-  `DISTINCT`); the *result semantics* of R4/R5/R9 land live in Slice 4 —
+  `DISTINCT`), the hop hooks receiving the `info` passed in, a plan
+  re-entering its owner's model inside the owner's own hook refused on
+  both colors with a path-rich message, the sync `graph.apply` raising
+  `SyncMisuseError` for an async-only hop type, and `graph.apply_async`
+  compiling the same plan; the *result semantics* of R4/R5/R9 land live in Slice 4 —
   Slice 3 is not accepted with a package-only stand-in for live-reachable
   behavior.
 - [ ] **Slice 4 — `EdgeScope` + `FieldDependencyPlan` + Meta surface + live
@@ -210,7 +224,9 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   `(owner definition, relation field, target definition, context)` whose
   request-bound sync factory returns a **`PredicatePlan` (or a `Q`,
   normalized)** that the framework compiles onto the child queryset via
-  `graph.apply` at `optimizer/walker.py::_build_child_queryset` — after
+  `graph.apply` at `optimizer/walker.py::_build_child_queryset`, with the
+  walker's `info` (`None` passes through as it does to target
+  visibility) — after
   target visibility, narrow-only **by construction** — keeping the
   accessor-keyed prefetch cache the generated resolver already reads (no
   reserved `to_attr` for plain relations; the resolver trusts that cache
@@ -236,10 +252,14 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   `edge_scopes` declaration on `BookType.loans`, the R9 secondary Loan type
   + acceptance connection riding the existing `FAKESHOP_TEST_LOAN_CONNECTION`
   flag (coordinated with card 060's planned
-  `DjangoConnectionField(LoanType)` so one card owns it), live HTTP tests
+  `DjangoConnectionField(LoanType)` so one card owns it), the R9 plan arm:
+  an `edge_scopes` declaration on a parent edge to `Loan` whose relation
+  override targets the secondary Loan type, its factory returning a plan
+  whose path re-enters `Loan` (Decision 6), live HTTP tests
   under `examples/fakeshop/test_query/` covering R3 (edge-selection half,
-  including the `filter:`-argument fallback case), R4/R5/R9 result
-  semantics, and the one-vs-one-hundred-parents query-count equality;
+  including the `filter:`-argument fallback case), R4/R5 result
+  semantics, R9's plan arm through that edge scope, and the
+  one-vs-one-hundred-parents query-count equality;
   re-baseline plan-cacheability and query-count assertions in
   `test_query/test_library_api.py` / `test_query/test_optimizer_auto_api.py`
   and sweep every private schema-module tuple in the test tree for the new
@@ -369,7 +389,10 @@ of the first foundation card.
     leaf folds outward through (`filters/sets.py::FilterSet._reaches_hop`,
     declared hops with their explicit `queryset=` and intermediate visible
     rows, `filters/sets.py::FilterSet._via_rows`; undeclared hops with the
-    hop's rows as they are); the planned search arms are specified onto it
+    rows the type registered for their model shows,
+    `filters/sets.py::FilterSet._scoped_rows`, a path re-entering the set's
+    own model reading the type the set is bound to, or every row when no
+    type scopes them); the planned search arms are specified onto it
     too ([search spec][spec-060] Decision 12).
   - **`OrderSet` value helpers** sit beside them:
     `optimizer/predicates.py::visible_row_exists` is the order-side test
@@ -479,6 +502,14 @@ of the first foundation card.
   a correlated subquery body (an `OuterRef` reaching past `graph.apply`'s
   input), and a `PredicatePlan` construct inside a branch's conditions
   (which are plain `Q`), are out of scope for `0.1.1`.
+- **A to-many branch re-entering the owner's own model, compiled inside
+  that owner's `get_queryset`.** The related rows' visibility is the plan
+  being compiled, a fixed point the ORM cannot express in one statement.
+  It is refused with a typed error (Decision 6), positive and negated
+  alike; a to-one self-reference goes through `direct(Q)`. This includes a
+  plan inside a secondary type's own hook that re-enters that type's
+  model; the exact-owner re-entry R9 pins for a plan runs through an
+  `EdgeScope` compile outside the hook instead.
 - **A per-event subscription memo scope.** Subscriptions fall back to
   per-call compute in `0.1.1` (Decision 3); promoting to a per-event scope
   is deferred and must arrive with an explicit invalidation rule.
@@ -547,7 +578,10 @@ class EventType(ModelType):
                 ),
             ),
         )
-        return graph.apply(plan, queryset, owner=cls)
+        return graph.apply(plan, queryset, info, owner=cls)
+
+    # An async def get_queryset composes with:
+    #     return await graph.apply_async(plan, queryset, info, owner=cls)
 
 
 # 3. Edge-specific child scoping, Meta-declared. The factory is sync, runs
@@ -605,7 +639,11 @@ Slice 1 makes the extension a `graph/` consumer); and because
 than eagerly re-entering a partially initialized package. Type references
 inside plan objects are **injected by the caller** (the finalizer, the
 walker, the search builder) as opaque `DjangoTypeDefinition` handles —
-`graph/` never resolves a model to a type itself. The card-060 amendment scope this boundary implies:
+`graph/` never resolves a model to a type itself. The one compile-time
+resolution, each `PredicatePlan` hop's type at `graph.apply`, goes through
+the shipped `utils/querysets.py::relation_target_type` /
+`utils/querysets.py::relation_visibility_type` with `root=` the owner
+(Decision 4), never a `graph/`-local lookup. The card-060 amendment scope this boundary implies:
 `GraphPathPlan` + `GraphPathPlanSet` (chain-keyed grouping) subsume 060's
 path classification and arm grouping, while 060's `LOOKUP_PREFIXES` prefix
 rejection and its permission-dispatch plan **stay 060-local** — they are
@@ -716,12 +754,23 @@ relation planning and row-preserving composition. Compilation mechanics,
 each pinned because the naive alternative is silently wrong:
 
 - **A branch is one target-side test over each hop's visible rows.** The
-  branch path is classified into its `GraphPathPlan` (Slice 2). A hop whose
-  target type — the exact owner on a re-entered model (Decision 6) —
-  declares its own `get_queryset` reads that hook's rows over
-  `base_queryset(<hop model>, using=queryset.db)`; a hop whose type keeps
-  the identity hook, or whose model has no registered type, reads
-  `_base_manager` on that alias, as Django's join does. The branch's
+  branch path is classified into its `GraphPathPlan` (Slice 2). The hop's
+  type is `utils/querysets.py::relation_target_type(<hop model>, root=<owner>)`,
+  the filter walk's own resolution
+  (`utils/permissions.py::_walk_undeclared_hops`), so a re-entered model
+  answers with the exact owner (Decision 6); it scopes only when
+  `utils/querysets.py::relation_visibility_type` names it. A hop whose
+  type declares its own `get_queryset` reads that hook's rows: the
+  compiler seeds `base_queryset(<hop model>, using=queryset.db)` and runs
+  the hook through `utils/querysets.py::apply_type_visibility_sync`
+  (`utils/querysets.py::apply_type_visibility_async` under
+  `graph.apply_async`) with the `info` passed to `graph.apply`, once per
+  `(hop type, alias)` per compile, the precedent of
+  `filters/sets.py::FilterSet._scoped_rows`. A plan compiled twice re-runs
+  its hooks: a hook result is re-sealed on every call and is never a memo
+  value (Decision 3). A hop whose type keeps the identity hook, or whose
+  model has no registered type, reads `_base_manager` on that alias, as
+  Django's join does. The branch's
   conditions are **path-relative** (`related`'s `Q` and
   `same_related_row`'s tuple alike) and filter the deepest hop's rows in one
   `.filter()` call; the compiler then calls
@@ -756,11 +805,22 @@ each pinned because the naive alternative is silently wrong:
   (Django refuses `.filter()` after `union()` / `intersection()` /
   `difference()`); a model-row iterable (`values()` querysets refused: the
   output is a visibility hook's or an edge child queryset's model rows, and
-  `values` is one of the window gate's refusal reasons). Each failure
-  raises a typed [`ConfigurationError`][glossary-configurationerror] naming
-  the recourse — never a raw Django error from a consumer-facing builder.
-  Every hop's rows are read on `queryset.db`, so the whole test compiles on
-  the input's database alias.
+  `values` is one of the window gate's refusal reasons); no branch hop's
+  type is one whose hook this compiler is already running (the re-entrancy
+  rule, Decision 6). Each failure raises a typed
+  [`ConfigurationError`][glossary-configurationerror] naming the recourse —
+  never a raw Django error from a consumer-facing builder. `info` is the
+  resolver `info` the caller holds (the hook's own argument;
+  `_build_child_queryset`'s for an edge scope, `None` included) and is
+  handed unchanged to every hop hook. Every hop's rows
+  are read on `queryset.db`, so the whole test compiles on the input's
+  database alias. `graph.apply` is sync and meets an async-only hop hook
+  with the shipped [`SyncMisuseError`][glossary-syncmisuseerror], naming
+  `graph.apply_async` as the recourse; `graph.apply_async` awaits every
+  scoped hop's hook into the per-compile map first and then compiles
+  exactly as `graph.apply` does, the split `FilterSet.apply_async` makes
+  (`filters/sets.py::FilterSet._derive_flat_hop_visibility_async` before
+  the sync `.qs` read).
 - **Structural/request split.** `GraphPathPlan` is structural: finalize-
   frozen, hashable, cacheable. `PredicatePlan` is **request-bound**: built
   per request from request-derived values, never cached, never a component
@@ -842,9 +902,17 @@ absolute-path conditions (unenforceable contract).
 
 When a relation path re-enters a model that has primary and secondary
 GraphQL types ([`Meta.primary`][glossary-metaprimary]), the plan carries the
-exact owning identity, never a registry primary lookup — a search over a
-secondary Loan type applies the secondary visibility to the re-entered Loan
-hop. The identity carrier is the **`DjangoTypeDefinition`** (matching the
+exact owning identity, never a registry primary lookup — an `EdgeScope`
+factory declared on a parent edge to `Loan` whose relation override targets
+the secondary Loan type compiles at
+`optimizer/walker.py::_build_child_queryset` with `owner=` that secondary
+type, outside any target hook, and a plan path re-entering `Loan`
+(`book__loans`) reads the secondary type's hook on the re-entered hop. The
+filter side applies the same rule to its own surface (an undeclared hop
+re-entering a set's model reads the type the set is bound to,
+`utils/permissions.py::_walk_undeclared_hops`), and the planned search arms
+inherit it ([search spec][spec-060]); those are parity, not this plan's
+proof. The identity carrier is the **`DjangoTypeDefinition`** (matching the
 [search spec][spec-060]'s rule — never a bare `(type_name, model)` pair);
 a `DjangoType` class passed as `owner=` resolves through its definition
 handle. Structural identities key on that definition, and two types over one
@@ -856,6 +924,43 @@ secondary-typed root the way a to-many path can, so primary-lookup is sound
 in cascade's position. **Rejected:** model-keyed identity (leaks
 primary-type visibility into secondary-type roots — a security failure,
 reproduction R9).
+
+**Re-entry inside the owner's own hook is refused.** A branch hop
+re-entering the owner's model reads the owner's hook; compiled inside that
+hook, the read is the hook itself and recurses, and each level builds a
+fresh request-bound plan, so no plan identity can detect the cycle.
+`graph/predicates.py` keeps a `ContextVar` holding the set of hop types
+whose hooks the compiler is running: each hop derivation sets it with
+that hop's type added and resets the token in `finally` (the token
+discipline `permissions.py::apply_cascade_permissions` uses for its
+traversal state; context-local, so the `graph.apply_async` twin needs
+nothing extra). `graph.apply` and `graph.apply_async` refuse, before
+building any test, a plan with a hop whose type is in that set — a typed
+[`ConfigurationError`][glossary-configurationerror] rendering the cycle
+path (`EventType.schedules -> EventType`) and naming the recourse, the
+fail-closed shape of the cascade's cycle error. The refusal fires at the
+first `graph.apply` reached inside a hook the compiler is running whose
+plan has a hop of that hook's type: for a self-re-entering owner, the
+second `graph.apply`, after one re-entrant hook run; mutual recursion
+through another type's hook closes the same way. It never fires for a
+hop that merely has a hook, nor for a plan whose re-entered type's hook
+applies no plan (an `EdgeScope` factory's plan re-entering the edge
+target, the filter side's re-entry rule). Recourse: a to-one
+self-reference belongs in `direct(Q)` (no hop visibility, Decision 4); a
+to-many self-reference inside the owner's hook is out of scope
+(Non-goals). Exact-owner resolution of a re-entered hop is therefore
+observable only for a plan compiled outside that owner's own hook: the
+edge-scope compile above is R9's plan arm, and a plan inside the secondary
+Loan type's own `get_queryset` that re-enters `Loan` is the refused case.
+**Rejected:** reading the exact-owner hop from `graph.apply`'s input
+queryset (the hook's pre-plan rows: a one-step unrolling of a fixed point,
+a superset under positive branches and the other direction under `not_`);
+a depth cap (N hook runs before an error naming the depth, not the
+cause); publishing the running-hooks set from the visibility runners in
+`utils/querysets.py` (a `ContextVar` set and reset on every hook run on
+the hot path, inside the sealed-boundary module, saving one hook run per
+refusal and catching no cycle the compiler-local set misses, since every
+cycle passes through a compiler hop derivation).
 
 ### Decision 7 — `EdgeScope` composes into the child queryset, not a broader cascade
 
@@ -919,9 +1024,13 @@ No path may fail open:
   applies target visibility there, color-matched
   (`types/resolvers.py::_visible_many_rows` awaits
   `apply_type_visibility_async` under `async_execution()` and calls
-  `apply_type_visibility_sync` otherwise); this slice composes the (sync)
-  edge-scope predicate between that visibility and the bound, on both
-  colors, and extends the path to an edge-scoped relation whose target
+  `apply_type_visibility_sync` otherwise); this slice composes the
+  edge-scope predicate between that visibility and the bound on both
+  colors — the factory is sync and returns a plan, the compile is
+  color-matched, `graph.apply` on the sync arm and
+  `await graph.apply_async` on the async arm, so a plan whose hops reach
+  an async-only type still works on the `relation_shapes = "list"`
+  recourse path — and extends the path to an edge-scoped relation whose target
   declares no `get_queryset`. `relation_shapes = "list"` is the *documented
   recourse* for async-visibility targets locked out of nested connections —
   a sync-only scoped path would raise `SyncMisuseError` on exactly the types
@@ -965,7 +1074,10 @@ No path may fail open:
 Factories are **sync-only in `0.1.1`** (an `async def` factory raises
 [`SyncMisuseError`][glossary-syncmisuseerror], the shipped color-misuse
 error — sync factories compose without change inside the async list
-resolver arm); the `graph.apply` output passes the same
+resolver arm, whose compile is `graph.apply_async`); the walker and the
+per-parent fallback pipeline are sync and compile with `graph.apply`,
+handing it the `info` they already pass to target visibility; the
+`graph.apply` output passes the same
 [sealed visibility boundary][glossary-sealed-execution-queryset] with the
 same allow-sliced posture — and the same admitted-bound-value rule over
 every predicate payload (see `Edge cases and constraints`) — as the
@@ -1086,8 +1198,8 @@ shipped precedent's error timing for checks available at type creation).
 |---|---|---|
 | 1 | `graph/__init__.py`, `graph/memo.py` (store owner); two-line delegation in `optimizer/extension.py::DjangoOptimizerExtension.on_execute`; new `extensions/graph.py::GraphSubstrateExtension` | live `examples/fakeshop/test_query/` (isolation, five-roots, keying, no-extension fallback); `tests/graph/test_memo.py` (single-flight, cancellation, raise paths, absent store) |
 | 2 | `graph/paths.py` (plan, plan set, path/lookup splitter), `graph/proofs.py` over `utils/relations.py` | `tests/graph/test_paths.py` + window-gate characterization |
-| 3 | `utils/predicates.py` (relocated `optimizer/predicates.py`, both `EXISTS` builders + `OrderSet` value helpers; `optimizer/predicates.py` re-export shim); `graph/predicates.py` over `utils/predicates.py::related_rows_exist` | `tests/graph/test_predicates.py` (SQL-shape: one `EXISTS` term per branch in one `WHERE`, no annotation, one nested `EXISTS` per link, hop visibility inside each hop's body, inner alias sharing, `NOT EXISTS`, no compiler `DISTINCT`; raise paths) |
-| 4 | `graph/edges.py`, `graph/dependencies.py`; `Meta.edge_scopes` in `types/base.py` (+ `types/finalizer.py` residue, `types/definition.py` slot); owner threading + edge composition in `optimizer/walker.py::_build_child_queryset` and `optimizer/nested_planner.py` (injected-callable signature); second application in `connection.py::_build_relation_connection_resolver`; visibility + scope on the list-resolver cache-miss branch in `types/resolvers.py`; `examples/fakeshop/apps/library/models.py` (`Loan.confidential`) + migration file; library schema fixtures (LoanType hook + `primary = True`, BookType hook rewrite + `edge_scopes`, R9 secondary Loan type + connection under `FAKESHOP_TEST_LOAN_CONNECTION`) | `tests/graph/test_edges.py`, `tests/graph/test_dependencies.py`; live `examples/fakeshop/test_query/` (R3 incl. `filter:` fallback, R4/R5/R9 result semantics, 1-vs-100 parents); re-baselined `test_library_api.py` / `test_optimizer_auto_api.py`; schema-module tuple sweep |
+| 3 | `utils/predicates.py` (relocated `optimizer/predicates.py`, both `EXISTS` builders + `OrderSet` value helpers; `optimizer/predicates.py` re-export shim); `graph/predicates.py` over `utils/predicates.py::related_rows_exist` (`graph.apply` / `graph.apply_async` taking `info`, hop hooks through the shipped visibility runners, the re-entrancy `ContextVar`) | `tests/graph/test_predicates.py` (SQL-shape: one `EXISTS` term per branch in one `WHERE`, no annotation, one nested `EXISTS` per link, hop visibility inside each hop's body, inner alias sharing, `NOT EXISTS`, no compiler `DISTINCT`; `info` identity at each hop hook; raise paths incl. re-entrant refusal on both colors and sync `SyncMisuseError` for an async-only hop) |
+| 4 | `graph/edges.py`, `graph/dependencies.py`; `Meta.edge_scopes` in `types/base.py` (+ `types/finalizer.py` residue, `types/definition.py` slot); owner threading + edge composition in `optimizer/walker.py::_build_child_queryset` and `optimizer/nested_planner.py` (injected-callable signature); second application in `connection.py::_build_relation_connection_resolver`; visibility + scope on the list-resolver cache-miss branch in `types/resolvers.py`; `examples/fakeshop/apps/library/models.py` (`Loan.confidential`) + migration file; library schema fixtures (LoanType hook + `primary = True`, BookType hook rewrite + `edge_scopes`, R9 secondary Loan type + connection under `FAKESHOP_TEST_LOAN_CONNECTION`, R9 plan-arm `edge_scopes` on a parent edge whose relation override targets the secondary Loan type) | `tests/graph/test_edges.py`, `tests/graph/test_dependencies.py`; live `examples/fakeshop/test_query/` (R3 incl. `filter:` fallback, R4/R5 result semantics, R9 plan arm through that edge scope, 1-vs-100 parents); re-baselined `test_library_api.py` / `test_optimizer_auto_api.py`; schema-module tuple sweep |
 | 5 | `docs/TREE.md` + tracked-path constants regenerate, glossary DB + regenerate, `test_query/README.md`, card-amendment audit + wrap | render-clean checks |
 
 Slices are sequential; each later slice consumes the earlier's surface, so no
@@ -1127,7 +1239,10 @@ ownership partition applies.
   access.
 - Visibility binding: the shared sync/async visibility helpers that
   normalize `get_queryset` hooks today are the only binding path for target
-  visibility; the edge factory composes *after* them at
+  visibility and for every hop a `PredicatePlan` branch reads
+  (`utils/querysets.py::apply_type_visibility_sync` /
+  `utils/querysets.py::apply_type_visibility_async`, the hop type from
+  `utils/querysets.py::relation_target_type`); the edge factory composes *after* them at
   `_build_child_queryset` rather than through a parallel variant.
 - Reserved naming: the `_dst_` namespace (with the `$` response-key escape)
   stays the only reserved-attribute discipline; no second naming scheme.
@@ -1167,7 +1282,24 @@ ownership partition applies.
   papered over.
 - **Exact-owner identity** must survive plan freezing and hashing — two
   definitions over one model never compare equal as owners (Decision 6's
-  `DjangoTypeDefinition` carrier).
+  `DjangoTypeDefinition` carrier). A plan observes it only when compiled
+  outside the owner's own hook: an `EdgeScope` plan on a parent edge
+  targeting a secondary type reads that type's hook on a hop re-entering
+  its model, while the same plan inside the secondary type's own
+  `get_queryset` is refused (Non-goals).
+- **Hop hooks see the caller's `info`.** The compiler passes the `info`
+  given to `graph.apply` / `graph.apply_async` to every hop hook unchanged
+  (`None` included on an edge scope the walker builds without one); a hop
+  hook built on the memo (`graph.get_or_compute(info, ...)`) therefore
+  shares the operation scope with the plan's author.
+- **An async-only hop hook needs the async compile.** `graph.apply` meets
+  it with `SyncMisuseError` naming `graph.apply_async`; `graph.apply_async`
+  awaits every scoped hop's hook before the sync compile, so no async-only
+  hook runs inside it (Decision 4).
+- **Re-entrant compile is a typed refusal, never a `RecursionError`,** on
+  both colors: a plan hop whose type's hook the compiler is already running
+  raises `ConfigurationError` naming the cycle path and the `direct(Q)`
+  recourse for a to-one self-reference (Decision 6).
 - **Edge scopes and empty results:** a predicate matching no rows is valid
   (viewer sees no children), keeps the composed queryset window-gate-clean,
   and must not un-plan the edge or drop the parent.
@@ -1214,7 +1346,7 @@ is optional and non-gating; R12 is consumer-repository work.
 | R6 | Computed dependency batching | A computed field over related rows runs no per-parent, per-child, or deferred-column query; count is constant across parent counts; omitting the field omits its queries | this card |
 | R7 | Ordered nested connection batching | Parent count does not change child query count; per-parent windows and `totalCount`; cursors replay; argument-divergent aliases batch separately; strictness reports no planned edge | sibling |
 | R8 | Row-identity window gate | The classifier misses a multiplying join (the baseline); strict targets raise a targeted unproven-row-identity error and non-strict fall back; no automatic `DISTINCT`; correlated `EXISTS` restores a proven window plan | sibling (baseline here, Slice 2) |
-| R9 | Exact-owner root-model re-entry | A connection over a secondary type applies *that* type's visibility to the re-entered hop; registry primary lookup is not substituted; structural identities differ by exact owner type | this card |
+| R9 | Exact-owner root-model re-entry | An `EdgeScope` plan on a parent edge targeting a secondary type, compiled outside any target hook, applies *that* type's visibility to the hop re-entering its model; registry primary lookup is not substituted; structural identities differ by exact owner type; the same re-entering plan inside the secondary type's own hook is refused; the filter side's bound-type re-entry is the parity row | this card |
 | R10 | Operation explain completeness | Every root appears regardless of completion order; no response carries only the last plan; shared dependencies appear once; fallback reasons attach to the right response key; scope values are redacted | sibling |
 | R11 | Repeatable-read snapshot | PostgreSQL-only optional policy: opt-in keeps multiple roots coherent inside a read-only transaction that closes on success, GraphQL error, cancellation, and resolver exception | optional, non-gating |
 | R12 | Consumer permission value gate | The originating consumer repository's own permission matrix must be proven before operation memoization — a fast shared wrong answer is worse than a repeated wrong one | consumer repository |
@@ -1280,9 +1412,28 @@ raise paths, and interleavings a real query cannot produce.
   computed `borrowers`-shaped field is card 059's, after it consumes the
   plan.
 - **R9 — exact owner (package identity, Slice 3; live, Slice 4):** primary
-  and secondary Loan types with different visibility; the secondary root's
-  re-entered Loan hop applies secondary visibility; plan identities differ
-  by owner definition.
+  and secondary Loan types with different visibility; plan identities
+  differ by owner definition. Package: a plan re-entering `Loan` applied
+  with `owner=` the secondary type outside that type's hook reads the
+  secondary hook's rows on the re-entered hop; the same plan compiled
+  inside the secondary type's own `get_queryset` is refused (sync and
+  async, Decision 6). Live, the plan arm: the `EdgeScope` factory on the
+  parent edge whose relation override targets the secondary Loan type
+  returns a plan re-entering `Loan`, compiles at `_build_child_queryset`
+  outside any target hook, and the selected edge shows the rows the
+  secondary type's visibility admits on the re-entered hop, never the
+  primary's. Parity row (already shipped, not this plan's proof):
+  `tests/filters/test_sets.py::test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook`
+  and
+  `tests/orders/test_sets.py::test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to`.
+- **Hop visibility and color (package, Slice 3):** every hop hook receives
+  the `info` object passed to `graph.apply` (identity-asserted); each
+  `(hop type, alias)` hook runs once per compile and again on a second
+  compile of the same plan; `graph.apply` with an async-only hop type
+  raises `SyncMisuseError`; `graph.apply_async` compiles the same plan
+  with the hop hook's rows inside that hop's body; a self-re-entering and
+  a mutually recursive plan each raise the path-rich
+  `ConfigurationError` instead of recursing, on both colors.
 - **Window-gate characterization (Slice 2):** pin the measured baseline —
   `unwindowable_child_queryset_reason` returns `None` for
   `Issue.objects.filter(periodical__issues__embargoed=False)` while the shape
@@ -1316,15 +1467,6 @@ version triplet stay untouched (Decision 10).
   ordinary execution risk: the amendments are prose obligations, so a card
   that starts without re-reading its own scope can still build a private
   twin.
-- **Hop visibility needs the request.** A branch reads each hop's rows
-  through the hop target type's `get_queryset`, which takes `info`, while
-  `graph.apply(plan, queryset, owner=...)` receives none; the consumer hook
-  calling it (and `_build_child_queryset` for an edge scope) holds `info`.
-  Open: thread `info` through `graph.apply` or bind it when the plan is
-  built. Related: a branch whose path re-enters the owner's own model,
-  compiled inside that owner's `get_queryset`, reads the re-entered hop
-  through the same hook (Decision 6) and recurses; Slice 3 must refuse or
-  bound that shape.
 - **Consumer row-identity assertion.** Should a consumer be able to assert a
   validated row-identity contract for a custom queryset (unlocking windows
   over shapes the framework didn't build)? Preferred for `0.1.1`: no —
@@ -1400,8 +1542,14 @@ version triplet stay untouched (Decision 10).
 - [ ] `PredicatePlan` compiles every correlated branch target-side through
   `utils/predicates.py::related_rows_exist` over each hop's visible rows,
   the whole tree as one `Q` under one outer `.filter()` (N `EXISTS` terms
-  for N branches, no annotation or reserved alias), typed input errors,
-  `direct` over a to-many path rejected, and SQL-shape assertions green
+  for N branches, no annotation or reserved alias), typed input errors
+  (owner/model mismatch, sliced, combinator, `values`, re-entrant hop
+  refused through the `graph/predicates.py` re-entrancy set on both
+  colors), `info` threaded to every hop hook through the shipped
+  visibility runners once per `(hop type, alias)` per compile with the
+  color twin `graph.apply_async` (sync `graph.apply` meets an async-only
+  hop hook with `SyncMisuseError`), `direct` over a to-many path
+  rejected, and SQL-shape assertions green
   (R4, R5, R9); path-relative `same_related_row` with pre-prefixed-leaf
   rejection; the Slice 3 relocation moves both `EXISTS` builders and the
   `OrderSet` value helpers behind the `optimizer/predicates.py` shim.
@@ -1415,7 +1563,10 @@ version triplet stay untouched (Decision 10).
   factory returns and consumer prefetches over scoped accessors loudly
   (unplanned caches re-read optimizer-off/`SKIP`), publishes strictness
   keys only after attachment, and the live R3 edge-selection fixture holds
-  with parent-count-independent query counts on the windowed path.
+  with parent-count-independent query counts on the windowed path; R9's
+  plan arm holds live through the edge scope on the parent edge targeting
+  the secondary Loan type (the re-entered hop reads the secondary type's
+  hook), with the filter side's bound-type re-entry as the parity row.
 - [ ] `FieldDependencyPlan(columns=...)` + shorthand normalizer shipped;
   no consumer-less vocabulary members.
 - [ ] `RowIdentityProof` lattice shipped with the weakest-meet rule;

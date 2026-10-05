@@ -26,6 +26,12 @@ correlated to the outer row by the relation's own link columns. A declared
 (``filters/sets.py::_restrict_to_related``), so a nested branch and a flat leaf
 walking the branch read the related rows the same way.
 
+``visible_row_exists`` is the order-side sibling: "the row an outer join
+already reached is one of THESE rows", correlated by that joined row's primary
+key. An order value belongs to one joined row, not to the outer row, so the
+test reuses the join the value is read through instead of re-walking the path
+from the outer row. Its exact type is ``utils/querysets.py::VisibleRowExists``.
+
 Implementation invariant: the INNER queryset built here is correlated with
 ``OuterRef`` and compiles inside the outer statement - it must never execute
 independently. An evaluated OUTER queryset is still valid input (``.alias()`` /
@@ -46,10 +52,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
-from django.db.models import Exists, OuterRef, Q
+from django.db.models import Case, Exists, F, OuterRef, Q, When
 from django.db.models.constants import LOOKUP_SEP
 
 from ..exceptions import ConfigurationError, OptimizerError
+from ..utils.querysets import VisibleRowExists
 from ..utils.relations import m2m_through_link_fields, relation_kind, relation_link
 
 if TYPE_CHECKING:
@@ -336,3 +343,53 @@ def related_rows_exist(
             through = step.model._base_manager.using(using)
         query = _correlated(through, step).filter(Exists(query))
     return Exists(query)
+
+
+def visible_row_exists(rows: QuerySet[models.Model], joined_path: str) -> VisibleRowExists:
+    """Return ``EXISTS`` "the row the outer query reaches through ``joined_path`` is one of ``rows``".
+
+    Correlated by primary key to the row the outer query's own join over
+    ``joined_path`` reaches, so an ordering whose value is read through that join
+    adds no join of its own: a to-one value reuses its join, and inside a to-many
+    aggregate the test reads the same joined row the aggregate does. ``rows``
+    keep any ``DISTINCT`` inside the subquery, where it changes no answer.
+    """
+    return VisibleRowExists(rows.filter(pk=OuterRef(f"{joined_path}{LOOKUP_SEP}pk")))
+
+
+def visible_value(field_path: str, tests: Sequence[VisibleRowExists]) -> Case:
+    """Return ``field_path``'s value where every test holds and ``NULL`` where any fails.
+
+    One ``CASE WHEN`` per test, nested so each condition is a ``VisibleRowExists``
+    itself rather than a composed predicate. ``tests`` must be non-empty.
+    """
+    value: Case | F = F(field_path)
+    for test in reversed(tests):
+        value = Case(When(test, then=value))
+    return cast("Case", value)
+
+
+def visible_value_path(expression: object) -> str | None:
+    """Return the field path a ``visible_value`` inside ``expression`` reads, or ``None``.
+
+    Walks ``expression``'s source tree without entering a ``VisibleRowExists``
+    (its subquery is the target type's rows, not part of the value). ``None``
+    when no such test guards a value anywhere in the tree.
+    """
+    stack: list[object] = [expression]
+    guarded = False
+    path: str | None = None
+    while stack:
+        node = stack.pop()
+        if type(node) is VisibleRowExists:
+            guarded = True
+            continue
+        if type(node) is When:
+            name: object = getattr(node.result, "name", None)
+            if type(node.result) is F and type(name) is str:
+                path = name
+        sources = getattr(node, "get_source_expressions", None)
+        if callable(sources):
+            children = cast("Sequence[object | None]", sources())
+            stack.extend(source for source in children if source is not None)
+    return path if guarded else None

@@ -46,10 +46,11 @@ import pytest
 from apps.library.models import Book, Issue, LendingDesk, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from django.db.models import Count, F
+from django.http import HttpRequest
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
 
-from django_strawberry_framework import finalize_django_types
+from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.connection import (
     _connection_type_for,
     _keyset_connection_context,
@@ -73,6 +74,7 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     deferred_loading_of,
 )
+from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
 from django_strawberry_framework.utils.connections import UnwindowableConnection
 
 ISSUE_ORDER = ("-number", "id")
@@ -324,6 +326,59 @@ def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order)
     )
     with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
         _keyset_order_state(state_stub, Patron.objects.order_by(*order))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("spelling", ["flat", "nested"])
+@pytest.mark.parametrize("hides", [True, False], ids=["hiding-target", "identity-target"])
+def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(hides, spelling):
+    """A related ``orderBy:`` value through a type that hides rows is nullable, so refused.
+
+    ``OrderSet`` reads ``periodical__name`` as ``NULL`` for a periodical the
+    periodical type hides; a value cursor cannot anchor that. Through a type
+    keeping the identity hook the path stays the plain non-null column.
+    """
+    attrs: dict[str, object] = {
+        "Meta": type("Meta", (), {"model": Periodical, "fields": "__all__"}),
+    }
+    if hides:
+        attrs["get_queryset"] = classmethod(
+            lambda cls, queryset, info, **kwargs: queryset.exclude(name="secret"),
+        )
+    type("KeysetPeriodicalNode", (DjangoType,), attrs)
+    state = _issue_order_state()
+
+    class PeriodicalNameOrder(OrderSet):
+        class Meta:
+            model = Periodical
+            fields = ["name"]
+
+    class IssuePeriodicalOrder(OrderSet):
+        periodical = RelatedOrder(PeriodicalNameOrder, field_name="periodical")
+
+        class Meta:
+            model = Issue
+            fields = ["number", "periodical__name"]
+
+    periodical_term = (
+        {"periodical_name": Ordering.ASC}
+        if spelling == "flat"
+        else {"periodical": {"name": Ordering.ASC}}
+    )
+
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True)
+    ordered = IssuePeriodicalOrder.apply_sync(
+        [periodical_term, {"number": Ordering.DESC}],
+        Issue.objects.all(),
+        SimpleNamespace(context=SimpleNamespace(request=request)),
+    )
+    if hides:
+        with pytest.raises(GraphQLError, match="'periodical__name' is nullable"):
+            _keyset_order_state(state, ordered)
+    else:
+        columns, _fingerprint, _queryset = _keyset_order_state(state, ordered)
+        assert [column.name for column in columns] == ["periodical__name", "number"]
 
 
 def test_keyset_order_ref_parses_strings_and_rejects_nulls():

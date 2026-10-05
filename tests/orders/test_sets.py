@@ -26,7 +26,7 @@ from types import SimpleNamespace
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
-from django.db.models import F
+from django.db.models import F, Model, QuerySet
 from django.http import HttpRequest
 from graphql import GraphQLError
 
@@ -45,6 +45,8 @@ from django_strawberry_framework.orders.sets import (
     _validate_normalized_terms,
     capture_applied_order_normalization,
 )
+from django_strawberry_framework.types.base import DjangoType
+from django_strawberry_framework.utils.querysets import model_for
 
 # ---------------------------------------------------------------------------
 # Metaclass collection / override / binding
@@ -335,6 +337,7 @@ def test_orderset_resolve_order_expressions_rejects_unknown_order_path():
         ValidPathOrder._resolve_order_expressions(
             [("does_not_exist", Ordering.ASC)],
             model=Book,
+            visible_rows=_every_row,
         )
 
 
@@ -367,6 +370,11 @@ def _isolate_orderset_state():
     _field_specs.clear()
     OrderArgumentsFactory.input_object_types.clear()
     OrderArgumentsFactory._type_orderset_registry.clear()
+
+
+def _every_row(scope: type[DjangoType]) -> QuerySet[Model]:
+    """Every row of ``scope``'s model: a visibility reader for terms no hook should scope."""
+    return model_for(scope)._base_manager.all()
 
 
 def _make_info(user_is_anonymous: bool = False) -> SimpleNamespace:
@@ -818,6 +826,7 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
     annotations, expressions = _MultBranchOrder._resolve_order_expressions(
         [("shelves__code", Ordering.ASC), ("name", Ordering.DESC)],
         model=Branch,
+        visible_rows=_every_row,
     )
     # The to-many path produced exactly one aggregate annotation (``Min`` for ASC).
     assert len(annotations) == 1
@@ -917,10 +926,18 @@ def test_resolve_order_expressions_rejects_non_ordering_direction():
             fields = ["title"]
 
     with pytest.raises(ConfigurationError, match="received invalid order direction 'ASC'"):
-        CustomBookOrder._resolve_order_expressions([("title", "ASC")], model=Book)
+        CustomBookOrder._resolve_order_expressions(
+            [("title", "ASC")],
+            model=Book,
+            visible_rows=_every_row,
+        )
 
     with pytest.raises(ConfigurationError, match="received invalid order direction 42"):
-        CustomBookOrder._resolve_order_expressions([("title", 42)], model=Book)
+        CustomBookOrder._resolve_order_expressions(
+            [("title", 42)],
+            model=Book,
+            visible_rows=_every_row,
+        )
 
 
 @pytest.mark.django_db
@@ -1201,6 +1218,7 @@ def test_resolve_order_expressions_handles_non_class_model_on_path_error():
         CustomBookOrder._resolve_order_expressions(
             [("bad_field", Ordering.ASC)],
             model="NotAModel",
+            visible_rows=_every_row,
         )
 
 
@@ -2635,3 +2653,279 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch):
     ledger.publish(_AppliedNormalization(ResetFailureOrder, order_input, ()))
     assert ledger._records == []
     assert ledger.claim(ResetFailureOrder, order_input) is None
+
+
+# ---------------------------------------------------------------------------
+# Related-row visibility: which relations a term reads through a hiding type
+# ---------------------------------------------------------------------------
+
+
+def _hiding_type(model, type_name, *, primary=True, **hidden):
+    """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``hidden``."""
+
+    def get_queryset(cls, queryset, info, **kwargs):
+        return queryset.exclude(**hidden)
+
+    return type(
+        type_name,
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": model, "fields": "__all__", "primary": primary}),
+            "get_queryset": classmethod(get_queryset),
+        },
+    )
+
+
+def _plain_type(model, name):
+    """Register a type for ``model`` that keeps the identity ``get_queryset``."""
+    return type(
+        name,
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": model, "fields": "__all__"})},
+    )
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_scoped_hops_read_only_relations_whose_type_hides_rows():
+    """A relation is scoped by a registered type with its own hook; nothing else is."""
+    shelf_type = _hiding_type(Shelf, "HidingShelfType", topic="secret")
+    _plain_type(Branch, "PlainBranchType")
+
+    class BookPaths(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    assert BookPaths._scoped_hops(Book, "shelf__topic") == (("shelf", shelf_type),)
+    assert BookPaths._scoped_hops(Book, "shelf__branch__name") == (("shelf", shelf_type),)
+    assert BookPaths._scoped_hops(Book, "genres__name") == ()
+    assert BookPaths._scoped_hops(Book, "title") == ()
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_scoped_hops_read_every_hop_of_an_undeclared_to_many_path():
+    """Each relation segment is one hop, joined by the path that reaches it."""
+    book_type = _hiding_type(Book, "HidingBookType", circulation_status="repair")
+    shelf_type = _hiding_type(Shelf, "HidingShelfType", topic="secret")
+
+    class GenrePaths(OrderSet):
+        class Meta:
+            model = Genre
+            fields = ["name"]
+
+    assert GenrePaths._scoped_hops(Genre, "books__shelf__topic") == (
+        ("books", book_type),
+        ("books__shelf", shelf_type),
+    )
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_scoped_hops_read_a_pk_segment_on_a_relation_keyed_model_as_that_relation():
+    """``pk`` on ``PatronProfile`` (keyed by ``patron``) is the relation, named by its field."""
+    from apps.library.models import Patron, PatronProfile
+
+    patron_type = _hiding_type(Patron, "HidingPatronType", name="secret")
+
+    class ProfilePaths(OrderSet):
+        class Meta:
+            model = PatronProfile
+            fields = ["postal_code"]
+
+    assert ProfilePaths._scoped_hops(PatronProfile, "pk") == (("patron", patron_type),)
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_scoped_hops_read_a_declared_hop_through_its_target_sets_bound_type():
+    """A ``RelatedOrder`` hop answers for the type its target set is bound to, not the primary."""
+    primary = _hiding_type(Shelf, "PrimaryShelfType", topic="secret")
+    secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="private")
+
+    class BoundShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic"]
+
+    BoundShelfOrder._owner_definition = secondary.__django_strawberry_definition__
+
+    class DeclaredBookOrder(OrderSet):
+        shelf = RelatedOrder(BoundShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class UndeclaredBookOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title", "shelf__topic"]
+
+    assert DeclaredBookOrder._scoped_hops(Book, "shelf__topic") == (("shelf", secondary),)
+    assert UndeclaredBookOrder._scoped_hops(Book, "shelf__topic") == (("shelf", primary),)
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_scoped_hops_read_the_intermediate_model_of_a_multi_relation_declaration():
+    """``RelatedOrder(field_name="shelf__branch")`` passes through the shelf's type too."""
+    shelf_type = _hiding_type(Shelf, "HidingShelfType", topic="secret")
+    branch_type = _hiding_type(Branch, "HidingBranchType", city="restricted")
+
+    class UnboundBranchOrder(OrderSet):
+        class Meta:
+            model = Branch
+            fields = ["city"]
+
+    class ThroughShelfOrder(OrderSet):
+        home = RelatedOrder(UnboundBranchOrder, field_name="shelf__branch")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    assert ThroughShelfOrder._scoped_hops(Book, "shelf__branch__city") == (
+        ("shelf", shelf_type),
+        ("shelf__branch", branch_type),
+    )
+
+
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to():
+    """A path back into the set's own model reads its bound type, not the model's primary."""
+    _hiding_type(Shelf, "PrimaryShelfType", topic="secret")
+    secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="private")
+
+    class ReentrantShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic", "books__shelf__topic"]
+
+    ReentrantShelfOrder._owner_definition = secondary.__django_strawberry_definition__
+
+    assert ReentrantShelfOrder._scoped_hops(Shelf, "books__shelf__topic") == (
+        ("books__shelf", secondary),
+    )
+
+
+def _secret_and_mid_shelf_books():
+    """Two books on a ``secret`` and an ``mmm`` shelf, each in its own genre."""
+    branch = Branch.objects.create(name="home")
+    secret = Shelf.objects.create(branch=branch, code="S1", topic="secret")
+    middle = Shelf.objects.create(branch=branch, code="S2", topic="mmm")
+    on_secret = Book.objects.create(title="on-secret", shelf=secret)
+    on_middle = Book.objects.create(title="on-mmm", shelf=middle)
+    Genre.objects.create(name="g-secret").books.add(on_secret)
+    Genre.objects.create(name="g-mmm").books.add(on_middle)
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolate_global_registry")
+@pytest.mark.parametrize(
+    (
+        "model",
+        "fields",
+        "order_input",
+        "expected",
+    ),
+    [
+        (
+            Book,
+            ["title", "shelf__topic"],
+            [{"shelf_topic": Ordering.DESC_NULLS_LAST}],
+            ["on-mmm", "on-secret"],
+        ),
+        (
+            Genre,
+            ["name", "books__shelf__topic"],
+            [{"books_shelf_topic": Ordering.DESC_NULLS_LAST}],
+            ["g-mmm", "g-secret"],
+        ),
+    ],
+    ids=["to-one", "to-many"],
+)
+def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
+    model,
+    fields,
+    order_input,
+    expected,
+):
+    """``apply_async`` derives an async-only target ``get_queryset`` up front; ``apply_sync`` refuses it."""
+    from asgiref.sync import sync_to_async
+
+    from django_strawberry_framework.utils.querysets import SyncMisuseError
+
+    async def hide_secret_async(cls, queryset, info, **kwargs):
+        return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
+
+    type(
+        "AsyncShelfType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": Shelf, "fields": "__all__"}),
+            "get_queryset": classmethod(hide_secret_async),
+        },
+    )
+    _secret_and_mid_shelf_books()
+    async_order = type(
+        "AsyncRelatedOrder",
+        (OrderSet,),
+        {"Meta": type("Meta", (), {"model": model, "fields": fields})},
+    )
+
+    ordered = asyncio.run(
+        async_order.apply_async(order_input, model._default_manager.all(), _make_info()),
+    )
+    label = "title" if model is Book else "name"
+    assert list(ordered.values_list(label, flat=True)) == expected
+    with pytest.raises(SyncMisuseError, match="await OrderSet.apply_async"):
+        async_order.apply_sync(order_input, model._default_manager.all(), _make_info())
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_declared_hop_orders_by_the_rows_its_target_sets_bound_type_shows():
+    """Ordering through a ``RelatedOrder`` reads the bound secondary's hook, not the primary's."""
+    _hiding_type(Shelf, "PrimaryShelfType", topic="mmm")
+    secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="secret")
+    _secret_and_mid_shelf_books()
+
+    class BoundShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic"]
+
+    BoundShelfOrder._owner_definition = secondary.__django_strawberry_definition__
+
+    class DeclaredBookOrder(OrderSet):
+        shelf = RelatedOrder(BoundShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    ordered = DeclaredBookOrder.apply_sync(
+        [{"shelf": {"topic": Ordering.DESC_NULLS_LAST}}],
+        Book.objects.all(),
+        _make_info(),
+    )
+    assert list(ordered.values_list("title", flat=True)) == ["on-mmm", "on-secret"]
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_reentering_path_orders_by_the_rows_the_sets_bound_type_shows():
+    """``books__shelf__topic`` from a shelf set bound to the secondary reads the secondary's hook."""
+    _hiding_type(Shelf, "PrimaryShelfType", topic="mmm")
+    secondary = _hiding_type(Shelf, "SecondaryShelfType", primary=False, topic="secret")
+    _secret_and_mid_shelf_books()
+
+    class ReentrantShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code", "books__shelf__topic"]
+
+    ReentrantShelfOrder._owner_definition = secondary.__django_strawberry_definition__
+    ordered = ReentrantShelfOrder.apply_sync(
+        [{"books_shelf_topic": Ordering.DESC_NULLS_LAST}],
+        Shelf.objects.all(),
+        _make_info(),
+    )
+    assert list(ordered.values_list("code", flat=True)) == ["S2", "S1"]

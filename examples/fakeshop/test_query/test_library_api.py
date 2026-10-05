@@ -3960,6 +3960,447 @@ def test_library_branches_order_by_reverse_fk_relation():
     assert names == ["Alpha", "Beta"]
 
 
+def _outside_parentheses(sql: str) -> str:
+    """Return ``sql`` with every parenthesized body removed: the outer statement's own text."""
+    depth = 0
+    kept: list[str] = []
+    for char in sql:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0:
+            kept.append(char)
+    return "".join(kept)
+
+
+def _seed_books_on_hidden_shelf() -> None:
+    """Books on an ``aaa`` / a ``secret`` / a ``zzz`` shelf; one ``aaa`` book is in repair."""
+    branch = models.Branch.objects.create(name="Order branch", city="Boston")
+    shelf_aaa = models.Shelf.objects.create(code="S2", topic="aaa", branch=branch)
+    shelf_secret = models.Shelf.objects.create(code="S1", topic="secret", branch=branch)
+    shelf_zzz = models.Shelf.objects.create(code="S3", topic="zzz", branch=branch)
+    models.Book.objects.create(title="on-zzz", shelf=shelf_zzz)
+    models.Book.objects.create(title="on-secret", shelf=shelf_secret)
+    models.Book.objects.create(title="on-aaa", shelf=shelf_aaa)
+    models.Book.objects.create(title="bbb-visible", shelf=shelf_aaa)
+    models.Book.objects.create(
+        title="aaa-repair",
+        shelf=shelf_aaa,
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+    )
+
+
+def _seed_genres_over_hidden_books() -> None:
+    """Genres whose lowest book title is visible, hidden, the only book, or absent."""
+    branch = models.Branch.objects.create(name="Order branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="G1", topic="general", branch=branch)
+    repair = models.Book.CirculationStatus.REPAIR
+    visible = models.Genre.objects.create(name="g-visible")
+    beside_hidden = models.Genre.objects.create(name="g-hidden")
+    only_hidden = models.Genre.objects.create(name="g-only-hidden")
+    models.Genre.objects.create(name="g-none")
+    visible.books.add(models.Book.objects.create(title="bbb-visible", shelf=shelf))
+    beside_hidden.books.add(
+        models.Book.objects.create(title="aaa-repair", shelf=shelf, circulation_status=repair),
+        models.Book.objects.create(title="mmm-visible", shelf=shelf),
+    )
+    only_hidden.books.add(
+        models.Book.objects.create(title="aab-repair", shelf=shelf, circulation_status=repair),
+    )
+
+
+def _seed_shelves_over_hidden_books() -> None:
+    """Shelves whose lowest book title is hidden on one, plus a hidden shelf."""
+    branch = models.Branch.objects.create(name="Order branch", city="Boston")
+    repair = models.Book.CirculationStatus.REPAIR
+    shelf_low = models.Shelf.objects.create(code="S2", topic="aaa", branch=branch)
+    shelf_secret = models.Shelf.objects.create(code="S1", topic="secret", branch=branch)
+    shelf_high = models.Shelf.objects.create(code="S3", topic="zzz", branch=branch)
+    shelf_mixed = models.Shelf.objects.create(code="S4", topic="mid", branch=branch)
+    models.Book.objects.create(title="aaa-repair", shelf=shelf_low, circulation_status=repair)
+    models.Book.objects.create(title="bbb-visible", shelf=shelf_low)
+    models.Book.objects.create(title="on-secret", shelf=shelf_secret)
+    models.Book.objects.create(title="on-zzz", shelf=shelf_high)
+    models.Book.objects.create(title="ccc-repair", shelf=shelf_mixed, circulation_status=repair)
+    models.Book.objects.create(title="yyy-visible", shelf=shelf_mixed)
+
+
+def _seed_genres_over_hidden_shelves() -> None:
+    """Genres ranked by their books' shelf topics, one book on a hidden shelf."""
+    branch = models.Branch.objects.create(name="Order branch", city="Boston")
+    shelf_secret = models.Shelf.objects.create(code="S1", topic="secret", branch=branch)
+    shelf_ttt = models.Shelf.objects.create(code="S2", topic="ttt", branch=branch)
+    shelf_zzz = models.Shelf.objects.create(code="S3", topic="zzz", branch=branch)
+    beside_secret = models.Genre.objects.create(name="g-a")
+    plain = models.Genre.objects.create(name="g-b")
+    beside_secret.books.add(
+        models.Book.objects.create(title="visible-on-secret", shelf=shelf_secret),
+        models.Book.objects.create(title="visible-on-zzz", shelf=shelf_zzz),
+    )
+    plain.books.add(models.Book.objects.create(title="visible-on-ttt", shelf=shelf_ttt))
+
+
+def _seed_branches_over_hidden_alt_shelves() -> None:
+    """Branches ranked by alternate shelves, a relation no ``RelatedOrder`` declares."""
+    home = models.Branch.objects.create(name="Home", city="Somerville")
+    beside_secret = models.Branch.objects.create(name="Bra", city="Boston")
+    plain = models.Branch.objects.create(name="Brb", city="Cambridge")
+    shelf_secret = models.Shelf.objects.create(code="S1", topic="secret", branch=home)
+    shelf_zzz = models.Shelf.objects.create(code="S2", topic="zzz", branch=home)
+    shelf_ttt = models.Shelf.objects.create(code="S3", topic="ttt", branch=home)
+    shelf_secret.alt_branches.add(beside_secret)
+    shelf_zzz.alt_branches.add(beside_secret)
+    shelf_ttt.alt_branches.add(plain)
+
+
+def _seed_shelves_over_hidden_desks() -> None:
+    """Shelves ranked by their desk, a reverse one-to-one no ``RelatedOrder`` declares.
+
+    ``desk-a`` sits on a ``restricted`` branch, so ``CirculationDeskType``'s cascade
+    hides it from anonymous requests while its visible shelf stays listed.
+    """
+    branch = models.Branch.objects.create(name="Open", city="Boston")
+    restricted = models.Branch.objects.create(name="Closed", city="restricted")
+    shelf_hidden_desk = models.Shelf.objects.create(code="S1", topic="general", branch=branch)
+    shelf_visible_desk = models.Shelf.objects.create(code="S2", topic="general", branch=branch)
+    models.Shelf.objects.create(code="S3", topic="general", branch=branch)
+    models.CirculationDesk.objects.create(
+        name="desk-a",
+        branch=restricted,
+        shelf=shelf_hidden_desk,
+    )
+    models.CirculationDesk.objects.create(name="desk-m", branch=branch, shelf=shelf_visible_desk)
+
+
+class _HiddenOrderRow(NamedTuple):
+    """One related ``orderBy`` shape: seed, root field, order input, selection, both answers.
+
+    ``anonymous`` is the order with every hidden related row read as missing;
+    ``staff`` is the order over every row, the hidden values included.
+    """
+
+    seed: Callable[[], None]
+    root: str
+    order: str
+    selection: str
+    anonymous: list[str]
+    staff: list[str]
+
+
+_GENRES_ANONYMOUS = [
+    "g-visible",
+    "g-hidden",
+    "g-none",
+    "g-only-hidden",
+]
+_GENRES_STAFF = [
+    "g-hidden",
+    "g-only-hidden",
+    "g-visible",
+    "g-none",
+]
+_GENRES_BY_BOOK_TITLE = "[{ books: { title: ASC_NULLS_LAST } }, { name: ASC }]"
+
+_HIDDEN_ORDER_ROWS = {
+    "declared-to-one-ascending": _HiddenOrderRow(
+        _seed_books_on_hidden_shelf,
+        "allLibraryBooks",
+        "[{ shelf: { topic: ASC_NULLS_FIRST } }, { title: ASC }]",
+        "title",
+        [
+            "on-secret",
+            "bbb-visible",
+            "on-aaa",
+            "on-zzz",
+        ],
+        [
+            "aaa-repair",
+            "bbb-visible",
+            "on-aaa",
+            "on-secret",
+            "on-zzz",
+        ],
+    ),
+    "declared-to-one-descending": _HiddenOrderRow(
+        _seed_books_on_hidden_shelf,
+        "allLibraryBooks",
+        "[{ shelf: { topic: DESC_NULLS_LAST } }, { title: ASC }]",
+        "title",
+        [
+            "on-zzz",
+            "bbb-visible",
+            "on-aaa",
+            "on-secret",
+        ],
+        [
+            "on-zzz",
+            "on-secret",
+            "aaa-repair",
+            "bbb-visible",
+            "on-aaa",
+        ],
+    ),
+    "meta-fields-path": _HiddenOrderRow(
+        _seed_books_on_hidden_shelf,
+        "allLibraryBooks",
+        "[{ shelfCode: ASC_NULLS_LAST }, { title: ASC }]",
+        "title",
+        [
+            "bbb-visible",
+            "on-aaa",
+            "on-zzz",
+            "on-secret",
+        ],
+        [
+            "on-secret",
+            "aaa-repair",
+            "bbb-visible",
+            "on-aaa",
+            "on-zzz",
+        ],
+    ),
+    "declared-many-to-many": _HiddenOrderRow(
+        _seed_genres_over_hidden_books,
+        "allLibraryGenres",
+        _GENRES_BY_BOOK_TITLE,
+        "name",
+        _GENRES_ANONYMOUS,
+        _GENRES_STAFF,
+    ),
+    "declared-reverse-foreign-key": _HiddenOrderRow(
+        _seed_shelves_over_hidden_books,
+        "allLibraryShelves",
+        "[{ books: { title: ASC_NULLS_LAST } }, { code: ASC }]",
+        "code",
+        ["S2", "S3", "S4"],
+        [
+            "S2",
+            "S4",
+            "S1",
+            "S3",
+        ],
+    ),
+    "two-declared-hops": _HiddenOrderRow(
+        _seed_genres_over_hidden_shelves,
+        "allLibraryGenres",
+        "[{ books: { shelf: { topic: ASC_NULLS_LAST } } }, { name: ASC }]",
+        "name",
+        ["g-b", "g-a"],
+        ["g-a", "g-b"],
+    ),
+    "undeclared-many-to-many": _HiddenOrderRow(
+        _seed_branches_over_hidden_alt_shelves,
+        "allLibraryBranches",
+        "[{ altShelvesTopic: ASC_NULLS_LAST }, { city: ASC }]",
+        "name",
+        ["Brb", "Bra", "Home"],
+        ["Bra", "Brb", "Home"],
+    ),
+    "undeclared-reverse-one-to-one": _HiddenOrderRow(
+        _seed_shelves_over_hidden_desks,
+        "allLibraryShelves",
+        "[{ circulationDeskName: ASC_NULLS_LAST }, { code: ASC }]",
+        "code",
+        ["S2", "S1", "S3"],
+        ["S1", "S2", "S3"],
+    ),
+}
+
+
+def _hidden_order_answer(row: _HiddenOrderRow, *, staff: bool) -> list[object]:
+    query = f"query {{ {row.root}(orderBy: {row.order}) {{ {row.selection} }} }}"
+    response = _post_graphql_as_staff(query) if staff else _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return [record[row.selection] for record in payload["data"][row.root]]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_HIDDEN_ORDER_ROWS))
+def test_related_order_reads_a_hidden_row_as_missing_for_anonymous(shape: str):
+    """A related row the target type hides orders its parent as a missing row would.
+
+    Every relation an order path crosses, declared by a ``RelatedOrder`` or not,
+    reads only the rows its target type's ``get_queryset`` shows: a to-one value
+    through a hidden row is ``NULL`` (placed by the direction's ``NULLS`` variant),
+    and a to-many ``Min`` / ``Max`` skips hidden children, so a genre whose only
+    book is hidden sorts beside the genre with no book at all.
+    """
+    row = _HIDDEN_ORDER_ROWS[shape]
+    row.seed()
+
+    assert _hidden_order_answer(row, staff=False) == row.anonymous
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("shape", sorted(_HIDDEN_ORDER_ROWS))
+def test_related_order_reads_every_row_for_staff(shape: str):
+    """Staff see the hidden rows, so their values order the parents."""
+    row = _HIDDEN_ORDER_ROWS[shape]
+    row.seed()
+
+    assert _hidden_order_answer(row, staff=True) == row.staff
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("staff", "expected"),
+    [(False, _GENRES_ANONYMOUS), (True, _GENRES_STAFF)],
+)
+def test_related_order_on_a_connection_reads_a_hidden_row_as_missing(
+    staff: bool,
+    expected: list[str],
+):
+    """``DjangoConnectionField``'s ``orderBy:`` reads hidden related rows as missing too."""
+    _seed_genres_over_hidden_books()
+    query = (
+        f"query {{ allLibraryGenresConnection(orderBy: {_GENRES_BY_BOOK_TITLE})"
+        " { edges { node { name } } } }"
+    )
+    response = _post_graphql_as_staff(query) if staff else _post_graphql(query)
+    payload = response.json()
+
+    assert "errors" not in payload, payload
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert [edge["node"]["name"] for edge in edges] == expected
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("seed", "order", "expected"),
+    [
+        (_seed_genres_over_hidden_books, _GENRES_BY_BOOK_TITLE, _GENRES_ANONYMOUS[1:]),
+        (
+            _seed_genres_over_hidden_shelves,
+            "[{ books: { shelf: { topic: ASC_NULLS_LAST } } }, { name: ASC }]",
+            ["g-a"],
+        ),
+    ],
+    ids=["one-hop", "two-hops"],
+)
+def test_related_order_on_a_list_field_keeps_a_positive_offset(
+    seed: Callable[[], None],
+    order: str,
+    expected: list[str],
+):
+    """A positive ``offset`` stands on an order through a hidden-row relation.
+
+    The ``DjangoListField`` offset guard certifies the visibility test as
+    deterministic, so the scoped term is a materially active order.
+    """
+    seed()
+    payload = _post_graphql(
+        f"query {{ allLibraryGenresViaListField(orderBy: {order}, offset: 1) {{ name }} }}",
+    ).json()
+
+    assert "errors" not in payload, payload
+    genres = payload["data"]["allLibraryGenresViaListField"]
+    assert [genre["name"] for genre in genres] == expected
+
+
+@pytest.mark.django_db
+def test_related_order_adds_no_join_or_distinct_to_a_to_many_term():
+    """The visibility test reuses the aggregate's own joins and adds no ``DISTINCT``.
+
+    The outer statement joins exactly the tables the unscoped ``Min`` joined; the
+    ``EXISTS`` correlates to the joined book row inside the aggregate.
+    """
+    _seed_genres_over_hidden_books()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post_graphql(
+            f"query {{ allLibraryGenres(orderBy: {_GENRES_BY_BOOK_TITLE}) {{ name }} }}",
+        ).json()
+    assert "errors" not in payload, payload
+    (sql,) = [query["sql"] for query in captured.captured_queries if "MIN(" in query["sql"]]
+    outer = _outside_parentheses(sql)
+
+    assert "EXISTS" in sql
+    assert "DISTINCT" not in outer
+    assert outer.count(" JOIN ") == 2
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("staff", "expected"),
+    [
+        (
+            False,
+            [
+                "on-secret",
+                "bbb-visible",
+                "on-aaa",
+                "on-zzz",
+            ],
+        ),
+        (
+            True,
+            [
+                "aaa-repair",
+                "bbb-visible",
+                "on-aaa",
+                "on-secret",
+                "on-zzz",
+            ],
+        ),
+    ],
+    ids=["anonymous", "staff"],
+)
+def test_nested_related_order_under_one_parent_reads_a_hidden_row_as_missing(
+    staff: bool,
+    expected: list[str],
+):
+    """A nested ``booksConnection(orderBy:)`` under a single genre orders by visible shelves.
+
+    A nested key carrying ``orderBy:`` is left to the per-parent pipeline, so the
+    one-parent window fast path never sees the scoped term; the page is the
+    ``OrderSet`` order, the hidden shelf's topic read as ``NULL``.
+    """
+    _seed_books_on_hidden_shelf()
+    genre = models.Genre.objects.create(name="only")
+    genre.books.add(*models.Book.objects.all())
+    query = (
+        "query { allLibraryGenresConnection { edges { node { booksConnection("
+        "first: 10, orderBy: [{ shelf: { topic: ASC_NULLS_FIRST } }, { title: ASC }])"
+        " { edges { node { title } } } } } } }"
+    )
+    response = _post_graphql_as_staff(query) if staff else _post_graphql(query)
+    payload = response.json()
+
+    assert "errors" not in payload, payload
+    (genre_edge,) = payload["data"]["allLibraryGenresConnection"]["edges"]
+    books = genre_edge["node"]["booksConnection"]["edges"]
+    assert [book["node"]["title"] for book in books] == expected
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("staff", "expected"),
+    [(False, _GENRES_ANONYMOUS), (True, _GENRES_STAFF)],
+    ids=["anonymous", "staff"],
+)
+async def test_related_order_reads_a_hidden_row_as_missing_async(staff: bool, expected: list[str]):
+    """``OrderSet.apply_async`` awaits each scoping type's rows before ordering.
+
+    The connection's ``async def`` resolver routes ``orderBy:`` through
+    ``apply_async``, which derives ``BookType``'s visible rows up front and orders
+    by them exactly as the sync path does.
+    """
+    await sync_to_async(_seed_genres_over_hidden_books)()
+    user = None
+    if staff:
+        user = await User.objects.acreate_user(username="staff", password="pw", is_staff=True)
+
+    payload = await _post_async_genres(
+        f"query {{ genres(orderBy: {_GENRES_BY_BOOK_TITLE}) {{ edges {{ node {{ name }} }} }} }}",
+        user=user,
+    )
+
+    assert "errors" not in payload, payload
+    assert [edge["node"]["name"] for edge in payload["data"]["genres"]["edges"]] == expected
+
+
 @pytest.mark.django_db
 def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplication():
     """Mixed scalar + to-many-aggregate ``orderBy`` executes and preserves rows.

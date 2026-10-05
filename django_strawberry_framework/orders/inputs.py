@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, cast
 
 import strawberry
 from django.db.models import F
-from django.db.models.expressions import OrderBy
+from django.db.models.expressions import Expression, OrderBy
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..registry import register_subsystem_clear
@@ -109,22 +109,23 @@ class Ordering(enum.Enum):
         """
         return self.name.startswith("ASC")
 
-    def resolve(self, value: str) -> OrderBy:
+    def resolve(self, value: str | Expression) -> OrderBy:
         """Translate this direction into a Django ``OrderBy`` expression.
 
         ``value`` is the ORM field path (e.g. ``"title"`` or
-        ``"shelf__code"``). The result is ``F(value).asc(...)`` or
-        ``F(value).desc(...)`` with ``nulls_first`` / ``nulls_last``
-        sentinels derived from the enum member's name. The
-        ``True``-or-``None`` ternary matches Django's sentinel semantics:
-        passing ``None`` lets the database choose, while ``True`` forces
-        the corresponding clause.
+        ``"shelf__code"``), read as ``F(value)``, or an expression ordered as
+        it is. The result is ``<value>.asc(...)`` or ``<value>.desc(...)`` with
+        ``nulls_first`` / ``nulls_last`` sentinels derived from the enum
+        member's name. The ``True``-or-``None`` ternary matches Django's
+        sentinel semantics: passing ``None`` lets the database choose, while
+        ``True`` forces the corresponding clause.
         """
         nulls_first = True if "NULLS_FIRST" in self.name else None
         nulls_last = True if "NULLS_LAST" in self.name else None
+        expression = F(value) if isinstance(value, str) else value
         if self.is_ascending:
-            return F(value).asc(nulls_first=nulls_first, nulls_last=nulls_last)
-        return F(value).desc(nulls_first=nulls_first, nulls_last=nulls_last)
+            return expression.asc(nulls_first=nulls_first, nulls_last=nulls_last)
+        return expression.desc(nulls_first=nulls_first, nulls_last=nulls_last)
 
 
 # Provenance table populated by ``_build_input_fields`` and consulted at

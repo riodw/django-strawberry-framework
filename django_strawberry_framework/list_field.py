@@ -93,6 +93,7 @@ from .types.base import _is_relay_shaped
 from .utils.directives import validated_field_directives
 from .utils.execution_mode import async_execution, operation_is_async
 from .utils.querysets import (
+    VisibleRowExists,
     apply_orderset_async,
     apply_orderset_sync,
     apply_type_visibility_async,
@@ -620,10 +621,18 @@ _ORDER_FROM_MODEL_DEFAULT = "model_default"
 _ORDER_FROM_NOTHING = "nothing"
 
 #: The expression leaves this package can read: a column, the ``*`` of a row count,
-#: and a literal value. Matched by EXACT type, like every other approved form
-#: below, because a subclass carries its own ``as_sql``.
+#: a literal value, and the framework's own visibility test. Matched by EXACT type,
+#: like every other approved form below, because a subclass carries its own
+#: ``as_sql``. ``VisibleRowExists`` decides only whether an ``OrderSet`` term reads
+#: its column or ``NULL``, and its rows are a target type's ``get_queryset``, which
+#: this guard trusts for the parent rows as well.
 _READABLE_ORDER_LEAVES = frozenset(
-    {models.Value, Col, Star},
+    {
+        models.Value,
+        Col,
+        Star,
+        VisibleRowExists,
+    },
 )
 
 #: Expressions whose own SQL is punctuation around their sources - the branches of

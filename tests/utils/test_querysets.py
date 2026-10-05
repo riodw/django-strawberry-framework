@@ -22,7 +22,15 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from apps.library.models import LendingDesk, OpenVenue, Venue, VenueBadge, VenueSponsor
+from apps.library.models import (
+    Book,
+    LendingDesk,
+    OpenVenue,
+    Shelf,
+    Venue,
+    VenueBadge,
+    VenueSponsor,
+)
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
 from django.apps.registry import Apps
@@ -5630,6 +5638,57 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
         "MyOrderSet.apply_sync returned a combined queryset; "
         + _COMBINED_WHAT.format(model="Category", detail=detail)
     )
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("isolate_global_registry")
+def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through_a_hiding_type():
+    """A related order term on a combinator is a lost property, refused like any other.
+
+    The rewrite re-sorts the primary-key set by column names only; an
+    ``OrderSet`` term is an ``OrderBy`` expression (here the visibility-scoped
+    ``CASE`` over a shelf the shelf type can hide), so the combined result fails
+    closed instead of being served in an order the rewrite cannot reproduce.
+    """
+    from django.http import HttpRequest
+
+    from django_strawberry_framework.orders import Ordering, OrderSet
+
+    type(
+        "UnionShelfType",
+        (DjangoType,),
+        {
+            "Meta": type("Meta", (), {"model": Shelf, "fields": "__all__"}),
+            "get_queryset": classmethod(
+                lambda cls, queryset, info, **kwargs: queryset.exclude(topic="secret"),
+            ),
+        },
+    )
+
+    class DummyType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Book)
+
+    class UnionBookOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title", "shelf__topic"]
+
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True)
+    source_qs = Book.objects.all()
+    combined = Book.objects.filter(title="a").union(Book.objects.filter(title="b"))
+    ordered = UnionBookOrder.apply_sync(
+        [{"shelf_topic": Ordering.ASC}],
+        combined,
+        SimpleNamespace(context=SimpleNamespace(request=request)),
+    )
+    with pytest.raises(ConfigurationError, match="names a value that is not a Book column"):
+        _validate_post_orderset_result(
+            DummyType,
+            _snapshot_routing_intent(source_qs, "UnionBookOrder.apply_sync"),
+            ordered,
+            "UnionBookOrder.apply_sync",
+        )
 
 
 def test_validate_post_orderset_result_rejects_projection():

@@ -35,13 +35,22 @@ class BranchOrder(OrderSet):
     (spec-028 test plan). The gates raise ``GraphQLError`` with the explicit
     ``code="ORDER_PERMISSION_DENIED"`` extension code so the live HTTP
     tests can assert the extension-code value verbatim.
+
+    ``"alt_shelves__topic"`` orders through a many-to-many no ``RelatedOrder``
+    declares, into ``ShelfType``'s hidden ``topic="secret"`` shelves: the live
+    undeclared to-many visibility row.
     """
 
     shelves = RelatedOrder("ShelfOrder", field_name="shelves")
 
     class Meta:
         model = models.Branch
-        fields = ["id", "name", "city"]
+        fields = [
+            "id",
+            "name",
+            "city",
+            "alt_shelves__topic",
+        ]
 
     @classmethod
     def check_name_permission(cls, request: object) -> None:
@@ -82,14 +91,24 @@ class BranchOrder(OrderSet):
 
 
 class ShelfOrder(OrderSet):
-    """Shelf orderset bound to ``ShelfType`` at finalize phase 2.5."""
+    """Shelf orderset bound to ``ShelfType`` at finalize phase 2.5.
+
+    ``"circulation_desk__name"`` orders through a reverse one-to-one no
+    ``RelatedOrder`` declares, into desks ``CirculationDeskType``'s cascade hides:
+    the live undeclared to-one visibility row.
+    """
 
     branch = RelatedOrder("BranchOrder", field_name="branch")
     books = RelatedOrder("BookOrder", field_name="books")
 
     class Meta:
         model = models.Shelf
-        fields = ["id", "code", "topic"]
+        fields = [
+            "id",
+            "code",
+            "topic",
+            "circulation_desk__name",
+        ]
 
 
 class BookOrder(OrderSet):

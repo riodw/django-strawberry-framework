@@ -92,7 +92,7 @@ from django.db import models, router
 from django.db.models import Prefetch, sql
 from django.db.models import query as django_query
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import Combinable, RawSQL
+from django.db.models.expressions import Combinable, Exists, RawSQL
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.lookups import Lookup
 from django.db.models.query import (
@@ -668,6 +668,19 @@ def _is_class(value: object) -> TypeIs[type[object]]:
     return issubclass(type(value), type)
 
 
+class VisibleRowExists(Exists):
+    """The framework's visibility test over related rows: Django's ``Exists``, under its own name.
+
+    ``optimizer/predicates.py::visible_row_exists`` builds it to read an order value
+    only from related rows a target type's ``get_queryset`` lets the request see. It
+    defines nothing of its own, so every method the seal and the compiler dispatch on
+    it is Django's ``Exists`` code; it exists as a distinct exact type so the code
+    reading an ordering (the ``DjangoListField`` offset guard, the keyset order state)
+    can recognize the framework's test and nothing else. ``_type_is_genuinely_django``
+    admits it by identity beside Django's own classes.
+    """
+
+
 def _type_is_genuinely_django(node_type: type[object]) -> bool:
     """Return whether ``node_type`` is a genuine Django class by IDENTITY, not ``__module__``.
 
@@ -685,7 +698,9 @@ def _type_is_genuinely_django(node_type: type[object]) -> bool:
     ``getattr(genuine_django_module, name)`` return the consumer type, so it fails closed. A
     dotted (nested) qualname, or a module absent from ``sys.modules``, also fails closed.
     Exact genuine Django types only -- consumer-defined expressions / lookups are NOT
-    supported across the visibility boundary.
+    supported across the visibility boundary. The one framework type admitted beside
+    them is ``VisibleRowExists``, matched by identity: it overrides nothing, so its
+    ``clone`` / ``as_sql`` / ``resolve_expression`` are Django's ``Exists`` code.
 
     ``__module__`` and ``__qualname__`` are read through ``type.__getattribute__`` so a
     consumer METACLASS that overrides ``__getattribute__`` / ``__getattr__`` cannot run
@@ -693,6 +708,8 @@ def _type_is_genuinely_django(node_type: type[object]) -> bool:
     (spec-045 Decision 2): ``type.__getattribute__`` resolves both names
     from the class's own namespace without dispatching a metaclass hook.
     """
+    if node_type is VisibleRowExists:
+        return True
     try:
         module_name: object = type.__getattribute__(node_type, "__module__")
         qualname: object = type.__getattribute__(node_type, "__qualname__")

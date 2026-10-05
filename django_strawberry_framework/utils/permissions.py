@@ -701,7 +701,7 @@ def _set_model(set_cls: type[object]) -> type[models.Model] | None:
     return model if isinstance(model, type) else None
 
 
-def _bound_type(set_cls: type[object]) -> type[DjangoType] | None:
+def set_bound_type(set_cls: type[object]) -> type[DjangoType] | None:
     """Return the ``DjangoType`` a set class is bound to (``_owner_definition.origin``), if any."""
     definition: object = getattr(set_cls, "_owner_definition", None)
     origin: object = getattr(definition, "origin", None)
@@ -726,7 +726,7 @@ def _walk_undeclared_hops(
     if model is None:
         # A set with no ``Meta.model`` has no relation to walk.
         return index
-    root = _bound_type(set_cls)
+    root = set_bound_type(set_cls)
     owner: type[object] | None = set_cls
     for hop in leading_relation_hops(model, LOOKUP_SEP.join(segments[index:])):
         name = model._meta.pk.name if hop.segment == "pk" else hop.segment

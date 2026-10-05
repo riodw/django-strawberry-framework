@@ -27,15 +27,17 @@ import contextlib
 import dataclasses
 import threading
 from collections import OrderedDict
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.db import models
+from django.db.models.constants import LOOKUP_SEP
 from strawberry import UNSET
 from typing_extensions import override
 
 from ..exceptions import ConfigurationError, PathResolutionError, _safe_arg_repr, _safe_type_name
+from ..optimizer.predicates import visible_row_exists, visible_value
 from ..sets_mixins import (
     ActiveInputPermissionAttrs,
     ActiveInputPermissionMixin,
@@ -48,9 +50,18 @@ from ..sets_mixins import (
 )
 from ..utils.input_values import SetInputTraversal
 from ..utils.inputs import promote_set_meta_fields, read_set_meta_fields
-from ..utils.querysets import run_in_one_sync_boundary
+from ..utils.permissions import set_bound_type, walk_declared_relation_path
+from ..utils.querysets import (
+    apply_type_visibility_async,
+    apply_type_visibility_sync,
+    base_queryset,
+    model_for,
+    relation_target_type,
+    run_in_one_sync_boundary,
+)
 from ..utils.relations import (
     classify_path,
+    leading_relation_hops,
 )
 from ..utils.relations import (
     path_traverses_to_many as _path_traverses_to_many,
@@ -71,10 +82,20 @@ if TYPE_CHECKING:
     from django.db.models.expressions import OrderBy
     from typing_extensions import TypeIs
 
+    from ..types.base import DjangoType
     from ..types.definition import DjangoTypeDefinition
 
 _NormalizedTerms = tuple[tuple[str, "Ordering | None"], ...]
 _M = TypeVar("_M", bound=models.Model)
+#: The rows a scoping ``DjangoType``'s ``get_queryset`` lets one request see, per type.
+_VisibleRows = Callable[["type[DjangoType]"], "models.QuerySet[models.Model]"]
+
+#: Recourse for an async-only ``get_queryset`` behind a related order term on ``apply_sync``.
+_ORDER_ASYNC_RECOURSE = (
+    "A related order term reads its target type's get_queryset; await "
+    "OrderSet.apply_async from an async resolver instead, or redefine get_queryset "
+    "as a sync method."
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -693,28 +714,134 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         return result
 
     @classmethod
+    def _active_order_terms(
+        cls,
+        flat_orders: list[tuple[str, Ordering | None]],
+        *,
+        model: type[models.Model],
+    ) -> list[tuple[int, str, Ordering]]:
+        """Return ``(index, field_path, direction)`` for every term with a direction, validated.
+
+        A ``None`` direction contributes no term. A direction that is not an
+        ``Ordering`` member, and a path ``classify_path`` cannot resolve against
+        ``model``, raise ``ConfigurationError`` naming the term.
+        """
+        terms: list[tuple[int, str, Ordering]] = []
+        for index, (field_path, direction) in enumerate(flat_orders):
+            if direction is None:
+                continue
+            # basedpyright: trust boundary: a consumer ``get_flat_orders`` override can return any
+            # direction
+            if not isinstance(direction, Ordering):  # pyright: ignore[reportUnnecessaryIsInstance]
+                raise ConfigurationError(
+                    f"OrderSet {cls.__qualname__} received invalid order direction "
+                    f"{_safe_arg_repr(direction)} for path {field_path!r}; "
+                    f"expected an Ordering enum member.",
+                )
+            try:
+                classify_path(model, field_path)
+            except PathResolutionError as exc:
+                raise ConfigurationError(
+                    f"OrderSet {cls.__qualname__} received invalid order path "
+                    f"{field_path!r} for model {_safe_type_name(model)}: {exc}",
+                ) from exc
+            terms.append((index, field_path, direction))
+        return terms
+
+    @classmethod
+    def _scoped_hops(
+        cls,
+        model: type[models.Model],
+        field_path: str,
+    ) -> tuple[tuple[str, type[DjangoType]], ...]:
+        """Return ``(joined path, scoping type)`` per relation ``field_path`` crosses that hides rows.
+
+        The relations are ``utils/relations.py::leading_relation_hops``'s over
+        ``model``, each reaching the model Django's join reaches; a ``pk`` segment
+        on a model keyed by a relation is that relation, named by its field. Each
+        answers for one ``DjangoType``: a relation a ``RelatedOrder`` declares
+        (``utils/permissions.py::walk_declared_relation_path``) for the type its
+        target set is bound to, any other relation, the intermediate models of a
+        declaration whose ``field_name`` spans several relations included, for
+        ``utils/querysets.py::relation_target_type``'s type, a path re-entering
+        the model of the set it walks from reading the type that set is bound
+        to. A relation whose type keeps the identity ``get_queryset``, or whose
+        model no type registers, hides nothing and is left out, so a path
+        crossing only such relations orders by its plain column.
+        """
+        joins = leading_relation_hops(model, field_path)
+        if not joins:
+            return ()
+        declared, _remainder = walk_declared_relation_path(
+            cls,
+            field_path,
+            related_attr=cls._permission.traversal.related_attr,
+            target_attr=cls._permission.target_attr,
+        )
+        # The set each join is walked from (its re-entry root) and, for the join a
+        # declaration ends on, the type that declaration's target set is bound to.
+        root = set_bound_type(cls)
+        roots: dict[int, type[DjangoType] | None] = {}
+        owners: dict[int, type[DjangoType] | None] = {}
+        start = 0
+        for hop in declared:
+            relation: object = getattr(hop.related_obj, "field_name", None) or hop.declared_attr
+            end = start + len(str(relation).split(LOOKUP_SEP))
+            roots.update(dict.fromkeys(range(start, end), root))
+            root = None if hop.target is None else set_bound_type(hop.target)
+            owners[end - 1] = root
+            start = end
+        types = [
+            owners.get(position)
+            or relation_target_type(join.target_model, root=roots.get(position, root))
+            for position, join in enumerate(joins)
+        ]
+        segments = field_path.split(LOOKUP_SEP)
+        reached = model
+        joined: list[str] = []
+        scoped: list[tuple[str, type[DjangoType]]] = []
+        for segment, join, target_type in zip(segments, joins, types, strict=False):
+            joined.append(reached._meta.pk.name if segment == "pk" else segment)
+            reached = join.target_model
+            if target_type is not None and target_type.has_custom_get_queryset():
+                scoped.append((LOOKUP_SEP.join(joined), target_type))
+        return tuple(scoped)
+
+    @classmethod
     def _resolve_order_expressions(
         cls,
         flat_orders: list[tuple[str, Ordering | None]],
         *,
         model: type[models.Model],
+        visible_rows: _VisibleRows,
     ) -> tuple[dict[str, models.Aggregate], list[OrderBy]]:
         """Build ``(annotations, order_expressions)`` from flat ``(path, direction)`` pairs.
 
+        A term reads only related rows the request may see. Each relation the
+        path crosses whose type hides rows (``_scoped_hops``) contributes one
+        ``optimizer/predicates.py::visible_row_exists`` test over that type's
+        rows (``visible_rows``), correlated to the row the term's own join
+        reaches; the term's value is ``optimizer/predicates.py::visible_value``,
+        ``NULL`` wherever a test fails, so a hidden related row orders the parent
+        exactly as a missing one does. A path crossing no such relation orders
+        by its plain column.
+
         A term whose ``field_path`` traverses a **to-many** relation (reverse FK
-        or M2M -- ``_path_traverses_to_many``) is ordered by an AGGREGATE of the
-        child column rather than the raw fan-out path: ``Min`` for an ascending
+        or M2M -- ``_path_traverses_to_many``) is ordered by an AGGREGATE of that
+        value rather than the raw fan-out path: ``Min`` for an ascending
         direction, ``Max`` for a descending one, applied through an
-        ``.annotate(<alias>=Min/Max(path))`` and then ordered by ``<alias>``. A
+        ``.annotate(<alias>=Min/Max(...))`` and then ordered by ``<alias>``. A
         raw ``order_by("rel__col")`` across a to-many relation adds a JOIN that
         multiplies parent rows (one per matching child), which silently
         duplicates / skips nodes under the connection's positional cursors and
         inflates ``totalCount``; the aggregate keeps exactly one row per parent
         (the annotation forces a GROUP BY on the parent), so cursors index
         distinct nodes and ``.count()`` counts distinct parents
-        (``spec-030-connection_field-0_0_9`` P1-B). Scalar columns and to-one
-        relation paths (forward FK / O2O, reverse O2O -- which never
-        multiply) are ordered directly, unchanged.
+        (``spec-030-connection_field-0_0_9`` P1-B). A hidden child's value is
+        ``NULL`` inside the aggregate, which ``Min`` / ``Max`` skip, so a parent
+        whose related rows are all hidden sorts like a parent with none. Scalar
+        columns and to-one relation paths (forward FK / O2O, reverse O2O --
+        which never multiply) are ordered directly, unchanged.
 
         NULLS positioning carries onto the aggregate's ``OrderBy`` because the
         alias is resolved through the same ``Ordering.resolve``; mixed scalar +
@@ -740,24 +867,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         """
         annotations: dict[str, models.Aggregate] = {}
         expressions: list[OrderBy] = []
-        for index, (field_path, direction) in enumerate(flat_orders):
-            if direction is None:
-                continue
-            # basedpyright: trust boundary: a consumer ``get_flat_orders`` override can return any
-            # direction
-            if not isinstance(direction, Ordering):  # pyright: ignore[reportUnnecessaryIsInstance]
-                raise ConfigurationError(
-                    f"OrderSet {cls.__qualname__} received invalid order direction "
-                    f"{_safe_arg_repr(direction)} for path {field_path!r}; "
-                    f"expected an Ordering enum member.",
-                )
-            try:
-                classify_path(model, field_path)
-            except PathResolutionError as exc:
-                raise ConfigurationError(
-                    f"OrderSet {cls.__qualname__} received invalid order path "
-                    f"{field_path!r} for model {_safe_type_name(model)}: {exc}",
-                ) from exc
+        for index, field_path, direction in cls._active_order_terms(flat_orders, model=model):
+            tests = [
+                visible_row_exists(visible_rows(scope), joined)
+                for joined, scope in cls._scoped_hops(model, field_path)
+            ]
+            value = visible_value(field_path, tests) if tests else field_path
             if _path_traverses_to_many(model, field_path):
                 # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
                 # generated alias (one owner for the mangle).
@@ -765,41 +880,103 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
                 # Ascending vs descending: ``Ordering.is_ascending`` (same rule
                 # ``Ordering.resolve`` uses) picks Min / Max for the aggregate.
                 aggregate = models.Min if direction.is_ascending else models.Max
-                annotations[alias] = aggregate(field_path)
+                annotations[alias] = aggregate(value)
                 expressions.append(direction.resolve(alias))
             else:
-                expressions.append(direction.resolve(field_path))
+                expressions.append(direction.resolve(value))
         return annotations, expressions
+
+    @classmethod
+    def _visible_rows_sync(cls, queryset: models.QuerySet[_M], info: object) -> _VisibleRows:
+        """Return a reader of each scoping type's visible rows, derived on first use.
+
+        A type's rows are its ``get_queryset`` over that type's model on
+        ``queryset``'s database alias (``apply_type_visibility_sync``, which raises
+        ``SyncMisuseError`` for an async-only hook), derived once per call.
+        """
+        derived: dict[type[DjangoType], models.QuerySet[models.Model]] = {}
+
+        def rows(scope: type[DjangoType]) -> models.QuerySet[models.Model]:
+            found = derived.get(scope)
+            if found is None:
+                seed = base_queryset(model_for(scope), using=queryset.db)
+                found = derived[scope] = apply_type_visibility_sync(
+                    scope,
+                    seed,
+                    info,
+                    async_recourse=_ORDER_ASYNC_RECOURSE,
+                )
+            return found
+
+        return rows
+
+    @classmethod
+    async def _visible_rows_async(
+        cls,
+        flat_orders: list[tuple[str, Ordering | None]],
+        queryset: models.QuerySet[_M],
+        info: object,
+    ) -> _VisibleRows:
+        """Await every scoping type's visible rows the active terms read, before the sync tail.
+
+        ``_visible_rows_sync``'s rows, derived up front with
+        ``apply_type_visibility_async`` so an async-only ``get_queryset`` works:
+        the order expressions are built synchronously and read only this map.
+        """
+        derived: dict[type[DjangoType], models.QuerySet[models.Model]] = {}
+        for _index, field_path, _direction in cls._active_order_terms(
+            flat_orders,
+            model=queryset.model,
+        ):
+            for _joined, scope in cls._scoped_hops(queryset.model, field_path):
+                if scope not in derived:
+                    seed = base_queryset(model_for(scope), using=queryset.db)
+                    derived[scope] = await apply_type_visibility_async(scope, seed, info)
+        return derived.__getitem__
+
+    @classmethod
+    def _prepared_orderings(
+        cls,
+        input_value: object,
+    ) -> tuple[list[tuple[str, Ordering | None]], list[tuple[str, Ordering | None]]]:
+        """Return ``(normalized terms, flat orders)`` for ``input_value``; flat orders empty when no term."""
+        data = _validate_normalized_terms(cls, cls._normalize_input(input_value))
+        return data, (cls.get_flat_orders(data) if data else [])
 
     @classmethod
     def _apply_orderings(
         cls,
         input_value: object,
         queryset: models.QuerySet[_M],
+        prepared: tuple[list[tuple[str, Ordering | None]], list[tuple[str, Ordering | None]]],
+        visible_rows: _VisibleRows,
     ) -> models.QuerySet[_M]:
-        """Apply the normalized orderings to ``queryset`` - the un-colored tail.
+        """Apply the prepared orderings to ``queryset`` - the un-colored tail.
 
         The shared body behind ``apply_sync`` / ``apply_async`` (the order-side
         mirror of the filter side's ``_apply_common_prelude`` /
-        ``_apply_common_finalize`` split): normalize the input -> empty-out ->
-        ``get_flat_orders`` -> ``_resolve_order_expressions`` (``None``
-        directions filtered; to-many paths ordered via the row-preserving
-        ``Min`` / ``Max`` aggregate annotation) -> conditional
+        ``_apply_common_finalize`` split): ``prepared`` is
+        ``_prepared_orderings``'s normalized input and flat orders, and
+        ``visible_rows`` reads each scoping type's rows (``_visible_rows_sync``,
+        or ``_visible_rows_async``'s awaited map). Empty-out ->
+        ``_resolve_order_expressions`` (``None`` directions filtered; hidden
+        related rows read as missing; to-many paths ordered via the
+        row-preserving ``Min`` / ``Max`` aggregate annotation) -> conditional
         ``annotate(**annotations)`` -> ``order_by(*expressions)``; a term-less
         input returns ``queryset`` unchanged. Omitted fields and explicit
         GraphQL ``null`` directions both produce no term, preserving any
         pre-existing queryset order. Pure Python parsing + queryset-method calls
         that do no I/O, so the sync and async colorings differ ONLY in the
-        permission-check coloring they run before this.
+        permission-check and visibility colorings they run before this.
         """
-        data = _validate_normalized_terms(cls, cls._normalize_input(input_value))
+        data, flat_orders = prepared
         if not data:
             _record_applied_normalization(cls, input_value, data)
             return queryset
-        flat_orders = cls.get_flat_orders(data)
         annotations, expressions = cls._resolve_order_expressions(
             flat_orders,
             model=queryset.model,
+            visible_rows=visible_rows,
         )
         if not expressions:
             _record_applied_normalization(cls, input_value, data)
@@ -829,19 +1006,26 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
            ``[(field_path, Ordering | None), ...]`` list.
         4. Convert each ``(field_path, direction)`` pair into a Django
            ``OrderBy`` expression via ``_resolve_order_expressions`` --
-           scalar / to-one paths order directly via
-           ``direction.resolve(field_path)``, while a to-many path orders by an
-           aggregate annotation (``Min`` / ``Max``) so the parent row is not
-           multiplied (``spec-030-connection_field-0_0_9`` P1-B); ``None``
-           directions are filtered (spec-028 Decision 13 -- null-direction
-           edge case).
+           scalar / to-one paths order directly via ``direction.resolve``,
+           while a to-many path orders by an aggregate annotation
+           (``Min`` / ``Max``) so the parent row is not multiplied
+           (``spec-030-connection_field-0_0_9`` P1-B); a related row a scoping
+           type hides reads as missing (``_visible_rows_sync`` derives each
+           such type's rows); ``None`` directions are filtered (spec-028
+           Decision 13 -- null-direction edge case).
         5. ``annotate(**annotations)`` (when any to-many term produced one) then
            ``order_by(*expressions)`` when at least one expression survived;
            otherwise return ``queryset`` unchanged.
         """
         request = cls._request_from_info(info)
         cls._run_permission_checks(input_value, request)
-        return cls._apply_orderings(input_value, queryset)
+        prepared = cls._prepared_orderings(input_value)
+        return cls._apply_orderings(
+            input_value,
+            queryset,
+            prepared,
+            cls._visible_rows_sync(queryset, info),
+        )
 
     @classmethod
     async def apply_async(
@@ -855,17 +1039,15 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         Wraps ``_run_permission_checks`` in ``run_in_one_sync_boundary``
         so a consumer's ``check_*_permission`` hook that performs a
         blocking ORM read does not block the event loop.
-        ``get_flat_orders`` and ``queryset.order_by(...)`` are NOT
-        wrapped -- they are pure-Python parsing + a queryset-method call
-        that does no I/O (per spec-028 Decision 8 step 7).
-
-        The order side has NO equivalent of the filter side's
-        ``_derive_related_visibility_querysets_async`` /
-        ``_collect_nested_visibility_querysets_async`` work because
-        ordering does not re-derive child querysets per branch -- the
-        flat ``order_by`` clause already references the relation paths
-        directly via Django's ORM walker.
+        It then awaits the visible rows of every type scoping a relation
+        the active terms cross (``_visible_rows_async``), so an async-only
+        target ``get_queryset`` works. ``get_flat_orders`` and
+        ``queryset.order_by(...)`` are NOT wrapped -- they are pure-Python
+        parsing + a queryset-method call that does no I/O (per spec-028
+        Decision 8 step 7).
         """
         request = cls._request_from_info(info)
         await run_in_one_sync_boundary(cls._run_permission_checks, input_value, request)
-        return cls._apply_orderings(input_value, queryset)
+        prepared = cls._prepared_orderings(input_value)
+        visible_rows = await cls._visible_rows_async(prepared[1], queryset, info)
+        return cls._apply_orderings(input_value, queryset, prepared, visible_rows)

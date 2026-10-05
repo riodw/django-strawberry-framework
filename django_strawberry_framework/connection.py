@@ -94,6 +94,7 @@ from .optimizer.plans import (
     order_entry_has_explicit_nulls,
     order_entry_name_and_direction,
 )
+from .optimizer.predicates import visible_value_path
 from .optimizer.selections import (
     connection_field_names,
     connection_has_next_page_selected,
@@ -911,7 +912,9 @@ def _keyset_order_state(
     at decode. Entries a value cursor cannot anchor (aggregate aliases,
     expressions, explicit NULLS positioning, nullable columns) raise a
     ``GraphQLError`` naming the keyset boundary rather than paginating
-    wrongly.
+    wrongly. A related value the ``OrderSet`` reads through a relation whose
+    type hides rows (``optimizer/predicates.py::visible_value``) is ``NULL``
+    for a hidden related row, so it is refused as a nullable column.
 
     Also extends the queryset's ``.only()`` projection with the LOCAL cursor
     columns (the mint reads their attnames off the page rows) - related-path
@@ -934,6 +937,14 @@ def _keyset_order_state(
     annotations: dict[str, models.F] = {}
     local_attnames: list[str] = []
     for index, entry in enumerate(effective):
+        scoped_path = visible_value_path(entry)
+        if scoped_path is not None:
+            raise keyset_contract_error(
+                f"require non-nullable ordering columns; '{scoped_path}' is nullable: it "
+                "is read through a relation whose type hides rows, and a hidden related "
+                "row orders as missing. Order by a non-nullable column or paginate under "
+                "the default order.",
+            )
         parsed = _keyset_order_ref(entry)
         field = None if parsed is None else _resolve_order_path_field(model, parsed[1])
         if parsed is None or field is None:

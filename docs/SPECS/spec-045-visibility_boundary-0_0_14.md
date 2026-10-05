@@ -187,7 +187,9 @@ so the proven graph is never what the sealed query executes over.
 The proof: (a) genuine-Django provenance is proven by OBJECT IDENTITY against
 `sys.modules[module].<qualname>`, never the spoofable `__module__` string,
 reading `__module__` / `__qualname__` through `type.__getattribute__` so a
-consumer metaclass cannot lie; (b) any instance-`__dict__` key naming a callable
+consumer metaclass cannot lie; the one framework type admitted beside them is
+`VisibleRowExists` (`utils/querysets.py`), matched by identity, which defines
+nothing of its own, so every method dispatched on it is Django's `Exists`; (b) any instance-`__dict__` key naming a callable
 class attribute (`chain` / `clone` / `as_sql` / a dynamic `as_<vendor>` emitter /
 any) fails closed BEFORE the clone (the [callable shadow
 defect][glossary-callable-shadow-defect]). This rejection is STRUCTURAL and never
@@ -646,7 +648,9 @@ hardening with no consumer-visible surface change.
 These are deliberate constraints of the contract above, not defects:
 
 - **Consumer-defined expressions and lookups are unsupported across the
-  boundary.** A genuinely custom `Func` or `Lookup` fails closed as `untrusted`. A
+  boundary.** A genuinely custom `Func` or `Lookup` fails closed as `untrusted`;
+  the framework's own `VisibleRowExists`, the `OrderSet` visibility test, is the
+  only non-Django node admitted. A
   consumer needing a custom expression in a visibility filter expresses it through
   genuine Django primitives. The constraint is documented here and in the
   [prove-then-clone AST trust][glossary-prove-then-clone-ast-trust] glossary entry.

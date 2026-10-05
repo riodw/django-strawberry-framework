@@ -220,7 +220,11 @@ def get_form_fields(form_class: FormClass) -> dict[str, forms.Field]:
         ) from exc
 
 
-def _form_field_basis(form_class: FormClass, form_fields: Any = None) -> dict[str, forms.Field]:
+def _form_field_basis(
+    form_class: FormClass,
+    # basedpyright: EAFP: a consumer hook's return; the try/except around ``dict`` guards it
+    form_fields: Any = None,  # pyright: ignore[reportExplicitAny]
+) -> dict[str, forms.Field]:
     """Return the validated field basis used by every form-input operation.
 
     ``form_fields`` is the optional stable mapping supplied by a mutation's

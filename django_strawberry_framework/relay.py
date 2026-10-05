@@ -478,7 +478,9 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: a public field factory assigned in a class body returns Any, as
+    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Factory for the root ``node(id: ID!)`` Relay refetch field.
 
     Bare form (``target_type=None``) resolves any registered Relay-Node-shaped
@@ -506,7 +508,9 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         # Strawberry's ``convert_argument`` BEFORE the resolver runs, so
         # malformed ids would never reach the package.
         id: strawberry.ID,  # noqa: A002
-    ) -> Any:
+        # basedpyright: Strawberry reads this annotation for an unannotated assignment; Any keeps
+        # the module docstring's "Unexpected type 'typing.Any'" build error (object changes it)
+    ) -> Any:  # pyright: ignore[reportExplicitAny]
         # The cooperative deadline (spec-047) before the decode: a refetch is a
         # visibility-scoped query, and the decode is the step that makes one
         # inevitable.
@@ -552,7 +556,9 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: a public field factory assigned in a class body returns Any, as
+    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Factory for the root ``nodes(ids: [ID!]!)`` batch Relay refetch field.
 
     Input order is preserved; positional ``null`` is reserved for
@@ -588,7 +594,9 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
         # Raw strings for the same reason as ``DjangoNodeField``'s ``id``
         # argument.
         ids: list[strawberry.ID],
-    ) -> Any:
+        # basedpyright: Strawberry reads this annotation for an unannotated assignment; Any keeps
+        # the module docstring's "Unexpected type 'typing.Any'" build error (object changes it)
+    ) -> Any:  # pyright: ignore[reportExplicitAny]
         if not ids:
             # Zero database access (spec Edge cases).
             return []

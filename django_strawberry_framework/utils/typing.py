@@ -55,14 +55,17 @@ if TYPE_CHECKING:
     #: type is covariant, so ``object`` admits every column; the contravariant set
     #: type has no such bound (``Never`` makes basedpyright type a dataclass slot
     #: holding the field as a ``__set__`` descriptor accepting only ``Never``).
-    ConcreteField: TypeAlias = models.Field[Any, object]
+    # basedpyright: the stub's contravariant setter parameter has no universal value: Never
+    # types a dataclass slot holding the field as rejecting every write, object every column
+    ConcreteField: TypeAlias = models.Field[Any, object]  # pyright: ignore[reportExplicitAny]
     #: Every field ``Model._meta.get_field`` / ``get_fields`` returns: a
     #: ``ConcreteField`` or a reverse ``ForeignObjectRel`` (django-stubs' own
     #: ``_AnyField``).
     ModelField: TypeAlias = ConcreteField | models.ForeignObjectRel
     #: A forward ``ForeignKey`` / ``OneToOneField``, parametrized as ``ConcreteField``
     #: is: a cascadable edge, or a join's link column.
-    ForeignKeyField: TypeAlias = models.ForeignKey[Any, object]
+    # basedpyright: the stub's contravariant setter parameter, as for ``ConcreteField``
+    ForeignKeyField: TypeAlias = models.ForeignKey[Any, object]  # pyright: ignore[reportExplicitAny]
     #: Both resolver ``info`` flavors: the resolve-time Strawberry ``Info`` and the
     #: plan-time graphql-core ``GraphQLResolveInfo``.
     EitherInfo: TypeAlias = Info[object, object] | GraphQLResolveInfo

@@ -795,7 +795,9 @@ def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> se
 
 
 def _decode_and_validate_global_id(
-    value: Any,
+    # basedpyright: a non-GlobalID value reaches relay.GlobalID.from_id unchecked; object
+    # needs a str guard there, a runtime change
+    value: Any,  # pyright: ignore[reportExplicitAny]
     filter_instance: Filter,
     *,
     index: int | None = None,
@@ -994,7 +996,7 @@ class _AbsentGlobalIDMultipleChoiceWidget(SelectMultiple):
     def value_from_datadict(
         self,
         data: Mapping[str, object],
-        files: MultiValueDict[str, UploadedFile[Any]],
+        files: MultiValueDict[str, UploadedFile[bytes] | UploadedFile[str]],
         name: str,
     ) -> object:
         """Return ``None`` for an absent key; defer to ``SelectMultiple`` otherwise."""

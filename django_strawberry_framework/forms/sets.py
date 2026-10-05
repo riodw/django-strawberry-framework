@@ -42,7 +42,7 @@ consumer overrides the construction hook), and the reverse-map
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django import forms
 from typing_extensions import override
@@ -449,7 +449,7 @@ def _default_get_form_kwargs(
     data: dict[str, object],
     files: dict[str, object],
     instance: models.Model | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """The default ``get_form_kwargs`` body shared by both form bases (spec-038 Decision 8 step 4).
 
     Returns ``{"data": data, "files": files}`` plus ``"instance": instance`` when
@@ -483,7 +483,7 @@ def _default_get_form(
     identical for both flavors.
     """
     # Both flavors' ``_validate_meta`` store a ``require_subclass``-checked form class.
-    form_class: FormClass = type(self)._mutation_meta.form_class
+    form_class = cast("FormClass", type(self)._mutation_meta.form_class)
     return form_class(
         **self.get_form_kwargs(info, data=data, files=files, instance=instance),
     )
@@ -513,7 +513,7 @@ def _build_and_stash_form_input(
     touches one place.
     """
     # The form flavor's ``_validate_meta`` stored a ``require_subclass``-checked form class.
-    form_class: FormClass = meta.form_class
+    form_class = cast("FormClass", meta.form_class)
     form_fields = _mutation_form_fields(cls, form_class)
     return build_and_stash_input(
         cls,
@@ -546,7 +546,7 @@ def _form_input_type_name_for(
     choice and the field-factory's ``data:`` ref derive the name identically.
     """
     # The form flavor's ``_validate_meta`` stored a ``require_subclass``-checked form class.
-    form_class: FormClass = meta.form_class
+    form_class = cast("FormClass", meta.form_class)
     form_fields = _mutation_form_fields(mutation_cls, form_class)
     effective = _resolve_effective_form_field_names(
         form_class,
@@ -749,7 +749,8 @@ class DjangoModelFormMutation(DjangoMutation):
             data: dict[str, object],
             files: dict[str, object],
             instance: models.Model | None = None,
-        ) -> dict[str, Any]:
+            # basedpyright: splatted into the consumer form's constructor, whose stub types each kwarg
+        ) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
             """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
             ...
 
@@ -760,7 +761,8 @@ class DjangoModelFormMutation(DjangoMutation):
             data: dict[str, object],
             files: dict[str, object],
             instance: models.Model | None = None,
-        ) -> forms.ModelForm[Any]:
+            # basedpyright: invariant model parameter: ModelForm[Model] rejects ModelForm[Item]
+        ) -> forms.ModelForm[Any]:  # pyright: ignore[reportExplicitAny]
             """Construct the bound ``ModelForm`` (``form_class(**get_form_kwargs(...))``)."""
             ...
 
@@ -1060,7 +1062,8 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             data: dict[str, object],
             files: dict[str, object],
             instance: models.Model | None = None,
-        ) -> dict[str, Any]:
+            # basedpyright: splatted into the consumer form's constructor, whose stub types each kwarg
+        ) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
             """Return the form constructor kwargs (``data`` / ``files``, plus ``instance``)."""
             ...
 
@@ -1136,11 +1139,13 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     if TYPE_CHECKING:
 
         @classmethod
-        def resolve_sync(cls, info: Info[Any, Any], *, data: object) -> object:
+        # basedpyright: invariant Info: only Any admits an override typing its own context
+        def resolve_sync(cls, info: Info[Any, Any], *, data: object) -> object:  # pyright: ignore[reportExplicitAny]
             """Dispatch the mutation synchronously."""
 
         @classmethod
-        def resolve_async(cls, info: Info[Any, Any], *, data: object) -> object:
+        # basedpyright: invariant Info: only Any admits an override typing its own context
+        def resolve_async(cls, info: Info[Any, Any], *, data: object) -> object:  # pyright: ignore[reportExplicitAny]
             """Dispatch the mutation asynchronously."""
 
     else:

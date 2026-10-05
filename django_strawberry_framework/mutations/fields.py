@@ -264,7 +264,8 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Expose a ``DjangoMutation`` on the schema's ``Mutation`` type (spec-036 Decision 5).
 
     The write-side sibling of ``DjangoConnectionField``. Validates the target at

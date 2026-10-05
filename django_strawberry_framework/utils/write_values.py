@@ -253,7 +253,9 @@ RELATION_ID_ATOM_TYPES = (
 
 
 def materialize_relation_id_container(
-    values: Any,
+    # basedpyright: EAFP; ``list(values)`` on wire input runs inside the surrounding
+    # try/except, which is the guard
+    values: Any,  # pyright: ignore[reportExplicitAny]
     graphql_name: str,
 ) -> tuple[list[object], None] | tuple[None, FieldError]:
     """Materialize a relation-id container, or return the uniform field-keyed error.

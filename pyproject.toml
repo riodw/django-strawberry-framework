@@ -284,9 +284,11 @@ exclude = [
     "docs/*/temp-tests",
     "docs/*/worker-memory",
 ]
+# The ratchet's `reportExplicitAny` is on for the package and the root conftest; these two
+# environments keep it off until their own sites are fixed.
 executionEnvironments = [
-    { root = "scripts", extraPaths = ["examples/fakeshop", "."] },
-    { root = "examples/fakeshop" },
+    { root = "scripts", extraPaths = ["examples/fakeshop", "."], reportExplicitAny = "none" },
+    { root = "examples/fakeshop", reportExplicitAny = "none" },
 ]
 pythonVersion = "3.11"
 # Every rule on (`all`), minus the rules and flags below; a warning fails the run.
@@ -307,7 +309,6 @@ reportImportCycles = "none"
 reportUninitializedInstanceVariable = "none"
 # Off until their remaining sites are fixed (the ratchet): turn one on to list them.
 reportAny = "none"
-reportExplicitAny = "none"
 reportUnknownMemberType = "none"
 reportUnknownVariableType = "none"
 reportUnknownArgumentType = "none"

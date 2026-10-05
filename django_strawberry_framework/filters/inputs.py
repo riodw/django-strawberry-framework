@@ -653,7 +653,9 @@ def convert_filter_to_input_annotation(
 
 def normalize_input_value(
     filter_instance: Filter,
-    raw_value: Any,
+    # basedpyright: the list closures iterate a container the raising _require_list_container
+    # proves; object needs it to return the narrowed value, a runtime change
+    raw_value: Any,  # pyright: ignore[reportExplicitAny]
     field_name: str | None = None,
 ) -> object:
     """Translate a Strawberry-shaped input value into ``django-filter`` form-data.

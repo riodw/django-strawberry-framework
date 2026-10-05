@@ -275,7 +275,8 @@ def body_exceeds_limit(request: HttpRequest, limit: int) -> bool:
     return remaining > limit
 
 
-def _measured_remaining(stream: Any) -> int | _Probe:
+# basedpyright: EAFP over a foreign stream whose methods may be absent; the except is the guard
+def _measured_remaining(stream: Any) -> int | _Probe:  # pyright: ignore[reportExplicitAny]
     """The unread byte count of ``stream``, or which way the probe failed.
 
     Three outcomes, never two: a positive ``int``,
@@ -475,7 +476,8 @@ def _lacks_seek(stream: object) -> bool:
         return False
 
 
-def _position_restored(stream: Any, position: object) -> bool:
+# basedpyright: EAFP over a foreign stream whose methods may be absent; the except is the guard
+def _position_restored(stream: Any, position: object) -> bool:  # pyright: ignore[reportExplicitAny]
     """Whether ``stream`` is provably back at ``position``.
 
     Verified with ``tell()`` rather than inferred from a ``seek`` that did not
@@ -533,7 +535,8 @@ def _bounded_read_exceeds_limit(request: HttpRequest, stream: object, limit: int
         return True
 
 
-def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> bool:
+# basedpyright: EAFP over a foreign stream whose close may be absent; the caller's except guards
+def _measured_by_bounded_read(request: HttpRequest, stream: Any, limit: int) -> bool:  # pyright: ignore[reportExplicitAny]
     """Read at most ``limit + 1`` bytes of ``stream``; report whether that exceeds ``limit``.
 
     Reads through ``request.read`` rather than ``stream.read`` so Django keeps

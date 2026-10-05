@@ -44,7 +44,7 @@ from __future__ import annotations
 import inspect
 import re
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from .consumers import (
     _DEFAULT_REVALIDATION_WINDOW,
@@ -582,7 +582,7 @@ def _build_router_class_uncached() -> type[ProtocolTypeRouter]:
     return _router_class
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> type[ProtocolTypeRouter]:
     """Resolve ``DjangoGraphQLProtocolRouter`` lazily; unrelated misses stay normal misses."""
     if name == "DjangoGraphQLProtocolRouter":
         return _build_router_class()

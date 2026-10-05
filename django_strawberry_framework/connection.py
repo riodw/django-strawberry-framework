@@ -184,7 +184,9 @@ _ends_in_unique_column = ends_in_unique_column
 NodeType = TypeVar("NodeType")
 # A generated ``<TypeName>Connection`` (or the base): every helper below builds and
 # returns instances of the class it is handed, in the base's universal parametrization.
-_ConnectionT = TypeVar("_ConnectionT", bound="DjangoConnection[Any]")
+# basedpyright: Strawberry's NodeType is invariant and resolve_connection's type[Self] meets
+# no concrete parametrization, so only Any binds every generated connection class
+_ConnectionT = TypeVar("_ConnectionT", bound="DjangoConnection[Any]")  # pyright: ignore[reportExplicitAny]
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 # A queryset's row type, carried through unchanged (``object`` for an unchecked source).
 _RowT = TypeVar("_RowT")
@@ -665,7 +667,7 @@ def _consume_window(
     after: str | None,
     first: int | None,
     last: int | None,
-    max_results: int | None,
+    max_results: int,
     want_count: bool,
     **kwargs: object,
 ) -> AwaitableOrValue[_ConnectionT]:
@@ -764,11 +766,18 @@ def _consume_window(
 
 def _consume_fallback(
     cls: type[_ConnectionT],
-    nodes: Any,
+    # basedpyright: the resolver's value reaches ListConnection.resolve_connection, whose
+    # iterable union it may not meet; the slicer's own TypeError is the guard caught below
+    nodes: Any,  # pyright: ignore[reportExplicitAny]
     *,
     info: Info[object, object],
+    before: str | None,
+    after: str | None,
+    first: int | None,
+    last: int | None,
+    max_results: int,
     want_count: bool,
-    **slice_kwargs: Any,
+    **kwargs: object,
 ) -> AwaitableOrValue[_ConnectionT]:
     """Run the non-window keyset-or-offset path over a queryset.
 
@@ -794,11 +803,7 @@ def _consume_fallback(
     # The page carries the same ``first`` / ``last`` the window derivations
     # hand their engines, so no slicer serves a wider page than a planned
     # window would.
-    slice_kwargs["first"], slice_kwargs["last"] = page_arguments(
-        slice_kwargs["first"],
-        slice_kwargs["last"],
-        cap=slice_kwargs["max_results"],
-    )
+    first, last = page_arguments(first, last, cap=max_results)
     keyset_state = _keyset_connection_context(cls)
     if keyset_state is not None:
         return _resolve_keyset_connection(
@@ -807,16 +812,30 @@ def _consume_fallback(
             info=info,
             want_count=want_count,
             state=keyset_state,
-            **slice_kwargs,
+            before=before,
+            after=after,
+            first=first,
+            last=last,
+            max_results=max_results,
+            **kwargs,
         )
     try:
         # Validated here, synchronously and for every offset source, because
         # ``ListConnection`` decodes the cursors with ``int()`` alone and an
         # async-iterable source (a ``QuerySet`` from an async resolver) slices
         # inside the coroutine it returns, outside this ``try``.
-        decode_offset_cursor(slice_kwargs["after"], argument="after")
-        decode_offset_cursor(slice_kwargs["before"], argument="before")
-        conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
+        decode_offset_cursor(after, argument="after")
+        decode_offset_cursor(before, argument="before")
+        conn = super(DjangoConnection, cls).resolve_connection(
+            nodes,
+            info=info,
+            before=before,
+            after=after,
+            first=first,
+            last=last,
+            max_results=max_results,
+            **kwargs,
+        )
     except (
         ValueError,
         TypeError,
@@ -2411,7 +2430,9 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: a public field factory assigned in a class body returns Any, as
+    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Factory for a Relay connection field over a Relay-Node-shaped ``DjangoType``.
 
     Meta-only derivation (spec-030 Decision 5): the ``filter:`` / ``orderBy:`` arguments

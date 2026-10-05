@@ -261,7 +261,9 @@ def _m2m_join_columns(field: object) -> tuple[str, ...]:
     and keys ``rel_obj_attr`` on those), so the related row contributes no link
     column of its own.
     """
-    related_model: Any = _safe_getattr(field, "related_model")
+    # basedpyright: EAFP; ``related_model._meta`` is read inside the try/except below, which
+    # is the guard (synthetic doubles carry no model class)
+    related_model: Any = _safe_getattr(field, "related_model")  # pyright: ignore[reportExplicitAny]
     if related_model is None:
         return ()
     try:
@@ -287,7 +289,9 @@ def _generic_child_attname(field: object, name_attr: str) -> str | None:
     ``get_field`` resolves for a genuine ``GenericRelation``, so no defensive
     ``FieldDoesNotExist`` swallow is needed once both inputs exist.
     """
-    related_model: Any = _safe_getattr(field, "related_model")
+    # basedpyright: EAFP; ``related_model._meta`` is read inside the try/except below, which
+    # is the guard (synthetic doubles carry no model class)
+    related_model: Any = _safe_getattr(field, "related_model")  # pyright: ignore[reportExplicitAny]
     child_field_name = _safe_getattr(field, name_attr)
     if related_model is None or child_field_name is None:
         return None

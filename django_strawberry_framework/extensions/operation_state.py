@@ -179,7 +179,8 @@ class OperationState:
 
     def __init__(self, execution_context: ExecutionContext) -> None:
         self.execution_context: ExecutionContext = execution_context
-        self._resumed_bindings: list[tuple[ContextVar[Any], object]] = []
+        # basedpyright: ContextVar is invariant and these variables hold different value types
+        self._resumed_bindings: list[tuple[ContextVar[Any], object]] = []  # pyright: ignore[reportExplicitAny]
 
     def rebind_on_resume(
         self,
@@ -217,7 +218,8 @@ class OperationState:
         self._resumed_bindings.append((variable, value))
         return _register_resumed_binding(variable, token)
 
-    def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], object], ...]:
+    # basedpyright: ContextVar is invariant and these variables hold different value types
+    def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], object], ...]:  # pyright: ignore[reportExplicitAny]
         """The variables an extension asked the runner to bind again on resume."""
         return tuple(self._resumed_bindings)
 
@@ -521,7 +523,8 @@ class _OperationBoundExtension(SchemaExtension, Generic[_StateT]):
 
     @property
     @override
-    def execution_context(self) -> Any:
+    # basedpyright: None outside an operation; SchemaExtension types it non-Optional for hooks
+    def execution_context(self) -> Any:  # pyright: ignore[reportExplicitAny]
         """The engine context of the operation this extension is answering here.
 
         Two answers in one order: the state the package runner bound for this
@@ -635,8 +638,10 @@ class _Binding(NamedTuple):
     bookkeeping gone wrong.
     """
 
-    variable: ContextVar[Any]
-    token: Token[Any]
+    # basedpyright: ContextVar is invariant and bindings hold variables of different value types
+    variable: ContextVar[Any]  # pyright: ignore[reportExplicitAny]
+    # basedpyright: Token is invariant and bindings hold tokens of different value types
+    token: Token[Any]  # pyright: ignore[reportExplicitAny]
     lease: OperationLease[object] | None
     adopted: bool = False
 
@@ -867,7 +872,8 @@ class _ResumedStream(Generic[_FrameT]):
         with self._runner.resumed():
             return await self._source.asend(value)
 
-    async def athrow(self, *args: Any, **kwargs: Any) -> _FrameT:
+    # basedpyright: verbatim athrow forward; spelled-out args pass 3.12's deprecated 3-arg form
+    async def athrow(self, *args: Any, **kwargs: Any) -> _FrameT:  # pyright: ignore[reportExplicitAny]
         """Throw into the stream, bound so its teardown reads its own operation."""
         with self._runner.resumed():
             return await self._source.athrow(*args, **kwargs)
@@ -935,12 +941,14 @@ class DjangoExtensionsRunner(SchemaExtensionsRunner):
         return self._runner_scope
 
     @override
-    def operation(self) -> Any:
+    # basedpyright: returns _BoundScope, not the base's OperationContextManager
+    def operation(self) -> Any:  # pyright: ignore[reportExplicitAny]
         """The operation scope, with this operation's bindings around it."""
         return _BoundScope(self._scope(), self._operation_states, super().operation())
 
     @override
-    def on_stream_result(self, result: object) -> Any:
+    # basedpyright: returns _BoundScope, not the base's StreamResultContextManager
+    def on_stream_result(self, result: object) -> Any:  # pyright: ignore[reportExplicitAny]
         """The streaming-result scope, bound so the runner's contract is complete."""
         return _BoundScope(self._scope(), self._operation_states, super().on_stream_result(result))
 

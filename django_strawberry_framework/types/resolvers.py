@@ -23,7 +23,8 @@ caller pre-computes the field list with
 import inspect
 from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, cast
+from enum import Enum
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeVar, cast
 
 import strawberry
 from asgiref.sync import sync_to_async
@@ -91,12 +92,19 @@ _NamedFieldResolverT = TypeVar("_NamedFieldResolverT", bound=_NamedFieldResolver
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
 _EMPTY_ELISIONS: frozenset[str] = frozenset()
 
+
+class _PlanUnread(Enum):
+    """The one-member type of ``_PLAN_UNREAD``, so an ``is`` check narrows it away."""
+
+    UNREAD = "unread"
+
+
 # Sentinel distinguishing "caller did not read the PLAN sentinel" from a real
 # ``planned is None``. ``forward_resolver`` reads the plan once and threads it
 # (plus the resolver key) into ``_check_n1`` so the runtime-path walk is not
-# repeated when both the FK-id-elision and N+1 checks need it. Typed ``Any`` so it
-# can default ``_check_n1``'s precisely typed ``planned`` parameter.
-_PLAN_UNREAD: Any = object()
+# repeated when both the FK-id-elision and N+1 checks need it. A one-member enum
+# member, so ``_check_n1``'s ``is`` check narrows it out of ``planned``'s type.
+_PLAN_UNREAD: Final = _PlanUnread.UNREAD
 
 # Sentinel returned by ``_build_fk_id_stub`` when the FK ``attname`` is deferred
 # on ``root`` (spec-035 Decision 5). FK-id elision reads the FK column off the
@@ -268,7 +276,7 @@ def _check_n1(
     cache_name: str | None = None,
     to_attr: str | None = None,
     reason: str | None = None,
-    planned: AbstractSet[str] | None = _PLAN_UNREAD,
+    planned: AbstractSet[str] | _PlanUnread | None = _PLAN_UNREAD,
     precomputed_key: str | None = None,
     force_unplanned: bool = False,
     strictness: str | None = None,

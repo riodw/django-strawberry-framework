@@ -904,7 +904,9 @@ def _is_deterministic_order_name(
 
 def _is_deterministic_order_term(
     query: Query,
-    term: Any,
+    # basedpyright: narrowed only through the stored ``type(term)`` alias, which no checker
+    # follows; the F arm reads F.name, which django-stubs does not declare
+    term: Any,  # pyright: ignore[reportExplicitAny]
     opts: Options[models.Model] | None = None,
     seen: frozenset[tuple[type[models.Model], str]] = _NO_SEEN_EDGES,
     prefix: str = "",
@@ -1569,7 +1571,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     directives: Sequence[object] = (),
     max_rows: int | None = None,
     trusted_max_rows: bool = False,
-) -> Any:
+    # basedpyright: a public field factory assigned in a class body returns Any, as
+    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
     Outer nullability comes from the class-attribute annotation: ``list[T]`` renders

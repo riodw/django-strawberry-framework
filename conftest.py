@@ -40,7 +40,8 @@ import copy
 import inspect
 import json
 import threading
-from typing import Any, Protocol
+from collections.abc import Iterator
+from typing import Protocol
 
 import pytest
 
@@ -92,7 +93,10 @@ def _install_postgres_connection_tracking() -> None:
         return  # already installed (defensive against double import).
     original = postgres_base.DatabaseWrapper.get_new_connection
 
-    def _tracking_get_new_connection(self: Any, conn_params: Any) -> Any:
+    def _tracking_get_new_connection(
+        self: postgres_base.DatabaseWrapper,
+        conn_params: object,
+    ) -> _Closeable:
         connection = original(self, conn_params)
         if _opened_outside_main_thread_sync_context():
             _stray_postgres_connections.append(connection)
@@ -108,7 +112,7 @@ _install_postgres_connection_tracking()
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _close_stray_postgres_connections(django_db_setup: Any) -> Any:  # noqa: ARG001 - ordering dependency
+def _close_stray_postgres_connections(django_db_setup: None) -> Iterator[None]:  # noqa: ARG001 - ordering dependency
     """Close tracked stray Postgres connections before the test DBs drop.
 
     Depending on ``django_db_setup`` orders this fixture's teardown BEFORE
@@ -126,12 +130,12 @@ def _close_stray_postgres_connections(django_db_setup: Any) -> Any:  # noqa: ARG
 
 
 def _django_db_signature(
-    transaction: Any = False,
-    reset_sequences: Any = False,
-    databases: Any = None,  # noqa: ARG001 - pytest-django's parameter list, bound not read
-    serialized_rollback: Any = False,  # noqa: ARG001 - as above
-    available_apps: Any = None,  # noqa: ARG001 - as above
-) -> tuple[Any, Any]:
+    transaction: object = False,
+    reset_sequences: object = False,
+    databases: object = None,  # noqa: ARG001 - pytest-django's parameter list, bound not read
+    serialized_rollback: object = False,  # noqa: ARG001 - as above
+    available_apps: object = None,  # noqa: ARG001 - as above
+) -> tuple[object, object]:
     """Bind a ``django_db`` marker's arguments exactly as pytest-django's signature does.
 
     ``transaction`` and ``reset_sequences`` are the first two positional parameters, so
@@ -141,7 +145,7 @@ def _django_db_signature(
     return transaction, reset_sequences
 
 
-def _uses_db_and_is_transactional(item: Any) -> tuple[bool, bool]:
+def _uses_db_and_is_transactional(item: pytest.Item) -> tuple[bool, bool]:
     """Resolve a test's database setup the way pytest-django orders and runs it.
 
     Returns ``(uses_db, transactional)``. A ``django_db`` marker means database access, and
@@ -225,7 +229,7 @@ def _skip_pg_tests_off_postgres(items: list[pytest.Item]) -> None:
             item.add_marker(skip_pg)
 
 
-def pytest_collection_modifyitems(config: Any, items: list[pytest.Item]) -> None:  # noqa: ARG001 - pytest hookspec
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001 - pytest hookspec
     """Apply the collection rules to every collected item, whichever tree it came from."""
     _refuse_nontransactional_async_db_tests(items)
     _skip_pg_tests_off_postgres(items)

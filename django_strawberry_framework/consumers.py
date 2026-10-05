@@ -1486,14 +1486,16 @@ class _StopAwareSchema:
         self._schema = schema
         self._consumer = consumer
 
-    async def subscribe(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
+    # basedpyright: verbatim forward to BaseSchema.subscribe; uncapped strawberry may add params
+    async def subscribe(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:  # pyright: ignore[reportExplicitAny]
         """Return the real schema's subscription results, wrapped so they can stop.
 
         The seam the legacy ``graphql-ws`` handler reads.
         """
         return self._stoppable(await self._schema.subscribe(*args, **kwargs))
 
-    async def stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:
+    # basedpyright: verbatim forward to BaseSchema.stream; uncapped strawberry may add params
+    async def stream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[object, None]:  # pyright: ignore[reportExplicitAny]
         """Return the real schema's streamed results, wrapped so they can stop.
 
         The seam ``graphql-transport-ws`` reads, for EVERY operation type rather
@@ -1702,7 +1704,8 @@ def build_revalidating_consumer_class(
     # no static type to name here. The two handler attributes are read by name: upstream
     # declares each as an instance variable typed over the view's own ``Context`` /
     # ``RootValue`` type variables, which a read through the class leaves unbound.
-    transport_ws_handler_base: Any = getattr(  # noqa: B009
+    # basedpyright: typed, it rejects the object-typed __init__ forward and every hook override
+    transport_ws_handler_base: Any = getattr(  # pyright: ignore[reportExplicitAny]  # noqa: B009
         base_consumer_cls,
         "graphql_transport_ws_handler_class",
     )
@@ -1750,7 +1753,8 @@ def build_revalidating_consumer_class(
                 # subclasses included - no hand-maintained list can drift.
                 await _contain_message_loop_failure(self, exc, "graphql-transport-ws")
 
-    graphql_ws_handler_base: Any = getattr(base_consumer_cls, "graphql_ws_handler_class")  # noqa: B009
+    # basedpyright: typed, it rejects the object-typed __init__ forward and every hook override
+    graphql_ws_handler_base: Any = getattr(base_consumer_cls, "graphql_ws_handler_class")  # pyright: ignore[reportExplicitAny]  # noqa: B009
 
     class _RevalidatingGraphQLWSHandler(graphql_ws_handler_base):
         """Legacy ``graphql-ws``: revalidated admission, stoppable results."""
@@ -1801,7 +1805,8 @@ def build_revalidating_consumer_class(
             except Exception as exc:
                 await _contain_message_loop_failure(self, exc, "legacy graphql-ws")
 
-    websocket_adapter_base: Any = base_consumer_cls.websocket_adapter_class
+    # basedpyright: upstream types websocket_adapter_class a Callable factory, not a class
+    websocket_adapter_base: Any = base_consumer_cls.websocket_adapter_class  # pyright: ignore[reportExplicitAny]
 
     class _RevocationGatedWebSocketAdapter(websocket_adapter_base):
         """The outbound checkpoint, on the seam both protocols share.
@@ -1932,7 +1937,8 @@ def build_revalidating_consumer_class(
                 )
                 return
 
-    consumer_base: Any = base_consumer_cls
+    # basedpyright: typed, it rejects the object-typed __init__ forward and every hook override
+    consumer_base: Any = base_consumer_cls  # pyright: ignore[reportExplicitAny]
 
     class GraphQLWebSocketConsumer(consumer_base):
         """The package's WebSocket GraphQL consumer: upstream plus revalidation.

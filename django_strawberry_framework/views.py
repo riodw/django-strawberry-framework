@@ -541,7 +541,8 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
 
     @classonlymethod
     @override
-    def as_view(cls, **initkwargs: object) -> Any:  # noqa: N805 - Django's own signature
+    # basedpyright: sync or coroutine callback; the override must return View's sync-only type
+    def as_view(cls, **initkwargs: object) -> Any:  # pyright: ignore[reportExplicitAny]  # noqa: N805 - Django's own signature
         """Return upstream's view callback, stamped with the ordering protocol.
 
         The ordering half of the body boundary (spec-046 Decision 18), stamped
@@ -578,10 +579,11 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         """
         # A coroutine function whenever upstream marks it one: django-stubs types
         # ``View.as_view``'s sync callback only.
-        upstream_view: Callable[..., Any] = super().as_view(**initkwargs)
+        upstream_view: Callable[..., object] = super().as_view(**initkwargs)
         mount = object()
 
-        def prepared_view(request: HttpRequest) -> Any:
+        # basedpyright: the instance's dispatch is sync on one view, a coroutine on the other
+        def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]
             prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
             if type(prepared) is not tuple or len(prepared) != 2 or prepared[0] is not mount:
                 return None
@@ -1133,7 +1135,8 @@ class AsyncDjangoGraphQLView(_RequestBodyBoundaryMixin, AsyncGraphQLView[Context
     """
 
     @override
-    async def run(self, request: HttpRequest, *args: object, **kwargs: object) -> Any:
+    # basedpyright: upstream overloads run(HttpRequest) to two response types; this must meet both
+    async def run(self, request: HttpRequest, *args: object, **kwargs: object) -> Any:  # pyright: ignore[reportExplicitAny]
         """Enforce the request boundary, evaluate the actor, run CSRF, then upstream's ``run``.
 
         The sync twin's docstring is the contract for the boundary and CSRF

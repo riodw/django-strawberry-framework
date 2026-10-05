@@ -1032,7 +1032,9 @@ def _windowed_rows(
     trusted: bool = False,
 ) -> object: ...
 def _windowed_rows(
-    result: Any,
+    # basedpyright: a consumer resolver's return reaches islice / slicing unchecked; object
+    # needs an iterability check, a runtime change
+    result: Any,  # pyright: ignore[reportExplicitAny]
     info: object,
     declared: int | None = None,
     *,

@@ -50,7 +50,9 @@ _CHAR_WISE_TYPES = (
 )
 
 
-def validated_field_directives(label: str, directives: Any) -> tuple[object, ...]:
+# basedpyright: EAFP; ``tuple(directives)`` runs inside the surrounding try/except, which is
+# the guard
+def validated_field_directives(label: str, directives: Any) -> tuple[object, ...]:  # pyright: ignore[reportExplicitAny]
     """Return ``directives`` as a tuple, or raise the typed construction-time reject.
 
     ``label`` names the consuming factory (``"DjangoListField"``,

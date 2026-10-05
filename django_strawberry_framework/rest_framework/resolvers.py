@@ -411,7 +411,8 @@ def _decode_input_object(
 
 def _decode_nested(
     spec: InputFieldSpec,
-    value: Any,
+    # basedpyright: EAFP: a client input value; the try/except around ``list`` guards it
+    value: Any,  # pyright: ignore[reportExplicitAny]
     info: Info[object, object],
     *,
     path_prefix: str,
@@ -966,7 +967,8 @@ def _merged_serializer_kwargs(
     instance: models.Model | None,
     alias: str,
     hook_context: SerializerHookContext,
-) -> dict[str, Any]:
+    # basedpyright: splatted into ``serializer_class(**kwargs)``, whose stub types every kwarg
+) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
     """Construct the serializer kwargs through ``get_serializer_kwargs`` + the framework merge.
 
     Calls the overridable CONSTRUCTOR-ONLY hook ``get_serializer_kwargs(info,
@@ -1448,7 +1450,8 @@ def _pin_validator_querysets(serializer: DRFField, alias: str, *, path: str = ""
     while concurrent requests cannot rewrite one another's validator routing.
     """
 
-    def _pinned(validators: Any, owner: str) -> list[Any]:
+    # basedpyright: the copy's ``.queryset`` is written; drf-stubs' Validator declares none
+    def _pinned(validators: Any, owner: str) -> list[Any]:  # pyright: ignore[reportExplicitAny]
         pinned = []
         for validator in validators:
             queryset = getattr(validator, "queryset", None)
@@ -1674,7 +1677,8 @@ class _RelationIntentLedger:
     def record(self, path: str, value: _RelationSnapshot) -> None:
         self.records.setdefault(path, []).append(value)
 
-    def consume(self, path: str) -> Any:
+    # basedpyright: a snapshot or the ``_OMITTED`` object() sentinel, which no checker narrows
+    def consume(self, path: str) -> Any:  # pyright: ignore[reportExplicitAny]
         """Return the next recorded value for ``path``, or ``_OMITTED`` when none is pending."""
         index = self.counters.get(path, 0)
         entries = self.records.get(path)
@@ -2317,7 +2321,7 @@ def _serializer_write_step(
     integrity mapper - never a top-level ``GraphQLError`` at the write.
     """
     # Class validation gated ``Meta.serializer_class`` to a ``ModelSerializer`` subclass.
-    serializer_class: type[DRFSerializer] = mutation_cls._mutation_meta.serializer_class
+    serializer_class = cast("type[DRFSerializer]", mutation_cls._mutation_meta.serializer_class)
     reverse_map = _build_reverse_map(mutation_cls._input_field_specs)
     pipeline = require_write_pipeline()
     alias = pipeline.alias

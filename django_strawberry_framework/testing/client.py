@@ -110,7 +110,8 @@ class Response(_EngineResponse):
     meaningless.
     """
 
-    response: Any = None
+    # basedpyright: public field: Optional breaks res.response.status_code; None bars HttpResponse
+    response: Any = None  # pyright: ignore[reportExplicitAny]
 
 
 class _GraphQLTestClientBase(BaseGraphQLTestClient, Generic[_ClientT]):

@@ -189,8 +189,10 @@ class DjangoModelPermission:
         info: Info,
         mutation: type[_ModelResolvingMutation],
         operation: str,
-        data: Any,
-        instance: Any = None,
+        # basedpyright: consumer hook: a narrower base fails an override typing its own data
+        data: Any,  # pyright: ignore[reportExplicitAny]
+        # basedpyright: consumer hook: an override typing ``Item | None`` fails a narrower base
+        instance: Any = None,  # pyright: ignore[reportExplicitAny]
     ) -> bool:
         """Return whether the request user holds the model perm for ``operation``.
 

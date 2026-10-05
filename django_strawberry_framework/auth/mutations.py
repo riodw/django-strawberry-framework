@@ -1117,7 +1117,8 @@ def login_mutation(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Return the ``login(username:, password:)`` session mutation field (Decision 5).
 
     Two flat non-null ``String`` arguments (the ``username`` kwarg maps onto the
@@ -1146,7 +1147,8 @@ def logout_mutation(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Return the argument-less ``logout`` session mutation field (Decision 5).
 
     Resolves to the bind-materialized model-less ``LogoutPayload`` (the pinned
@@ -1450,7 +1452,8 @@ def register_mutation(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Return the ``register(data: RegisterInput!)`` mutation field (Decision 6).
 
     Synthesizes (once, cached through the auth declaration ledger) the

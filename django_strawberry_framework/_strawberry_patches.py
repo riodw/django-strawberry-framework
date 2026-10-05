@@ -398,8 +398,10 @@ if TYPE_CHECKING:
     # ``self`` is the view's universal form: ``Never`` for the contravariant ``Request``,
     # ``Any`` for the invariant rest (no single type is a supertype of every argument).
     _AnyBaseView = _BaseView[Never]
-    _AnySyncView = _SyncBaseHTTPView[Never, Any, Any, Any, Any]
-    _AnyAsyncView = _AsyncBaseHTTPView[Never, Any, Any, Any, Any, Any, Any]
+    # basedpyright: four invariant non-Request type params; only Any spans every sync view
+    _AnySyncView = _SyncBaseHTTPView[Never, Any, Any, Any, Any]  # pyright: ignore[reportExplicitAny]
+    # basedpyright: six invariant non-Request type params; only Any spans every async view
+    _AnyAsyncView = _AsyncBaseHTTPView[Never, Any, Any, Any, Any, Any, Any]  # pyright: ignore[reportExplicitAny]
 
     class _UploadUtility(Protocol):
         """The upload utility as the traversal translation reads it: a plain function."""
@@ -749,7 +751,8 @@ def _patched_parse_json(
 
 def _patched_parse_query_params(
     self: "_AnyBaseView",
-    params: "Mapping[str, Any]",
+    # basedpyright: verbatim upstream body rebinds str values to parsed JSON; only Any admits both
+    params: "Mapping[str, Any]",  # pyright: ignore[reportExplicitAny]
 ) -> "dict[str, object]":
     """Source-pinned reimplementation of ``BaseView.parse_query_params``.
 

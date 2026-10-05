@@ -29,7 +29,8 @@ class Command(BaseCommand):
         )
 
     @override
-    def handle(self, *args: object, **options: Any) -> None:
+    # basedpyright: call_command can bypass argparse; object needs a str guard, a runtime change
+    def handle(self, *args: object, **options: Any) -> None:  # pyright: ignore[reportExplicitAny]
         """Resolve the dotted-path schema symbol and emit SDL.
 
         Routes through three branches: ``--path`` omitted prints SDL to

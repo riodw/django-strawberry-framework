@@ -139,7 +139,9 @@ _PACKAGE_SCALAR_MAP: dict[object, ScalarDefinition] = {
 def strawberry_config(
     *,
     extra_scalar_map: Mapping[object, ScalarDefinition] | None = None,
-    **config_kwargs: Any,
+    # basedpyright: forwarded verbatim to StrawberryConfig, whose dataclass fields vary across
+    # the uncapped supported strawberry range, so its keyword types cannot be pinned here
+    **config_kwargs: Any,  # pyright: ignore[reportExplicitAny]
 ) -> StrawberryConfig:
     """Build a fresh ``StrawberryConfig`` registering django-strawberry-framework scalars.
 

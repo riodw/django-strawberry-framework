@@ -191,7 +191,8 @@ class SyncMisuseError(ConfigurationError, RuntimeError):
     """
 
 
-def _safe_class_name(value: Any) -> str:
+# basedpyright: EAFP; ``value.__name__`` is read inside the try/except, which is the guard
+def _safe_class_name(value: Any) -> str:  # pyright: ignore[reportExplicitAny]
     """Render a class name without allowing hostile metaclass metadata to escape.
 
     Deliberately STRICTER than the shared ``exceptions._safe_class_name``:
@@ -1847,7 +1848,9 @@ def _normalized_uuid(value: uuid.UUID) -> uuid.UUID:
 # ``IntegerChoices`` member (a ``str`` / ``int`` SUBCLASS) normalizes straight to its
 # underlying exact scalar. ``bool`` is absent because it cannot be subclassed, and
 # ``models.Model`` is absent because a model instance IS the bound foreign-key value.
-_BOUND_VALUE_NORMALIZERS: tuple[tuple[type[object], Callable[[Any], object]], ...] = (
+# basedpyright: each normalizer takes its own pair's base, so no one Callable parameter type
+# admits them all (parameters are contravariant); the issubclass test is the pairing proof
+_BOUND_VALUE_NORMALIZERS: tuple[tuple[type[object], Callable[[Any], object]], ...] = (  # pyright: ignore[reportExplicitAny]
     (str, _normalized_str),
     (bytes, _normalized_bytes),
     (bytearray, _normalized_bytearray),

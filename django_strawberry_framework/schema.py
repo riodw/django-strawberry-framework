@@ -823,10 +823,12 @@ class DjangoSchema(strawberry.Schema):
 
     def __init__(
         self,
-        *args: Any,
+        # basedpyright: verbatim forward to Schema.__init__; uncapped strawberry may add params
+        *args: Any,  # pyright: ignore[reportExplicitAny]
         resource_policy: ResourcePolicy | Mapping[str, object] | None = None,
         error_policy: ErrorPolicy | Mapping[str, object] | None = None,
-        **kwargs: Any,
+        # basedpyright: verbatim forward to Schema.__init__; uncapped strawberry may add params
+        **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> None:
         entries, declared_resource = _consumer_extension_entries(kwargs.get("extensions"))
         if declared_resource is not None and resource_policy is not None:
@@ -1111,7 +1113,8 @@ class DjangoSchema(strawberry.Schema):
         )
 
     @override
-    def execute_sync(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:
+    # basedpyright: verbatim forward to Schema.execute_sync; uncapped strawberry may add params
+    def execute_sync(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:  # pyright: ignore[reportExplicitAny]
         """Run the operation synchronously and mask what is RETURNED.
 
         The masking extension's teardown answers for a result upstream assigned
@@ -1126,7 +1129,8 @@ class DjangoSchema(strawberry.Schema):
         return self._masked_return(super().execute_sync(*args, **kwargs))
 
     @override
-    async def execute(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:
+    # basedpyright: verbatim forward to Schema.execute; uncapped strawberry may add params
+    async def execute(self, *args: Any, **kwargs: Any) -> StrawberryExecutionResult:  # pyright: ignore[reportExplicitAny]
         """Run the operation asynchronously and mask what is RETURNED.
 
         The async twin of :meth:`execute_sync`, for the same reason and with the
@@ -1186,8 +1190,10 @@ class DjangoSchema(strawberry.Schema):
         self,
         execution_context: StrawberryExecutionContext,
         extensions_runner: SchemaExtensionsRunner,
-        *args: Any,
-        **kwargs: Any,
+        # basedpyright: verbatim forward to Schema._stream; uncapped strawberry may add params
+        *args: Any,  # pyright: ignore[reportExplicitAny]
+        # basedpyright: verbatim forward to Schema._stream; uncapped strawberry may add params
+        **kwargs: Any,  # pyright: ignore[reportExplicitAny]
     ) -> StreamResult:
         """Stream the operation's frames with this operation bound in every task.
 

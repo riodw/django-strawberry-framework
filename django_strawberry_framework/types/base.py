@@ -865,7 +865,9 @@ class DjangoType:
         )
         # Read in the order the definition lists them: ``model`` before ``description``.
         model = model_meta.model
-        description: Any = _meta_attr(meta, "description")
+        # basedpyright: Meta.description reaches DjangoTypeDefinition.description (str | None)
+        # unvalidated; object needs a runtime check
+        description: Any = _meta_attr(meta, "description")  # pyright: ignore[reportExplicitAny]
         definition = DjangoTypeDefinition(
             origin=cls,
             model=model,
@@ -907,9 +909,15 @@ class DjangoType:
     @classmethod
     def get_queryset(
         cls,
-        queryset: models.QuerySet[Any, Any],
-        info: Any,  # noqa: ARG003
-    ) -> models.QuerySet[Any, Any]:
+        # basedpyright: consumer-overridden hook; an override narrows the queryset's model,
+        # which a parameter typed narrower than Any rejects (reportIncompatibleMethodOverride)
+        queryset: models.QuerySet[Any, Any],  # pyright: ignore[reportExplicitAny]
+        # basedpyright: an override annotates ``info: Info[...]``; object rejects that narrowing
+        # and Strawberry's Info is invariant, so no parametrization admits every override
+        info: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ARG003
+        # basedpyright: an override returns ``super().get_queryset(...)`` as its own model's
+        # queryset, which a concrete return rejects and a TypeVar return forbids non-generically
+    ) -> models.QuerySet[Any, Any]:  # pyright: ignore[reportExplicitAny]
         """Default identity hook.
 
         Subclasses override this to scope visibility (permissions,

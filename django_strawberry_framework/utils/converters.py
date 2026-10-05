@@ -86,7 +86,9 @@ def convert_with_mro(
     field: _FieldT,
     *,
     isinstance_prechecks: Sequence[
-        tuple[type[object] | tuple[type[object], ...], Callable[[Any], object]]
+        # basedpyright: each handler takes the class its paired isinstance narrows to; Callable
+        # parameters are contravariant, so no common spelling admits them all
+        tuple[type[object] | tuple[type[object], ...], Callable[[Any], object]]  # pyright: ignore[reportExplicitAny]
     ],
     scalar_registry: Mapping[type[_FieldT], object],
     fallthrough_error_factory: Callable[[_FieldT], Exception],

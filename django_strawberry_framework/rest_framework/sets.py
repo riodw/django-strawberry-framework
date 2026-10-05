@@ -251,7 +251,8 @@ def _checked_schema_field_map(
     field_map = _validate_schema_field_map(cls.__name__, cls.get_serializer_for_schema())
     if meta.schema_fingerprint is not None:
         effective = resolve_effective_serializer_fields(
-            meta.serializer_class,
+            # The serializer flavor's ``_validate_meta`` stored a validated serializer class.
+            cast("type[DRFSerializer]", meta.serializer_class),
             fields=meta.fields,
             exclude=meta.exclude,
             field_map=field_map,
@@ -278,7 +279,8 @@ def _serializer_input_shape_for(
 ) -> tuple[type[object], SerializerInputShape]:
     """Return the serializer input class + descriptor through the shared shape cache."""
     input_cls, shape = build_serializer_input_class(
-        meta.serializer_class,
+        # The serializer flavor's ``_validate_meta`` stored a validated serializer class.
+        cast("type[DRFSerializer]", meta.serializer_class),
         operation_kind=operation_kind,
         fields=meta.fields,
         exclude=meta.exclude,
@@ -513,7 +515,8 @@ class SerializerMutation(DjangoMutation):
 
     # The consumer's nested ``Meta`` (declared on every concrete subclass; the metaclass
     # validates it before the snapshot exists).
-    Meta: ClassVar[type[Any]]
+    # basedpyright: the consumer's own ``Meta``, read by attribute before any validated snapshot
+    Meta: ClassVar[type[Any]]  # pyright: ignore[reportExplicitAny]
 
     @classmethod
     @override
@@ -795,7 +798,11 @@ class SerializerMutation(DjangoMutation):
         against ``cls.Meta.serializer_class`` (its OWN ``Meta``), not the parent's.
         """
         meta: _ValidatedMutationMeta | None = cls.__dict__.get("_mutation_meta")
-        serializer_class = meta.serializer_class if meta is not None else cls.Meta.serializer_class
+        # Both windows read the serializer class ``_validate_meta`` gated before this hook runs.
+        serializer_class = cast(
+            "type[DRFSerializer]",
+            meta.serializer_class if meta is not None else cls.Meta.serializer_class,
+        )
         return _default_serializer_schema_fields(serializer_class)
 
     @classmethod
@@ -855,7 +862,8 @@ class SerializerMutation(DjangoMutation):
             primary_type
         )  # the serializer input derives from the serializer, not the model primary.
         operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
-        serializer_class = meta.serializer_class
+        # The serializer flavor's ``_validate_meta`` stored a validated serializer class.
+        serializer_class = cast("type[DRFSerializer]", meta.serializer_class)
         # Read the schema hook through the ONE guarded path, so the
         # determinism fingerprint is checked HERE and in ``input_type_name`` alike (no unguarded
         # second read). Then stash the schema-time specs for ``Meta.injected_fields``
@@ -945,7 +953,7 @@ class SerializerMutation(DjangoMutation):
         *,
         data: Mapping[str, object],
         hook_context: SerializerHookContext,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the resolver consumes this).
 
         The graphene ``get_serializer_kwargs`` parity seam (spec-039 Decision 7 step 4 /

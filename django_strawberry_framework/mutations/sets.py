@@ -92,8 +92,10 @@ if TYPE_CHECKING:
     from strawberry.types.base import WithStrawberryObjectDefinition
     from strawberry.types.field import StrawberryField
 
+    from ..forms.inputs import FormClass
     from ..forms.sets import DjangoFormMutation
     from ..rest_framework.inputs import NestedSerializerConfig
+    from ..rest_framework.serializer_converter import DRFSerializer
     from ..types.base import DjangoType
     from .inputs import ModelFieldIndex, MutationInputShape
     from .permissions import WritePermissionClass
@@ -717,7 +719,8 @@ def make_meta_validating_metaclass(
             cls: type[MetaValidatingMetaclass],
             name: str,
             bases: tuple[type[object], ...],
-            attrs: dict[str, Any],
+            # basedpyright: unvalidated ``Meta`` value; ``_validate_meta`` rejects a non-class
+            attrs: dict[str, Any],  # pyright: ignore[reportExplicitAny]
         ) -> MetaValidatingMetaclass:
             """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
             new_class = super().__new__(cls, name, bases, attrs)
@@ -909,8 +912,8 @@ class _ValidatedMutationMeta:
         fields: tuple[str, ...] | None,
         exclude: tuple[str, ...] | None,
         permission_classes: tuple[WritePermissionClass, ...],
-        form_class: Any = None,
-        serializer_class: Any = None,
+        form_class: FormClass | None = None,
+        serializer_class: type[DRFSerializer] | None = None,
         optional_fields: tuple[str, ...] | None = None,
         schema_fingerprint: tuple[tuple[object, ...], ...] | None = None,
         injected_fields: tuple[str, ...] | None = None,
@@ -931,13 +934,13 @@ class _ValidatedMutationMeta:
         # leaves it ``None`` (it has no ``form_class``), so the model path is
         # byte-unchanged - the slot is net-new state never read by the model
         # bind/resolver.
-        self.form_class: Any = form_class
+        self.form_class: FormClass | None = form_class
         # The serializer-flavor snapshot (spec-039): a ``SerializerMutation``
         # records its ``Meta.serializer_class`` here so the serializer ``build_input``
         # / resolver read one snapshot shape (mirroring ``form_class``). The model +
         # form flavors leave it ``None`` (net-new state, never read off the model /
         # form paths), so they stay byte-unchanged.
-        self.serializer_class: Any = serializer_class
+        self.serializer_class: type[DRFSerializer] | None = serializer_class
         # The serializer-flavor ``Meta.optional_fields`` (spec-039): the
         # create-only force-optional override lives on the MUTATION's ``Meta`` (the
         # documented public key), NOT the serializer's own ``Meta``. Normalized at
@@ -994,7 +997,8 @@ class _ValidatedMutationMeta:
 
 def _validate_permission_classes(
     mutation_name: str,
-    value: Any,
+    # basedpyright: EAFP: arbitrary consumer value; the try/except around ``list`` guards
+    value: Any,  # pyright: ignore[reportExplicitAny]
     *,
     unset_default: tuple[WritePermissionClass, ...] = (DjangoModelPermission,),
     base_label: str = "DjangoMutation",
@@ -1440,7 +1444,8 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         @classmethod
         def resolve_sync(
             cls,
-            info: Info[Any, Any],
+            # basedpyright: invariant Info: only Any admits an override typing its own context
+            info: Info[Any, Any],  # pyright: ignore[reportExplicitAny]
             *,
             data: object,
             id: object,  # noqa: A002
@@ -1450,7 +1455,8 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         @classmethod
         def resolve_async(
             cls,
-            info: Info[Any, Any],
+            # basedpyright: invariant Info: only Any admits an override typing its own context
+            info: Info[Any, Any],  # pyright: ignore[reportExplicitAny]
             *,
             data: object,
             id: object,  # noqa: A002
@@ -1468,8 +1474,10 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         self,
         info: Info,
         operation: str,
-        data: Any,
-        instance: Any = None,
+        # basedpyright: consumer hook: a narrower base fails an override typing its own data
+        data: Any,  # pyright: ignore[reportExplicitAny]
+        # basedpyright: consumer hook: an override typing ``Item | None`` fails a narrower base
+        instance: Any = None,  # pyright: ignore[reportExplicitAny]
     ) -> bool:
         """Return whether the request is authorized for ``operation`` (spec-036 Decision 15).
 

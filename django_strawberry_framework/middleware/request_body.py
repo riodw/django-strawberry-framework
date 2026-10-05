@@ -231,7 +231,8 @@ class GraphQLRequestBodyBoundaryMiddleware:
         view = _package_view_instance(view_func)
         if view is None:
             return None
-        setup: Any = getattr(view, "setup", _NO_SETUP)
+        # basedpyright: sentinel or unchecked setup; no identity test narrows object to callable
+        setup: Any = getattr(view, "setup", _NO_SETUP)  # pyright: ignore[reportExplicitAny]
         if setup is not _NO_SETUP:
             setup(request, *view_args, **view_kwargs)
             if not hasattr(view, "request"):

@@ -219,7 +219,9 @@ def _str_list(value: object) -> list[str]:
     return [_safe_text(item) for item in items]
 
 
-def _validation_messages(error: Any) -> list[object]:
+# basedpyright: EAFP; ``error.messages`` / ``error.message`` are read inside the surrounding
+# try/except, which is the guard
+def _validation_messages(error: Any) -> list[object]:  # pyright: ignore[reportExplicitAny]
     """Read one Django validation leaf's messages without trusting its metadata."""
     try:
         msgs = error.messages
@@ -244,7 +246,8 @@ def _validation_messages(error: Any) -> list[object]:
             return [error]
 
 
-def _validation_code(leaf: Any) -> object:
+# basedpyright: EAFP; ``leaf.code`` is read inside the surrounding try/except, which is the guard
+def _validation_code(leaf: Any) -> object:  # pyright: ignore[reportExplicitAny]
     """Read one Django validation leaf's code, dropping hostile or empty values."""
     try:
         code = leaf.code

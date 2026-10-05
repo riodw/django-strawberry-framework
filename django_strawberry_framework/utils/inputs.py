@@ -249,7 +249,9 @@ def emit_set_input_field_triples(
             target_name = input_type_name_for(target)
             # A runtime-built annotation: the object ``Annotated[...]`` builds from a
             # runtime name has no static type either checker models.
-            inner: Any = Annotated[target_name, strawberry.lazy(module_path)]
+            # basedpyright: it narrows to the ``Annotated`` special form, which neither widens
+            # with ``| None`` nor casts to ``OptionalWidenable`` (reportInvalidCast)
+            inner: Any = Annotated[target_name, strawberry.lazy(module_path)]  # pyright: ignore[reportExplicitAny]
             annotation: object = inner | None
             django_source_path = related_source_path_of(top_name, entry)
         else:
@@ -766,7 +768,9 @@ def name_set_input_type_name(
 
 
 def normalize_field_name_sequence(
-    value: Any,
+    # basedpyright: EAFP; ``tuple(value)`` on an arbitrary Meta value runs inside the
+    # surrounding try/except, which is the guard
+    value: Any,  # pyright: ignore[reportExplicitAny]
     *,
     label: str = "fields",
     flavor: str,
@@ -1077,7 +1081,9 @@ def build_strawberry_input_class(
         # explicit default for an optional field rather than the required sentinel.
         has_default = "default" in kwargs
         default = kwargs.pop("default", None)
-        strawberry_field_kwargs: dict[str, Any] = {"name": kwargs.pop("name")}
+        # basedpyright: the name / description values come from a caller's ``object`` mapping
+        # and are forwarded unchecked into strawberry.field's typed keywords
+        strawberry_field_kwargs: dict[str, Any] = {"name": kwargs.pop("name")}  # pyright: ignore[reportExplicitAny]
         if "description" in kwargs:
             strawberry_field_kwargs["description"] = kwargs.pop("description")
         annotations[python_attr] = annotation

@@ -110,7 +110,8 @@ def current_user(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any:
+    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
+) -> Any:  # pyright: ignore[reportExplicitAny]
     """Return the nullable session-actor query field (spec-040 Decision 7).
 
     The read-side member of the auth surface: a query FIELD (not a mutation)

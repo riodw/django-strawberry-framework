@@ -96,7 +96,6 @@ from .inputs import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
-    from typing import TypeAlias
 
     from django.db import models
     from strawberry.types import Info
@@ -105,18 +104,6 @@ if TYPE_CHECKING:
     from ..types.base import DjangoType
     from ..utils.inputs import InputFieldSpec
     from .inputs import FormClass
-
-    #: Each flavor's ``get_form_fields`` classmethod.
-    _ModelFormFieldsClassmethod: TypeAlias = (
-        "classmethod[DjangoModelFormMutation, [], dict[str, forms.Field]]"
-    )
-    _FormFieldsClassmethod: TypeAlias = (
-        "classmethod[DjangoFormMutation, [], dict[str, forms.Field]]"
-    )
-else:
-    # ``classmethod`` has no ``__class_getitem__`` before Python 3.11: the hints stay the class.
-    _ModelFormFieldsClassmethod = classmethod
-    _FormFieldsClassmethod = classmethod
 
 # The form ``Meta``'s allowed-key sets (spec-038 Decision 6), composed from
 # the shared mutation foundation key sets plus the local ``form_class`` key.
@@ -575,9 +562,15 @@ class DjangoModelFormMutation(DjangoMutation):
     ``Meta.fields`` / ``Meta.exclude`` / ``Meta.permission_classes``).
     """
 
-    get_form_fields: ClassVar[_ModelFormFieldsClassmethod] = classmethod(
-        _default_mutation_get_form_fields,
-    )
+    @classmethod
+    def get_form_fields(cls) -> dict[str, forms.Field]:
+        """Return the form-field basis the input derives from (overridable hook).
+
+        The default reads ``Meta.form_class.base_fields`` without instantiating the
+        form. An override must return a request-independent mapping of form field
+        names to ``forms.Field`` instances.
+        """
+        return _default_mutation_get_form_fields(cls)
 
     @classmethod
     @override
@@ -838,9 +831,15 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     payload (no object slot). The resolver pipeline lives in ``resolvers.py``.
     """
 
-    get_form_fields: ClassVar[_FormFieldsClassmethod] = classmethod(
-        _default_mutation_get_form_fields,
-    )
+    @classmethod
+    def get_form_fields(cls) -> dict[str, forms.Field]:
+        """Return the form-field basis the input derives from (overridable hook).
+
+        The default reads ``Meta.form_class.base_fields`` without instantiating the
+        form. An override must return a request-independent mapping of form field
+        names to ``forms.Field`` instances.
+        """
+        return _default_mutation_get_form_fields(cls)
 
     # The validated ``Meta`` snapshot the metaclass stashes on a concrete subclass.
     # ``None`` on the abstract base (no ``Meta``); a type checker sees the

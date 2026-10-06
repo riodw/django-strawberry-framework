@@ -95,9 +95,10 @@ if TYPE_CHECKING:
     # A declarative form class - the only kind a form mutation's ``Meta.form_class``
     # validates to (``forms.Form`` / ``forms.ModelForm`` are siblings under
     # ``forms.BaseForm``, and only they carry the metaclass-built ``base_fields``).
-    # ``ModelForm``'s model parameter is read-only here, so its ``Model`` bound covers
-    # every model form.
-    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[models.Model]]
+    # ``ModelForm``'s model parameter is invariant in the stubs, so ``Any`` is the one
+    # argument a consumer's ``ModelForm[Item]`` satisfies.
+    # basedpyright: invariant model TypeVar; a consumer's ModelForm[Item] must be accepted
+    FormClass: TypeAlias = type[forms.Form] | type[forms.ModelForm[Any]]  # pyright: ignore[reportExplicitAny]
     #: Any ``ModelChoiceField``: its model parameter is read-only here.
     _ModelChoiceFieldAny: TypeAlias = forms.ModelChoiceField[models.Model]
 else:

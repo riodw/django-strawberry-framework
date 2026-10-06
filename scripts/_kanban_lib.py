@@ -25,7 +25,11 @@ import subprocess
 import sys
 from collections.abc import Callable, Container, Sequence
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
+
+if TYPE_CHECKING:
+    from _typeshed import SupportsRichComparison
+    from django.db.backends.base.base import BaseDatabaseWrapper
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
@@ -103,10 +107,210 @@ def unresolvable_placeholders(
     return unresolvable
 
 
-def placeholder_defects(
-    cards: Sequence[dict[str, Any]],
-    board_docs: Sequence[dict[str, Any]],
-) -> list[str]:
+# --------------------------------------------------------------------------------------
+# Kanban payload shapes
+# --------------------------------------------------------------------------------------
+# The rows ``STATIC_KANBAN_QUERY`` selects, narrowed to the keys the renderers read by
+# name. The decoded JSON carries every selected key; a shape lists only the ones code
+# reads, so the query (not these classes) stays the full contract. Nullable relations
+# are ``| None``.
+
+
+class IdRow(TypedDict):
+    """A lookup row nothing reads past its sort keys."""
+
+    id: str
+
+
+class LabelRef(TypedDict):
+    """A related row read only for its ``label``."""
+
+    label: str
+
+
+class KeyRef(TypedDict):
+    """A related row read only for its ``key``."""
+
+    key: str
+
+
+class KeyLabelRef(TypedDict):
+    """A related row read for its ``key`` and ``label`` (status, kind)."""
+
+    key: str
+    label: str
+
+
+class OrderedRef(KeyLabelRef):
+    """A ``key`` / ``label`` / ``order`` row (milestone, section)."""
+
+    order: int
+
+
+class MilestoneRow(OrderedRef):
+    """One ``allKanbanMilestones`` row."""
+
+    versionCeiling: str | None
+
+
+class TargetVersionRef(TypedDict):
+    """A card's target version, read for its ``number``."""
+
+    number: str
+
+
+class RelativeSizeRow(TypedDict):
+    """A relative size: a card's ``relativeSize`` or one ``allKanbanRelativeSizes`` row."""
+
+    label: str
+    order: int
+    description: str
+
+
+class UpstreamRef(TypedDict):
+    """A parity claim's upstream."""
+
+    order: int
+    emoji: str
+    label: str
+
+
+class SpecRef(TypedDict):
+    """A card's spec, read for its ``path``."""
+
+    path: str
+
+
+class TrackedPathRow(TypedDict):
+    """A tracked path: a path link's ``path`` or one ``allKanbanTrackedPaths`` row."""
+
+    path: str
+    isCurrent: bool
+
+
+class CardLink(TypedDict):
+    """The ``CardLinkFields`` a reference or dependency carries."""
+
+    id: str
+    cardId: str
+    number: int
+    title: str
+    slug: str
+
+
+class ItemRow(TypedDict):
+    """One card item."""
+
+    id: str
+    order: int
+    text: str
+    isComplete: bool
+    section: OrderedRef
+
+
+class OutgoingReferenceRow(TypedDict):
+    """One reference from a card to ``targetCard``."""
+
+    id: str
+    order: int
+    rawText: str
+    kind: KeyLabelRef
+    targetCard: CardLink
+
+
+class PathLinkRow(TypedDict):
+    """One card-to-tracked-path link; ``kind`` is ``changed`` or ``predicted``."""
+
+    kind: str
+    path: TrackedPathRow
+
+
+class ParityClaimRow(TypedDict):
+    """One card parity claim."""
+
+    id: str
+    upstream: UpstreamRef
+    level: LabelRef
+
+
+class CardRow(CardLink):
+    """One ``allCards`` row."""
+
+    planningNote: str
+    updatedDate: str
+    status: KeyLabelRef
+    milestone: OrderedRef | None
+    targetVersion: TargetVersionRef | None
+    priority: LabelRef | None
+    relativeSize: RelativeSizeRow | None
+    spec: SpecRef | None
+    labels: list[KeyRef]
+    items: list[ItemRow]
+    outgoingReferences: list[OutgoingReferenceRow]
+    pathLinks: list[PathLinkRow]
+    parityClaims: list[ParityClaimRow]
+    dependencies: list[CardLink]
+
+
+class BoardDocReferenceRow(TypedDict):
+    """One reference from a board doc to ``card``."""
+
+    id: str
+    order: int
+    rawText: str
+    card: CardLink
+
+
+class _BoardDocFields(TypedDict):
+    id: str
+    uuid: IdRow
+    key: str
+    title: str
+    order: float
+    body: str
+    kind: KeyLabelRef
+    createdDate: str
+    updatedDate: str
+    cardReferences: list[BoardDocReferenceRow]
+
+
+class BoardDocRow(_BoardDocFields, total=False):
+    """One ``allKanbanBoardDocs`` row, or the synthetic progress doc.
+
+    ``namespace`` and ``includeHeading`` are not selected by the query; only the
+    synthetic doc (:func:`progress_board_doc`) carries them.
+    """
+
+    namespace: str
+    includeHeading: bool
+
+
+class Lookups(TypedDict):
+    """The lookup tables, keyed by their payload name (:data:`LOOKUP_FIELDS`)."""
+
+    statuses: list[IdRow]
+    milestones: list[MilestoneRow]
+    targetVersions: list[IdRow]
+    priorities: list[IdRow]
+    relativeSizes: list[RelativeSizeRow]
+    upstreams: list[IdRow]
+    parityLevels: list[IdRow]
+    sections: list[IdRow]
+    referenceKinds: list[IdRow]
+    boardDocKinds: list[IdRow]
+    trackedPaths: list[TrackedPathRow]
+
+
+class DashboardData(TypedDict):
+    """The kanban dashboard payload both exports render."""
+
+    cards: list[CardRow]
+    boardDocs: list[BoardDocRow]
+    lookups: Lookups
+    blockingReferenceKindKeys: list[str]
+
+
+def placeholder_defects(cards: Sequence[CardRow], board_docs: Sequence[BoardDocRow]) -> list[str]:
     """Return one ``site: token`` message per unresolvable placeholder in the board.
 
     Names the row it found, because the token alone does not locate it: the same
@@ -151,8 +355,12 @@ def placeholder_defects(
     return defects
 
 
-_JSONRow: TypeAlias = dict[str, Any]
-SortKey = Callable[[_JSONRow], Any]
+# The deep sort reads every child list by a payload key held in a variable, so it
+# sees a row as plain decoded JSON rather than as one of the shapes above.
+# basedpyright: a decoded GraphQL row read by a runtime key; each sort key below
+# indexes a different row shape, so no single TypedDict is true
+_JSONRow: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+SortKey: TypeAlias = "Callable[[_JSONRow], SupportsRichComparison]"
 
 # Every per-card child list ``STATIC_KANBAN_QUERY`` selects, as
 # ``payload key -> (ORM accessor, deterministic sort key)``. One table drives both the
@@ -188,7 +396,7 @@ CARD_NESTED_LISTS: dict[str, str] = {
 }
 
 
-def board_row_counts() -> dict[str, Any]:
+def board_row_counts() -> dict[str, dict[int, int]]:
     """Read the board's true per-card row counts straight from the ORM.
 
     Separated from :func:`truncation_defects` so the comparison is a pure function
@@ -203,7 +411,7 @@ def board_row_counts() -> dict[str, Any]:
     from apps.kanban import models
     from django.db.models import Count
 
-    counts: dict[str, dict[Any, int]] = {}
+    counts: dict[str, dict[int, int]] = {}
     for payload_key, accessor in CARD_NESTED_LISTS.items():
         counts[payload_key] = dict(
             models.Card.objects.values_list("number").annotate(total=Count(accessor)),
@@ -211,7 +419,7 @@ def board_row_counts() -> dict[str, Any]:
     return counts
 
 
-def truncation_defects(cards: Sequence[dict[str, Any]], expected: dict[str, Any]) -> list[str]:
+def truncation_defects(cards: Sequence[CardRow], expected: dict[str, dict[int, int]]) -> list[str]:
     """Return one message per nested card list that came back short of ``expected``.
 
     The export is GraphQL-driven on purpose, so it inherits the package's row
@@ -240,7 +448,7 @@ def truncation_defects(cards: Sequence[dict[str, Any]], expected: dict[str, Any]
     return defects
 
 
-def assert_nothing_truncated(cards: list[dict[str, Any]]) -> None:
+def assert_nothing_truncated(cards: list[CardRow]) -> None:
     """Fail the build when a row bound silenced part of the board.
 
     Sits at the shared fetch rather than in either ``main``, because both exports
@@ -270,13 +478,13 @@ def _install_sqlite_busy_timeout() -> None:
     from django.db import connections
     from django.db.backends.signals import connection_created
 
-    def _apply(connection: Any) -> None:
+    def _apply(connection: BaseDatabaseWrapper) -> None:
         if connection.vendor != "sqlite":
             return
         with connection.cursor() as cursor:
             cursor.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS};")
 
-    def _on_connect(connection: Any, **_kwargs: Any) -> None:
+    def _on_connect(connection: BaseDatabaseWrapper, **_kwargs: object) -> None:
         _apply(connection)
 
     connection_created.connect(_on_connect, dispatch_uid="kanban_scripts_busy_timeout")
@@ -347,7 +555,9 @@ def run_git(args: Sequence[str], *, error_cls: type[Exception] = GitCommandError
     return result.stdout
 
 
-def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, Any]:
+# basedpyright: the decoded ``response.json()`` is untyped; each caller states the shape
+# its own query selects (``DashboardData`` here, ``GlossaryData`` in build_glossary_md)
+def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, Any]:  # pyright: ignore[reportExplicitAny]
     """Fetch a GraphQL payload and validate required top-level list fields."""
     from django.test import Client
 
@@ -887,7 +1097,36 @@ def _pct(part: float, whole: float) -> float:
     return round(100 * part / whole, 1) if whole else 0.0
 
 
-def release_version(milestones: list[dict[str, Any]]) -> tuple[int, ...]:
+class ProgressScope(TypedDict):
+    """One headline scope of :func:`compute_progress_metrics`."""
+
+    cards_done: int
+    cards_total: int
+    cards_pct: float
+    weighted_pct: float
+
+
+class MilestoneBucket(TypedDict):
+    """One milestone's raw and size-weighted card counts."""
+
+    key: str
+    label: str
+    order: int
+    done: int
+    total: int
+    rank_done: int
+    rank_total: int
+
+
+class ProgressMetrics(TypedDict):
+    """The road-to-release figures :func:`render_progress_markdown` renders."""
+
+    toward: ProgressScope
+    overall: ProgressScope
+    milestones: dict[str, MilestoneBucket]
+
+
+def release_version(milestones: list[MilestoneRow]) -> tuple[int, ...]:
     """Return the road-to-release target version, derived from Milestone rows.
 
     The release boundary is the highest ``versionCeiling`` across the milestone
@@ -911,9 +1150,9 @@ def release_version(milestones: list[dict[str, Any]]) -> tuple[int, ...]:
 
 
 def compute_progress_metrics(
-    cards: list[dict[str, Any]],
+    cards: list[CardRow],
     target_release: tuple[int, ...],
-) -> dict[str, Any]:
+) -> ProgressMetrics:
     """Aggregate road-to-``1.0.0`` progress from the card set.
 
     Backlog cards are excluded (deferred / un-triaged). Cards are counted raw and
@@ -940,14 +1179,14 @@ def compute_progress_metrics(
     post-``1.0.0`` work is in flight).
     """
 
-    def rank(card: dict[str, Any]) -> int:
+    def rank(card: CardRow) -> int:
         # ``RelativeSize.order`` is 0-indexed (XS=0 .. XL=4); weight by ``order + 1``
         # (XS=1 .. XL=5) so an XS card still counts as 1 unit of work rather than
         # being invisible to the size-weighted figure.
         size = card.get("relativeSize")
         return size["order"] + 1 if size else 0
 
-    def targets_by_release(card: dict[str, Any]) -> bool:
+    def targets_by_release(card: CardRow) -> bool:
         # The 1.0.0 release card ships exactly 1.0.0, so the boundary is inclusive
         # (``<=``). A card with no target version is treated as pre-release work.
         target = card.get("targetVersion") or {}
@@ -956,7 +1195,7 @@ def compute_progress_metrics(
 
     universe = [card for card in cards if (card.get("status") or {}).get("key") != "backlog"]
 
-    milestones: dict[str, dict[str, Any]] = {}
+    milestones: dict[str, MilestoneBucket] = {}
     for card in universe:
         milestone = card.get("milestone") or {}
         key = milestone.get("key", "?")
@@ -978,7 +1217,7 @@ def compute_progress_metrics(
             bucket["done"] += 1
             bucket["rank_done"] += rank(card)
 
-    def scope(predicate: Callable[[_JSONRow], bool]) -> dict[str, Any]:
+    def scope(predicate: Callable[[CardRow], bool]) -> ProgressScope:
         members = [card for card in universe if predicate(card)]
         done = [card for card in members if card["status"]["key"] == "done"]
         rank_total = sum(rank(card) for card in members)
@@ -996,7 +1235,7 @@ def compute_progress_metrics(
     }
 
 
-def render_progress_markdown(metrics: dict[str, Any], release_label: str) -> str:
+def render_progress_markdown(metrics: ProgressMetrics, release_label: str) -> str:
     """Render the progress metrics as a markdown body (headline + per-milestone table).
 
     ``release_label`` is the road-to-release target version (e.g. ``"1.0.0"``),
@@ -1035,10 +1274,10 @@ def render_progress_markdown(metrics: dict[str, Any], release_label: str) -> str
 
 
 def progress_board_doc(
-    anchor: dict[str, Any],
-    cards: list[dict[str, Any]],
-    milestones: list[dict[str, Any]],
-) -> dict[str, Any]:
+    anchor: BoardDocRow,
+    cards: list[CardRow],
+    milestones: list[MilestoneRow],
+) -> BoardDocRow:
     """Build the synthetic, export-time ``Progress to <release>`` reference board doc.
 
     Clones the kind / namespace / timestamps from ``anchor`` (the ``snapshot``
@@ -1067,7 +1306,7 @@ def progress_board_doc(
     }
 
 
-def fetch_dashboard_data() -> dict[str, Any]:
+def fetch_dashboard_data() -> DashboardData:
     """Fetch the kanban dashboard payload through the real ``/graphql/`` route.
 
     A synthetic ``Progress to <release>`` board doc is injected right after the
@@ -1083,11 +1322,14 @@ def fetch_dashboard_data() -> dict[str, Any]:
         required_lists=("allCards", "allKanbanBoardDocs", *LOOKUP_FIELDS),
     )
     assert_nothing_truncated(data["allCards"])
-    lookups = {
-        payload_name: data[graphql_name] for graphql_name, payload_name in LOOKUP_FIELDS.items()
-    }
+    lookups = Lookups(
+        **{
+            payload_name: data[graphql_name]
+            for graphql_name, payload_name in LOOKUP_FIELDS.items()
+        },
+    )
 
-    board_docs = data["allKanbanBoardDocs"]
+    board_docs: list[BoardDocRow] = data["allKanbanBoardDocs"]
     anchor_index = next(
         (
             index
@@ -1117,26 +1359,27 @@ def fetch_dashboard_data() -> dict[str, Any]:
     }
 
 
-def build_dashboard_snapshot(dashboard_data: dict[str, Any]) -> dict[str, Any]:
+def build_dashboard_snapshot(dashboard_data: DashboardData) -> DashboardData:
     """Deep-sort every list in the dashboard payload in place, returning it.
 
     Deterministic ordering (not resolver order) so the HTML data block diffs cleanly
     build over build, and so the markdown renderer can rely on the same order (items
     grouped by section, claims by upstream, paths by path) without re-sorting.
     """
-    cards: list[_JSONRow] = dashboard_data["cards"]
+    cards = dashboard_data["cards"]
     for card in cards:
         for payload_key, (_accessor, sort_key) in CARD_CHILD_LISTS.items():
             card.get(payload_key, []).sort(key=sort_key)
     cards.sort(key=lambda card: card["number"])
 
-    board_docs: list[_JSONRow] = dashboard_data["boardDocs"]
+    board_docs = dashboard_data["boardDocs"]
     for doc in board_docs:
-        references: list[_JSONRow] = doc.get("cardReferences", [])
+        references = doc.get("cardReferences", [])
         references.sort(key=lambda ref: (ref["order"], ref["id"]))
     board_docs.sort(key=lambda doc: (doc["order"], doc["key"]))
 
-    lookups: dict[str, list[_JSONRow]] = dashboard_data["lookups"]
+    # Sorted per table name, so each table is read as plain JSON rows.
+    lookups = cast("dict[str, list[_JSONRow]]", cast("object", dashboard_data["lookups"]))
     for name, rows in lookups.items():
         if name == "trackedPaths":
             rows.sort(key=lambda row: row["path"])

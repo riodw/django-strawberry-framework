@@ -61,9 +61,9 @@ import argparse
 import statistics
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypedDict
 
 from _bench_common import (
     bootstrap_fakeshop_django,
@@ -77,9 +77,11 @@ from _bench_common import (
     summarize_rounds,
     write_report,
 )
+from typing_extensions import NotRequired
 
 if TYPE_CHECKING:
-    from django_strawberry_framework.optimizer.extension import CacheInfo
+    from django_strawberry_framework import DjangoSchema
+    from django_strawberry_framework.optimizer.extension import CacheInfo, DjangoOptimizerExtension
 
 # Below this many measured iterations, warm-vs-cold timing deltas are dominated
 # by noise (a single sample can even make ``cold`` look faster than ``warm``),
@@ -130,19 +132,42 @@ CANDIDATES: dict[str, str] = {
 }
 
 
-def _reset(optimizer: Any) -> None:
+class _CacheInfoCells(TypedDict):
+    """The warm run's ``CacheInfo`` counters, as a report row carries them."""
+
+    hits: int
+    misses: int
+    size: int
+
+
+class _Row(TypedDict):
+    """One measured query's report row; ``main`` adds ``label`` and ``status``."""
+
+    cache_info: _CacheInfoCells
+    cacheable: bool
+    cold_us: dict[str, float]
+    label: NotRequired[str]
+    root_rows: int | None
+    speedup: float | None
+    sql_queries: int
+    status: NotRequired[str]
+    walk_us: dict[str, float] | None
+    warm_us: dict[str, float]
+
+
+def _reset(optimizer: DjangoOptimizerExtension) -> None:
     reset_plan_cache(optimizer)
 
 
 def _bench_one(
-    schema: Any,
-    optimizer: Any,
+    schema: DjangoSchema,
+    optimizer: DjangoOptimizerExtension,
     query: str,
     iterations: int,
     warmup: int,
     *,
     cold: bool,
-    variables: dict[str, Any] | None = None,
+    variables: dict[str, object] | None = None,
 ) -> tuple[list[int], CacheInfo]:
     """Return (timings_ns, cache_info) for ``iterations`` runs of ``query``."""
     _reset(optimizer)
@@ -174,7 +199,11 @@ def _us_summary(rounds: Sequence[Sequence[float]]) -> dict[str, float]:
     }
 
 
-def _probe(schema: Any, query: str, variables: dict[str, Any] | None) -> tuple[int | None, int]:
+def _probe(
+    schema: DjangoSchema,
+    query: str,
+    variables: dict[str, object] | None,
+) -> tuple[int | None, int]:
     """Execute ``query`` once, returning its root row count and SQL query count.
 
     Raises:
@@ -188,12 +217,12 @@ def _probe(schema: Any, query: str, variables: dict[str, Any] | None) -> tuple[i
 
 
 def _measure(
-    schema: Any,
-    optimizer: Any,
+    schema: DjangoSchema,
+    optimizer: DjangoOptimizerExtension,
     query: str,
     args: argparse.Namespace,
-    variables: dict[str, Any] | None,
-) -> dict[str, Any]:
+    variables: dict[str, object] | None,
+) -> _Row:
     """Run every round of one query and return its report row.
 
     Raises:
@@ -255,7 +284,7 @@ def _measure(
     }
 
 
-def _walk_cells(row: dict[str, Any]) -> tuple[str, str]:
+def _walk_cells(row: _Row) -> tuple[str, str]:
     if not row["cacheable"]:
         return "non-cacheable", "n/a"
     if row["walk_us"] is None:
@@ -334,7 +363,7 @@ def main() -> int:
     print(header)
     print("-" * len(header))
 
-    rows: list[dict[str, Any]] = []
+    rows: list[Mapping[str, object]] = []
     failures: list[str] = []
     for label, query in candidates.items():
         try:

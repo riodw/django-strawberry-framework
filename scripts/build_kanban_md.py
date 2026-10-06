@@ -23,11 +23,11 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypedDict, cast
 
 try:
     from _kanban_lib import (
@@ -58,6 +58,16 @@ except ModuleNotFoundError:  # imported as ``scripts.build_kanban_md`` (repo roo
         placeholder_defects,
         render_parser,
         version_tuple,
+    )
+
+if TYPE_CHECKING:
+    from _kanban_lib import (
+        BoardDocRow,
+        CardLink,
+        CardRow,
+        DashboardData,
+        PathLinkRow,
+        RelativeSizeRow,
     )
 
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
@@ -122,24 +132,24 @@ UNROUTED_COLUMN_KEY = "backlog"
 DESCENDING_COLUMN_KEYS = frozenset({"done"})
 
 
-def card_key(card: dict[str, Any]) -> str:
+def card_key(card: CardLink) -> str:
     """The card id, read from ``cardId`` (``Card.card_id``) rather than recomputed here."""
     return card["cardId"]
 
 
-def versions_for(cards: list[dict[str, Any]], status: str) -> list[str]:
+def versions_for(cards: list[CardRow], status: str) -> list[str]:
     """Distinct target versions of the cards in ``status``, ascending."""
     return sorted(
         {
-            card["targetVersion"]["number"]
+            target["number"]
             for card in cards
-            if card["status"]["key"] == status and card.get("targetVersion")
+            if card["status"]["key"] == status and (target := card.get("targetVersion"))
         },
         key=version_tuple,
     )
 
 
-def active_version(cards: list[dict[str, Any]]) -> str:
+def active_version(cards: list[CardRow]) -> str:
     """Return the version currently in progress.
 
     The lowest ``wip`` target version names the active version, falling back to the
@@ -154,7 +164,7 @@ def active_version(cards: list[dict[str, Any]]) -> str:
     return done_versions[-1] if done_versions else ""
 
 
-def card_column_key(card: dict[str, Any], active: str) -> str:
+def card_column_key(card: CardRow, active: str) -> str:
     """Return the board column key that owns ``card`` (see ``COLUMN_ROUTES``)."""
     facts = Placement(
         status=card["status"]["key"],
@@ -179,26 +189,26 @@ class Board:
     routed once into ``cards_by_column`` and the computed tokens are filled once.
     """
 
-    cards: list[dict[str, Any]]
-    docs: list[dict[str, Any]]
-    column_docs: list[dict[str, Any]]
-    link_definitions: dict[str, Any] | None
-    cards_by_column: dict[str, list[dict[str, Any]]]
+    cards: list[CardRow]
+    docs: list[BoardDocRow]
+    column_docs: list[BoardDocRow]
+    link_definitions: BoardDocRow | None
+    cards_by_column: dict[str, list[CardRow]]
     computed: dict[str, str]
     doc_count: int
 
-    def column_cards(self, column_key: str) -> list[dict[str, Any]]:
+    def column_cards(self, column_key: str) -> list[CardRow]:
         """Cards of one column in display order (payload order is by number)."""
         cards = self.cards_by_column.get(column_key, [])
         return cards[::-1] if column_key in DESCENDING_COLUMN_KEYS else cards
 
     @property
-    def exported_cards(self) -> list[dict[str, Any]]:
+    def exported_cards(self) -> list[CardRow]:
         """Every card under a rendered column doc, board order."""
         return [card for doc in self.column_docs for card in self.column_cards(doc["key"])]
 
 
-def render_relative_size_scale(sizes: list[dict[str, Any]]) -> str:
+def render_relative_size_scale(sizes: list[RelativeSizeRow]) -> str:
     """Render the ``## Relative size`` bullet scale from the (order-sorted) lookup rows."""
     return "\n".join(
         f"- **{size['label']}** - {size['description']}"
@@ -208,7 +218,7 @@ def render_relative_size_scale(sizes: list[dict[str, Any]]) -> str:
 
 
 def compute_tokens(
-    dashboard_data: dict[str, Any],
+    dashboard_data: DashboardData,
     active: str,
     *,
     has_in_progress: bool,
@@ -233,11 +243,11 @@ def compute_tokens(
     }
 
 
-def plan_board(dashboard_data: dict[str, Any]) -> Board:
+def plan_board(dashboard_data: DashboardData) -> Board:
     """Route the cards, select the docs and fill the tokens; expects a deep-sorted payload."""
     cards = dashboard_data["cards"]
     active = active_version(cards)
-    cards_by_column: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    cards_by_column: dict[str, list[CardRow]] = defaultdict(list)
     for card in cards:
         cards_by_column[card_column_key(card, active)].append(card)
 
@@ -277,7 +287,7 @@ def plan_board(dashboard_data: dict[str, Any]) -> Board:
 
 def resolve_card_refs(
     text: str,
-    references: list[dict[str, Any]],
+    references: Sequence[Mapping[str, object]],
     *,
     card_field: str,
     site: str,
@@ -300,7 +310,7 @@ def resolve_card_refs(
                 f"{site} references card_ref:{match.group(1)}, "
                 "but no reference with that order exists on it.",
             )
-        return card_key(reference[card_field])
+        return card_key(cast("CardLink", reference[card_field]))
 
     return CARD_REF_RE.sub(replace, text)
 
@@ -336,7 +346,14 @@ def block(heading: str, body: list[str]) -> list[str]:
     )
 
 
-def fetch_glossary_terms() -> list[dict[str, Any]]:
+class GlossaryTermRef(TypedDict):
+    """A glossary term the inliner may link."""
+
+    title: str
+    anchor: str
+
+
+def fetch_glossary_terms() -> list[GlossaryTermRef]:
     """Load every glossary term the inliner may link (title + anchor), from the DB."""
     from apps.glossary.models import GlossaryTerm
 
@@ -370,7 +387,7 @@ class GlossaryInliner:
     ``BigInt`` followed by ``scalar``).
     """
 
-    def __init__(self, glossary_terms: list[dict[str, Any]]) -> None:
+    def __init__(self, glossary_terms: list[GlossaryTermRef]) -> None:
         self._pending = {
             term["anchor"]: (term, term_pattern(term["title"]))
             for term in sorted(glossary_terms, key=lambda term: -len(term["title"]))
@@ -419,7 +436,7 @@ class GlossaryInliner:
 # --------------------------------------------------------------------------------------
 
 
-def doc_body(doc: dict[str, Any], computed: dict[str, str]) -> str:
+def doc_body(doc: BoardDocRow, computed: dict[str, str]) -> str:
     """A board doc's body with card refs and computed tokens resolved, stripped."""
     text = resolve_card_refs(
         doc.get("body", ""),
@@ -430,7 +447,7 @@ def doc_body(doc: dict[str, Any], computed: dict[str, str]) -> str:
     return resolve_computed_tokens(text, computed).strip()
 
 
-def render_doc(doc: dict[str, Any], computed: dict[str, str]) -> list[str]:
+def render_doc(doc: BoardDocRow, computed: dict[str, str]) -> list[str]:
     """Render one ordered board-prose document."""
     body = doc_body(doc, computed)
     if doc["key"] == LINK_DEFINITIONS_KEY:
@@ -467,7 +484,7 @@ def render_card_index(board: Board) -> list[str]:
     )
 
 
-def tracked_path_link(link: dict[str, Any]) -> str:
+def tracked_path_link(link: PathLinkRow) -> str:
     """Return a Markdown link or planned/historical marker for one tracked-path link.
 
     A non-current path reads as ``planned`` on a ``predicted`` link (the file does not
@@ -480,7 +497,7 @@ def tracked_path_link(link: dict[str, Any]) -> str:
     return f"`{path}` ({marker})"
 
 
-def render_tracked_paths(card: dict[str, Any]) -> list[str]:
+def render_tracked_paths(card: CardRow) -> list[str]:
     """Render the tracked paths linked to one card.
 
     The link ``kind`` (``changed`` vs ``predicted``), not the card's status, decides
@@ -493,7 +510,7 @@ def render_tracked_paths(card: dict[str, Any]) -> list[str]:
     return block(heading, [f"- {tracked_path_link(link)}" for link in links])
 
 
-def parity_text(card: dict[str, Any]) -> str:
+def parity_text(card: CardRow) -> str:
     """One ``emoji label (level)`` entry per parity claim, comma-joined."""
     return ", ".join(
         f"{claim['upstream']['emoji']} {claim['upstream']['label']} ({claim['level']['label']})".strip()
@@ -501,13 +518,13 @@ def parity_text(card: dict[str, Any]) -> str:
     )
 
 
-def spec_link(card: dict[str, Any]) -> str:
+def spec_link(card: CardRow) -> str:
     """A Markdown link to the card's DB-backed spec path (``SpecDoc.path``), or ``""``."""
     path = (card.get("spec") or {}).get("path", "")
     return f"[{Path(path).name}]({path})" if path else ""
 
 
-def card_meta_lines(card: dict[str, Any]) -> list[str]:
+def card_meta_lines(card: CardRow) -> list[str]:
     """The ``- Label: value`` bullets under a card heading, empty values skipped."""
     meta = (
         ("Priority", (card.get("priority") or {}).get("label", "")),
@@ -520,7 +537,7 @@ def card_meta_lines(card: dict[str, Any]) -> list[str]:
     return [f"- {label}: {value}" for label, value in meta if value]
 
 
-def card_item_lines(card: dict[str, Any], card_text: Callable[[str], str]) -> list[str]:
+def card_item_lines(card: CardRow, card_text: Callable[[str], str]) -> list[str]:
     """One ``####`` block per item section, in section order (items arrive pre-sorted)."""
     omitted = set(MD_OMITTED_SECTION_KEYS)
     if card["status"]["key"] == "done":
@@ -543,7 +560,7 @@ def card_item_lines(card: dict[str, Any], card_text: Callable[[str], str]) -> li
     return lines
 
 
-def card_reference_lines(card: dict[str, Any], card_text: Callable[[str], str]) -> list[str]:
+def card_reference_lines(card: CardRow, card_text: Callable[[str], str]) -> list[str]:
     """The ``#### Card references`` block: one bullet per outgoing reference."""
     body: list[str] = []
     for reference in card.get("outgoingReferences", []):
@@ -558,7 +575,7 @@ def card_reference_lines(card: dict[str, Any], card_text: Callable[[str], str]) 
     return block("#### Card references", body)
 
 
-def render_card(card: dict[str, Any], glossary_terms: list[dict[str, Any]]) -> list[str]:
+def render_card(card: CardRow, glossary_terms: list[GlossaryTermRef]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
     glossary = GlossaryInliner(glossary_terms)
 
@@ -589,11 +606,11 @@ def render_card(card: dict[str, Any], glossary_terms: list[dict[str, Any]]) -> l
     ]
 
 
-def render_markdown(board: Board, glossary_terms: list[dict[str, Any]]) -> str:
+def render_markdown(board: Board, glossary_terms: list[GlossaryTermRef]) -> str:
     """Render the complete kanban board markdown."""
     first_column_doc = board.column_docs[0] if board.column_docs else None
     rendered: list[str] = []
-    rendered_card_ids: set[Any] = set()
+    rendered_card_ids: set[str] = set()
     for doc in board.docs:
         if doc is first_column_doc:
             rendered += render_card_index(board)

@@ -50,7 +50,7 @@ import argparse
 import statistics
 import sys
 import time
-from typing import Any
+from typing import TYPE_CHECKING
 
 from _bench_common import (
     bootstrap_fakeshop_django,
@@ -59,6 +59,9 @@ from _bench_common import (
     is_memory_db_name,
     write_report,
 )
+
+if TYPE_CHECKING:
+    import strawberry
 
 
 def _seed(parents: int, children: int) -> None:
@@ -98,7 +101,7 @@ def _seed(parents: int, children: int) -> None:
         cursor.execute("ANALYZE library_book")
 
 
-def _build_schemas(*, lateral: bool = True) -> dict[str, Any]:
+def _build_schemas(*, lateral: bool = True) -> dict[str, strawberry.Schema]:
     """One finalized type graph, one schema per mode (the parity-test shape).
 
     Type declaration and strategy mounting come from the shared
@@ -159,7 +162,11 @@ def _queries(page_size: int) -> list[tuple[str, str]]:
     ]
 
 
-def _run(schema: Any, document: str, iterations: int) -> tuple[list[float], int, bool, Any]:
+def _run(
+    schema: strawberry.Schema,
+    document: str,
+    iterations: int,
+) -> tuple[list[float], int, bool, object]:
     """Time ``iterations`` requests and inspect one counted request.
 
     Returns the timing samples (ms), the per-request query count, whether
@@ -254,10 +261,10 @@ def main() -> int:
     )
     print(header)
     print("-" * len(header))
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, object]] = []
     failures: list[str] = []
     for label, document in _queries(args.page_size):
-        data_by_mode: dict[str, Any] = {}
+        data_by_mode: dict[str, object] = {}
         for mode, schema in schemas.items():
             samples, query_count, lateral_used, data = _run(schema, document, args.iterations)
             data_by_mode[mode] = data

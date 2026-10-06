@@ -148,9 +148,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, TypedDict, cast
 
-from typing_extensions import override
+from typing_extensions import NotRequired, override
 
 try:
     import _bench_common
@@ -158,7 +158,7 @@ except ModuleNotFoundError:  # imported as ``scripts.workspace`` (repo root on p
     from scripts import _bench_common
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Sequence
+    from collections.abc import Callable, Generator, Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = "django_strawberry_framework"
@@ -454,7 +454,7 @@ def _write_json(path: Path, payload: object) -> None:
     temporary.replace(path)
 
 
-def _read_json_object(path: Path, default: dict[str, Any]) -> dict[str, Any]:
+def _read_json_object(path: Path, default: Mapping[str, object]) -> Mapping[str, object]:
     """Return the JSON object this script wrote at ``path``, or ``default`` when it is absent."""
     if not path.exists():
         return default
@@ -788,12 +788,21 @@ def _uv_sync(destination: Path) -> None:
         raise WorkspaceError(msg)
 
 
+class _Manifest(TypedDict):
+    """What :func:`sync_copy` returns and a slot's ``.manifest.json`` holds."""
+
+    synced_at: str
+    tree_digest: str
+    package_digest: str
+    entries: dict[str, list[str | int]]
+
+
 def sync_copy(
     repo_root: Path,
     destination: Path,
     *,
     preserved: frozenset[str] = PRESERVED,
-) -> dict[str, object]:
+) -> _Manifest:
     """Mirror, ``uv sync`` and digest-check one copy; return its manifest."""
     entries = mirror_tree(repo_root, destination, preserved=preserved)
     _uv_sync(destination)
@@ -820,7 +829,7 @@ def _is_generated(relative: str) -> bool:
 
 def copy_edits(
     destination: Path,
-    manifest: dict[str, Any],
+    manifest: _Manifest,
     preserved: frozenset[str] = PRESERVED,
 ) -> list[str]:
     """Return the names a copy changed, added or deleted since its sync, caches excluded."""
@@ -852,7 +861,7 @@ def copy_edits(
     return sorted(changed)
 
 
-def shared_moves(repo_root: Path, manifest: dict[str, Any]) -> list[str]:
+def shared_moves(repo_root: Path, manifest: _Manifest) -> list[str]:
     """Return the names the shared tree changed, added or deleted since the copy's sync."""
     entries: dict[str, list[str | int]] = manifest.get("entries", {})
     wanted = wanted_files(repo_root)
@@ -1031,15 +1040,48 @@ def _running_postgres(repo_root: Path) -> Postgres | None:
 # --------------------------------------------------------------------------------------------
 
 
-def _load_state(layout: Layout) -> dict[str, Any]:
-    return _read_json_object(
-        layout.state_path,
-        {
-            "version": 1,
-            "repo_root": str(layout.repo_root),
-            "slots": {},
-            "items": {},
-        },
+class _SlotBinding(TypedDict):
+    """One bound copy in the pool state; a sync adds its digests."""
+
+    address: str
+    item: str
+    role: str
+    bound_at: str
+    status: str
+    synced_at: NotRequired[str]
+    tree_digest: NotRequired[str]
+    package_digest: NotRequired[str]
+
+
+class _ItemBaseline(TypedDict):
+    """One item's pinned ``ITEM_BASELINE`` in the pool state."""
+
+    item_baseline: str
+    at: str
+
+
+class _PoolState(TypedDict):
+    """The pool state file: every slot's binding (``None`` when free) and item baselines."""
+
+    version: int
+    repo_root: str
+    slots: dict[str, _SlotBinding | None]
+    items: dict[str, _ItemBaseline]
+
+
+def _load_state(layout: Layout) -> _PoolState:
+    # Only this script writes the state file, always from a ``_PoolState``.
+    return cast(
+        "_PoolState",
+        _read_json_object(
+            layout.state_path,
+            {
+                "version": 1,
+                "repo_root": str(layout.repo_root),
+                "slots": {},
+                "items": {},
+            },
+        ),
     )
 
 
@@ -1069,7 +1111,7 @@ def bind(layout: Layout, address: Address, *, fresh: bool = False) -> Binding:
     layout.ensure_marked()
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
-        slots: dict[str, dict[str, str] | None] = state["slots"]
+        slots = state["slots"]
         for slot, bound in slots.items():
             if bound and bound["address"] == str(address):
                 needs = fresh or bound.get("status") != "ready"
@@ -1106,7 +1148,7 @@ def _slot_number(name: str) -> int:
     return int(name.rpartition("-")[2])
 
 
-def _mark_synced(layout: Layout, slot: str, manifest: dict[str, object]) -> None:
+def _mark_synced(layout: Layout, slot: str, manifest: _Manifest) -> None:
     with file_lock(layout.pool_lock):
         state = _load_state(layout)
         bound = state["slots"].get(slot)
@@ -1120,7 +1162,7 @@ def _mark_synced(layout: Layout, slot: str, manifest: dict[str, object]) -> None
             _write_json(layout.state_path, state)
 
 
-def sync_slot(layout: Layout, slot: str) -> dict[str, object]:
+def sync_slot(layout: Layout, slot: str) -> _Manifest:
     """Resync one copy from the shared tree and drop its Postgres databases."""
     postgres = _running_postgres(layout.repo_root)
     if postgres is not None:
@@ -1150,7 +1192,22 @@ def cell_env(layout: Layout, slot: str, cell: str) -> tuple[dict[str, str], str 
     return clean_env(FAKESHOP_PG_DSN=postgres.dsn(database)), database
 
 
-def probe(directory: Path, env: dict[str, str]) -> dict[str, Any]:
+class _ProbeDatabase(TypedDict):
+    """One alias's settings as ``PROBE`` reports them."""
+
+    ENGINE: str
+    NAME: str
+
+
+class _ProbeResult(TypedDict):
+    """The JSON line ``PROBE`` prints inside a copy."""
+
+    executable: str
+    package_file: str | None
+    databases: dict[str, _ProbeDatabase]
+
+
+def probe(directory: Path, env: dict[str, str]) -> _ProbeResult:
     """Resolve, inside the copy, where the package imports from and each alias's database."""
     command = [
         "uv",
@@ -1180,7 +1237,7 @@ def probe(directory: Path, env: dict[str, str]) -> dict[str, Any]:
 
 
 def provenance_faults(
-    found: dict[str, Any],
+    found: _ProbeResult,
     directory: Path,
     cell: str,
     database: str | None,
@@ -1269,7 +1326,31 @@ def _short(names: list[str], limit: int = 4) -> str:
     return f"{shown}, +{len(names) - limit} more" if len(names) > limit else shown
 
 
-def render_header(record: dict[str, Any]) -> str:
+class _RunRecord(TypedDict):
+    """One run :func:`execute` logs; ``exit`` and ``seconds`` land when the command ends."""
+
+    run_id: str
+    address: str
+    item: str
+    role: str
+    slot: str
+    directory: str
+    synced_at: str
+    tree_digest: str
+    package_file: str | None
+    package_digest: str
+    cell: str
+    databases: dict[str, str]
+    copy_edits: list[str]
+    shared_moves: list[str]
+    command: list[str]
+    log: str
+    started: str
+    exit: NotRequired[int]
+    seconds: NotRequired[float]
+
+
+def render_header(record: _RunRecord) -> str:
     """Return the provenance header a run prints before its output."""
     edits = record["copy_edits"]
     moves = record["shared_moves"]
@@ -1305,7 +1386,8 @@ def execute(
         manifest = (
             sync_slot(layout, binding.slot)
             if binding.needs_sync or not layout.manifest_path(binding.slot).exists()
-            else _read_json_object(layout.manifest_path(binding.slot), {})
+            # Only ``sync_slot`` writes a slot's manifest file, always from a ``_Manifest``.
+            else cast("_Manifest", _read_json_object(layout.manifest_path(binding.slot), {}))
         )
         env, database = cell_env(layout, binding.slot, cell)
         found = probe(binding.directory, env)
@@ -1315,7 +1397,7 @@ def execute(
         run_id = new_run_id(layout.flow)
         command = build_command(binding.directory, run_id)
         log_path = layout.evidence / "logs" / f"{run_id}.log"
-        record = {
+        record: _RunRecord = {
             "run_id": run_id,
             "address": str(address),
             "item": address.item,
@@ -1348,11 +1430,12 @@ def execute(
             "pg",
         ]
         code = stream([*uv_run, "--", *command], env, log_path, header)
-        record.update(exit=code, seconds=round(time.monotonic() - started, 2))
+        seconds = round(time.monotonic() - started, 2)
+        record.update(exit=code, seconds=seconds)
     layout.evidence.mkdir(parents=True, exist_ok=True)
     with layout.run_log.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
-    sys.stderr.write(f"workspace run {record['run_id']} exit {code} in {record['seconds']}s\n")
+    sys.stderr.write(f"workspace run {record['run_id']} exit {code} in {seconds}s\n")
     return code
 
 
@@ -1409,7 +1492,9 @@ def release(
         for slot in chosen:
             if postgres is not None:
                 postgres.drop_matching(layout.db_name(slot), exact=True)
-            released.append(f"{slot} {state['slots'][slot]['address']}")
+            # ``chosen`` holds only bound slots.
+            bound = cast("_SlotBinding", state["slots"][slot])
+            released.append(f"{slot} {bound['address']}")
             state["slots"][slot] = None
         if not roles and not keep:
             state["items"].pop(item, None)
@@ -1481,7 +1566,21 @@ def status(repo_root: Path, flow: str | None) -> list[str]:
     return lines
 
 
-def load_runs(layout: Layout) -> dict[str, dict[str, Any]]:
+class _LoggedRun(TypedDict):
+    """The run log fields :func:`audit_record` reads; execute and gate runs both write them."""
+
+    address: str
+    directory: str
+    package_file: str
+    package_digest: str
+    cell: str
+    databases: dict[str, str]
+    copy_edits: list[str]
+    shared_moves: list[str]
+    exit: int
+
+
+def load_runs(layout: Layout) -> dict[str, _LoggedRun]:
     """Return every logged run of the flow by id."""
     if not layout.run_log.exists():
         return {}
@@ -1499,7 +1598,7 @@ def audit_record(repo_root: Path, record_path: Path) -> tuple[list[str], bool]:
     cited = list(dict.fromkeys(match.group(0) for match in RUN_ID_PATTERN.finditer(text)))
     lines = [f"{record_path}: {len(cited)} run id(s) cited"]
     base = workspace_base(repo_root)
-    runs: dict[str, dict[str, Any]] = {}
+    runs: dict[str, _LoggedRun] = {}
     for flow in {match.group(1) for match in RUN_ID_PATTERN.finditer(text)}:
         runs.update(load_runs(Layout(repo_root, base, flow)))
     ok = True
@@ -1711,7 +1810,7 @@ def _append_gate_run(
     layout: Layout,
     entry: _GateRun,
     suite: str,
-    manifest: dict[str, object],
+    manifest: _Manifest,
 ) -> None:
     record = {
         "run_id": entry["run_id"],

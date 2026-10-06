@@ -50,7 +50,13 @@ import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from apps.scalars.models import ScalarSpecimen
+    from django.db import models
+
+    from django_strawberry_framework.filters import FilterSet
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARTIFACT_PATH = REPO_ROOT / "docs" / "row-preserving-predicates-part1-pg-explain.md"
@@ -184,7 +190,7 @@ def _seed_scalars() -> tuple[dict[str, int], list[int]]:
 
     moment = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
-    def specimen(label: str, parent: Any = None) -> Any:
+    def specimen(label: str, parent: ScalarSpecimen | None = None) -> ScalarSpecimen:
         return ScalarSpecimen(
             label=label,
             occurred_on=moment.date(),
@@ -207,11 +213,11 @@ def _seed_scalars() -> tuple[dict[str, int], list[int]]:
 
 
 def _production_qs(
-    filterset_cls: Any,
+    filterset_cls: type[FilterSet],
     leaf: str,
-    root: Any,
+    root: models.QuerySet[models.Model],
     value: object = NEEDLE,
-) -> Any:
+) -> models.QuerySet[models.Model]:
     """Instantiate a real fakeshop filter set and return its compiled ``.qs``.
 
     The genuine production generation + apply path: the metaclass /
@@ -231,7 +237,7 @@ def _production_qs(
     return filterset.qs
 
 
-def _referenced_tables(qs: Any) -> list[str]:
+def _referenced_tables(qs: models.QuerySet[models.Model]) -> list[str]:
     """Return the tables the outer statement's ``FROM`` reads: aliases the SQL references.
 
     A join Django set up and then trimmed (resolving an ``OuterRef`` on a
@@ -267,7 +273,7 @@ def _extract_exists_subquery(sql: str) -> str:
     return sql[start:]
 
 
-def _capture(qs: Any, oracle_pks: list[int]) -> Capture:
+def _capture(qs: models.QuerySet[models.Model], oracle_pks: list[int]) -> Capture:
     """Run ``EXPLAIN (ANALYZE, BUFFERS)`` on ``qs``'s exact statement and record its shape."""
     from django.db import connection
 
@@ -291,7 +297,11 @@ def _capture(qs: Any, oracle_pks: list[int]) -> Capture:
     )
 
 
-def _assert_row_preserving(capture: Capture, qs: Any, root_table: str) -> None:
+def _assert_row_preserving(
+    capture: Capture,
+    qs: models.QuerySet[models.Model],
+    root_table: str,
+) -> None:
     """Fail loudly unless ``capture`` is a row-preserving, distinct-free ``EXISTS`` shape.
 
     An artifact is only written for the real emitted query, so every invariant
@@ -345,7 +355,11 @@ def _render_capture(lines: list[str], capture: Capture) -> None:
     lines.append("")
 
 
-def _shape_lines(capture: Capture, qs: Any, exists_line: str) -> list[str]:
+def _shape_lines(
+    capture: Capture,
+    qs: models.QuerySet[models.Model],
+    exists_line: str,
+) -> list[str]:
     """Return the shape-assertion bullets shared by both captures."""
     return [
         "Shape assertions (all passed before this file was written):",

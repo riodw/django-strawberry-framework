@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 try:
     from _kanban_lib import (
@@ -36,13 +36,16 @@ except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo r
         render_parser,
     )
 
+if TYPE_CHECKING:
+    from _kanban_lib import DashboardData
+
 DEFAULT_HTML_PATH = REPO_ROOT / "KANBAN.html"
 DATA_BLOCK_RE = re.compile(
     r"(?s)<!-- KANBAN_DATA_START -->.*?<!-- KANBAN_DATA_END -->",
 )
 
 
-def render_data_block(dashboard_data: dict[str, Any]) -> str:
+def render_data_block(dashboard_data: DashboardData) -> str:
     """Render the replaceable dashboard data block."""
     encoded = json.dumps(dashboard_data, ensure_ascii=True, separators=(",", ":"))
     encoded = encoded.replace("</", "<\\/")
@@ -71,7 +74,7 @@ def embed_dashboard_data(html_path: Path, data_block: str) -> None:
     html_path.write_text(updated, encoding="utf-8")
 
 
-def assert_placeholders_resolve(snapshot: dict[str, Any]) -> None:
+def assert_placeholders_resolve(snapshot: DashboardData) -> None:
     r"""Fail the build when the embedded prose carries a placeholder nothing resolves.
 
     Unlike ``KANBAN.md``, this export ships placeholders on purpose -- the Vue shell

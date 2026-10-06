@@ -284,10 +284,8 @@ exclude = [
     "docs/*/temp-tests",
     "docs/*/worker-memory",
 ]
-# The ratchet's `reportExplicitAny` is on everywhere but `scripts`, which keeps it off
-# until its own sites are fixed.
 executionEnvironments = [
-    { root = "scripts", extraPaths = ["examples/fakeshop", "."], reportExplicitAny = "none" },
+    { root = "scripts", extraPaths = ["examples/fakeshop", "."] },
     { root = "examples/fakeshop" },
 ]
 pythonVersion = "3.11"

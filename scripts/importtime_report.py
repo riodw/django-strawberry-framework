@@ -42,7 +42,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from _bench_common import (
     REPO_ROOT,
@@ -124,7 +124,34 @@ def min_across_rounds(rounds: list[list[ImportRow]]) -> dict[str, dict[str, int]
     return merged
 
 
-def summarize(merged: dict[str, dict[str, int]], top: int) -> dict[str, Any]:
+class _ModuleRow(TypedDict):
+    """One package module's minimum times."""
+
+    module: str
+    cumulative_us: int
+    self_us: int
+
+
+class _GroupRow(TypedDict):
+    """One top-level import name outside the package and its summed self time."""
+
+    name: str
+    self_us: int
+
+
+class _ImportSummary(TypedDict):
+    """The report body :func:`summarize` builds."""
+
+    package_cumulative_us: int | None
+    package_modules: int
+    package_self_us: int
+    all_by_cumulative: list[_ModuleRow]
+    top_by_cumulative: list[_ModuleRow]
+    top_by_self: list[_ModuleRow]
+    top_level_self: list[_GroupRow]
+
+
+def summarize(merged: dict[str, dict[str, int]], top: int) -> _ImportSummary:
     """Build the report body: package totals, every and top package modules, top-level groups."""
     package_rows = {name: times for name, times in merged.items() if is_package_module(name)}
     groups: dict[str, int] = {}
@@ -138,9 +165,12 @@ def summarize(merged: dict[str, dict[str, int]], top: int) -> dict[str, Any]:
         items: dict[str, dict[str, int]],
         key: str,
         limit: int | None = top,
-    ) -> list[dict[str, Any]]:
+    ) -> list[_ModuleRow]:
         ordered = sorted(items.items(), key=lambda item: (-item[1][key], item[0]))
-        return [{"module": name, **times} for name, times in ordered[:limit]]
+        return [
+            {"module": name, "cumulative_us": times["cumulative_us"], "self_us": times["self_us"]}
+            for name, times in ordered[:limit]
+        ]
 
     return {
         "package_cumulative_us": package_rows.get(PACKAGE, {}).get("cumulative_us"),

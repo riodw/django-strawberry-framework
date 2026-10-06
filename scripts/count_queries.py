@@ -54,10 +54,11 @@ import argparse
 import hashlib
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, TypedDict, cast
 
 from _bench_common import (
     bootstrap_fakeshop_django,
@@ -69,6 +70,10 @@ from _bench_common import (
     seed_glossary_terms,
     write_report,
 )
+from typing_extensions import NotRequired
+
+if TYPE_CHECKING:
+    from django_strawberry_framework import DjangoSchema
 
 BATCHED = "batched"
 SCALES = "scales with cardinality"
@@ -164,7 +169,30 @@ def operation_sha1(document: str) -> str:
     return hashlib.sha1(document.strip().encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
-def compare_reports(baseline: dict[str, Any], current: dict[str, Any]) -> list[str]:
+class _Cell(TypedDict):
+    """One measured cardinality; ``sql`` only under ``--show-sql``."""
+
+    cardinality: int
+    queries: int
+    root_rows: int | None
+    sql: NotRequired[list[str]]
+
+
+class _ReportHeader(TypedDict):
+    """The part of a report header ``compare_reports`` reads."""
+
+    params: Mapping[str, object]
+
+
+class _Report(TypedDict):
+    """The keys of a ``count_queries`` JSON report ``compare_reports`` reads."""
+
+    header: _ReportHeader
+    rows: list[_Cell]
+    verdict: NotRequired[str | None]
+
+
+def compare_reports(baseline: _Report, current: _Report) -> list[str]:
     """Return the delta lines between two ``count_queries`` JSON reports.
 
     Raises:
@@ -216,7 +244,7 @@ def _seed(seeder: str, count: int) -> None:
         seed_glossary_terms(count)
 
 
-def _schema(*, optimizer: bool) -> Any:
+def _schema(*, optimizer: bool) -> DjangoSchema:
     from config import schema as fakeshop_schema
 
     if optimizer:
@@ -303,7 +331,7 @@ def main() -> int:
         f"optimizer={'off' if args.no_optimizer else 'on'} viewer=anonymous",
     )
     print(f"{'N':>5} {'root rows':>10} {'queries':>8}")
-    cells: list[dict[str, Any]] = []
+    cells: list[_Cell] = []
     failures: list[str] = []
     for cardinality in cardinalities:
         _seed(seeder, cardinality)
@@ -324,11 +352,7 @@ def main() -> int:
             print(f"{cardinality:>5} ERROR: {errors}")
             continue
         root_rows = root_row_count(result.data)
-        cell: dict[str, Any] = {
-            "cardinality": cardinality,
-            "queries": len(ctx),
-            "root_rows": root_rows,
-        }
+        cell: _Cell = {"cardinality": cardinality, "queries": len(ctx), "root_rows": root_rows}
         if args.show_sql:
             cell["sql"] = [entry["sql"] for entry in ctx.captured_queries]
         cells.append(cell)
@@ -372,7 +396,10 @@ def main() -> int:
         print(f"wrote {args.json_path}")
     if baseline is not None:
         try:
-            lines = compare_reports(baseline, report)
+            # ``report`` is ``build_report`` over ``cells`` plus the verdict, so it holds
+            # the ``_Report`` keys; ``build_report`` returns the shape every script shares.
+            current = cast("_Report", cast("object", report))
+            lines = compare_reports(baseline, current)
         except ValueError as exc:
             print(f"compare refused: {exc}", file=sys.stderr)
             return EXIT_NOT_MEASURED

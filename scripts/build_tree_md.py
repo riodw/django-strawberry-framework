@@ -53,7 +53,7 @@ import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Protocol, TypeVar, cast
 
 try:
     from _kanban_lib import (
@@ -315,7 +315,7 @@ class FirstLineReport:
     line: str | None
     violations: tuple[RuleViolation, ...]
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> dict[str, object]:
         """Return the JSON shape emitted by ``--list-docstrings --json``."""
         return {
             "path": display_path(self.path),
@@ -947,6 +947,48 @@ class TargetNode:
     children: dict[str, TargetNode] = field(default_factory=dict)
 
 
+class _PlannedCardStatus(Protocol):
+    """The ``Status`` attribute ``_planned_paths_from_rows`` reads."""
+
+    @property
+    def key(self) -> str: ...
+
+
+class _PlannedCard(Protocol):
+    """The ``Card`` attributes ``_planned_paths_from_rows`` reads."""
+
+    @property
+    def status(self) -> _PlannedCardStatus: ...
+
+    @property
+    def number(self) -> int: ...
+
+    @property
+    def card_id(self) -> str: ...
+
+    @property
+    def title(self) -> str: ...
+
+
+class _PlannedCards(Protocol):
+    """A ``TrackedPath.cards`` related manager, reduced to ``all()``."""
+
+    def all(self) -> Iterable[_PlannedCard]: ...
+
+
+class _PlannedRow(Protocol):
+    """The ``TrackedPath`` attributes ``_planned_paths_from_rows`` reads."""
+
+    @property
+    def path(self) -> str: ...
+
+    @property
+    def is_directory(self) -> bool: ...
+
+    @property
+    def cards(self) -> _PlannedCards: ...
+
+
 def fetch_planned_paths() -> list[PlannedPath]:
     """Return planned TrackedPath rows linked from WIP/TODO kanban cards.
 
@@ -974,10 +1016,13 @@ def fetch_planned_paths() -> list[PlannedPath]:
     # row with no qualifying owner (``_planned_paths_from_rows`` takes ``min``).
     with transaction.atomic():
         rows = list(queryset)
-    return _planned_paths_from_rows(rows)
+    # Every row meets ``_PlannedRow`` at runtime, but the checker cannot see it: the stubs
+    # type ``path`` / ``is_directory`` as field descriptors, which do not match a protocol
+    # property, and ``TrackedPath`` declares no annotation for its reverse ``cards``.
+    return _planned_paths_from_rows(cast("list[_PlannedRow]", rows))
 
 
-def _planned_paths_from_rows(rows: Iterable[Any]) -> list[PlannedPath]:
+def _planned_paths_from_rows(rows: Iterable[_PlannedRow]) -> list[PlannedPath]:
     """Build planned entries from TrackedPath rows, skipping paths already rendered.
 
     A row whose path is already in the tree population (``is_tree_member``) has

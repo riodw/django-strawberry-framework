@@ -53,8 +53,9 @@ import argparse
 import statistics
 import sys
 import time
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 from unittest import mock
 
 from _bench_common import (
@@ -69,6 +70,17 @@ from _bench_common import (
     write_report,
 )
 
+if TYPE_CHECKING:
+    from _bench_common import BenchProvenance
+    from django.db import models
+    from graphql.type.definition import GraphQLResolveInfo
+
+    from django_strawberry_framework import DjangoSchema
+    from django_strawberry_framework.optimizer.extension import DjangoOptimizerExtension
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+    from django_strawberry_framework.optimizer.selections import ConvertedSelection
+    from django_strawberry_framework.types.base import DjangoType
+
 _FAKESHOP = FAKESHOP
 
 # Below this many measured iterations the per-call median/min are dominated by
@@ -76,7 +88,7 @@ _FAKESHOP = FAKESHOP
 _MIN_RELIABLE_ITERATIONS = 1000
 
 
-def _bootstrap_django() -> Any:
+def _bootstrap_django() -> BenchProvenance:
     """Configure Django against an in-memory DB, print provenance, and migrate.
 
     Deprecated alias kept for callers that import it: the bring-up has one
@@ -130,18 +142,18 @@ CANDIDATES: dict[str, str] = {
 class _Capture(NamedTuple):
     """One recorded ``plan_optimizations`` invocation, replayable in isolation."""
 
-    selections: list[Any]
-    model: type
-    info: Any
-    source_type: type | None
+    selections: Iterable[ConvertedSelection]
+    model: type[models.Model]
+    info: GraphQLResolveInfo | None
+    source_type: type[DjangoType] | None
 
 
 def _capture_walk_inputs(
-    schema: Any,
+    schema: DjangoSchema,
     query: str,
     *,
-    optimizer: Any = None,
-    variables: dict[str, Any] | None = None,
+    optimizer: DjangoOptimizerExtension | None = None,
+    variables: dict[str, object] | None = None,
 ) -> _Capture | None:
     """Run ``query`` once, intercepting the first call into ``plan_optimizations``.
 
@@ -167,13 +179,13 @@ def _capture_walk_inputs(
     captured: list[_Capture] = []
 
     def _recorder(
-        selected_fields: list[Any],
-        model: type,
-        info: Any = None,
+        selected_fields: Iterable[ConvertedSelection],
+        model: type[models.Model],
+        info: GraphQLResolveInfo | None = None,
         *,
-        runtime_prefixes: Any = None,
-        source_type: type | None = None,
-    ) -> Any:
+        runtime_prefixes: tuple[tuple[str, ...], ...] | None = None,
+        source_type: type[DjangoType] | None = None,
+    ) -> OptimizationPlan:
         if not captured:
             captured.append(_Capture(selected_fields, model, info, source_type))
         return real_plan_optimizations(
@@ -304,7 +316,7 @@ def main() -> int:
     print(header)
     print("-" * (len(header) + 30))
 
-    rows: list[dict[str, Any]] = []
+    rows: list[Mapping[str, object]] = []
     failures: list[str] = []
     for label, query in candidates.items():
         try:

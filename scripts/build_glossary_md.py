@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TypedDict
 
 try:
     from _kanban_lib import (
@@ -85,7 +85,95 @@ query StaticGlossary {
 """
 
 
-def fetch_glossary_data() -> dict[str, Any]:
+class GlossaryDocument(TypedDict):
+    """One ``allGlossaryDocuments`` row as ``STATIC_GLOSSARY_QUERY`` selects it."""
+
+    id: int
+    key: str
+    title: str
+    order: int
+    body: str
+    includeHeading: bool
+
+
+class GlossaryStatus(TypedDict):
+    """A term's ``status`` selection."""
+
+    id: int
+    key: str
+    label: str
+    order: int
+
+
+class GlossaryTermRef(TypedDict):
+    """The ``term`` selection nested under a membership or spec mention."""
+
+    id: int
+    title: str
+    anchor: str
+
+
+class GlossaryTerm(TypedDict):
+    """One ``allGlossaryTerms`` row as ``STATIC_GLOSSARY_QUERY`` selects it."""
+
+    id: int
+    title: str
+    titleSort: str
+    anchor: str
+    statusText: str
+    body: str
+    entryOrder: int
+    indexOrder: int
+    status: GlossaryStatus
+
+
+class GlossaryCategory(TypedDict):
+    """A membership's ``category`` selection."""
+
+    id: int
+    key: str
+    label: str
+    order: int
+
+
+class GlossaryCategoryMembership(TypedDict):
+    """One ``allGlossaryCategoryMemberships`` row."""
+
+    id: int
+    order: int
+    category: GlossaryCategory
+    term: GlossaryTermRef
+
+
+class GlossarySpecMention(TypedDict):
+    """One ``allGlossarySpecMentions`` row."""
+
+    id: int
+    specPath: str
+    specName: str
+    termText: str
+    notes: str
+    order: int
+    term: GlossaryTermRef
+
+
+class GlossaryData(TypedDict):
+    """The payload ``fetch_glossary_data`` hands ``render_markdown``."""
+
+    documents: list[GlossaryDocument]
+    terms: list[GlossaryTerm]
+    categoryMemberships: list[GlossaryCategoryMembership]
+    specMentions: list[GlossarySpecMention]
+
+
+class _CategoryBucket(TypedDict):
+    """One category's memberships, grouped by ``render_browse``."""
+
+    category: GlossaryCategory
+    memberships: list[GlossaryCategoryMembership]
+
+
+def fetch_glossary_data() -> GlossaryData:
     """Fetch glossary data through the real ``/graphql/`` route."""
     data = fetch_graphql_data(
         STATIC_GLOSSARY_QUERY,
@@ -104,12 +192,12 @@ def fetch_glossary_data() -> dict[str, Any]:
     }
 
 
-def term_link(term: dict[str, Any], *, label: str | None = None) -> str:
+def term_link(term: GlossaryTermRef, *, label: str | None = None) -> str:
     """Render an in-page markdown link for a glossary term."""
     return f"[{label or term['title']}](#{term['anchor']})"
 
 
-def render_document(doc: dict[str, Any]) -> list[str]:
+def render_document(doc: GlossaryDocument) -> list[str]:
     """Render one non-term document section."""
     lines = []
     if doc["includeHeading"]:
@@ -120,7 +208,7 @@ def render_document(doc: dict[str, Any]) -> list[str]:
     return lines
 
 
-def render_index(terms: list[dict[str, Any]]) -> list[str]:
+def render_index(terms: list[GlossaryTerm]) -> list[str]:
     """Render the generated alphabetical index."""
     lines = [
         "## Index",
@@ -137,10 +225,10 @@ def render_index(terms: list[dict[str, Any]]) -> list[str]:
 
 
 def render_browse(
-    memberships: list[dict[str, Any]],
+    memberships: list[GlossaryCategoryMembership],
 ) -> list[str]:
     """Render the generated category browser."""
-    grouped: dict[str, dict[str, Any]] = {}
+    grouped: dict[str, _CategoryBucket] = {}
     for membership in memberships:
         category = membership["category"]
         bucket = grouped.setdefault(
@@ -169,7 +257,7 @@ def render_browse(
     return lines
 
 
-def render_term(term: dict[str, Any]) -> list[str]:
+def render_term(term: GlossaryTerm) -> list[str]:
     """Render one glossary term entry."""
     lines = [
         f"## {term['title']}",
@@ -184,7 +272,7 @@ def render_term(term: dict[str, Any]) -> list[str]:
     return lines
 
 
-def render_terms(terms: list[dict[str, Any]]) -> list[str]:
+def render_terms(terms: list[GlossaryTerm]) -> list[str]:
     """Render all glossary term entries."""
     lines = []
     for term in sorted(terms, key=lambda value: (value["entryOrder"], value["titleSort"])):
@@ -192,7 +280,7 @@ def render_terms(terms: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def render_markdown(glossary_data: dict[str, Any]) -> str:
+def render_markdown(glossary_data: GlossaryData) -> str:
     """Render the complete glossary markdown export."""
     docs = {doc["key"]: doc for doc in glossary_data["documents"]}
     terms = glossary_data["terms"]

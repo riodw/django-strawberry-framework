@@ -34,12 +34,14 @@ import sys
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Literal, get_args
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping, Sequence
 
     from django.test.utils import CaptureQueriesContext
+
+    from django_strawberry_framework.optimizer.extension import DjangoOptimizerExtension
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FAKESHOP = REPO_ROOT / "examples" / "fakeshop"
@@ -90,7 +92,7 @@ class BenchProvenance:
     strawberry: str
     platform: str
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self) -> dict[str, object]:
         """Return the provenance as a plain dict for a ``--json`` header."""
         return {**asdict(self), "instrument_ids": dict(self.instrument_ids)}
 
@@ -370,7 +372,7 @@ def capture_queries(alias: str = "default") -> Generator[CaptureQueriesContext, 
         yield ctx
 
 
-def reset_plan_cache(optimizer: Any) -> None:
+def reset_plan_cache(optimizer: DjangoOptimizerExtension) -> None:
     """Return the optimizer to a cold start: no cached plan, no cached document key.
 
     ``cache_clear`` empties the extension's plan cache and counters;
@@ -448,10 +450,10 @@ def build_report(
     *,
     tool: str,
     provenance: Mapping[str, object],
-    params: dict[str, Any],
-    rows: list[dict[str, Any]],
+    params: Mapping[str, object],
+    rows: Sequence[Mapping[str, object]],
     failures: list[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Assemble the ``--json`` document every measurement script writes.
 
     One shape across scripts lets a before/after pair be compared field by
@@ -468,7 +470,7 @@ def build_report(
     }
 
 
-def write_report(path: str | Path, report: dict[str, Any]) -> None:
+def write_report(path: str | Path, report: Mapping[str, object]) -> None:
     """Write ``report`` as JSON with sorted keys so two runs diff line by line."""
     Path(path).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -478,7 +480,7 @@ def load_graphql_document(path: str | Path) -> str:
     return Path(path).read_text(encoding="utf-8")
 
 
-def parse_variables(raw: str | None) -> dict[str, Any] | None:
+def parse_variables(raw: str | None) -> dict[str, object] | None:
     """Parse a ``--variables`` JSON object, refusing any other JSON value.
 
     Raises:
@@ -493,7 +495,7 @@ def parse_variables(raw: str | None) -> dict[str, Any] | None:
     return value
 
 
-def root_row_count(data: Any) -> int | None:
+def root_row_count(data: object) -> int | None:
     """Return the length of the first root list (or connection ``edges``) in ``data``.
 
     A query-count verdict is evidence only when the parent rows under it grew,

@@ -18,6 +18,9 @@ Covers ``django_strawberry_framework/rest_framework/serializer_converter.py``:
   choice column's read enum has no member for (refused: declared, ``source``-mapped,
   ``extra_kwargs``, an integer column) beside the accepted ``blank=True`` column, the
   read-back comparison and the serializer-only field;
+- a ``Choices.__empty__`` ``(None, label)`` pair left to ``allow_null``: the auto
+  ``ModelSerializer`` field, a serializer-only ``ChoiceField`` / ``MultipleChoiceField`` and an
+  ``ArrayField`` element build with no ``_None`` member;
 - a ``MultipleChoiceField`` over a single-value choice column (refused: declared,
   ``source``-mapped, ``serializer_choice_field``-generated) beside the accepted
   ``ArrayField`` (element values checked against its ``base_field``), ``JSONField`` and
@@ -1420,6 +1423,83 @@ def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "calm": "calm"}
 
 
+class _Condition(models.TextChoices):
+    __empty__ = "Unassessed"
+    GOOD = "good", "Good"
+    WORN = "worn", "Worn"
+
+
+def test_auto_model_serializer_over_empty_label_column_builds_the_read_enum():
+    """An auto ``ModelSerializer`` field over an ``__empty__`` column builds; ``None`` is no member.
+
+    DRF copies the column's ``(None, "Unassessed")`` pair into the field's choices; the subset
+    check leaves ``None`` to ``allow_null`` (the column's read enum has no member for it), so the
+    field resolves to the column's read enum instead of being refused.
+    """
+    from django_strawberry_framework.types.converters import convert_choices_to_enum
+
+    class AutoConditionSer(serializers.ModelSerializer[library_models.Shelf]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = library_models.Shelf
+            fields = ("condition",)
+
+    field = AutoConditionSer().fields["condition"]
+    assert isinstance(field, serializers.ChoiceField)
+    assert None in field.choices
+    _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
+    read_enum = convert_choices_to_enum(
+        _concrete_field(library_models.Shelf, "condition"),
+        "ShelfReadType",
+    )
+    assert annotation is read_enum
+    assert [member.name for member in read_enum] == [
+        "BLANK",
+        "good",
+        "worn",
+        "damaged",
+    ]
+
+
+@pytest.mark.parametrize("allow_null", [False, True], ids=["strict", "allow-null"])
+def test_serializer_only_choice_over_empty_label_choices_gets_no_none_member(allow_null: bool):
+    """A serializer-only ``ChoiceField`` over ``__empty__`` choices publishes no ``_None`` member.
+
+    ``None`` is the empty option's label; ``allow_null`` decides whether the field takes it,
+    before the choices are read.
+    """
+
+    class MoodSer(serializers.Serializer[object]):
+        mood = serializers.ChoiceField(choices=_Condition.choices, allow_null=allow_null)
+
+    field = MoodSer().fields["mood"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "EmptyLabelX")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert {member.name: member.value for member in annotation} == {"good": "good", "worn": "worn"}
+    if allow_null:
+        assert field.run_validation(None) is None
+    else:
+        with pytest.raises(serializers.ValidationError):
+            field.run_validation(None)
+
+
+def test_serializer_only_multiple_choice_over_empty_label_choices_keeps_a_non_null_element():
+    """A serializer-only ``MultipleChoiceField`` element enum carries no ``_None`` member.
+
+    The element stays non-null: ``allow_null`` on the field nulls the whole list, never an
+    element.
+    """
+
+    class TagsSer(serializers.Serializer[object]):
+        tags = serializers.MultipleChoiceField(choices=_Condition.choices)
+
+    field = TagsSer().fields["tags"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "EmptyLabelTagsX")
+    assert get_origin(annotation) is list
+    (inner,) = get_args(annotation)
+    assert {member.name: member.value for member in inner} == {"good": "good", "worn": "worn"}
+
+
 def _multiple_choice_refusal(serializer_name: str, field_name: str) -> str:
     return (
         f"Serializer {serializer_name} field {field_name!r} is a MultipleChoiceField over the "
@@ -1600,6 +1680,29 @@ def test_multiple_choice_blank_element_over_blank_array_base_accepted(
     annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
     (inner,) = get_args(annotation)
     assert {member.name: member.value for member in inner} == {"BLANK": "", "a": "a"}
+
+
+def test_multiple_choice_over_empty_label_array_base_accepted(monkeypatch: pytest.MonkeyPatch):
+    """An ``__empty__`` ``base_field``'s ``(None, label)`` pair is no element value: accepted.
+
+    The field's choices carry ``None`` from ``Choices.__empty__``; the element check leaves it to
+    ``allow_null``, and the element enum has no ``_None`` member.
+    """
+    from django_strawberry_framework.types import converters
+
+    monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
+    element = models.CharField(max_length=5, choices=_Condition.choices)
+    column = _FakeArrayField(element)
+    tagged = type("Tagged", (), {})
+    for model_field in (column, element):
+        model_field.set_attributes_from_name("tags")
+        # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
+        # as a Model subclass
+        model_field.model = tagged  # pyright: ignore[reportAttributeAccessIssue]
+    field = _multi_tags_field(choices=_Condition.choices)
+    annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
+    (inner,) = get_args(annotation)
+    assert {member.name: member.value for member in inner} == {"good": "good", "worn": "worn"}
 
 
 def test_serializer_only_filepathfield_stays_str_not_enum():

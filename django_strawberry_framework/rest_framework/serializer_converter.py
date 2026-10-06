@@ -890,7 +890,10 @@ def _reject_choice_values_outside_column_enum(field: DRFField, column: ConcreteF
     """Refuse a serializer choice field admitting a value its choice column's read enum lacks.
 
     A serializer ``ChoiceField`` admits its declared choice values, plus ``""`` when
-    ``allow_blank=True`` (``ChoiceField.to_internal_value`` returns it), and ``save()`` stores
+    ``allow_blank=True`` (``ChoiceField.to_internal_value`` returns it), never ``None``, which
+    ``allow_null`` decides (``Field.validate_empty_values`` settles it before the choices are
+    read; a ``(None, label)`` pair from ``Choices.__empty__`` is the empty option's label, which
+    the column's read enum gives no member either), and ``save()`` stores
     whichever one the client sent. The column's read enum represents only
     ``types/converters.py::choice_column_enum_values``, so a stored value outside that set
     makes every later read of the row fail. Each admitted value is compared, as the column
@@ -901,14 +904,14 @@ def _reject_choice_values_outside_column_enum(field: DRFField, column: ConcreteF
     ``get_serializer_for_schema()`` / ``get_fields()`` hook returns, since the input is built
     from that map. A column without ``choices`` is not checked (its read type
     is a scalar); a serializer-only field has no column, so its generated enum keeps every
-    declared value and the ``BLANK`` member ``_serializer_choice_enum`` adds.
+    declared non-``None`` value and the ``BLANK`` member ``_serializer_choice_enum`` adds.
     """
     if not isinstance(field, serializers.ChoiceField) or not column.choices:
         return
     member_values = choice_column_enum_values(column)
     # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
     declared: Mapping[object, object] = field.choices
-    admitted = list(declared)
+    admitted = [value for value in declared if value is not None]
     blank_from_allow_blank = field.allow_blank and "" not in admitted
     if blank_from_allow_blank:
         admitted.append("")
@@ -1062,7 +1065,10 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     grouped-form / value-sanitization / sanitize-collision rules the read-side model enum
     applies), so a serializer-only choice enum cannot drift from a model-choice enum. DRF's
     ``ChoiceField.choices`` is a value -> display mapping (already flattened), so its
-    ``.items()`` are the ``(value, label)`` pairs the builder expects. ``allow_blank=True``
+    ``.items()`` are the ``(value, label)`` pairs the builder expects; a ``None``-valued pair
+    (``Choices.__empty__``'s empty-option label) gets no member, so the empty option travels as
+    ``null`` where ``allow_null=True`` (a ``MultipleChoiceField`` element stays non-null: its
+    ``allow_null`` nulls the whole list). ``allow_blank=True``
     (``ChoiceField.to_internal_value`` returns ``""``) adds the ``BLANK`` member, so the
     blank the serializer admits is reachable over the wire (``MultipleChoiceField`` too:
     ``[BLANK]`` decodes to ``[""]``). Over a model choice column every member, ``BLANK``

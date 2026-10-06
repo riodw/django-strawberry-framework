@@ -686,7 +686,10 @@ def build_enum_from_choices(
     grouped-form rejection, the value-not-label sanitization, and the sanitize-collision
     guard cannot drift between the two flavors:
 
-    1. reject the empty sequence;
+    1. leave out every ``None``-valued pair (the ``(None, label)`` pair ``Choices.__empty__``
+       adds, or one declared by hand): it labels the empty option, which travels as ``null``
+       where the field is nullable and as ``BLANK`` where it admits ``""``, so it gets no
+       member; reject a sequence left empty;
     2. reject Django's grouped-choices form (a ``(group_label, [(value, label), ...])``
        nested tuple - detected on ``label`` being a list / tuple, the load-bearing
        distinction: in the grouped form the *value* slot is the group name, so testing
@@ -711,8 +714,8 @@ def build_enum_from_choices(
     derived enum name - stay separate).
 
     Raises:
-        ConfigurationError: empty sequence, grouped-choices form, or two values that
-            sanitize to the same enum member.
+        ConfigurationError: empty sequence (or one holding only ``None``-valued pairs),
+            grouped-choices form, or two values that sanitize to the same enum member.
     """
     normalized_pairs = _normalize_choice_pairs(choice_pairs, source_label=source_label)
     _insert_blank_pair(normalized_pairs, include_blank=include_blank)
@@ -758,6 +761,12 @@ def _normalize_choice_pairs(
     Steps 1 and 2 of ``build_enum_from_choices`` (unreadable / empty sequence, a malformed entry,
     Django's grouped-choices form), shared with ``choice_column_enum_values`` so a column's
     represented values are read through the same checks, with the same messages, as its enum.
+
+    A ``None``-valued pair (the ``(None, label)`` pair ``Choices.__empty__`` adds to
+    ``.choices``, or one declared by hand) is the label of the empty option, never a value, so it
+    is left out: the empty option travels as ``null`` where the field is nullable and as the
+    ``BLANK`` member where it admits ``""``. The test is identity, so a declared ``""`` and an
+    ``IntegerChoices`` ``0`` stay. A sequence holding nothing but such pairs is empty.
     """
     try:
         pairs = tuple(choice_pairs)
@@ -766,12 +775,6 @@ def _normalize_choice_pairs(
             f"{source_label} declares choices but the sequence could not be read; choices must be "
             "a non-empty flat sequence of (value, label) pairs.",
         ) from exc
-    if not pairs:
-        raise ConfigurationError(
-            f"{source_label} declares choices but the "
-            "sequence is empty; choices must be a non-empty flat sequence "
-            "of (value, label) pairs.",
-        )
     normalized_pairs: list[tuple[object, object]] = []
     for entry in pairs:
         if isinstance(entry, (str, bytes)):
@@ -808,7 +811,21 @@ def _normalize_choice_pairs(
                 "separate fields.",
             )
 
-    return normalized_pairs
+    empty_labels = [label for value, label in normalized_pairs if value is None]
+    value_pairs = [(value, label) for value, label in normalized_pairs if value is not None]
+    if not value_pairs:
+        only_empty = (
+            ", holding only the empty option "
+            f"{', '.join(_safe_arg_repr(label) for label in empty_labels)} (a None value labels "
+            "the empty option and is never a member)"
+            if empty_labels
+            else ""
+        )
+        raise ConfigurationError(
+            f"{source_label} declares choices but the sequence is empty{only_empty}; choices must "
+            "be a non-empty flat sequence of (value, label) pairs.",
+        )
+    return value_pairs
 
 
 def _insert_blank_pair(
@@ -836,7 +853,8 @@ def _column_admits_empty_string(field: "ConcreteField") -> bool:
 def choice_column_enum_values(field: "ConcreteField") -> list[object]:
     """Return the values a choice column's read enum can represent, in member order.
 
-    The column's choice values, plus ``""`` when ``_column_admits_empty_string`` holds and no
+    The column's choice values (never ``None``: a ``None``-valued pair labels the empty option and
+    gets no member), plus ``""`` when ``_column_admits_empty_string`` holds and no
     declared value is ``""``: exactly the member values ``convert_choices_to_enum`` builds,
     read through the same ``_normalize_choice_pairs`` checks (so a malformed column raises the
     same specific ``ConfigurationError``). No enum is built or registered, so a write-side

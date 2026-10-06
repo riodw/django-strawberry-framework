@@ -13464,6 +13464,51 @@ def test_shelf_condition_exact_blank_matches_only_blank_shelves_over_http():
     )
 
 
+@pytest.mark.django_db
+def test_shelf_condition_empty_label_is_no_member_on_filter_or_write_over_http():
+    """``Condition.__empty__`` labels the empty option and publishes no member.
+
+    ``Shelf.Condition`` declares ``__empty__ = "Unassessed"``, so ``.choices`` carries a
+    ``(None, "Unassessed")`` pair; it is a label, never a value, so ``ShelfTypeConditionEnum``
+    has no ``_None`` member and GraphQL enum coercion refuses the spelling on a filter and on
+    a write before any row is read or stored, while ``exact: BLANK`` still selects the
+    unassessed shelf.
+    """
+    branch = models.Branch.objects.create(name="EmptyLabelBranch", city="Boston")
+    models.Shelf.objects.create(code="E-blank", branch=branch)
+    models.Shelf.objects.create(code="E-good", branch=branch, condition="good")
+
+    filtered = _post_graphql(
+        _SHELF_CONDITIONS,
+        variables={"filter": {"condition": {"exact": "_None"}}},
+    ).json()
+    assert filtered["data"] is None, filtered
+    assert (
+        "Value '_None' does not exist in 'ShelfTypeConditionEnum' enum."
+        in filtered["errors"][0]["message"]
+    ), filtered
+
+    written = _post_graphql(
+        "mutation($d: ShelfAlt_ubranchesBranchCodeConditionInput!) { createShelf(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "E-none", "branchId": branch.pk, "condition": "_None"}},
+    ).json()
+    assert written["data"] is None, written
+    assert (
+        "Value '_None' does not exist in 'ShelfTypeConditionEnum' enum."
+        in written["errors"][0]["message"]
+    ), written
+    assert not models.Shelf.objects.filter(code="E-none").exists()
+
+    blank = _post_graphql(
+        _SHELF_CONDITIONS,
+        variables={"filter": {"condition": {"exact": "BLANK"}}},
+    ).json()
+    blank_codes = {row["code"] for row in blank["data"]["allLibraryShelves"]}
+    assert "E-blank" in blank_codes, blank
+    assert "E-good" not in blank_codes, blank
+
+
 @pytest.mark.parametrize(
     "branch_filter",
     [{"shelvesCondition": {"exact": "BLANK"}}, {"shelves": {"condition": {"exact": "BLANK"}}}],

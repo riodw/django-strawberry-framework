@@ -128,6 +128,9 @@ class Shelf(models.Model):
     """A shelf inside a branch."""
 
     class Condition(models.TextChoices):
+        # ``__empty__`` adds a ``(None, "Unassessed")`` pair to ``.choices``: the label of the
+        # empty option, never a value, so it gets no enum member.
+        __empty__ = "Unassessed"
         GOOD = "good", "Good"
         WORN = "worn", "Worn"
         DAMAGED = "damaged", "Damaged"

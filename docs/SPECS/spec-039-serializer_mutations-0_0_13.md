@@ -1501,11 +1501,15 @@ them separately:
   `ChoiceField` / `MultipleChoiceField` it is reflected: the generated enum carries the
   `BLANK` member for `""`, because GraphQL enum coercion would otherwise reject the empty
   string before the serializer runs. Over a model choice column, every value the choice
-  field admits (its declared choice values, plus `""` when `allow_blank=True`), compared as
+  field admits (its declared choice values, plus `""` when `allow_blank=True`; never `None`,
+  which `allow_null` decides before DRF reads the choices), compared as
   the column reads it back, must be a member of the column's read enum
   (`types/converters.py::choice_column_enum_values`: the column's choice values, which carry
   `""` only when `""` is a declared column choice or the column is `blank=True` on a type
-  that stores empty strings). Any other value is a
+  that stores empty strings, and never the `(None, label)` pair `Choices.__empty__` adds,
+  which labels the empty option and gets no member). A field whose choices carry that pair,
+  as an auto-generated `ModelSerializer` field over an `__empty__` column does (DRF copies the
+  column's choices), is checked on its other values only. Any other value is a
   [`ConfigurationError`][glossary-configurationerror] at input build: the field would write a
   value the column's read enum cannot serialize, so every later read of the row would fail.
   This holds for a declared field, an auto-generated one given `allow_blank` by
@@ -3217,9 +3221,12 @@ grouped-form rejection, value-based sanitization, and sanitize-collision guard t
 applies), so a serializer-only choice enum cannot drift from a model-choice enum.
 `allow_blank=True` passes `include_blank` to that core, so the enum carries the `BLANK`
 member for the `""` DRF's `ChoiceField.to_internal_value` admits (`[BLANK]` decodes to `[""]`
-on a `MultipleChoiceField`). A serializer-only field has no column, so its `BLANK` member
-stands; a choice field bound to a model choice column offers only values the column's read
-enum also carries (a `MultipleChoiceField`: the read enum of the `ArrayField` `base_field` each
+on a `MultipleChoiceField`). A `None`-valued pair (the `(None, label)` pair
+`Choices.__empty__` adds) is the empty option's label and gets no member, as on the read side:
+the empty option travels as `null` where `allow_null=True`, and a `MultipleChoiceField` element
+stays non-null (its `allow_null` nulls the whole list, never an element). A serializer-only
+field has no column, so its `BLANK` member stands; a choice field bound to a model choice
+column offers only values the column's read enum also carries (a `MultipleChoiceField`: the read enum of the `ArrayField` `base_field` each
 element is stored through; over a single-value choice column it is refused)
 (`rest_framework/serializer_converter.py::_reject_choice_values_outside_column_enum` refuses
 it otherwise, see [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)). The enum is

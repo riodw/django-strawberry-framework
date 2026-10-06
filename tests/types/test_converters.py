@@ -27,6 +27,8 @@ Covered behavior:
 - registry caching keyed on ``(model, field_name)``
 - enum reuse across two ``DjangoType``s pointing at the same column
 - grouped-choices rejection
+- a ``None``-valued choice (``Choices.__empty__`` or hand-declared) gets no member, on
+  the column enum, an ``ArrayField`` element and a ``null=True`` column's read and write
 - member-name sanitization (hyphens, leading digits, keywords)
 - ``null=True`` widening to exactly ``EnumType | None``
 
@@ -38,7 +40,7 @@ import enum
 import itertools
 import re
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict, get_args
 
 import pytest
 import strawberry
@@ -589,8 +591,14 @@ def test_choice_column_enum_values_match_the_read_enum():
         (["abc"], "declares a malformed choice 'abc'"),
         ([("a",)], r"declares a malformed choice \('a',\)"),
         ([("g", [("a", "A")])], "uses Django's grouped-choices form"),
+        ([(None, [("a", "A")])], "uses Django's grouped-choices form"),
     ],
-    ids=["bare-string", "one-tuple", "grouped"],
+    ids=[
+        "bare-string",
+        "one-tuple",
+        "grouped",
+        "grouped-none-label",
+    ],
 )
 def test_malformed_column_choices_keep_their_specific_message(
     choices: object,
@@ -652,6 +660,204 @@ def test_nullable_blank_choice_column_keeps_null_and_blank_distinct():
     assert enum_cls is not None
     assert annotation == enum_cls | None
     assert enum_cls["BLANK"].value == ""
+
+
+class _Condition(models.TextChoices):
+    __empty__ = "Unassessed"
+    GOOD = "good", "Good"
+    WORN = "worn", "Worn"
+
+
+class _Rank(models.IntegerChoices):
+    __empty__ = "Unranked"
+    NONE = 0, "None"
+    ONE = 1, "One"
+
+
+class _Grade(models.TextChoices):
+    __empty__ = "Ungraded"
+    UNSET = "", "Unset"
+    GOOD = "good", "Good"
+
+
+@pytest.mark.parametrize(
+    ("field", "members"),
+    [
+        (models.TextField(choices=_Condition.choices), {"good": "good", "worn": "worn"}),
+        (
+            models.TextField(choices=_Condition.choices, blank=True),
+            {"BLANK": "", "good": "good", "worn": "worn"},
+        ),
+        (
+            models.TextField(choices=_Condition.choices, null=True, blank=True),
+            {"BLANK": "", "good": "good", "worn": "worn"},
+        ),
+        (
+            models.IntegerField(choices=_Rank.choices, null=True, blank=True),
+            {"MEMBER_0": 0, "MEMBER_1": 1},
+        ),
+        (models.TextField(choices=_Grade.choices), {"BLANK": "", "good": "good"}),
+        (models.TextField(choices=[(None, "Unknown"), ("good", "Good")]), {"good": "good"}),
+    ],
+    ids=[
+        "text-strict",
+        "text-blank",
+        "text-null-blank",
+        "integer-zero",
+        "declared-empty-string",
+        "hand-declared-none",
+    ],
+)
+def test_none_valued_choice_is_the_empty_option_label_and_gets_no_member(
+    field: models.Field[Never, object],
+    members: dict[str, object],
+):
+    """A ``(None, label)`` pair labels the empty option, never a value, so it gets no member.
+
+    ``Choices.__empty__`` prepends the pair to ``.choices``; a hand-declared one is read the
+    same way. The test is identity, so an ``IntegerChoices`` ``0`` keeps ``MEMBER_0`` and a
+    declared ``""`` keeps ``BLANK``; the represented values the serializer check reads agree.
+    """
+    meta = type("Meta", (), {"app_label": _unique_app_label("test_empty_label_choices")})
+    owner = type(
+        "EmptyLabelFixture",
+        (models.Model,),
+        {"status": field, "Meta": meta, "__module__": __name__},
+    )
+    assert _concrete_field(owner, "status") is field
+    enum_cls = convert_choices_to_enum(field, "EmptyLabelFixtureType")
+    assert _member_map(enum_cls) == members
+    assert choice_column_enum_values(field) == list(members.values())
+
+
+def test_nullable_empty_label_choice_column_reads_null_without_a_none_member():
+    """A ``null=True`` column with ``__empty__`` publishes ``Enum | None`` and reads NULL as ``null``.
+
+    The empty option travels as GraphQL ``null``, never as a member: the enum carries only the
+    declared conditions (plus ``BLANK`` for the ``""`` the column admits).
+    """
+    owner_model = _blank_choice_model(choices=_Condition.choices, blank=True, null=True)
+
+    class EmptyLabelOwnerType(DjangoType):
+        class Meta:
+            model = owner_model
+            fields = ("status",)
+
+    enum_cls = registry.get_enum(owner_model, "status")
+    assert enum_cls is not None
+    assert EmptyLabelOwnerType.__annotations__["status"] == (enum_cls | None)
+    assert _member_map(enum_cls) == {"BLANK": "", "good": "good", "worn": "worn"}
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def owners(self) -> list[EmptyLabelOwnerType]:
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return [owner_model(status=None), owner_model(status="good")]  # pyright: ignore[reportReturnType]
+
+    result = strawberry.Schema(query=Query).execute_sync("{ owners { status } }")
+    assert result.errors is None
+    assert result.data == {"owners": [{"status": None}, {"status": "good"}]}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_nullable_empty_label_choice_column_writes_null_as_null():
+    """A ``null`` sent to a ``null=True`` ``__empty__`` column stores NULL; ``_None`` is no member.
+
+    The unmanaged owner's table is created for this test only (SQLite's schema editor needs the
+    transaction-less test), so the create mutation runs the real decode, ``full_clean`` and save.
+    """
+    from django.db import connection
+
+    from django_strawberry_framework import DjangoMutation, DjangoMutationField, DjangoSchema
+
+    class EmptyLabelWriteOwner(models.Model):
+        status = models.TextField(choices=_Condition.choices, null=True, blank=True)
+
+        class Meta:
+            app_label = _unique_app_label("test_empty_label_choices")
+            managed = False
+            db_table = "converters_empty_label_write_owner"
+
+    class EmptyLabelWriteOwnerType(DjangoType):
+        class Meta:
+            model = EmptyLabelWriteOwner
+            fields = ("id", "status")
+            primary = True
+
+    assert registry.get(EmptyLabelWriteOwner) is EmptyLabelWriteOwnerType
+
+    class CreateEmptyLabelWriteOwner(DjangoMutation):
+        class Meta:
+            model = EmptyLabelWriteOwner
+            operation = "create"
+            fields = ("status",)
+            permission_classes = []
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def ping(self) -> int:
+            return 1
+
+    @strawberry.type
+    class Mutation:
+        create_owner = DjangoMutationField(CreateEmptyLabelWriteOwner)
+
+    finalize_django_types()
+    schema = DjangoSchema(query=Query, mutation=Mutation)
+    with connection.schema_editor() as editor:
+        editor.create_model(EmptyLabelWriteOwner)
+    try:
+        document = (
+            "mutation($status: EmptyLabelWriteOwnerTypeStatusEnum) { createOwner(data: "
+            "{status: $status}) { result { status } errors { field messages } } }"
+        )
+        written = schema.execute_sync(document, variable_values={"status": None})
+        assert written.errors is None
+        assert written.data == {"createOwner": {"result": {"status": None}, "errors": []}}
+        assert list(EmptyLabelWriteOwner.objects.values_list("status", flat=True)) == [None]
+        refused = schema.execute_sync(document, variable_values={"status": "_None"})
+        assert refused.errors is not None
+        assert "Value '_None' does not exist in 'EmptyLabelWriteOwnerTypeStatusEnum' enum." in (
+            refused.errors[0].message
+        )
+        assert EmptyLabelWriteOwner.objects.count() == 1
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(EmptyLabelWriteOwner)
+
+
+@pytest.mark.parametrize(
+    "choices",
+    [[(None, "Unassessed")], [(None, "Unassessed"), (None, "Unknown")]],
+    ids=["one", "two"],
+)
+def test_choices_holding_only_the_empty_option_are_empty(choices: list[tuple[None, str]]):
+    """A sequence whose every pair is ``None``-valued declares no value: the empty-choices error."""
+    labels = ", ".join(repr(label) for _value, label in choices)
+    message = re.escape(
+        f"Fixture.status declares choices but the sequence is empty, holding only the empty "
+        f"option {labels} (a None value labels the empty option and is never a member); "
+        "choices must be a non-empty flat sequence of (value, label) pairs.",
+    )
+    with pytest.raises(ConfigurationError, match=f"^{message}$"):
+        build_enum_from_choices(choices, "OnlyEmptyEnum", source_label="Fixture.status")
+    field = models.TextField(choices=choices, blank=True)
+    field.set_attributes_from_name("status")
+    with pytest.raises(ConfigurationError, match="holding only the empty option"):
+        choice_column_enum_values(field)
+
+
+def test_empty_choices_message_names_no_empty_option():
+    """A sequence with no pair at all keeps the plain empty-choices message."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"^Fixture\.status declares choices but the sequence is empty; choices must be ",
+    ):
+        build_enum_from_choices([], "NoChoicesEnum", source_label="Fixture.status")
 
 
 def test_choice_member_name_sanitization():
@@ -1569,6 +1775,32 @@ def test_array_field_choices_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyP
     assert type_payload["ofType"]["kind"] == "LIST"
     terminal = _walk_introspected_type(type_payload)
     assert terminal["kind"] == "ENUM"
+
+
+def test_array_field_element_empty_label_gets_no_member_via_fake_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """An ``ArrayField`` ``base_field`` with ``__empty__`` choices gets an element enum without ``_None``.
+
+    The element enum is built by the same ``_normalize_choice_pairs`` the column enum reads, so the
+    ``(None, "Unassessed")`` pair labels the empty option there too.
+    """
+    monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
+
+    class ArrayEmptyLabelOwner(models.Model):
+        arr = _FakeArrayField(models.CharField(max_length=5, choices=_Condition.choices))
+
+        class Meta:
+            managed = False
+            app_label = "test_arrayfield"
+
+    class ArrayEmptyLabelOwnerType(DjangoType):
+        class Meta:
+            model = ArrayEmptyLabelOwner
+            fields = ("arr",)
+
+    (element_enum,) = get_args(ArrayEmptyLabelOwnerType.__annotations__["arr"])
+    assert _member_map(element_enum) == {"good": "good", "worn": "worn"}
 
 
 def test_array_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch):

@@ -177,6 +177,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/test_single_parent_fastpath_api.py",
     "examples/fakeshop/test_query/test_transport_api.py",
     "examples/fakeshop/test_query/test_uploads_api.py",
+    "examples/fakeshop/tests/conftest.py",
     "examples/fakeshop/tests/test_export_schema.py",
     "examples/fakeshop/tests/test_inspect_django_type.py",
     "examples/fakeshop/tests/test_settings_guard.py",

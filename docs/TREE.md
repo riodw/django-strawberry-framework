@@ -663,6 +663,7 @@ Source: `examples/fakeshop/tests/`
 
 ```text
 examples/fakeshop/tests/    # Project/config-level fakeshop tests that belong to no single app and do not use live /graphql HTTP.
+├── conftest.py                   # Shared fixtures for the fakeshop project/config-level tests.
 ├── test_export_schema.py         # Fakeshop project command tests for export_schema against the configured schema.
 ├── test_inspect_django_type.py   # Fakeshop project command tests for inspect_django_type against example DjangoTypes.
 ├── test_settings_guard.py        # Fakeshop settings-module pin: the development fixture fails loudly as production.

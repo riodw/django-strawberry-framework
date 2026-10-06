@@ -4,7 +4,7 @@ The complete-reload discipline these suites depend on lives in the shared
 ``schema_reload`` module (``examples/fakeshop/schema_reload.py``, importable via
 ``pytest.ini``'s ``pythonpath = examples/fakeshop``) so it is single-sited across
 every fakeshop suite that rebuilds the aggregate ``config.schema`` - both these
-acceptance suites and the in-process ``apps.products`` schema tests. See that
+acceptance suites and the project-level ``examples/fakeshop/tests/`` modules. See that
 module's docstring for why a partial reload leaves the combined build raising a
 ``LazyType`` ``KeyError`` or a ``DuplicatedTypeName``.
 

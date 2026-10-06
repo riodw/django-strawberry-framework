@@ -21,8 +21,10 @@ a partial reload, depending on incoming dirty state:
 every contributing app in a dependency-safe order, so the rebuild is complete and
 order-independent regardless of the incoming registry / ``sys.modules`` state.
 Every fakeshop suite that rebuilds the aggregate schema delegates here - the
-``test_query`` acceptance suites and the in-process ``apps.products`` schema
-tests - so the reload discipline is single-sited.
+``test_query`` acceptance suites and the project-level ``tests/`` modules
+(``reload_project_schemas`` in ``tests/conftest.py``, plus the
+``inspect_django_type`` tests), and the package-side Postgres predicate
+``EXPLAIN`` test - so the reload discipline is single-sited.
 
 ``pythonpath = examples/fakeshop`` (``pytest.ini``) makes this module importable
 as ``schema_reload`` from any conftest in the project.

@@ -7,6 +7,8 @@ import pytest
 from django.core.management import CommandError, call_command
 from strawberry.printer import print_schema
 
+pytestmark = pytest.mark.usefixtures("reload_project_schemas")
+
 
 def test_export_schema_writes_fakeshop_sdl_to_stdout_by_default():
     out = StringIO()

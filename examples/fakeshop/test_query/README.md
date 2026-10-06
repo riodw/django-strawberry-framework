@@ -897,13 +897,13 @@ Same discipline every case: package docstring says what it keeps, why no live re
 
 `config/schema.py` composes every app's `Query`/`Mutation` into one `DjangoSchema`, `finalize_django_types()`, mounts a module-level `DjangoOptimizerExtension` singleton. `tests/` clears the global registry for its own isolation. Partial reload after a clear = classic order-dependent failure: reload one app → other apps' types gone → composed build raises `LazyType` `KeyError` or `DuplicatedTypeName` depending on what the previous worker left in `sys.modules`.
 
-Single-sited in [`schema_reload.py`][schema-reload], applied by [`conftest.py`][conftest] at two levels:
+Single-sited in [`schema_reload.py`][schema-reload], applied by [`conftest.py`][conftest] in three ways:
 
 - **Once per module per worker**: `_reload_project_schema_for_acceptance_tests` clears registry, reloads every `apps.<app>.schema` dependency-safe (`glossary` before `kanban`; `CardGlossaryTermType.term` FKs into glossary), then `config.schema` + `config.urls`.
 - **Before every test**: `_isolate_project_schema_for_acceptance_test` rebuilds only `config.schema` + `config.urls` → fresh Strawberry schema, optimizer, URLconf; finalized types reused. Fingerprints every registry map + app module first; test mutated registration → teardown runs the full rebuild, incl. after assertion failure.
 - **On request**: `project_schema_override` = the full-rebuild callable, for re-finalizing under `override_settings` when the setting is read at schema CONSTRUCTION (a `Meta` body, `FAKESHOP_TEST_LOAN_CONNECTION`); function guard restores default after. Settings read per request (`MEDIA_ROOT`, `DEBUG`, `MIDDLEWARE`, `AUTHENTICATION_BACKENDS`) need only `override_settings`; the per-test rebuild suffices.
 
-No other tree rebuilds the aggregate. `apps/<app>/tests/` never composes the project schema; a test needing it is a live row here.
+`apps/<app>/tests/` never composes the project schema; a test needing it is a live row here. The project-level `examples/fakeshop/tests/` modules that build the aggregate (`config.urls`, `export_schema`, `inspect_django_type`) call the same `reload_all_project_schemas`: `test_urls.py` and `test_export_schema.py` through the module-scoped `reload_project_schemas` fixture in that tree's `conftest.py`, `test_inspect_django_type.py` through its own per-test fixture and cold-path teardown.
 
 Adding an app → add to `_PROJECT_APP_SCHEMA_MODULES` in [`schema_reload.py`][schema-reload] + grep whole test tree for other private module lists. Order independence is a contract; invisible under `-n0` / single module; verify w/ full parallel sweep.
 

@@ -1687,6 +1687,11 @@ class FilterSet(
     # Binding seam - populated by `finalize_django_types` phase 2.5.
     _owner_definition: DjangoTypeDefinition | None = None
 
+    # The name-keyed ``RelatedFilter`` declarations ``FilterSetMetaclass`` stores on every
+    # class it builds (``sets_mixins.py::collect_related_declarations``, an ``OrderedDict``).
+    # Annotation only: the metaclass is the one writer.
+    related_filters: ClassVar[dict[str, RelatedFilter]]
+
     # Cache for fully-resolved filters per Layer 4 of Decision 3.
     _expanded_filters = None
     # The immutable expansion snapshot (``ExpansionSnapshot``) owning the
@@ -3680,14 +3685,11 @@ class FilterSet(
     @classmethod
     def _projection_hop(cls, projection: ChildProjection) -> RelationHop:
         """Return the declared hop a ``ProjectedChildFilter`` of this set runs its child across."""
-        # ``related_filters`` is the metaclass's name-keyed ``RelatedFilter`` map
-        # (``sets_mixins.py::collect_related_declarations``); the projection was
-        # expanded from one of its entries.
-        related: Mapping[str, RelatedFilter] = getattr(cls, "related_filters", {})
+        # The projection was expanded from one of ``related_filters``' entries.
         return RelationHop(
             cls,
             projection.branch,
-            related[projection.branch],
+            cls.related_filters[projection.branch],
             projection.filterset,
         )
 
@@ -3811,10 +3813,7 @@ class FilterSet(
             return None
         child_name = record.expanded_from[-1]
         branch = name.removesuffix(f"{LOOKUP_SEP}{child_name}")
-        # ``related_filters`` is the metaclass's name-keyed ``RelatedFilter`` map
-        # (``sets_mixins.py::collect_related_declarations``).
-        related: Mapping[str, RelatedFilter] = getattr(cls, "related_filters", {})
-        declaration = related.get(branch)
+        declaration = cls.related_filters.get(branch)
         child_cls = declaration.filterset if declaration is not None else None
         if child_cls is None:
             return None

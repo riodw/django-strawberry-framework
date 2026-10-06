@@ -52,6 +52,10 @@ AUTH_QUERIES_MODULE_PATH = "django_strawberry_framework.auth.queries"
 # ``UserType`` at schema build, so the SDL reads ``me: UserType``.
 CURRENT_USER_ALIAS_NAME = "CurrentUserAlias"
 
+# The parked global named by ``CURRENT_USER_ALIAS_NAME``. Annotation only: the name stays
+# unbound until ``materialize_current_user_alias`` pins the resolved user primary here.
+CurrentUserAlias: type[DjangoType]
+
 # The alias-namespace lifecycle trio (spec-040 D13): ``materialize_current_user_alias``
 # pins the resolved user primary as this module's ``CurrentUserAlias`` global via
 # the blessed ``materialize_generated_input_class`` parked-global path;

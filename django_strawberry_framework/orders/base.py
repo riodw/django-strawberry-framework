@@ -94,6 +94,9 @@ class RelatedOrder(RelatedSetTargetMixin):
     # twin uses ``("_filterset", "bound_filterset")``.
     _target_attr = "_orderset"
     _owner_attr = "bound_orderset"
+    # The owning set the bind records under ``_owner_attr``. Annotation only: the slot stays
+    # absent until the bind, which is how ``_bind_owner`` tells a first bind from a re-bind.
+    bound_orderset: type[OrderSet]
 
     def __init__(self, orderset: _OrderSetTarget, field_name: str | None = None) -> None:
         """Store the (possibly-lazy) target orderset and the ORM field name."""

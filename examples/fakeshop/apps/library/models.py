@@ -211,6 +211,8 @@ class Book(models.Model):
         related_name="books",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``shelf``, declared for the type checker.
+    shelf_id: int
     genres = models.ManyToManyField(
         Genre,
         related_name="books",
@@ -307,6 +309,8 @@ class Issue(models.Model):
         related_name="issues",
         on_delete=models.CASCADE,
     )
+    # Key column Django adds beside ``periodical``, declared for the type checker.
+    periodical_id: int
     number = models.IntegerField()
     title = models.TextField()
     embargoed = models.BooleanField(default=False)

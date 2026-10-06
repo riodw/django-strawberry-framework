@@ -84,9 +84,7 @@ if TYPE_CHECKING:
 
     from strawberry.types.fields.resolver import StrawberryResolver
 
-    from ..filters.base import RelatedFilter
     from ..filters.sets import FilterSet
-    from ..orders.base import RelatedOrder
     from ..orders.sets import OrderSet
     from ..utils.inputs import GeneratedInputArgumentsFactory
     from ..utils.typing import ModelField
@@ -1773,9 +1771,7 @@ def _expand_orderset(orderset_cls: type[OrderSet]) -> None:
     ``ConfigurationError`` with ``__cause__`` preserved here.
     """
     orderset_cls.get_fields()
-    # The metaclass stores ``related_orders`` from ``collect_related_declarations``.
-    related_orders: Mapping[str, RelatedOrder] = getattr(orderset_cls, "related_orders", {})
-    for related in related_orders.values():
+    for related in orderset_cls.related_orders.values():
         _ = related.orderset
 
 
@@ -1795,11 +1791,7 @@ def _audit_unregistered_related_filter_targets(wired: list[type[FilterSet]]) -> 
     pending_filtersets: list[type[FilterSet]] = list(wired)
     while pending_filtersets:
         filterset_cls = pending_filtersets.pop()
-        # The metaclass stores ``related_filters`` from ``collect_related_declarations``.
-        related_filters: Mapping[str, RelatedFilter] = (
-            getattr(filterset_cls, "related_filters", {}) or {}
-        )
-        for field_name, related_filter in related_filters.items():
+        for field_name, related_filter in filterset_cls.related_filters.items():
             child_filterset = related_filter.filterset
             if child_filterset is not None and child_filterset not in seen_filtersets:
                 seen_filtersets.add(child_filterset)

@@ -1147,13 +1147,7 @@ def _build_input_fields(
     paths, one bag attr per lookup the table holds. Populates ``_field_specs``
     for the active-field walk and the permission gates.
     """
-    # The metaclass stores ``related_filters`` from
-    # ``sets_mixins.py::collect_related_declarations`` (``RelatedFilter`` only).
-    related_filters: Mapping[str, RelatedFilter] = getattr(
-        filterset_cls,
-        "related_filters",
-        OrderedDict(),
-    )
+    related_filters = filterset_cls.related_filters
     lookup_table = filter_lookup_table(filterset_cls)
 
     # ``HIDE_FLAT_FILTERS`` (default ``False`` -- matches

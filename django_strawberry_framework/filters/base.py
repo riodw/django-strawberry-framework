@@ -1428,6 +1428,9 @@ class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     # twin uses ``("_orderset", "bound_orderset")``.
     _target_attr = "_filterset"
     _owner_attr = "bound_filterset"
+    # The owning set the bind records under ``_owner_attr``. Annotation only: the slot stays
+    # absent until the bind, which is how ``_bind_owner`` tells a first bind from a re-bind.
+    bound_filterset: type[FilterSet]
 
     def __init__(
         self,

@@ -77,7 +77,7 @@ from .inputs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection
 
     from django.db.models.expressions import OrderBy
     from typing_extensions import TypeIs
@@ -414,8 +414,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
     # filter side's ``FilterSet._owner_definition``.
     _owner_definition: DjangoTypeDefinition | None = None
 
+    # The name-keyed ``RelatedOrder`` declarations ``OrderSetMetaclass`` stores on every
+    # class it builds (``sets_mixins.py::collect_related_declarations``, an ``OrderedDict``).
+    # Annotation only: the metaclass is the one writer.
+    related_orders: ClassVar[dict[str, RelatedOrder]]
+
     # Cache for fully-resolved fields per Layer 4 of spec-028 Decision 3.
-    _expanded_fields = None
+    _expanded_fields: ClassVar[OrderedDict[str, RelatedOrder | None] | None] = None
     # Expansion reentry-guard slot (named by ``_lifecycle.guard``):
     # ``sets_mixins.expanded_once`` sets it around ``get_fields``'s build and
     # clears it in a ``finally``. No reentry branch reads it, because the
@@ -472,10 +477,7 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
 
         def _build() -> OrderedDict[str, RelatedOrder | None]:
             fields = cls._expand_meta_fields()
-            # The metaclass stores ``related_orders`` from
-            # ``sets_mixins.py::collect_related_declarations`` (``RelatedOrder`` only).
-            related_orders: Mapping[str, RelatedOrder] = getattr(cls, "related_orders", {})
-            for k, v in related_orders.items():
+            for k, v in cls.related_orders.items():
                 fields[k] = v
 
             # The two-condition cache-write gate (own ``related_orders`` +

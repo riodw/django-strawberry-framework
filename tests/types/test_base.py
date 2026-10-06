@@ -2544,16 +2544,6 @@ def test_has_custom_get_queryset_with_subclasscheck_without_mro():
     assert not _detect_custom_get_queryset(FakeType)
 
 
-def test_validate_optimizer_hints_non_string_keys():
-    from django_strawberry_framework.types.base import _validate_optimizer_hints
-
-    with pytest.raises(
-        ConfigurationError,
-        match="Meta.optimizer_hints keys must be field name strings",
-    ):
-        _validate_optimizer_hints({123: OptimizerHint()}, fields=(), model=Category)
-
-
 def test_post_finalization_registration_raises():
     class FirstCategoryType(DjangoType):
         class Meta:

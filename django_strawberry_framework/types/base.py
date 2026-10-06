@@ -1119,13 +1119,15 @@ def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, object]:
         )
     model = _meta_attr(meta, "model")
     prefix = f"{model.__name__}." if isinstance(model, type) else ""
-    for key in value:
+    # One pass over the consumer mapping: the keys checked are the keys returned.
+    plain = dict(value)
+    for key in plain:
         if not isinstance(key, str):
             raise ConfigurationError(
                 f"{prefix}Meta.optimizer_hints keys must be field name strings; "
                 f"got {_safe_arg_repr(key)}.",
             )
-    return dict(value)
+    return plain
 
 
 def _format_unknown_fields_error(
@@ -1556,13 +1558,6 @@ def _validate_optimizer_hints(
     """
     if not hints:
         return
-    for key in hints:
-        # basedpyright: trust boundary: a consumer's ``Meta.optimizer_hints`` can hold any key
-        if not isinstance(key, str):  # pyright: ignore[reportUnnecessaryIsInstance]
-            raise ConfigurationError(
-                f"{model.__name__}.Meta.optimizer_hints keys must be field name strings; "
-                f"got {_safe_arg_repr(key)}.",
-            )
     valid_field_names = {f.name for f in model._meta.get_fields()}
     selected_relation_names = {f.name for f in fields if f.is_relation}
 

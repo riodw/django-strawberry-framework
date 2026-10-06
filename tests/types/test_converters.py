@@ -60,11 +60,13 @@ from django_strawberry_framework.types.converters import (
     DjangoFileType,
     DjangoImagePathType,
     DjangoImageType,
+    _column_admits_empty_string,
     _field_has_choices,
     _field_label,
     _field_output_type_for,
     _sanitize_member_name,
     build_enum_from_choices,
+    choice_column_enum_values,
     convert_choices_to_enum,
     convert_field_output,
     convert_scalar,
@@ -488,6 +490,77 @@ def test_declared_empty_choice_is_not_duplicated_by_include_blank():
         include_blank=True,
     )
     assert _member_map(enum_cls) == {"BLANK": "", "good": "good"}
+
+
+@pytest.mark.parametrize(
+    ("field", "admits", "values"),
+    [
+        (models.TextField(choices=[("good", "Good")]), False, ["good"]),
+        (models.TextField(choices=[("good", "Good")], blank=True), True, ["", "good"]),
+        (models.TextField(choices=[("good", "Good"), ("", "Unassessed")]), False, ["good", ""]),
+        (models.IntegerField(choices=[(1, "One")], blank=True, null=True), False, [1]),
+    ],
+    ids=[
+        "text-strict",
+        "text-blank",
+        "text-declared-empty",
+        "integer-blank",
+    ],
+)
+def test_choice_column_enum_values(field, admits, values):
+    """A column's represented values are its choices plus ``""`` when it admits the empty string.
+
+    A ``blank=False`` column that declares ``""`` represents it through the declared value; an
+    integer column with ``blank=True`` admits only ``None``.
+    """
+    field.set_attributes_from_name("status")
+    assert _column_admits_empty_string(field) is admits
+    assert choice_column_enum_values(field) == values
+
+
+def test_choice_column_enum_values_match_the_read_enum():
+    """The represented values are exactly the read enum's member values, in member order."""
+    model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")], blank=True)
+    field = model._meta.get_field("status")
+    enum_cls = convert_choices_to_enum(field, "RepresentedFixtureType")
+    assert choice_column_enum_values(field) == [member.value for member in enum_cls]
+
+
+@pytest.mark.parametrize("blank", [False, True], ids=["strict", "blank"])
+@pytest.mark.parametrize(
+    ("choices", "message"),
+    [
+        (["abc"], "declares a malformed choice 'abc'"),
+        ([("a",)], r"declares a malformed choice \('a',\)"),
+        ([("g", [("a", "A")])], "uses Django's grouped-choices form"),
+    ],
+    ids=["bare-string", "one-tuple", "grouped"],
+)
+def test_malformed_column_choices_keep_their_specific_message(choices, message, blank):
+    """A malformed choice is named on the column enum and the represented-value reader alike.
+
+    The represented values are read through the enum's own choice checks, so neither path
+    collapses the specific message into the generic "Could not inspect choices".
+    """
+    model = _blank_choice_model(choices=choices, blank=blank)
+    field = model._meta.get_field("status")
+    with pytest.raises(ConfigurationError, match=message):
+        convert_choices_to_enum(field, "MalformedFixtureType")
+    with pytest.raises(ConfigurationError, match=message):
+        choice_column_enum_values(field)
+
+
+def test_choice_column_enum_values_wrap_unreadable_choices(choice_fixture_model, monkeypatch):
+    """A choices container with broken truthiness raises the package error, not its own."""
+
+    class HostileChoices:
+        def __bool__(self):
+            raise RuntimeError("bool should not escape")
+
+    field = choice_fixture_model._meta.get_field("status")
+    monkeypatch.setattr(field, "choices", HostileChoices())
+    with pytest.raises(ConfigurationError, match="Could not inspect choices"):
+        choice_column_enum_values(field)
 
 
 def test_declared_blank_value_collides_with_blank_member():

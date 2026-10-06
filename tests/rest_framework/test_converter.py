@@ -13,7 +13,11 @@ Covers ``django_strawberry_framework/rest_framework/serializer_converter.py``:
 - the renamed-field reverse map (declared name -> GraphQL name; backing column via
   ``source``; declared name preserved as ``target_name``), the id-like-suffix rule,
   the dotted-``source`` rejection, the serializer-only relation (``queryset.model``),
-  and the missing-primary-DjangoType raise.
+  and the missing-primary-DjangoType raise;
+- a choice field admitting a value (a declared choice, or ``""`` from ``allow_blank``) its
+  choice column's read enum has no member for (refused: declared, ``source``-mapped,
+  ``extra_kwargs``, an integer column) beside the accepted ``blank=True`` column, the
+  read-back comparison and the serializer-only field.
 
 The relation id-type (Relay-``GlobalID`` vs raw pk, single + multi) is pinned at
 the ``resolve_serializer_field`` build site over a real model's primary
@@ -1051,6 +1055,285 @@ def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_membe
     field = DeclaredSer().fields["topic"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "x": "x"}
+
+
+def _value_refusal(
+    serializer_name: str,
+    field_name: str,
+    missing: str,
+    column: str,
+    remedy: str,
+):
+    return (
+        f"Serializer {serializer_name} field {field_name!r} admits {missing} over the choice "
+        f"column {column}, whose GraphQL enum has no matching member, so a value written "
+        f"through this input could not be read back. {remedy}"
+    )
+
+
+_BLANK_COLUMN_REMEDY = (
+    "Set blank=True on the column, or drop allow_blank from the serializer field."
+)
+
+
+@pytest.mark.parametrize(
+    "field_cls",
+    [serializers.ChoiceField, serializers.MultipleChoiceField],
+)
+def test_declared_choice_allow_blank_over_strict_choice_column_refused(field_cls):
+    """``allow_blank=True`` over a ``blank=False`` choice column would write an unreadable ``""``."""
+
+    class BlankStatusSer(serializers.ModelSerializer):
+        circulation_status = field_cls(choices=[("available", "Available")], allow_blank=True)
+
+        class Meta:
+            model = library_models.Book
+            fields = ("circulation_status",)
+
+    field = BlankStatusSer().fields["circulation_status"]
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_serializer_field(field, library_models.Book, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "BlankStatusSer",
+        "circulation_status",
+        "''",
+        "Book.circulation_status",
+        _BLANK_COLUMN_REMEDY,
+    )
+
+
+def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
+    """The column is resolved through ``source``; the message names the declared field."""
+
+    class RenamedStatusSer(serializers.ModelSerializer):
+        status = serializers.ChoiceField(
+            choices=[("available", "Available")],
+            allow_blank=True,
+            source="circulation_status",
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = ("status",)
+
+    field = RenamedStatusSer().fields["status"]
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_serializer_field(field, library_models.Book, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "RenamedStatusSer",
+        "status",
+        "''",
+        "Book.circulation_status",
+        _BLANK_COLUMN_REMEDY,
+    )
+
+
+def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
+    """An auto-generated choice field given ``allow_blank`` by ``extra_kwargs`` is refused too."""
+
+    class ExtraBlankSer(serializers.ModelSerializer):
+        class Meta:
+            model = library_models.Book
+            fields = ("circulation_status",)
+            extra_kwargs = {"circulation_status": {"allow_blank": True}}
+
+    field = ExtraBlankSer().fields["circulation_status"]
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_serializer_field(field, library_models.Book, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "ExtraBlankSer",
+        "circulation_status",
+        "''",
+        "Book.circulation_status",
+        _BLANK_COLUMN_REMEDY,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "declared",
+        "allow_blank",
+        "missing",
+        "remedy",
+    ),
+    [
+        (
+            [("", "-"), ("available", "Available")],
+            False,
+            "''",
+            "Set blank=True on the column, or remove '' from the serializer field's choices.",
+        ),
+        (
+            [("", "-"), ("available", "Available")],
+            True,
+            "''",
+            "Set blank=True on the column, or remove '' from the serializer field's choices and "
+            "drop allow_blank from the serializer field.",
+        ),
+        (
+            [("available", "Available"), ("zz", "Z")],
+            False,
+            "'zz'",
+            "Remove 'zz' from the serializer field's choices.",
+        ),
+        (
+            [("zz", "Z"), ("available", "Available")],
+            True,
+            "'zz', ''",
+            "Remove 'zz' from the serializer field's choices and drop allow_blank from the "
+            "serializer field.",
+        ),
+    ],
+    ids=[
+        "declared-empty",
+        "declared-empty-and-allow-blank",
+        "unknown-value",
+        "unknown-and-blank",
+    ],
+)
+def test_declared_choice_value_missing_from_column_enum_refused(
+    declared,
+    allow_blank,
+    missing,
+    remedy,
+):
+    """Every value the serializer admits must be a member of the column's read enum."""
+
+    class ValueSer(serializers.ModelSerializer):
+        circulation_status = serializers.ChoiceField(choices=declared, allow_blank=allow_blank)
+
+        class Meta:
+            model = library_models.Book
+            fields = ("circulation_status",)
+
+    field = ValueSer().fields["circulation_status"]
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_serializer_field(field, library_models.Book, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "ValueSer",
+        "circulation_status",
+        missing,
+        "Book.circulation_status",
+        remedy,
+    )
+
+
+def _integer_choice_column(**kwargs):
+    """An integer choice column bound to a stand-in model (only ``__name__`` is read)."""
+    column = models.IntegerField(choices=[(1, "One"), (2, "Two")], **kwargs)
+    column.set_attributes_from_name("rank")
+    column.model = type("Ranked", (), {})
+    return column
+
+
+def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_remedy():
+    """An integer column never stores ``""``, so ``blank=True`` is no remedy: only the field is."""
+
+    class RankSer(serializers.Serializer):
+        rank = serializers.ChoiceField(choices=[(1, "One")], allow_blank=True)
+
+    column = _integer_choice_column(blank=True, null=True)
+    with pytest.raises(ConfigurationError) as exc_info:
+        serializer_converter._reject_choice_values_outside_column_enum(
+            RankSer().fields["rank"],
+            column,
+        )
+    assert str(exc_info.value) == _value_refusal(
+        "RankSer",
+        "rank",
+        "''",
+        "Ranked.rank",
+        "Drop allow_blank from the serializer field.",
+    )
+
+
+def test_choice_values_compared_as_the_column_reads_them_back():
+    """A declared ``"1"`` over an integer column is stored and read back as ``1``: accepted."""
+
+    class RankSer(serializers.Serializer):
+        rank = serializers.ChoiceField(choices=[("1", "One"), (2, "Two")])
+
+    serializer_converter._reject_choice_values_outside_column_enum(
+        RankSer().fields["rank"],
+        _integer_choice_column(),
+    )
+
+
+def test_integer_choices_column_accepts_its_own_choices():
+    """An ``IntegerChoices`` column with a field declaring the same choices is accepted."""
+
+    class Rank(models.IntegerChoices):
+        LOW = 1, "Low"
+        HIGH = 2, "High"
+
+    class RankSer(serializers.Serializer):
+        rank = serializers.ChoiceField(choices=Rank.choices)
+
+    column = models.IntegerField(choices=Rank.choices)
+    column.set_attributes_from_name("rank")
+    column.model = type("Ranked", (), {})
+    serializer_converter._reject_choice_values_outside_column_enum(
+        RankSer().fields["rank"],
+        column,
+    )
+
+
+def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
+    """Over a ``blank=True`` choice column both the input enum and the read enum carry ``BLANK``."""
+    from django_strawberry_framework.types.converters import convert_choices_to_enum
+
+    class ConditionSer(serializers.ModelSerializer):
+        condition = serializers.ChoiceField(
+            choices=library_models.Shelf.Condition.choices,
+            allow_blank=True,
+        )
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("condition",)
+
+    field = ConditionSer().fields["condition"]
+    _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
+    read_enum = convert_choices_to_enum(
+        library_models.Shelf._meta.get_field("condition"),
+        "ShelfReadType",
+    )
+    assert {member.name: member.value for member in annotation}["BLANK"] == ""
+    assert {member.name: member.value for member in read_enum}["BLANK"] == ""
+
+
+def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
+    """A column without ``choices`` reads as ``String``, which carries ``""``: not refused.
+
+    ``Book.title`` is ``blank=False``, so only the column's lack of ``choices`` keeps the
+    declared field out of the refusal.
+    """
+
+    class TitleChoiceSer(serializers.ModelSerializer):
+        title = serializers.ChoiceField(choices=[("dune", "Dune")], allow_blank=True)
+
+        class Meta:
+            model = library_models.Book
+            fields = ("title",)
+
+    field = TitleChoiceSer().fields["title"]
+    _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
+    assert {member.name: member.value for member in annotation} == {"BLANK": "", "dune": "dune"}
+
+
+def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
+    """A choice field with no backing column keeps the ``BLANK`` member ``allow_blank`` adds."""
+
+    class ExtraChoiceSer(serializers.ModelSerializer):
+        mood = serializers.ChoiceField(choices=[("calm", "Calm")], allow_blank=True)
+
+        class Meta:
+            model = library_models.Book
+            fields = ("mood",)
+
+    field = ExtraChoiceSer().fields["mood"]
+    _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
+    assert {member.name: member.value for member in annotation} == {"BLANK": "", "calm": "calm"}
 
 
 def test_serializer_only_filepathfield_stays_str_not_enum():

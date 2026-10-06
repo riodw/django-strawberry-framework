@@ -430,6 +430,33 @@ def test_choices_modelserializer_field_resolves_to_read_side_enum():
     assert _inner_type(fields["circulation_status"]).wrapped_cls is read_enum
 
 
+def test_get_fields_hook_allow_blank_over_strict_choice_column_refused():
+    """The input is built from the hook's field map, so a ``get_fields`` flip is refused too.
+
+    ``Book.circulation_status`` is ``blank=False``, so the auto-generated ``ChoiceField``
+    has ``allow_blank=False``; the hook turns it on, which would offer an input ``BLANK`` the
+    column's read enum cannot serialize.
+    """
+    from apps.library.models import Book
+
+    class HookBlankSer(serializers.ModelSerializer):
+        class Meta:
+            model = Book
+            fields = ("circulation_status",)
+
+        def get_fields(self):
+            fields = super().get_fields()
+            fields["circulation_status"].allow_blank = True
+            return fields
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Serializer HookBlankSer field 'circulation_status' admits '' "
+        r"over the choice column Book\.circulation_status",
+    ):
+        _build_serializer_inputs(HookBlankSer)
+
+
 # ---------------------------------------------------------------------------
 # read_only / HiddenField dropped + Meta.fields / Meta.exclude narrowing
 # ---------------------------------------------------------------------------

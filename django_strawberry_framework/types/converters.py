@@ -686,8 +686,8 @@ def build_enum_from_choices(
     5. build the ``Enum`` and decorate with ``strawberry.enum``.
 
     ``include_blank`` is the caller's answer to "does this field admit the empty string?": a model
-    column with ``blank=True`` whose type stores empty strings
-    (``convert_choices_to_enum``), or a serializer field with ``allow_blank=True``
+    column per ``_column_admits_empty_string`` (``convert_choices_to_enum``), or a serializer
+    field with ``allow_blank=True``
     (``rest_framework/serializer_converter.py::_serializer_choice_enum``).
 
     ``source_label`` names the offending field in every raised message
@@ -699,6 +699,51 @@ def build_enum_from_choices(
     Raises:
         ConfigurationError: empty sequence, grouped-choices form, or two values that
             sanitize to the same enum member.
+    """
+    normalized_pairs = _normalize_choice_pairs(choice_pairs, source_label=source_label)
+    _insert_blank_pair(normalized_pairs, include_blank=include_blank)
+
+    members: dict[str, object] = {}
+    collisions: dict[str, list[object]] = {}
+    for value, _label in normalized_pairs:
+        try:
+            member = _sanitize_member_name(value, enum_name=enum_name)
+        except BaseException as exc:
+            raise ConfigurationError(
+                f"{source_label} choice value {_safe_arg_repr(value)} cannot be converted to "
+                "a GraphQL enum member name.",
+            ) from exc
+        if member in members:
+            collisions.setdefault(member, [members[member]]).append(value)
+        else:
+            members[member] = value
+    if collisions:
+        details = ", ".join(
+            f"{_safe_arg_repr(member)} from values "
+            f"[{', '.join(sorted(_safe_arg_repr(value) for value in vals))}]"
+            for member, vals in sorted(collisions.items())
+        )
+        raise ConfigurationError(
+            f"{source_label} choices sanitize to the same enum member: "
+            f"{details}.  Rename one side or split into separate fields.",
+        )
+    # The metaclass call ``Enum(enum_name, members)`` makes, spelled out: its type is the
+    # ``type[Enum]`` the functional API returns, where a checker reading ``Enum(...)``
+    # with a non-literal name either rejects it or types an ``Enum`` member.
+    enum_cls = EnumMeta.__call__(Enum, enum_name, members)
+    return strawberry.enum(enum_cls)
+
+
+def _normalize_choice_pairs(
+    choice_pairs: Iterable[object],
+    *,
+    source_label: str,
+) -> list[tuple[object, object]]:
+    """Return a flat choice sequence as ``(value, label)`` pairs, rejecting every malformed form.
+
+    Steps 1 and 2 of ``build_enum_from_choices`` (unreadable / empty sequence, a malformed entry,
+    Django's grouped-choices form), shared with ``choice_column_enum_values`` so a column's
+    represented values are read through the same checks, with the same messages, as its enum.
     """
     try:
         pairs = tuple(choice_pairs)
@@ -749,40 +794,51 @@ def build_enum_from_choices(
                 "separate fields.",
             )
 
+    return normalized_pairs
+
+
+def _insert_blank_pair(
+    normalized_pairs: list[tuple[object, object]],
+    *,
+    include_blank: bool,
+) -> None:
+    """Prepend ``("", "")`` when ``include_blank`` is set and no declared value is ``""``."""
     if include_blank and not any(
         isinstance(value, str) and value == "" for value, _label in normalized_pairs
     ):
         normalized_pairs.insert(0, ("", ""))
 
-    members: dict[str, object] = {}
-    collisions: dict[str, list[object]] = {}
-    for value, _label in normalized_pairs:
-        try:
-            member = _sanitize_member_name(value, enum_name=enum_name)
-        except BaseException as exc:
-            raise ConfigurationError(
-                f"{source_label} choice value {_safe_arg_repr(value)} cannot be converted to "
-                "a GraphQL enum member name.",
-            ) from exc
-        if member in members:
-            collisions.setdefault(member, [members[member]]).append(value)
-        else:
-            members[member] = value
-    if collisions:
-        details = ", ".join(
-            f"{_safe_arg_repr(member)} from values "
-            f"[{', '.join(sorted(_safe_arg_repr(value) for value in vals))}]"
-            for member, vals in sorted(collisions.items())
-        )
+
+def _column_admits_empty_string(field: "ConcreteField") -> bool:
+    """Return whether a column admits ``""``: Django's own text-column blank predicate.
+
+    ``blank=True`` on a type that stores empty strings; an ``IntegerChoices`` column with
+    ``blank=True`` admits only ``None``, never ``""``. It is the ``include_blank`` a choice
+    column's read enum (``convert_choices_to_enum``) is built with.
+    """
+    return bool(field.blank and field.empty_strings_allowed)
+
+
+def choice_column_enum_values(field: "ConcreteField") -> list[object]:
+    """Return the values a choice column's read enum can represent, in member order.
+
+    The column's choice values, plus ``""`` when ``_column_admits_empty_string`` holds and no
+    declared value is ``""``: exactly the member values ``convert_choices_to_enum`` builds,
+    read through the same ``_normalize_choice_pairs`` checks (so a malformed column raises the
+    same specific ``ConfigurationError``). No enum is built or registered, so a write-side
+    caller cannot claim the column enum's GraphQL name.
+    """
+    try:
+        choices = field.choices
+        include_blank = _column_admits_empty_string(field)
+        choice_source = choices or []
+    except BaseException as exc:
         raise ConfigurationError(
-            f"{source_label} choices sanitize to the same enum member: "
-            f"{details}.  Rename one side or split into separate fields.",
-        )
-    # The metaclass call ``Enum(enum_name, members)`` makes, spelled out: its type is the
-    # ``type[Enum]`` the functional API returns, where a checker reading ``Enum(...)``
-    # with a non-literal name either rejects it or types an ``Enum`` member.
-    enum_cls = EnumMeta.__call__(Enum, enum_name, members)
-    return strawberry.enum(enum_cls)
+            f"Could not inspect choices for {_field_label(field)}.",
+        ) from exc
+    pairs = _normalize_choice_pairs(choice_source, source_label=_field_label(field))
+    _insert_blank_pair(pairs, include_blank=include_blank)
+    return [value for value, _label in pairs]
 
 
 def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum]:
@@ -791,7 +847,7 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
     1. Cache check on ``(field.model, field.name)``; return cached on hit.
     2. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
     3. Delegate to the shared ``build_enum_from_choices`` core (empty / grouped-form
-       rejection, the ``BLANK`` member when the column admits ``""``, value-based
+       rejection, the ``BLANK`` member when ``_column_admits_empty_string``, value-based
        sanitization, sanitize-collision guard, ``Enum`` build).
     4. Cache via ``registry.register_enum`` and return the enum class.
 
@@ -811,10 +867,7 @@ def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum
         model = field.model
         field_name = field.name
         choices = field.choices
-        # The column admits ``""`` when ``blank=True`` on a type that stores empty strings
-        # (Django's own text-column predicate); an ``IntegerChoices`` column with
-        # ``blank=True`` admits only ``None``, never ``""``.
-        include_blank = bool(field.blank and field.empty_strings_allowed)
+        include_blank = _column_admits_empty_string(field)
     except BaseException as exc:
         raise ConfigurationError(
             f"Could not inspect choices for {_field_label(field)}.",

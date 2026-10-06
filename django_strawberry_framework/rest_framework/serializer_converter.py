@@ -75,7 +75,12 @@ from ..mutations.inputs import (
 )
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
-from ..types.converters import build_enum_from_choices, convert_scalar, scalar_for_field
+from ..types.converters import (
+    build_enum_from_choices,
+    choice_column_enum_values,
+    convert_scalar,
+    scalar_for_field,
+)
 from ..utils.converters import (
     convert_with_mro,
     finish_field_conversion,
@@ -530,7 +535,9 @@ def convert_serializer_field(
     ``str`` (``String`` already carries ``""``); on a ``ChoiceField`` /
     ``MultipleChoiceField`` it adds the generated enum's ``BLANK`` member at the build
     site (``_serializer_choice_enum``), since enum coercion would otherwise reject ``""``
-    before the serializer runs (spec-039 Decision 7).
+    before the serializer runs (spec-039 Decision 7); over a model choice column whose read
+    enum has no member for ``""`` (or for any declared choice value) the build site refuses
+    the field instead (``_reject_choice_values_outside_column_enum``).
     """
     del is_input  # graphene-parity, accepted-and-ignored.
 
@@ -862,6 +869,75 @@ def _scalar_name(scalar: object) -> str:
     return getattr(scalar, "__name__", None) or repr(scalar)
 
 
+def _stored_choice_value(column: ConcreteField, value: object) -> object:
+    """Return the value ``column`` reads back after storing ``value`` (``to_python``), else ``value``.
+
+    A serializer choice value is saved through the column and read back as the column's Python
+    type (``"1"`` over an ``IntegerField`` reads as ``1``); a value the column cannot coerce
+    (``""`` over an ``IntegerField``) is returned unchanged, so it matches no member.
+    """
+    try:
+        return column.to_python(value)
+    except BaseException:
+        return value
+
+
+def _reject_choice_values_outside_column_enum(field: DRFField, column: ConcreteField) -> None:
+    """Refuse a serializer choice field admitting a value its choice column's read enum lacks.
+
+    A serializer ``ChoiceField`` admits its declared choice values, plus ``""`` when
+    ``allow_blank=True`` (``ChoiceField.to_internal_value`` returns it), and ``save()`` stores
+    whichever one the client sent. The column's read enum represents only
+    ``types/converters.py::choice_column_enum_values``, so a stored value outside that set
+    makes every later read of the row fail. Each admitted value is compared, as the column
+    reads it back (``_stored_choice_value``), against those member values; any value missing
+    raises at input build. A single-value choice field that passes stores only values the
+    column's read enum represents. The check reads the admitted values of every ``ChoiceField``
+    subclass, declared or auto-generated (``Meta.extra_kwargs``), and of a field map a
+    ``get_serializer_for_schema()`` / ``get_fields()`` hook returns, since the input is built
+    from that map. A column without ``choices`` is not checked (its read type
+    is a scalar); a serializer-only field has no column, so its generated enum keeps every
+    declared value and the ``BLANK`` member ``_serializer_choice_enum`` adds.
+    """
+    if not isinstance(field, serializers.ChoiceField) or not column.choices:
+        return
+    member_values = choice_column_enum_values(column)
+    # drf-stubs: ``ChoiceField.choices`` is the flattened ``dict`` of value -> display.
+    declared: Mapping[object, object] = field.choices
+    admitted = list(declared)
+    blank_from_allow_blank = field.allow_blank and "" not in admitted
+    if blank_from_allow_blank:
+        admitted.append("")
+    missing = [
+        value
+        for value in admitted
+        if not any(_stored_choice_value(column, value) == member for member in member_values)
+    ]
+    if not missing:
+        return
+    field_fixes: list[str] = []
+    missing_declared = [value for value in missing if value in declared]
+    if missing_declared:
+        rendered = ", ".join(_safe_arg_repr(value) for value in missing_declared)
+        field_fixes.append(f"remove {rendered} from the serializer field's choices")
+    if field.allow_blank and "" in missing:
+        field_fixes.append("drop allow_blank from the serializer field")
+    field_remedy = " and ".join(field_fixes)
+    if missing == [""] and column.empty_strings_allowed:
+        # Only ``""`` is missing and the column type stores it: ``blank=True`` adds it.
+        remedy = f"Set blank=True on the column, or {field_remedy}."
+    else:
+        remedy = f"{field_remedy[0].upper()}{field_remedy[1:]}."
+    serializer_name = _safe_type_name(getattr(field, "parent", None))
+    rendered_missing = ", ".join(_safe_arg_repr(value) for value in missing)
+    raise ConfigurationError(
+        f"Serializer {serializer_name} field {field.field_name!r} admits {rendered_missing} "
+        f"over the choice column {column.model.__name__}.{column.name}, whose GraphQL enum has "
+        "no matching member, so a value written through this input could not be read back. "
+        f"{remedy}",
+    )
+
+
 def _model_backed_scalar_annotation(
     field: DRFField,
     column: ConcreteField,
@@ -889,8 +965,12 @@ def _model_backed_scalar_annotation(
     ``ChoiceField`` / ``MultipleChoiceField`` (even ``source``-mapped to a plain model column)
     emits the GENERATED serializer-only enum from its DECLARED choices, rather than collapsing
     back to the column's scalar (``String``) - the declared choices are part of the public
-    mutation contract, so they must survive (never silently lost).
+    mutation contract, so they must survive (never silently lost). A choice field admitting a
+    value (a declared choice, or ``""`` from ``allow_blank``) the backing choice column's read
+    enum has no member for is refused first (``_reject_choice_values_outside_column_enum``), so
+    a single-value choice field never writes a value the column's read enum cannot serialize.
     """
+    _reject_choice_values_outside_column_enum(field, column)
     if _is_consumer_declared(field) and _is_enumerable_serializer_choice(field):
         return _serializer_choice_annotation(field, type_name)
     model_annotation = convert_scalar(column, type_name, force_nullable=False)
@@ -947,7 +1027,10 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     ``.items()`` are the ``(value, label)`` pairs the builder expects. ``allow_blank=True``
     (``ChoiceField.to_internal_value`` returns ``""``) adds the ``BLANK`` member, so the
     blank the serializer admits is reachable over the wire (``MultipleChoiceField`` too:
-    ``[BLANK]`` decodes to ``{""}``). The enum is cached by
+    ``[BLANK]`` decodes to ``{""}``). Over a model choice column every member, ``BLANK``
+    included, must also be a member of the column's read enum:
+    ``_reject_choice_values_outside_column_enum`` refuses the field before this enum is built
+    otherwise. The enum is cached by
     its descriptor-derived name so two inputs referencing the same serializer-only choice
     field share ONE enum object (Strawberry rejects two distinct types under one GraphQL
     name); a name reused with a DIFFERENT member set fails loud rather than silently reusing

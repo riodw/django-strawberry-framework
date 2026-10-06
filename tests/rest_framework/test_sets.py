@@ -579,6 +579,43 @@ def test_create_required_guard_fires_through_build_input():
         finalize_django_types()
 
 
+def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize():
+    """A ``ChoiceField(allow_blank=True)`` over a ``blank=False`` choice column fails the bind.
+
+    Its input enum would offer ``BLANK`` while the column's read enum has no member for the
+    stored ``""``, so the input build refuses it and ``finalize_django_types`` raises.
+    """
+    from apps.library.models import Book
+
+    class BookT(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "circulation_status")
+            primary = True
+
+    class BlankStatusSer(serializers.ModelSerializer):
+        circulation_status = serializers.ChoiceField(
+            choices=Book.CirculationStatus.choices,
+            allow_blank=True,
+        )
+
+        class Meta:
+            model = Book
+            fields = ("title", "circulation_status")
+
+    class CreateBook(SerializerMutation):
+        class Meta:
+            serializer_class = BlankStatusSer
+            operation = "create"
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"circulation_status: Serializer BlankStatusSer field 'circulation_status' "
+        r"admits '' over the choice column Book\.circulation_status",
+    ):
+        finalize_django_types()
+
+
 def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard():
     """Overriding ``get_serializer_kwargs`` does NOT waive the create-required guard (hardened).
 

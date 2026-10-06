@@ -49,7 +49,9 @@ import logging
 import sys
 import tempfile
 import threading
+from collections.abc import Callable, Generator
 from io import BytesIO
+from typing import Any, TypeAlias
 from unittest import mock
 
 import pytest
@@ -65,6 +67,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.http import (
     HttpRequest,
     HttpResponse,
+    HttpResponseBase,
     HttpResponseForbidden,
     RawPostDataException,
     UnreadablePostError,
@@ -82,6 +85,7 @@ from django.urls import path
 from django.utils.functional import SimpleLazyObject
 from strawberry.django.views import AsyncGraphQLView, GraphQLView
 from strawberry.http.base import BaseView
+from typing_extensions import override
 
 import django_strawberry_framework
 from django_strawberry_framework import _cross_web_patches as cross_web_patches
@@ -128,6 +132,8 @@ _UPSTREAM_VIEWS = (GraphQLView, AsyncGraphQLView)
 # the absence test - so the ONE upstream module ``views.py`` imports re-executes
 # under the sentinel instead of answering from the module cache.
 _ABSENCE_PREFIXES = ("strawberry.channels", "daphne", "django_strawberry_framework.views")
+
+_ViewClass: TypeAlias = type[DjangoGraphQLView] | type[AsyncDjangoGraphQLView]
 
 _VIEW_CLASSES = (
     pytest.param(DjangoGraphQLView, id="sync"),
@@ -222,7 +228,7 @@ def test_views_module_imports_with_channels_absent():
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_every_upstream_as_view_kwarg_still_binds_on_the_package_views(view_class):
+def test_every_upstream_as_view_kwarg_still_binds_on_the_package_views(view_class: _ViewClass):
     """Every upstream ``as_view()`` keyword keeps working, unchanged (Decision 6).
 
     All four are declared class attributes upstream (``schema``,
@@ -248,7 +254,9 @@ def test_every_upstream_as_view_kwarg_still_binds_on_the_package_views(view_clas
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_an_unknown_as_view_kwarg_is_rejected_by_djangos_class_attribute_guard(view_class):
+def test_an_unknown_as_view_kwarg_is_rejected_by_djangos_class_attribute_guard(
+    view_class: _ViewClass,
+):
     """Django's ``View.as_view`` admits only keywords that are already class attributes.
 
     The consequence a later slice depends on: a view keyword the package wants to
@@ -274,8 +282,11 @@ def test_async_view_as_view_is_a_real_coroutine_function():
     """
     async_callback = AsyncDjangoGraphQLView.as_view(schema=SCHEMA)
     sync_callback = DjangoGraphQLView.as_view(schema=SCHEMA)
-    assert iscoroutinefunction(async_callback) is True
-    assert iscoroutinefunction(sync_callback) is False
+    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
+    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
+    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
+    assert iscoroutinefunction(async_callback) is True  # pyright: ignore[reportDeprecated]
+    assert iscoroutinefunction(sync_callback) is False  # pyright: ignore[reportDeprecated]
     assert async_callback.__code__.co_flags & inspect.CO_COROUTINE
     assert not sync_callback.__code__.co_flags & inspect.CO_COROUTINE
 
@@ -290,7 +301,8 @@ async def test_async_as_view_dispatches_fresh_and_middleware_prepared_instances(
     """
 
     class RecordingAsyncView(AsyncDjangoGraphQLView):
-        async def dispatch(self, request, *args, **kwargs):
+        @override
+        async def dispatch(self, request: HttpRequest, *args: object, **kwargs: object):
             return HttpResponse(getattr(self, "marker", "fresh"))
 
     callback = RecordingAsyncView.as_view(schema=SCHEMA)
@@ -336,7 +348,9 @@ async def test_the_async_view_evaluates_the_lazy_actor_off_the_loop_without_ause
         return AnonymousUser()
 
     request = AsyncRequestFactory().get("/graphql/", {"query": "{ ping }"})
-    request.user = SimpleLazyObject(load_actor)
+    # basedpyright: Django's AuthenticationMiddleware installs a SimpleLazyObject on request.user
+    # the same way; django-stubs types the slot as AbstractBaseUser | AnonymousUser
+    request.user = SimpleLazyObject(load_actor)  # pyright: ignore[reportAttributeAccessIssue]
     request.auser = auser
 
     response = await AsyncDjangoGraphQLView.as_view(schema=SCHEMA)(request)
@@ -372,7 +386,7 @@ def test_module_exports_exactly_the_two_view_classes_and_stays_off_the_package_r
 # ---------------------------------------------------------------------------
 
 
-def _settings_with(value):
+def _settings_with(value: object):
     """Override only ``MAX_REQUEST_BODY_BYTES``, leaving the rest of the dict absent."""
     return override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"MAX_REQUEST_BODY_BYTES": value})
 
@@ -386,7 +400,11 @@ def _settings_with(value):
         pytest.param(None, None, None, id="setting-none-disables"),
     ],
 )
-def test_the_cap_precedence_ladder_is_kwarg_then_setting_then_default(kwarg, setting, expected):
+def test_the_cap_precedence_ladder_is_kwarg_then_setting_then_default(
+    kwarg: int | None,
+    setting: int | None,
+    expected: int | None,
+):
     """``max_request_body_bytes=`` > ``MAX_REQUEST_BODY_BYTES`` > the default.
 
     The two ``None``s mean different things by design (spec-046 Decision 7 step
@@ -422,7 +440,7 @@ def test_no_kwarg_and_no_setting_resolves_to_the_one_megabyte_default():
     ],
 )
 @pytest.mark.parametrize("rung", ["kwarg", "setting"])
-def test_an_invalid_cap_value_raises_configuration_error_on_either_rung(bad, rung):
+def test_an_invalid_cap_value_raises_configuration_error_on_either_rung(bad: object, rung: str):
     """Both precedence rungs are validated, and the message points at the fix.
 
     ``0`` is rejected rather than read as "unlimited": it is the near-universal
@@ -445,7 +463,7 @@ def test_an_invalid_cap_value_raises_configuration_error_on_either_rung(bad, run
 
 
 @pytest.mark.parametrize("rung", ["kwarg", "setting"])
-def test_a_cap_value_too_large_to_render_still_raises_configuration_error(rung):
+def test_a_cap_value_too_large_to_render_still_raises_configuration_error(rung: str):
     """An unrenderable rejected value must not replace the typed error.
 
     A separate row from the matrix above on purpose: that one proves the message
@@ -474,7 +492,8 @@ def test_a_cap_value_too_large_to_render_still_raises_configuration_error(rung):
 class _HostileInt(int):
     """An ``int`` whose ordering raises - the comparison dunder is overridable."""
 
-    def __le__(self, other):
+    @override
+    def __le__(self, other: int):
         raise RuntimeError("hostile comparison")
 
 
@@ -490,7 +509,7 @@ class _WellBehavedInt(int):
     ],
 )
 @pytest.mark.parametrize("rung", ["kwarg", "setting"])
-def test_the_cap_admits_the_builtin_int_exactly(subclass_value, rung):
+def test_the_cap_admits_the_builtin_int_exactly(subclass_value: int, rung: str):
     """The cap's type gate is exact: a subclass of ``int`` is not an ``int``.
 
     A subclass may override ``__le__``, so admitting one would run consumer code
@@ -519,7 +538,10 @@ def test_the_cap_admits_the_builtin_int_exactly(subclass_value, rung):
         pytest.param("", None, id="empty"),
     ],
 )
-def test_the_declared_length_reader_is_none_for_every_unmeasurable_shape(content_length, expected):
+def test_the_declared_length_reader_is_none_for_every_unmeasurable_shape(
+    content_length: str | None,
+    expected: int | None,
+):
     """An absent or garbage ``CONTENT_LENGTH`` reads as ``None``, never as a number.
 
     ``None`` is the fail-safe direction: an unmeasurable declaration falls
@@ -538,7 +560,7 @@ def test_the_declared_length_reader_is_none_for_every_unmeasurable_shape(content
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_cap_keyword_binds_through_as_view_on_both_classes(view_class):
+def test_the_cap_keyword_binds_through_as_view_on_both_classes(view_class: _ViewClass):
     """``max_request_body_bytes=`` is admitted by Django's class-attribute guard.
 
     The companion to the rejected-bogus-keyword test above: Django's
@@ -556,7 +578,7 @@ def test_the_cap_keyword_binds_through_as_view_on_both_classes(view_class):
     assert view.view_initkwargs == {"schema": SCHEMA, "max_request_body_bytes": 4096}
 
 
-def _capped_view(limit, view_class=DjangoGraphQLView):
+def _capped_view(limit: int | None, view_class: _ViewClass = DjangoGraphQLView):
     """A package view instance with the cap set, built the way ``as_view`` builds one.
 
     ``as_view`` instantiates with ``cls(**initkwargs)``, and Django's
@@ -599,7 +621,7 @@ def test_a_declared_over_limit_request_is_refused_without_touching_the_stream():
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_multipart_request_under_the_declared_gate_is_never_materialized(view_class):
+def test_a_multipart_request_under_the_declared_gate_is_never_materialized(view_class: _ViewClass):
     """Decision 7 step 3: multipart is size-gated by the declaration, never by reading ``body``.
 
     Reading ``request.body`` here would pull the whole payload into memory and
@@ -651,7 +673,7 @@ def test_the_counted_check_fires_when_no_content_length_is_declared_at_all():
     """
     view = _capped_view(16)
 
-    def undeclared(size):
+    def undeclared(size: int):
         request = RequestFactory().post(
             "/graphql/",
             data=b"x" * size,
@@ -731,7 +753,7 @@ _PROBE_CAP = 256
 _UNDER_LIMIT_BODY = bytes(range(256))
 
 
-class _UnreadableSpool(tempfile.SpooledTemporaryFile):
+class _UnreadableSpool(tempfile.SpooledTemporaryFile[bytes]):
     """A real ASGI body file whose ``read`` refuses to run.
 
     ``ASGIHandler.read_body`` hands Django a ``tempfile.SpooledTemporaryFile``;
@@ -744,7 +766,8 @@ class _UnreadableSpool(tempfile.SpooledTemporaryFile):
     interpreter actually takes.
     """
 
-    def read(self, *args, **kwargs):
+    @override
+    def read(self, *args: object, **kwargs: object):
         raise AssertionError("the cap read a stream it was supposed to size-probe")
 
 
@@ -759,7 +782,7 @@ class _RecordingNonSeekableStream:
     ``read`` call) and ``delivered`` (the running total handed over) record.
     """
 
-    def __init__(self, raw):
+    def __init__(self, raw: bytes):
         self._buffer = BytesIO(raw)
         self.requested = []
         self.delivered = 0
@@ -768,7 +791,7 @@ class _RecordingNonSeekableStream:
     def seekable(self):
         return False
 
-    def read(self, size=-1):
+    def read(self, size: int = -1):
         self.requested.append(size)
         chunk = self._buffer.read(size)
         self.delivered += len(chunk)
@@ -797,12 +820,14 @@ class _UndeclaredSeekableStream(_RecordingNonSeekableStream):
     register if it ran.
     """
 
-    seekable = None
+    # basedpyright: ``None`` stands in for the ``seekable`` method this stream lacks; the probe
+    # must treat it as absent
+    seekable = None  # pyright: ignore[reportAssignmentType]
 
     def tell(self):
         return self._buffer.tell()
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         return self._buffer.seek(offset, whence)
 
 
@@ -821,7 +846,9 @@ class _UnmeasurableStream(_RecordingNonSeekableStream):
     never "unmeasurable means empty".
     """
 
-    seekable = None
+    # basedpyright: ``None`` stands in for the ``seekable`` method this stream lacks; the probe
+    # must treat it as absent
+    seekable = None  # pyright: ignore[reportAssignmentType]
 
     def tell(self):
         raise io.UnsupportedOperation("tell")
@@ -840,7 +867,8 @@ class _MisreportingSizeStream(_UndeclaredSeekableStream):
     for a full body.
     """
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         return offset
 
 
@@ -854,6 +882,7 @@ class _OverReportingPositionStream(_UndeclaredSeekableStream):
     and a position is the one thing a probe has to take on trust.
     """
 
+    @override
     def tell(self):
         return super().tell() + _PROBE_CAP * 64
 
@@ -861,24 +890,27 @@ class _OverReportingPositionStream(_UndeclaredSeekableStream):
 class _LyingRestoredPosition(int):
     """An ``int`` subclass whose equality lies about a failed restoration."""
 
-    def __eq__(self, other):
+    @override
+    def __eq__(self, other: object):
         return True
 
 
 class _LyingRestoredPositionStream(_UndeclaredSeekableStream):
     """Leaves the stream at EOF while reporting a matching foreign position."""
 
-    def __init__(self, raw):
+    def __init__(self, raw: bytes):
         super().__init__(raw)
         self._tell_calls = 0
 
+    @override
     def tell(self):
         self._tell_calls += 1
         if self._tell_calls == 2:
             return _LyingRestoredPosition(0)
         return super().tell()
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         if whence == io.SEEK_END:
             return super().seek(offset, whence)
         self._buffer.seek(0, io.SEEK_END)
@@ -897,14 +929,16 @@ class _ForeignInitialPositionStream(_UndeclaredSeekableStream):
     distinguishes "never seeked" from "seeked and got away with it".
     """
 
-    def __init__(self, raw):
+    def __init__(self, raw: bytes):
         super().__init__(raw)
         self.seeks = []
 
+    @override
     def tell(self):
         return _LyingRestoredPosition(super().tell())
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         self.seeks.append((offset, whence))
         return super().seek(offset, whence)
 
@@ -920,6 +954,7 @@ class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
     read is both available and correct.
     """
 
+    @override
     def seekable(self):
         raise OSError("this stream refuses to answer capability queries")
 
@@ -928,6 +963,7 @@ class _SeekableAttributeRaisingStream(_UndeclaredSeekableStream):
     """A descriptor that raises before the probe can call ``seekable()``."""
 
     @property
+    @override
     def seekable(self):
         raise RuntimeError("this stream refuses attribute inspection")
 
@@ -941,7 +977,8 @@ class _UnseekableToEndStream(_UndeclaredSeekableStream):
     bounded read.
     """
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         if whence == io.SEEK_END:
             raise OSError("this stream cannot seek to its end")
         return self._buffer.seek(offset, whence)
@@ -957,7 +994,9 @@ class _UnnumberedSeekStream(_UndeclaredSeekableStream):
     and the bounded read is the answer.
     """
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    # basedpyright: deliberately reports no position, the legal file-like shape the probe must tolerate
+    def seek(self, offset: int, whence: int = io.SEEK_SET):  # pyright: ignore[reportIncompatibleMethodOverride]
         return None
 
 
@@ -972,7 +1011,8 @@ class _ArithmeticRaisingPosition(int):
     written as ``isinstance``.
     """
 
-    def __sub__(self, other):
+    @override
+    def __sub__(self, other: int):
         raise RuntimeError("this position refuses to be subtracted")
 
 
@@ -985,7 +1025,8 @@ class _ComparisonRaisingPosition(int):
     one expression rather than about the boundary.
     """
 
-    def __le__(self, other):
+    @override
+    def __le__(self, other: int):
         raise RuntimeError("this position refuses to be compared")
 
 
@@ -996,7 +1037,8 @@ class _ArithmeticRaisingPositionStream(_UndeclaredSeekableStream):
     bounded read that follows starts where the request started.
     """
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         moved = self._buffer.seek(offset, whence)
         if whence == io.SEEK_END:
             return _ArithmeticRaisingPosition(moved)
@@ -1006,7 +1048,8 @@ class _ArithmeticRaisingPositionStream(_UndeclaredSeekableStream):
 class _ComparisonRaisingPositionStream(_ArithmeticRaisingPositionStream):
     """Answers the end-seek with a position whose comparison raises instead."""
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         moved = self._buffer.seek(offset, whence)
         if whence == io.SEEK_END:
             return _ComparisonRaisingPosition(moved)
@@ -1023,7 +1066,8 @@ class _UnrestorableStream(_UndeclaredSeekableStream):
     instead.
     """
 
-    def seek(self, offset, whence=io.SEEK_SET):
+    @override
+    def seek(self, offset: int, whence: int = io.SEEK_SET):
         if whence == io.SEEK_END:
             return self._buffer.seek(offset, whence)
         raise OSError("this stream cannot seek back")
@@ -1043,7 +1087,9 @@ class _TellWithoutSeekStream(_RecordingNonSeekableStream):
     the operator was told the probe had moved a stream that had no way to move.
     """
 
-    seekable = None
+    # basedpyright: ``None`` stands in for the ``seekable`` method this stream lacks; the probe
+    # must treat it as absent
+    seekable = None  # pyright: ignore[reportAssignmentType]
 
     def tell(self):
         return self._buffer.tell()
@@ -1053,7 +1099,9 @@ class _UnreadableSeekAttributeStream(_UndeclaredSeekableStream):
     """A descriptor that raises before the probe can even read ``seek``."""
 
     @property
-    def seek(self):
+    @override
+    # basedpyright: deliberately a ``seek`` whose read raises, the stream the probe must contain
+    def seek(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         raise RuntimeError("this stream refuses attribute inspection")
 
 
@@ -1069,7 +1117,8 @@ class _ReadRaisingStream(_RecordingNonSeekableStream):
     hand-rolled one.
     """
 
-    def read(self, size=-1):
+    @override
+    def read(self, size: int = -1):
         self.requested.append(size)
         raise OSError("this stream cannot be read")
 
@@ -1084,7 +1133,8 @@ class _ReadRaisingAfterPrefixStream(_RecordingNonSeekableStream):
     satisfied its own ``limit + 1`` bound and stopped.
     """
 
-    def read(self, size=-1):
+    @override
+    def read(self, size: int = -1):
         self.requested.append(size)
         if len(self.requested) > 1:
             raise OSError("this stream stopped part way")
@@ -1112,11 +1162,13 @@ class _TruthyZeroLengthChunk:
 class _NonAdvancingChunkStream(_RecordingNonSeekableStream):
     """Returns one truthy zero-length object, then stops a non-advancing retry."""
 
-    def __init__(self, raw):
+    def __init__(self, raw: bytes):
         super().__init__(raw)
         self.chunk = _TruthyZeroLengthChunk()
 
-    def read(self, size=-1):
+    @override
+    # basedpyright: deliberately a truthy zero-length chunk, the read the bounded loop must not retry
+    def read(self, size: int = -1):  # pyright: ignore[reportIncompatibleMethodOverride]
         self.requested.append(size)
         if len(self.requested) > 1:
             raise AssertionError("the bounded read retried without advancing")
@@ -1124,7 +1176,12 @@ class _NonAdvancingChunkStream(_RecordingNonSeekableStream):
 
 
 @contextlib.contextmanager
-def _spooled(raw, *, spool_class=_UnreadableSpool, max_size=1 << 20):
+def _spooled(
+    raw: bytes,
+    *,
+    spool_class: type[tempfile.SpooledTemporaryFile[bytes]] = _UnreadableSpool,
+    max_size: int = 1 << 20,
+):
     """A rewound ``SpooledTemporaryFile`` holding ``raw``, closed on the way out.
 
     ``max_size=0`` forces the rollover-to-disk case, which is the shape that makes
@@ -1144,7 +1201,7 @@ def _spooled(raw, *, spool_class=_UnreadableSpool, max_size=1 << 20):
         stream.close()
 
 
-def _asgi_request(stream, content_length):
+def _asgi_request(stream: object, content_length: str | None):
     """A real ``ASGIRequest`` whose body file is ``stream``.
 
     ``AsyncRequestFactory`` builds the genuine ``ASGIRequest`` (``_read_started``
@@ -1177,7 +1234,8 @@ def _asgi_request(stream, content_length):
         data=b"",
         content_type="application/json",
     )
-    request._stream = stream
+    # basedpyright: a recording stand-in stream; django-stubs types the slot as BinaryIO
+    request._stream = stream  # pyright: ignore[reportAttributeAccessIssue]
     assert "CONTENT_LENGTH" not in request.META
     assert "CONTENT_TYPE" not in request.META
     request.META["CONTENT_TYPE"] = "application/json"
@@ -1199,9 +1257,9 @@ _UNDECLARED_LENGTHS = (
 )
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_seekable_over_limit_body_is_refused_without_ever_being_read(
-    view_class,
-    max_size,
-    content_length,
+    view_class: _ViewClass,
+    max_size: int,
+    content_length: str | None,
 ):
     """The rejecting operation itself is bounded, not just the verdict.
 
@@ -1241,7 +1299,7 @@ def test_a_seekable_over_limit_body_is_refused_without_ever_being_read(
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_seekable_under_limit_body_reaches_strawberry_byte_for_byte(view_class):
+def test_a_seekable_under_limit_body_reaches_strawberry_byte_for_byte(view_class: _ViewClass):
     """The control that makes the no-read rows meaningful, and pins the success path.
 
     A bounded cap is worthless if it corrupts or truncates the bodies it allows,
@@ -1268,7 +1326,9 @@ def test_a_seekable_under_limit_body_reaches_strawberry_byte_for_byte(view_class
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_an_undeclared_seekable_stream_is_still_size_probed_rather_than_read(view_class):
+def test_an_undeclared_seekable_stream_is_still_size_probed_rather_than_read(
+    view_class: _ViewClass,
+):
     """The Python 3.10 floor's ASGI body file is size-probed, not read.
 
     ``SpooledTemporaryFile`` gained ``seekable()`` only in 3.11, so a probe that
@@ -1291,7 +1351,9 @@ def test_an_undeclared_seekable_stream_is_still_size_probed_rather_than_read(vie
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_non_seekable_over_limit_body_reads_at_most_one_byte_past_the_limit(view_class):
+def test_a_non_seekable_over_limit_body_reads_at_most_one_byte_past_the_limit(
+    view_class: _ViewClass,
+):
     """A stream that can only be measured by reading is read to ``limit + 1`` and no further.
 
     One byte past the limit is the least information that distinguishes "exactly
@@ -1315,7 +1377,9 @@ def test_a_non_seekable_over_limit_body_reads_at_most_one_byte_past_the_limit(vi
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_non_seekable_under_limit_body_is_handed_back_as_a_rewound_stream(view_class):
+def test_a_non_seekable_under_limit_body_is_handed_back_as_a_rewound_stream(
+    view_class: _ViewClass,
+):
     """An allowed bounded read gives the bytes back as a stream, not as Django's cache.
 
     The bounded branch is the one that has to hand its bytes back, and *how* is a
@@ -1341,7 +1405,9 @@ def test_a_non_seekable_under_limit_body_is_handed_back_as_a_rewound_stream(view
     view._enforce_request_body_limit(request)
 
     assert hasattr(request, "_body") is False
-    assert request._read_started is False
+    # basedpyright: django-stubs omits HttpRequest._read_started, which HttpRequest.read reads; the
+    # omission reads as an unknown attribute
+    assert request._read_started is False  # pyright: ignore[reportAttributeAccessIssue]
     assert isinstance(request._stream, BytesIO)
     assert stream.closed is True
     assert stream.delivered == len(_UNDER_LIMIT_BODY)
@@ -1352,7 +1418,7 @@ def test_a_non_seekable_under_limit_body_is_handed_back_as_a_rewound_stream(view
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_an_unmeasurable_stream_falls_back_to_the_bounded_read(view_class):
+def test_an_unmeasurable_stream_falls_back_to_the_bounded_read(view_class: _ViewClass):
     """A stream that cannot report its position is read, not waved through.
 
     "Unmeasurable" must never resolve to "assume it fits". The stand-in has no
@@ -1370,7 +1436,7 @@ def test_an_unmeasurable_stream_falls_back_to_the_bounded_read(view_class):
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
+def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class: _ViewClass):
     """A size probe may never answer "the body is empty" on its own.
 
     ``_measured_remaining``'s contract is that ``None`` means "ask the bounded
@@ -1403,11 +1469,11 @@ def test_a_stream_that_probes_as_empty_is_read_rather_than_believed(view_class):
 
 
 def _assert_one_unmeasurable_body_was_recorded(
-    caplog,
-    stream,
-    message,
+    caplog: pytest.LogCaptureFixture,
+    stream: object,
+    message: str,
     *,
-    exc_type,
+    exc_type: type[BaseException] | None,
 ):
     """The shape BOTH of the body gate's operator signals share, asserted once.
 
@@ -1440,10 +1506,11 @@ def _assert_one_unmeasurable_body_was_recorded(
     if exc_type is None:
         assert records[0].exc_info is None
     else:
+        assert records[0].exc_info is not None
         assert isinstance(records[0].exc_info[1], exc_type)
 
 
-def _assert_the_corrupted_probe_was_recorded(caplog, stream):
+def _assert_the_corrupted_probe_was_recorded(caplog: pytest.LogCaptureFixture, stream: object):
     """Exactly one ``WARNING`` naming the probe outcome and the stream that caused it.
 
     No traceback, and that is the difference from the bounded read's twin rather
@@ -1461,8 +1528,8 @@ def _assert_the_corrupted_probe_was_recorded(caplog, stream):
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
-    view_class,
-    caplog,
+    view_class: _ViewClass,
+    caplog: pytest.LogCaptureFixture,
 ):
     """The other incoherent direction: an unverifiable restore fails CLOSED.
 
@@ -1503,7 +1570,7 @@ def test_a_stream_reporting_a_position_past_its_end_is_refused_rather_than_read(
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_foreign_initial_position_uses_the_bounded_read_without_seeking(view_class):
+def test_a_foreign_initial_position_uses_the_bounded_read_without_seeking(view_class: _ViewClass):
     """A foreign initial position is rejected before the probe can move the stream."""
     view = _capped_view(_PROBE_CAP, view_class=view_class)
     stream = _ForeignInitialPositionStream(b"x" * (_PROBE_CAP * 16))
@@ -1526,7 +1593,10 @@ def test_position_restored_rejects_a_foreign_position_before_calling_the_stream(
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_foreign_restored_position_is_not_allowed_to_lie_about_the_stream(view_class, caplog):
+def test_a_foreign_restored_position_is_not_allowed_to_lie_about_the_stream(
+    view_class: _ViewClass,
+    caplog: pytest.LogCaptureFixture,
+):
     """A foreign equality result cannot turn a failed restore into a valid size probe."""
     view = _capped_view(_PROBE_CAP, view_class=view_class)
     stream = _LyingRestoredPositionStream(b"x" * 4)
@@ -1542,7 +1612,7 @@ def test_a_foreign_restored_position_is_not_allowed_to_lie_about_the_stream(view
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_non_callable_seekable_marker_uses_the_bounded_read(view_class):
+def test_a_non_callable_seekable_marker_uses_the_bounded_read(view_class: _ViewClass):
     """A non-callable ``seekable`` marker is not treated as an omitted method."""
     view = _capped_view(_PROBE_CAP, view_class=view_class)
     stream = _NonCallableSeekableMarkerStream(b"x" * (_PROBE_CAP * 16))
@@ -1566,8 +1636,8 @@ def test_a_non_callable_seekable_marker_uses_the_bounded_read(view_class):
 )
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_read(
-    view_class,
-    stream_class,
+    view_class: _ViewClass,
+    stream_class: type[_RecordingNonSeekableStream],
 ):
     """A failed probe is a ``413`` from a bounded read, never a ``500``.
 
@@ -1608,8 +1678,8 @@ def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_
 )
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_position_object_whose_numeric_protocol_raises_never_runs_inside_the_gate(
-    view_class,
-    stream_class,
+    view_class: _ViewClass,
+    stream_class: type[_RecordingNonSeekableStream],
 ):
     """No foreign numeric protocol is executed on a probed position, at all.
 
@@ -1645,7 +1715,10 @@ def test_a_position_object_whose_numeric_protocol_raises_never_runs_inside_the_g
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(view_class, caplog):
+def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(
+    view_class: _ViewClass,
+    caplog: pytest.LogCaptureFixture,
+):
     """The fail-closed state: a failed restore ends the request.
 
     The one outcome that must never become a bounded read. The probe has already
@@ -1682,7 +1755,10 @@ def test_a_probe_that_cannot_restore_the_position_refuses_instead_of_reading(vie
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_stream_with_no_seek_method_is_measured_rather_than_refused(view_class, caplog):
+def test_a_stream_with_no_seek_method_is_measured_rather_than_refused(
+    view_class: _ViewClass,
+    caplog: pytest.LogCaptureFixture,
+):
     """A stream nothing could have moved is unmeasurable, never corrupted.
 
     Believing a missing ``seekable`` declaration - the Python 3.10 spool's
@@ -1717,7 +1793,7 @@ def test_a_stream_with_no_seek_method_is_measured_rather_than_refused(view_class
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_stream_with_no_seek_method_over_limit_is_still_bounded(view_class):
+def test_a_stream_with_no_seek_method_over_limit_is_still_bounded(view_class: _ViewClass):
     """The same shape refuses through the bounded read, not by verdict.
 
     Measured rather than believed in both directions: the probe-less stream is
@@ -1741,7 +1817,10 @@ def test_a_stream_with_no_seek_method_over_limit_is_still_bounded(view_class):
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_an_unreadable_seek_attribute_is_not_a_proven_absence(view_class, caplog):
+def test_an_unreadable_seek_attribute_is_not_a_proven_absence(
+    view_class: _ViewClass,
+    caplog: pytest.LogCaptureFixture,
+):
     """A raising ``seek`` descriptor stays on the conservative path.
 
     The guard inside the absence check has one answer for an attribute read
@@ -1768,7 +1847,7 @@ def test_an_unreadable_seek_attribute_is_not_a_proven_absence(view_class, caplog
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_genuinely_empty_body_is_allowed_by_one_bounded_read(view_class):
+def test_a_genuinely_empty_body_is_allowed_by_one_bounded_read(view_class: _ViewClass):
     """The control that keeps "never believe a zero" from becoming "always read".
 
     An empty POST body is legal - it is refused later, by the JSON parse, not by
@@ -1794,7 +1873,7 @@ def test_a_genuinely_empty_body_is_allowed_by_one_bounded_read(view_class):
     assert request.body == b""
 
 
-def _assert_the_unreadable_stream_was_recorded(caplog, stream):
+def _assert_the_unreadable_stream_was_recorded(caplog: pytest.LogCaptureFixture, stream: object):
     """Exactly one ``WARNING`` naming the unreadable stream, with its traceback attached.
 
     The bounded read's twin of :func:`_assert_the_corrupted_probe_was_recorded`,
@@ -1821,9 +1900,9 @@ def _assert_the_unreadable_stream_was_recorded(caplog, stream):
 )
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_request_stream_that_cannot_be_read_is_refused_rather_than_escaping(
-    view_class,
-    stream_class,
-    caplog,
+    view_class: _ViewClass,
+    stream_class: type[_RecordingNonSeekableStream],
+    caplog: pytest.LogCaptureFixture,
 ):
     """A broken client stream is the controlled ``413``, never an unhandled ``500``.
 
@@ -1874,8 +1953,8 @@ def test_a_request_stream_that_cannot_be_read_is_refused_rather_than_escaping(
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_non_bytes_chunk_cannot_stall_or_run_protocols_inside_the_bounded_read(
-    view_class,
-    caplog,
+    view_class: _ViewClass,
+    caplog: pytest.LogCaptureFixture,
 ):
     """A foreign read result is rejected before its truth or length protocol runs.
 
@@ -1917,7 +1996,9 @@ def test_a_non_bytes_chunk_cannot_stall_or_run_protocols_inside_the_bounded_read
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_a_body_already_cached_by_middleware_is_measured_from_the_cache_and_refused(view_class):
+def test_a_body_already_cached_by_middleware_is_measured_from_the_cache_and_refused(
+    view_class: _ViewClass,
+):
     """The one shape the cap cannot bound, and the only thing left to do about it.
 
     A consumer middleware that reads ``request.POST`` (or ``request.body``) on the
@@ -2025,8 +2106,10 @@ def _strawberry_patch_opted_out():
         DJANGO_STRAWBERRY_FRAMEWORK={"APPLY_UPSTREAM_PATCHES": {"strawberry": False}},
     )
     try:
-        BaseView.parse_json = patches._original_parse_json
-        BaseView.parse_query_params = patches._original_parse_query_params
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
+        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
         with override:
             yield
     finally:
@@ -2036,7 +2119,11 @@ def _strawberry_patch_opted_out():
 
 @pytest.mark.parametrize(("body", "cause"), _WIRE_SHAPES)
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_package_view_rejects_every_non_utf8_wire_shape(view_class, body, cause):
+def test_the_package_view_rejects_every_non_utf8_wire_shape(
+    view_class: _ViewClass,
+    body: bytes,
+    cause: type[Exception],
+):
     """The wire matrix, now owned by the view: every non-UTF-8 shape 400s, and why.
 
     The executable form of spec-046 Decision 9's measured-behavior table and of
@@ -2068,7 +2155,11 @@ def test_the_package_view_rejects_every_non_utf8_wire_shape(view_class, body, ca
 
 @pytest.mark.parametrize(("body", "cause"), _WIRE_SHAPES)
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_wire_contract_holds_with_the_upstream_patches_opted_out(view_class, body, cause):
+def test_the_wire_contract_holds_with_the_upstream_patches_opted_out(
+    view_class: _ViewClass,
+    body: bytes,
+    cause: type[Exception],
+):
     """The identical nine rows with ``{"strawberry": False}`` in effect.
 
     The strict decode used to live inside
@@ -2095,7 +2186,7 @@ def test_the_wire_contract_holds_with_the_upstream_patches_opted_out(view_class,
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_package_view_hands_upstream_a_str_for_a_bytes_body(view_class):
+def test_the_package_view_hands_upstream_a_str_for_a_bytes_body(view_class: _ViewClass):
     """Attribution: the decode happens at the view, so upstream never sees ``bytes``.
 
     Recording what upstream's ``parse_json`` actually receives is the crispest
@@ -2108,7 +2199,7 @@ def test_the_package_view_hands_upstream_a_str_for_a_bytes_body(view_class):
     view = view_class(schema=SCHEMA)
     seen = []
 
-    def _recorder(self, data):
+    def _recorder(self: object, data: str | bytes):
         seen.append(data)
         return {"recorded": True}
 
@@ -2120,7 +2211,7 @@ def test_the_package_view_hands_upstream_a_str_for_a_bytes_body(view_class):
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_package_view_passes_a_str_body_through_by_identity(view_class):
+def test_the_package_view_passes_a_str_body_through_by_identity(view_class: _ViewClass):
     """A ``str`` input reaches upstream as the **same object**, never a round trip.
 
     Upstream's GET ``variables`` / ``extensions`` parses and the multipart
@@ -2133,7 +2224,7 @@ def test_the_package_view_passes_a_str_body_through_by_identity(view_class):
     body = '{"a": 1}'
     seen = []
 
-    def _recorder(self, data):
+    def _recorder(self: object, data: str | bytes):
         seen.append(data)
         return {"recorded": True}
 
@@ -2155,14 +2246,16 @@ def test_the_wire_reason_is_upstreams_own_parse_json_literal():
     message change fails loudly instead of quietly splitting one contract into
     two.
     """
+    original_parse_json = patches._original_parse_json
+    assert original_parse_json is not None
     with pytest.raises(HTTPException) as excinfo:
-        patches._original_parse_json(BaseView(), "{not valid json")
+        original_parse_json(BaseView(), "{not valid json")
 
     assert excinfo.value.reason == _JSON_PARSE_REASON
     assert patches._UPSTREAM_JSON_PARSE_REASON == _JSON_PARSE_REASON
 
 
-def _json_request(raw):
+def _json_request(raw: bytes):
     """A real request carrying ``raw`` as its body, for the adapter rows below."""
     return RequestFactory().post("/graphql/", data=raw, content_type="application/json")
 
@@ -2194,14 +2287,18 @@ def test_the_sync_view_hands_parse_json_raw_bytes_in_every_patch_state():
     assert issubclass(_RawBodyRequestAdapter, DjangoHTTPRequestAdapter)
 
     try:
-        DjangoHTTPRequestAdapter.body = property(cross_web_patches._original_body_fget)
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = property(cross_web_patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
         assert cross_web_patches._patch_is_installed() is False
 
         body = _RawBodyRequestAdapter(_json_request(raw)).body
         with pytest.raises(UnicodeDecodeError):
             DjangoHTTPRequestAdapter(_json_request(raw)).body
     finally:
-        DjangoHTTPRequestAdapter.body = saved
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
 
     assert body == raw
     assert isinstance(body, bytes)
@@ -2286,7 +2383,7 @@ _DECLARED_CHARSETS = (
 _MULTIPART_BOUNDARY = "BoUnDaRy"
 
 
-def _multipart_body(raw):
+def _multipart_body(raw: bytes):
     """A real single-field multipart body carrying ``raw`` as ``operations``.
 
     Hand-built rather than produced by ``RequestFactory.post`` because the whole
@@ -2304,7 +2401,7 @@ def _multipart_body(raw):
     )
 
 
-def _multipart_request(charset=None, *, encoding=None, data=b"x"):
+def _multipart_request(charset: str | None = None, *, encoding: object = None, data: bytes = b"x"):
     """A multipart request whose declared ``Content-Type`` carries ``charset``.
 
     Built through ``generic`` rather than ``post`` for one reason that is itself
@@ -2329,12 +2426,17 @@ def _multipart_request(charset=None, *, encoding=None, data=b"x"):
         content_type = f"{content_type}; charset={charset}"
     request = RequestFactory().generic("POST", "/graphql/", data=data, content_type=content_type)
     if encoding is not None:
-        request.encoding = encoding
+        # basedpyright: a non-str encoding is the hostile input some rows plant; django-stubs types
+        # request.encoding as str
+        request.encoding = encoding  # pyright: ignore[reportAttributeAccessIssue]
     return request
 
 
 @pytest.mark.parametrize(("charset", "accepted"), _DECLARED_CHARSETS)
-def test_only_codecs_that_canonicalize_to_utf8_are_accepted_as_a_form_encoding(charset, accepted):
+def test_only_codecs_that_canonicalize_to_utf8_are_accepted_as_a_form_encoding(
+    charset: str,
+    accepted: bool,
+):
     """The declared charset is resolved through ``codecs``, not compared as a string.
 
     Every alias Python calls UTF-8 is accepted, including ones the package has
@@ -2370,7 +2472,9 @@ _NON_STRING_ENCODINGS = (
 
 
 @pytest.mark.parametrize("encoding", _NON_STRING_ENCODINGS)
-def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_typeerror(encoding):
+def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_typeerror(
+    encoding: object,
+):
     """``codecs.lookup`` raises ``TypeError``, not ``LookupError``, on a non-string.
 
     ``request.encoding`` is a public settable attribute with no type coercion, so
@@ -2404,7 +2508,7 @@ def test_a_non_string_effective_encoding_is_refused_rather_than_escaping_as_a_ty
     [pytest.param("utf-8\x00", id="embedded-nul"), pytest.param("\ud800", id="lone-surrogate")],
 )
 def test_an_unsearchable_effective_encoding_is_refused_rather_than_escaping_as_a_valueerror(
-    encoding,
+    encoding: str,
 ):
     """A string ``codecs.lookup`` cannot search raises ``ValueError``, not ``LookupError``.
 
@@ -2473,7 +2577,7 @@ _UNHONOURED_DECLARATIONS = (
 
 
 @pytest.mark.parametrize("charset", _UNHONOURED_DECLARATIONS)
-def test_a_declared_non_utf8_charset_is_refused_even_when_django_would_decode_utf8(charset):
+def test_a_declared_non_utf8_charset_is_refused_even_when_django_would_decode_utf8(charset: str):
     """The declared condition is independent, and this is the row that says so.
 
     Both requests here would be decoded as UTF-8 by Django - ``request.encoding``
@@ -2588,7 +2692,7 @@ def test_a_bytes_control_field_is_left_to_the_strict_decode_rather_than_the_mark
 
 
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
-def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class):
+def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class: _ViewClass):
     """The mark has to be on the callback, and it has to come from ONE owner.
 
     ``CsrfViewMiddleware.process_view`` reads ``getattr(callback, "csrf_exempt")``,
@@ -2615,7 +2719,10 @@ def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class
     assert view_class.as_view.__func__ is views_module._RequestBodyBoundaryMixin.as_view.__func__
     assert view.view_class is view_class
     assert view.view_initkwargs == {"schema": SCHEMA}
-    assert iscoroutinefunction(view) is (view_class is AsyncDjangoGraphQLView)
+    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
+    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
+    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
+    assert iscoroutinefunction(view) is (view_class is AsyncDjangoGraphQLView)  # pyright: ignore[reportDeprecated]
 
 
 def test_each_csrf_continuation_matches_the_transport_it_protects():
@@ -2635,9 +2742,12 @@ def test_each_csrf_continuation_matches_the_transport_it_protects():
     """
     from django_strawberry_framework import views as views_module
 
-    assert iscoroutinefunction(views_module._async_run_after_csrf_check)
-    assert iscoroutinefunction(views_module._csrf_protected_async_run)
-    assert iscoroutinefunction(views_module._csrf_protected_run) is False
+    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
+    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
+    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
+    assert iscoroutinefunction(views_module._async_run_after_csrf_check)  # pyright: ignore[reportDeprecated]
+    assert iscoroutinefunction(views_module._csrf_protected_async_run)  # pyright: ignore[reportDeprecated]
+    assert iscoroutinefunction(views_module._csrf_protected_run) is False  # pyright: ignore[reportDeprecated]
     assert views_module._csrf_protected_run is not views_module._run_after_csrf_check
     for function in (
         views_module._run_after_csrf_check,
@@ -2673,12 +2783,13 @@ class _RejectingCsrfMiddleware(CsrfViewMiddleware):
 
     calls: list[str] = []
 
+    @override
     def process_view(
         self,
-        request,
-        callback,
-        callback_args,
-        callback_kwargs,
+        request: HttpRequest,
+        callback: Callable[..., HttpResponseBase],
+        callback_args: tuple[object, ...],
+        callback_kwargs: dict[str, object],
     ):
         """Apply the extra policy to exactly the callbacks the base class would check.
 
@@ -2703,7 +2814,7 @@ class _RejectingCsrfMiddleware(CsrfViewMiddleware):
         return HttpResponseForbidden("the project's own CSRF policy refused this")
 
 
-def _passthrough_middleware(get_response):
+def _passthrough_middleware(get_response: Callable[[HttpRequest], HttpResponseBase]):
     """A function-style middleware, which the ordering check must skip rather than probe.
 
     ``settings.MIDDLEWARE`` admits any callable factory, so the ordering audit has
@@ -2713,7 +2824,7 @@ def _passthrough_middleware(get_response):
     return get_response
 
 
-def _plain_view(request):
+def _plain_view(request: HttpRequest):
     """A non-package view, mounted so the middleware's pass-through is exercised."""
     return HttpResponse("plain")
 
@@ -2732,7 +2843,9 @@ class _DerivedBoundaryMiddleware(GraphQLRequestBodyBoundaryMiddleware):
 class _NonCallableSetupView(DjangoGraphQLView):
     """A package view shadowing Django's setup hook with a non-callable value."""
 
-    setup = None
+    # basedpyright: the view shadows Django's ``setup`` hook with a non-callable on purpose; the
+    # test proves the body middleware refuses it
+    setup = None  # pyright: ignore[reportAssignmentType]
 
 
 _NON_CALLABLE_SETUP_CALLBACK = _NonCallableSetupView.as_view(schema=SCHEMA)
@@ -2741,14 +2854,15 @@ _NON_CALLABLE_SETUP_CALLBACK = _NonCallableSetupView.as_view(schema=SCHEMA)
 class _SetupWithoutRequestView(DjangoGraphQLView):
     """A package view whose setup forgets Django's required ``super()`` call."""
 
-    def setup(self, request, *args, **kwargs):
+    @override
+    def setup(self, request: HttpRequest, *args: object, **kwargs: object):
         pass
 
 
 _SETUP_WITHOUT_REQUEST_CALLBACK = _SetupWithoutRequestView.as_view(schema=SCHEMA)
 
 
-def _wrapper_copying_only_csrf_exempt(view):
+def _wrapper_copying_only_csrf_exempt(view: Callable[..., HttpResponseBase]):
     """A hand-written wrapper of the shape ``as_view``'s docstring names as live.
 
     It forwards the call and copies ``csrf_exempt`` - the one mark a callback
@@ -2763,23 +2877,32 @@ def _wrapper_copying_only_csrf_exempt(view):
     Deliberately not ``functools.wraps``-based: ``wraps`` copies ``__dict__``, so
     both marks would travel together and the interesting callback would not exist.
     """
-    if iscoroutinefunction(view):
+    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
+    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
+    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
+    if iscoroutinefunction(view):  # pyright: ignore[reportDeprecated]
 
-        async def wrapped(request, *args, **kwargs):
+        async def async_wrapped(request: HttpRequest, *args: object, **kwargs: object):
             return await view(request, *args, **kwargs)
+
+        wrapped = async_wrapped
 
     else:
 
-        def wrapped(request, *args, **kwargs):
+        def sync_wrapped(request: HttpRequest, *args: object, **kwargs: object):
             return view(request, *args, **kwargs)
 
-    wrapped.csrf_exempt = view.csrf_exempt
-    wrapped.view_class = view.view_class
-    wrapped.view_initkwargs = view.view_initkwargs
+        wrapped = sync_wrapped
+
+    # basedpyright: Django's ``View.as_view()`` sets these three on its function callback and a
+    # hand-written wrapper copies them; ``FunctionType`` declares none
+    wrapped.csrf_exempt = view.csrf_exempt  # pyright: ignore[reportFunctionMemberAccess]
+    wrapped.view_class = view.view_class  # pyright: ignore[reportFunctionMemberAccess]
+    wrapped.view_initkwargs = view.view_initkwargs  # pyright: ignore[reportFunctionMemberAccess]
     return wrapped
 
 
-def _marked_callback_without_a_view_class(request):
+def _marked_callback_without_a_view_class(request: HttpRequest):
     """A callback carrying the marker and none of the bookkeeping behind it.
 
     The marker name is package-specific, so nothing supported produces this - but
@@ -2790,7 +2913,7 @@ def _marked_callback_without_a_view_class(request):
     return HttpResponse("marked, no view_class")
 
 
-def _marked_callback_with_unusable_initkwargs(request):
+def _marked_callback_with_unusable_initkwargs(request: HttpRequest):
     """A callback whose ``view_initkwargs`` is not a mapping to splat.
 
     The other half of the same recognition: ``view_class`` is real here, so only
@@ -2799,7 +2922,7 @@ def _marked_callback_with_unusable_initkwargs(request):
     return HttpResponse("marked, unusable initkwargs")
 
 
-def _marked_callback_with_initkwargs_the_class_rejects(request):
+def _marked_callback_with_initkwargs_the_class_rejects(request: HttpRequest):
     """A callback whose bookkeeping has ``as_view``'s exact shape and no instance behind it.
 
     The third shape, and the only one no test of the bookkeeping's *shape* can
@@ -2818,7 +2941,7 @@ class _NotAPackageView:
 _VIEW_CLASS_FACTORY_CALLS = []
 
 
-def _boundary_the_factory_carries(request):
+def _boundary_the_factory_carries(request: HttpRequest):
     """The callable the factory below carries under the boundary method's name.
 
     Never invoked by anything: the object a called factory returns is what
@@ -2828,7 +2951,7 @@ def _boundary_the_factory_carries(request):
     raise AssertionError("the boundary of a non-class view_class must never run")
 
 
-def _view_class_factory(**initkwargs):
+def _view_class_factory(**initkwargs: object):
     """A ``view_class`` that is callable and is not a class.
 
     It records rather than merely returning, because the contract is that nothing
@@ -2847,7 +2970,7 @@ def _view_class_factory(**initkwargs):
 setattr(_view_class_factory, _BOUNDARY_METHOD, _boundary_the_factory_carries)
 
 
-def _marked_callback_with_a_callable_view_class(request):
+def _marked_callback_with_a_callable_view_class(request: HttpRequest):
     """A callback whose ``view_class`` is callable and is not a class.
 
     The shape that separates the class test from the construction attempt: a
@@ -2872,11 +2995,11 @@ class _ForeignButBuildableView:
     same ``None`` while having run a foreign ``__init__``.
     """
 
-    def __init__(self, **initkwargs):
+    def __init__(self, **initkwargs: object):
         _FOREIGN_VIEW_CONSTRUCTIONS.append(initkwargs)
 
 
-def _marked_callback_with_a_foreign_view_class(request):
+def _marked_callback_with_a_foreign_view_class(request: HttpRequest):
     """A callback whose bookkeeping is impeccable and whose class is not ours.
 
     The shape no test of the bookkeeping and no construction attempt can tell from
@@ -2896,7 +3019,7 @@ class _BoundaryReadRaisesMeta(type):
     than some unrelated introspection of the class.
     """
 
-    def __getattr__(cls, name):
+    def __getattr__(cls, name: str):
         if name == _BOUNDARY_METHOD:
             raise RuntimeError("this metaclass answers the boundary read with a raise")
         raise AttributeError(name)
@@ -2905,14 +3028,14 @@ class _BoundaryReadRaisesMeta(type):
 class _ViewClassWhoseMetaclassRaises(metaclass=_BoundaryReadRaisesMeta):
     """A real, buildable class whose boundary read raises instead of answering."""
 
-    def __init__(self, **initkwargs):
+    def __init__(self, **initkwargs: object):
         raise AssertionError("a class whose boundary cannot be read must never be built")
 
 
 class _RaisingBoundaryDescriptor:
     """A descriptor under the boundary method's name whose read raises."""
 
-    def __get__(self, instance, owner=None):
+    def __get__(self, instance: object, owner: type | None = None):
         raise RuntimeError("this descriptor answers the boundary read with a raise")
 
 
@@ -2925,7 +3048,7 @@ class _ViewClassWhoseBoundaryDescriptorRaises:
     has to survive either.
     """
 
-    def __init__(self, **initkwargs):
+    def __init__(self, **initkwargs: object):
         raise AssertionError("a class whose boundary cannot be read must never be built")
 
 
@@ -2943,14 +3066,14 @@ class _CallbackWhoseBookkeepingReadRaises:
     measuring its own scaffolding rather than the recognition.
     """
 
-    def __call__(self, request):
+    def __call__(self, request: HttpRequest):
         raise AssertionError("a callback the recognition declines is never called by it")
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str):
         raise RuntimeError("this callback answers a bookkeeping read with a raise")
 
 
-def _marked_callback_with_a_raising_metaclass(request):
+def _marked_callback_with_a_raising_metaclass(request: HttpRequest):
     """A callback whose class turns the boundary probe's read into an exception.
 
     Every clause before the probe says yes: the marker is there, ``view_class`` is
@@ -2962,7 +3085,7 @@ def _marked_callback_with_a_raising_metaclass(request):
     return HttpResponse("marked, metaclass read raises")
 
 
-def _marked_callback_with_a_raising_boundary_descriptor(request):
+def _marked_callback_with_a_raising_boundary_descriptor(request: HttpRequest):
     """The same failure through the other shape of attribute machinery.
 
     Refused by the same guard as the metaclass route rather than by a clause of
@@ -2987,11 +3110,11 @@ class _MinimalBoundaryViewClass:
     ``process_view`` runs.
     """
 
-    def __init__(self, **initkwargs):
+    def __init__(self, **initkwargs: object):
         self.initkwargs = initkwargs
 
 
-def _record_the_boundary_run(self, request):
+def _record_the_boundary_run(self: object, request: HttpRequest):
     """The boundary the class above carries: it records the request and refuses nothing."""
     _MINIMAL_BOUNDARY_RUNS.append(request)
 
@@ -2999,7 +3122,7 @@ def _record_the_boundary_run(self, request):
 setattr(_MinimalBoundaryViewClass, _BOUNDARY_METHOD, _record_the_boundary_run)
 
 
-def _marked_callback_with_a_minimal_boundary_view_class(request):
+def _marked_callback_with_a_minimal_boundary_view_class(request: HttpRequest):
     """A callback whose ``view_class`` carries the probed boundary and nothing else.
 
     Unmounted on purpose: its subject is which name ``process_view`` invokes, which is
@@ -3016,22 +3139,24 @@ setattr(_marked_callback_with_a_foreign_view_class, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_raising_metaclass, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_raising_boundary_descriptor, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_minimal_boundary_view_class, _BOUNDARY_MARKER, True)
-_marked_callback_with_unusable_initkwargs.view_class = DjangoGraphQLView
-_marked_callback_with_unusable_initkwargs.view_initkwargs = [("schema", SCHEMA)]
-_marked_callback_with_initkwargs_the_class_rejects.view_class = DjangoGraphQLView
-_marked_callback_with_initkwargs_the_class_rejects.view_initkwargs = {"not_a_view_kwarg": 1}
-_marked_callback_with_a_callable_view_class.view_class = _view_class_factory
-_marked_callback_with_a_callable_view_class.view_initkwargs = {}
-_marked_callback_with_a_foreign_view_class.view_class = _ForeignButBuildableView
-_marked_callback_with_a_foreign_view_class.view_initkwargs = {}
-_marked_callback_with_a_raising_metaclass.view_class = _ViewClassWhoseMetaclassRaises
-_marked_callback_with_a_raising_metaclass.view_initkwargs = {}
-_marked_callback_with_a_raising_boundary_descriptor.view_class = (
+# basedpyright: Django's ``as_view()`` callback contract puts ``view_class`` /
+# ``view_initkwargs`` on a function, mimicked here; ``FunctionType`` declares neither
+_marked_callback_with_unusable_initkwargs.view_class = DjangoGraphQLView  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_unusable_initkwargs.view_initkwargs = [("schema", SCHEMA)]  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_initkwargs_the_class_rejects.view_class = DjangoGraphQLView  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_initkwargs_the_class_rejects.view_initkwargs = {"not_a_view_kwarg": 1}  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_callable_view_class.view_class = _view_class_factory  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_callable_view_class.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_foreign_view_class.view_class = _ForeignButBuildableView  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_foreign_view_class.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_raising_metaclass.view_class = _ViewClassWhoseMetaclassRaises  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_raising_metaclass.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_raising_boundary_descriptor.view_class = (  # pyright: ignore[reportFunctionMemberAccess]
     _ViewClassWhoseBoundaryDescriptorRaises
 )
-_marked_callback_with_a_raising_boundary_descriptor.view_initkwargs = {}
-_marked_callback_with_a_minimal_boundary_view_class.view_class = _MinimalBoundaryViewClass
-_marked_callback_with_a_minimal_boundary_view_class.view_initkwargs = {}
+_marked_callback_with_a_raising_boundary_descriptor.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_minimal_boundary_view_class.view_class = _MinimalBoundaryViewClass  # pyright: ignore[reportFunctionMemberAccess]
+_marked_callback_with_a_minimal_boundary_view_class.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
 
 #: The callback-side read failure, built once: the marker is in the instance's
 #: ``__dict__`` so recognition gets past the first clause and fails on the next read.
@@ -3098,7 +3223,7 @@ _WRAPPED_PATHS = (
 
 
 @contextlib.contextmanager
-def _chain(middleware):
+def _chain(middleware: list[str]):
     """This module as the project's URLconf, with ``middleware`` as the whole chain.
 
     ``ROOT_URLCONF`` points at this module because the rows' subject is Django's
@@ -3111,7 +3236,13 @@ def _chain(middleware):
         yield
 
 
-async def _post(path, is_async, client=None, **kwargs):
+# basedpyright: verbatim forward to Client.post / AsyncClient.post; object fails its typed params
+async def _post(
+    path: str,
+    is_async: bool,
+    client: Client | AsyncClient | None = None,
+    **kwargs: Any,  # pyright: ignore[reportExplicitAny]
+) -> HttpResponseBase:
     """POST through the real handler, on whichever client matches the transport.
 
     A fresh client per call by default, because Django's ``ClientHandler.__call__``
@@ -3121,11 +3252,13 @@ async def _post(path, is_async, client=None, **kwargs):
     if client is None:
         client = AsyncClient() if is_async else Client()
     if is_async:
+        assert isinstance(client, AsyncClient)
         return await client.post(path, **kwargs)
+    assert isinstance(client, Client)
     return client.post(path, **kwargs)
 
 
-def _csrf_enforcing_client(is_async):
+def _csrf_enforcing_client(is_async: bool):
     """A client whose CSRF check actually reaches the ``request.POST`` read.
 
     Two fixture traps sit in front of that read, and either one silently turns a
@@ -3145,7 +3278,7 @@ def _csrf_enforcing_client(is_async):
 
 
 @contextlib.contextmanager
-def _counting_multipart_parses():
+def _counting_multipart_parses() -> Generator[list[bool], None, None]:
     """Count real ``MultiPartParser.parse`` invocations, wherever they come from.
 
     The primary witness for every ordering row: a CSRF call log only says which
@@ -3153,9 +3286,9 @@ def _counting_multipart_parses():
     at all. The original is called through, so the request behaves normally.
     """
     original = multipartparser.MultiPartParser.parse
-    parses = []
+    parses: list[bool] = []
 
-    def counting(self, *args, **kwargs):
+    def counting(self: multipartparser.MultiPartParser, *args: object, **kwargs: object):
         parses.append(True)
         return original(self, *args, **kwargs)
 
@@ -3165,9 +3298,9 @@ def _counting_multipart_parses():
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
 async def test_the_projects_own_csrf_middleware_runs_when_the_chain_supplies_the_ordering(
-    under,
-    over,
-    is_async,
+    under: str,
+    over: str,
+    is_async: bool,
 ):
     """The defect this closes: a project's CSRF class must not be replaced here.
 
@@ -3197,9 +3330,9 @@ async def test_the_projects_own_csrf_middleware_runs_when_the_chain_supplies_the
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
 async def test_without_the_middleware_the_view_keeps_its_own_ordering_and_exemption(
-    under,
-    over,
-    is_async,
+    under: str,
+    over: str,
+    is_async: bool,
 ):
     """Backward compatibility, asserted rather than assumed.
 
@@ -3220,6 +3353,7 @@ async def test_without_the_middleware_the_view_keeps_its_own_ordering_and_exempt
         )
         refused = await _post(over, is_async, data={"operations": "{}"})
 
+    assert isinstance(allowed, HttpResponse)
     assert json.loads(allowed.content)["data"] == {"ping": "pong"}
     assert refused.status_code == 413
     assert _RejectingCsrfMiddleware.calls == []
@@ -3243,7 +3377,11 @@ async def test_the_middleware_passes_a_non_package_view_through_untouched():
 
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
-async def test_the_view_does_not_measure_a_body_the_chain_already_measured(under, over, is_async):
+async def test_the_view_does_not_measure_a_body_the_chain_already_measured(
+    under: str,
+    over: str,
+    is_async: bool,
+):
     """One request, one measurement: the middleware stamps and the view believes it.
 
     The stamp is not an optimization detail - re-running the boundary would cost a
@@ -3257,7 +3395,9 @@ async def test_the_view_does_not_measure_a_body_the_chain_already_measured(under
     body = json.dumps({"query": "{ ping }"}).encode()
 
     class _Recording(DjangoGraphQLView):
-        def run(self, request, *args, **kwargs):
+        @override
+        # basedpyright: verbatim forward to SyncBaseHTTPView.run; object fails its typed params
+        def run(self, request: HttpRequest, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
             seen.append((getattr(request, _BOUNDARY_ENFORCED, False), request.body))
             return super().run(request, *args, **kwargs)
 
@@ -3290,19 +3430,20 @@ def test_middleware_ignores_an_unreadable_optional_mount_handoff():
     """
 
     class BoundaryView:
-        def _enforce_request_boundary(self, request):
+        def _enforce_request_boundary(self, request: HttpRequest):
             return None
 
     class Callback:
         view_class = BoundaryView
         view_initkwargs = {}
 
-        def __getattribute__(self, name):
+        @override
+        def __getattribute__(self, name: str):
             if name == _BOUNDARY_MOUNT:
                 raise RuntimeError("mount unavailable")
             return super().__getattribute__(name)
 
-        def __call__(self, request):
+        def __call__(self, request: HttpRequest):
             return HttpResponse()
 
     setattr(Callback, _BOUNDARY_MARKER, True)
@@ -3478,7 +3619,7 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
     """
     from django_strawberry_framework._boundary_ordering import _CSRF_ORDERING_EXEMPTION
 
-    async def downstream(request):
+    async def downstream(request: HttpRequest):
         assert bool(_CSRF_ORDERING_EXEMPTION) is True
         setattr(request, _BOUNDARY_ENFORCED, True)
         assert bool(_CSRF_ORDERING_EXEMPTION) is False
@@ -3486,18 +3627,23 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
 
     middleware = GraphQLRequestBodyBoundaryMiddleware(downstream)
 
-    assert iscoroutinefunction(middleware) is True
+    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
+    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
+    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
+    assert iscoroutinefunction(middleware) is True  # pyright: ignore[reportDeprecated]
     with pytest.raises(RuntimeError, match="downstream chain"):
-        await middleware(RequestFactory().get("/graphql/"))
+        response = middleware(RequestFactory().get("/graphql/"))
+        assert inspect.isawaitable(response)
+        await response
 
     assert bool(_CSRF_ORDERING_EXEMPTION) is True
 
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
 async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
-    marked,
-    wrapped,
-    is_async,
+    marked: str,
+    wrapped: str,
+    is_async: bool,
 ):
     """The other half of the pair, and what makes the row above about a regression.
 
@@ -3526,9 +3672,9 @@ async def test_the_same_two_mounts_parse_nothing_without_the_middleware_either(
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
 async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class(
-    marked,
-    wrapped,
-    is_async,
+    marked: str,
+    wrapped: str,
+    is_async: bool,
 ):
     """The secondary witness, against the project's own CSRF class this time.
 
@@ -3548,12 +3694,17 @@ async def test_a_declined_callbacks_over_limit_body_never_reaches_the_csrf_class
         response = await _post(wrapped, is_async, data={"operations": "{}"})
 
     assert response.status_code == 413
+    assert isinstance(response, HttpResponse)
     assert response.content.decode() == _BODY_LIMIT_REASON
     assert _RejectingCsrfMiddleware.calls == []
 
 
 @pytest.mark.parametrize(("marked", "wrapped", "is_async"), _WRAPPED_PATHS)
-async def test_a_declined_callback_still_gets_a_complete_csrf_check(marked, wrapped, is_async):
+async def test_a_declined_callback_still_gets_a_complete_csrf_check(
+    marked: str,
+    wrapped: str,
+    is_async: bool,
+):
     """Falling back must not cost the protection, only the class.
 
     The mount the middleware declines is left on the arrangement that predates it,
@@ -3583,15 +3734,16 @@ async def test_a_declined_callback_still_gets_a_complete_csrf_check(marked, wrap
             content_type="application/json",
         )
 
+    assert isinstance(allowed, HttpResponse)
     assert json.loads(allowed.content)["data"] == {"ping": "pong"}
     assert refused.status_code == 403
 
 
 @pytest.mark.parametrize(("under", "over", "is_async"), _MOUNTED_PATHS)
 async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csrf(
-    under,
-    over,
-    is_async,
+    under: str,
+    over: str,
+    is_async: bool,
 ):
     """The disjunct the ordering audit deliberately admits, driven by a request.
 
@@ -3624,6 +3776,7 @@ async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csr
             content_type="application/json",
         )
 
+    assert isinstance(allowed, HttpResponse)
     assert json.loads(allowed.content)["data"] == {"ping": "pong"}
     assert refused.status_code == 403
 
@@ -3640,7 +3793,7 @@ async def test_a_chain_with_the_boundary_and_no_csrf_middleware_still_checks_csr
         "/marked-raising-descriptor/",
     ],
 )
-async def test_a_marked_callback_the_middleware_cannot_build_is_declined_not_crashed(route):
+async def test_a_marked_callback_the_middleware_cannot_build_is_declined_not_crashed(route: str):
     """The marker is a claim, not a guarantee that a view instance is behind it.
 
     Running the boundary needs ``view_class`` and ``view_initkwargs`` as well, and a
@@ -3716,7 +3869,7 @@ def test_a_view_class_without_the_boundary_is_never_constructed():
         pytest.param(_CALLBACK_WHOSE_BOOKKEEPING_READ_RAISES, id="callback-bookkeeping"),
     ],
 )
-def test_a_read_that_raises_is_declined_rather_than_raised_out_of_the_hook(callback):
+def test_a_read_that_raises_is_declined_rather_than_raised_out_of_the_hook(callback: object):
     """An attribute read is not only an answer: it can also fail.
 
     ``getattr``'s default covers an absent attribute and nothing else, and

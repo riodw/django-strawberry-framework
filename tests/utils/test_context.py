@@ -6,9 +6,11 @@ are in ``examples/fakeshop/test_query/test_library_api.py`` and
 ``examples/fakeshop/test_query/test_resource_policy_api.py``.
 """
 
+from collections.abc import Callable
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.utils.context import (
     MISSING,
@@ -26,15 +28,15 @@ def test_context_stash_round_trips_and_clears_object_dict_and_slots_mapping():
         __slots__ = ("values",)
 
         def __init__(self):
-            self.values = {}
+            self.values: dict[str, object] = {}
 
-        def __getitem__(self, key):
+        def __getitem__(self, key: str) -> object:
             return self.values[key]
 
-        def __setitem__(self, key, value):
+        def __setitem__(self, key: str, value: object):
             self.values[key] = value
 
-        def __delitem__(self, key):
+        def __delitem__(self, key: str):
             del self.values[key]
 
     for context in (SimpleNamespace(), {}, SlotsMapping()):
@@ -52,8 +54,9 @@ def test_context_read_fails_closed_for_hostile_attribute_and_mapping_access():
         def dst_context_test(self):
             raise RuntimeError("descriptor failed")
 
-    class HostileMapping(dict):
-        def get(self, key, default=None):
+    class HostileMapping(dict[str, object]):
+        @override
+        def get(self, key: str, default: object = None):
             raise RuntimeError("mapping read failed")
 
     assert get_context_value(HostileAttribute(), "dst_context_test", "missing") == "missing"
@@ -67,12 +70,13 @@ def test_context_read_tries_mapping_after_hostile_attribute():
         def __init__(self):
             self.values = {"dst_context_test": 42}
 
-        def __getattribute__(self, name):
+        @override
+        def __getattribute__(self, name: str):
             if name == "dst_context_test":
                 raise RuntimeError("descriptor failed")
             return object.__getattribute__(self, name)
 
-        def __getitem__(self, key):
+        def __getitem__(self, key: str):
             return self.values[key]
 
     context = HostileAttributeMapping()
@@ -110,11 +114,13 @@ def test_context_distinguishes_explicit_none_from_missing_sentinel():
 def test_locked_dict_subclass_stash_and_clear_are_noops():
     """Immutable dict subclasses (e.g. locked QueryDict) silently skip stash and clear."""
 
-    class LockedDict(dict):
-        def __setitem__(self, key, value):
+    class LockedDict(dict[str, object]):
+        @override
+        def __setitem__(self, key: str, value: object):
             raise AttributeError("This dict is immutable")
 
-        def __delitem__(self, key):
+        @override
+        def __delitem__(self, key: str):
             raise AttributeError("This dict is immutable")
 
     ctx = LockedDict({"dst_context_test": 42})
@@ -126,18 +132,18 @@ def test_locked_dict_subclass_stash_and_clear_are_noops():
 class SlotsMapping:
     """A non-dict mapping-only context: ``setattr`` is impossible, items work."""
 
-    __slots__ = ("values",)
+    __slots__: tuple[str, ...] = ("values",)
 
     def __init__(self):
-        self.values = {}
+        self.values: dict[str, object] = {}
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> object:
         return self.values[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: object):
         self.values[key] = value
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: str):
         del self.values[key]
 
 
@@ -146,7 +152,7 @@ class SlotsMapping:
     [SimpleNamespace, dict, SlotsMapping],
     ids=["object", "dict", "slots"],
 )
-def test_restored_context_keys_round_trips_absent_present_and_none(make):
+def test_restored_context_keys_round_trips_absent_present_and_none(make: Callable[[], object]):
     """The restore puts ABSENT keys back to absent and re-stashes found values.
 
     An explicit ``None`` snapshot is a VALUE: it is re-stashed, never cleared,
@@ -199,7 +205,8 @@ def test_restored_context_keys_snapshots_an_unreadable_key_as_absent():
             super().__init__()
             self.readable = False
 
-        def __getitem__(self, key):
+        @override
+        def __getitem__(self, key: str) -> object:
             if not self.readable:
                 raise RuntimeError("reads locked")
             return self.values[key]

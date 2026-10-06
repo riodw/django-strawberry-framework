@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
@@ -32,6 +33,7 @@ from django_strawberry_framework.mutations.operations import (
 
 
 class _HostileRepr:
+    @override
     def __repr__(self):
         raise RuntimeError("HostileRepr exploded")
 
@@ -42,7 +44,9 @@ def test_mutation_operation_descriptor_immutability():
     assert isinstance(desc, MutationOperationDescriptor)
     assert dataclasses.is_dataclass(desc)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        desc.name = "other"
+        # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+        # checker rejects assignment to a frozen field
+        desc.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_operation_descriptors_invariants():

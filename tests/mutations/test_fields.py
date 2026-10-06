@@ -13,11 +13,13 @@ A request cannot observe ``CreateItemPayload!`` bind identity or a
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 
 import pytest
 import strawberry
 from apps.products import models as product_models
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoMutation,
@@ -32,7 +34,7 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     registry.clear()
     yield
     registry.clear()
@@ -41,11 +43,11 @@ def _isolate_registry():
 class _AllowAll:
     def has_permission(
         self,
-        info,
-        mutation,
-        operation,
-        data,
-        instance=None,
+        info: object,
+        mutation: type[object],
+        operation: str,
+        data: object,
+        instance: object = None,
     ):
         return True
 
@@ -98,6 +100,7 @@ def _operation_mutations():
 def _field_arg_map(schema: strawberry.Schema, field_name: str) -> dict[str, str]:
     """Return ``{arg_name: type_str}`` for a Mutation field from the built schema."""
     mutation_type = schema._schema.mutation_type
+    assert mutation_type is not None
     field = mutation_type.fields[field_name]
     return {arg_name: str(arg.type) for arg_name, arg in field.args.items()}
 
@@ -121,6 +124,7 @@ def test_no_class_attribute_annotation_builds_and_types_payload():
     finalize_django_types()
     schema = DjangoSchema(query=_Query, mutation=Mutation)
     mutation_type = schema._schema.mutation_type
+    assert mutation_type is not None
     assert str(mutation_type.fields["createItem"].type) == "CreateItemPayload!"
 
 
@@ -156,24 +160,31 @@ def test_non_mutation_target_raises_at_construction():
         pass
 
     with pytest.raises(ConfigurationError, match="DjangoMutationField"):
-        DjangoMutationField(NotAMutation)
+        # basedpyright: the non-mutation class is the hostile input under test; DjangoMutationField
+        # types the parameter as WriteMutationClass
+        DjangoMutationField(NotAMutation)  # pyright: ignore[reportArgumentType]
 
 
 def test_non_class_target_raises_at_construction():
     """A non-class value raises at the construction line."""
     with pytest.raises(ConfigurationError, match="DjangoMutationField"):
-        DjangoMutationField(object())
+        # basedpyright: the non-class value is the hostile input under test; DjangoMutationField
+        # types the parameter as WriteMutationClass
+        DjangoMutationField(object())  # pyright: ignore[reportArgumentType]
 
 
 def test_hostile_non_class_target_repr_still_raises_configuration_error():
     """A rejected target's repr cannot replace the construction-time configuration error."""
 
     class HostileTarget:
+        @override
         def __repr__(self):
             raise RuntimeError("repr boom")
 
     with pytest.raises(ConfigurationError, match="DjangoMutationField") as exc:
-        DjangoMutationField(HostileTarget())
+        # basedpyright: the non-class value whose repr raises is the hostile input under test;
+        # DjangoMutationField types the parameter as WriteMutationClass
+        DjangoMutationField(HostileTarget())  # pyright: ignore[reportArgumentType]
     assert "unprintable" in str(exc.value)
 
 
@@ -224,7 +235,9 @@ def test_inherited_meta_target_rejected_at_construction():
             DjangoMutationField(child)
 
     class CreateItemRedeclared(CreateItem):
-        class Meta:
+        # basedpyright: DjangoMutation's metaclass reads only the class body's own ``Meta``; the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             operation = "create"
             permission_classes = [_AllowAll]
@@ -259,7 +272,7 @@ def test_generalized_target_accepts_modelform_and_plain_form_family():
 
     from django_strawberry_framework import DjangoFormMutation, DjangoModelFormMutation
 
-    class ItemModelForm(forms.ModelForm):
+    class ItemModelForm(forms.ModelForm[product_models.Item]):
         class Meta:
             model = product_models.Item
             fields = ("name", "category")
@@ -338,8 +351,9 @@ def test_django_mutation_field_generalizes_to_serializer_mutation():
 
     _declare_item_primaries()
 
-    class ItemSerializer(serializers.ModelSerializer):
-        class Meta:
+    class ItemSerializer(serializers.ModelSerializer[product_models.Item]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("name", "category")
 
@@ -393,6 +407,7 @@ def test_mutation_field_metadata_passthrough():
     finalize_django_types()
     schema = DjangoSchema(query=_Query, mutation=Mutation)
     mutation_type = schema._schema.mutation_type
+    assert mutation_type is not None
     field = mutation_type.fields["createItem"]
     assert field.description == "Create a new item entity"
     assert field.deprecation_reason == "Use createItemV2 instead"
@@ -404,7 +419,7 @@ def test_mutation_field_metadata_passthrough():
 
 
 @pytest.mark.parametrize("bare", ["@deprecated", b"@deprecated"])
-def test_bare_string_or_bytes_directives_raise_at_construction(bare):
+def test_bare_string_or_bytes_directives_raise_at_construction(bare: str | bytes):
     """A bare str / bytes `directives` is rejected at the construction line.
 
     Strawberry consumes field directives lazily at class decoration / SDL render,
@@ -438,7 +453,9 @@ def test_hostile_directives_iterator_raises_at_construction():
             raise ValueError("boom")
 
     with pytest.raises(ConfigurationError, match="directives could not be read") as exc:
-        DjangoMutationField(CreateItem, directives=HostileDirectives())
+        # basedpyright: the raising directives iterator is the hostile input under test;
+        # DjangoMutationField types the parameter as Sequence[object]
+        DjangoMutationField(CreateItem, directives=HostileDirectives())  # pyright: ignore[reportArgumentType]
     assert isinstance(exc.value.__cause__, ValueError)
 
 
@@ -448,7 +465,9 @@ def test_non_iterable_directives_raise_configuration_error():
     CreateItem, _, _ = _operation_mutations()
 
     with pytest.raises(ConfigurationError, match="directives could not be read") as exc:
-        DjangoMutationField(CreateItem, directives=42)
+        # basedpyright: the non-iterable directives value is the hostile input under test;
+        # DjangoMutationField types the parameter as Sequence[object]
+        DjangoMutationField(CreateItem, directives=42)  # pyright: ignore[reportArgumentType]
     assert isinstance(exc.value.__cause__, TypeError)
 
 

@@ -6,10 +6,12 @@ and ``examples/fakeshop/test_query/test_optimizer_auto_api.py``.
 """
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 from apps.library.models import Book, Branch, Genre, TaggedItem
 from apps.products.models import Category, Item
+from django.db.models import Field, ForeignKey
 
 from django_strawberry_framework.optimizer.join_taxonomy import (
     WINDOWABLE_RELATION_KINDS,
@@ -17,6 +19,16 @@ from django_strawberry_framework.optimizer.join_taxonomy import (
     RelationJoinDescriptor,
     classify_relation_join,
 )
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.utils.typing import ModelField
+
+
+def _as_field(stand_in: object) -> "ModelField":
+    """Hand a duck-typed relation field to the classifier that takes a Django field."""
+    # basedpyright: a stand-in field carrying only the slots the code under test reads;
+    # classify_relation_join types the parameter as ModelField | FieldMeta
+    return stand_in  # pyright: ignore[reportReturnType]
 
 
 def test_windowable_relation_kinds_is_classifier_membership_set():
@@ -38,6 +50,8 @@ def test_windowable_relation_kinds_is_classifier_membership_set():
 def test_reverse_fk_classifies_direct_fk():
     """Reverse FK (graph-node analog B): child table stores the parent id."""
     descriptor = classify_relation_join(Category._meta.get_field("items"))
+    category_fk = Item._meta.get_field("category")
+    assert isinstance(category_fk, ForeignKey)
     assert descriptor == RelationJoinDescriptor(
         kind="reverse_many_to_one",
         windowable=True,
@@ -46,7 +60,7 @@ def test_reverse_fk_classifies_direct_fk():
         through_model=None,
         lateral_shape=LateralJoinShape.DIRECT_FK,
         # The resolved child-side FK object (the lateral join's link field).
-        parent_link_field=Item._meta.get_field("category"),
+        parent_link_field=category_fk,
         through_child_field=None,
     )
 
@@ -63,7 +77,9 @@ def test_forward_m2m_classifies_through_table():
     assert descriptor.through_model is Book.genres.through
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
     # Through-link FK pair: parent side (Book) / child side (Genre).
+    assert descriptor.parent_link_field is not None
     assert descriptor.parent_link_field.attname == "book_id"
+    assert descriptor.through_child_field is not None
     assert descriptor.through_child_field.attname == "genre_id"
 
 
@@ -77,7 +93,9 @@ def test_reverse_m2m_classifies_through_table():
     assert descriptor.through_model is Book.genres.through
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
     # The sides swap on the reverse rel: parent is Genre, child is Book.
+    assert descriptor.parent_link_field is not None
     assert descriptor.parent_link_field.attname == "genre_id"
+    assert descriptor.through_child_field is not None
     assert descriptor.through_child_field.attname == "book_id"
 
 
@@ -121,7 +139,7 @@ def test_windowable_kind_without_partition_classifies_unwindowable():
         field=None,
         link_carrier_attnames=(),
     )
-    descriptor = classify_relation_join(double)
+    descriptor = classify_relation_join(_as_field(double))
     assert descriptor.kind == "reverse_many_to_one"
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
@@ -141,8 +159,12 @@ def test_generic_relation_classifies_direct_fk_partitioned_by_object_id():
     ``LateralJoinShape.GENERIC`` arm.
     """
     descriptor = classify_relation_join(Branch._meta.get_field("tags"))
-    object_id_attname = TaggedItem._meta.get_field("object_id").attname
-    content_type_attname = TaggedItem._meta.get_field("content_type").attname
+    object_id_field = TaggedItem._meta.get_field("object_id")
+    content_type_field = TaggedItem._meta.get_field("content_type")
+    assert isinstance(object_id_field, Field)
+    assert isinstance(content_type_field, Field)
+    object_id_attname = object_id_field.attname
+    content_type_attname = content_type_field.attname
     assert descriptor.kind == "generic"
     assert descriptor.windowable is True
     assert descriptor.partition_expr == object_id_attname
@@ -176,7 +198,7 @@ def test_generic_double_without_related_model_classifies_unwindowable():
         object_id_field_name="object_id",
         related_model=None,
     )
-    descriptor = classify_relation_join(double)
+    descriptor = classify_relation_join(_as_field(double))
     assert descriptor.kind == "generic"
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
@@ -197,7 +219,7 @@ def test_m2m_double_without_related_model_has_no_connector():
         through=None,
         related_model=None,
     )
-    descriptor = classify_relation_join(double)
+    descriptor = classify_relation_join(_as_field(double))
     assert descriptor.windowable is True
     assert descriptor.partition_expr == "posts"
     assert descriptor.parent_join_columns == ()
@@ -210,7 +232,7 @@ def test_m2m_double_without_related_model_has_no_connector():
 class _BrokenMeta:
     """A model ``_meta`` whose every field lookup raises."""
 
-    def get_field(self, name):
+    def get_field(self, name: str):
         raise RuntimeError(name)
 
 
@@ -235,7 +257,7 @@ def test_classifier_fail_closes_when_m2m_target_model_has_no_meta():
         through=None,
         related_model=MissingTargetMeta,
     )
-    descriptor = classify_relation_join(m2m)
+    descriptor = classify_relation_join(_as_field(m2m))
     assert descriptor.parent_join_columns == ()
 
 
@@ -260,7 +282,7 @@ def test_classifier_fail_closes_when_generic_target_field_lookup_raises():
         object_id_field_name="object_id",
         related_model=BrokenModel,
     )
-    descriptor = classify_relation_join(generic)
+    descriptor = classify_relation_join(_as_field(generic))
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
     assert descriptor.content_type_column is None
@@ -293,7 +315,7 @@ def test_classifier_fail_closes_when_through_model_field_lookup_raises():
         def m2m_reverse_field_name(self):
             return "target"
 
-    descriptor = classify_relation_join(BrokenM2M())
+    descriptor = classify_relation_join(_as_field(BrokenM2M()))
     assert descriptor.through_model is BrokenThrough
     assert descriptor.parent_link_field is None
     assert descriptor.through_child_field is None
@@ -329,7 +351,7 @@ class _TruthinessRaises:
     [_AttributeReadRaises, _TruthinessRaises],
     ids=["attribute_read_raises", "truthiness_raises"],
 )
-def test_classifier_fail_closes_on_hostile_many_to_many_metadata(field_factory):
+def test_classifier_fail_closes_on_hostile_many_to_many_metadata(field_factory: type):
     """Hostile ``many_to_many`` metadata yields the fully unresolved descriptor.
 
     Neither a raising attribute read nor a value whose ``bool()`` raises may
@@ -356,9 +378,9 @@ def test_classifier_fail_closes_on_hostile_many_to_many_metadata(field_factory):
     ids=["unique_together_targets", "composite_pk_targets"],
 )
 def test_two_column_foreign_object_reverse_is_unwindowable_and_attaches_on_every_carrier(
-    owner,
-    field_name,
-    carriers,
+    owner: str,
+    field_name: str,
+    carriers: tuple[str, ...],
 ):
     """A reverse two-column ``ForeignObject`` has no single partition expression.
 
@@ -435,6 +457,6 @@ def test_reverse_double_with_malformed_carrier_slot_has_no_connector():
         auto_created=True,
         link_carrier_attnames=("p_id", 7),
     )
-    descriptor = classify_relation_join(double)
+    descriptor = classify_relation_join(_as_field(double))
     assert descriptor.parent_join_columns == ()
     assert descriptor.windowable is False

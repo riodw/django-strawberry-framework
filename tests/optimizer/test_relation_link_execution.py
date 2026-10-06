@@ -17,9 +17,13 @@ Fakeshop carries no ``ForeignObject`` and exposes no reverse relation over a
 wire against the optimizer-off wire and pins the optimized query count.
 """
 
+from collections.abc import Callable, Iterator
+from typing import Any
+
 import pytest
 import strawberry
 from django.db import connection
+from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
 from strategy_schemas import make_django_type
 from strawberry import relay
@@ -47,18 +51,23 @@ from ._link_models import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry(isolate_global_registry):
+def _isolate_global_registry(isolate_global_registry: None) -> None:
     """Every row declares fresh ``DjangoType`` classes."""
 
 
 @pytest.fixture
-def link_tables():
+def link_tables() -> Iterator[None]:
     """Materialize and seed the link fixture tables for one row."""
     with link_fixture_tables(connection):
         yield
 
 
-def _parent_visibility(cls, queryset, info, **kwargs):
+def _parent_visibility(
+    cls: type,
+    queryset: QuerySet[LnkParent],
+    info: object,
+    **kwargs: object,
+):
     """An identity ``get_queryset`` hook: forces every hop onto the parent into a ``Prefetch``."""
     return queryset
 
@@ -118,7 +127,7 @@ def _schema(*, optimizer: bool, parent_hook: bool) -> strawberry.Schema:
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
-def _run(query: str, *, parent_hook: bool = False) -> tuple[dict, int]:
+def _run(query: str, *, parent_hook: bool = False):
     """Execute ``query`` optimized; return its data and query count after the oracle agrees."""
     expected = _schema(optimizer=False, parent_hook=parent_hook).execute_sync(query)
     assert expected.errors is None, expected.errors
@@ -126,15 +135,20 @@ def _run(query: str, *, parent_hook: bool = False) -> tuple[dict, int]:
     with CaptureQueriesContext(connection) as ctx:
         result = schema.execute_sync(query)
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert result.data == expected.data
     return result.data, len(ctx.captured_queries)
 
 
-def _names(rows: list[dict], key: str) -> list[list[str]]:
+# basedpyright: ExecutionResult.data is dict[str, Any]; the rows read nested wire values by key
+_WireData = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+
+
+def _names(rows: list[_WireData], key: str) -> list[list[str]]:
     return [[child["name"] for child in row[key]] for row in rows]
 
 
-def _edge_names(rows: list[dict], key: str) -> list[list[str]]:
+def _edge_names(rows: list[_WireData], key: str) -> list[list[str]]:
     return [[edge["node"]["name"] for edge in row[key]["edges"]] for row in rows]
 
 
@@ -143,7 +157,7 @@ _EXPECTED_PAGE = [["a1", "a2"], ["b1"], []]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_two_column_link_list_prefetch_loads_every_carrier(link_tables):
+def test_two_column_link_list_prefetch_loads_every_carrier(link_tables: None):
     """A plain list over the two-column link is one parent query plus one prefetch.
 
     The prefetch ``.only()`` carries both ``p_tenant`` and ``p_code`` (the
@@ -155,23 +169,30 @@ def test_two_column_link_list_prefetch_loads_every_carrier(link_tables):
     assert queries == 2
 
 
+_LINK_CONNECTION_ROOT_ROWS: list[tuple[str, Callable[[_WireData], list[_WireData]]]] = [
+    (
+        "{ parents { label pairChildrenConnection(first: 2) { edges { node { name } } } } }",
+        lambda data: data["parents"],
+    ),
+    (
+        "{ parentsConnection(first: 10) { edges { node { label "
+        "pairChildrenConnection(first: 2) { edges { node { name } } } } } } }",
+        lambda data: [edge["node"] for edge in data["parentsConnection"]["edges"]],
+    ),
+]
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     ("query", "rows_of"),
-    [
-        (
-            "{ parents { label pairChildrenConnection(first: 2) { edges { node { name } } } } }",
-            lambda data: data["parents"],
-        ),
-        (
-            "{ parentsConnection(first: 10) { edges { node { label "
-            "pairChildrenConnection(first: 2) { edges { node { name } } } } } } }",
-            lambda data: [edge["node"] for edge in data["parentsConnection"]["edges"]],
-        ),
-    ],
+    _LINK_CONNECTION_ROOT_ROWS,
     ids=["list_root", "connection_root"],
 )
-def test_two_column_link_connection_resolves_per_parent(link_tables, query, rows_of):
+def test_two_column_link_connection_resolves_per_parent(
+    link_tables: None,
+    query: str,
+    rows_of: Callable[[_WireData], list[_WireData]],
+):
     """A nested connection over the two-column link has no partition and resolves per parent.
 
     The window is left unplanned (one page query per parent after the root
@@ -192,7 +213,7 @@ def test_two_column_link_connection_resolves_per_parent(link_tables, query, rows
     ],
     ids=["one_column_foreign_object", "to_field_foreign_key"],
 )
-def test_one_column_link_list_prefetch_is_batched(link_tables, relation, query):
+def test_one_column_link_list_prefetch_is_batched(link_tables: None, relation: str, query: str):
     """A plain list over a one-column link is one parent query plus one prefetch.
 
     The child carrier (``p_id`` / the ``slug`` FK column) and, for the
@@ -219,7 +240,7 @@ def test_one_column_link_list_prefetch_is_batched(link_tables, relation, query):
     ],
     ids=["one_column_foreign_object", "to_field_foreign_key"],
 )
-def test_one_column_link_connection_is_one_window(link_tables, relation, query):
+def test_one_column_link_connection_is_one_window(link_tables: None, relation: str, query: str):
     """A nested connection over a one-column link is one root query plus one window.
 
     The window partitions by the lone carrier column, and both projections load
@@ -236,7 +257,7 @@ def test_one_column_link_connection_is_one_window(link_tables, relation, query):
     ["columnChildren", "slugChildren"],
     ids=["one_column_foreign_object", "to_field_foreign_key"],
 )
-def test_forward_link_prefetch_loads_the_child_carrier(link_tables, root):
+def test_forward_link_prefetch_loads_the_child_carrier(link_tables: None, root: str):
     """A forward hop downgraded to a ``Prefetch`` is one child query plus one parent query.
 
     The parent type's ``get_queryset`` forces the ``Prefetch``, whose attach reads
@@ -254,7 +275,7 @@ def test_forward_link_prefetch_loads_the_child_carrier(link_tables, root):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_conflicting_alias_connection_loads_the_parent_link_columns(link_tables):
+def test_conflicting_alias_connection_loads_the_parent_link_columns(link_tables: None):
     """A connection refused for conflicting alias arguments still loads the parent ``slug``.
 
     Two aliases of one parent hop select the nested connection with different
@@ -282,13 +303,16 @@ def test_conflicting_alias_connection_loads_the_parent_link_columns(link_tables)
     assert queries == 1 + 4 * 2
 
 
-def _leaf(node: dict) -> str:
-    return node.get("name", node.get("label"))
+def _leaf(node: _WireData) -> str:
+    leaf = node.get("name", node.get("label"))
+    assert isinstance(leaf, str)
+    return leaf
 
 
-def _m2m_rows(data: dict) -> list[list[str]]:
+def _m2m_rows(data: _WireData) -> list[list[str]]:
     """Each root row's related leaves, from a list field or a connection's edges."""
     root = data.get("parents", data.get("tags"))
+    assert root is not None
     rows = []
     for row in root:
         related = next(value for key, value in row.items() if key not in {"label", "name"})
@@ -313,7 +337,7 @@ _M2M_ROWS = {
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("row", list(_M2M_ROWS), ids=list(_M2M_ROWS))
-def test_m2m_through_to_field_link_loads_the_source_key(link_tables, row):
+def test_m2m_through_to_field_link_loads_the_source_key(link_tables: None, row: str):
     """An M2M hop whose through FK targets a non-pk column loads that column on the source.
 
     Django matches through rows to source rows by the through FK's target
@@ -349,7 +373,7 @@ def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
     if route == "hint":
         child_meta["optimizer_hints"] = {"parent": OptimizerHint.prefetch_related()}
 
-        def _parent(root) -> parent_type | None:
+        def _parent(root: LnkPairChild) -> parent_type | None:
             return root.parent
 
         child_namespace["parent"] = strawberry.field(resolver=_parent)
@@ -372,7 +396,10 @@ def _pair_parent_schema(*, optimizer: bool, route: str) -> strawberry.Schema:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("route", ["annotation", "hint"], ids=["visibility_hook", "prefetch_hint"])
-def test_consumer_authored_two_column_forward_link_prefetch_loads_every_target(link_tables, route):
+def test_consumer_authored_two_column_forward_link_prefetch_loads_every_target(
+    link_tables: None,
+    route: str,
+):
     """A prefetched two-column forward link is one child query plus one parent query.
 
     Django attaches each prefetched parent by the link's targets (``tenant``,
@@ -387,6 +414,7 @@ def test_consumer_authored_two_column_forward_link_prefetch_loads_every_target(l
         result = schema.execute_sync(query)
     assert result.errors is None, result.errors
     assert result.data == expected.data
+    assert result.data is not None
     assert [(row["name"], row["parent"]["label"]) for row in result.data["pairs"]] == [
         ("a1", "pa"),
         ("a2", "pa"),
@@ -449,12 +477,7 @@ def _generated_pair_schema(
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
-def _run_generated(
-    query: str,
-    *,
-    parent_hook: bool = False,
-    child_model: type = LnkPairChild,
-) -> tuple[dict, list[str]]:
+def _run_generated(query: str, *, parent_hook: bool = False, child_model: type = LnkPairChild):
     """Execute ``query`` optimized over the generated link; return its data and SQL.
 
     The optimizer-off wire is the oracle: the optimized data must equal it.
@@ -473,11 +496,12 @@ def _run_generated(
     with CaptureQueriesContext(connection) as ctx:
         result = schema.execute_sync(query)
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert result.data == expected.data
     return result.data, [captured["sql"] for captured in ctx.captured_queries]
 
 
-def _pair_rows(data: dict) -> list[dict]:
+def _pair_rows(data: _WireData) -> list[_WireData]:
     """The child rows of a ``pairs`` list or a ``pairsConnection`` page."""
     if "pairs" in data:
         return data["pairs"]
@@ -507,10 +531,10 @@ _PAIR_PARENTS = [
     ids=["select_related", "prefetch"],
 )
 def test_generated_two_column_forward_link_resolves_every_parent(
-    link_tables,
-    query,
-    parent_hook,
-    queries,
+    link_tables: None,
+    query: str,
+    parent_hook: bool,
+    queries: int,
 ):
     """The generated forward field over a two-column link joins on both columns.
 
@@ -525,7 +549,7 @@ def test_generated_two_column_forward_link_resolves_every_parent(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_generated_two_column_forward_link_id_selection_joins_the_parent(link_tables):
+def test_generated_two_column_forward_link_id_selection_joins_the_parent(link_tables: None):
     """An id-only selection over the link reads the parent row, never one carrier column.
 
     FK-id elision answers an id-only hop from the source row's one link column;
@@ -551,9 +575,9 @@ def test_generated_two_column_forward_link_id_selection_joins_the_parent(link_ta
     ids=["reverse_list", "reverse_connection"],
 )
 def test_generated_two_column_forward_link_round_trips_through_the_reverse_side(
-    link_tables,
-    relation,
-    queries,
+    link_tables: None,
+    relation: str,
+    queries: int,
 ):
     """Forward over the link and back through its reverse side returns each parent's children.
 
@@ -580,9 +604,9 @@ def test_generated_two_column_forward_link_round_trips_through_the_reverse_side(
     ids=["select_related", "prefetch"],
 )
 def test_generated_nullable_two_column_forward_link_resolves_absent_parents_to_null(
-    link_tables,
-    parent_hook,
-    queries,
+    link_tables: None,
+    parent_hook: bool,
+    queries: int,
 ):
     """A ``null=True`` link over nullable carriers is null wherever no parent matches.
 

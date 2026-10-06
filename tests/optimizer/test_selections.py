@@ -6,10 +6,20 @@ request-observable. Cache-key and window behavior through a real document is
 """
 
 import copy
+from collections.abc import Iterable
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
-from graphql import parse
-from graphql.language.ast import FragmentDefinitionNode, FragmentSpreadNode
+from graphql import GraphQLResolveInfo, parse
+from graphql.language.ast import (
+    DocumentNode,
+    FieldNode,
+    FragmentDefinitionNode,
+    FragmentSpreadNode,
+    InlineFragmentNode,
+    OperationDefinitionNode,
+)
+from strawberry import Info
 
 from django_strawberry_framework.optimizer.selections import (
     _CONNECTION_FIELD_PYTHON_NAMES,
@@ -34,12 +44,56 @@ from django_strawberry_framework.optimizer.selections import (
     should_include,
 )
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.optimizer.selections import FragmentVisitKey
+
+
+def _operation(doc: DocumentNode) -> OperationDefinitionNode:
+    """The document's first definition, proven to be its operation."""
+    operation = doc.definitions[0]
+    assert isinstance(operation, OperationDefinitionNode)
+    return operation
+
+
+def _ast_selections(
+    selections: Iterable[object],
+) -> list[FieldNode | InlineFragmentNode | FragmentSpreadNode]:
+    """Materialize ``selections``, proving each is one of a selection set's three node kinds."""
+    members: list[FieldNode | InlineFragmentNode | FragmentSpreadNode] = []
+    for selection in selections:
+        assert isinstance(selection, (FieldNode, InlineFragmentNode, FragmentSpreadNode))
+        members.append(selection)
+    return members
+
+
+def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a duck-typed info to the AST adapter that takes a graphql-core resolve info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads;
+    # ast_to_converted_selections types info as graphql-core's GraphQLResolveInfo
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _as_strawberry_info(stand_in: object) -> Info[object, object]:
+    """Hand a duck-typed info to the priming hook that takes a Strawberry info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads;
+    # prime_selected_fields types info as a concrete Strawberry Info
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _field_nodes(selections: Iterable[object]) -> list[FieldNode]:
+    """Materialize ``selections``, proving each is a ``FieldNode``."""
+    fields: list[FieldNode] = []
+    for selection in selections:
+        assert isinstance(selection, FieldNode)
+        fields.append(selection)
+    return fields
+
 
 def _field(
-    name,
-    selections=None,
-    directives=None,
-    alias=None,
+    name: str,
+    selections: list[SimpleNamespace] | None = None,
+    directives: dict[str, object] | None = None,
+    alias: str | None = None,
 ):
     return SimpleNamespace(
         name=name,
@@ -50,7 +104,10 @@ def _field(
     )
 
 
-def _fragment(selections=None, directives=None):
+def _fragment(
+    selections: Iterable[SimpleNamespace] | None = None,
+    directives: dict[str, object] | None = None,
+):
     return SimpleNamespace(
         type_condition="T",
         directives=directives or {},
@@ -66,9 +123,9 @@ def _fragment(selections=None, directives=None):
 def test_ast_child_selections_returns_children_or_empty():
     """A field with a selection set yields its children; a leaf yields ``()``."""
     doc = parse("{ a { b c } d }")
-    operation = doc.definitions[0]
+    operation = _operation(doc)
     field_a, field_d = ast_child_selections(operation)
-    assert {c.name.value for c in ast_child_selections(field_a)} == {"b", "c"}
+    assert {c.name.value for c in _field_nodes(ast_child_selections(field_a))} == {"b", "c"}
     assert ast_child_selections(field_d) == ()  # scalar leaf, no selection_set.
 
 
@@ -76,11 +133,12 @@ def test_resolve_unvisited_fragment_resolves_once_then_dedups():
     """A spread resolves to its definition once; a second visit and misses return ``None``."""
     doc = parse("query { ...F } fragment F on T { x }")
     operation, fragment_def = doc.definitions
+    assert isinstance(operation, OperationDefinitionNode)
     spread = operation.selection_set.selections[0]
-    fragments = {"F": fragment_def}
-    visited: set[str] = set()
-
     assert isinstance(fragment_def, FragmentDefinitionNode)
+    fragments = {"F": fragment_def}
+    visited: set[FragmentVisitKey] = set()
+
     assert resolve_unvisited_fragment(spread, fragments, visited) is fragment_def
     assert visited == {"F"}
     # Already visited -> None (the cycle / sibling-spread guard).
@@ -109,9 +167,11 @@ def test_resolve_unvisited_fragment_depth_keys_visits_per_spread_site():
     """
     doc = parse("query { ...F } fragment F on T { x }")
     operation, fragment_def = doc.definitions
+    assert isinstance(operation, OperationDefinitionNode)
     spread = operation.selection_set.selections[0]
+    assert isinstance(fragment_def, FragmentDefinitionNode)
     fragments = {"F": fragment_def}
-    visited: set[tuple[str, int]] = set()
+    visited: set[FragmentVisitKey] = set()
 
     assert resolve_unvisited_fragment(spread, fragments, visited, depth=0) is fragment_def
     assert visited == {("F", 0)}
@@ -127,18 +187,20 @@ def test_directive_variable_names_collects_skip_include_vars_only():
     doc = parse(
         "query Q($x: Boolean!, $y: Boolean!, $z: Boolean!) { a @skip(if: $x) @other(if: $z) }",
     )
-    field_a = doc.definitions[0].selection_set.selections[0]
+    field_a = _operation(doc).selection_set.selections[0]
     assert directive_variable_names(field_a) == {"x"}
 
     doc2 = parse("query Q($y: Boolean!) { b @include(if: $y) }")
-    field_b = doc2.definitions[0].selection_set.selections[0]
+    field_b = _operation(doc2).selection_set.selections[0]
     assert directive_variable_names(field_b) == {"y"}
 
 
 def test_directive_variable_names_ignores_non_directive_objects():
     """A ``directives`` collection carrying a non-``DirectiveNode`` is skipped."""
     node = SimpleNamespace(directives=[object()])
-    assert directive_variable_names(node) == set()
+    # basedpyright: a stand-in node carrying only the slots the code under test reads;
+    # directive_variable_names types the parameter as Node
+    assert directive_variable_names(node) == set()  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -352,8 +414,8 @@ def test_ast_to_converted_selections_memoized_per_execution():
     from django_strawberry_framework.optimizer.selections import ast_to_converted_selections
 
     doc = parse("{ items { name } books { title } }")
-    field_nodes = list(doc.definitions[0].selection_set.selections)
-    info = SimpleNamespace(fragments={}, variable_values={})
+    field_nodes = _ast_selections(_operation(doc).selection_set.selections)
+    info = _as_resolve_info(SimpleNamespace(fragments={}, variable_values={}))
     single = field_nodes[:1]
 
     frame = begin_execution_frame({}, nested=False)
@@ -429,7 +491,7 @@ def test_included_field_selections_materializes_one_shot_iterables():
     assert included_field_selections(tup) is tup
 
 
-def _count_observers(selection, **kwargs):
+def _count_observers(selection: SimpleNamespace, **kwargs: ConnectionFieldNames):
     """Return ``(totalCount selected, hasNextPage selected)`` for one connection selection."""
     return (
         connection_total_count_selected(selection, **kwargs),
@@ -505,7 +567,7 @@ def test_connection_count_observers_matrix():
 # ---------------------------------------------------------------------------
 
 
-def _info_with_converter(converter):
+def _info_with_converter(converter: object):
     """A plan-time-shaped ``info`` whose schema config carries ``converter``."""
     return SimpleNamespace(
         schema=SimpleNamespace(
@@ -552,7 +614,7 @@ def test_connection_field_names_honor_a_custom_naming_config():
     """A converter overriding ``apply_naming_config`` drives the vocabulary too."""
 
     class _Shouty:
-        def apply_naming_config(self, name):
+        def apply_naming_config(self, name: str):
             return name.upper()
 
     names = connection_field_names(_info_with_converter(_Shouty()))
@@ -626,11 +688,14 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
         "fragment Frag on Author { penName }",
     )
     operation, fragment_def = doc.definitions
-    field_nodes = list(operation.selection_set.selections)
-    info = SimpleNamespace(
-        fragments={"Frag": fragment_def},
-        variable_values={"incl": True},
-        schema=None,
+    assert isinstance(operation, OperationDefinitionNode)
+    field_nodes = _ast_selections(operation.selection_set.selections)
+    info = _as_resolve_info(
+        SimpleNamespace(
+            fragments={"Frag": fragment_def},
+            variable_values={"incl": True},
+            schema=None,
+        ),
     )
 
     converted = ast_to_converted_selections(info, field_nodes)
@@ -643,6 +708,7 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
     assert field_sel.arguments == {"id": "1"}
     assert field_sel.directives == {"include": {"if": True}}
     assert len(field_sel.selections) == 1
+    assert isinstance(field_sel.selections[0], SelectedField)
     assert field_sel.selections[0].name == "name"
 
     # 2. Named InlineFragment
@@ -650,6 +716,7 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
     assert isinstance(inline_named, InlineFragment)
     assert inline_named.type_condition == "Book"
     assert len(inline_named.selections) == 1
+    assert isinstance(inline_named.selections[0], SelectedField)
     assert inline_named.selections[0].name == "title"
 
     # 3. Anonymous InlineFragment (type_condition is None, never crashes)
@@ -665,6 +732,7 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
     assert spread.name == "Frag"
     assert spread.type_condition == "Author"
     assert len(spread.selections) == 1
+    assert isinstance(spread.selections[0], SelectedField)
     assert spread.selections[0].name == "penName"
 
 
@@ -674,34 +742,34 @@ def test_prime_selected_fields_lifecycle():
 
     # 1. No _raw_info -> no-op
     bare_info = SimpleNamespace()
-    prime_selected_fields(bare_info)
+    prime_selected_fields(_as_strawberry_info(bare_info))
     assert "selected_fields" not in bare_info.__dict__
 
     # 2. _raw_info has no field_nodes -> no-op
     empty_raw = SimpleNamespace(_raw_info=SimpleNamespace(field_nodes=None))
-    prime_selected_fields(empty_raw)
+    prime_selected_fields(_as_strawberry_info(empty_raw))
     assert "selected_fields" not in empty_raw.__dict__
 
     # 3. Existing selected_fields in __dict__ is never overwritten
     pre_existing = ["sentinel"]
     existing_info = SimpleNamespace(
         _raw_info=SimpleNamespace(
-            field_nodes=[parse("{ x }").definitions[0].selection_set.selections[0]],
+            field_nodes=[_operation(parse("{ x }")).selection_set.selections[0]],
             fragments={},
             variable_values={},
         ),
         selected_fields=pre_existing,
     )
     assert existing_info.__dict__["selected_fields"] is pre_existing
-    prime_selected_fields(existing_info)
+    prime_selected_fields(_as_strawberry_info(existing_info))
     assert existing_info.__dict__["selected_fields"] is pre_existing
 
     # 4. Valid unpopulated info -> primed with converted selections
     doc = parse("{ item { name } }")
-    field_node = doc.definitions[0].selection_set.selections[0]
+    field_node = _operation(doc).selection_set.selections[0]
     raw_info = SimpleNamespace(field_nodes=[field_node], fragments={}, variable_values={})
     info_to_prime = SimpleNamespace(_raw_info=raw_info)
-    prime_selected_fields(info_to_prime)
+    prime_selected_fields(_as_strawberry_info(info_to_prime))
     assert "selected_fields" in info_to_prime.__dict__
     assert len(info_to_prime.selected_fields) == 1
     assert isinstance(info_to_prime.selected_fields[0], SelectedField)

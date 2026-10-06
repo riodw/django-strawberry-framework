@@ -19,8 +19,13 @@ names distinct from the inline test models declared elsewhere in the suite.
 """
 
 import contextlib
+from typing import TYPE_CHECKING
 
 from django.db import models
+from django.db.backends.base.base import BaseDatabaseWrapper
+
+if TYPE_CHECKING:
+    from django.db.models.fields.related_descriptors import RelatedManager
 
 
 class RpCompositeParent(models.Model):
@@ -42,6 +47,8 @@ class RpCompositeParent(models.Model):
     code = models.CharField(max_length=32)
     pk = models.CompositePrimaryKey("tenant_id", "code")
     label = models.CharField(max_length=64)
+    # Reverse accessor Django adds at class creation, declared for the type checker.
+    children: "RelatedManager[RpCompositeChild]"
 
     class Meta:
         app_label = "products"
@@ -80,7 +87,7 @@ class RpCompositeChild(models.Model):
 
 
 @contextlib.contextmanager
-def relation_fixture_tables(connection):
+def relation_fixture_tables(connection: BaseDatabaseWrapper):
     """Create the ``Rp*`` fixture tables via ``schema_editor``; drop on exit.
 
     The models are ``managed = False``, so their tables never exist until a

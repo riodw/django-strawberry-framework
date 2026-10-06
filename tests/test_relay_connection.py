@@ -22,17 +22,22 @@ nested ``pageInfo``, and shipped SDL field presence live in
 ``examples/fakeshop/test_query/test_products_visibility_api.py``.
 """
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
+import pytest_django
 import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, RepairTicket, Shelf, Venue
 from apps.products.models import Category, Item, Property
 from django.db import connection as db_connection
 from django.db import models as djmodels
+from django.db.models import ForeignObjectRel
 from django.http import HttpRequest
 from strategy_schemas import make_django_type
-from strawberry import relay
+from strawberry import Info, relay
+from strawberry.types.field import StrawberryField
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoListField,
@@ -43,6 +48,7 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.connection import (
+    DjangoConnection,
     _connection_type_cache,
     _connection_type_for,
 )
@@ -53,7 +59,35 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
 
 
-def _path(*keys):
+def _as_django_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a plain stand-in class to a seam that takes a ``DjangoType``."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
+    # registry, teardown and N+1 seams type the parameter as type[DjangoType]
+    return cls  # pyright: ignore[reportReturnType]
+
+
+def _as_strawberry_info(stand_in: object) -> Info[object, object]:
+    """Hand a duck-typed info to a window seam that takes a Strawberry info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the window
+    # seams type info as a concrete Strawberry Info
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _as_window_rows(*rows: object) -> list[djmodels.Model]:
+    """Hand stand-in window rows to ``_WindowedConnectionRows``."""
+    # basedpyright: a stand-in row carrying only the window columns the code under test reads;
+    # _WindowedConnectionRows types rows as list[Model]
+    return list(rows)  # pyright: ignore[reportReturnType]
+
+
+def _synthesized_field() -> StrawberryField:
+    """A resolver-backed Strawberry field, as connection synthesis plants one."""
+    # basedpyright: Strawberry types field(resolver=...) as the resolver's return so a class body
+    # can declare it; the call returns the StrawberryField the teardown restores
+    return strawberry.field(resolver=lambda: None)  # pyright: ignore[reportReturnType]
+
+
+def _path(*keys: str | int):
     """Build a graphql-core-style linked response path (integer keys are list indexes)."""
     path = None
     for key in keys:
@@ -62,7 +96,7 @@ def _path(*keys):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry(isolate_global_registry):
+def _isolate_global_registry(isolate_global_registry: None) -> None:
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -72,7 +106,7 @@ def _isolate_global_registry(isolate_global_registry):
 _make_type = make_django_type
 
 
-def _schema_with_root(declaring_type, *, field_name="objs"):
+def _schema_with_root(declaring_type: type, *, field_name: str = "objs"):
     """Finalize and build a schema exposing ``field_name: [declaring_type!]!``.
 
     The root field lists every row of the declaring type's model in pk order
@@ -81,7 +115,8 @@ def _schema_with_root(declaring_type, *, field_name="objs"):
     finalize_django_types()
     model = declaring_type.__django_strawberry_definition__.model
 
-    def _resolver() -> list[declaring_type]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def _resolver() -> list[declaring_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         return list(model._default_manager.all().order_by("pk"))
 
     query_cls = strawberry.type(
@@ -97,7 +132,7 @@ def _schema_with_root(declaring_type, *, field_name="objs"):
     return strawberry.Schema(query=query_cls, config=strawberry_config())
 
 
-def _field_args_block(sdl, field_name):
+def _field_args_block(sdl: str, field_name: str):
     """Return the SDL argument block of ``field_name``.
 
     The Relay pagination args carry descriptions, so graphql-core prints a
@@ -109,12 +144,16 @@ def _field_args_block(sdl, field_name):
     return block
 
 
-def _seed_library_books(titles, *, genre_name="fiction"):
+def _seed_library_books(
+    titles: list[str],
+    *,
+    genre_name: str = "fiction",
+) -> tuple[Genre, list[Book]]:
     """Create one genre linked to one book per title (library inline-create rule)."""
     branch = Branch.objects.create(name="central")
     shelf = Shelf.objects.create(code="A1", branch=branch)
     genre = Genre.objects.create(name=genre_name)
-    books = []
+    books: list[Book] = []
     for title in titles:
         book = Book.objects.create(title=title, shelf=shelf)
         book.genres.add(genre)
@@ -170,6 +209,7 @@ def test_reverse_fk_without_related_name_resolves_list_and_connection():
     ``relay.Node``.
     """
     rel = Venue._meta.get_field("repairticket")
+    assert isinstance(rel, ForeignObjectRel)
     assert rel.get_accessor_name() == "repairticket_set"  # the split this test pins
 
     _make_type("RepairTicketNode", RepairTicket, ("id", "code"))
@@ -189,6 +229,7 @@ def test_reverse_fk_without_related_name_resolves_list_and_connection():
         "repairticketConnection { edges { node { code } } } } }",
     )
     assert result.errors is None
+    assert result.data is not None
     assert result.data["objs"] == [
         {
             "name": "a1",
@@ -230,7 +271,7 @@ def test_shape_list_suppresses_connection():
 
 
 @pytest.mark.parametrize("shape", ["connection", "both"])
-def test_non_node_target_explicit_raises(shape):
+def test_non_node_target_explicit_raises(shape: str):
     """An explicit ``"connection"`` / ``"both"`` over a non-Node target raises at finalize.
 
     Construction-time ``ConfigurationError``: the silent list-only default is
@@ -485,18 +526,23 @@ def test_registry_clear_preserves_replacement_for_synthesized_connection():
 
 def test_relation_connection_teardown_restores_owned_annotations_in_place():
     """Teardown preserves the annotation-dict identity held by consumer tooling."""
-    annotations = {"items": list[Item]}
+    annotations: dict[str, object] = {"items": list[Item]}
 
+    @_as_django_type
     class CategoryType:
         __annotations__ = annotations
 
-    field_obj = strawberry.field(resolver=lambda: None)
-    CategoryType.items_connection = field_obj
+    field_obj = _synthesized_field()
+    # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
+    # restores; the class declares no such attribute
+    CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
     definition = SimpleNamespace(relation_connections={"items_connection": "items"})
     registry.register(Category, CategoryType)
     _register_relation_connection_teardown(
         CategoryType,
-        definition,
+        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+        # _register_relation_connection_teardown types the parameter as DjangoTypeDefinition
+        definition,  # pyright: ignore[reportArgumentType]
         generated="items_connection",
         field_obj=field_obj,
         relation_name="items",
@@ -523,19 +569,24 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
     must still drop the synthesized annotation and restore the suppressed
     relation annotation into whatever dict is current.
     """
-    synthesis_time_annotations = {"items": list[Item]}
+    synthesis_time_annotations: dict[str, object] = {"items": list[Item]}
     replaced = {"name": str, "items_connection": object}
 
+    @_as_django_type
     class CategoryType:
         __annotations__ = replaced
 
-    field_obj = strawberry.field(resolver=lambda: None)
-    CategoryType.items_connection = field_obj
+    field_obj = _synthesized_field()
+    # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
+    # restores; the class declares no such attribute
+    CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
     definition = SimpleNamespace(relation_connections={"items_connection": "items"})
     registry.register(Category, CategoryType)
     _register_relation_connection_teardown(
         CategoryType,
-        definition,
+        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+        # _register_relation_connection_teardown types the parameter as DjangoTypeDefinition
+        definition,  # pyright: ignore[reportArgumentType]
         generated="items_connection",
         field_obj=field_obj,
         relation_name="items",
@@ -555,20 +606,25 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
 
 def test_relation_connection_teardown_keeps_a_present_relation_annotation():
     """The replaced-dict inverse never overwrites an already-present relation slot."""
-    synthesis_time_annotations = {"items": list[Item]}
+    synthesis_time_annotations: dict[str, object] = {"items": list[Item]}
     consumer_items = object()
     replaced = {"items": consumer_items, "items_connection": object}
 
+    @_as_django_type
     class CategoryType:
         __annotations__ = replaced
 
-    field_obj = strawberry.field(resolver=lambda: None)
-    CategoryType.items_connection = field_obj
+    field_obj = _synthesized_field()
+    # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
+    # restores; the class declares no such attribute
+    CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
     definition = SimpleNamespace(relation_connections={"items_connection": "items"})
     registry.register(Category, CategoryType)
     _register_relation_connection_teardown(
         CategoryType,
-        definition,
+        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+        # _register_relation_connection_teardown types the parameter as DjangoTypeDefinition
+        definition,  # pyright: ignore[reportArgumentType]
         generated="items_connection",
         field_obj=field_obj,
         relation_name="items",
@@ -639,7 +695,12 @@ def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild
 # =============================================================================
 
 
-def _genres_list_schema(*, optimizer=False, book_total_count=False, strictness="off"):
+def _genres_list_schema(
+    *,
+    optimizer: bool = False,
+    book_total_count: bool = False,
+    strictness: str = "off",
+):
     """Build a ``DjangoListField(GenreType)`` root over the M2M ``Genre.books``.
 
     With ``optimizer`` installed the parent ``Genre`` queryset is planned, so
@@ -673,7 +734,7 @@ def _genres_list_schema(*, optimizer=False, book_total_count=False, strictness="
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
-def _genres_filterable_book_schema(*, strictness="raise"):
+def _genres_filterable_book_schema(*, strictness: str = "raise"):
     """Build the same M2M genres list root but with ``BookType`` carrying a sidecar.
 
     A ``filterset_class`` on ``BookType`` means a nested ``booksConnection(filter:
@@ -718,7 +779,7 @@ def _genres_filterable_book_schema(*, strictness="raise"):
     )
 
 
-def _genres_distinct_book_schema(*, optimizer=True, strictness="off"):
+def _genres_distinct_book_schema(*, optimizer: bool = True, strictness: str = "off"):
     """M2M genres list root whose ``BookType`` target ``get_queryset`` ``.distinct()``s.
 
     A ``.distinct()``-ing target is a Decision-6 DISTINCT fallback: the window's
@@ -737,8 +798,11 @@ def _genres_distinct_book_schema(*, optimizer=True, strictness="off"):
             connection = {"total_count": True}
 
         @classmethod
-        def get_queryset(cls, queryset, info):
+        @override
+        def get_queryset(cls, queryset: djmodels.QuerySet[Book], info: object):
             return queryset.filter(genres__isnull=False).distinct()
+
+    assert registry.get(Book) is BookType
 
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
@@ -756,7 +820,7 @@ def _genres_distinct_book_schema(*, optimizer=True, strictness="off"):
     return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
 
 
-def _exec(schema, query):
+def _exec(schema: strawberry.Schema, query: str):
     """Execute and return the first parent's ``booksConnection`` dict (no errors)."""
     result = schema.execute_sync(query)
     assert result.errors is None, result.errors
@@ -764,7 +828,7 @@ def _exec(schema, query):
 
 
 @pytest.mark.django_db
-def test_fast_path_single_query(django_assert_num_queries):
+def test_fast_path_single_query(django_assert_num_queries: pytest_django.DjangoAssertNumQueries):
     """Parent page + one window query, zero per-parent queries (the cost contract).
 
     The optimizer-on mirror of the optimizer-less ``1 + N`` cost (live at
@@ -791,12 +855,15 @@ def test_fast_path_single_query(django_assert_num_queries):
             schema,
             "{ objs { name booksConnection(first: 2) { edges { node { title } } } } }",
         )
+    assert result.data is not None
     assert len(result.data["objs"]) == 4
     assert all(len(g["booksConnection"]["edges"]) == 2 for g in result.data["objs"])
 
 
 @pytest.mark.django_db
-def test_fast_path_through_schema_connection_extension(django_assert_num_queries):
+def test_fast_path_through_schema_connection_extension(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """The fast path survives Strawberry's ``ConnectionExtension.resolve`` wrapper.
 
     MANDATORY (spec-033 Decision 5, the through-schema mandate): execute the real ``relay.connection(...)`` field
@@ -813,12 +880,15 @@ def test_fast_path_through_schema_connection_extension(django_assert_num_queries
             schema,
             "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
         )
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["a", "b"]
 
 
 @pytest.mark.django_db
-def test_divergent_aliases_one_window_query_per_alias(django_assert_num_queries):
+def test_divergent_aliases_one_window_query_per_alias(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """Divergent aliases cost parents + ONE window query per alias.
 
     ``a: booksConnection(first: 2)`` + ``b: booksConnection(first: 5)`` was the
@@ -850,6 +920,7 @@ def test_divergent_aliases_one_window_query_per_alias(django_assert_num_queries)
             "b: booksConnection(first: 5) { edges { node { title } } } "
             "} }",
         )
+    assert result.data is not None
     assert len(result.data["objs"]) == 4
     for obj in result.data["objs"]:
         assert len(obj["a"]["edges"]) == 2  # a's window bound
@@ -886,6 +957,7 @@ def test_divergent_aliases_wire_parity():
     slow = _exec(_genres_list_schema(optimizer=False), query)
     assert fast.data == slow.data
     # And the fast payload is substantively right, not vacuously equal.
+    assert fast.data is not None
     fast_obj = fast.data["objs"][0]
     assert [e["node"]["title"] for e in fast_obj["a"]["edges"]] == ["a", "b"]
     assert fast_obj["a"]["pageInfo"]["hasNextPage"] is True
@@ -915,7 +987,8 @@ def test_divergent_alias_per_key_window_preferred_over_shared():
     finalize_django_types()
     model = genre_type.__django_strawberry_definition__.model
 
-    def _resolver() -> list[genre_type]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def _resolver() -> list[genre_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         objs = list(model._default_manager.all().order_by("pk"))
         for obj in objs:
             books = list(obj.books.all().order_by("pk"))
@@ -946,6 +1019,7 @@ def test_divergent_alias_per_key_window_preferred_over_shared():
         "{ objs { x: booksConnection(first: 2) { edges { node { title } } } } }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["x"]["edges"]]
     assert titles == ["b"]  # the per-key window, not the shared ["a", "c"]
 
@@ -969,6 +1043,7 @@ def test_divergent_mixed_sidecar_serves_each_alias_correctly():
         context_value=HttpRequest(),
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     obj = result.data["objs"][0]
     assert [e["node"]["title"] for e in obj["a"]["edges"]] == ["banana"]
     assert [e["node"]["title"] for e in obj["b"]["edges"]] == ["apple", "banana", "avocado"]
@@ -986,6 +1061,7 @@ def test_divergent_aliases_strictness_raise_planned_keys_silent():
         "} }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     obj = result.data["objs"][0]
     assert len(obj["a"]["edges"]) == 2
     assert len(obj["b"]["edges"]) == 3
@@ -1043,6 +1119,7 @@ def test_distinct_target_fallback_reports_correct_total_count():
 
     schema = _genres_distinct_book_schema(optimizer=True)
     result = _exec(schema, "{ objs { name booksConnection { totalCount } } }")
+    assert result.data is not None
     by_name = {g["name"]: g["booksConnection"]["totalCount"] for g in result.data["objs"]}
     # True distinct count (3), NOT the inflated 5 a pre-DISTINCT Count(1) OVER reports.
     assert by_name["fiction"] == 3
@@ -1053,7 +1130,7 @@ def test_distinct_target_fallback_reports_correct_total_count():
     "args",
     ["first: 2", "first: 10", 'first: 2, after: "YXJyYXljb25uZWN0aW9uOjA="'],
 )
-def test_fast_path_wire_parity_with_pipeline(args):
+def test_fast_path_wire_parity_with_pipeline(args: str):
     """Identical edges / cursors / pageInfo for the same data, optimizer on vs off.
 
     The core parity matrix: the fast path (optimizer installed, window consumed)
@@ -1109,6 +1186,7 @@ def test_fast_path_wire_parity_last_only():
     query = f"{{ objs {{ {selection} }} }}"
 
     fast = _exec(_genres_list_schema(optimizer=True), query)
+    assert fast.data is not None
     fast_conn = fast.data["objs"][0]["booksConnection"]
     assert [e["node"]["title"] for e in fast_conn["edges"]] == ["d", "e"]
     assert fast_conn["pageInfo"]["hasPreviousPage"] is True
@@ -1120,7 +1198,7 @@ def test_fast_path_wire_parity_last_only():
     assert fast.data == slow.data
 
 
-def _genres_expression_ordered_schema(*, optimizer=True, auto_camel_case=True):
+def _genres_expression_ordered_schema(*, optimizer: bool = True, auto_camel_case: bool = True):
     """``_genres_list_schema`` whose ``BookType`` orders by a bare EXPRESSION.
 
     ``get_queryset`` returns ``queryset.order_by(Lower("title"))``, so the
@@ -1139,8 +1217,11 @@ def _genres_expression_ordered_schema(*, optimizer=True, auto_camel_case=True):
             connection = {"total_count": True}
 
         @classmethod
-        def get_queryset(cls, queryset, info):
+        @override
+        def get_queryset(cls, queryset: djmodels.QuerySet[Book], info: object):
             return queryset.order_by(Lower("title"))
+
+    assert registry.get(Book) is BookType
 
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
@@ -1163,7 +1244,9 @@ def _genres_expression_ordered_schema(*, optimizer=True, auto_camel_case=True):
 
 
 @pytest.mark.django_db
-def test_windowed_last_page_reverses_a_bare_expression_ordering(django_assert_num_queries):
+def test_windowed_last_page_reverses_a_bare_expression_ordering(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """A ``last: N`` window under an EXPRESSION ordering serves the partition's TAIL.
 
     ``_reverse_order_by`` builds ``_dst_row_number_reversed``; a term with no
@@ -1194,6 +1277,7 @@ def test_windowed_last_page_reverses_a_bare_expression_ordering(django_assert_nu
 
     with django_assert_num_queries(2):  # parents + ONE windowed prefetch.
         fast = _exec(_genres_expression_ordered_schema(optimizer=True), query)
+    assert fast.data is not None
     fast_conn = fast.data["objs"][0]["booksConnection"]
     assert [e["node"]["title"] for e in fast_conn["edges"]] == ["d", "e"]
     assert fast_conn["pageInfo"]["hasPreviousPage"] is True
@@ -1207,7 +1291,7 @@ def test_windowed_last_page_reverses_a_bare_expression_ordering(django_assert_nu
 
 @pytest.mark.django_db
 def test_nested_window_count_observers_follow_a_non_camel_case_schema(
-    django_assert_num_queries,
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
 ):
     """``auto_camel_case=False`` renames the count observers; the planner must follow.
 
@@ -1241,6 +1325,7 @@ def test_nested_window_count_observers_follow_a_non_camel_case_schema(
             _genres_expression_ordered_schema(optimizer=True, auto_camel_case=False),
             f"{{ objs {{ {snake} }} }}",
         )
+    assert result.data is not None
     conn = result.data["objs"][0]["books_connection"]
     assert conn["total_count"] == 5
     assert conn["page_info"]["has_next_page"] is True
@@ -1257,6 +1342,7 @@ def test_nested_window_count_observers_follow_a_non_camel_case_schema(
         _genres_expression_ordered_schema(optimizer=True, auto_camel_case=True),
         f"{{ objs {{ {camel} }} }}",
     )
+    assert default.data is not None
     default_conn = default.data["objs"][0]["booksConnection"]
     assert default_conn["totalCount"] == conn["total_count"]
     assert default_conn["pageInfo"]["hasNextPage"] == conn["page_info"]["has_next_page"]
@@ -1336,7 +1422,7 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
             "pageInfo { startCursor endCursor } } } }"
         )
 
-        def _build(*, optimizer):
+        def _build(*, optimizer: bool):
             type(
                 "OConnPostType",
                 (DjangoType,),
@@ -1393,6 +1479,7 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
         _connection_type_cache.clear()
         slow = _exec(_build(optimizer=False), query)
         assert fast.data == slow.data
+        assert fast.data is not None
         titles = [e["node"]["title"] for e in fast.data["objs"][0]["postsConnection"]["edges"]]
         assert titles == ["a", "b"]
     finally:
@@ -1422,6 +1509,7 @@ def test_fast_path_cursor_round_trips_to_fallback_after():
         _genres_list_schema(optimizer=True),
         "{ objs { booksConnection(first: 2) { pageInfo { endCursor } } } }",
     )
+    assert fast.data is not None
     end_cursor = fast.data["objs"][0]["booksConnection"]["pageInfo"]["endCursor"]
 
     registry.clear()
@@ -1431,12 +1519,15 @@ def test_fast_path_cursor_round_trips_to_fallback_after():
         f'{{ objs {{ booksConnection(first: 2, after: "{end_cursor}") '
         f"{{ edges {{ node {{ title }} }} }} }} }}",
     )
+    assert page_two.data is not None
     titles = [e["node"]["title"] for e in page_two.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["c", "d"]
 
 
 @pytest.mark.django_db
-def test_fast_path_fires_for_reverse_fk_without_related_name(django_assert_num_queries):
+def test_fast_path_fires_for_reverse_fk_without_related_name(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """The fast path fires for a reverse FK without ``related_name``.
 
     Decision 5: the resolver receives the relation FIELD NAME
@@ -1447,7 +1538,9 @@ def test_fast_path_fires_for_reverse_fk_without_related_name(django_assert_num_q
     The shipped ``VenueType`` publishes no ``repairticketConnection``, so the
     window is planned here over test-local types on ``Venue`` / ``RepairTicket``.
     """
-    assert Venue._meta.get_field("repairticket").get_accessor_name() == "repairticket_set"
+    repairticket_rel = Venue._meta.get_field("repairticket")
+    assert isinstance(repairticket_rel, ForeignObjectRel)
+    assert repairticket_rel.get_accessor_name() == "repairticket_set"
 
     type(
         "RepairTicketNode",
@@ -1489,12 +1582,15 @@ def test_fast_path_fires_for_reverse_fk_without_related_name(django_assert_num_q
             schema,
             "{ objs { name repairticketConnection(first: 2) { edges { node { code } } } } }",
         )
+    assert result.data is not None
     assert len(result.data["objs"]) == 3
     assert all(len(v["repairticketConnection"]["edges"]) == 2 for v in result.data["objs"])
 
 
 @pytest.mark.django_db
-def test_fast_path_total_count_from_annotation_no_query(django_assert_num_queries):
+def test_fast_path_total_count_from_annotation_no_query(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """A fast-path ``totalCount`` reads ``_dst_total_count`` - zero extra COUNT queries."""
     _seed_library_books(
         [
@@ -1511,11 +1607,14 @@ def test_fast_path_total_count_from_annotation_no_query(django_assert_num_querie
             schema,
             "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } } } }",
         )
+    assert result.data is not None
     assert result.data["objs"][0]["booksConnection"]["totalCount"] == 5
 
 
 @pytest.mark.django_db
-def test_fast_path_has_next_page_without_edges_on_window(django_assert_num_queries):
+def test_fast_path_has_next_page_without_edges_on_window(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """``hasNextPage`` is correct on the WINDOW path even when ``edges`` is unrequested.
 
     The Relay invariant (spec-032 Goal 4 / DoD: "the connection MUST resolve
@@ -1545,11 +1644,14 @@ def test_fast_path_has_next_page_without_edges_on_window(django_assert_num_queri
             "{ objs { booksConnection(first: 2) { pageInfo { hasNextPage } } } }",
         )
     # 5 books, first: 2 -> a further page exists.
+    assert result.data is not None
     assert result.data["objs"][0]["booksConnection"]["pageInfo"]["hasNextPage"] is True
 
 
 @pytest.mark.django_db
-def test_fast_path_has_no_next_page_at_boundary_without_edges_on_window(django_assert_num_queries):
+def test_fast_path_has_no_next_page_at_boundary_without_edges_on_window(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """The boundary twin: ``first >= total`` -> ``hasNextPage`` False on the window path.
 
     Pins that the scalar-only window's ``hasNextPage`` is not hard-wired True: 5
@@ -1571,11 +1673,14 @@ def test_fast_path_has_no_next_page_at_boundary_without_edges_on_window(django_a
             schema,
             "{ objs { booksConnection(first: 5) { pageInfo { hasNextPage } } } }",
         )
+    assert result.data is not None
     assert result.data["objs"][0]["booksConnection"]["pageInfo"]["hasNextPage"] is False
 
 
 @pytest.mark.django_db
-def test_fast_path_total_count_without_edges_on_window(django_assert_num_queries):
+def test_fast_path_total_count_without_edges_on_window(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """``totalCount`` alone (no ``edges``) reads ``_dst_total_count`` on the window path.
 
     The totalCount-only sibling of the pageInfo-only pin: a nested
@@ -1598,6 +1703,7 @@ def test_fast_path_total_count_without_edges_on_window(django_assert_num_queries
             schema,
             "{ objs { booksConnection(first: 2) { totalCount } } }",
         )
+    assert result.data is not None
     assert result.data["objs"][0]["booksConnection"]["totalCount"] == 5
 
 
@@ -1616,12 +1722,16 @@ def test_fast_path_total_count_marker_bypasses_non_queryset_guard():
         "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } } } }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert result.data["objs"][0]["booksConnection"]["totalCount"] == 3
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("args", ["first: 0", 'after: "YXJyYXljb25uZWN0aW9uOjk5"'])
-def test_fast_path_ambiguous_empty_served_from_marker_row(args, django_assert_num_queries):
+def test_fast_path_ambiguous_empty_served_from_marker_row(
+    args: str,
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """``first: 0`` (``limit == 0``) and overshot ``after:`` (``offset > 0``) serve from markers.
 
     The marker-row disambiguation (spec-033 Decision 5):
@@ -1645,11 +1755,14 @@ def test_fast_path_ambiguous_empty_served_from_marker_row(args, django_assert_nu
     assert fast.data == slow.data
     # The marker carries the true totalCount (3), never a spurious 0 from
     # inferring "the window is empty so the parent is empty".
+    assert fast.data is not None
     assert fast.data["objs"][0]["booksConnection"]["totalCount"] == 3
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_async_fast_path_last_zero_serves_the_first_zero_page(monkeypatch):
+async def test_async_fast_path_last_zero_serves_the_first_zero_page(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``last: 0`` under ASYNC execution is the ``first: 0`` page served from the window.
 
     Driven by ``await schema.execute(...)``: empty ``edges``, the true
@@ -1671,6 +1784,7 @@ async def test_async_fast_path_last_zero_serves_the_first_zero_page(monkeypatch)
     first_zero = await schema.execute(f"{{ objs {{ booksConnection(first: 0) {page} }} }}")
     assert last_zero.errors is None, last_zero.errors
     assert first_zero.errors is None, first_zero.errors
+    assert last_zero.data is not None
     assert last_zero.data["objs"][0]["booksConnection"] == {
         "edges": [],
         "totalCount": 3,
@@ -1710,12 +1824,15 @@ def test_fast_path_last_zero_serves_the_first_zero_page():
     _connection_type_cache.clear()
     slow = _exec(_genres_list_schema(optimizer=False, book_total_count=True), query)
     assert fast.data == slow.data
+    assert fast.data is not None
     assert fast.data["objs"][0]["booksConnection"]["edges"] == []
     assert fast.data["objs"][0]["booksConnection"]["pageInfo"]["hasNextPage"] is True
 
 
 @pytest.mark.django_db
-def test_fast_path_genuinely_empty_parent_serves_zero(django_assert_num_queries):
+def test_fast_path_genuinely_empty_parent_serves_zero(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """A parent with no related rows is fast-pathed: totalCount 0, no fallback query.
 
     Empty window with ``offset == 0`` and a positive bound proves the parent
@@ -1732,6 +1849,7 @@ def test_fast_path_genuinely_empty_parent_serves_zero(django_assert_num_queries)
             "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } "
             "pageInfo { hasNextPage hasPreviousPage } } } }",
         )
+    assert result.data is not None
     conn = result.data["objs"][0]["booksConnection"]
     assert conn["edges"] == []
     assert conn["totalCount"] == 0
@@ -1741,8 +1859,8 @@ def test_fast_path_genuinely_empty_parent_serves_zero(django_assert_num_queries)
 @pytest.mark.django_db
 @pytest.mark.parametrize("args", ["first: 0", 'first: 2, after: "YXJyYXljb25uZWN0aW9uOjk5"'])
 def test_fast_path_zero_children_parent_serves_under_ambiguous_shapes(
-    args,
-    django_assert_num_queries,
+    args: str,
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
 ):
     """A zero-children parent is served (not fallen back) under the marker shapes.
 
@@ -1769,6 +1887,7 @@ def test_fast_path_zero_children_parent_serves_under_ambiguous_shapes(
     _connection_type_cache.clear()
     slow = _exec(_genres_list_schema(optimizer=False, book_total_count=True), query)
     assert fast.data == slow.data
+    assert fast.data is not None
     conn = fast.data["objs"][0]["booksConnection"]
     assert conn["edges"] == []
     assert conn["totalCount"] == 0
@@ -1817,6 +1936,7 @@ def test_fast_path_ignores_window_when_sidecar_kwargs_present():
         context_value=HttpRequest(),
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["banana"]  # the filter narrowed; the unfiltered window was refused
 
@@ -1838,7 +1958,8 @@ def test_fallback_when_annotations_missing():
     finalize_django_types()
     model = genre_type.__django_strawberry_definition__.model
 
-    def _resolver() -> list[genre_type]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def _resolver() -> list[genre_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         objs = list(model._default_manager.all().order_by("pk"))
         # Plant an UNANNOTATED list at the package-reserved to_attr (a consumer
         # prefetch shape); the resolver must NOT consume it as a window.
@@ -1861,6 +1982,7 @@ def test_fallback_when_annotations_missing():
         "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["a", "b"]
 
@@ -1916,6 +2038,7 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
         "{ totalCount edges { node { title } } } } } } }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     genre_node = result.data["objs"]["edges"][0]["node"]
     assert genre_node["booksConnection"]["totalCount"] == 3
 
@@ -2009,7 +2132,7 @@ def test_sidecar_fallback_is_flagged_with_reason():
 
 
 @pytest.mark.django_db
-def test_strictness_warn_logs_once_per_occurrence(caplog):
+def test_strictness_warn_logs_once_per_occurrence(caplog: pytest.LogCaptureFixture):
     """``"warn"`` + a fallback nested connection -> logged warning, execution CONTINUES.
 
     The query still resolves correctly (warn does not abort); the resolver
@@ -2025,6 +2148,7 @@ def test_strictness_warn_logs_once_per_occurrence(caplog):
     )
     assert result.errors is None, result.errors
     # Warn continues: the filtered page is still served correctly.
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["banana"]
     assert any("Potential N+1 on books" in r.getMessage() for r in caplog.records), [
@@ -2172,6 +2296,7 @@ def test_strictness_silent_when_window_served():
         "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["apple", "banana"]
 
@@ -2194,6 +2319,7 @@ def test_strictness_silent_when_off():
         context_value=HttpRequest(),
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["banana"]
 
@@ -2216,6 +2342,7 @@ def test_strictness_silent_no_optimizer():
         "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["apple", "banana"]
 
@@ -2240,6 +2367,7 @@ def test_strictness_silent_when_planned():
     from django_strawberry_framework.optimizer.plans import resolver_key
     from django_strawberry_framework.types.resolvers import _check_n1
 
+    @_as_django_type
     class GenreType:
         pass
 
@@ -2290,7 +2418,9 @@ def test_strictness_silent_when_planned():
 
 
 @pytest.mark.django_db
-def test_fast_path_count_less_window_serves_cheap_page(django_assert_num_queries):
+def test_fast_path_count_less_window_serves_cheap_page(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """A window planned WITHOUT the count still fast-paths the cheap page shape.
 
     ``edges`` + ``hasPreviousPage`` + cursors derive from ``_dst_row_number``
@@ -2309,6 +2439,7 @@ def test_fast_path_count_less_window_serves_cheap_page(django_assert_num_queries
 
     with django_assert_num_queries(2), CaptureQueriesContext(db_connection) as captured:
         result = _exec(schema, query)
+    assert result.data is not None
     conn = result.data["objs"][0]["booksConnection"]
     assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b"]
     assert conn["pageInfo"]["hasPreviousPage"] is False
@@ -2342,17 +2473,22 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
         _WindowedConnectionRows,
     )
 
-    inert_info = SimpleNamespace(selected_fields=[])
+    inert_info = _as_strawberry_info(SimpleNamespace(selected_fields=[]))
 
     # Plain forward page, ``totalCount`` requested, count annotation absent: the
     # count cannot be fabricated, so fall back per-parent.
     window = _WindowedConnectionRows(
-        rows=[SimpleNamespace(_dst_row_number=1), SimpleNamespace(_dst_row_number=2)],
+        rows=_as_window_rows(
+            SimpleNamespace(_dst_row_number=1),
+            SimpleNamespace(_dst_row_number=2),
+        ),
         fallback=lambda: None,
     )
     assert (
         _resolve_from_window(
-            object,
+            # basedpyright: the path under test returns before reading cls; _resolve_from_window
+            # types the parameter as type[DjangoConnection]
+            object,  # pyright: ignore[reportArgumentType]
             window,
             info=inert_info,
             offset=0,
@@ -2367,12 +2503,14 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
     # cannot be inferred. (The SAME shape count-FREE is now SERVED, not dropped -
     # see the live edges-only / unbounded overshoot pins.)
     marker_only = _WindowedConnectionRows(
-        rows=[SimpleNamespace(_dst_row_number=1)],
+        rows=_as_window_rows(SimpleNamespace(_dst_row_number=1)),
         fallback=lambda: None,
     )
     assert (
         _resolve_from_window(
-            object,
+            # basedpyright: the path under test returns before reading cls; _resolve_from_window
+            # types the parameter as type[DjangoConnection]
+            object,  # pyright: ignore[reportArgumentType]
             marker_only,
             info=inert_info,
             offset=5,
@@ -2388,7 +2526,11 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
 # ---------------------------------------------------------------------------
 
 
-def _shelves_with_consumer_books_schema(*, strictness="raise", books_hint=None):
+def _shelves_with_consumer_books_schema(
+    *,
+    strictness: str = "raise",
+    books_hint: OptimizerHint | None = None,
+):
     """Root ``objs: [ShelfType]`` where the consumer owns ``ShelfType.books``.
 
     The consumer resolver re-queries the relation (``order_by(...)[:2]``), so
@@ -2407,15 +2549,19 @@ def _shelves_with_consumer_books_schema(*, strictness="raise", books_hint=None):
             model = Loan
             fields = ("id", "note")
 
+    assert registry.get(Loan) is LoanType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "loans")
 
-    def _curated_books(root) -> list[BookType]:
-        return list(root.books.order_by("title")[:2])
+    def _curated_books(root: Shelf) -> list[BookType]:
+        # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+        # returns the model rows a DjangoType field resolves from, as the consumer corner does
+        return list(root.books.order_by("title")[:2])  # pyright: ignore[reportReturnType]
 
-    meta_ns = {"model": Shelf, "fields": ("id", "code", "books")}
+    meta_ns: dict[str, object] = {"model": Shelf, "fields": ("id", "code", "books")}
     if books_hint is not None:
         meta_ns["optimizer_hints"] = {"books": books_hint}
     shelf_type = type(
@@ -2491,11 +2637,12 @@ def test_consumer_assigned_relation_with_hint_is_planned_and_silent():
         context_value=HttpRequest(),
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     titles = [b["title"] for b in result.data["objs"][0]["books"]]
     assert titles == ["a", "b"]
 
 
-def _windowed_book_connection_class(*, total_count=False):
+def _windowed_book_connection_class(*, total_count: bool = False) -> type[DjangoConnection[Book]]:
     """A real generated ``<TypeName>Connection`` class for direct-call pins."""
     book_type = make_django_type(
         "BookType",
@@ -2504,13 +2651,15 @@ def _windowed_book_connection_class(*, total_count=False):
         meta_extra={"connection": {"total_count": True}} if total_count else None,
     )
     finalize_django_types()
-    return _connection_type_for(book_type, book_type.__django_strawberry_definition__)
+    connection_type = _connection_type_for(book_type, book_type.__django_strawberry_definition__)
+    assert issubclass(connection_type, DjangoConnection)
+    return connection_type
 
 
 #: A count-free plain ``first: 2`` window row: with ``totalCount`` observed and no
 #: count annotation, ``_resolve_from_window`` refuses it (the conditional-count
 #: drift guard).
-_COUNT_LESS_WINDOW_ROWS = [SimpleNamespace(_dst_row_number=1)]
+_COUNT_LESS_WINDOW_ROWS = _as_window_rows(SimpleNamespace(_dst_row_number=1))
 
 
 @pytest.mark.django_db
@@ -2538,7 +2687,7 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
         window,
         # The shipped pipeline probes ``info.selected_fields`` for the
         # edges-resolution shortcut; an empty selection list is enough.
-        info=SimpleNamespace(selected_fields=[]),
+        info=_as_strawberry_info(SimpleNamespace(selected_fields=[])),
         before=None,
         after=None,
         first=2,
@@ -2546,6 +2695,7 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
         max_results=100,
         want_count=True,
     )
+    assert isinstance(conn, DjangoConnection)
     assert conn.edges == []
 
 
@@ -2563,10 +2713,10 @@ async def test_consume_window_unservable_window_runs_the_async_fallback():
         rows=_COUNT_LESS_WINDOW_ROWS,
         fallback=lambda: Book.objects.none(),
     )
-    conn = await _consume_window(
+    pending = _consume_window(
         connection_cls,
         window,
-        info=SimpleNamespace(selected_fields=[]),
+        info=_as_strawberry_info(SimpleNamespace(selected_fields=[])),
         before=None,
         after=None,
         first=2,
@@ -2574,6 +2724,8 @@ async def test_consume_window_unservable_window_runs_the_async_fallback():
         max_results=100,
         want_count=True,
     )
+    assert inspect.isawaitable(pending)
+    conn = await pending
     assert conn.edges == []
 
 
@@ -2604,7 +2756,7 @@ def test_consume_window_offset_unwindowable_shape_propagates():
         _consume_window(
             connection_cls,
             window,
-            info=SimpleNamespace(selected_fields=[]),
+            info=_as_strawberry_info(SimpleNamespace(selected_fields=[])),
             before=None,
             # ``after`` + ``last`` with no ``first`` / ``before`` is the
             # offset-bearing backward window the derivation refuses.

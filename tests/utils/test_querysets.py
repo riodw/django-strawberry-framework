@@ -18,10 +18,13 @@ import datetime
 import enum
 import uuid
 import zoneinfo
+from collections.abc import Callable, Generator, Iterable
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import TypeVar
 
 import pytest
+import pytest_django
 from apps.library.models import (
     Book,
     Branch,
@@ -36,13 +39,19 @@ from apps.library.models import (
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
 from django.apps.registry import Apps
+from django.contrib.auth.models import AnonymousUser
 from django.db import connection, models, router
-from django.db.models import F, FilteredRelation, Prefetch, Q
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.models import F, FilteredRelation, ForeignObjectRel, Prefetch, Q
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Coalesce, Trunc, Upper
-from django.db.models.lookups import In
+from django.db.models.lookups import In, Lookup
+from django.db.models.sql import Query as SqlQuery
+from django.db.models.sql.compiler import SQLCompiler
+from django.db.models.sql.where import ExtraWhere
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -111,6 +120,7 @@ def test_safe_class_name_falls_back_for_non_string_metaclass_name_metadata():
     """A non-string ``__name__`` degrades to the metaclass name instead of a raw label."""
 
     class _NonStringNameMeta(type):
+        @override
         def __getattribute__(cls, name: str):
             if name == "__name__":
                 return 42
@@ -122,35 +132,83 @@ def test_safe_class_name_falls_back_for_non_string_metaclass_name_metadata():
     assert _safe_class_name(_MalformedName) == "_NonStringNameMeta"
 
 
-def _stub_type(model, hook):
+_M = TypeVar("_M", bound=models.Model)
+
+
+def _rows_of(model: type[_M], rows: Iterable[object]) -> list[_M]:
+    """Materialize ``rows``, proving each is a ``model`` instance."""
+    proven: list[_M] = []
+    for row in rows:
+        assert isinstance(row, model)
+        proven.append(row)
+    return proven
+
+
+def _where_leaf(query: SqlQuery) -> "Lookup[object]":
+    """The first ``WHERE`` child, proven to be the lookup the filter built."""
+    leaf = query.where.children[0]
+    assert isinstance(leaf, Lookup)
+    return leaf
+
+
+def _extra_where_lists(query: SqlQuery) -> tuple[list[str], list[object]]:
+    """The first ``WHERE`` child's ``sqls`` / ``params``: the lists ``.extra()`` stored."""
+    node = query.where.children[0]
+    assert isinstance(node, ExtraWhere)
+    assert isinstance(node.sqls, list)
+    assert isinstance(node.params, list)
+    # basedpyright: django-stubs types ExtraWhere.params as int / str sequences; ``.extra()``
+    # stores the caller's own params list, whose members are any bound values
+    return node.sqls, node.params  # pyright: ignore[reportReturnType]
+
+
+def _noop(*args: object, **kwargs: object) -> None:
+    """A shadow that accepts any call and does nothing (it must never run)."""
+
+
+def _as_django_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a duck-typed stub class to a substrate entry point that takes a ``DjangoType``."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
+    # visibility substrate types the parameter as type[DjangoType]
+    return cls  # pyright: ignore[reportReturnType]
+
+
+def _stub_type(
+    model: type[_M],
+    hook: Callable[[type, models.QuerySet[_M], object], object],
+) -> type[DjangoType]:
     """Build a duck-typed ``DjangoType`` stub over ``model`` with ``hook`` as its visibility hook."""
-    return type(
-        "_StubType",
-        (),
-        {
-            "__django_strawberry_definition__": SimpleNamespace(model=model),
-            "get_queryset": classmethod(hook),
-        },
+    return _as_django_type(
+        type(
+            "_StubType",
+            (),
+            {
+                "__django_strawberry_definition__": SimpleNamespace(model=model),
+                "get_queryset": classmethod(hook),
+            },
+        ),
     )
 
 
+@_as_django_type
 class _SyncType:
     """Duck-typed ``DjangoType`` stub with a sync ``get_queryset``."""
 
     __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
         return queryset.exclude(name="__never__")
 
 
+@_as_django_type
 class _AsyncType:
     """Duck-typed ``DjangoType`` stub with an ``async def`` ``get_queryset``."""
 
     __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     @classmethod
-    async def get_queryset(cls, queryset, info):
+    async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
         return queryset
 
 
@@ -231,7 +289,8 @@ def test_relation_write_visibility_boundary_is_controlled_by_type_registration()
                 primary = True
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
                 return queryset.exclude(pk=category.pk)
 
         del CategoryType
@@ -293,7 +352,8 @@ def test_run_in_one_sync_boundary_is_single_sourced_from_utils():
     permissions / auth share one boundary. Pin the re-export identity so a
     future split cannot silently fork a second definition.
     """
-    assert mutation_resolvers.run_in_one_sync_boundary is run_in_one_sync_boundary
+    # basedpyright: the identity check reads the name through the importing module on purpose
+    assert mutation_resolvers.run_in_one_sync_boundary is run_in_one_sync_boundary  # pyright: ignore[reportPrivateLocalImportUsage]
 
 
 async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():
@@ -323,11 +383,13 @@ async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():
 def test_visibility_source_must_be_a_queryset():
     """A non-queryset source fails closed BEFORE the hook runs (fires no consumer code)."""
 
-    def _boom(cls, queryset, info):  # must never run
+    def _boom(cls: type, queryset: models.QuerySet[Category], info: object):  # must never run
         raise AssertionError("hook ran on an invalid source")
 
     with pytest.raises(ConfigurationError, match="requires a QuerySet of Category rows"):
-        apply_type_visibility_sync(_stub_type(Category, _boom), [1, 2], info=None)
+        # basedpyright: the plain list is the hostile input under test; apply_type_visibility_sync
+        # types the parameter as QuerySet[Model, object]
+        apply_type_visibility_sync(_stub_type(Category, _boom), [1, 2], info=None)  # pyright: ignore[reportArgumentType]
 
 
 def test_visibility_source_must_use_registered_concrete_table():
@@ -337,7 +399,9 @@ def test_visibility_source_must_use_registered_concrete_table():
 
 
 @pytest.mark.django_db
-def test_evaluated_source_is_refreshed_before_hook(django_assert_num_queries):
+def test_evaluated_source_is_refreshed_before_hook(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """An evaluated source is ``.all()``-refreshed before consumer code sees it - zero SQL.
 
     Cached rows must never reach (or bypass) the hook: the hook receives a
@@ -346,7 +410,7 @@ def test_evaluated_source_is_refreshed_before_hook(django_assert_num_queries):
     """
     seen: dict[str, object] = {}
 
-    def _capture(cls, queryset, info):
+    def _capture(cls: type, queryset: models.QuerySet[Category], info: object):
         seen["qs"] = queryset
         return queryset
 
@@ -355,6 +419,7 @@ def test_evaluated_source_is_refreshed_before_hook(django_assert_num_queries):
     with django_assert_num_queries(0):
         result = apply_type_visibility_sync(_stub_type(Category, _capture), evaluated, info=None)
     assert seen["qs"] is not evaluated
+    assert isinstance(seen["qs"], models.QuerySet)
     assert seen["qs"]._result_cache is None
     assert result._result_cache is None
 
@@ -364,7 +429,8 @@ def test_active_write_pipeline_pins_source_and_repins_result():
     hook = _stub_type(Category, lambda cls, qs, info: Category.objects.filter(name="x"))
     with write_pipeline("default", lock=False):
         result = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
-    assert result._db == "default"
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert result._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_active_write_pipeline_rejects_divergent_source_alias():
@@ -387,7 +453,8 @@ def test_hostile_source_all_override_is_neutralized_by_sealing():
     runs on that sealed plain queryset.
     """
 
-    class _StickySource(models.QuerySet):
+    class _StickySource(models.QuerySet[Category]):
+        @override
         def all(self):  # would be a predicate-dropping clone if ever dispatched
             return Category.objects.all()
 
@@ -406,11 +473,13 @@ def test_unsealable_source_fails_closed():
     runs on an unsealable source.
     """
 
-    def _boom(cls, queryset, info):  # must never run
+    def _boom(cls: type, queryset: models.QuerySet[Category], info: object):  # must never run
         raise AssertionError("hook ran on an unsealable source")
 
     source = Category.objects.filter(name="visible")
-    source._iterable_class = list  # a foreign row synthesizer
+    # basedpyright: the planted foreign row iterable is the hostile input under test; django-stubs
+    # types the slot as one of Django's BaseIterable classes
+    source._iterable_class = list  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(_stub_type(Category, _boom), source, info=None)
 
@@ -429,7 +498,7 @@ def test_a_source_carrying_a_consumer_expression_names_the_state_the_seal_rebuil
     the queryset from instead.
     """
 
-    def _boom(cls, queryset, info):  # must never run
+    def _boom(cls: type, queryset: models.QuerySet[Category], info: object):  # must never run
         raise AssertionError("hook ran on an unsealable source")
 
     source = Category.objects.annotate(u=_ConsumerUpper(F("name")))
@@ -446,7 +515,7 @@ def test_a_source_carrying_a_consumer_expression_names_the_state_the_seal_rebuil
 # ---------------------------------------------------------------------------
 
 
-def _sync_hook_type(result):
+def _sync_hook_type(result: object):
     """A Category stub type whose hook returns ``result`` verbatim."""
     return _stub_type(Category, lambda cls, qs, info: result)
 
@@ -465,11 +534,12 @@ def test_hook_manager_result_is_coerced_sync():
 async def test_hook_manager_result_is_coerced_async():
     """An async-path ``Manager`` return is coerced too - previously it flowed through verbatim."""
 
+    @_as_django_type
     class _ManagerAsyncType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset, info):
+        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
             return Category.objects
 
     result = await apply_type_visibility_async(
@@ -497,7 +567,7 @@ def _async_generator_result():
         (object(), "object"),
     ],
 )
-def test_invalid_hook_results_fail_closed(bad, detail):
+def test_invalid_hook_results_fail_closed(bad: object, detail: str):
     """``None`` / list / generator / async-generator / custom-iterable returns fail closed."""
     with pytest.raises(
         ConfigurationError,
@@ -575,7 +645,8 @@ def test_unpinned_result_is_repinned_to_explicit_source_alias():
     """
     hook = _stub_type(Category, lambda cls, qs, info: Category.objects.filter(name="x"))
     result = apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
-    assert result._db == "other"
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_matching_explicit_result_alias_is_accepted():
@@ -585,7 +656,8 @@ def test_matching_explicit_result_alias_is_accepted():
         Category.objects.using("other").all(),
         info=None,
     )
-    assert result._db == "other"
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_divergent_explicit_result_alias_fails_closed():
@@ -602,11 +674,14 @@ def test_unpinned_read_hook_keeps_documented_alias_routing():
     """With no required alias, an unpinned read hook may still choose ``.using(alias)`` itself."""
     hook = _stub_type(Category, lambda cls, qs, info: qs.using("other"))
     result = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
-    assert result._db == "other"
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db
-def test_evaluated_hook_result_is_refreshed(django_assert_num_queries):
+def test_evaluated_hook_result_is_refreshed(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """An evaluated hook result is re-cloned so cached rows never survive the boundary."""
     evaluated = Category.objects.all()
     list(evaluated)
@@ -629,7 +704,7 @@ def test_normalization_preserves_lazy_query_state():
     rebuilt from the cloned query and preserved.
     """
 
-    class _CustomQuerySet(models.QuerySet):
+    class _CustomQuerySet(models.QuerySet[Category]):
         pass
 
     shaped = (
@@ -655,7 +730,8 @@ def test_hostile_result_all_override_is_neutralized_by_sealing():
     from the result's query state, so the visibility predicate survives.
     """
 
-    class _StickyResult(models.QuerySet):
+    class _StickyResult(models.QuerySet[Category]):
+        @override
         def all(self):  # a predicate-dropping clone if ever dispatched
             return Category.objects.all()
 
@@ -673,14 +749,17 @@ def test_hostile_result_using_override_repin_is_neutralized_by_sealing():
     ``.using()`` that returns an unrouted self can never dodge the repin.
     """
 
-    class _PinDodger(models.QuerySet):
-        def using(self, alias):  # would return an unrouted self if dispatched
+    class _PinDodger(models.QuerySet[Category]):
+        @override
+        def using(self, alias: str | None):  # would return an unrouted self if dispatched
             return self
 
     hook = _stub_type(Category, lambda cls, qs, info: _PinDodger(model=Category))
     result = apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
     assert type(result) is models.QuerySet
-    assert result._db == "other"  # pinned at construction, not via the override
+    # Pinned at construction, not via the override.
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_predicate_dropping_all_override_source_is_neutralized_by_sealing():
@@ -692,7 +771,8 @@ def test_predicate_dropping_all_override_source_is_neutralized_by_sealing():
     override, the visibility predicate is preserved.
     """
 
-    class _DropFilter(models.QuerySet):
+    class _DropFilter(models.QuerySet[Category]):
+        @override
         def all(self):
             return Category.objects.all()  # would drop whatever WHERE the source carried
 
@@ -716,7 +796,8 @@ def test_foreign_query_class_result_fails_closed():
         pass
 
     result = Category.objects.filter(name="visible")
-    result._query = _ForeignQuery(Category)
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    result._query = _ForeignQuery(Category)  # pyright: ignore[reportAttributeAccessIssue]
     hook = _sync_hook_type(result)
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(hook, Category.objects.all(), info=None)
@@ -745,11 +826,12 @@ def test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked():
     compiled SQL of a plain framework-owned queryset.
     """
 
-    class _DeferredSub(models.QuerySet):
+    class _DeferredSub(models.QuerySet[Category]):
         pass
 
     result = _DeferredSub(model=Category)
-    result._deferred_filter = (False, (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     hook = _sync_hook_type(result)
     sealed = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
     assert type(sealed) is models.QuerySet
@@ -771,11 +853,13 @@ def test_exact_queryset_pending_deferred_filter_is_resolved():
     a concurrent caller reusing the same source queryset sees no mutation).
     """
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(result, Category, None)
     assert defect is None
     # The candidate is never mutated -- the pending flag is left exactly as it was.
     assert result.__dict__.get("_deferred_filter") == (False, (), {"name": "later"})
+    assert sealed is not None
     sql_str, params = sealed.query.get_compiler(using="default").as_sql()
     assert "name" in sql_str
     assert "later" in params
@@ -794,7 +878,9 @@ def test_a_value_whose_class_property_raises_is_a_typed_seal_defect():
 
     class _RaisingClass:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("class bomb")
 
     sealed, defect = _seal_or_defect(_RaisingClass(), Category, None)
@@ -807,7 +893,9 @@ def test_a_value_that_only_claims_to_be_a_queryset_is_a_typed_seal_defect():
 
     class _ClaimsToBeAQuerySet:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             return models.QuerySet
 
     candidate = _ClaimsToBeAQuerySet()
@@ -831,13 +919,16 @@ def test_pending_deferred_filter_over_foreign_query_never_dispatches():
     dispatched = []
 
     class _AddQSpy(sql.Query):
-        def add_q(self, q):  # must never run
-            dispatched.append(q)
-            return super().add_q(q)
+        @override
+        def add_q(self, q_object: Q, reuse_all: bool = False) -> None:  # must never run
+            dispatched.append(q_object)
+            return super().add_q(q_object, reuse_all)
 
     result = models.QuerySet(model=Category)
-    result._query = _AddQSpy(Category)
-    result._deferred_filter = (False, (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    result._query = _AddQSpy(Category)  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _seal_or_defect(result, Category, None)
     assert defect == ("untrusted", "QuerySet.query is _AddQSpy")
     assert dispatched == []
@@ -856,15 +947,17 @@ def test_deferred_filter_never_dispatches_instance_shadowed_inplace():
     """
     dispatched = []
 
-    def _spy_inplace(negate, args, kwargs):  # must never run
+    def _spy_inplace(negate: object, args: object, kwargs: object):  # must never run
         dispatched.append((negate, args, kwargs))
 
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"name": "later"})
-    result.__dict__["_filter_or_exclude_inplace"] = _spy_inplace
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    vars(result)["_filter_or_exclude_inplace"] = _spy_inplace
     sealed, defect = _seal_or_defect(result, Category, None)
     assert dispatched == []
     assert defect is None
+    assert sealed is not None
     sql_str, params = sealed.query.get_compiler(using="default").as_sql()
     assert "name" in sql_str
     assert "later" in params
@@ -883,14 +976,16 @@ def test_deferred_filter_never_dispatches_instance_shadowed_add_q():
 
     dispatched = []
 
-    def _spy_add_q(q):  # must never run
+    def _spy_add_q(q: Q):  # must never run
         dispatched.append(q)
 
     query = sql.Query(Category)
     query.__dict__["add_q"] = _spy_add_q
     result = models.QuerySet(model=Category)
-    result._query = query
-    result._deferred_filter = (False, (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    result._query = query  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _seal_or_defect(result, Category, None)
     assert defect == ("untrusted", "query instance shadows the 'add_q' method")
     assert dispatched == []
@@ -907,13 +1002,14 @@ def test_malformed_deferred_filter_fails_closed_instead_of_leaking():
     leaking past the boundary's typed defect contract.
     """
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"nonexistent_field": 1})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"nonexistent_field": 1})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet carries malformed deferred-filter state")
 
 
-class _PendingFilterQuerySet(models.QuerySet):
+class _PendingFilterQuerySet(models.QuerySet[Category]):
     """A project's own queryset class with no overrides, the shape a manager builds."""
 
 
@@ -939,7 +1035,10 @@ class _ForeignDeferredValue:
         "foreign-value",
     ],
 )
-def test_a_subclass_deferred_filter_state_django_never_writes_fails_closed(deferred, detail):
+def test_a_subclass_deferred_filter_state_django_never_writes_fails_closed(
+    deferred: tuple[object, ...],
+    detail: str,
+):
     """The pending STATE's shape is what fails closed, on a subclass as on any candidate.
 
     A pending predicate is baked for every class, so each of these shapes is
@@ -947,7 +1046,8 @@ def test_a_subclass_deferred_filter_state_django_never_writes_fails_closed(defer
     with the typed defect rather than resolved.
     """
     candidate = _PendingFilterQuerySet(model=Category)
-    candidate._deferred_filter = deferred
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    candidate._deferred_filter = deferred  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(candidate, Category, None)
     assert sealed is None
     assert defect == ("untrusted", detail)
@@ -961,7 +1061,8 @@ def test_a_deferred_filter_negate_that_is_not_a_bool_fails_closed_on_an_exact_qu
     that slot, so every other shape is refused before the predicate is built.
     """
     candidate = Category.objects.all()
-    candidate._deferred_filter = (1, (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    candidate._deferred_filter = (1, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(candidate, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter negate is a int")
@@ -982,14 +1083,15 @@ def test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool():
             return True
 
     candidate = Category.objects.all()
-    candidate._deferred_filter = (_NegateSpy(), (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    candidate._deferred_filter = (_NegateSpy(), (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(candidate, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter negate is a _NegateSpy")
     assert dispatched == []
 
 
-def _pending_exclude(queryset_cls, name):
+def _pending_exclude(queryset_cls: type[models.QuerySet[Category]], name: str):
     """An ``.exclude(name=...)`` Django leaves pending, written by Django itself.
 
     ``_defer_next_filter`` is the flag ``RelatedManager._apply_rel_filters`` sets;
@@ -997,13 +1099,16 @@ def _pending_exclude(queryset_cls, name):
     ``QuerySet._filter_or_exclude`` write the ``(True, (), {...})`` tuple.
     """
     queryset = queryset_cls(model=Category)
-    queryset._defer_next_filter = True
+    # basedpyright: django-stubs omits QuerySet._defer_next_filter, reported as an unknown
+    # attribute
+    queryset._defer_next_filter = True  # pyright: ignore[reportAttributeAccessIssue]
     return queryset.exclude(name=name)
 
 
-def _sealed(queryset):
+def _sealed(queryset: models.QuerySet[Category]) -> models.QuerySet[models.Model, object]:
     sealed, defect = _seal_or_defect(queryset, Category, None)
     assert defect is None
+    assert sealed is not None
     return sealed
 
 
@@ -1021,7 +1126,10 @@ def _sealed(queryset):
         "project-queryset-class-row-source",
     ],
 )
-def test_a_pending_exclude_is_baked_negated_exactly_as_django_resolves_it(queryset_cls, rebuild):
+def test_a_pending_exclude_is_baked_negated_exactly_as_django_resolves_it(
+    queryset_cls: type[models.QuerySet[Category]],
+    rebuild: Callable[[models.QuerySet[Category]], models.QuerySet[models.Model, object]],
+):
     """A pending negated predicate is baked as ``NOT``, the way Django's getter bakes it.
 
     The oracle is a second pending instance resolved through Django's own
@@ -1030,6 +1138,7 @@ def test_a_pending_exclude_is_baked_negated_exactly_as_django_resolves_it(querys
     """
     seed_data(1)
     name = Category.objects.order_by("pk").values_list("name", flat=True).first()
+    assert name is not None
     candidate = _pending_exclude(queryset_cls, name)
     oracle = _pending_exclude(queryset_cls, name)
     assert candidate.__dict__["_deferred_filter"] == (True, (), {"name": name})
@@ -1039,7 +1148,7 @@ def test_a_pending_exclude_is_baked_negated_exactly_as_django_resolves_it(querys
     assert "NOT" in rebuilt_sql[0]
     expected = sorted(Category.objects.exclude(name=name).values_list("pk", flat=True))
     assert expected
-    assert sorted(row.pk for row in rebuilt) == expected
+    assert sorted(row.pk for row in _rows_of(Category, rebuilt)) == expected
 
 
 @pytest.mark.django_db
@@ -1085,7 +1194,9 @@ def test_injected_custom_iterable_result_fails_closed():
     genuine ``.values()`` projection).
     """
     injected = Category.objects.filter(name="visible")
-    injected._iterable_class = list
+    # basedpyright: the planted foreign row iterable is the hostile input under test; django-stubs
+    # types the slot as one of Django's BaseIterable classes
+    injected._iterable_class = list  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(_sync_hook_type(injected), Category.objects.all(), info=None)
 
@@ -1108,10 +1219,12 @@ def test_spoofed_base_table_over_frozen_alias_map_fails_closed():
     Baking the alias map composes lazy query state only; no SQL runs.
     """
 
-    def _spoof(cls, queryset, info):
+    def _spoof(cls: type, queryset: models.QuerySet[Category], info: object):
         hostile = Item.objects.all()
         hostile.query.get_initial_alias()  # freeze the alias map against Item's table
-        hostile.model = Category
+        # basedpyright: the planted spoofed model is the hostile input under test; django-stubs
+        # types the slot as the queryset's own model class
+        hostile.model = Category  # pyright: ignore[reportAttributeAccessIssue]
         hostile.query.model = Category
         return hostile
 
@@ -1140,9 +1253,11 @@ def test_malformed_non_model_query_model_fails_closed_typed():
     ``_concrete_or_none`` folds it into the fail-closed table defect instead.
     """
 
-    def _malformed(cls, queryset, info):
+    def _malformed(cls: type, queryset: models.QuerySet[Category], info: object):
         hostile = Category.objects.all()
-        hostile.model = object()
+        # basedpyright: the planted spoofed model is the hostile input under test; django-stubs
+        # types the slot as the queryset's own model class
+        hostile.model = object()  # pyright: ignore[reportAttributeAccessIssue]
         return hostile
 
     with pytest.raises(ConfigurationError, match="concrete table"):
@@ -1167,8 +1282,10 @@ def test_cross_model_union_source_fails_closed():
 def test_manager_result_degrading_to_list_fails_closed():
     """A hook returning a Manager whose ``.all()`` yields a list fails closed (never a bypass)."""
 
-    class _ListManager(models.Manager):
-        def all(self):
+    class _ListManager(models.Manager[Category]):
+        @override
+        # basedpyright: deliberately degrades ``all()`` into a list, the bypass shape the guard refuses
+        def all(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             return ["secret"]
 
     manager = _ListManager()
@@ -1178,10 +1295,11 @@ def test_manager_result_degrading_to_list_fails_closed():
         apply_type_visibility_sync(_sync_hook_type(manager), Category.objects.all(), info=None)
 
 
-def _alias_drift_manager(explicit):
+def _alias_drift_manager(explicit: str | None):
     """A Manager pinned to ``explicit`` whose ``.all()`` drifts to a different alias."""
 
-    class _DriftManager(models.Manager):
+    class _DriftManager(models.Manager[Category]):
+        @override
         def get_queryset(self):
             return Category.objects.using("elsewhere")
 
@@ -1208,7 +1326,8 @@ def test_hostile_foreign_query_type_name_cannot_escape_typed_defect():
     from django.db.models import sql
 
     class _ExplodingMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name in {"__name__", "__qualname__", "__module__"}:
                 raise RuntimeError("hostile type-name read")
             return super().__getattribute__(name)
@@ -1217,7 +1336,8 @@ def test_hostile_foreign_query_type_name_cannot_escape_typed_defect():
         pass
 
     source = Category.objects.all()
-    source._query = _HostileQuery(Category)
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    source._query = _HostileQuery(Category)  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet.query is object")
@@ -1226,8 +1346,9 @@ def test_hostile_foreign_query_type_name_cannot_escape_typed_defect():
 def test_hostile_manager_routing_metadata_cannot_escape_coercion_boundary():
     """Manager routing failures become a typed coercion error, not a raw exception."""
 
-    class _HostileManager(models.Manager):
-        def __getattribute__(self, name):
+    class _HostileManager(models.Manager[Category]):
+        @override
+        def __getattribute__(self, name: str):
             if name == "_db":
                 raise RuntimeError("hostile manager routing read")
             return super().__getattribute__(name)
@@ -1259,11 +1380,15 @@ async def test_manager_result_alias_drift_fails_closed_async():
 async def test_predicate_dropping_override_result_is_neutralized_async():
     """The async runner seals an override-subclass hook result, same as the sync runner."""
 
-    class _DropFilter(models.QuerySet):
+    class _DropFilter(models.QuerySet[Category]):
+        @override
         def all(self):
             return Category.objects.all()
 
-    shaped = models.QuerySet.filter(_DropFilter(model=Category), name="visible")
+    shaped: models.QuerySet[Category] = models.QuerySet.filter(
+        _DropFilter(model=Category),
+        name="visible",
+    )
     hook = _stub_type(Category, lambda cls, qs, info: shaped)
     result = await apply_type_visibility_async(hook, Category.objects.all(), info=None)
     assert type(result) is models.QuerySet
@@ -1277,18 +1402,22 @@ async def test_predicate_dropping_override_result_is_neutralized_async():
 # ---------------------------------------------------------------------------
 
 
-def _shadowed_all_hook(cls, qs, info):
+def _shadowed_all_hook(cls: type, qs: models.QuerySet[Category], info: object):
     """Return a plain visible-only queryset whose instance ``all`` is predicate-dropping."""
     source = Category.objects.filter(is_private=False)
     source.all = lambda: Category.objects.all()  # instance shadow (would drop the predicate)
     return source
 
 
-def _shadowed_chain_hook(cls, qs, info):
+def _shadowed_chain_hook(cls: type, qs: models.QuerySet[Category], info: object):
     """Return a plain visible-only queryset whose ``query.chain`` is instance-replaced."""
     source = Category.objects.filter(is_private=False)
     unfiltered = Category.objects.all().query
-    source.query.chain = lambda *args, **kwargs: unfiltered  # instance shadow
+
+    def _unfiltered_chain(*args: object, **kwargs: object) -> SqlQuery:
+        return unfiltered
+
+    source.query.chain = _unfiltered_chain  # instance shadow
     return source
 
 
@@ -1320,7 +1449,7 @@ async def test_instance_shadowed_all_hook_serves_only_visible_rows_async():
         Category.objects.all(),
         info=None,
     )
-    names = [row.name async for row in result]
+    names = [row.name for row in _rows_of(Category, [row async for row in result])]
     assert names == ["visible_row"]
 
 
@@ -1349,7 +1478,7 @@ def test_query_shadow_defect_is_name_agnostic():
     literal ``chain`` name") -- a shadowed ``get_compiler`` fails closed identically.
     """
     source = Category.objects.filter(is_private=False)
-    source.query.get_compiler = lambda *a, **k: None  # shadow a different Query method
+    source.query.get_compiler = _noop  # shadow a different Query method
     _, defect = _seal_or_defect(source, Category, None)
     assert defect == ("untrusted", "query instance shadows the 'get_compiler' method")
 
@@ -1384,7 +1513,7 @@ def test_additive_only_subclass_result_is_sealed_to_plain_queryset():
     subclass could still override an unlisted downstream method.
     """
 
-    class _AddOnly(models.QuerySet):
+    class _AddOnly(models.QuerySet[Category]):
         def published(self):  # additive only
             return self.filter(name="published")
 
@@ -1401,7 +1530,7 @@ def test_hook_exception_propagates_unchanged():
     class _BoomError(RuntimeError):
         pass
 
-    def _raise(cls, queryset, info):
+    def _raise(cls: type, queryset: models.QuerySet[Category], info: object):
         raise _BoomError("consumer bug")
 
     with pytest.raises(_BoomError, match="consumer bug"):
@@ -1433,14 +1562,17 @@ def test_hostile_prefetch_queryset_is_neutralized_to_plain():
     """
     from django.db.models import Prefetch
 
-    class _HostileItemQS(models.QuerySet):
+    class _HostileItemQS(models.QuerySet[Item]):
+        @override
         def _fetch_all(self):  # never dispatched after sealing
             self._result_cache = [Item(name="SYNTHETIC-HIDDEN")]
 
     hostile = _HostileItemQS(model=Item).filter(name="real")
     source = Category.objects.all().prefetch_related(Prefetch("items", queryset=hostile))
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
-    (entry,) = sealed._prefetch_related_lookups
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    (entry,) = sealed._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
     assert type(entry) is Prefetch  # rebuilt wrapper, subclass identity dropped
     assert type(entry.queryset) is models.QuerySet  # plain child - hostile subclass dropped
     assert "real" in str(entry.queryset.query)  # the genuine predicate survives
@@ -1461,7 +1593,8 @@ def test_hostile_prefetch_synthetic_row_never_materializes():
     category = Category.objects.create(name="c-real")
     Item.objects.create(name="item-real", category=category)
 
-    class _HostileItemQS(models.QuerySet):
+    class _HostileItemQS(models.QuerySet[Item]):
+        @override
         def _fetch_all(self):  # never dispatched after sealing
             self._result_cache = [Item(name="SYNTHETIC-HIDDEN", category_id=category.pk)]
 
@@ -1471,7 +1604,9 @@ def test_hostile_prefetch_synthetic_row_never_materializes():
     )
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
     (materialized,) = list(sealed)
-    assert [item.name for item in materialized.pf] == ["item-real"]
+    # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
+    # class does not declare it
+    assert [item.name for item in materialized.pf] == ["item-real"]  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_string_and_default_prefetch_lookups_pass_through():
@@ -1485,7 +1620,9 @@ def test_string_and_default_prefetch_lookups_pass_through():
 
     source = Category.objects.all().prefetch_related("items", Prefetch("items"))
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
-    string_lookup, default_prefetch = sealed._prefetch_related_lookups
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    string_lookup, default_prefetch = sealed._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
     assert string_lookup == "items"
     assert isinstance(default_prefetch, Prefetch)
     assert default_prefetch.queryset is None
@@ -1500,7 +1637,9 @@ def test_prefetch_with_non_queryset_queryset_fails_closed():
     """
     from django.db.models import Prefetch
 
-    source = Category.objects.all().prefetch_related(Prefetch("items", queryset=object()))
+    # basedpyright: the non-queryset prefetch child is the hostile input under test; django-stubs
+    # types Prefetch's queryset as a QuerySet
+    source = Category.objects.all().prefetch_related(Prefetch("items", queryset=object()))  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(_SyncType, source, info=None)
 
@@ -1519,7 +1658,8 @@ def test_prefetch_with_foreign_inner_query_fails_closed():
 
     inner = Item.objects.filter(name="x")
     prefetch = Prefetch("items", queryset=inner)
-    inner._query = _ForeignQuery(Item)
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    inner._query = _ForeignQuery(Item)  # pyright: ignore[reportAttributeAccessIssue]
     source = Category.objects.all().prefetch_related(prefetch)
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(_SyncType, source, info=None)
@@ -1572,10 +1712,12 @@ def test_seal_copies_hints_into_a_fresh_dict():
     """
     source = Category.objects.all()
     hints = {"instance": object()}
-    source._hints = hints
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source._hints = hints  # pyright: ignore[reportAttributeAccessIssue]
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
-    assert sealed._hints == hints
-    assert sealed._hints is not hints
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    assert sealed._hints == hints  # pyright: ignore[reportAttributeAccessIssue]
+    assert sealed._hints is not hints  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db
@@ -1590,7 +1732,7 @@ def test_identity_hook_result_is_resealed_dropping_injected_cache_sync():
     """
     Category.objects.create(name="visible_row", is_private=False)
 
-    def _hook(cls, queryset, info):
+    def _hook(cls: type, queryset: models.QuerySet[Category], info: object):
         queryset._result_cache = [Category(name="synthetic-hidden", is_private=True)]
         return queryset
 
@@ -1600,7 +1742,7 @@ def test_identity_hook_result_is_resealed_dropping_injected_cache_sync():
         info=None,
     )
     assert result._result_cache is None
-    assert sorted(row.name for row in result) == ["visible_row"]
+    assert sorted(row.name for row in _rows_of(Category, result)) == ["visible_row"]
 
 
 # ---------------------------------------------------------------------------
@@ -1620,6 +1762,7 @@ def test_hostile_where_subclass_fails_closed():
     from django.db.models.sql.where import WhereNode
 
     class _WideningWhere(WhereNode):
+        @override
         def clone(self):  # never dispatched; rejected first
             return WhereNode()
 
@@ -1632,7 +1775,9 @@ def test_hostile_where_subclass_fails_closed():
 def test_non_django_where_leaf_fails_closed():
     """A consumer (non-``django.``) leaf lurking in the where tree fails closed."""
     source = Category.objects.filter(is_private=False)
-    source.query.where.children.append(object())
+    # basedpyright: the bare object where-leaf is the hostile input under test; django-stubs types
+    # WhereNode.children as Node | NothingNode | Sequence
+    source.query.where.children.append(object())  # pyright: ignore[reportArgumentType]
     _, defect = _seal_or_defect(source, Category, None)
     assert defect == ("untrusted", "where clause carries a object node")
 
@@ -1646,7 +1791,9 @@ def test_hostile_annotation_expression_fails_closed():
     walks use).
     """
     source = Category.objects.filter(is_private=False)
-    source.query.annotations = {"x": object()}
+    # basedpyright: the planted non-expression annotation is the hostile input under test;
+    # django-stubs types the slot as a mapping of expressions
+    source.query.annotations = {"x": object()}  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _seal_or_defect(source, Category, None)
     assert defect == ("untrusted", "annotation 'x' carries a object node")
 
@@ -1654,7 +1801,9 @@ def test_hostile_annotation_expression_fails_closed():
 def test_hostile_alias_join_fails_closed():
     """A non-Django join object in the alias map fails closed."""
     source = Category.objects.filter(is_private=False)
-    source.query.alias_map = {**source.query.alias_map, "bogus": object()}
+    # basedpyright: the planted non-join alias entry is the hostile input under test; django-stubs
+    # types the slot as a mapping of BaseTable / Join
+    source.query.alias_map = {**source.query.alias_map, "bogus": object()}  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _seal_or_defect(source, Category, None)
     assert defect == ("untrusted", "join for alias 'bogus' is a object")
 
@@ -1662,7 +1811,9 @@ def test_hostile_alias_join_fails_closed():
 def test_non_dict_select_related_fails_closed():
     """A ``select_related`` that is neither bool nor dict fails closed."""
     source = Category.objects.filter(is_private=False)
-    source.query.select_related = object()
+    # basedpyright: the planted select_related shape is the hostile input under test; django-stubs
+    # types the slot as a bool or str-keyed dict
+    source.query.select_related = object()  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _seal_or_defect(source, Category, None)
     assert defect == ("untrusted", "select_related is a object")
 
@@ -1670,7 +1821,9 @@ def test_non_dict_select_related_fails_closed():
 def test_non_str_select_related_key_fails_closed():
     """A ``select_related`` dict with a non-str key fails closed."""
     source = Category.objects.filter(is_private=False)
-    source.query.select_related = {1: {}}
+    # basedpyright: the planted select_related shape is the hostile input under test; django-stubs
+    # types the slot as a bool or str-keyed dict
+    source.query.select_related = {1: {}}  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _seal_or_defect(source, Category, None)
     assert defect == ("untrusted", "select_related key is a int")
 
@@ -1764,7 +1917,11 @@ def test_prefetch_unrouted_child_inherits_outer_alias():
         Category,
     )
     assert defect is None
-    assert sealed[0].queryset._db == "default"
+    assert sealed is not None
+    assert isinstance(sealed[0], Prefetch)
+    assert sealed[0].queryset is not None
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert sealed[0].queryset._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_prefetch_cross_alias_child_fails_closed():
@@ -1801,6 +1958,8 @@ def test_sliced_prefetch_child_seals_successfully():
         Category,
     )
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed[0], Prefetch)
     child = sealed[0].queryset
     assert type(child) is models.QuerySet
     assert child.query.is_sliced
@@ -1820,13 +1979,15 @@ def test_prefetch_child_defect_detail_appears_in_message():
         pass
 
     inner = Item.objects.all()
-    inner._query = _ForeignInnerQuery(Item)
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    inner._query = _ForeignInnerQuery(Item)  # pyright: ignore[reportAttributeAccessIssue]
     _, defect = _sealed_prefetch_related_lookups(
         (Prefetch("items", queryset=inner),),
         "X",
         None,
         Category,
     )
+    assert defect is not None
     code, detail = defect
     assert code == "untrusted"
     assert (
@@ -1843,12 +2004,12 @@ def test_prefetch_child_defect_detail_appears_in_message():
 class _AwaitableOf:
     """A custom (non-coroutine) awaitable resolving to a fixed value."""
 
-    def __init__(self, value):
+    def __init__(self, value: object):
         self.value = value
 
-    def __await__(self):
+    def __await__(self) -> Generator[None, None, object]:
+        yield from ()  # resolves without suspending
         return self.value
-        yield  # marks this as a generator function
 
 
 def test_sync_boundary_rejects_custom_awaitable_hook():
@@ -1868,11 +2029,12 @@ async def test_async_custom_awaitable_hook_is_awaited_once():
 async def test_async_nested_awaitable_fails_closed():
     """An async hook resolving to ANOTHER awaitable fails closed after exactly one await."""
 
+    @_as_django_type
     class _NestedType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset, info):
+        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
             async def _inner():
                 return queryset  # disposed, never awaited
 
@@ -1885,11 +2047,12 @@ async def test_async_nested_awaitable_fails_closed():
 async def test_async_generator_hook_result_fails_closed():
     """An async hook resolving to an async generator is not awaitable - a type rejection."""
 
+    @_as_django_type
     class _AgenType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset, info):
+        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
             return _async_generator_result()
 
     with pytest.raises(ConfigurationError, match="got async_generator"):
@@ -1906,11 +2069,12 @@ async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
     """
     await Category.objects.acreate(name="visible_row", is_private=False)
 
+    @_as_django_type
     class _CaptureAsyncType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        async def get_queryset(cls, queryset, info):
+        async def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
             queryset._result_cache = [Category(name="synthetic-hidden", is_private=True)]
             return queryset
 
@@ -1920,7 +2084,7 @@ async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
         info=None,
     )
     assert result._result_cache is None
-    names = [row.name async for row in result]
+    names = [row.name for row in _rows_of(Category, [row async for row in result])]
     assert names == ["visible_row"]
 
 
@@ -1971,13 +2135,16 @@ def test_shadowed_leaf_as_sql_never_dispatches():
 
     fired = []
 
-    def _spy_as_sql(compiler, connection):  # must never run
+    def _spy_as_sql(
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+    ) -> tuple[str, list[object]]:  # must never run
         fired.append("as_sql")
         return "1", []
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    leaf = source.query.where.children[0]
+    leaf = _where_leaf(source.query)
     leaf.rhs = Value("keep")
     leaf.rhs.__dict__["as_sql"] = _spy_as_sql
     sealed, defect = _seal_or_defect(source, Category, None)
@@ -1998,16 +2165,16 @@ def test_lookup_direct_rhs_attribute_hook_never_dispatches():
     fired = []
 
     class _HookedRhs:
-        def __init__(self, log):
+        def __init__(self, log: list[str]):
             self.log = log
 
-        def __getattr__(self, name):  # must never run
+        def __getattr__(self, name: str):  # must never run
             self.log.append(name)
             return None
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].rhs = _HookedRhs(fired)
+    _where_leaf(source.query).rhs = _HookedRhs(fired)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == (
@@ -2029,7 +2196,7 @@ def test_lookup_direct_rhs_plain_object_fails_closed():
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].rhs = _PlainRhs()
+    _where_leaf(source.query).rhs = _PlainRhs()
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause lookup rhs is a _PlainRhs")
@@ -2043,14 +2210,14 @@ def test_lookup_direct_rhs_sequence_members_are_walked():
     """
     source = Category.objects.filter(pk__in=[1, 2])
     str(source.query)
-    assert type(source.query.where.children[0].rhs) is list
+    assert type(_where_leaf(source.query).rhs) is list
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     assert type(sealed) is models.QuerySet
 
     hostile = Category.objects.filter(pk__in=[1, 2])
     str(hostile.query)
-    hostile.query.where.children[0].rhs = [1, object()]
+    _where_leaf(hostile.query).rhs = [1, object()]
     sealed, defect = _seal_or_defect(hostile, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause lookup rhs is a object")
@@ -2069,7 +2236,7 @@ def test_lookup_direct_rhs_enum_member_seals():
 
     source = Category.objects.filter(name=_SealChoices.KEEP)
     str(source.query)
-    assert type(source.query.where.children[0].rhs) is _SealChoices
+    assert type(_where_leaf(source.query).rhs) is _SealChoices
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     assert type(sealed) is models.QuerySet
@@ -2089,15 +2256,17 @@ def test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date():
     fired = []
 
     class _LoudDate(datetime.date):
+        @override
         def __str__(self):  # must never run
             fired.append("__str__")
             return "1999-12-31"
 
     source = Category.objects.filter(created_date__date=_LoudDate(2020, 1, 2))
-    assert type(source.query.where.children[0].rhs) is _LoudDate
+    assert type(_where_leaf(source.query).rhs) is _LoudDate
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    sealed_rhs = sealed.query.where.children[0].rhs
+    assert sealed is not None
+    sealed_rhs = _where_leaf(sealed.query).rhs
     assert type(sealed_rhs) is datetime.date
     assert sealed_rhs == datetime.date(2020, 1, 2)
     assert fired == []
@@ -2106,7 +2275,7 @@ def test_lookup_direct_rhs_date_subclass_normalizes_to_exact_date():
     assert sealed.query.sql_with_params() == expected.query.sql_with_params()
     assert fired == []
     # The candidate keeps its own value: normalization applies to the sealed query only.
-    assert type(source.query.where.children[0].rhs) is _LoudDate
+    assert type(_where_leaf(source.query).rhs) is _LoudDate
 
 
 def test_lookup_direct_rhs_str_subclass_normalizes_to_exact_str():
@@ -2121,10 +2290,11 @@ def test_lookup_direct_rhs_str_subclass_normalizes_to_exact_str():
         KEEP = "keep", "Keep"
 
     source = Category.objects.filter(name=_NormChoices.KEEP)
-    assert type(source.query.where.children[0].rhs) is _NormChoices
+    assert type(_where_leaf(source.query).rhs) is _NormChoices
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    sealed_rhs = sealed.query.where.children[0].rhs
+    assert sealed is not None
+    sealed_rhs = _where_leaf(sealed.query).rhs
     assert type(sealed_rhs) is str
     assert sealed_rhs == "keep"
 
@@ -2145,16 +2315,19 @@ def test_lookup_direct_rhs_property_shadowed_subclass_normalizes_safely():
 
     class _ShadowedDate(datetime.date):
         @property
+        @override
         def year(self):  # must never run
             fired.append("year")
             return 1999
 
         @property
+        @override
         def month(self):  # must never run
             fired.append("month")
             return 12
 
         @property
+        @override
         def day(self):  # must never run
             fired.append("day")
             return 31
@@ -2162,7 +2335,8 @@ def test_lookup_direct_rhs_property_shadowed_subclass_normalizes_safely():
     source = Category.objects.filter(created_date__date=_ShadowedDate(2020, 1, 2))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    sealed_rhs = sealed.query.where.children[0].rhs
+    assert sealed is not None
+    sealed_rhs = _where_leaf(sealed.query).rhs
     assert type(sealed_rhs) is datetime.date
     assert sealed_rhs == datetime.date(2020, 1, 2)
     assert fired == []
@@ -2245,10 +2419,11 @@ def test_lookup_direct_rhs_every_plain_data_base_normalizes_to_its_exact_type():
 
     source = Category.objects.filter(name__in=["keep"])
     str(source.query)
-    source.query.where.children[0].rhs = members
+    _where_leaf(source.query).rhs = members
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    sealed_rhs = sealed.query.where.children[0].rhs
+    assert sealed is not None
+    sealed_rhs = _where_leaf(sealed.query).rhs
     assert [type(item) for item in sealed_rhs] == expected_types
     assert sealed_rhs[:11] == members[:11]
     assert sealed_rhs[11] == "keep"
@@ -2271,7 +2446,7 @@ def test_lookup_direct_rhs_unnormalizable_enum_member_fails_closed():
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].rhs = _OpaqueChoices.KEEP
+    _where_leaf(source.query).rhs = _OpaqueChoices.KEEP
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet binds a _OpaqueValue bound value")
@@ -2286,13 +2461,22 @@ def test_lookup_expression_rhs_still_recurses():
     fired = []
 
     class _HostileRhs(models.Func):
-        def as_sql(self, compiler, connection):  # must never run
+        @override
+        def as_sql(
+            self,
+            compiler: SQLCompiler,
+            connection: BaseDatabaseWrapper,
+            function: str | None = None,
+            template: str | None = None,
+            arg_joiner: str | None = None,
+            **extra_context: object,
+        ) -> tuple[str, tuple[str | int, ...]]:  # must never run
             fired.append("rhs.as_sql")
-            return "1", []
+            return "1", ()
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].rhs = _HostileRhs(models.F("name"))
+    _where_leaf(source.query).rhs = _HostileRhs(models.F("name"))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause carries a _HostileRhs node")
@@ -2308,13 +2492,22 @@ def test_lookup_hostile_lhs_fails_closed():
     fired = []
 
     class _HostileLhs(models.Func):
-        def as_sql(self, compiler, connection):  # must never run
+        @override
+        def as_sql(
+            self,
+            compiler: SQLCompiler,
+            connection: BaseDatabaseWrapper,
+            function: str | None = None,
+            template: str | None = None,
+            arg_joiner: str | None = None,
+            **extra_context: object,
+        ) -> tuple[str, tuple[str | int, ...]]:  # must never run
             fired.append("lhs.as_sql")
-            return "1", []
+            return "1", ()
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].lhs = _HostileLhs(models.F("name"))
+    _where_leaf(source.query).lhs = _HostileLhs(models.F("name"))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause carries a _HostileLhs node")
@@ -2331,9 +2524,18 @@ def test_hostile_order_by_expression_fails_closed():
     fired = []
 
     class _HostileOrder(models.Func):
-        def as_sql(self, compiler, connection):  # must never run
+        @override
+        def as_sql(
+            self,
+            compiler: SQLCompiler,
+            connection: BaseDatabaseWrapper,
+            function: str | None = None,
+            template: str | None = None,
+            arg_joiner: str | None = None,
+            **extra_context: object,
+        ) -> tuple[str, tuple[str | int, ...]]:  # must never run
             fired.append("order_by.as_sql")
-            return "1", []
+            return "1", ()
 
     source = Category.objects.filter(is_private=False)
     str(source.query)
@@ -2354,8 +2556,17 @@ def test_consumer_expression_nested_in_genuine_func_fails_closed():
     from django.db.models.functions import Upper
 
     class _NestedHostile(models.Func):
-        def as_sql(self, compiler, connection):  # must never run
-            return "1", []
+        @override
+        def as_sql(
+            self,
+            compiler: SQLCompiler,
+            connection: BaseDatabaseWrapper,
+            function: str | None = None,
+            template: str | None = None,
+            arg_joiner: str | None = None,
+            **extra_context: object,
+        ) -> tuple[str, tuple[str | int, ...]]:  # must never run
+            return "1", ()
 
     source = Category.objects.filter(is_private=False)
     source.query.annotations = {"x": Upper(_NestedHostile(models.F("name")))}
@@ -2397,7 +2608,9 @@ def test_hostile_subquery_inner_query_fails_closed():
     inner = Subquery(Item.objects.filter(category=models.OuterRef("pk")).values("pk"))
     inner.query = _HostileInner(Item)
     source = Category.objects.filter(is_private=False)
-    source.query.annotations = {"x": inner}
+    # basedpyright: django-stubs types annotation values as Expression, which Subquery does not
+    # subclass; Django stores one there for every .annotate(Subquery(...))
+    source.query.annotations = {"x": inner}  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "annotation 'x' carries a _HostileInner node")
@@ -2414,13 +2627,26 @@ def test_hostile_expression_inside_genuine_subquery_where_fails_closed():
     """
 
     class _BuriedHostile(models.Func):
-        def as_sql(self, compiler, connection):  # must never run
-            return "1", []
+        @override
+        def as_sql(
+            self,
+            compiler: SQLCompiler,
+            connection: BaseDatabaseWrapper,
+            function: str | None = None,
+            template: str | None = None,
+            arg_joiner: str | None = None,
+            **extra_context: object,
+        ) -> tuple[str, tuple[str | int, ...]]:  # must never run
+            return "1", ()
 
     inner = models.Subquery(Item.objects.filter(name="x").values("pk"))
-    inner.query.where.children.append(_BuriedHostile(models.F("name")))
+    # basedpyright: the buried non-Django where-leaf is the hostile input under test; django-stubs
+    # types WhereNode.children as Node | NothingNode | Sequence
+    inner.query.where.children.append(_BuriedHostile(models.F("name")))  # pyright: ignore[reportArgumentType]
     source = Category.objects.filter(is_private=False)
-    source.query.annotations = {"y": inner}
+    # basedpyright: django-stubs types annotation values as Expression, which Subquery does not
+    # subclass; Django stores one there for every .annotate(Subquery(...))
+    source.query.annotations = {"y": inner}  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause carries a _BuriedHostile node")
@@ -2442,7 +2668,7 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
     class _HostileValue:
         conditional = True
 
-        def resolve_expression(self, query, *args, **kwargs):
+        def resolve_expression(self, query: SqlQuery, *args: object, **kwargs: object):
             fired.append("resolve_expression")
             from django.db.models.sql.where import WhereNode
 
@@ -2450,7 +2676,8 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
             return Value(1)
 
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"name": _HostileValue()})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": _HostileValue()})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter 'name' carries a _HostileValue node")
@@ -2465,12 +2692,15 @@ def test_deferred_filter_bake_leaves_candidate_unmutated_and_is_repeatable():
     the SAME source twice yields identical SQL with no duplicated predicate.
     """
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"name": "later"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
     sealed_one, defect_one = _seal_or_defect(result, Category, None)
     sealed_two, defect_two = _seal_or_defect(result, Category, None)
     assert defect_one is None and defect_two is None
     assert result.__dict__.get("_deferred_filter") == (False, (), {"name": "later"})
+    assert sealed_one is not None
     sql_one, params_one = sealed_one.query.get_compiler(using="default").as_sql()
+    assert sealed_two is not None
     sql_two, params_two = sealed_two.query.get_compiler(using="default").as_sql()
     assert sql_one == sql_two
     assert list(params_one) == list(params_two)
@@ -2502,8 +2732,9 @@ def test_hostile_query_container_subclass_fails_closed():
     """
     fired = []
 
-    class _HostileRefcount(dict):
-        def copy(self):  # must never run
+    class _HostileRefcount(dict[str, int]):
+        @override
+        def copy(self) -> dict[str, int]:  # must never run
             fired.append("copy")
             return {}
 
@@ -2530,7 +2761,9 @@ def test_unrouted_parent_rejects_cross_routed_prefetch_child():
     str(child.query)
     parent = Category.objects.all()
     str(parent.query)
-    parent._prefetch_related_lookups = (models.Prefetch("items", queryset=child),)
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    parent._prefetch_related_lookups = (models.Prefetch("items", queryset=child),)  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(parent, Category, None)
     assert sealed is None
     assert defect == (
@@ -2564,7 +2797,9 @@ def test_poisoned_base_table_cache_fails_closed_on_real_first_alias():
     hostile = Item.objects.filter(name="x")
     str(hostile.query)
     hostile.query.get_initial_alias()
-    hostile.model = Category
+    # basedpyright: the planted spoofed model is the hostile input under test; django-stubs types
+    # the slot as the queryset's own model class
+    hostile.model = Category  # pyright: ignore[reportAttributeAccessIssue]
     hostile.query.model = Category
     hostile.query.alias_map = dict(hostile.query.alias_map)
     spoof_alias = Category._meta.db_table
@@ -2584,9 +2819,10 @@ def test_stateful_combined_queries_tuple_subclass_fails_closed():
     iterations identical.
     """
 
-    class _StatefulTuple(tuple):
+    class _StatefulTuple(tuple[object, ...]):
         _calls = [0]
 
+        @override
         def __iter__(self):  # must never be iterated
             self._calls[0] += 1
             if self._calls[0] == 1:
@@ -2613,7 +2849,7 @@ def test_is_inert_value_uses_exact_types_not_isinstance():
     from decimal import Decimal
 
     class _EvilStr(str):
-        def resolve_expression(self, query, *args, **kwargs):
+        def resolve_expression(self, query: object, *args: object, **kwargs: object):
             from django.db.models import Value
 
             return Value(1)
@@ -2637,16 +2873,18 @@ def test_deferred_str_subclass_expression_never_dispatches():
     fired = []
 
     class _EvilStr(str):
-        def resolve_expression(self, query, *args, **kwargs):
+        def resolve_expression(self, query: object, *args: object, **kwargs: object):
             fired.append("resolve_expression")
             from django.db.models import Value
 
             return Value(1)
 
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"name": _EvilStr("later")})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"name": _EvilStr("later")})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
+    assert defect is not None
     assert defect[0] == "untrusted"
     assert fired == []
 
@@ -2661,10 +2899,16 @@ def test_deferred_model_instance_with_instance_resolve_expression_fails_closed()
     """
     from django.db.models import Value
 
+    def _value_one(query: object, *args: object, **kwargs: object) -> Value:
+        return Value(1)
+
     inst = Category(name="p")
-    inst.resolve_expression = lambda query, *a, **k: Value(1)  # instance-level shadow
+    # basedpyright: the instance-level resolve_expression shadow is the hostile input under test;
+    # the model class declares no such attribute
+    inst.resolve_expression = _value_one  # pyright: ignore[reportAttributeAccessIssue]
     result = Category.objects.all()
-    result._deferred_filter = (False, (), {"parent": inst})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"parent": inst})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect == (
@@ -2683,7 +2927,8 @@ def test_deferred_plain_model_instance_still_seals():
     ``category`` FK and seals cleanly.
     """
     result = Item.objects.all()
-    result._deferred_filter = (False, (), {"category": Category(name="p", pk=7)})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    result._deferred_filter = (False, (), {"category": Category(name="p", pk=7)})  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(result, Item, None)
     assert defect is None
     assert sealed is not None
@@ -2700,13 +2945,16 @@ def test_dynamic_as_vendor_shadow_never_dispatches():
 
     fired = []
 
-    def _spy_as_sqlite(compiler, connection):  # must never run
+    def _spy_as_sqlite(
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+    ) -> tuple[str, list[object]]:  # must never run
         fired.append("as_sqlite")
         return "1", []
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    leaf = source.query.where.children[0]
+    leaf = _where_leaf(source.query)
     leaf.rhs = Value("keep")
     leaf.rhs.__dict__["as_sqlite"] = _spy_as_sqlite
     sealed, defect = _seal_or_defect(source, Category, None)
@@ -2726,12 +2974,14 @@ def test_func_arg_joiner_metadata_non_string_fails_closed():
     from django.db.models.functions import Concat
 
     class _EvilJoiner:
-        def join(self, parts):  # must never run
+        def join(self, parts: object):  # must never run
             return "x"
 
     source = Category.objects.all()
     ann = Concat(models.F("name"), models.Value("!"), output_field=models.TextField())
-    ann.arg_joiner = _EvilJoiner()
+    # basedpyright: the planted non-string arg_joiner is the hostile input under test; django-stubs
+    # types the slot as str
+    ann.arg_joiner = _EvilJoiner()  # pyright: ignore[reportAttributeAccessIssue]
     source.query.annotations = {"c": ann}
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
@@ -2751,6 +3001,7 @@ def test_func_extra_template_parameter_object_fails_closed():
     fired = []
 
     class _HostileTemplateParam:
+        @override
         def __str__(self):  # must never run
             fired.append("__str__")
             return "UPPER"
@@ -2787,6 +3038,8 @@ def test_func_extra_string_template_parameter_seals():
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     assert sealed is not None
+    assert isinstance(sealed.query.annotations["c"], models.Func)
+    assert isinstance(source.query.annotations["c"], models.Func)
     assert sealed.query.annotations["c"].extra == {
         "function": "UPPER",
         "precision": 1,
@@ -2804,7 +3057,7 @@ def test_func_extra_string_template_parameter_seals():
         ({"function": b"UPPER"}, "annotation 'c' extra['function'] is a bytes"),
     ],
 )
-def test_func_extra_non_inert_template_state_fails_closed(extra, detail):
+def test_func_extra_non_inert_template_state_fails_closed(extra: object, detail: str):
     """The ``extra`` mapping itself, its keys, and its values are each pinned exactly.
 
     A ``dict`` SUBCLASS would run its own ``items`` when ``as_sql`` unpacks the format
@@ -2828,6 +3081,7 @@ def test_where_node_non_string_connector_fails_closed():
     """
 
     class _EvilConnector:
+        @override
         def __str__(self):  # must never run
             return "OR"
 
@@ -2846,11 +3100,13 @@ def test_where_node_non_string_connector_fails_closed():
         (["name", 5], "query extra_order_by carries a int"),
     ],
 )
-def test_extra_order_by_non_string_state_fails_closed(holder, detail):
+def test_extra_order_by_non_string_state_fails_closed(holder: object, detail: str):
     """``extra_order_by`` (emitted as raw SQL) must be an exact sequence of strings."""
     source = Category.objects.all()
     str(source.query)
-    source.query.extra_order_by = holder
+    # basedpyright: the planted extra_order_by holder is the hostile input under test; django-stubs
+    # types the slot as a sequence of order-by names
+    source.query.extra_order_by = holder  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", detail)
@@ -2860,7 +3116,9 @@ def test_extra_order_by_none_and_string_sequence_seal():
     """A ``None`` or all-string ``extra_order_by`` seals -- the raw-SQL slot is accepted."""
     none_source = Category.objects.all()
     str(none_source.query)
-    none_source.query.extra_order_by = None
+    # basedpyright: a None extra_order_by is the slot shape under test; django-stubs types the slot
+    # as a sequence of order-by names
+    none_source.query.extra_order_by = None  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(none_source, Category, None)
     assert defect is None and sealed is not None
 
@@ -2876,6 +3134,7 @@ def test_query_extra_select_executable_sql_fails_closed_before_clone():
     fired = []
 
     class _HostileSQL:
+        @override
         def __str__(self):  # must never run
             fired.append("str")
             return "1"
@@ -2896,7 +3155,7 @@ def test_query_extra_select_executable_sql_fails_closed_before_clone():
         ("1", (), ()),
     ],
 )
-def test_query_extra_select_malformed_payload_fails_closed(payload):
+def test_query_extra_select_malformed_payload_fails_closed(payload: object):
     """A ``Query.extra`` payload that is not an exact ``(sql, params)`` 2-tuple fails closed.
 
     The scan unpacks ``statement, params = payload`` to type each half, so the SHAPE gate
@@ -2942,11 +3201,14 @@ def test_extra_where_executable_sql_fails_closed_before_clone():
     fired = []
 
     class _HostileSQL:
+        @override
         def __str__(self):  # must never run
             fired.append("str")
             return "1"
 
-    source = Category.objects.extra(where=[_HostileSQL()])
+    # basedpyright: the non-str extra() SQL fragment is the hostile input under test; django-stubs
+    # types QuerySet.extra's where as list[str]
+    source = Category.objects.extra(where=[_HostileSQL()])  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause sqls carries a _HostileSQL")
@@ -2970,7 +3232,9 @@ def test_extra_where_non_sequence_sqls_fails_closed():
             fired.append("iter")
             return iter(["1 = 1"])
 
-    source = Category.objects.extra(where=_EvilSqls())
+    # basedpyright: the list-like extra() where container is the hostile input under test;
+    # django-stubs types QuerySet.extra's where as list[str]
+    source = Category.objects.extra(where=_EvilSqls())  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause sqls is a _EvilSqls")
@@ -2995,7 +3259,9 @@ def test_extra_where_non_sequence_params_fails_closed():
             fired.append("iter")
             return iter(["keep"])
 
-    source = Category.objects.extra(where=["name = %s"], params=_EvilParams())
+    # basedpyright: the list-like extra() params container is the hostile input under test;
+    # django-stubs types QuerySet.extra's params as a list
+    source = Category.objects.extra(where=["name = %s"], params=_EvilParams())  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause params is a _EvilParams")
@@ -3050,12 +3316,24 @@ def test_filtered_relation_hostile_resolved_condition_never_dispatches():
     fired = []
 
     class _BuriedHostile(models.Func):
-        def as_sql(self, compiler, connection):  # must never run
+        @override
+        def as_sql(
+            self,
+            compiler: SQLCompiler,
+            connection: BaseDatabaseWrapper,
+            function: str | None = None,
+            template: str | None = None,
+            arg_joiner: str | None = None,
+            **extra_context: object,
+        ) -> tuple[str, tuple[str | int, ...]]:  # must never run
             fired.append("as_sql")
-            return "1", []
+            return "1", ()
 
     frq, _alias, join = _filtered_relation_join()
-    join.filtered_relation.resolved_condition.children.append(_BuriedHostile(models.F("name")))
+    assert join.filtered_relation is not None
+    # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an unknown
+    # attribute
+    join.filtered_relation.resolved_condition.children.append(_BuriedHostile(models.F("name")))  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(frq, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "where clause carries a _BuriedHostile node")
@@ -3065,7 +3343,9 @@ def test_filtered_relation_hostile_resolved_condition_never_dispatches():
 def test_join_defect_non_genuine_filtered_relation_fails_closed():
     """A join carrying a non-Django ``filtered_relation`` object fails closed."""
     _frq, alias, join = _filtered_relation_join()
-    join.filtered_relation = object()
+    # basedpyright: the planted non-Django filtered_relation is the hostile input under test;
+    # django-stubs types the slot as a FilteredRelation or None
+    join.filtered_relation = object()  # pyright: ignore[reportAttributeAccessIssue]
     defect = _join_defect(join, alias, _GraphWalk())
     assert defect == ("untrusted", f"join for alias {alias!r} filtered_relation is a object")
 
@@ -3078,7 +3358,7 @@ def test_join_defect_shadowed_filtered_relation_fails_closed():
     dynamically-resolved ``as_<vendor>`` emitter absent from the class).
     """
     _frq, alias, join = _filtered_relation_join()
-    join.filtered_relation.__dict__["as_sql"] = lambda *a, **k: None
+    join.filtered_relation.__dict__["as_sql"] = _noop
     defect = _join_defect(join, alias, _GraphWalk())
     assert defect == (
         "untrusted",
@@ -3089,7 +3369,10 @@ def test_join_defect_shadowed_filtered_relation_fails_closed():
 def test_join_defect_unresolved_filtered_relation_is_clean():
     """A genuine join whose ``filtered_relation`` is not yet resolved carries no defect."""
     _frq, alias, join = _filtered_relation_join()
-    join.filtered_relation.resolved_condition = None
+    assert join.filtered_relation is not None
+    # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an unknown
+    # attribute
+    join.filtered_relation.resolved_condition = None  # pyright: ignore[reportAttributeAccessIssue]
     assert _join_defect(join, alias, _GraphWalk()) is None
 
 
@@ -3103,7 +3386,8 @@ def test_module_spoofing_metaclass_is_not_invoked_and_fails_closed():
     fired = []
 
     class _NoisyMeta(type):
-        def __getattribute__(cls, name):  # must never run for provenance
+        @override
+        def __getattribute__(cls, name: str):  # must never run for provenance
             fired.append(name)
             return super().__getattribute__(name)
 
@@ -3125,7 +3409,10 @@ def test_provenance_of_type_with_raising_module_descriptor_fails_closed():
 
     class _RaisingMeta(type):
         @property
-        def __module__(cls):
+        @override
+        # basedpyright: the hostile shape under test, a ``__module__`` property whose read raises;
+        # the checker rejects any property overriding a base class attribute
+        def __module__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise AttributeError("no module")
 
     class _Raiser(metaclass=_RaisingMeta):
@@ -3145,7 +3432,7 @@ def test_provenance_of_type_with_raising_module_descriptor_fails_closed():
         ("_for_write", object(), "QuerySet._for_write is a object"),
     ],
 )
-def test_retained_state_field_wrong_shape_fails_closed(field, value, detail):
+def test_retained_state_field_wrong_shape_fails_closed(field: str, value: object, detail: str):
     """Each retained ``QuerySet`` state field is pinned to its exact shape."""
     source = Category.objects.all()
     str(source.query)
@@ -3159,18 +3446,20 @@ def test_hostile_hints_bool_and_iter_never_dispatch():
     """A ``_hints`` dict subclass with a hostile ``__bool__`` / ``__iter__`` fails closed."""
     fired = []
 
-    class _EvilHints(dict):
+    class _EvilHints(dict[str, object]):
         def __bool__(self):  # must never run
             fired.append("bool")
             return True
 
+        @override
         def __iter__(self):  # must never run
             fired.append("iter")
             return super().__iter__()
 
     source = Category.objects.all()
     str(source.query)
-    source._hints = _EvilHints()
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source._hints = _EvilHints()  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet._hints is a _EvilHints")
@@ -3181,7 +3470,8 @@ def test_hints_non_string_key_fails_closed():
     """A ``_hints`` dict with a non-string key fails closed before it is copied."""
     source = Category.objects.all()
     str(source.query)
-    source._hints = {object(): 1}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source._hints = {object(): 1}  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet._hints has a non-string key")
@@ -3191,10 +3481,13 @@ def test_none_hints_seals_to_fresh_dict():
     """A ``None`` ``_hints`` seals to a fresh empty dict rather than erroring."""
     source = Category.objects.all()
     str(source.query)
-    source._hints = None
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source._hints = None  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    assert sealed._hints == {}
+    assert sealed is not None
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    assert sealed._hints == {}  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_prefetch_lookups_wrong_shape_fails_closed():
@@ -3206,7 +3499,9 @@ def test_prefetch_lookups_wrong_shape_fails_closed():
 
     source = Category.objects.all()
     str(source.query)
-    source._prefetch_related_lookups = _EvilLookups()
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    source._prefetch_related_lookups = _EvilLookups()  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet prefetch lookups is a _EvilLookups")
@@ -3216,10 +3511,13 @@ def test_missing_prefetch_lookups_key_seals():
     """An absent ``_prefetch_related_lookups`` key (``None``) seals with no prefetch."""
     source = Category.objects.all()
     str(source.query)
-    source.__dict__.pop("_prefetch_related_lookups", None)
+    vars(source).pop("_prefetch_related_lookups", None)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    assert sealed._prefetch_related_lookups == ()
+    assert sealed is not None
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    assert sealed._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # ---------------------------------------------------------------------------
@@ -3244,7 +3542,8 @@ def test_deferred_filter_slot_never_truth_tested():
 
     source = Category.objects.all()
     str(source.query)
-    source._deferred_filter = _EvilDeferred()
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    source._deferred_filter = _EvilDeferred()  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter is malformed")
@@ -3254,7 +3553,8 @@ def test_deferred_filter_wrong_arity_tuple_fails_closed():
     """A non-3-tuple deferred filter is rejected before any unpack."""
     source = Category.objects.all()
     str(source.query)
-    source._deferred_filter = (False, ())
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    source._deferred_filter = (False, ())  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter is malformed")
@@ -3268,13 +3568,13 @@ def test_expr_graph_walk_rejects_self_referential_containers():
     it would report the graph trusted and leave the unbounded recursion to resurface
     downstream as a raw ``RecursionError`` outside the typed contract.
     """
-    cyclic_list: list = []
+    cyclic_list: list[object] = []
     cyclic_list.append(cyclic_list)
     assert _expr_graph_defect(cyclic_list, _GraphWalk(), "where clause") == (
         "untrusted",
         "where clause contains a reference cycle",
     )
-    cyclic_dict: dict = {}
+    cyclic_dict: dict[str, object] = {}
     cyclic_dict["self"] = cyclic_dict
     assert _expr_graph_defect(cyclic_dict, _GraphWalk(), "where clause") == (
         "untrusted",
@@ -3305,13 +3605,13 @@ def test_expr_graph_walk_accepts_shared_diamond():
 
 def test_deferred_value_walk_rejects_self_referential_values():
     """A cyclic Q / list / dict deferred-filter value fails closed as a typed defect."""
-    cyclic_list: list = []
+    cyclic_list: list[object] = []
     cyclic_list.append(cyclic_list)
     assert _deferred_value_defect(cyclic_list, _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg contains a reference cycle",
     )
-    cyclic_dict: dict = {}
+    cyclic_dict: dict[str, object] = {}
     cyclic_dict["self"] = cyclic_dict
     assert _deferred_value_defect(cyclic_dict, _GraphWalk(), "deferred arg") == (
         "untrusted",
@@ -3327,7 +3627,7 @@ def test_deferred_value_walk_rejects_self_referential_values():
 
 def test_deferred_value_walk_accepts_shared_diamond():
     """A value reached twice after validating stays cheap and is not reported a cycle."""
-    shared: list = [1, 2]
+    shared: list[object] = [1, 2]
     shared_map = {"k": 1}
     shared_q = models.Q(pk=1)
     assert (
@@ -3424,7 +3724,9 @@ def test_slotted_genuine_django_node_fails_closed():
 
     source = Category.objects.filter(is_private=False)
     str(source.query)
-    source.query.annotations["flag"] = SafeString("1")
+    # basedpyright: the SafeString annotation payload is the hostile input under test; django-stubs
+    # types Query.annotations values as Expression
+    source.query.annotations["flag"] = SafeString("1")  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "annotation 'flag' is a SafeString with no instance state")
@@ -3445,7 +3747,11 @@ def test_slotted_django_namedtuple_in_an_unenumerated_slot_fails_closed():
     A slotted object has no slot-by-slot rebuild, so it takes the admitted-bound-value
     rule, which has no representation for a namedtuple and refuses it.
     """
-    from django.db.models.sql.query import ExplainInfo
+    # basedpyright: django-stubs omits ExplainInfo from django.db.models.sql.query, where Django
+    # defines it
+    from django.db.models.sql.query import (
+        ExplainInfo,  # pyright: ignore[reportAttributeAccessIssue]
+    )
 
     source = Category.objects.filter(is_private=False)
     str(source.query)
@@ -3493,7 +3799,11 @@ def test_reconstruction_never_grows_the_retained_type_set_with_a_planted_type():
     in a process, which is growth attributable to the schema and not to any planted value.
     Snapshotting after it leaves the assertion measuring only what the planted value adds.
     """
-    from django.db.models.sql.query import ExplainInfo
+    # basedpyright: django-stubs omits ExplainInfo from django.db.models.sql.query, where Django
+    # defines it
+    from django.db.models.sql.query import (
+        ExplainInfo,  # pyright: ignore[reportAttributeAccessIssue]
+    )
     from django.utils.safestring import SafeString
 
     _seal_or_defect(Category.objects.filter(is_private=False), Category, None)
@@ -3518,7 +3828,8 @@ def test_hostile_case_container_fails_closed_before_its_iterator_runs():
     """
     fired = []
 
-    class _HostileCases(list):
+    class _HostileCases(list[object]):
+        @override
         def __iter__(self):  # must never run
             fired.append("iter")
             return super().__iter__()
@@ -3531,6 +3842,7 @@ def test_hostile_case_container_fails_closed_before_its_iterator_runs():
         ),
     )
     str(source.query)
+    assert isinstance(source.query.annotations["flag"], models.Case)
     source.query.annotations["flag"].cases = _HostileCases(
         source.query.annotations["flag"].cases,
     )
@@ -3551,11 +3863,13 @@ def test_hostile_alias_refcount_payload_fails_closed():
     fired = []
 
     class _HostileCount(int):
-        def __add__(self, other):  # must never run
+        @override
+        def __add__(self, other: int):  # must never run
             fired.append("add")
             return self
 
-        def __sub__(self, other):  # must never run
+        @override
+        def __sub__(self, other: int):  # must never run
             fired.append("sub")
             return self
 
@@ -3573,7 +3887,9 @@ def test_hostile_external_alias_payload_fails_closed():
     """A non-``bool`` ``external_aliases`` value fails closed."""
     source = Category.objects.filter(is_private=False)
     str(source.query)
-    source.query.external_aliases["evil"] = 1
+    # basedpyright: the non-bool external_aliases value is the hostile input under test;
+    # django-stubs types Query.external_aliases values as bool
+    source.query.external_aliases["evil"] = 1  # pyright: ignore[reportArgumentType]
     assert _query_container_defect(source.query) == (
         "untrusted",
         "query external_aliases['evil'] is a int",
@@ -3585,12 +3901,16 @@ def test_hostile_table_map_payload_fails_closed():
     source = Category.objects.filter(is_private=False)
     str(source.query)
     table = next(iter(source.query.table_map))
-    source.query.table_map[table] = (source.query.table_map[table][0],)
+    # basedpyright: the tuple table_map entry is the hostile input under test; django-stubs types
+    # Query.table_map values as list[str]
+    source.query.table_map[table] = (source.query.table_map[table][0],)  # pyright: ignore[reportArgumentType]
     assert _query_container_defect(source.query) == (
         "untrusted",
         f"query table_map[{table!r}] is a tuple",
     )
-    source.query.table_map[table] = [object()]
+    # basedpyright: the non-str table_map alias is the hostile input under test; django-stubs types
+    # Query.table_map values as list[str]
+    source.query.table_map[table] = [object()]  # pyright: ignore[reportArgumentType]
     assert _query_container_defect(source.query) == (
         "untrusted",
         f"query table_map[{table!r}] carries a object",
@@ -3601,7 +3921,9 @@ def test_hostile_set_container_member_fails_closed():
     """A non-``str`` member of a retained alias set fails closed."""
     source = Category.objects.filter(is_private=False)
     str(source.query)
-    source.query.used_aliases = {object()}
+    # basedpyright: the planted non-str alias is the hostile input under test; django-stubs types
+    # the slot as a set of str
+    source.query.used_aliases = {object()}  # pyright: ignore[reportAttributeAccessIssue]
     assert _query_container_defect(source.query) == (
         "untrusted",
         "query used_aliases carries a object",
@@ -3612,14 +3934,18 @@ def test_hostile_filtered_relation_payload_fails_closed():
     """A ``_filtered_relations`` value must be a genuine, unshadowed Django object."""
     source = Category.objects.filter(is_private=False)
     str(source.query)
-    source.query._filtered_relations = {"rel": object()}
+    # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown attribute
+    source.query._filtered_relations = {"rel": object()}  # pyright: ignore[reportAttributeAccessIssue]
     assert _query_container_defect(source.query) == (
         "untrusted",
         "query _filtered_relations['rel'] is a object",
     )
     relation = models.FilteredRelation("items", condition=models.Q(pk=1))
-    relation.as_sql = lambda *args, **kwargs: None  # must never run
-    source.query._filtered_relations = {"rel": relation}
+    # basedpyright: the instance-level as_sql shadow is the hostile input under test; the stubs
+    # declare a method there
+    relation.as_sql = _noop  # must never run  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown attribute
+    source.query._filtered_relations = {"rel": relation}  # pyright: ignore[reportAttributeAccessIssue]
     assert _query_container_defect(source.query) == (
         "untrusted",
         "query _filtered_relations['rel'] shadows the 'as_sql' method",
@@ -3631,6 +3957,7 @@ def test_sealed_queryset_keeps_its_predicate_through_filter_composition():
     source = Category.objects.filter(is_private=False)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
     composed_sql = str(sealed.filter(name="visible").query)
     assert "is_private" in composed_sql
     assert "name" in composed_sql
@@ -3644,10 +3971,11 @@ def test_sealed_query_table_map_payload_is_not_shared_with_the_candidate():
     assert defect is None
     table = next(iter(source.query.table_map))
     source.query.table_map[table].append("injected")
+    assert sealed is not None
     assert "injected" not in sealed.query.table_map[table]
 
 
-def _join_with_filtered_relation(query):
+def _join_with_filtered_relation(query: SqlQuery):
     """Return the one ``alias_map`` join carrying a ``FilteredRelation``."""
     return next(join for join in query.alias_map.values() if join.filtered_relation is not None)
 
@@ -3657,9 +3985,10 @@ def test_mutating_a_candidate_where_leaf_cannot_change_the_sealed_predicate():
     source = Category.objects.filter(is_private=False)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
     before = sealed.query.sql_with_params()
     source_before = source.query.sql_with_params()
-    source.query.where.children[0].rhs = True
+    _where_leaf(source.query).rhs = True
     assert sealed.query.sql_with_params() == before
     assert source.query.sql_with_params() != source_before
 
@@ -3671,8 +4000,10 @@ def test_mutating_a_candidate_annotation_expression_cannot_change_the_sealed_sql
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
     before = sealed.query.sql_with_params()
     annotation = source.query.annotations["bonus"]
+    assert isinstance(annotation, RawSQL)
     annotation.sql = "1 + %s + 1000"
     annotation.params[0] = 99
     assert sealed.query.sql_with_params() == before
@@ -3686,10 +4017,14 @@ def test_mutating_a_candidate_filtered_relation_cannot_change_the_sealed_join():
     ).filter(visible__name="widget")
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
     before = sealed.query.sql_with_params()
     source_before = source.query.sql_with_params()
     source_join = _join_with_filtered_relation(source.query)
-    source_join.filtered_relation.resolved_condition.children[0].rhs = True
+    assert source_join.filtered_relation is not None
+    # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an unknown
+    # attribute
+    source_join.filtered_relation.resolved_condition.children[0].rhs = True  # pyright: ignore[reportAttributeAccessIssue]
     assert sealed.query.sql_with_params() == before
     assert source.query.sql_with_params() != source_before
 
@@ -3699,10 +4034,11 @@ def test_mutating_a_candidate_raw_sql_parameter_container_cannot_change_the_seal
     source = Category.objects.extra(where=["is_private = %s"], params=[False])
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
     before = sealed.query.sql_with_params()
-    extra_where = source.query.where.children[0]
-    extra_where.sqls[0] = "1 = 1"
-    extra_where.params[0] = True
+    sqls, params = _extra_where_lists(source.query)
+    sqls[0] = "1 = 1"
+    params[0] = True
     assert sealed.query.sql_with_params() == before
     assert before[1] == (False,)
 
@@ -3719,6 +4055,7 @@ def test_sealed_query_shares_no_ast_node_with_the_candidate():
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
     assert sealed.query.where is not source.query.where
     for sealed_child, source_child in zip(
         sealed.query.where.children,
@@ -3727,18 +4064,26 @@ def test_sealed_query_shares_no_ast_node_with_the_candidate():
     ):
         assert sealed_child is not source_child
     assert sealed.query.annotations["bonus"] is not source.query.annotations["bonus"]
+    assert isinstance(sealed.query.annotations["bonus"], RawSQL)
+    assert isinstance(source.query.annotations["bonus"], RawSQL)
     assert sealed.query.annotations["bonus"].params is not source.query.annotations["bonus"].params
     assert (
-        sealed.query._filtered_relations["visible"]
-        is not source.query._filtered_relations["visible"]
+        # basedpyright: django-stubs omits Query._filtered_relations, reported as an unknown
+        # attribute
+        sealed.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue]
+        is not source.query._filtered_relations["visible"]  # pyright: ignore[reportAttributeAccessIssue]
     )
     sealed_join = _join_with_filtered_relation(sealed.query)
     source_join = _join_with_filtered_relation(source.query)
     assert sealed_join is not source_join
     assert sealed_join.filtered_relation is not source_join.filtered_relation
+    assert sealed_join.filtered_relation is not None
+    assert source_join.filtered_relation is not None
     assert (
-        sealed_join.filtered_relation.resolved_condition
-        is not source_join.filtered_relation.resolved_condition
+        # basedpyright: django-stubs omits FilteredRelation.resolved_condition, reported as an
+        # unknown attribute
+        sealed_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue]
+        is not source_join.filtered_relation.resolved_condition  # pyright: ignore[reportAttributeAccessIssue]
     )
 
 
@@ -3747,8 +4092,9 @@ def test_sealed_query_retains_its_schema_objects_by_reference():
     source = Category.objects.filter(is_private=False)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    sealed_lhs = sealed.query.where.children[0].lhs
-    source_lhs = source.query.where.children[0].lhs
+    assert sealed is not None
+    sealed_lhs = _where_leaf(sealed.query).lhs
+    source_lhs = _where_leaf(source.query).lhs
     assert sealed_lhs is not source_lhs
     assert sealed_lhs.target is source_lhs.target
     assert sealed_lhs.output_field is source_lhs.output_field
@@ -3760,12 +4106,14 @@ def test_mutating_a_candidate_bytearray_parameter_cannot_change_the_sealed_param
     source = Category.objects.extra(where=["is_private = %s"], params=[bytearray(b"\x00")])
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    sealed_param = sealed.query.where.children[0].params[0]
-    source_param = source.query.where.children[0].params[0]
+    assert sealed is not None
+    sealed_param = _extra_where_lists(sealed.query)[1][0]
+    source_param = _extra_where_lists(source.query)[1][0]
     assert sealed_param == source_param
     assert sealed_param is not source_param
+    assert isinstance(source_param, bytearray)
     source_param[0] = 1
-    assert sealed.query.where.children[0].params[0] == bytearray(b"\x00")
+    assert _extra_where_lists(sealed.query)[1][0] == bytearray(b"\x00")
 
 
 def test_query_state_that_cannot_be_reconstructed_fails_closed_typed():
@@ -3782,7 +4130,7 @@ def test_query_state_that_cannot_be_reconstructed_fails_closed_typed():
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].rhs = object.__new__(_HollowUuid)
+    _where_leaf(source.query).rhs = object.__new__(_HollowUuid)
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet query state cannot be reconstructed")
@@ -3802,7 +4150,9 @@ def test_reconstruction_hostile_mapping_key_fails_closed():
         """Hashable, but neither inert plain data nor trusted schema."""
 
     annotation = RawSQL("1", [], output_field=models.IntegerField())
-    annotation._constructor_args = ((), {_HostileKey(): 1})
+    # basedpyright: django-stubs omits the deconstructible _constructor_args slot; the planted key
+    # is the hostile input under test
+    annotation._constructor_args = ((), {_HostileKey(): 1})  # pyright: ignore[reportAttributeAccessIssue]
     source = Category.objects.filter(is_private=False)
     source.query.annotations["boom"] = annotation
     sealed, defect = _seal_or_defect(source, Category, None)
@@ -3826,6 +4176,8 @@ def test_value_payload_mapping_key_plain_data_subclass_normalizes():
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["probe"], models.Value)
     (sealed_key,) = sealed.query.annotations["probe"].value
     assert type(sealed_key) is str
     assert sealed_key == "a"
@@ -3842,6 +4194,8 @@ def test_value_payload_mapping_key_enum_member_normalizes():
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["probe"], models.Value)
     (sealed_key,) = sealed.query.annotations["probe"].value
     assert type(sealed_key) is str
     assert sealed_key == "keep"
@@ -3866,6 +4220,7 @@ def test_value_payload_opaque_object_fails_closed():
     assert sealed is None
     assert defect == ("untrusted", "QuerySet binds a _OpaquePayload bound value")
     # The candidate keeps its own payload: the seal never mutates the candidate graph.
+    assert isinstance(source.query.annotations["probe"], models.Value)
     assert source.query.annotations["probe"].value is payload
 
 
@@ -3878,10 +4233,10 @@ def test_value_payload_mutable_container_subclass_fails_closed():
     shape; the payload slot takes the identical verdict.
     """
 
-    class _HostileList(list):
+    class _HostileList(list[object]):
         pass
 
-    class _HostileDict(dict):
+    class _HostileDict(dict[str, object]):
         pass
 
     source = Category.objects.filter(is_private=False).annotate(
@@ -3911,6 +4266,8 @@ def test_value_payload_plain_containers_rebuild_without_sharing():
     source = Category.objects.filter(is_private=False).annotate(probe=models.Value(payload))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["probe"], models.Value)
     sealed_payload = sealed.query.annotations["probe"].value
     assert type(sealed_payload) is dict
     assert sealed_payload == payload
@@ -3922,6 +4279,8 @@ def test_value_payload_plain_containers_rebuild_without_sharing():
     source = Category.objects.filter(is_private=False).annotate(probe=models.Value(members))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["probe"], models.Value)
     sealed_members = sealed.query.annotations["probe"].value
     assert type(sealed_members) is list
     assert sealed_members == members
@@ -3944,6 +4303,7 @@ def test_value_payload_plain_data_subclass_normalizes_to_exact_value():
         KEEP = "keep", "Keep"
 
     class _LoudDate(datetime.date):
+        @override
         def __str__(self):  # must never run
             fired.append("__str__")
             return "1999-12-31"
@@ -3954,6 +4314,9 @@ def test_value_payload_plain_data_subclass_normalizes_to_exact_value():
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["choice"], models.Value)
+    assert isinstance(sealed.query.annotations["day"], models.Value)
     sealed_choice = sealed.query.annotations["choice"].value
     assert type(sealed_choice) is str
     assert sealed_choice == "keep"
@@ -3962,6 +4325,8 @@ def test_value_payload_plain_data_subclass_normalizes_to_exact_value():
     assert sealed_day == datetime.date(2020, 1, 2)
     assert fired == []
     # The candidate keeps its own instances: normalization applies to the sealed query only.
+    assert isinstance(source.query.annotations["choice"], models.Value)
+    assert isinstance(source.query.annotations["day"], models.Value)
     assert type(source.query.annotations["choice"].value) is _PayloadChoices
     assert type(source.query.annotations["day"].value) is _LoudDate
 
@@ -3975,13 +4340,15 @@ def test_value_payload_field_instance_is_retained_schema():
     retention verdict itself, not a memo of an earlier traversal.
     """
 
-    class _LocalField(models.TextField):
+    class _LocalField(models.TextField[str, str]):
         pass
 
     field = _LocalField()
     source = Category.objects.filter(is_private=False).annotate(probe=models.Value(field))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["probe"], models.Value)
     assert sealed.query.annotations["probe"].value is field
 
 
@@ -3998,7 +4365,7 @@ def test_enum_member_with_model_value_fails_closed():
 
     source = Category.objects.filter(name="keep")
     str(source.query)
-    source.query.where.children[0].rhs = _ModelChoices.KEEP
+    _where_leaf(source.query).rhs = _ModelChoices.KEEP
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet binds a _ModelChoices bound value")
@@ -4015,13 +4382,16 @@ def test_hostile_tzinfo_subclass_fails_closed():
     """
 
     class _HostileTz(datetime.tzinfo):
-        def utcoffset(self, dt):  # must never run
+        @override
+        def utcoffset(self, dt: datetime.datetime | None):  # must never run
             return datetime.timedelta(0)
 
-        def tzname(self, dt):  # must never run
+        @override
+        def tzname(self, dt: datetime.datetime | None):  # must never run
             return "X"
 
-        def dst(self, dt):  # must never run
+        @override
+        def dst(self, dt: datetime.datetime | None):  # must never run
             return datetime.timedelta(0)
 
     source = Category.objects.filter(is_private=False).annotate(
@@ -4047,16 +4417,20 @@ def test_trunc_tzinfo_is_retained_and_rows_survive():
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["day"], Trunc)
     assert sealed.query.annotations["day"].tzinfo is tz
-    assert [row.name for row in sealed] == ["tz_row"]
+    assert [row.name for row in _rows_of(Category, sealed)] == ["tz_row"]
 
     source = Category.objects.filter(is_private=False).annotate(
         day=Trunc("created_date", "day", tzinfo=datetime.timezone.utc),
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
+    assert sealed is not None
+    assert isinstance(sealed.query.annotations["day"], Trunc)
     assert sealed.query.annotations["day"].tzinfo is datetime.timezone.utc
-    assert [row.name for row in sealed] == ["tz_row"]
+    assert [row.name for row in _rows_of(Category, sealed)] == ["tz_row"]
 
 
 @pytest.mark.django_db
@@ -4069,10 +4443,13 @@ def test_value_payload_literals_seal_and_rows_survive():
     )
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
-    rows = list(sealed)
+    assert sealed is not None
+    rows = _rows_of(Category, sealed)
     assert [row.name for row in rows] == ["lit_row"]
-    assert rows[0].flag == 1
-    assert rows[0].label == "x"
+    # basedpyright: annotate() sets the annotation on each row at run time; the model class does
+    # not declare it
+    assert rows[0].flag == 1  # pyright: ignore[reportAttributeAccessIssue]
+    assert rows[0].label == "x"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_non_class_model_with_convincing_meta_fails_closed():
@@ -4089,7 +4466,9 @@ def test_non_class_model_with_convincing_meta_fails_closed():
         _meta = _HookedMeta()
 
     source = Category.objects.filter(is_private=False)
-    source.model = _FakeModel()
+    # basedpyright: the planted spoofed model is the hostile input under test; django-stubs types
+    # the slot as the queryset's own model class
+    source.model = _FakeModel()  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("table", "_FakeModel")
@@ -4110,7 +4489,9 @@ def test_non_model_class_with_convincing_meta_fails_closed():
         _meta = _HookedMeta()
 
     source = Category.objects.filter(is_private=False)
-    source.model = _FakeModelClass
+    # basedpyright: the planted spoofed model is the hostile input under test; django-stubs types
+    # the slot as the queryset's own model class
+    source.model = _FakeModelClass  # pyright: ignore[reportAttributeAccessIssue]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("table", "_FakeModelClass")
@@ -4190,7 +4571,7 @@ def test_join_shadowed_method_fails_closed():
     source = Category.objects.filter(name="keep")
     str(source.query)
     alias, join = next(iter(source.query.alias_map.items()))
-    join.__dict__["as_sql"] = lambda *a, **k: None
+    join.__dict__["as_sql"] = _noop
     defect = _join_defect(join, alias, _GraphWalk())
     assert defect == ("untrusted", f"join for alias {alias!r} shadows the 'as_sql' method")
 
@@ -4263,7 +4644,9 @@ def test_query_ast_having_tree_defect_fails_closed():
     source = Category.objects.filter(name="keep")
     str(source.query)
     hostile_having = WhereNode()
-    hostile_having.children.append(_HostileLeaf())
+    # basedpyright: the non-Django having-leaf is the hostile input under test; django-stubs types
+    # WhereNode.children as Node | NothingNode | Sequence
+    hostile_having.children.append(_HostileLeaf())  # pyright: ignore[reportArgumentType]
     source.query.__dict__["having"] = hostile_having
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
@@ -4294,7 +4677,7 @@ def test_query_genuineness_shared_query_visited_once():
 def test_query_genuineness_shadowed_query_fails_closed():
     """An embedded query whose ``__dict__`` shadows a method fails closed."""
     query = Category.objects.all().query
-    query.__dict__["add_q"] = lambda *a, **k: None
+    query.__dict__["add_q"] = _noop
     assert _query_genuineness_defect(query, _GraphWalk()) == (
         "untrusted",
         "subquery instance shadows the 'add_q' method",
@@ -4329,7 +4712,9 @@ def test_query_genuineness_combined_branch_defect_fails_closed():
 def test_deferred_value_q_non_kv_child_fails_closed():
     """A ``Q`` child that is neither a nested ``Q`` nor a ``(str, value)`` pair fails closed."""
     bad = models.Q()
-    bad.children.append(object())
+    # basedpyright: the bare object Q child is the hostile input under test; django-stubs types
+    # Q.children as Node | NothingNode | Sequence
+    bad.children.append(object())  # pyright: ignore[reportArgumentType]
     assert _deferred_value_defect(bad, _GraphWalk(), "deferred arg") == (
         "untrusted",
         "deferred arg Q child is a object",
@@ -4479,10 +4864,14 @@ def test_manager_coercion_rejects_unreadable_routing_state():
         __slots__ = ()
 
     with pytest.raises(ConfigurationError, match="could not read the manager's routing state"):
-        _coerced_manager_queryset(_NoRoutingState())
+        # basedpyright: the slotless object is the hostile input under test;
+        # _coerced_manager_queryset types the parameter as Manager[Model]
+        _coerced_manager_queryset(_NoRoutingState())  # pyright: ignore[reportArgumentType]
 
 
-def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(monkeypatch):
+def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A model whose ``_meta`` cannot be read resolves to no concrete model.
 
     A model class whose metaclass raises on ``_meta`` is malformed by
@@ -4493,7 +4882,8 @@ def test_concrete_model_probe_fails_closed_for_unreadable_model_metadata(monkeyp
     model_base = type(models.Model)
 
     class _HostileModelBase(model_base):
-        def __getattribute__(self, name):
+        @override
+        def __getattribute__(self, name: str):
             if name == "_meta" and type.__getattribute__(self, "_hostile_meta"):
                 raise RuntimeError("model metadata exploded")
             return super().__getattribute__(name)
@@ -4595,7 +4985,9 @@ def test_reject_async_in_sync_context_cancels_future():
 def test_coerce_field_value_or_none_returns_none_for_non_field():
     """Passing a non-Field object returns None rather than raising an error."""
     assert coerce_field_value_or_none(None, 42) is None
-    assert coerce_field_value_or_none("not_a_field", 42) is None
+    # basedpyright: the string standing in for a field is the hostile input under test;
+    # coerce_field_value_or_none types the parameter as ModelField | None
+    assert coerce_field_value_or_none("not_a_field", 42) is None  # pyright: ignore[reportArgumentType]
 
 
 def test_query_genuineness_defect_with_clean_combined_branches():
@@ -4610,10 +5002,11 @@ def test_query_genuineness_defect_with_clean_combined_branches():
 def test_prepared_visibility_source_with_custom_render_error():
     """_prepared_visibility_source formats defect with custom render_error callable."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
-    def custom_render(code, detail):
+    def custom_render(code: str, detail: str):
         return f"custom source error: {code} -> {detail}"
 
     with pytest.raises(ConfigurationError, match="custom source error: type -> list"):
@@ -4623,10 +5016,11 @@ def test_prepared_visibility_source_with_custom_render_error():
 def test_normalized_visibility_result_with_custom_render_error():
     """_normalized_visibility_result formats defect with custom render_error callable."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
-    def custom_render(code, detail):
+    def custom_render(code: str, detail: str):
         return f"custom result error: {code} -> {detail}"
 
     with pytest.raises(ConfigurationError, match="custom result error: type -> list"):
@@ -4660,8 +5054,8 @@ def test_visible_related_object_resolution():
 
 def test_reject_awaitable_sync_source_noop_for_non_awaitable():
     """reject_awaitable_sync_source passes non-awaitables without raising."""
-    reject_awaitable_sync_source([1, 2, 3], Category)
-    reject_awaitable_sync_source(Category.objects.none(), Category)
+    reject_awaitable_sync_source([1, 2, 3], _as_django_type(Category))
+    reject_awaitable_sync_source(Category.objects.none(), _as_django_type(Category))
 
 
 def test_reject_awaitable_sync_source_raises_for_awaitable():
@@ -4672,7 +5066,7 @@ def test_reject_awaitable_sync_source_raises_for_awaitable():
 
     coro = sample()
     with pytest.raises(SyncMisuseError, match="consumer resolver returned an awaitable"):
-        reject_awaitable_sync_source(coro, Category)
+        reject_awaitable_sync_source(coro, _as_django_type(Category))
 
 
 # --------------------------------------------------------------------------
@@ -4700,7 +5094,9 @@ def test_prefetch_child_over_unrelated_model_fails_closed():
 
     seed_data(2)
     qs = Category.objects.prefetch_related(Prefetch("items", queryset=Property.objects.all()))
-    code, detail = _seal_or_defect(qs, Category, None)[1]
+    defect = _seal_or_defect(qs, Category, None)[1]
+    assert defect is not None
+    code, detail = defect
     assert code == "untrusted"
     assert "'items'" in detail
     assert "Property" in detail and "Item" in detail
@@ -4715,7 +5111,8 @@ def test_prefetch_child_over_relation_target_seals_and_fetches_model_rows():
     qs = Category.objects.prefetch_related(Prefetch("items", queryset=Item.objects.all()))
     sealed, defect = _seal_or_defect(qs, Category, None)
     assert defect is None, defect
-    rows = list(sealed)
+    assert sealed is not None
+    rows = _rows_of(Category, sealed)
     assert rows
     assert all(type(row) is Category for row in rows)
     assert all(type(item) is Item for row in rows for item in row.items.all())
@@ -4732,7 +5129,9 @@ def test_prefetch_child_over_target_subclass_seals():
     """
 
     class _ItemProxy(Item):
-        class Meta:
+        # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model
+        # keeps one), so Item has no Meta at run time for this one to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             proxy = True
             app_label = "products"
 
@@ -4747,7 +5146,9 @@ _proxy_target_apps = Apps([])
 class _ProxyTargetCategory(Category):
     """Proxy of ``Category``, used as a relation TARGET (it reads Category's table)."""
 
-    class Meta:
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so Category has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         proxy = True
         app_label = "products"
         apps = _proxy_target_apps
@@ -4817,7 +5218,9 @@ def test_prefetch_child_over_unrelated_table_still_fails_for_proxy_target():
     qs = _ProxyTargetHolder.objects.prefetch_related(
         Prefetch("cat", queryset=Property.objects.all()),
     )
-    code, detail = _seal_or_defect(qs, _ProxyTargetHolder, None)[1]
+    defect = _seal_or_defect(qs, _ProxyTargetHolder, None)[1]
+    assert defect is not None
+    code, detail = defect
     assert code == "untrusted"
     assert "Property" in detail
 
@@ -4832,7 +5235,9 @@ def test_prefetch_child_wrong_model_nested_path_fails_closed():
     wrong = Category.objects.prefetch_related(
         Prefetch("items__entries", queryset=Property.objects.all()),
     )
-    code, detail = _seal_or_defect(wrong, Category, None)[1]
+    defect = _seal_or_defect(wrong, Category, None)[1]
+    assert defect is not None
+    code, detail = defect
     assert code == "untrusted"
     assert "'items__entries'" in detail
     assert "Property" in detail and "Entry" in detail
@@ -4854,7 +5259,9 @@ def test_forward_fk_prefetch_child_model_mismatch_fails_closed():
     """The forward-FK direction is guarded too: Item.category expects Category rows."""
 
     qs = Item.objects.prefetch_related(Prefetch("category", queryset=Property.objects.all()))
-    code, detail = _seal_or_defect(qs, Item, None)[1]
+    defect = _seal_or_defect(qs, Item, None)[1]
+    assert defect is not None
+    code, detail = defect
     assert code == "untrusted"
     assert "Category" in detail
 
@@ -4908,8 +5315,12 @@ def test_prefetch_child_non_str_path_fails_closed():
     pf = Prefetch("items", queryset=Item.objects.all())
     pf.__dict__["prefetch_through"] = object()
     qs = Category.objects.all()
-    qs._prefetch_related_lookups = (pf,)
-    code, detail = _seal_or_defect(qs, Category, None)[1]
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    qs._prefetch_related_lookups = (pf,)  # pyright: ignore[reportAttributeAccessIssue]
+    defect = _seal_or_defect(qs, Category, None)[1]
+    assert defect is not None
+    code, detail = defect
     assert code == "untrusted"
     assert "path is not an exact str" in detail
 
@@ -4983,7 +5394,9 @@ def test_prefetch_child_default_accessor_wrong_model_fails_closed():
     qs = ContentType.objects.prefetch_related(
         Prefetch("permission_set", queryset=LogEntry.objects.all()),
     )
-    code, detail = _seal_or_defect(qs, ContentType, None)[1]
+    defect = _seal_or_defect(qs, ContentType, None)[1]
+    assert defect is not None
+    code, detail = defect
     assert code == "untrusted"
     assert "'permission_set'" in detail
     assert "LogEntry" in detail and "Permission" in detail
@@ -5052,10 +5465,12 @@ def test_prefetch_relation_target_resolves_every_installed_default_accessor():
         for field in model._meta.get_fields():
             if not (field.is_relation and field.auto_created and not field.concrete):
                 continue
+            assert isinstance(field, ForeignObjectRel)
             accessor = field.get_accessor_name()
             if not accessor or not accessor.endswith("_set"):
                 continue
             if _prefetch_relation_target_or_none(model, accessor) is not field.related_model:
+                assert field.related_model is not None
                 unresolved.append((model.__name__, accessor, field.related_model.__name__))
     assert unresolved == []
 
@@ -5114,9 +5529,11 @@ def test_seal_policy_presets_answer_slice_and_combinator_independently():
     ):
         sealed, defect = _seal_or_defect(combined, Category, None, policy)
         assert defect is None
+        assert sealed is not None
         assert sealed.query.combinator is None
     raw_sealed, raw_defect = _seal_or_defect(combined, Category, None, _RAW_LIST_SOURCE_POLICY)
     assert raw_defect is None
+    assert raw_sealed is not None
     assert raw_sealed.query.combinator == "union"
     # ``require_model_rows`` still answers only the projection question.
     assert _seal_or_defect(base.values("id"), Category, None, _DEFAULT_SEAL_POLICY)[1] == (
@@ -5146,9 +5563,11 @@ def test_seal_serves_a_combinator_as_a_single_table_primary_key_membership_query
     sealed, defect = _seal_or_defect(combined, Category, None)
 
     assert defect is None
+    assert sealed is not None
     assert sealed.db == "default"
     assert sealed.query.combinator is None
-    assert sealed._fields is None
+    # basedpyright: django-stubs omits QuerySet._fields, reported as an unknown attribute
+    assert sealed._fields is None  # pyright: ignore[reportAttributeAccessIssue]
     (membership,) = sealed.query.where.children
     assert isinstance(membership, In)
     assert membership.lhs.target is Category._meta.pk
@@ -5160,8 +5579,11 @@ def test_seal_serves_a_combinator_as_a_single_table_primary_key_membership_query
     table = Category._meta.db_table
     assert sql.startswith(f'SELECT "{table}"."id"')
     assert sql.endswith(f'ORDER BY "{table}"."name" DESC')
-    assert [row.pk for row in sealed] == [
-        row.pk for row in sorted((first, second), key=lambda c: c.name, reverse=True)
+    assert [row.pk for row in _rows_of(Category, sealed)] == [
+        # basedpyright: django-stubs leaves a model field's value type unsolved without its mypy
+        # plugin, so Category.name reads Unknown
+        row.pk
+        for row in sorted((first, second), key=lambda c: c.name, reverse=True)  # pyright: ignore[reportUnknownLambdaType]
     ]
 
 
@@ -5177,28 +5599,41 @@ def test_seal_carries_a_primary_key_ordering_of_a_combinator():
     )
     sealed, defect = _seal_or_defect(combined, Category, None)
     assert defect is None
+    assert sealed is not None
     assert sealed.query.combinator is None
-    assert [row.pk for row in sealed] == [second.pk, first.pk]
+    assert [row.pk for row in _rows_of(Category, sealed)] == [second.pk, first.pk]
+
+
+def _union_of_an_annotated_intersection(
+    qs: models.QuerySet[Category],
+) -> models.QuerySet[Category]:
+    return qs.union(qs.intersection(qs.annotate(n=F("id"))))
+
+
+def _union_of_a_difference_of_a_union_all(
+    qs: models.QuerySet[Category],
+) -> models.QuerySet[Category]:
+    return qs.union(qs.difference(qs.union(qs, all=True)))
 
 
 @pytest.mark.parametrize(
     ("build", "detail"),
     [
         pytest.param(
-            lambda qs: qs.union(qs.intersection(qs.annotate(n=F("id")))),
+            _union_of_an_annotated_intersection,
             "union: a branch selects annotations ('n') that would be dropped from the rows",
             id="nested-branch-annotations",
         ),
         pytest.param(
-            lambda qs: qs.union(qs.difference(qs.union(qs, all=True))),
+            _union_of_a_difference_of_a_union_all,
             "union: union(all=True) keeps duplicate rows, which a primary-key set cannot",
             id="nested-union-all",
         ),
     ],
 )
 def test_seal_refuses_a_nested_combinator_whose_branch_the_primary_key_set_cannot_carry(
-    build,
-    detail,
+    build: Callable[[models.QuerySet[Category]], models.QuerySet[Category]],
+    detail: str,
 ):
     """The lost-property walk recurses into a combined branch at any depth."""
     sealed, defect = _seal_or_defect(build(Category.objects.all()), Category, None)
@@ -5217,23 +5652,44 @@ def test_seal_serves_a_nested_combinator_as_its_primary_key_set():
     )
     sealed, defect = _seal_or_defect(combined, Category, None)
     assert defect is None
+    assert sealed is not None
     assert sealed.query.combinator is None
-    assert sorted(row.pk for row in sealed) == [first.pk, second.pk]
+    assert sorted(row.pk for row in _rows_of(Category, sealed)) == [first.pk, second.pk]
 
 
-class _RawListSourceQuerySet(models.QuerySet):
+class _RawListSourceQuerySet(models.QuerySet[Category]):
     """A project queryset class, so ``normalized_row_source`` rebuilds it."""
+
+
+def _sliced_union(
+    a: models.QuerySet[Category],
+    b: models.QuerySet[Category],
+) -> models.QuerySet[Category]:
+    return a.union(b)[:2]
+
+
+def _union_all(
+    a: models.QuerySet[Category],
+    b: models.QuerySet[Category],
+) -> models.QuerySet[Category]:
+    return a.union(b, all=True)
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     ("build", "expected_count"),
     [
-        pytest.param(lambda a, b: a.union(b)[:2], 2, id="sliced-union"),
-        pytest.param(lambda a, b: a.union(b, all=True), 4, id="union-all"),
+        pytest.param(_sliced_union, 2, id="sliced-union"),
+        pytest.param(_union_all, 4, id="union-all"),
     ],
 )
-def test_raw_list_row_source_keeps_a_combinator_as_it_is(build, expected_count):
+def test_raw_list_row_source_keeps_a_combinator_as_it_is(
+    build: Callable[
+        [models.QuerySet[Category], models.QuerySet[Category]],
+        models.QuerySet[Category],
+    ],
+    expected_count: int,
+):
     """The raw-list bound windows a combinator as Django serves it, never rewritten or refused.
 
     Nothing recomposes onto a raw-list source, so its rebuild keeps the
@@ -5339,7 +5795,7 @@ def test_seal_require_unevaluated():
     assert defect == ("evaluated", "the result cache is populated")
 
 
-class _RowList(list):
+class _RowList(list[object]):
     """A ``list`` subclass, whose own ``__getitem__`` would answer the window."""
 
 
@@ -5366,10 +5822,12 @@ def test_seal_carry_result_cache_carries_the_rows_the_source_holds():
         _SealPolicy(carry_result_cache=True),
     )
     assert defect is None
+    assert sealed is not None
     assert sealed._result_cache is held
 
     unchanged, defect = _seal_or_defect(qs, Category, None, _DEFAULT_SEAL_POLICY)
     assert defect is None
+    assert unchanged is not None
     assert unchanged._result_cache is None
 
 
@@ -5378,7 +5836,7 @@ def test_seal_carry_result_cache_carries_the_rows_the_source_holds():
     [_RowList(), (), _NotASequence()],
     ids=["list-subclass", "tuple", "foreign-object"],
 )
-def test_seal_carry_result_cache_refuses_a_cache_that_is_not_an_exact_list(cache):
+def test_seal_carry_result_cache_refuses_a_cache_that_is_not_an_exact_list(cache: object):
     """A cache that is not an exact ``list`` brings its own subscript, so it is refused.
 
     The carried rows are windowed by subscripting them, and at an exact ``list``
@@ -5387,7 +5845,9 @@ def test_seal_carry_result_cache_refuses_a_cache_that_is_not_an_exact_list(cache
     truthiness.
     """
     qs = Category.objects.all()
-    qs._result_cache = cache
+    # basedpyright: the planted non-list cache is the hostile input under test; django-stubs types
+    # the slot as a row list
+    qs._result_cache = cache  # pyright: ignore[reportAttributeAccessIssue]
 
     sealed, defect = _seal_or_defect(
         qs,
@@ -5408,6 +5868,7 @@ def test_visibility_defect_messages():
     dispatch must say so rather than mislabel it.
     """
 
+    @_as_django_type
     class BookType:
         pass
 
@@ -5437,6 +5898,7 @@ def test_visibility_defect_messages():
         _COMBINED_WHAT.format(model="Category", detail="union: a lost property")
     )
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5471,22 +5933,25 @@ def test_apply_type_visibility_sync_serves_a_combined_result_as_its_pk_set():
     names = sorted(Category.objects.values_list("name", flat=True))
     first, second = names[0], names[1]
 
+    @_as_django_type
     class CombinedType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
         @classmethod
-        def get_queryset(cls, queryset, info):
+        def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
             return queryset.filter(name=first).union(queryset.filter(name=second))
 
     sealed = apply_type_visibility_sync(CombinedType, Category.objects.all(), SimpleNamespace())
     assert sealed.query.combinator is None
-    assert sorted(row.name for row in sealed) == [first, second]
-    assert [row.name for row in sealed.filter(name=second).only("name")] == [second]
+    assert sorted(row.name for row in _rows_of(Category, sealed)) == [first, second]
+    second_only = sealed.filter(name=second).only("name")
+    assert [row.name for row in _rows_of(Category, second_only)] == [second]
 
 
 def test_validate_post_orderset_result_valid():
     """_validate_post_orderset_result accepts valid, ordered candidate querysets."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5504,6 +5969,7 @@ def test_validate_post_orderset_result_valid():
 def test_validate_post_orderset_result_rejects_non_queryset():
     """_validate_post_orderset_result rejects non-queryset collections."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5523,6 +5989,7 @@ def test_validate_post_orderset_result_rejects_non_queryset():
 def test_validate_post_orderset_result_rejects_none():
     """_validate_post_orderset_result rejects None return values."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5542,6 +6009,7 @@ def test_validate_post_orderset_result_rejects_none():
 def test_validate_post_orderset_result_rejects_wrong_model():
     """_validate_post_orderset_result rejects querysets of an unrelated model."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5562,6 +6030,7 @@ def test_validate_post_orderset_result_rejects_wrong_model():
 def test_validate_post_orderset_result_rejects_evaluated():
     """_validate_post_orderset_result rejects querysets with evaluated result cache."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5583,6 +6052,7 @@ def test_validate_post_orderset_result_rejects_evaluated():
 def test_validate_post_orderset_result_rejects_sliced():
     """_validate_post_orderset_result rejects sliced querysets."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5611,6 +6081,7 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
     seed_data(1)
     names = sorted(Category.objects.values_list("name", flat=True))
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5627,7 +6098,7 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
         "MyOrderSet.apply_sync",
     )
     assert sealed.query.combinator is None
-    assert [row.name for row in sealed] == [names[1], names[0]]
+    assert [row.name for row in _rows_of(Category, sealed)] == [names[1], names[0]]
 
     upper = Category.objects.annotate(upper_name=Upper("name"))
     lost_qs = upper.union(upper).order_by("upper_name")
@@ -5664,17 +6135,24 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
 
     from django_strawberry_framework.orders import Ordering, OrderSet
 
+    def _hide_secret(
+        cls: type[DjangoType],
+        queryset: models.QuerySet[Shelf],
+        info: object,
+        **kwargs: object,
+    ) -> models.QuerySet[Shelf]:
+        return queryset.exclude(topic="secret")
+
     type(
         "UnionShelfType",
         (DjangoType,),
         {
             "Meta": type("Meta", (), {"model": Shelf, "fields": "__all__"}),
-            "get_queryset": classmethod(
-                lambda cls, queryset, info, **kwargs: queryset.exclude(topic="secret"),
-            ),
+            "get_queryset": classmethod(_hide_secret),
         },
     )
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Book)
 
@@ -5684,7 +6162,7 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
             fields = ["title", "shelf__topic"]
 
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True)
+    request.user = AnonymousUser()
     source_qs = Book.objects.all()
     combined = Book.objects.filter(title="a").union(Book.objects.filter(title="b"))
     ordered = UnionBookOrder.apply_sync(
@@ -5704,6 +6182,7 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
 def test_validate_post_orderset_result_rejects_projection():
     """_validate_post_orderset_result rejects values/projection querysets."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5724,6 +6203,7 @@ def test_validate_post_orderset_result_rejects_projection():
 def test_validate_post_orderset_result_rejects_db_routing_mismatch():
     """_validate_post_orderset_result rejects querysets routed to a different database."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -5744,12 +6224,14 @@ def test_validate_post_orderset_result_rejects_db_routing_mismatch():
 def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
     """_validate_post_orderset_result rejects querysets with divergent database routing hints."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
     diff_hints_qs = Category.objects.all()
-    diff_hints_qs._hints = {"instance": 123}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    diff_hints_qs._hints = {"instance": 123}  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(
         ConfigurationError,
         match="changed database routing intent",
@@ -5765,12 +6247,18 @@ def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
 def test_validate_post_orderset_result_contains_an_unreadable_instance_dictionary():
     """A hostile QuerySet ``__dict__`` descriptor becomes a typed seal defect."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
-    class UnreadableStateQuerySet(models.QuerySet):
-        @property
-        def __dict__(self):
+    class UnreadableStateQuerySet(models.QuerySet[Category]):
+        # basedpyright: the hostile shape under test; a raising __dict__ descriptor is what the
+        # seal must turn into a defect, and the checker forbids redeclaring the Final __dict__
+        @property  # pyright: ignore[reportGeneralTypeIssues]
+        @override
+        # basedpyright: the hostile shape under test, a ``__dict__`` property whose read raises;
+        # the checker rejects any property overriding a base class attribute
+        def __dict__(self):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("consumer descriptor ran")
 
     source_qs = Category.objects.all()
@@ -5792,11 +6280,13 @@ def test_validate_post_orderset_result_contains_an_unreadable_instance_dictionar
 def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
     """_validate_post_orderset_result accesses _db and _hints without consumer __getattribute__."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
-    class HostileGetattributeQuerySet(models.QuerySet):
-        def __getattribute__(self, name):
+    class HostileGetattributeQuerySet(models.QuerySet[Category]):
+        @override
+        def __getattribute__(self, name: str):
             if name in ("_db", "_hints"):
                 raise AssertionError(f"Hostile consumer __getattribute__ invoked for '{name}'")
             return super().__getattribute__(name)
@@ -5815,13 +6305,16 @@ def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
 def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     """_validate_post_orderset_result compares and reports routing hints without consumer __eq__ or __repr__."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     class HostileValue:
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             raise AssertionError("Hostile consumer __eq__ invoked")
 
+        @override
         def __repr__(self):
             raise AssertionError("Hostile consumer __repr__ invoked")
 
@@ -5829,10 +6322,13 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     val_b = HostileValue()
 
     source_qs = Category.objects.all()
-    source_qs._hints = {"tag": val_a}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tag": val_a}  # pyright: ignore[reportAttributeAccessIssue]
 
     cand_same = Category.objects.all()
-    cand_same._hints = {"tag": val_a}  # Same instance (identity)
+    # Same instance (identity).
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    cand_same._hints = {"tag": val_a}  # pyright: ignore[reportAttributeAccessIssue]
 
     # Comparing identical non-primitive hints must not invoke __eq__
     sealed = _validate_post_orderset_result(
@@ -5844,7 +6340,9 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     assert sealed is not None
 
     cand_diff = Category.objects.all()
-    cand_diff._hints = {"tag": val_b}  # Different instance
+    # Different instance.
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    cand_diff._hints = {"tag": val_b}  # pyright: ignore[reportAttributeAccessIssue]
 
     # Rejection formatting must not invoke HostileValue.__repr__
     with pytest.raises(
@@ -5863,14 +6361,17 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
 def test_validate_post_orderset_result_routing_hints_none_vs_empty():
     """_validate_post_orderset_result preserves distinction between absent (None) and empty ({}) hints."""
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    source_qs._hints = None
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = None  # pyright: ignore[reportAttributeAccessIssue]
 
     cand_qs = Category.objects.all()
-    cand_qs._hints = {}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    cand_qs._hints = {}  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(
         ConfigurationError,
@@ -5896,10 +6397,12 @@ def test_routing_hints_equal_and_repr_reject_a_non_dict_hints_mapping():
     walking the mapping.
     """
 
-    class HintsSubclass(dict):
-        def __eq__(self, other):
+    class HintsSubclass(dict[str, object]):
+        @override
+        def __eq__(self, other: object):
             raise AssertionError("Hostile subclass __eq__ invoked")
 
+        @override
         def __repr__(self):
             raise AssertionError("Hostile subclass __repr__ invoked")
 
@@ -5918,14 +6421,17 @@ def test_routing_hints_equal_rejects_a_renamed_key_at_equal_length():
     standing between a renamed routing hint and a silent accept.
     """
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    source_qs._hints = {"tenant": "a"}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tenant": "a"}  # pyright: ignore[reportAttributeAccessIssue]
 
     cand_qs = Category.objects.all()
-    cand_qs._hints = {"other": "a"}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    cand_qs._hints = {"other": "a"}  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(
         ConfigurationError,
@@ -5949,26 +6455,31 @@ def test_routing_hints_equal_rejects_equal_primitives_that_are_not_identical():
     holds and a runtime-rebuilt equal string fails closed.
     """
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    source_qs._hints = {"tenant": "shard-a"}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tenant": "shard-a"}  # pyright: ignore[reportAttributeAccessIssue]
     expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
 
     cand_qs = Category.objects.all()
     # A runtime-built (uninterned) equal string: equal by value, a different object.
-    cand_qs._hints = {"tenant": "shard-a!"[:-1]}
-    assert cand_qs._hints["tenant"] == source_qs._hints["tenant"]
-    assert cand_qs._hints["tenant"] is not source_qs._hints["tenant"]
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    cand_qs._hints = {"tenant": "shard-a!"[:-1]}  # pyright: ignore[reportAttributeAccessIssue]
+    assert cand_qs._hints["tenant"] == source_qs._hints["tenant"]  # pyright: ignore[reportAttributeAccessIssue]
+    assert cand_qs._hints["tenant"] is not source_qs._hints["tenant"]  # pyright: ignore[reportAttributeAccessIssue]
 
-    assert _routing_hints_equal(cand_qs._hints, expected.hints) is False
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    assert _routing_hints_equal(cand_qs._hints, expected.hints) is False  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="changed database routing intent"):
         _validate_post_orderset_result(DummyType, expected, cand_qs, "MyOrderSet.apply_sync")
 
     # The same object under the same key is the same intent.
     same_qs = Category.objects.all()
-    same_qs._hints = {"tenant": source_qs._hints["tenant"]}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    same_qs._hints = {"tenant": source_qs._hints["tenant"]}  # pyright: ignore[reportAttributeAccessIssue]
     assert (
         _validate_post_orderset_result(DummyType, expected, same_qs, "MyOrderSet.apply_sync")
         is not None
@@ -5985,26 +6496,36 @@ def test_snapshot_routing_intent_is_frozen_before_consumer_code_can_mutate_the_s
     what the source carried when the override was handed it.
     """
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    source_qs._hints = {"tenant": 1}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tenant": 1}  # pyright: ignore[reportAttributeAccessIssue]
     expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
     assert (expected.db, expected.hints) == (None, {"tenant": 1})
     assert expected.effective_alias == "default"
-    assert expected.hints is not source_qs._hints
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    assert expected.hints is not source_qs._hints  # pyright: ignore[reportAttributeAccessIssue]
 
     # An in-place hints edit on the source leaves the snapshot untouched and is rejected.
-    source_qs._hints["tenant"] = 2
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints["tenant"] = 2  # pyright: ignore[reportAttributeAccessIssue]
     assert expected.hints == {"tenant": 1}
     with pytest.raises(ConfigurationError, match=r"expected db=None, hints=\{'tenant': 1\}"):
         _validate_post_orderset_result(DummyType, expected, source_qs, "MyOrderSet.apply_sync")
 
     # An in-place alias rewrite on the same object is rejected the same way.
-    source_qs._hints = {"tenant": 1}
-    source_qs._hints["tenant"] = expected.hints["tenant"]
-    source_qs._db = "other"
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tenant": 1}  # pyright: ignore[reportAttributeAccessIssue]
+    assert expected.hints is not None
+    tenant = expected.hints["tenant"]
+    assert isinstance(tenant, int)
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints["tenant"] = tenant  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    source_qs._db = "other"  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="expected db=None, .* got db='other'"):
         _validate_post_orderset_result(DummyType, expected, source_qs, "MyOrderSet.apply_sync")
 
@@ -6020,12 +6541,12 @@ class _NestedAliasRouter:
 
     calls: list[str] = []
 
-    def db_for_read(self, model, **hints):
+    def db_for_read(self, model: type[models.Model], **hints: object) -> str | None:
         _NestedAliasRouter.calls.append("read")
         token = hints.get("tenant")
         return token["alias"] if type(token) is dict else None
 
-    def db_for_write(self, model, **hints):
+    def db_for_write(self, model: type[models.Model], **hints: object) -> str | None:
         _NestedAliasRouter.calls.append("write")
         return self.db_for_read(model, **hints)
 
@@ -6043,12 +6564,14 @@ def test_routing_intent_pins_the_alias_resolved_before_a_hint_could_be_mutated()
     contents.
     """
 
+    @_as_django_type
     class DummyType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     token = {"alias": "default"}
     source_qs = Category.objects.all()
-    source_qs._hints = {"tenant": token}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tenant": token}  # pyright: ignore[reportAttributeAccessIssue]
 
     _NestedAliasRouter.calls.clear()
     intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
@@ -6062,16 +6585,19 @@ def test_routing_intent_pins_the_alias_resolved_before_a_hint_could_be_mutated()
     # queryset carrying that very object, so every identity check still holds.
     token["alias"] = "other"
     candidate = Category.objects.all()
-    candidate._hints = {"tenant": token}
-    assert candidate._hints["tenant"] is source_qs._hints["tenant"]
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    candidate._hints = {"tenant": token}  # pyright: ignore[reportAttributeAccessIssue]
+    assert candidate._hints["tenant"] is source_qs._hints["tenant"]  # pyright: ignore[reportAttributeAccessIssue]
 
     sealed = _validate_post_orderset_result(DummyType, intent, candidate, "MyOrderSet.apply_sync")
     # Validation asks the router nothing; the pin is the frozen answer.
     assert _NestedAliasRouter.calls == ["read"]
-    assert sealed._db == "default"
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert sealed._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
     assert sealed.db == "default"
     # Without the pin, the mutated token routes the read somewhere else.
-    assert router.db_for_read(Category, **candidate._hints) == "other"
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    assert router.db_for_read(Category, **candidate._hints) == "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @override_settings(DATABASE_ROUTERS=[_NestedAliasRouter()])
@@ -6082,8 +6608,10 @@ def test_routing_intent_resolves_a_write_marked_source_through_the_write_router(
     for a source Django would route as a write would pin the wrong connection.
     """
     source_qs = Category.objects.all()
-    source_qs._hints = {"tenant": {"alias": "default"}}
-    source_qs._for_write = True
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = {"tenant": {"alias": "default"}}  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._for_write, reported as an unknown attribute
+    source_qs._for_write = True  # pyright: ignore[reportAttributeAccessIssue]
 
     _NestedAliasRouter.calls.clear()
     intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
@@ -6100,7 +6628,7 @@ def test_routing_intent_on_an_explicitly_routed_source_needs_no_router():
 
 
 class _RaisingRouter:
-    def db_for_read(self, model, **hints):
+    def db_for_read(self, model: type[models.Model], **hints: object):
         raise RuntimeError("router exploded")
 
 
@@ -6116,7 +6644,7 @@ def test_routing_intent_fails_closed_when_the_router_raises():
 
 
 class _NonStringAliasRouter:
-    def db_for_read(self, model, **hints):
+    def db_for_read(self, model: type[models.Model], **hints: object):
         return 17
 
 
@@ -6157,13 +6685,15 @@ def test_snapshot_routing_intent_keeps_a_non_dict_hints_slot_by_reference():
     fails closed on the exact-``dict`` requirement instead.
     """
 
-    class HintsSubclass(dict):
+    class HintsSubclass(dict[str, object]):
+        @override
         def __iter__(self):
             raise AssertionError("Hostile subclass __iter__ invoked")
 
     source_qs = Category.objects.all()
     hostile = HintsSubclass()
-    source_qs._hints = hostile
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    source_qs._hints = hostile  # pyright: ignore[reportAttributeAccessIssue]
     expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
     assert expected.hints is hostile
     assert _routing_hints_equal({}, expected.hints) is False

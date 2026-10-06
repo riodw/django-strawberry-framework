@@ -28,15 +28,19 @@ import functools
 import itertools
 import sys
 import types
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+from typing import ClassVar
 
 import pytest
+import pytest_django
 import strawberry
 from apps.library.models import Patron
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
 from strawberry import relay
+from strawberry.types import get_object_definition
 from strawberry.types.auto import StrawberryAuto
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -76,7 +80,7 @@ CATEGORY_SCALAR_FIELDS = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry):
+def _isolate_registry(isolate_global_registry: None) -> None:
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -97,12 +101,14 @@ def test_registry_collision_raises_configuration_error():
             fields = CATEGORY_SCALAR_FIELDS
             primary = True
 
+    assert registry.get(Category) is CategoryTypeA
+
     with pytest.raises(
         ConfigurationError,
         match=r"Cannot register CategoryTypeB as primary for Category;.*CategoryTypeA is already the primary type",
     ):
-
-        class CategoryTypeB(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryTypeB(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -155,16 +161,16 @@ def test_detect_custom_get_queryset_returns_false_for_non_djangotype_class():
 
 def test_meta_required_model_raises_when_missing():
     with pytest.raises(ConfigurationError, match="Meta.model is required"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 fields = CATEGORY_SCALAR_FIELDS
 
 
 def test_meta_model_must_be_django_model_class():
     with pytest.raises(ConfigurationError, match="Meta.model must be a Django model class"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = "Category"
                 fields = CATEGORY_SCALAR_FIELDS
@@ -179,7 +185,7 @@ def test_meta_model_must_be_django_model_class():
         ("exclude", "name", "Meta.exclude must be a non-string sequence"),
     ],
 )
-def test_meta_field_selectors_must_have_valid_shapes(attr, value, message):
+def test_meta_field_selectors_must_have_valid_shapes(attr: str, value: object, message: str):
     meta_cls = type("Meta", (), {"model": Category, attr: value})
     with pytest.raises(ConfigurationError, match=message):
         type("T", (DjangoType,), {"Meta": meta_cls})
@@ -187,8 +193,8 @@ def test_meta_field_selectors_must_have_valid_shapes(attr, value, message):
 
 def test_meta_optimizer_hints_must_be_mapping_when_declared():
     with pytest.raises(ConfigurationError, match="Meta.optimizer_hints must be a mapping"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -200,8 +206,8 @@ def test_meta_optimizer_hints_rejects_non_string_keys():
         ConfigurationError,
         match="Meta.optimizer_hints keys must be field name strings",
     ):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ["items"]
@@ -213,8 +219,8 @@ def test_meta_optimizer_hints_rejects_mixed_non_string_keys_safely():
         ConfigurationError,
         match="Meta.optimizer_hints keys must be field name strings",
     ):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ["items"]
@@ -227,38 +233,47 @@ def test_meta_optimizer_hints_rejects_mixed_non_string_keys_safely():
 class _HostileMetaValue:
     """A malformed Meta value whose diagnostic representation raises."""
 
+    @override
     def __repr__(self):
         raise RuntimeError("repr should not escape")
 
 
-class _HostileMetaSequence(Sequence):
+class _HostileMetaSequence(Sequence[object]):
     """A sequence whose item access raises while a Meta value is inspected.
 
     Both call sites reach ``__getitem__`` through the ``Sequence`` ABC's
     derived iterator, so ``__len__`` is never the failing step.
     """
 
-    def __getitem__(self, index):
+    @override
+    def __getitem__(self, index: int | slice):
         raise RuntimeError("sequence access should not escape")
 
+    @override
     def __len__(self):
         raise RuntimeError("sequence length should not escape")
 
 
 def test_meta_validator_diagnostics_survive_hostile_values():
     """Malformed Meta values cannot replace ConfigurationError with repr failures."""
-    meta = type("Meta", (), {"model": Category})
+
+    class Meta:
+        model: ClassVar[type[models.Model]] = Category
+
     hostile = _HostileMetaValue()
+
+    class InterfaceMeta:
+        model: ClassVar[type[models.Model]] = Category
+        interfaces = (hostile,)
+
     validators = (
-        lambda: _validate_filterset_class(meta, hostile),
-        lambda: _validate_orderset_class(meta, hostile),
-        lambda: _validate_connection(meta, hostile, False),
-        lambda: _validate_cursor_field(meta, hostile, False),
-        lambda: _validate_relation_shapes(meta, hostile, False),
-        lambda: _validate_globalid_strategy(meta, hostile, False),
-        lambda: _validate_interfaces(
-            type("InterfaceMeta", (), {"model": Category, "interfaces": (hostile,)}),
-        ),
+        lambda: _validate_filterset_class(Meta, hostile),
+        lambda: _validate_orderset_class(Meta, hostile),
+        lambda: _validate_connection(Meta, hostile, False),
+        lambda: _validate_cursor_field(Meta, hostile, False),
+        lambda: _validate_relation_shapes(Meta, hostile, False),
+        lambda: _validate_globalid_strategy(Meta, hostile, False),
+        lambda: _validate_interfaces(InterfaceMeta),
     )
     for validator in validators:
         with pytest.raises(ConfigurationError, match="unprintable _HostileMetaValue"):
@@ -267,22 +282,28 @@ def test_meta_validator_diagnostics_survive_hostile_values():
 
 def test_meta_connection_unknown_keys_are_typed_for_mixed_and_hostile_keys():
     """Unknown connection keys cannot leak sorting or repr exceptions."""
-    meta = type("Meta", (), {"model": Category})
+
+    class Meta:
+        model: ClassVar[type[models.Model]] = Category
+
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-        _validate_connection(meta, {1: True, "bogus": False}, False)
+        _validate_connection(Meta, {1: True, "bogus": False}, False)
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-        _validate_connection(meta, {_HostileMetaValue(): True}, False)
+        _validate_connection(Meta, {_HostileMetaValue(): True}, False)
 
 
 def test_meta_cursor_field_hostile_sequence_is_typed():
     """A broken sequence descriptor cannot escape as a raw runtime exception."""
-    meta = type("Meta", (), {"model": Category})
+
+    class Meta:
+        model: ClassVar[type[models.Model]] = Category
+
     with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
-        _validate_cursor_field(meta, _HostileMetaSequence(), True)
+        _validate_cursor_field(Meta, _HostileMetaSequence(), True)
 
 
 @pytest.mark.parametrize("key", ["fields", "exclude"])
-def test_meta_field_collections_wrap_hostile_iteration(key):
+def test_meta_field_collections_wrap_hostile_iteration(key: str):
     """A field collection that raises while iterating stays a typed shape error."""
     meta_cls = type("Meta", (), {"model": Category, key: _HostileMetaSequence()})
 
@@ -293,8 +314,8 @@ def test_meta_field_collections_wrap_hostile_iteration(key):
 def test_meta_name_rejects_an_empty_string():
     """An empty ``Meta.name`` is rejected at type creation."""
     with pytest.raises(ConfigurationError, match="empty name"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -305,6 +326,7 @@ def test_meta_name_rejects_hostile_values_at_type_creation():
     """A malformed ``Meta.name`` cannot survive to Strawberry schema creation."""
 
     class HostileName:
+        @override
         def __repr__(self):
             raise RuntimeError("repr should not escape")
 
@@ -312,8 +334,8 @@ def test_meta_name_rejects_hostile_values_at_type_creation():
         ConfigurationError,
         match="Meta.name must be a non-empty string; got <unprintable HostileName>",
     ):
-
-        class BadNameType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadNameType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -323,8 +345,8 @@ def test_meta_name_rejects_hostile_values_at_type_creation():
 def test_meta_name_rejects_invalid_graphql_names_at_type_creation():
     """A syntactically invalid GraphQL name cannot leak Strawberry's GraphQLError."""
     with pytest.raises(ConfigurationError, match="valid GraphQL name"):
-
-        class BadNameType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadNameType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -341,9 +363,9 @@ def test_globalid_callable_wraps_non_signature_inspection_errors():
 
         def __call__(
             self,
-            type_cls,
-            model,
-            root,
+            type_cls: type[DjangoType],
+            model: type[models.Model],
+            root: object,
         ):
             return "value"
 
@@ -359,9 +381,11 @@ def test_meta_globalid_callable_hostile_descriptor_is_typed():
         def __call__(self):
             raise RuntimeError("callable descriptor should not escape")
 
-    meta = type("Meta", (), {"model": Category})
+    class Meta:
+        model: ClassVar[type[models.Model]] = Category
+
     with pytest.raises(ConfigurationError, match="could not be inspected"):
-        _validate_globalid_strategy(meta, HostileCallable(), True)
+        _validate_globalid_strategy(Meta, HostileCallable(), True)
 
 
 @pytest.mark.parametrize(
@@ -374,7 +398,7 @@ def test_meta_globalid_callable_hostile_descriptor_is_typed():
         "filesystem_path_fields",
     ],
 )
-def test_meta_name_collections_reject_non_string_entries(attr):
+def test_meta_name_collections_reject_non_string_entries(attr: str):
     """All field-name collections reject unhashable entries before set operations."""
     meta = type("Meta", (), {"model": Category, attr: (["name"],)})
     with pytest.raises(ConfigurationError, match=f"Meta.{attr} must contain field name strings"):
@@ -383,8 +407,8 @@ def test_meta_name_collections_reject_non_string_entries(attr):
 
 def test_meta_fields_and_exclude_mutually_exclusive():
     with pytest.raises(ConfigurationError, match="mutually exclusive"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -405,8 +429,8 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
         fields = ("id", "name")
 
     with pytest.raises(ConfigurationError, match="mutually exclusive"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta(BaseMeta):
                 model = Category
                 exclude = ("description",)
@@ -416,7 +440,7 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
     "deferred_key",
     ["aggregate_class", "fields_class", "search_fields"],
 )
-def test_meta_rejects_each_deferred_key(deferred_key):
+def test_meta_rejects_each_deferred_key(deferred_key: str):
     """Every key in DEFERRED_META_KEYS must raise until the spec that owns it ships."""
     meta_attrs = {"model": Category, "fields": CATEGORY_SCALAR_FIELDS, deferred_key: object()}
     meta_cls = type("Meta", (), meta_attrs)
@@ -434,6 +458,7 @@ def test_definition_fields_class_slot_is_reserved_but_unpopulated():
 
     definition = registry.get_definition(CategoryType)
 
+    assert definition is not None
     assert definition.fields_class is None
 
 
@@ -453,7 +478,7 @@ def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
     assert "orderset_class" not in DEFERRED_META_KEYS
 
 
-def _declare_category_type_with_interface(entry):
+def _declare_category_type_with_interface(entry: object):
     """Declare a ``DjangoType`` subclass with ``entry`` in ``Meta.interfaces``.
 
     Shared boilerplate for the six named-rejection tests and the
@@ -467,6 +492,8 @@ def _declare_category_type_with_interface(entry):
             model = Category
             fields = CATEGORY_SCALAR_FIELDS
             interfaces = (entry,)
+
+    assert registry.get(Category) is CategoryType
 
 
 def test_interfaces_rejects_relay_globalid_named():
@@ -556,8 +583,8 @@ def test_connection_key_requires_relay_node():
     add-``relay.Node``-or-inherit-it-directly remediation (spec-032).
     """
     with pytest.raises(ConfigurationError) as excinfo:
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -581,12 +608,12 @@ def test_meta_relation_shapes_in_allowed_meta_keys():
 
 
 def _declare_relation_shapes_type(
-    model,
-    fields,
-    relation_shapes,
+    model: type[models.Model],
+    fields: Sequence[str],
+    relation_shapes: object,
     *,
-    relay_node=True,
-    namespace_extra=None,
+    relay_node: bool = True,
+    namespace_extra: dict[str, object] | None = None,
 ):
     """Declare a throwaway ``DjangoType`` carrying ``Meta.relation_shapes``.
 
@@ -596,7 +623,7 @@ def _declare_relation_shapes_type(
     meta_attrs = {"model": model, "fields": fields, "relation_shapes": relation_shapes}
     if relay_node:
         meta_attrs["interfaces"] = (relay.Node,)
-    namespace = {"Meta": type("Meta", (), meta_attrs)}
+    namespace: dict[str, object] = {"Meta": type("Meta", (), meta_attrs)}
     if namespace_extra:
         namespace.update(namespace_extra)
     return type("RelationShapesProbeType", (DjangoType,), namespace)
@@ -703,11 +730,11 @@ def _declare_relation_shapes_type(
     ],
 )
 def test_relation_shapes_validation_matrix(
-    model,
-    fields,
-    relation_shapes,
-    relay_node,
-    expected,
+    model: type[models.Model],
+    fields: Sequence[str],
+    relation_shapes: object,
+    relay_node: bool,
+    expected: str,
 ):
     """Every illegal ``Meta.relation_shapes`` declaration raises at type creation.
 
@@ -748,7 +775,7 @@ def test_relation_shapes_on_consumer_assigned_relation_raises():
     contract; same overrides-own-the-shape message as the annotation corner.
     """
 
-    def _items_resolver(root) -> list[str]:
+    def _items_resolver(root: Category) -> list[str]:
         return []  # Never resolved - the class raises at creation.
 
     with pytest.raises(ConfigurationError) as excinfo:
@@ -804,8 +831,8 @@ def test_select_fields_signature_accepts_validated_specs():
 def test_meta_filterset_class_rejects_non_filterset_value():
     """``_validate_filterset_class`` rejects non-``FilterSet`` values."""
     with pytest.raises(ConfigurationError, match="must be a FilterSet subclass"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -869,8 +896,8 @@ def test_meta_connection_non_dict_raises():
     from strawberry import relay
 
     with pytest.raises(ConfigurationError, match="must be a dict"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -883,8 +910,8 @@ def test_meta_connection_unknown_subkey_raises():
     from strawberry import relay
 
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -897,8 +924,8 @@ def test_meta_connection_non_bool_total_count_raises():
     from strawberry import relay
 
     with pytest.raises(ConfigurationError, match="must be a bool"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -909,8 +936,8 @@ def test_meta_connection_non_bool_total_count_raises():
 def test_meta_connection_non_relay_type_raises():
     """``Meta.connection`` on a type whose ``interfaces`` omits ``relay.Node`` raises."""
     with pytest.raises(ConfigurationError, match="relay.Node"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1017,8 +1044,8 @@ def test_meta_globalid_strategy_unknown_string_raises():
     from strawberry import relay
 
     with pytest.raises(ConfigurationError, match="unknown strategy"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1029,8 +1056,8 @@ def test_meta_globalid_strategy_unknown_string_raises():
 def test_meta_globalid_strategy_non_relay_type_raises():
     """``Meta.globalid_strategy`` on a type whose ``interfaces`` omits ``relay.Node`` raises."""
     with pytest.raises(ConfigurationError, match="relay.Node"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1042,8 +1069,8 @@ def test_meta_globalid_strategy_wrong_type_raises():
     from strawberry import relay
 
     with pytest.raises(ConfigurationError, match="must be one of"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1055,7 +1082,7 @@ def test_meta_globalid_strategy_callable_accepted_and_stored():
     """A well-formed sync three-arg encoder validates and is stored on the definition."""
     from strawberry import relay
 
-    def encode(type_cls, model, root):
+    def encode(type_cls: type[DjangoType], model: type[models.Model], root: object):
         return "custom"
 
     class CategoryType(DjangoType):
@@ -1073,12 +1100,12 @@ def test_meta_globalid_strategy_callable_wrong_arity_raises():
     """A wrong-arity encoder is rejected at type creation (the ``inspect.signature`` check)."""
     from strawberry import relay
 
-    def encode(type_cls, model):
+    def encode(type_cls: type[DjangoType], model: type[models.Model]):
         return "custom"
 
     with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1097,16 +1124,16 @@ def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected():
     from strawberry import relay
 
     def encode(
-        type_cls,
-        model,
-        root,
-        info,
+        type_cls: type[DjangoType],
+        model: type[models.Model],
+        root: object,
+        info: object,
     ):
         return "custom"
 
     with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1118,12 +1145,12 @@ def test_meta_globalid_strategy_async_callable_raises():
     """An ``async def`` encoder is rejected at type creation (the sync-ness check)."""
     from strawberry import relay
 
-    async def encode(type_cls, model, root):
+    async def encode(type_cls: type[DjangoType], model: type[models.Model], root: object):
         return "custom"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1144,15 +1171,15 @@ def test_meta_globalid_strategy_async_callable_object_raises():
     class Encoder:
         async def __call__(
             self,
-            type_cls,
-            model,
-            root,
+            type_cls: type[DjangoType],
+            model: type[models.Model],
+            root: object,
         ):
             return "custom.label"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1174,15 +1201,15 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
     class Encoder:
         async def __call__(
             self,
-            type_cls,
-            model,
-            root,
+            type_cls: type[DjangoType],
+            model: type[models.Model],
+            root: object,
         ):
             return "custom.label"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1219,7 +1246,7 @@ def test_meta_globalid_strategy_absent_leaves_definition_none():
     assert definition.globalid_strategy is None
 
 
-def test_resolve_globalid_strategy_precedence(settings):
+def test_resolve_globalid_strategy_precedence(settings: pytest_django.Settings):
     """``_resolve_globalid_strategy`` is pure precedence: Meta -> snapshot -> ``"model"``.
 
     The resolver no longer reads or validates the setting - it takes the
@@ -1275,8 +1302,8 @@ def test_resolve_globalid_strategy_precedence(settings):
 def test_meta_rejects_unknown_key():
     """Typo guard: keys outside the allowed/deferred sets raise."""
     with pytest.raises(ConfigurationError, match="Unknown Meta keys"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -1286,8 +1313,8 @@ def test_meta_rejects_unknown_key():
 def test_meta_fields_unknown_name_raises():
     """A typo in ``Meta.fields`` raises ``ConfigurationError`` rather than silently dropping."""
     with pytest.raises(ConfigurationError, match="unknown fields"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "nmae")  # typo: "nmae" instead of "name"
@@ -1296,8 +1323,8 @@ def test_meta_fields_unknown_name_raises():
 def test_meta_fields_unknown_name_includes_model_and_available():
     """The error names the model and lists available fields so the typo is obvious."""
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("nope",)
@@ -1312,8 +1339,8 @@ def test_meta_fields_unknown_name_includes_model_and_available():
 def test_meta_exclude_unknown_name_raises():
     """A typo in ``Meta.exclude`` raises rather than silently keeping the field."""
     with pytest.raises(ConfigurationError, match="unknown fields"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 exclude = ("descriptoin",)  # typo
@@ -1327,8 +1354,8 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
     walker never visits an excluded field.
     """
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "name")
@@ -1337,8 +1364,8 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
 
 def test_meta_optimizer_hints_for_selected_scalar_field_raises():
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "name")
@@ -1355,8 +1382,8 @@ def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_er
     selected-relation gate fires with a normal ``ConfigurationError``.
     """
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 exclude = (
@@ -1426,7 +1453,7 @@ def test_meta_primary_absent_does_not_register_primary():
         1.0,
     ],
 )
-def test_meta_primary_non_bool_raises_configuration_error(bad):
+def test_meta_primary_non_bool_raises_configuration_error(bad: object):
     """``Meta.primary`` must be a ``bool``; any other shape raises.
 
     ``isinstance(1, bool)`` is ``False`` (``bool`` is a subclass of ``int``,
@@ -1434,8 +1461,8 @@ def test_meta_primary_non_bool_raises_configuration_error(bad):
     integer trap that would otherwise pass a duck-typed bool check.
     """
     with pytest.raises(ConfigurationError, match="must be a bool"):
-
-        class T(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class T(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Item
                 fields = ("id", "name")
@@ -1451,7 +1478,9 @@ def test_meta_primary_propagates_to_definition():
             fields = ("id", "name")
             primary = True
 
-    assert registry.get_definition(ItemTypePrimary).primary is True
+    definition = registry.get_definition(ItemTypePrimary)
+    assert definition is not None
+    assert definition.primary is True
 
 
 def test_meta_primary_absent_definition_primary_defaults_false():
@@ -1462,7 +1491,9 @@ def test_meta_primary_absent_definition_primary_defaults_false():
             model = Item
             fields = ("id", "name")
 
-    assert registry.get_definition(ItemType).primary is False
+    definition = registry.get_definition(ItemType)
+    assert definition is not None
+    assert definition.primary is False
 
 
 def test_two_types_same_model_one_primary_both_register_successfully():
@@ -1495,12 +1526,14 @@ def test_two_primary_types_same_model_raises():
             fields = ("id", "name")
             primary = True
 
+    assert registry.get(Item) is ItemType
+
     with pytest.raises(
         ConfigurationError,
         match=r"Cannot register AdminItemType as primary for Item;.*ItemType is already the primary type",
     ):
-
-        class AdminItemType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class AdminItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Item
                 fields = ("id", "name")
@@ -1576,7 +1609,7 @@ def test_category_type_is_a_strawberry_type():
 
     finalize_django_types()
     assert hasattr(CategoryType, "__strawberry_definition__")
-    assert CategoryType.__strawberry_definition__.name == "CategoryType"
+    assert get_object_definition(CategoryType, strict=True).name == "CategoryType"
 
 
 def test_meta_name_overrides_graphql_type_name():
@@ -1588,7 +1621,7 @@ def test_meta_name_overrides_graphql_type_name():
 
     finalize_django_types()
 
-    assert CategoryType.__strawberry_definition__.name == "Category"
+    assert get_object_definition(CategoryType, strict=True).name == "Category"
 
 
 def test_meta_description_threads_through_to_strawberry():
@@ -1600,7 +1633,7 @@ def test_meta_description_threads_through_to_strawberry():
 
     finalize_django_types()
 
-    assert CategoryType.__strawberry_definition__.description == "A Faker provider."
+    assert get_object_definition(CategoryType, strict=True).description == "A Faker provider."
 
 
 # ---------------------------------------------------------------------------
@@ -1639,7 +1672,8 @@ def test_has_custom_get_queryset_true_when_overridden():
             fields = CATEGORY_SCALAR_FIELDS
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: models.QuerySet[Category], info: object, **kwargs: object):
             return queryset.filter(is_private=False)
 
     assert CategoryType._is_default_get_queryset is False
@@ -1661,14 +1695,17 @@ def test_has_custom_get_queryset_inherits_through_intermediate_base():
             fields = CATEGORY_SCALAR_FIELDS
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: models.QuerySet[Category], info: object, **kwargs: object):
             return queryset.filter(is_private=False)
 
     # Drop the registry collision so we can subclass cleanly.
     registry.clear()
 
     class ChildCategoryType(BaseCategoryType):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Category
             fields = CATEGORY_SCALAR_FIELDS
 
@@ -1694,7 +1731,13 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
         """Abstract base - no Meta, but defines ``get_queryset``."""
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(
+            cls,
+            queryset: models.QuerySet[models.Model],
+            info: object,
+            **kwargs: object,
+        ):
             return queryset.filter(is_private=False)
 
     # The abstract base flipped its own sentinel even without Meta.
@@ -1716,10 +1759,11 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
 # ---------------------------------------------------------------------------
 
 
-def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch):
+def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch: pytest.MonkeyPatch):
     """Unsupported field types fail loudly with a message naming the field."""
     monkeypatch.delitem(converters.SCALAR_MAP, models.TextField)
     name_field = Category._meta.get_field("name")
+    assert isinstance(name_field, models.Field)
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
         convert_scalar(name_field, "CategoryType")
 
@@ -1861,7 +1905,9 @@ def test_relation_full_chain_when_all_targets_registered():
     assert EntryType.__annotations__["item"] is ItemType
 
 
-def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch):
+def test_resolved_relation_annotation_nullable_fk_widens_to_optional(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Nullable forward FK widens to ``T | None``.
 
     No fakeshop FK declares ``null=True``, so monkeypatch the Item.category
@@ -1938,7 +1984,12 @@ def _make_override_model():
     return _OverrideOwner
 
 
-def _make_override_type(model, *, namespace=None, **meta_attrs):
+def _make_override_type(
+    model: type[models.Model],
+    *,
+    namespace: dict[str, object] | None = None,
+    **meta_attrs: object,
+):
     """Build an ``OverrideType`` subclass for ``model`` with the given Meta attrs.
 
     Uses ``type(...)`` construction (mirroring ``test_meta_rejects_each_deferred_key``)
@@ -2051,8 +2102,8 @@ def test_override_relay_suppressed_pk_raises():
     from strawberry import relay
 
     with pytest.raises(ConfigurationError, match="Relay-Node-suppressed pk"):
-
-        class CategoryNodeOverride(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryNodeOverride(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "name")
@@ -2166,7 +2217,7 @@ def test_consumer_assigned_field_resolver_on_file_column_is_not_clobbered():
     (spec-037 Decision 3).
     """
 
-    def attachment_resolver(self) -> str:
+    def attachment_resolver(self: object) -> str:
         return "consumer-owned"
 
     model = _make_file_override_model()
@@ -2182,7 +2233,11 @@ def test_consumer_assigned_field_resolver_on_file_column_is_not_clobbered():
     assert attr.__name__ == "attachment_resolver"
 
 
-def _make_file_override_model_type(model, *, namespace=None):
+def _make_file_override_model_type(
+    model: type[models.Model],
+    *,
+    namespace: dict[str, object] | None = None,
+):
     """Build an ``OverrideType`` over ``model`` selecting only ``id`` + ``attachment``."""
     meta_cls = type("Meta", (), {"model": model, "fields": ("id", "attachment")})
     return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
@@ -2257,7 +2312,13 @@ def _make_path_optin_model():
     return MediaSpecimen
 
 
-def _make_path_optin_type(model, *, namespace=None, fields=None, **meta_attrs):
+def _make_path_optin_type(
+    model: type[models.Model],
+    *,
+    namespace: dict[str, object] | None = None,
+    fields: Sequence[str] | None = None,
+    **meta_attrs: object,
+):
     """Build a ``PathOptInType`` over ``model`` with the given Meta attrs."""
     meta_cls = type(
         "Meta",
@@ -2362,7 +2423,7 @@ def test_filesystem_path_fields_rejects_a_bare_string():
         "set",
     ],
 )
-def test_filesystem_path_fields_accepts_every_collection_literal(declaration):
+def test_filesystem_path_fields_accepts_every_collection_literal(declaration: Collection[str]):
     """A set of names may be declared as a set (spec-048 Decision 2).
 
     The key names an unordered SET of columns and is normalized to a
@@ -2381,7 +2442,7 @@ def test_filesystem_path_fields_accepts_every_collection_literal(declaration):
     "key",
     ["nullable_overrides", "required_overrides", "filesystem_path_fields"],
 )
-def test_the_collection_guard_names_the_key_it_rejected(key):
+def test_the_collection_guard_names_the_key_it_rejected(key: str):
     """One helper serves four ``Meta`` keys, so its message must name the caller's.
 
     The message previously said ``Meta.exclude`` whatever key was written, which
@@ -2390,7 +2451,9 @@ def test_the_collection_guard_names_the_key_it_rejected(key):
     """
     model = _make_path_optin_model()
     with pytest.raises(ConfigurationError, match=f"Meta.{key} must be a non-string"):
-        _make_path_optin_type(model, **{key: "attachment"})
+        # basedpyright: a dict splat is checked against every keyword of _make_path_optin_type; the
+        # parametrized key only ever names a Meta attribute, which **meta_attrs takes as object
+        _make_path_optin_type(model, **{key: "attachment"})  # pyright: ignore[reportArgumentType]
 
 
 def test_the_collection_guard_still_names_exclude_for_exclude():
@@ -2412,10 +2475,12 @@ def test_the_collection_guard_still_names_exclude_for_exclude():
     "key",
     ["nullable_overrides", "required_overrides"],
 )
-def test_the_sibling_collection_keys_accept_a_frozenset_too(key):
+def test_the_sibling_collection_keys_accept_a_frozenset_too(key: str):
     """The sibling keys share the widened guard, so the four cannot drift apart."""
     model = _make_path_optin_model()
-    _make_path_optin_type(model, **{key: frozenset({"label"})})
+    # basedpyright: a dict splat is checked against every keyword of _make_path_optin_type; the
+    # parametrized key only ever names a Meta attribute, which **meta_attrs takes as object
+    _make_path_optin_type(model, **{key: frozenset({"label"})})  # pyright: ignore[reportArgumentType]
     finalize_django_types()
 
 
@@ -2470,8 +2535,8 @@ def test_meta_cursor_field_rejects_non_sequence_shapes():
 
     for bad_value in ("name", (), ("name", 3)):
         with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
-
-            class CategoryType(DjangoType):
+            # basedpyright: the class statement is the call under test and raises, so the name is never bound
+            class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
                 class Meta:
                     model = Category
                     fields = CATEGORY_SCALAR_FIELDS
@@ -2492,8 +2557,8 @@ def test_meta_cursor_field_rejects_malformed_and_traversing_entries():
         (("name", "-name"), "more than once"),
     ):
         with pytest.raises(ConfigurationError, match=match):
-
-            class CategoryType(DjangoType):
+            # basedpyright: the class statement is the call under test and raises, so the name is never bound
+            class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
                 class Meta:
                     model = Category
                     fields = CATEGORY_SCALAR_FIELDS
@@ -2506,8 +2571,8 @@ def test_meta_cursor_field_rejects_malformed_and_traversing_entries():
 def test_meta_cursor_field_requires_relay_node_shape():
     """``cursor_field`` on a non-Relay-Node type raises the shared gate error."""
     with pytest.raises(ConfigurationError, match="requires a Relay-Node-shaped type"):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
@@ -2527,6 +2592,8 @@ def test_meta_cursor_field_finalization_validates_columns():
             # class creation, rejected by the finalization column contract.
             cursor_field = ("description",)
 
+    assert registry.get(Category) is CategoryType
+
     with pytest.raises(ConfigurationError, match="must end in a unique column"):
         finalize_django_types()
 
@@ -2535,7 +2602,8 @@ def test_has_custom_get_queryset_with_subclasscheck_without_mro():
     from django_strawberry_framework.types.base import _detect_custom_get_queryset
 
     class FakeMeta(type):
-        def __subclasscheck__(cls, subclass):
+        @override
+        def __subclasscheck__(cls, subclass: type):
             return True
 
     class FakeType(metaclass=FakeMeta):
@@ -2550,6 +2618,8 @@ def test_post_finalization_registration_raises():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is FirstCategoryType
+
     finalize_django_types()
     assert registry.is_finalized()
 
@@ -2557,8 +2627,8 @@ def test_post_finalization_registration_raises():
         ConfigurationError,
         match="finalize_django_types\\(\\) already ran; cannot register LateCategoryType after finalization",
     ):
-
-        class LateCategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class LateCategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "name")
@@ -2569,8 +2639,8 @@ def test_optimizer_hints_unknown_field_raises():
         ConfigurationError,
         match="Category.Meta.optimizer_hints names unknown fields: \\['nonexistent'\\]. Available:",
     ):
-
-        class BadHintCategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadHintCategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "name")
@@ -2582,8 +2652,8 @@ def test_optimizer_hints_bad_value_raises():
         ConfigurationError,
         match="optimizer_hints values must be OptimizerHint instances, got non-OptimizerHint for: \\['items'\\]",
     ):
-
-        class BadValueCategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadValueCategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id", "name", "items")
@@ -2595,7 +2665,7 @@ def test_optimizer_hints_bad_value_raises():
 # ---------------------------------------------------------------------------
 
 
-def _exec_pep563_module(program, module_name):
+def _exec_pep563_module(program: str, module_name: str):
     """exec ``program`` into a REAL sys.modules entry and return its namespace.
 
     Strawberry resolves string annotations through ``sys.modules`` for the
@@ -2753,6 +2823,8 @@ def test_pep563_auto_relation_annotation_registers_pending_relation():
             model = Item
             fields = ("id",)
 
+    assert registry.get(Item) is ProbePEP563ItemType
+
     namespace = _exec_pep563_module(
         """
 from __future__ import annotations
@@ -2815,11 +2887,12 @@ def test_auto_string_spelling_accepted_without_future_import():
             model = Category
             fields = ("id", "name")
 
-        name: "auto"  # noqa: F821 - the string spelling IS the marker under test
+        # basedpyright: the unimported string spelling of auto is the marker under test
+        name: "auto"  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 
     assert StringAutoType.__annotations__["name"] is str
     finalize_django_types()
-    assert StringAutoType.__strawberry_definition__ is not None
+    assert get_object_definition(StringAutoType) is not None
 
 
 def test_non_string_annotation_keys_raise_configuration_error():
@@ -2834,16 +2907,24 @@ def test_non_string_annotation_keys_raise_configuration_error():
     """
 
     class InjectAnnotationsMeta(type):
-        def __new__(mcs, name, bases, namespace, **kwargs):
-            annotations = dict(namespace.get("__annotations__", {}))
+        def __new__(
+            mcs,
+            name: str,
+            bases: tuple[type, ...],
+            namespace: dict[str, object],
+            **kwargs: object,
+        ):
+            declared = namespace.get("__annotations__", {})
+            assert isinstance(declared, dict)
+            annotations = dict(declared)
             annotations[1] = StrawberryAuto()
             annotations["zz"] = StrawberryAuto()
             namespace["__annotations__"] = annotations
             return super().__new__(mcs, name, bases, namespace, **kwargs)
 
     with pytest.raises(ConfigurationError, match="string names"):
-
-        class ProbeNonStringKeysType(DjangoType, metaclass=InjectAnnotationsMeta):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class ProbeNonStringKeysType(DjangoType, metaclass=InjectAnnotationsMeta):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Category
                 fields = ("id",)
@@ -2859,14 +2940,14 @@ def test_meta_metaclass_raising_getattr_raises_configuration_error():
     """
 
     class HostileMeta(type):
-        def __getattr__(cls, item):
+        def __getattr__(cls, item: str):
             if item in {"fields", "optimizer_hints", "interfaces"}:
                 raise RuntimeError(f"hostile Meta access: {item}")
             raise AttributeError(item)
 
     with pytest.raises(ConfigurationError, match="could not be read"):
-
-        class ProbeHostileMetaType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class ProbeHostileMetaType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta(metaclass=HostileMeta):
                 model = Category
 
@@ -2887,9 +2968,9 @@ def test_meta_metaclass_raising_getattr_raises_configuration_error():
     ],
 )
 def test_multi_column_forward_foreign_object_maps_to_its_related_type(
-    child_name,
-    fields_spec,
-    nullable,
+    child_name: str,
+    fields_spec: Sequence[str],
+    nullable: bool,
 ):
     """A forward ``ForeignObject`` over two columns is a generated relation field.
 

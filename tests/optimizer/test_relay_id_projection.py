@@ -9,9 +9,11 @@ whose primary key is the one-to-one key to the patron it extends, so the column
 an id projection must load is ``patron_id``.
 """
 
+from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
+import pytest_django
 import strawberry
 from apps.library.models import Patron, PatronProfile
 from strawberry import relay
@@ -21,7 +23,7 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
@@ -29,7 +31,9 @@ def _isolate_registry():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_queries):
+def test_relay_id_with_custom_pk_attname_avoids_lazy_load(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """A Relay type whose pk attname is not ``id`` answers ``{ id postalCode }`` in one query.
 
     The walker resolves the configured ``id_attr``, projects the real pk column
@@ -45,6 +49,8 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
             model = Patron
             fields = ("name",)
 
+    assert registry.get(Patron) is PatronType
+
     class PatronProfileNode(DjangoType):
         class Meta:
             model = PatronProfile
@@ -55,7 +61,9 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
     class Query:
         @strawberry.field
         def all_profiles(self) -> list[PatronProfileNode]:
-            return PatronProfile.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return PatronProfile.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -68,6 +76,7 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
     plan = ctx.dst_optimizer_plan
     assert "patron_id" in plan.only_fields
     assert "id" not in plan.only_fields
+    assert result.data is not None
     assert result.data == {
         "allProfiles": [{"id": result.data["allProfiles"][0]["id"], "postalCode": "EC1"}],
     }

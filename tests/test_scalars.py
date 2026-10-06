@@ -34,6 +34,7 @@ import strawberry
 import strawberry.file_uploads.scalars
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
+from typing_extensions import override
 
 from django_strawberry_framework import BigInt, strawberry_config
 from django_strawberry_framework.scalars import (
@@ -52,19 +53,24 @@ def test_bigint_int_subclasses_are_normalized_before_serialization():
     """Subclass dunders cannot forge or break the canonical decimal wire value."""
 
     class _HostileInt(int):
+        @override
         def __int__(self):
             raise RuntimeError("int exploded")
 
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
+        @override
         def __str__(self):
             return "forged"
 
     class _HexInt(int):
+        @override
         def __repr__(self):
             return hex(self)
 
+        @override
         def __str__(self):
             return hex(self)
 
@@ -151,7 +157,8 @@ def test_bigint_rejection_messages_survive_hostile_values():
     """Malformed scalar values cannot replace typed errors while formatting a message."""
 
     class _HostileTypeMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__name__":
                 raise RuntimeError("type name exploded")
             return super().__getattribute__(name)
@@ -163,9 +170,11 @@ def test_bigint_rejection_messages_survive_hostile_values():
         def __int__(self):
             raise RuntimeError("int exploded")
 
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
+        @override
         def __str__(self):
             raise RuntimeError("str exploded")
 
@@ -261,16 +270,20 @@ def test_strawberry_config_accepts_empty_extra_scalar_map():
 def test_strawberry_config_rejects_unmaterializable_extra_scalar_map():
     """A mapping failure is reported as the helper's typed configuration error."""
 
-    class _BrokenMapping(Mapping):
-        def __getitem__(self, key):
+    class _BrokenMapping(Mapping[object, ScalarDefinition]):
+        @override
+        def __getitem__(self, key: object):
             raise RuntimeError("getitem exploded")
 
+        @override
         def __iter__(self):
             return iter(("custom",))
 
+        @override
         def __len__(self):
             return 1
 
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -293,7 +306,7 @@ def test_strawberry_config_extra_scalar_map_does_not_mutate_caller_dict():
     """The factory copies ``extra_scalar_map`` rather than mutating the caller's dict (spec #"`extra_scalar_map` mutation post-call")."""
     CustomScalar = NewType("CustomScalar", str)
     custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
-    caller_dict = {CustomScalar: custom_def}
+    caller_dict: dict[object, ScalarDefinition] = {CustomScalar: custom_def}
     before = dict(caller_dict)
     strawberry_config(extra_scalar_map=caller_dict)
     assert caller_dict == before
@@ -310,6 +323,7 @@ def test_scalar_collision_label_falls_back_when_class_name_metadata_is_unreadabl
     """
 
     class _HostileNameMeta(type):
+        @override
         def __getattribute__(cls, name: str):
             if name == "__name__":
                 raise RuntimeError("name unavailable")
@@ -344,12 +358,15 @@ def test_strawberry_config_collision_message_survives_hostile_key():
     """
 
     class _HostileKey:
+        @override
         def __hash__(self):
             return hash(BigInt)
 
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             return True
 
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -375,12 +392,15 @@ def test_strawberry_config_hostile_key_eq_raising_is_contained():
     """
 
     class _ExplodingEqKey:
+        @override
         def __hash__(self):
             return hash(BigInt)
 
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             raise RuntimeError("eq exploded")
 
+        @override
         def __repr__(self):
             return "<ExplodingEqKey>"
 
@@ -404,13 +424,16 @@ def test_safe_scalar_map_key_label_normalizes_str_subclass_name():
     """
 
     class _NameStr(str):
+        @override
         def __str__(self):
             raise RuntimeError("str exploded")
 
-        def __format__(self, fmt):
+        @override
+        def __format__(self, fmt: str):
             raise RuntimeError("format exploded")
 
-        def __lt__(self, other):
+        @override
+        def __lt__(self, other: object):
             raise RuntimeError("lt exploded")
 
     class _Key:
@@ -432,6 +455,7 @@ def test_strawberry_config_independent_call_returns_independent_instance():
     c2 = strawberry_config()
     assert c1 is not c2
     assert c1.scalar_map is not c2.scalar_map
+    assert isinstance(c1.scalar_map, dict)
     c1.scalar_map[CustomScalar] = custom_def
     assert CustomScalar not in c2.scalar_map
 

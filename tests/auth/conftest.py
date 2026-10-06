@@ -7,13 +7,16 @@ across the modules live in ``tests/auth/_helpers.py``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from django_strawberry_framework.auth import mutations as auth_mutations
+from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
 
 
 @pytest.fixture
-def _sync_boundary_spy(monkeypatch):
+def _sync_boundary_spy(monkeypatch: pytest.MonkeyPatch) -> list[Callable[..., object]]:
     """Spy on ``run_in_one_sync_boundary`` so async-body entry is counted deterministically.
 
     Both ``login`` / ``logout`` and ``current_user`` ride the same
@@ -25,9 +28,9 @@ def _sync_boundary_spy(monkeypatch):
     is observed.
     """
     calls = []
-    real = auth_mutations.run_in_one_sync_boundary
+    real = run_in_one_sync_boundary
 
-    async def _spy(fn, *args, **kwargs):
+    async def _spy(fn: Callable[..., object], *args: object, **kwargs: object):
         calls.append(fn)
         return await real(fn, *args, **kwargs)
 

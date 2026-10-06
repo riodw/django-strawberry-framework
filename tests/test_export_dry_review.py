@@ -10,6 +10,8 @@ so none of these rows can move. There is no live sibling in
 
 from pathlib import Path
 
+import pytest
+
 from docs.dry import export_dry_review as dry
 
 
@@ -21,9 +23,13 @@ def _write(path: Path, content: str) -> Path:
 
 def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(dry, "_git_status_short", lambda root: " M package/root.py\n?? notes.md\n")
+
+    def _dirty_status(root: Path) -> str:
+        return " M package/root.py\n?? notes.md\n"
+
+    monkeypatch.setattr(dry, "_git_status_short", _dirty_status)
     package = tmp_path / "package"
     _write(package / "__init__.py", "")
     _write(package / "root.py", "VALUE = 1\n")
@@ -83,9 +89,16 @@ def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
 
 def test_plan_reads_the_release_from_the_package_and_states_a_missing_status(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(dry, "_git_status_short", lambda root: None)
+
+    def _unavailable_status(root: Path) -> None:
+        return None
+
+    def _clean_status(root: Path) -> str:
+        return ""
+
+    monkeypatch.setattr(dry, "_git_status_short", _unavailable_status)
     package = tmp_path / "package"
     _write(package / "__init__.py", '__version__ = "0.0.7"\n')
     _write(package / "root.py", "VALUE = 1\n")
@@ -102,7 +115,7 @@ def test_plan_reads_the_release_from_the_package_and_states_a_missing_status(
     assert "# System-wide DRY review plan: 0.0.7" in report
     assert "`git status --short` unavailable at generation" in report
 
-    monkeypatch.setattr(dry, "_git_status_short", lambda root: "")
+    monkeypatch.setattr(dry, "_git_status_short", _clean_status)
     _write(package / "__init__.py", "")
     assert dry.main(arguments) == 2
     assert dry.main([*arguments, "--target-release", "0.0.8"]) == 0

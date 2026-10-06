@@ -33,8 +33,11 @@ from apps.library.models import Book, Branch, Loan, Patron, Shelf
 from apps.scalars.filters import ScalarSpecimenFilter
 from apps.scalars.models import ScalarSpecimen
 from django.db import connection as db_connection
+from django.db.models import Model, QuerySet
 from django.http import HttpRequest
 from schema_reload import reload_all_project_schemas
+
+from django_strawberry_framework.filters import FilterSet
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
@@ -45,7 +48,7 @@ _LOAN_HOPS = ("book", "loans", "patron")
 
 
 @pytest.fixture(autouse=True)
-def _project_schema():
+def _project_schema() -> None:
     """Register every fakeshop type, so each declared hop resolves its target type."""
     reload_all_project_schemas()
 
@@ -84,10 +87,10 @@ def _seed_library():
             )
 
 
-def _seed_specimens():
+def _seed_specimens() -> list[int]:
     """Parent specimens with four children each; return the pks of every fourth child."""
     moment = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
-    needle = []
+    needle: list[int] = []
     for parent_index in range(10):
         parent = None
         for offset in range(5):
@@ -107,10 +110,10 @@ def _seed_specimens():
 
 
 def _production_qs(
-    filterset_cls,
-    leaf,
-    root,
-    value=_NEEDLE,
+    filterset_cls: type[FilterSet],
+    leaf: str,
+    root: QuerySet[Model],
+    value: object = _NEEDLE,
 ):
     """Return the compiled ``.qs`` of a real fakeshop filter set for ``{leaf: value}``."""
     filterset_cls.get_filters()  # publish the expansion snapshot (as apply_* does).
@@ -121,7 +124,7 @@ def _production_qs(
     ).qs
 
 
-def _referenced_tables(qs):
+def _referenced_tables(qs: QuerySet[Model]):
     """The tables the outer statement reads: aliases the SQL references.
 
     A join Django set up and then trimmed (resolving an ``OuterRef`` on a
@@ -134,13 +137,15 @@ def _referenced_tables(qs):
     }
 
 
-def _top_actual_rows(qs):
+def _top_actual_rows(qs: QuerySet[Model]):
     """Run ``EXPLAIN (ANALYZE, BUFFERS)`` on ``qs``'s exact statement; return the plan and top rows."""
     compiled_sql, compiled_params = qs.query.get_compiler(using=qs.db).as_sql()
     with db_connection.cursor() as cursor:
         cursor.execute("EXPLAIN (ANALYZE, BUFFERS) " + compiled_sql, compiled_params)
         plan = "\n".join(row[0] for row in cursor.fetchall())
-    return plan, int(re.search(r"actual time=[\d.]+\.\.[\d.]+ rows=(\d+)", plan).group(1))
+    top_rows = re.search(r"actual time=[\d.]+\.\.[\d.]+ rows=(\d+)", plan)
+    assert top_rows is not None
+    return plan, int(top_rows.group(1))
 
 
 def test_routed_leaf_is_a_single_distinct_free_exists_on_the_outer_pk():
@@ -174,7 +179,7 @@ def test_walked_leaf_is_one_distinct_free_exists_per_declared_hop():
 
 
 @pytest.mark.parametrize("shape", ["routed", "walked"])
-def test_explain_analyze_buffers_shows_no_outer_fan_out(shape):
+def test_explain_analyze_buffers_shows_no_outer_fan_out(shape: str):
     """EXPLAIN(ANALYZE, BUFFERS) executes each emitted query with no outer multiplication.
 
     The top plan node's ACTUAL row count equals both the production result count

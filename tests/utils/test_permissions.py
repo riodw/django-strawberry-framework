@@ -9,10 +9,14 @@ Channels scope adapters and hostile ``info.context`` reads have no HTTP mount
 from collections.abc import Mapping
 
 import pytest
+import pytest_django
 import strawberry
+from django.db.models import Model
 from django.http import HttpRequest
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.sets_mixins import ActiveInputPermissionMixin
 from django_strawberry_framework.utils.permissions import (
     ChannelsRequestAdapter,
     _channels_request_adapter,
@@ -38,12 +42,12 @@ from django_strawberry_framework.utils.querysets import SyncMisuseError
 
 
 class _Ctx:
-    def __init__(self, request):
+    def __init__(self, request: object):
         self.request = request
 
 
 @pytest.mark.parametrize("family_label", ["FilterSet", "OrderSet"])
-def test_request_from_info_resolves_and_names_family(family_label):
+def test_request_from_info_resolves_and_names_family(family_label: str):
     """Every ordinary Django request context resolves; bad shapes name the family."""
     request = HttpRequest()
     info_with_request = type("Info", (), {"context": _Ctx(request)})()
@@ -72,23 +76,29 @@ def test_request_from_info_resolves_and_names_family(family_label):
 
 
 class _FakeConsumer:
-    def __init__(self, scope):
+    def __init__(self, scope: object):
         self.scope = scope
 
 
 class _FakeChannelsRequest:
     """The ``ChannelsRequest`` duck shape: ``consumer`` + ``body`` + request attrs."""
 
-    def __init__(self, scope):
+    def __init__(self, scope: object):
         self.consumer = _FakeConsumer(scope)
         self.body = b'{"query": "{ ping }"}'
         self.method = "POST"
         self.headers = {"content-type": "application/json"}
 
 
-def _channels_info(scope):
-    context = {"request": _FakeChannelsRequest(scope), "response": object()}
-    return type("Info", (), {"context": context})()
+class _FakeInfo:
+    """The ``info`` duck shape ``request_from_info`` reads: only ``context``."""
+
+    def __init__(self, context: dict[str, object]):
+        self.context = context
+
+
+def _channels_info(scope: object) -> _FakeInfo:
+    return _FakeInfo({"request": _FakeChannelsRequest(scope), "response": object()})
 
 
 def test_channels_context_resolves_to_a_wrapping_adapter():
@@ -96,6 +106,7 @@ def test_channels_context_resolves_to_a_wrapping_adapter():
     user, session = object(), object()
     scope = {"user": user, "session": session, "type": "http"}
     adapter = request_from_info(_channels_info(scope), family_label="FilterSet")
+    assert isinstance(adapter, ChannelsRequestAdapter)
     assert adapter.user is user
     assert adapter.session is session
     assert adapter.scope is scope
@@ -106,7 +117,9 @@ def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request():
     scope = {"user": object()}
     info = _channels_info(scope)
     adapter = request_from_info(info, family_label="OrderSet")
+    assert isinstance(adapter, ChannelsRequestAdapter)
     wrapped = info.context["request"]
+    assert isinstance(wrapped, _FakeChannelsRequest)
     assert adapter.method == "POST"
     assert adapter.headers is wrapped.headers
     assert adapter.consumer is wrapped.consumer
@@ -119,6 +132,7 @@ def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request():
 def test_channels_adapter_scope_fields_default_to_none_when_middleware_absent():
     """No ``AuthMiddlewareStack`` in the stack: ``.user`` / ``.session`` are ``None``, not errors."""
     adapter = request_from_info(_channels_info({"type": "http"}), family_label="FilterSet")
+    assert isinstance(adapter, ChannelsRequestAdapter)
     assert adapter.user is None
     assert adapter.session is None
 
@@ -131,7 +145,7 @@ def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attrib
     seen = {}
 
     class _Gate:
-        def check_name_permission(self, request):
+        def check_name_permission(self, request: ChannelsRequestAdapter):
             seen["user"] = request.user  # scope-backed
             seen["method"] = request.method  # delegated to the wrapped request
 
@@ -148,7 +162,9 @@ def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attrib
         {},
     ],
 )
-def test_non_channels_mapping_shapes_still_raise_the_family_labelled_error(context):
+def test_non_channels_mapping_shapes_still_raise_the_family_labelled_error(
+    context: dict[str, object],
+):
     """Mapping contexts that are not Channels-shaped keep the final ``ConfigurationError``."""
     info = type("Info", (), {"context": context})()
     with pytest.raises(ConfigurationError, match="FilterSet could not resolve"):
@@ -173,15 +189,14 @@ def test_non_mapping_scope_is_not_recognized_as_channels():
 class _FakeWSConsumer:
     """The ``GraphQLWSConsumer`` duck shape: the consumer is the request."""
 
-    def __init__(self, scope):
+    def __init__(self, scope: object):
         self.scope = scope
         self.channel_name = "specific..inmemory!probe"
 
 
-def _channels_ws_info(scope):
+def _channels_ws_info(scope: object) -> _FakeInfo:
     consumer = _FakeWSConsumer(scope)
-    context = {"request": consumer, "ws": consumer}
-    return type("Info", (), {"context": context})()
+    return _FakeInfo({"request": consumer, "ws": consumer})
 
 
 def test_channels_websocket_context_resolves_to_a_wrapping_adapter():
@@ -189,6 +204,7 @@ def test_channels_websocket_context_resolves_to_a_wrapping_adapter():
     user, session = object(), object()
     scope = {"user": user, "session": session, "type": "websocket"}
     adapter = request_from_info(_channels_ws_info(scope), family_label="FilterSet")
+    assert isinstance(adapter, ChannelsRequestAdapter)
     assert adapter.user is user
     assert adapter.session is session
     assert adapter.scope is scope
@@ -201,6 +217,7 @@ def test_channels_websocket_scope_fields_default_to_none_when_middleware_absent(
         _channels_ws_info({"type": "websocket"}),
         family_label="OrderSet",
     )
+    assert isinstance(adapter, ChannelsRequestAdapter)
     assert adapter.user is None
     assert adapter.session is None
 
@@ -238,8 +255,9 @@ def test_hostile_direct_scope_and_context_mapping_reads_fail_closed():
         def scope(self):
             raise RuntimeError("direct scope exploded")
 
-    class _HostileContext(dict):
-        def __getitem__(self, key):
+    class _HostileContext(dict[str, object]):
+        @override
+        def __getitem__(self, key: str):
             raise RuntimeError("context mapping exploded")
 
     context = _HostileContext(request=object())
@@ -263,8 +281,9 @@ def test_hostile_attribute_context_request_read_fails_closed():
 def test_hostile_channels_scope_mapping_becomes_configuration_error_on_user_read():
     """A scope mapping that fails during lookup is typed at the adapter boundary."""
 
-    class _HostileScope(dict):
-        def __getitem__(self, key):
+    class _HostileScope(dict[str, object]):
+        @override
+        def __getitem__(self, key: str):
             raise RuntimeError("scope mapping exploded")
 
     adapter = ChannelsRequestAdapter(object(), _HostileScope())
@@ -275,7 +294,7 @@ def test_hostile_channels_scope_mapping_becomes_configuration_error_on_user_read
 def test_mapping_request_must_be_a_django_request_or_channels_context():
     """A mapping's arbitrary ``request`` value must not bypass request validation."""
 
-    class _Context(dict):
+    class _Context(dict[str, object]):
         pass
 
     info = type("Info", (), {"context": _Context(request=object())})()
@@ -340,7 +359,7 @@ def test_invoke_permission_method_fires_once_and_dedupes():
     calls: list[str] = []
 
     class _Bare:
-        def check_name_permission(self, request):
+        def check_name_permission(self, request: object):
             calls.append("name")
 
     fired: set[str] = set()
@@ -367,7 +386,7 @@ def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allo
     denied: list[str] = []
 
     class _Bare:
-        async def check_name_permission(self, request):
+        async def check_name_permission(self, request: object):
             # Would DENY, but as an ``async def`` it can never run under the sync
             # permission pass; the guard must reject the coroutine, not treat it as
             # a truthy success.
@@ -386,7 +405,7 @@ def test_invoke_permission_method_passes_a_normal_sync_return_through():
     fired: set[str] = set()
 
     class _Bare:
-        def check_name_permission(self, request):
+        def check_name_permission(self, request: object):
             return None
 
     # No raise, and the fire is recorded for the dedup set.
@@ -422,20 +441,23 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
         check_name_permission = "not-a-callable"
 
         @classmethod
-        def _permission_walk_gates(cls, input_value):
+        def _permission_walk_gates(cls, input_value: object):
             return ()
 
         @classmethod
-        def _active_permission_targets(cls, input_value):
+        def _active_permission_targets(
+            cls,
+            input_value: object,
+        ) -> tuple[list[str], list[tuple[str, object, object]]]:
             return ["name"], [("duck", _DuckRelated(), {"x": 1})]
 
         @staticmethod
         def _invoke_permission_method(
-            bare,
-            field_path,
-            request,
+            bare: object,
+            field_path: str,
+            request: object,
             *,
-            fired=None,
+            fired: set[str] | None = None,
         ):
             invoke_permission_method(bare, field_path, request, fired=fired)
 
@@ -444,11 +466,11 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
     # visible through instance attribute access.
     with pytest.raises(ConfigurationError, match="must be callable"):
         run_active_input_permission_checks(
-            _Set,
+            _as_permission_set(_Set),
             {"name": "x"},
             HttpRequest(),
             fired={},
-            bare=object.__new__(_Set),
+            bare=_as_bare(object.__new__(_Set)),
             target_attr="filterset",
             related_attr="related_filters",
         )
@@ -494,22 +516,36 @@ def test_invoke_permission_method_treats_a_none_slot_as_absent():
 # ---------------------------------------------------------------------------
 
 
+def _as_permission_set(cls: type[object]) -> type[ActiveInputPermissionMixin]:
+    """Hand a duck-typed set class to a permission walker that takes the facade mixin."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
+    # permission walkers type the parameter as type[ActiveInputPermissionMixin]
+    return cls  # pyright: ignore[reportReturnType]
+
+
+def _as_bare(obj: object) -> ActiveInputPermissionMixin:
+    """Hand a duck-typed bare instance to run_active_input_permission_checks."""
+    # basedpyright: a stand-in bare instance carrying only the slots the code under test reads;
+    # run_active_input_permission_checks types the parameter as ActiveInputPermissionMixin
+    return obj  # pyright: ignore[reportReturnType]
+
+
 class _Rel:
     """Duck-typed RelatedFilter/RelatedOrder: an ORM ``field_name`` + a target set."""
 
     def __init__(
         self,
-        field_name,
-        target,
+        field_name: object,
+        target: object,
         *,
-        target_attr,
+        target_attr: str,
     ):
         self.field_name = field_name
         setattr(self, target_attr, target)
 
 
-def _record_gate(store, label):
-    def _check(self, request):
+def _record_gate(store: list[str], label: str):
+    def _check(self: object, request: object):
         store.append(label)
 
     return _check
@@ -540,7 +576,7 @@ def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
         check_entries_permission = _record_gate(calls, "Item.entries")
 
     _fire_flat_relation_path_gates(
-        Item,
+        _as_permission_set(Item),
         "entries__property__category__name",
         HttpRequest(),
         fired={},
@@ -592,7 +628,7 @@ def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_l
             "dangling": _Rel("dangling", None, target_attr="filterset"),
         }
 
-    def _walk(path):
+    def _walk(path: str):
         hops, remainder = walk_declared_relation_path(
             Item,
             path,
@@ -633,7 +669,7 @@ def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name()
         check_visible_shelves_permission = _record_gate(calls, "Book.visible_shelves")
 
     _fire_flat_relation_path_gates(
-        Book,
+        _as_permission_set(Book),
         "shelves__code",
         HttpRequest(),
         fired={},
@@ -662,7 +698,7 @@ def test_fire_flat_relation_path_gates_fires_the_branch_gate_of_a_relation_key_l
         check_visible_shelves_permission = _record_gate(calls, "Book.visible_shelves")
 
     _fire_flat_relation_path_gates(
-        Book,
+        _as_permission_set(Book),
         "shelves",
         HttpRequest(),
         fired={},
@@ -687,7 +723,7 @@ def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
         check_key_permission = _record_gate(calls, "Milestone.key")
 
     class TargetVersion:
-        related_filters: dict = {}
+        related_filters: dict[str, object] = {}
 
     class Card:
         related_filters = {
@@ -705,7 +741,7 @@ def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
         check_milestone_permission = _record_gate(calls, "Card.milestone")
 
     _fire_flat_relation_path_gates(
-        Card,
+        _as_permission_set(Card),
         "target_version__milestone__key",
         HttpRequest(),
         fired={},
@@ -720,11 +756,11 @@ def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop():
     calls: list[str] = []
 
     class Item:
-        related_filters: dict = {}  # no ``author`` RelatedFilter declared
+        related_filters: dict[str, object] = {}  # no ``author`` RelatedFilter declared
         check_author_permission = _record_gate(calls, "Item.author")
 
     _fire_flat_relation_path_gates(
-        Item,
+        _as_permission_set(Item),
         "author__name",
         HttpRequest(),
         fired={},
@@ -751,7 +787,7 @@ def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
     fired: dict[type, set[str]] = {}
     # First the flat leaf...
     _fire_flat_relation_path_gates(
-        Item,
+        _as_permission_set(Item),
         "category__name",
         HttpRequest(),
         fired=fired,
@@ -760,7 +796,7 @@ def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
     )
     # ...then the same path again (as the nested twin would, sharing ``fired``).
     _fire_flat_relation_path_gates(
-        Item,
+        _as_permission_set(Item),
         "category__name",
         HttpRequest(),
         fired=fired,
@@ -787,7 +823,7 @@ def test_fire_flat_relation_path_gates_works_for_the_order_family():
         check_category_permission = _record_gate(calls, "ItemOrder.category")
 
     _fire_flat_relation_path_gates(
-        ItemOrder,
+        _as_permission_set(ItemOrder),
         "category__name",
         HttpRequest(),
         fired={},
@@ -815,7 +851,7 @@ def test_fire_flat_relation_path_gates_falls_back_to_declared_attribute_when_fie
         check_author_permission = _record_gate(calls, "BookOrder.author")
 
     _fire_flat_relation_path_gates(
-        BookOrder,
+        _as_permission_set(BookOrder),
         "author__name",
         HttpRequest(),
         fired={},
@@ -841,7 +877,7 @@ def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolv
         check_category_permission = _record_gate(calls, "Item.category")
 
     _fire_flat_relation_path_gates(
-        Item,
+        _as_permission_set(Item),
         "category__name",
         HttpRequest(),
         fired={},
@@ -857,11 +893,11 @@ def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf():
     calls: list[str] = []
 
     class Item:
-        related_filters: dict = {}
+        related_filters: dict[str, object] = {}
         check_name_permission = _record_gate(calls, "Item.name")
 
     _fire_flat_relation_path_gates(
-        Item,
+        _as_permission_set(Item),
         "name",
         HttpRequest(),
         fired={},
@@ -886,7 +922,7 @@ def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_str
 
     with pytest.raises(ConfigurationError, match="unreadable related branch"):
         _fire_flat_relation_path_gates(
-            _UnreadableSet,
+            _as_permission_set(_UnreadableSet),
             "category__name",
             HttpRequest(),
             fired={},
@@ -901,7 +937,7 @@ def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_str
         check_category_permission = _record_gate(calls, "_NonStringSet.category")
 
     _fire_flat_relation_path_gates(
-        _NonStringSet,
+        _as_permission_set(_NonStringSet),
         "category__name",
         HttpRequest(),
         fired={},
@@ -916,7 +952,8 @@ def test_related_permission_declarations_fail_closed_for_malformed_metadata():
     """Only a readable mapping declares related branches; absent means none, malformed raises."""
 
     class _HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "related_filters":
                 raise RuntimeError("related descriptor exploded")
             return super().__getattribute__(name)
@@ -930,16 +967,20 @@ def test_related_permission_declarations_fail_closed_for_malformed_metadata():
     class _InvalidSet:
         related_filters = []
 
-    class _UnreadableMapping(Mapping):
-        def __getitem__(self, key):
+    class _UnreadableMapping(Mapping[str, object]):
+        @override
+        def __getitem__(self, key: str):
             raise KeyError(key)
 
+        @override
         def __iter__(self):
             return iter(())
 
+        @override
         def __len__(self):
             return 0
 
+        @override
         def items(self):
             raise RuntimeError("items exploded")
 
@@ -967,11 +1008,11 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value,
-            request,
+            input_value: object,
+            request: object,
             *,
-            _fired=None,
-            _depth=0,
+            _fired: dict[type[object], set[str]] | None = None,
+            _depth: int = 0,
         ):
             (_fired if _fired is not None else {}).setdefault(cls, set())
             calls.append(f"child._run@{_depth}")
@@ -980,11 +1021,14 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
 
     class _Parent:
         @classmethod
-        def _permission_walk_gates(cls, input_value):
+        def _permission_walk_gates(cls, input_value: object):
             return ()
 
         @classmethod
-        def _active_permission_targets(cls, input_value):
+        def _active_permission_targets(
+            cls,
+            input_value: object,
+        ) -> tuple[list[str], list[tuple[str, object, object]]]:
             # The fused single-pass contract ``run_active_input_permission_checks``
             # consumes: one call yields BOTH the per-field gate
             # paths (repeated ``name`` -> must dedup) and the related branches.
@@ -992,28 +1036,28 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
 
         @staticmethod
         def _invoke_permission_method(
-            bare,
-            field_path,
-            request,
+            bare: object,
+            field_path: str,
+            request: object,
             *,
-            fired=None,
+            fired: set[str] | None = None,
         ):
             invoke_permission_method(bare, field_path, request, fired=fired)
 
-        def check_name_permission(self, request):
+        def check_name_permission(self, request: object):
             calls.append("parent.name")
 
-        def check_child_permission(self, request):
+        def check_child_permission(self, request: object):
             calls.append("parent.child")
 
     fired: dict[type, set[str]] = {}
     bare = object.__new__(_Parent)
     run_active_input_permission_checks(
-        _Parent,
+        _as_permission_set(_Parent),
         {"name": "v", "child": {"x": 1}},
         HttpRequest(),
         fired=fired,
-        bare=bare,
+        bare=_as_bare(bare),
         target_attr="orderset",
         related_attr="related_orders",
     )
@@ -1029,7 +1073,14 @@ def test_active_related_branches_empty_when_no_related_collection():
     class _NoRel:
         pass
 
-    assert active_related_branches(_NoRel, {"a": 1}, related_attr="related_orders") == []
+    assert (
+        active_related_branches(
+            _as_permission_set(_NoRel),
+            {"a": 1},
+            related_attr="related_orders",
+        )
+        == []
+    )
 
 
 def test_run_active_input_permission_checks_caps_related_recursion():
@@ -1045,40 +1096,43 @@ def test_run_active_input_permission_checks_caps_related_recursion():
         _MAX_LOGIC_DEPTH = 2
 
         @classmethod
-        def _permission_walk_gates(cls, input_value):
+        def _permission_walk_gates(cls, input_value: object):
             return ()
 
         @classmethod
-        def _active_permission_targets(cls, input_value):
+        def _active_permission_targets(
+            cls,
+            input_value: object,
+        ) -> tuple[list[str], list[tuple[str, object, object]]]:
             # Always yields a related branch pointing back at THIS class -- the
             # runtime shape of ``CardFilter.dependencies`` -> ``CardFilter``.
             return [], [("child", _rel, {"x": 1})]
 
         @staticmethod
         def _invoke_permission_method(
-            bare,
-            field_path,
-            request,
+            bare: object,
+            field_path: str,
+            request: object,
             *,
-            fired=None,
+            fired: set[str] | None = None,
         ):
             pass
 
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value,
-            request,
+            input_value: object,
+            request: object,
             *,
-            _fired=None,
-            _depth=0,
+            _fired: dict[type[object], set[str]] | None = None,
+            _depth: int = 0,
         ):
             run_active_input_permission_checks(
-                cls,
+                _as_permission_set(cls),
                 input_value,
                 request,
                 fired=_fired if _fired is not None else {},
-                bare=object.__new__(cls),
+                bare=_as_bare(object.__new__(cls)),
                 target_attr="child_set",
                 related_attr="related",
                 depth=_depth,
@@ -1104,7 +1158,7 @@ def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf
         related_orders = {"shelf": object()}
 
     paths, branches = active_permission_targets(
-        _Set,
+        _as_permission_set(_Set),
         {"title": "asc", "shelf": {"code": "x"}, "and_": [{"title": "x"}]},
         field_specs={},
         related_attr="related_orders",
@@ -1123,7 +1177,9 @@ def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf
 # ---------------------------------------------------------------------------
 
 
-def test_auth_aliases_for_permission_classes_gates_alias_resolution(monkeypatch):
+def test_auth_aliases_for_permission_classes_gates_alias_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The explicit no-permissions opt-out grants no auth-alias access."""
     calls = []
 
@@ -1157,7 +1213,8 @@ def test_related_depth_error_survives_hostile_child_qualname():
     """The depth-limit error is raised even when the child set's own name cannot be read."""
 
     class _HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__qualname__":
                 raise RuntimeError("qualname exploded")
             return super().__getattribute__(name)
@@ -1168,11 +1225,11 @@ def test_related_depth_error_survives_hostile_child_qualname():
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value,
-            request,
+            input_value: object,
+            request: object,
             *,
-            _fired,
-            _depth,
+            _fired: dict[type[object], set[str]] | None,
+            _depth: int,
         ):
             raise AssertionError("depth gate should fire before recursion")
 
@@ -1180,20 +1237,23 @@ def test_related_depth_error_survives_hostile_child_qualname():
 
     class _Parent:
         @classmethod
-        def _permission_walk_gates(cls, input_value):
+        def _permission_walk_gates(cls, input_value: object):
             return ()
 
         @classmethod
-        def _active_permission_targets(cls, input_value):
+        def _active_permission_targets(
+            cls,
+            input_value: object,
+        ) -> tuple[list[str], list[tuple[str, object, object]]]:
             return [], [("child", related, input_value)]
 
     with pytest.raises(ConfigurationError, match="nesting exceeded"):
         run_active_input_permission_checks(
-            _Parent,
+            _as_permission_set(_Parent),
             {"child": {}},
             HttpRequest(),
             fired={},
-            bare=object(),
+            bare=_as_bare(object()),
             target_attr="child_set",
             related_attr="related",
         )
@@ -1206,11 +1266,11 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
         @classmethod
         def _run_permission_checks(
             cls,
-            input_value,
-            request,
+            input_value: object,
+            request: object,
             *,
-            _fired,
-            _depth,
+            _fired: dict[type[object], set[str]] | None,
+            _depth: int,
         ):
             raise AssertionError("depth gate should fire before recursion")
 
@@ -1218,11 +1278,14 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
 
     class _Parent:
         @classmethod
-        def _permission_walk_gates(cls, input_value):
+        def _permission_walk_gates(cls, input_value: object):
             return ()
 
         @classmethod
-        def _active_permission_targets(cls, input_value):
+        def _active_permission_targets(
+            cls,
+            input_value: object,
+        ) -> tuple[list[str], list[tuple[str, object, object]]]:
             return [], [("child", related, input_value)]
 
     # At depth=8, next_depth=9 > DEFAULT_SET_INPUT_TRAVERSAL_DEPTH (8), raising error
@@ -1231,11 +1294,11 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
         match="nesting exceeded the maximum traversal depth \\(8\\)",
     ):
         run_active_input_permission_checks(
-            _Parent,
+            _as_permission_set(_Parent),
             {"child": {}},
             HttpRequest(),
             fired={},
-            bare=object(),
+            bare=_as_bare(object()),
             target_attr="child_set",
             related_attr="related",
             depth=8,
@@ -1251,7 +1314,9 @@ def test_resolve_auth_aliases_returns_the_default_alias_by_default():
 
 
 @pytest.mark.django_db
-def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(settings):
+def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(
+    settings: pytest_django.Settings,
+):
     """The auth alias follows the router's read answer for the auth models."""
     from django.contrib.auth import get_user_model
 
@@ -1260,14 +1325,14 @@ def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(settings):
     auth_app_label = get_user_model()._meta.app_label
 
     class _AuthToShardRouter:
-        def db_for_read(self, model, **hints):
+        def db_for_read(self, model: type[Model], **hints: object):
             # Route the auth app (and its perm/contenttype companions) to a
             # non-default alias; everything else keeps the default.
             if model._meta.app_label in {auth_app_label, "auth", "contenttypes"}:
                 return "shard_b"
             return None
 
-        def db_for_write(self, model, **hints):
+        def db_for_write(self, model: type[Model], **hints: object):
             return None
 
     settings.DATABASE_ROUTERS = [_AuthToShardRouter()]
@@ -1279,7 +1344,9 @@ def test_resolve_auth_aliases_skips_uninstalled_models():
     from django_strawberry_framework.utils.permissions import _safe_get_model
 
     assert _safe_get_model("nonexistent_app", "Nope") is None
-    assert _safe_get_model(None, None) is None
+    # basedpyright: the None app label and model name are the hostile input under test;
+    # _safe_get_model types both parameters as str
+    assert _safe_get_model(None, None) is None  # pyright: ignore[reportArgumentType]
 
 
 def test_channels_request_in_object_context_is_adapted_to_channels_request_adapter():
@@ -1290,11 +1357,11 @@ def test_channels_request_in_object_context_is_adapted_to_channels_request_adapt
     )
 
     class _FakeConsumer:
-        def __init__(self, scope):
+        def __init__(self, scope: object):
             self.scope = scope
 
     class _FakeChannelsRequest:
-        def __init__(self, scope):
+        def __init__(self, scope: object):
             self.consumer = _FakeConsumer(scope)
             self.method = "POST"
 
@@ -1319,7 +1386,7 @@ def test_bare_channels_consumer_in_object_context_is_adapted():
     )
 
     class _FakeWSConsumer:
-        def __init__(self, scope):
+        def __init__(self, scope: object):
             self.scope = scope
             self.channel_name = "specific..inmemory!ws"
 
@@ -1345,31 +1412,34 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
 
     class _SampleFilter:
         @classmethod
-        def _permission_walk_gates(cls, input_value):
+        def _permission_walk_gates(cls, input_value: object):
             return ()
 
         @classmethod
-        def _active_permission_targets(cls, input_value):
+        def _active_permission_targets(
+            cls,
+            input_value: object,
+        ) -> tuple[list[str], list[tuple[str, object, object]]]:
             return [], [("duck", _DuckRelatedObj(), {"sub": 1})]
 
         @staticmethod
         def _invoke_permission_method(
-            bare,
-            field_name,
-            request,
+            bare: object,
+            field_name: str,
+            request: object,
             *,
-            fired=None,
+            fired: set[str] | None = None,
         ):
             if fired is not None:
                 fired.add(f"check_{field_name}_permission")
 
     fired = {}
     run_active_input_permission_checks(
-        _SampleFilter,
+        _as_permission_set(_SampleFilter),
         {"duck": {"sub": 1}},
         object(),
         fired=fired,
-        bare=object(),
+        bare=_as_bare(object()),
         target_attr="filterset",
         related_attr="related_filters",
     )

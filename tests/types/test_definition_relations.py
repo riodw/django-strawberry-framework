@@ -30,6 +30,7 @@ import pytest
 import strawberry
 from apps.library.models import Book, Genre, Loan, Shelf
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -42,8 +43,15 @@ from django_strawberry_framework.types.definition import (
 from django_strawberry_framework.types.relay import _resolve_id_default
 
 
+def _as_django_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a plain origin class to the definition constructor that takes a ``DjangoType``."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # DjangoTypeDefinition types origin as type[DjangoType]
+    return cls  # pyright: ignore[reportReturnType]
+
+
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry):
+def _isolate_registry(isolate_global_registry: None) -> None:
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
@@ -168,7 +176,7 @@ def test_related_target_for_returns_none_when_target_unregistered():
     assert definition.related_target_for("shelf") is None
 
 
-def _malformed_definition(*, origin=object, model=Book, name=None):
+def _malformed_definition(*, origin: type = object, model: object = Book, name: object = None):
     """Build a directly constructed definition carrying malformed metadata.
 
     The constructor takes eleven arguments of which only three vary across
@@ -177,8 +185,10 @@ def _malformed_definition(*, origin=object, model=Book, name=None):
     """
     return DjangoTypeDefinition(
         origin=origin,
-        model=model,
-        name=name,
+        # basedpyright: the malformed model and name callers pass are the hostile input under test;
+        # DjangoTypeDefinition types them as type[Model] and str | None
+        model=model,  # pyright: ignore[reportArgumentType]
+        name=name,  # pyright: ignore[reportArgumentType]
         description=None,
         fields_spec=None,
         exclude_spec=None,
@@ -193,7 +203,8 @@ def test_graphql_type_name_wraps_unreadable_origin_and_rejects_empty_name():
     """An unreadable origin name and an empty ``name`` are both typed failures."""
 
     class _HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__name__":
                 raise RuntimeError("name exploded")
             return super().__getattribute__(name)
@@ -207,7 +218,9 @@ def test_graphql_type_name_wraps_unreadable_origin_and_rejects_empty_name():
         _ = _malformed_definition(name="").graphql_type_name
 
 
-def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(monkeypatch):
+def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Every unreadable step of the target walk degrades to ``None``, never an exception."""
 
     class _UnreadableRelationFlag:
@@ -222,10 +235,19 @@ def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(mo
         def related_model(self):
             raise RuntimeError("target exploded")
 
+    def _exploding_field(name: str) -> object:
+        raise RuntimeError("field")
+
+    def _unreadable_relation_flag(name: str) -> object:
+        return _UnreadableRelationFlag()
+
+    def _unreadable_target(name: str) -> object:
+        return _UnreadableTarget()
+
     cases = [
-        SimpleNamespace(get_field=lambda name: (_ for _ in ()).throw(RuntimeError("field"))),
-        SimpleNamespace(get_field=lambda name: _UnreadableRelationFlag()),
-        SimpleNamespace(get_field=lambda name: _UnreadableTarget()),
+        SimpleNamespace(get_field=_exploding_field),
+        SimpleNamespace(get_field=_unreadable_relation_flag),
+        SimpleNamespace(get_field=_unreadable_target),
     ]
     for meta in cases:
         definition = _malformed_definition(model=SimpleNamespace(_meta=meta))
@@ -233,19 +255,29 @@ def test_related_target_lookup_degrades_malformed_model_and_relation_metadata(mo
 
     target = object()
     field = SimpleNamespace(is_relation=True, related_model=target)
+
+    def _relation_field(name: str) -> object:
+        return field
+
+    def _exploding_get(model: object) -> object:
+        raise RuntimeError
+
+    def _exploding_get_definition(type_cls: object) -> object:
+        raise RuntimeError
+
     definition = _malformed_definition(
-        model=SimpleNamespace(_meta=SimpleNamespace(get_field=lambda name: field)),
+        model=SimpleNamespace(_meta=SimpleNamespace(get_field=_relation_field)),
     )
-    monkeypatch.setattr(registry, "get", lambda model: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(registry, "get", _exploding_get)
     assert definition.related_target_for("relation") is None
 
     target_type = object()
-    monkeypatch.setattr(registry, "get", lambda model: target_type)
-    monkeypatch.setattr(
-        registry,
-        "get_definition",
-        lambda type_cls: (_ for _ in ()).throw(RuntimeError()),
-    )
+
+    def _target_type_get(model: object) -> object:
+        return target_type
+
+    monkeypatch.setattr(registry, "get", _target_type_get)
+    monkeypatch.setattr(registry, "get_definition", _exploding_get_definition)
     assert definition.related_target_for("relation") is None
 
 
@@ -253,7 +285,8 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
     """Unreadable ``__mro__`` / ``__dict__`` metadata counts as a custom resolver."""
 
     class _HostileMroMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__mro__":
                 raise RuntimeError("mro exploded")
             return super().__getattribute__(name)
@@ -262,7 +295,8 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
         pass
 
     class _HostileDictMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__dict__":
                 raise RuntimeError("dict exploded")
             return super().__getattribute__(name)
@@ -275,7 +309,8 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
             raise RuntimeError("mro iteration exploded")
 
     class _UnreadableMroMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__mro__":
                 return _UnreadableMro()
             return super().__getattribute__(name)
@@ -285,13 +320,17 @@ def test_custom_id_detection_fails_closed_for_hostile_class_metadata():
 
     class _HostileClassProperty:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("class exploded")
 
     assert origin_has_custom_id_resolver(_HostileMro, "id") is True
     assert origin_has_custom_id_resolver(_HostileDict, "id") is True
     assert origin_has_custom_id_resolver(_UnreadableMroOrigin, "id") is True
-    assert origin_has_custom_id_resolver(_HostileClassProperty(), "id") is True
+    # basedpyright: the object whose __class__ raises is the hostile input under test;
+    # origin_has_custom_id_resolver types the parameter as type[object]
+    assert origin_has_custom_id_resolver(_HostileClassProperty(), "id") is True  # pyright: ignore[reportArgumentType]
 
 
 def test_custom_id_detection_fails_closed_for_hostile_relay_resolver():
@@ -299,12 +338,15 @@ def test_custom_id_detection_fails_closed_for_hostile_relay_resolver():
 
     class _RaisingNode(relay.Node):
         @classmethod
+        @override
         def resolve_id_attr(cls):
             raise RuntimeError("resolver exploded")
 
     class _NonStringNode(relay.Node):
         @classmethod
-        def resolve_id_attr(cls):
+        @override
+        # basedpyright: deliberately a non-str id attribute, the hook result the resolver check refuses
+        def resolve_id_attr(cls):  # pyright: ignore[reportIncompatibleMethodOverride]
             return 123
 
     assert origin_has_custom_id_resolver(_RaisingNode, "id") is True
@@ -318,6 +360,8 @@ def test_related_target_for_caches_resolved_pair_after_finalize():
         class Meta:
             model = Shelf
             fields = ("id", "code")
+
+    assert registry.get(Shelf) is ShelfType
 
     class BookType(DjangoType):
         class Meta:
@@ -345,7 +389,7 @@ def test_has_custom_id_resolver_for_caches_mro_result():
         pass
 
     definition = DjangoTypeDefinition(
-        origin=BookType,
+        origin=_as_django_type(BookType),
         model=Book,
         name=None,
         description=None,
@@ -369,7 +413,7 @@ def test_has_custom_id_resolver_for_ignores_framework_relay_default():
         resolve_id = classmethod(_resolve_id_default)
 
     definition = DjangoTypeDefinition(
-        origin=BookType,
+        origin=_as_django_type(BookType),
         model=Book,
         name=None,
         description=None,
@@ -392,7 +436,7 @@ def test_has_custom_id_resolver_for_ignores_inherited_relay_default():
         pass
 
     definition = DjangoTypeDefinition(
-        origin=BookType,
+        origin=_as_django_type(BookType),
         model=Book,
         name=None,
         description=None,
@@ -420,7 +464,7 @@ def test_has_custom_id_resolver_for_detects_non_id_pk_resolver():
             return "custom"
 
     definition = DjangoTypeDefinition(
-        origin=BookType,
+        origin=_as_django_type(BookType),
         model=Book,
         name=None,
         description=None,
@@ -450,7 +494,7 @@ def test_has_custom_id_resolver_for_flags_non_pk_node_id():
         title: str
 
     definition = DjangoTypeDefinition(
-        origin=BookType,
+        origin=_as_django_type(BookType),
         model=Book,
         name=None,
         description=None,
@@ -475,7 +519,7 @@ def test_has_custom_id_resolver_for_allows_pk_node_id():
         title: str
 
     definition = DjangoTypeDefinition(
-        origin=BookType,
+        origin=_as_django_type(BookType),
         model=Book,
         name=None,
         description=None,
@@ -510,6 +554,8 @@ def test_related_target_for_resolves_to_primary_when_two_types_share_target_mode
         class Meta:
             model = Shelf
             fields = ("id", "code")
+
+    assert registry.get(Shelf) is ShelfType
 
     class AdminShelfType(DjangoType):
         class Meta:
@@ -566,9 +612,11 @@ def test_graphql_type_name_rejects_hostile_metadata():
     """A malformed definition name raises a typed error with safe diagnostics."""
 
     class HostileName:
+        @override
         def __str__(self):
             raise RuntimeError("str should not escape")
 
+        @override
         def __repr__(self):
             raise RuntimeError("repr should not escape")
 
@@ -590,8 +638,12 @@ def test_graphql_type_name_rejects_invalid_graphql_names():
 def test_custom_id_resolver_guards_reject_malformed_pk_names():
     """Unhashable primary-key names cannot escape the FK-id safety checks."""
     definition = _malformed_definition(origin=Book)
-    assert definition.has_custom_id_resolver_for([]) is False
-    assert origin_has_custom_id_resolver(Book, []) is False
+    # basedpyright: the unhashable pk name is the hostile input under test;
+    # has_custom_id_resolver_for types the parameter as str
+    assert definition.has_custom_id_resolver_for([]) is False  # pyright: ignore[reportArgumentType]
+    # basedpyright: the unhashable pk name is the hostile input under test;
+    # origin_has_custom_id_resolver types the parameter as str
+    assert origin_has_custom_id_resolver(Book, []) is False  # pyright: ignore[reportArgumentType]
 
 
 def test_framework_id_resolver_guard_survives_hostile_descriptor():

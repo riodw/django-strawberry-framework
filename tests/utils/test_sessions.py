@@ -19,6 +19,7 @@ from django.contrib.sessions.backends.signed_cookies import (
     SessionStore as SignedCookieSessionStore,
 )
 from django.test import override_settings
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.sessions import (
@@ -51,7 +52,7 @@ def test_session_store_class_honors_override_settings():
     assert resolved is SignedCookieSessionStore
 
 
-def test_session_store_class_resolves_custom_engine(monkeypatch):
+def test_session_store_class_resolves_custom_engine(monkeypatch: pytest.MonkeyPatch):
     """A custom session engine resolves identically via import_string."""
     module_name = "tests.utils._stub_custom_session_engine"
     module = types.ModuleType(module_name)
@@ -59,7 +60,9 @@ def test_session_store_class_resolves_custom_engine(monkeypatch):
     class CustomSessionStore:
         pass
 
-    module.SessionStore = CustomSessionStore
+    # basedpyright: ModuleType declares no settable attributes; the planted engine attribute is
+    # the input import_string reads
+    module.SessionStore = CustomSessionStore  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, module_name, module)
 
     with override_settings(SESSION_ENGINE=module_name):
@@ -67,7 +70,7 @@ def test_session_store_class_resolves_custom_engine(monkeypatch):
 
 
 def test_session_store_class_reports_an_unreadable_setting_as_configuration_error(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """A ``settings.SESSION_ENGINE`` read that RAISES becomes ``ConfigurationError``.
 
@@ -79,7 +82,7 @@ def test_session_store_class_reports_an_unreadable_setting_as_configuration_erro
     from django.conf import settings as django_settings
 
     class _RaisingSettings:
-        def __getattr__(self, name):
+        def __getattr__(self, name: str):
             raise KeyError(name)
 
     monkeypatch.setattr("django.conf.settings", _RaisingSettings())
@@ -115,7 +118,7 @@ def test_session_store_class_reports_an_unresolvable_engine_as_configuration_err
 
 
 def test_session_store_class_reports_a_storeless_engine_as_configuration_error(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """An engine module WITHOUT ``SessionStore`` is a ``ConfigurationError``, not an ImportError.
 
@@ -134,13 +137,15 @@ def test_session_store_class_reports_a_storeless_engine_as_configuration_error(
 class _FormatHostileEngine(str):
     """A deployment-supplied engine whose ``__format__`` raises while being interpolated."""
 
-    def __format__(self, spec):
+    @override
+    def __format__(self, spec: str):
         raise RuntimeError("hostile __format__")
 
 
 class _ReprHostileEngine(str):
     """A deployment-supplied engine whose ``__repr__`` raises while being rendered."""
 
+    @override
     def __repr__(self):
         raise RuntimeError("hostile __repr__")
 
@@ -203,7 +208,8 @@ def test_connection_actor_state_slots_prevent_arbitrary_attributes():
     """__slots__ enforces exact field shape and raises AttributeError on typos."""
     state = ConnectionActorState()
     with pytest.raises(AttributeError):
-        state.unknown_field = True
+        # basedpyright: the undeclared slot write is the rejected operation under test
+        state.unknown_field = True  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_connection_actor_state_get_or_create_reused_per_scope():

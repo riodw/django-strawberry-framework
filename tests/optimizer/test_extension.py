@@ -23,14 +23,28 @@ import uuid
 import warnings
 import weakref
 from collections import OrderedDict
+from collections.abc import Iterable, Iterator, Mapping
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, TypeGuard
 
 import pytest
+import pytest_django
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
+from django.db.models import Model, QuerySet
+from graphql import (
+    DefinitionNode,
+    DocumentNode,
+    FragmentDefinitionNode,
+    GraphQLObjectType,
+    GraphQLResolveInfo,
+    OperationDefinitionNode,
+)
 from strawberry import relay
 from strawberry.extensions.base_extension import SchemaExtension
+from strawberry.types import ExecutionResult
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoListField,
@@ -41,25 +55,55 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.optimizer import logger as optimizer_logger
+from django_strawberry_framework.optimizer._context import (
+    active_optimizer as _active_optimizer,
+)
 from django_strawberry_framework.optimizer.extension import (
-    _active_optimizer,
     _named_children,
     _node_children_with_runtime_prefix,
     _resolve_model_from_return_type,
     clear_document_key_cache,
 )
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import iter_subsystem_clears, registry
+from django_strawberry_framework.utils.querysets import _AsyncQuerySetRows
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.optimizer.selections import FragmentVisitKey
+
+
+def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a duck-typed info to an extension hook that takes a graphql-core resolve info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
+    # extension hooks type info as graphql-core's GraphQLResolveInfo
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _operation(doc: DocumentNode) -> OperationDefinitionNode:
+    """The document's first definition, proven to be its operation."""
+    operation = doc.definitions[0]
+    assert isinstance(operation, OperationDefinitionNode)
+    return operation
+
+
+def _fragments_by_name(definitions: Iterable[DefinitionNode]) -> dict[str, FragmentDefinitionNode]:
+    """``definitions`` proven to be fragment definitions, keyed by fragment name."""
+    fragments: dict[str, FragmentDefinitionNode] = {}
+    for definition in definitions:
+        assert isinstance(definition, FragmentDefinitionNode)
+        fragments[definition.name.value] = definition
+    return fragments
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
     registry.clear()
 
 
-def _force_unregister_after_finalize(type_cls):
+def _force_unregister_after_finalize(type_cls: type[DjangoType]):
     """Test-only helper: drop ``type_cls`` from a *finalized* registry.
 
     The schema-audit tests in this module build a Strawberry schema, then
@@ -109,6 +153,8 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -121,7 +167,9 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
         @strawberry.field
         def all_items(self) -> list[ItemType]:
             # Return the Manager itself, not ``Manager.all()``.
-            return Item.objects
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -148,6 +196,8 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -159,7 +209,9 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -195,6 +247,8 @@ def test_optimizer_elides_forward_fk_id_only_selection_plan_shape():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -204,7 +258,9 @@ def test_optimizer_elides_forward_fk_id_only_selection_plan_shape():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -243,6 +299,8 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -252,7 +310,9 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -296,6 +356,8 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_sha
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -305,7 +367,9 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_sha
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -351,8 +415,11 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
             return queryset
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -363,7 +430,9 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -383,7 +452,7 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
 
 
 @pytest.mark.django_db
-def test_optimizer_passes_through_unregistered_return_type(caplog):
+def test_optimizer_passes_through_unregistered_return_type(caplog: pytest.LogCaptureFixture):
     """If the return type isn't in the registry, the queryset is unchanged."""
     services.seed_data(1)
 
@@ -396,7 +465,9 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -444,6 +515,8 @@ def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -457,7 +530,9 @@ def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss():
         def all_items(self) -> list[ItemType]:
             qs = Item.objects.select_related("category").all()
             len(qs)
-            return qs
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return qs  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -483,12 +558,12 @@ def test_optimize_returns_same_instance_for_evaluated_queryset():
     qs = Category.objects.all()
     len(qs)
 
-    assert ext._optimize(qs, SimpleNamespace()) is qs
+    assert ext._optimize(qs, _as_resolve_info(SimpleNamespace())) is qs
     assert ext.cache_info().misses == 0
 
 
 @pytest.mark.django_db
-def test_apply_to_returns_a_combined_queryset_unplanned(caplog):
+def test_apply_to_returns_a_combined_queryset_unplanned(caplog: pytest.LogCaptureFixture):
     """A combined queryset is returned as-is before any plan is built.
 
     Django refuses ``only`` / ``select_related`` on a ``union`` result, so
@@ -501,13 +576,13 @@ def test_apply_to_returns_a_combined_queryset_unplanned(caplog):
     info = SimpleNamespace(field_name="allCategories", field_nodes=[object()])
     caplog.set_level("DEBUG", logger=optimizer_logger.name)
 
-    assert ext.apply_to(None, Category, qs, info) is qs
+    assert ext.apply_to(None, Category, qs, _as_resolve_info(info)) is qs
     assert ext.cache_info().misses == 0
     assert any("combined (union) queryset" in r.message for r in caplog.records)
 
 
 @pytest.mark.django_db
-def test_resolve_async_passes_through_evaluated_queryset(monkeypatch):
+def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.MonkeyPatch):
     """Async mirror: the await -> ``_optimize`` wrapper inherits the G1 guard.
 
     The async path (``_async_optimize`` awaits the resolver then calls
@@ -526,12 +601,12 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch):
     qs = Category.objects.all()
     len(qs)  # evaluate synchronously, before the await -> no DB access in the coroutine
 
-    def _tripwire(info):
+    def _tripwire(info: object):
         raise AssertionError("guard must short-circuit before return-type resolution")
 
     monkeypatch.setattr(extension_module, "_resolve_model_from_return_type", _tripwire)
 
-    async def fake_next(root, info, *args, **kwargs):
+    async def fake_next(root: object, info: object, *args: object, **kwargs: object):
         return qs
 
     info = SimpleNamespace(
@@ -541,7 +616,7 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch):
         field_name="allCategories",
         field_nodes=[],
     )
-    result = ext.resolve(fake_next, None, info)
+    result = ext.resolve(fake_next, None, _as_resolve_info(info))
     assert asyncio.iscoroutine(result)
     resolved = asyncio.run(result)
     assert resolved is qs  # same instance, no clone
@@ -574,13 +649,14 @@ def test_resolve_model_from_return_type_unwraps_nested_wrappers():
 
     # Simulate the graphql-core wrapper stack the resolve hook sees.
     inner = schema._schema.type_map["CategoryType"]
+    assert isinstance(inner, GraphQLObjectType)
     wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
 
     info = SimpleNamespace(
         return_type=wrapped,
         schema=schema._schema,
     )
-    result = _resolve_model_from_return_type(info)
+    result = _resolve_model_from_return_type(_as_resolve_info(info))
     assert result is not None
     assert result.model is Category
     assert result.origin is CategoryType
@@ -592,7 +668,7 @@ def test_resolve_model_returns_none_for_non_object_leaf():
         return_type=SimpleNamespace(),  # no of_type, no name
         schema=None,
     )
-    assert _resolve_model_from_return_type(info) is None
+    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
 
 
 def test_resolve_model_returns_none_when_no_strawberry_schema():
@@ -601,7 +677,7 @@ def test_resolve_model_returns_none_when_no_strawberry_schema():
         return_type=SimpleNamespace(name="SomeType"),
         schema=SimpleNamespace(),  # no _strawberry_schema
     )
-    assert _resolve_model_from_return_type(info) is None
+    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
 
 
 def test_resolve_model_returns_none_when_type_not_in_schema():
@@ -625,19 +701,21 @@ def test_resolve_model_returns_none_when_type_not_in_schema():
         return_type=SimpleNamespace(name="NonExistentType"),
         schema=schema._schema,
     )
-    assert _resolve_model_from_return_type(info) is None
+    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
 
 
 def test_resolve_model_returns_none_when_definition_has_no_origin():
     """When the schema's type definition lacks an ``origin`` (e.g. a scalar / interface), returns None."""
-    fake_strawberry_schema = SimpleNamespace(
-        get_type_by_name=lambda _name: SimpleNamespace(),  # definition without `origin`
-    )
+
+    def _definition_without_origin(_name: str) -> SimpleNamespace:
+        return SimpleNamespace()
+
+    fake_strawberry_schema = SimpleNamespace(get_type_by_name=_definition_without_origin)
     info = SimpleNamespace(
         return_type=SimpleNamespace(name="SomeType"),
         schema=SimpleNamespace(_strawberry_schema=fake_strawberry_schema),
     )
-    assert _resolve_model_from_return_type(info) is None
+    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -654,18 +732,20 @@ def test_resolve_passes_through_non_root_resolvers():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     # Simulate a non-root resolver: path.prev is not None.
     qs = Category.objects.all()
     called_with = {}
 
-    def fake_next(root, info, *args, **kwargs):
+    def fake_next(root: object, info: object, *args: object, **kwargs: object):
         called_with["fired"] = True
         return qs
 
     info = SimpleNamespace(
         path=SimpleNamespace(prev=SimpleNamespace(key="parent", prev=None, typename="Query")),
     )
-    result = ext.resolve(fake_next, None, info)
+    result = ext.resolve(fake_next, None, _as_resolve_info(info))
     # _next was called and result passed through unchanged (no _optimize).
     assert called_with["fired"] is True
     assert result is qs
@@ -687,9 +767,11 @@ def test_resolve_handles_async_root_resolver():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     qs = Category.objects.all()
 
-    async def fake_next(root, info, *args, **kwargs):
+    async def fake_next(root: object, info: object, *args: object, **kwargs: object):
         return qs
 
     # Root resolver: path.prev is None.
@@ -700,7 +782,7 @@ def test_resolve_handles_async_root_resolver():
         field_name="allCategories",
         field_nodes=[],
     )
-    result = ext.resolve(fake_next, None, info)
+    result = ext.resolve(fake_next, None, _as_resolve_info(info))
     # result should be a coroutine (async wrapper)
     assert asyncio.iscoroutine(result)
     # Await it - _optimize will pass through because return_type has no name.
@@ -714,7 +796,9 @@ def test_resolve_handles_async_root_resolver():
 
 
 @pytest.mark.django_db
-def test_optimize_handles_empty_field_nodes(django_assert_num_queries):
+def test_optimize_handles_empty_field_nodes(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """If field_nodes is empty, _optimize returns the queryset unchanged."""
     services.seed_data(1)
 
@@ -727,7 +811,9 @@ def test_optimize_handles_empty_field_nodes(django_assert_num_queries):
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -743,13 +829,14 @@ def test_optimize_handles_empty_field_nodes(django_assert_num_queries):
         field_nodes=[],
     )
     qs = Category.objects.all()
-    result = ext._optimize(qs, info)
+    result = ext._optimize(qs, _as_resolve_info(info))
     # Should return the queryset unchanged (no field_nodes to plan from).
+    assert isinstance(result, QuerySet)
     assert result.query.select_related is False
 
 
 @pytest.mark.django_db
-def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
+def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch: pytest.MonkeyPatch):
     """If the walker produces an empty plan, _optimize returns the original queryset."""
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -765,16 +852,24 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    monkeypatch.setattr(
-        extension_module,
-        "plan_optimizations",
-        lambda selected_fields, model, info=None, *, source_type=None: OptimizationPlan(),
-    )
+
+    def _empty_plan(
+        selected_fields: object,
+        model: object,
+        info: object = None,
+        *,
+        source_type: object = None,
+    ) -> OptimizationPlan:
+        return OptimizationPlan()
+
+    monkeypatch.setattr(extension_module, "plan_optimizations", _empty_plan)
     ctx = SimpleNamespace()
     result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
     assert result.errors is None
@@ -804,7 +899,9 @@ def test_on_execute_sets_and_resets_context_var():
 
 
 @pytest.mark.django_db
-def test_cache_differentiates_queries(django_assert_num_queries):
+def test_cache_differentiates_queries(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """B1: different queries produce different cache entries."""
     services.seed_data(1)
 
@@ -812,6 +909,8 @@ def test_cache_differentiates_queries(django_assert_num_queries):
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -824,7 +923,9 @@ def test_cache_differentiates_queries(django_assert_num_queries):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -845,6 +946,8 @@ def test_cache_differentiates_reachable_named_fragment_bodies():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -856,7 +959,9 @@ def test_cache_differentiates_reachable_named_fragment_bodies():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -883,7 +988,9 @@ def test_cache_differentiates_reachable_named_fragment_bodies():
 
 
 @pytest.mark.django_db
-def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
+def test_cache_differentiates_same_model_root_fields(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """B1/O4: root fields returning the same model do not share one cached plan."""
     services.seed_data(1)
 
@@ -891,6 +998,8 @@ def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
         class Meta:
             model = Item
             fields = ("id", "name")
+
+    assert registry.get(Item) is ItemType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -903,11 +1012,15 @@ def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
         @strawberry.field
         def featured_categories(self) -> list[CategoryType]:
-            return Category.objects.filter(is_private=False)
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.filter(is_private=False)  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -943,9 +1056,9 @@ def test_cache_key_includes_root_runtime_path_for_same_model_fields():
     )
 
     assert DjangoOptimizerExtension._build_cache_key(
-        info_a,
+        _as_resolve_info(info_a),
         Category,
-    ) != DjangoOptimizerExtension._build_cache_key(info_b, Category)
+    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_b), Category)
 
 
 def test_cache_key_differs_for_named_operations_in_same_document():
@@ -953,8 +1066,9 @@ def test_cache_key_differs_for_named_operations_in_same_document():
     from graphql import parse
 
     doc = parse("query A { allItems { name } } query B { allItems { category { name } } }")
-    operation_a = next(d for d in doc.definitions if getattr(d.name, "value", None) == "A")
-    operation_b = next(d for d in doc.definitions if getattr(d.name, "value", None) == "B")
+    operations = [d for d in doc.definitions if isinstance(d, OperationDefinitionNode)]
+    operation_a = next(d for d in operations if getattr(d.name, "value", None) == "A")
+    operation_b = next(d for d in operations if getattr(d.name, "value", None) == "B")
     info_a = SimpleNamespace(
         operation=operation_a,
         fragments={},
@@ -969,9 +1083,9 @@ def test_cache_key_differs_for_named_operations_in_same_document():
     )
 
     assert DjangoOptimizerExtension._build_cache_key(
-        info_a,
+        _as_resolve_info(info_a),
         Item,
-    ) != DjangoOptimizerExtension._build_cache_key(info_b, Item)
+    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_b), Item)
 
 
 def test_query_and_mutation_plans_coexist_distinct_keys():
@@ -1001,9 +1115,9 @@ def test_query_and_mutation_plans_coexist_distinct_keys():
     )
 
     assert DjangoOptimizerExtension._build_cache_key(
-        info_query,
+        _as_resolve_info(info_query),
         Item,
-    ) != DjangoOptimizerExtension._build_cache_key(info_mutation, Item)
+    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_mutation), Item)
 
 
 @pytest.mark.django_db
@@ -1027,6 +1141,8 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -1036,13 +1152,17 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     @strawberry.type
     class Mutation:
         @strawberry.mutation
         def touch_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -1069,11 +1189,12 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related():
     assert query_plan.only_fields != ()
 
 
-def test_cache_eviction_removes_old_entries(monkeypatch):
+def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch):
     """B1: the plan cache evicts least-recently-used entries when full."""
     from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     ext = DjangoOptimizerExtension()
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
@@ -1088,15 +1209,22 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
         )
 
     infos = [_cache_info_for(f"root{idx}") for idx in range(4)]
-    keys = [DjangoOptimizerExtension._build_cache_key(info, Category, None) for info in infos]
-    plans = [object() for _ in range(4)]
+    keys = [
+        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category, None)
+        for info in infos
+    ]
+    plans = [OptimizationPlan() for _ in range(4)]
     ext._plan_cache = OrderedDict(zip(keys, plans, strict=True))
 
-    assert ext._get_or_build_plan([], Category, infos[0], None) is plans[0]
+    assert ext._get_or_build_plan([], Category, _as_resolve_info(infos[0]), None) is plans[0]
 
     root4_info = _cache_info_for("root4")
-    root4_key = DjangoOptimizerExtension._build_cache_key(root4_info, Category, None)
-    ext._get_or_build_plan([], Category, root4_info, None)
+    root4_key = DjangoOptimizerExtension._build_cache_key(
+        _as_resolve_info(root4_info),
+        Category,
+        None,
+    )
+    ext._get_or_build_plan([], Category, _as_resolve_info(root4_info), None)
 
     assert keys[0] in ext._plan_cache
     assert keys[1] not in ext._plan_cache
@@ -1106,7 +1234,7 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
     assert ext.cache_info().size == 4
 
 
-def test_doc_key_cache_evicts_when_full(monkeypatch):
+def test_doc_key_cache_evicts_when_full(monkeypatch: pytest.MonkeyPatch):
     """B1: the cross-request document-key cache is a bounded LRU.
 
     ``_doc_cache_entry`` memoizes the printed operation-plus-fragments key AND
@@ -1123,7 +1251,7 @@ def test_doc_key_cache_evicts_when_full(monkeypatch):
     monkeypatch.setattr(extension_module, "_MAX_DOC_KEY_CACHE_SIZE", 2)
     monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
 
-    ops = [parse(f"query Q{i} {{ field{i} }}").definitions[0] for i in range(3)]
+    ops = [_operation(parse(f"query Q{i} {{ field{i} }}")) for i in range(3)]
     for op in ops:
         extension_module._doc_cache_entry(op, {})
 
@@ -1131,8 +1259,11 @@ def test_doc_key_cache_evicts_when_full(monkeypatch):
     # the two most-recent survive.
     assert len(extension_module._doc_key_cache) == 2
     cached_bodies = {body for (body, _name) in extension_module._doc_key_cache}
+    assert ops[0].loc is not None
     assert ops[0].loc.source.body not in cached_bodies
+    assert ops[1].loc is not None
     assert ops[1].loc.source.body in cached_bodies
+    assert ops[2].loc is not None
     assert ops[2].loc.source.body in cached_bodies
 
 
@@ -1157,7 +1288,9 @@ def test_cache_clear_makes_the_next_request_build_its_plan_again():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1173,14 +1306,14 @@ def test_cache_clear_makes_the_next_request_build_its_plan_again():
     assert ext.cache_info() == (0, 1, 1)
 
 
-def test_registry_clear_empties_the_document_key_cache(monkeypatch):
+def test_registry_clear_empties_the_document_key_cache(monkeypatch: pytest.MonkeyPatch):
     """The document-key memo is registered with ``registry.clear()`` and empties on it."""
     from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
 
     monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
-    extension_module._doc_cache_entry(parse("query Q { field }").definitions[0], {})
+    extension_module._doc_cache_entry(_operation(parse("query Q { field }")), {})
     assert len(extension_module._doc_key_cache) == 1
 
     assert clear_document_key_cache in iter_subsystem_clears()
@@ -1209,7 +1342,9 @@ def test_stash_union_skips_restash_when_subset():
     assert context.sentinels == frozenset({"a", "b", "c"})
 
 
-def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(monkeypatch):
+def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """B1: the per-execution memo reuses an uncacheable plan built earlier this execution.
 
     A nested fallback connection pipeline calls ``_get_or_build_plan`` once per
@@ -1228,11 +1363,11 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(monkeypatch)
     builds = {"count": 0}
 
     def _fake_plan_optimizations(
-        selections,
-        model,
+        selections: object,
+        model: type[Model],
         *,
-        info,
-        source_type,
+        info: object,
+        source_type: object,
     ):
         builds["count"] += 1
         return OptimizationPlan(prefetch_related=["items"], cacheable=False).finalize()
@@ -1251,8 +1386,8 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(monkeypatch)
     gen = ext.on_execute()
     next(gen)  # enter the lifecycle: installs the per-execution plan memo
     try:
-        first = ext._get_or_build_plan([], Item, info, None)
-        second = ext._get_or_build_plan([], Item, info, None)
+        first = ext._get_or_build_plan([], Item, _as_resolve_info(info), None)
+        second = ext._get_or_build_plan([], Item, _as_resolve_info(info), None)
     finally:
         with contextlib.suppress(StopIteration):
             next(gen)  # exit: resets the memo
@@ -1277,6 +1412,8 @@ def test_filter_vars_do_not_affect_cache():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -1288,7 +1425,9 @@ def test_filter_vars_do_not_affect_cache():
     class Query:
         @strawberry.field
         def all_items(self, limit: int = 10) -> list[ItemType]:
-            return Item.objects.all()[:limit]
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()[:limit]  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1311,6 +1450,8 @@ def test_cache_separates_operation_names_in_same_document():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -1322,7 +1463,9 @@ def test_cache_separates_operation_names_in_same_document():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1350,7 +1493,7 @@ def test_build_cache_key_is_stable_when_source_location_missing():
         path=None,
     )
 
-    key = DjangoOptimizerExtension._build_cache_key(info, Category)
+    key = DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
 
     assert key[2] is Category
     assert isinstance(key[3], tuple)
@@ -1396,12 +1539,15 @@ def test_walk_cache_relevant_vars_ignores_non_directive_objects():
     from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
 
     operation = parse("query Q($v: Boolean!) { items @skip(if: $v) { name } }").definitions[0]
+    assert isinstance(operation, OperationDefinitionNode)
     field = operation.selection_set.selections[0]
 
     directive_names: set[str] = set()
     pagination_names: set[str] = set()
     node = SimpleNamespace(directives=[object(), *field.directives], selection_set=None)
-    _walk_cache_relevant_vars(node, {}, set(), 0, directive_names, pagination_names)
+    # basedpyright: a stand-in node carrying only the slots the code under test reads;
+    # _walk_cache_relevant_vars types the parameter as Node
+    _walk_cache_relevant_vars(node, {}, set(), 0, directive_names, pagination_names)  # pyright: ignore[reportArgumentType]
     assert directive_names == {"v"}
 
 
@@ -1419,10 +1565,10 @@ def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_sprea
         "fragment F on Item { name @skip(if: $v) }",
     )
     operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    fragments = _fragments_by_name(doc.definitions[1:])
     directive_names: set[str] = set()
     pagination_names: set[str] = set()
-    visited: set[tuple[str, int]] = set()
+    visited: set[FragmentVisitKey] = set()
     _walk_cache_relevant_vars(operation, fragments, visited, 0, directive_names, pagination_names)
     assert directive_names == {"v"}
     # Fragment F was descended exactly once even though it was spread twice: both
@@ -1441,7 +1587,7 @@ def test_walk_cache_relevant_vars_handles_unresolved_fragment_name():
     operation = doc.definitions[0]
     directive_names: set[str] = set()
     pagination_names: set[str] = set()
-    visited: set[str] = set()
+    visited: set[FragmentVisitKey] = set()
     _walk_cache_relevant_vars(operation, {}, visited, 0, directive_names, pagination_names)
     assert directive_names == set()
     assert visited == set()
@@ -1492,11 +1638,11 @@ def test_directive_var_family_no_directives():
 
 
 def _key_for(
-    operation,
+    operation: object,
     *,
-    variable_values,
-    path_key,
-    model=Category,
+    variable_values: dict[str, object],
+    path_key: str,
+    model: type[Model] = Category,
 ):
     """Build a ``_build_cache_key`` tuple for ``operation`` at root ``path_key``.
 
@@ -1511,7 +1657,7 @@ def _key_for(
         variable_values=variable_values,
         path=SimpleNamespace(key=path_key, prev=None),
     )
-    return DjangoOptimizerExtension._build_cache_key(info, model)
+    return DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), model)
 
 
 def test_nested_pagination_variable_keys_cache():
@@ -1573,7 +1719,7 @@ def test_root_fragment_pagination_variable_shares_cache():
         "{ edges { node { name } } } }",
     )
     operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    fragments = _fragments_by_name(doc.definitions[1:])
     info_two = SimpleNamespace(
         operation=operation,
         fragments=fragments,
@@ -1587,9 +1733,9 @@ def test_root_fragment_pagination_variable_shares_cache():
         path=SimpleNamespace(key="someRootConnection", prev=None),
     )
     assert DjangoOptimizerExtension._build_cache_key(
-        info_two,
+        _as_resolve_info(info_two),
         Category,
-    ) == DjangoOptimizerExtension._build_cache_key(info_five, Category)
+    ) == DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_five), Category)
 
 
 def test_fragment_carried_nested_pagination_variable_collected():
@@ -1607,7 +1753,7 @@ def test_fragment_carried_nested_pagination_variable_collected():
         "{ edges { node { title } } } }",
     )
     operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    fragments = _fragments_by_name(doc.definitions[1:])
     info_two = SimpleNamespace(
         operation=operation,
         fragments=fragments,
@@ -1621,9 +1767,9 @@ def test_fragment_carried_nested_pagination_variable_collected():
         path=SimpleNamespace(key="parents", prev=None),
     )
     assert DjangoOptimizerExtension._build_cache_key(
-        info_two,
+        _as_resolve_info(info_two),
         Category,
-    ) != DjangoOptimizerExtension._build_cache_key(info_five, Category)
+    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_five), Category)
 
 
 def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
@@ -1650,7 +1796,7 @@ def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
     )
     for doc in (root_first, nested_first):
         operation = doc.definitions[0]
-        fragments = {d.name.value: d for d in doc.definitions[1:]}
+        fragments = _fragments_by_name(doc.definitions[1:])
         names = _collect_cache_var_families(operation, fragments)[1]
         assert names == frozenset({"n"})
 
@@ -1739,7 +1885,8 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class Opaque:
-        __hash__ = None
+        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     first = _hashable_variable_value(Opaque())
     second = _hashable_variable_value(Opaque())
@@ -1761,10 +1908,12 @@ def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class EqualityBomb:
+        @override
         def __hash__(self):
             return 1
 
-        def __eq__(self, _other):
+        @override
+        def __eq__(self, _other: object):
             raise RuntimeError("custom scalar equality must not run in cache lookup")
 
     first = _hashable_variable_value(EqualityBomb())
@@ -1779,14 +1928,14 @@ def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
         "query Q($value: Int!) { parents { child(first: $value) { value } } }",
     ).definitions[0]
 
-    def _key(value):
+    def _key(value: object):
         info = SimpleNamespace(
             operation=operation,
             fragments={},
             variable_values={"value": value},
             path=SimpleNamespace(key="parents", prev=None),
         )
-        return DjangoOptimizerExtension._build_cache_key(info, Category)
+        return DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
 
     assert _key(EqualityBomb()) != _key(EqualityBomb())
 
@@ -1834,7 +1983,8 @@ def test_library_owned_scalars_share_one_cache_identity_across_requests():
 
     # A SUBCLASS may override equality, so exact-type membership must exclude it.
     class SneakyDate(datetime.date):
-        def __eq__(self, _other):
+        @override
+        def __eq__(self, _other: object):
             raise RuntimeError("subclass equality must not run in cache lookup")
 
         __hash__ = datetime.date.__hash__
@@ -1853,6 +2003,7 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class CancellingMeta(type):
+        @override
         def __hash__(cls):
             raise asyncio.CancelledError
 
@@ -1860,6 +2011,7 @@ def test_freezer_lets_cancellation_propagate_rather_than_caching_it():
         pass
 
     class InterruptingMeta(type):
+        @override
         def __hash__(cls):
             raise KeyboardInterrupt
 
@@ -1879,29 +2031,36 @@ def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class ExplodingHash:
+        @override
         def __hash__(self):
             raise RuntimeError("hash boom")
 
-    class ExplodingItems(dict):
+    class ExplodingItems(dict[str, object]):
+        @override
         def items(self):
             raise RuntimeError("items boom")
 
-    class ExplodingIterator(list):
+    class ExplodingIterator(list[object]):
+        @override
         def __iter__(self):
             raise RuntimeError("iter boom")
 
     class HostileRepr:
+        @override
         def __hash__(self):
             return 1
 
+        @override
         def __repr__(self):
             raise RuntimeError("repr boom")
 
     class UnhashableMetaclass(type):
-        __hash__ = None
+        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     class UnhashableType(metaclass=UnhashableMetaclass):
-        __hash__ = None
+        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
+        __hash__ = None  # pyright: ignore[reportAssignmentType]
 
     values = (
         ExplodingHash(),
@@ -1929,14 +2088,14 @@ def test_build_cache_key_tolerates_unhashable_pagination_variable():
         "query Q($x: [Int!]!) { parents { logs(after: $x) { value } } }",
     ).definitions[0]
 
-    def _key(values):
+    def _key(values: dict[str, object]):
         info = SimpleNamespace(
             operation=doc,
             fragments={},
             variable_values=values,
             path=SimpleNamespace(key="parents", prev=None),
         )
-        return DjangoOptimizerExtension._build_cache_key(info, Category)
+        return DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
 
     assert _key({"x": [1, 2, 3]}) != _key({"x": [4, 5]})
 
@@ -1950,12 +2109,12 @@ def test_build_cache_key_tolerates_unhashable_pagination_variable():
         variable_values={"x": {"start": "2020", "end": "2021"}},
         path=SimpleNamespace(key="parents", prev=None),
     )
-    dict_key = DjangoOptimizerExtension._build_cache_key(info2, Category)
+    dict_key = DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info2), Category)
     info2.variable_values = {"x": {"end": "2021", "start": "2020"}}
-    assert DjangoOptimizerExtension._build_cache_key(info2, Category) == dict_key
+    assert DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info2), Category) == dict_key
 
 
-def _categories_list_schema(ext):
+def _categories_list_schema(ext: DjangoOptimizerExtension):
     """Build a ``DjangoListField(CategoryType)`` root over the reverse FK ``Category.items``.
 
     With the optimizer installed the parent ``Category`` queryset is planned, so
@@ -2058,7 +2217,9 @@ def test_root_pagination_variable_one_plan_through_schema():
     class Query:
         @strawberry.field
         def all_categories(self, first: int = 10) -> list[CategoryType]:
-            return Category.objects.all()[:first]
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()[:first]  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -2072,7 +2233,9 @@ def test_root_pagination_variable_one_plan_through_schema():
 
 
 @pytest.mark.django_db
-def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkeypatch):
+def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The unified var-name AST walk runs once per operation, not per ``_build_cache_key``.
 
     Decision 7: nested fallback connections call ``_build_cache_key`` once per
@@ -2092,7 +2255,10 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkey
     calls = {"count": 0}
     real = extension_module._collect_cache_relevant_var_names
 
-    def _counting(operation, fragments):
+    def _counting(
+        operation: OperationDefinitionNode,
+        fragments: Mapping[str, FragmentDefinitionNode],
+    ):
         calls["count"] += 1
         return real(operation, fragments)
 
@@ -2121,16 +2287,16 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkey
     gen = ext.on_execute()
     next(gen)  # enter the lifecycle: installs the per-execution var-name memo
     try:
-        DjangoOptimizerExtension._build_cache_key(info, Category)
-        DjangoOptimizerExtension._build_cache_key(info, Category)
-        DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
+        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
+        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
         assert calls["count"] == 1
         # Empty the cross-request LRU mid-lifecycle so only the per-execution
         # ``id(operation)`` memo can answer the next call. The counter staying
         # at 1 pins THAT tier specifically - without it this fourth call is a
         # document-cache miss and the collector runs again.
         extension_module._doc_key_cache.clear()
-        DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
     finally:
         with contextlib.suppress(StopIteration):
             next(gen)  # exit the lifecycle: resets the memo
@@ -2157,8 +2323,8 @@ def test_collect_cache_relevant_var_names_unifies_both_families_through_fragment
         "fragment F on Parent { booksConnection(first: $n) @skip(if: $skip) "
         "{ edges { node { title } } } }",
     )
-    operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    operation = _operation(doc)
+    fragments = _fragments_by_name(doc.definitions[1:])
     names = _collect_cache_relevant_var_names(operation, fragments)
     assert names == frozenset({"skip", "n"})
 
@@ -2178,27 +2344,33 @@ _END_DETONATION = "hostile dunder detonated"
 
 
 class _DetonatingEqStr(str):
-    def __eq__(self, other):
+    @override
+    def __eq__(self, other: object):
         raise RuntimeError(_END_DETONATION)
 
+    @override
     def __hash__(self):
         return str.__hash__(self)
 
 
 class _DetonatingReprStr(str):
+    @override
     def __repr__(self):
         raise RuntimeError(_END_DETONATION)
 
 
 class _DetonatingEqObject:
-    def __eq__(self, other):
+    @override
+    def __eq__(self, other: object):
         raise RuntimeError(_END_DETONATION)
 
 
 class _DetonatingReprObject:
-    def __eq__(self, other):
+    @override
+    def __eq__(self, other: object):
         return False
 
+    @override
     def __repr__(self):
         raise RuntimeError(_END_DETONATION)
 
@@ -2218,7 +2390,7 @@ class _DetonatingReprObject:
         "repr-object",
     ],
 )
-def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile):
+def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile: object):
     """B3: a hostile strictness value is rejected typed, never dispatched into.
 
     The strictness boundary is construction-time consumer configuration with a
@@ -2230,7 +2402,9 @@ def test_strictness_hostile_dunder_values_raise_typed_valueerror(hostile):
     value's own exception.
     """
     with pytest.raises(ValueError, match="strictness must be") as exc_info:
-        DjangoOptimizerExtension(strictness=hostile)
+        # basedpyright: the non-str strictness is the hostile input under test;
+        # DjangoOptimizerExtension types the parameter as str
+        DjangoOptimizerExtension(strictness=hostile)  # pyright: ignore[reportArgumentType]
     assert _END_DETONATION not in str(exc_info.value)
 
 
@@ -2243,6 +2417,7 @@ def test_strictness_accepts_content_equal_str_subclass():
     """
 
     class ContentRaise(str):
+        @override
         def __repr__(self):
             raise RuntimeError(_END_DETONATION)
 
@@ -2259,7 +2434,10 @@ def test_strictness_accepts_content_equal_str_subclass():
         4,
     ],
 )
-def test_plan_cache_eviction_survives_concurrent_drain(monkeypatch, drain_at_pop):
+def test_plan_cache_eviction_survives_concurrent_drain(
+    monkeypatch: pytest.MonkeyPatch,
+    drain_at_pop: int,
+):
     """B1: the eviction sweep tolerates the shared-instance drain race.
 
     One extension instance is shared across a threaded / ASGI execution, and
@@ -2274,6 +2452,7 @@ def test_plan_cache_eviction_survives_concurrent_drain(monkeypatch, drain_at_pop
     from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 16)
 
@@ -2287,8 +2466,12 @@ def test_plan_cache_eviction_survives_concurrent_drain(monkeypatch, drain_at_pop
 
     extension = DjangoOptimizerExtension()
     for idx in range(16):
-        key = DjangoOptimizerExtension._build_cache_key(_info_for(f"root{idx}"), Category, None)
-        extension._plan_cache[key] = object()
+        key = DjangoOptimizerExtension._build_cache_key(
+            _as_resolve_info(_info_for(f"root{idx}")),
+            Category,
+            None,
+        )
+        extension._plan_cache[key] = OptimizationPlan()
     assert len(extension._plan_cache) == 16
 
     # Simulate the interleaving: after this thread's length read, other
@@ -2297,7 +2480,7 @@ def test_plan_cache_eviction_survives_concurrent_drain(monkeypatch, drain_at_pop
     real_popitem = extension._plan_cache.popitem
     calls = SimpleNamespace(value=0)
 
-    def racing_popitem(*, last):
+    def racing_popitem(*, last: bool):
         calls.value += 1
         if calls.value == drain_at_pop:
             extension._plan_cache.clear()
@@ -2306,19 +2489,25 @@ def test_plan_cache_eviction_survives_concurrent_drain(monkeypatch, drain_at_pop
     monkeypatch.setattr(extension._plan_cache, "popitem", racing_popitem)
 
     new_plan = SimpleNamespace(cacheable=True)
-    monkeypatch.setattr(
-        extension_module,
-        "plan_optimizations",
-        lambda selected_fields, model, info=None, *, source_type=None: new_plan,
-    )
 
-    plan = extension._get_or_build_plan([], Category, _info_for("rootnew"), None)
+    def _new_plan(
+        selected_fields: object,
+        model: object,
+        info: object = None,
+        *,
+        source_type: object = None,
+    ) -> SimpleNamespace:
+        return new_plan
+
+    monkeypatch.setattr(extension_module, "plan_optimizations", _new_plan)
+
+    plan = extension._get_or_build_plan([], Category, _as_resolve_info(_info_for("rootnew")), None)
     assert plan is new_plan
     assert calls.value == 4
 
 
 @pytest.mark.django_db
-def test_strictness_warn_logs_unplanned_relation(caplog):
+def test_strictness_warn_logs_unplanned_relation(caplog: pytest.LogCaptureFixture):
     """B3: strictness='warn' logs a warning for unplanned uncached relation access."""
     services.seed_data(1)
 
@@ -2326,6 +2515,8 @@ def test_strictness_warn_logs_unplanned_relation(caplog):
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -2336,7 +2527,9 @@ def test_strictness_warn_logs_unplanned_relation(caplog):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return list(Item.objects.all()[:1])
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return list(Item.objects.all()[:1])  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
@@ -2368,7 +2561,9 @@ def test_strictness_off_does_not_stash_sentinel():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     ext = DjangoOptimizerExtension(strictness="off")
     finalize_django_types()
@@ -2390,6 +2585,8 @@ def test_strictness_warn_stashes_sentinel():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -2399,7 +2596,9 @@ def test_strictness_warn_stashes_sentinel():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
@@ -2418,7 +2617,10 @@ def test_strictness_warn_stashes_sentinel():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("mode", ["warn", "raise"])
-def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
+def test_strictness_with_empty_plan_does_not_raise_or_warn(
+    mode: str,
+    caplog: pytest.LogCaptureFixture,
+):
     """B3: an empty plan plus strictness='warn'/'raise' must not raise or warn.
 
     ``_publish_plan_to_context`` stashes the strictness sentinels (planned set,
@@ -2441,7 +2643,9 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     ext = DjangoOptimizerExtension(strictness=mode)
     finalize_django_types()
@@ -2463,7 +2667,7 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
 
 
 @pytest.mark.django_db
-def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
+def test_strictness_includes_fk_id_elision_in_planned_paths(caplog: pytest.LogCaptureFixture):
     """B2+B3: FK-id-elided relations are planned and do not warn."""
     services.seed_data(1)
 
@@ -2471,6 +2675,8 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -2481,7 +2687,9 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
@@ -2574,6 +2782,8 @@ def test_strictness_raise_accepts_unplanned_cached_forward_fk():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -2583,7 +2793,9 @@ def test_strictness_raise_accepts_unplanned_cached_forward_fk():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return list(Item.objects.select_related("category").all()[:1])
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return list(Item.objects.select_related("category").all()[:1])  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
@@ -2597,6 +2809,7 @@ def test_strictness_raise_accepts_unplanned_cached_forward_fk():
         context_value=ctx,
     )
     assert result.errors is None
+    assert result.data is not None
     assert result.data["allItems"][0]["category"]["name"]
 
 
@@ -2613,6 +2826,8 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
             model = MembershipCard
             fields = ("id", "barcode")
 
+    assert registry.get(MembershipCard) is CardType
+
     class PatronType(DjangoType):
         class Meta:
             model = Patron
@@ -2622,7 +2837,9 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
     class Query:
         @strawberry.field
         def all_patrons(self) -> list[PatronType]:
-            return list(Patron.objects.select_related("card").all())
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return list(Patron.objects.select_related("card").all())  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
@@ -2644,7 +2861,7 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
 
 
 @pytest.mark.django_db
-def test_strictness_warn_planned_alias_no_warning(caplog):
+def test_strictness_warn_planned_alias_no_warning(caplog: pytest.LogCaptureFixture):
     """B3: aliased relation that IS planned does not trigger a warning."""
     services.seed_data(1)
 
@@ -2652,6 +2869,8 @@ def test_strictness_warn_planned_alias_no_warning(caplog):
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -2662,7 +2881,9 @@ def test_strictness_warn_planned_alias_no_warning(caplog):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
@@ -2691,10 +2912,14 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
             model = Entry
             fields = ("id", "value")
 
+    assert registry.get(Entry) is EntryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "entries")
+
+    assert registry.get(Item) is ItemType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2705,7 +2930,9 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     ext = DjangoOptimizerExtension(strictness="raise")
     finalize_django_types()
@@ -2731,14 +2958,19 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
             fields = ("id", "value")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Entry], info: object, **kwargs: object):
             calls.append(info)
             return queryset
+
+    assert registry.get(Entry) is EntryType
 
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "entries")
+
+    assert registry.get(Item) is ItemType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2751,7 +2983,9 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -2774,7 +3008,7 @@ def test_directive_var_family_in_named_fragment():
         "fragment ItemBits on ItemType { category @include(if: $show) { name } }",
     )
     operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
+    fragments = {d.name.value: d for d in doc.definitions if isinstance(d, FragmentDefinitionNode)}
     names = _collect_cache_var_families(operation, fragments)[0]
     assert names == frozenset({"show"})
 
@@ -2790,7 +3024,7 @@ def test_directive_var_family_includes_fragment_spread_directives():
         "fragment ItemBits on ItemType { category { name } }",
     )
     operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
+    fragments = {d.name.value: d for d in doc.definitions if isinstance(d, FragmentDefinitionNode)}
     names = _collect_cache_var_families(operation, fragments)[0]
     assert names == frozenset({"show"})
 
@@ -2804,7 +3038,7 @@ def test_cache_key_includes_fragment_spread_directive_variable_value():
         "fragment ItemBits on ItemType { category { name } }",
     )
     operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
+    fragments = {d.name.value: d for d in doc.definitions if isinstance(d, FragmentDefinitionNode)}
     info_false = SimpleNamespace(
         operation=operation,
         fragments=fragments,
@@ -2819,9 +3053,9 @@ def test_cache_key_includes_fragment_spread_directive_variable_value():
     )
 
     assert DjangoOptimizerExtension._build_cache_key(
-        info_false,
+        _as_resolve_info(info_false),
         Item,
-    ) != DjangoOptimizerExtension._build_cache_key(info_true, Item)
+    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_true), Item)
 
 
 # ---------------------------------------------------------------------------
@@ -2836,7 +3070,7 @@ def test_collect_schema_reachable_types_returns_empty_without_graphql_schema():
     assert _collect_schema_reachable_types(SimpleNamespace()) == set()
 
 
-def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch):
+def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch: pytest.MonkeyPatch):
     """B6: check_schema skips orphan types and types without optimizer metadata."""
     import django_strawberry_framework.optimizer.extension as extension_module
 
@@ -2846,13 +3080,15 @@ def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch):
     class UnreachableType:
         pass
 
-    registry.register(Category, ReachableWithoutFieldMap)
-    registry.register(Item, UnreachableType)
-    monkeypatch.setattr(
-        extension_module,
-        "_collect_schema_reachable_types",
-        lambda schema: {ReachableWithoutFieldMap},
-    )
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # registry.register types the parameter as type[DjangoType]
+    registry.register(Category, ReachableWithoutFieldMap)  # pyright: ignore[reportArgumentType]
+    registry.register(Item, UnreachableType)  # pyright: ignore[reportArgumentType]
+
+    def _reachable_types(schema: object) -> set[type]:
+        return {ReachableWithoutFieldMap}
+
+    monkeypatch.setattr(extension_module, "_collect_schema_reachable_types", _reachable_types)
 
     assert DjangoOptimizerExtension.check_schema(SimpleNamespace()) == []
 
@@ -2964,7 +3200,9 @@ def test_check_schema_descends_into_interface_implementations():
     class Query:
         @strawberry.field
         def some_node(self) -> relay.Node:
-            return None
+            # basedpyright: never executed: the annotation only builds the schema whose interface implementers
+            # the reachability audit walks
+            return None  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, types=[CategoryNode, ItemNode])
@@ -2991,6 +3229,8 @@ def test_check_schema_no_warnings_when_all_covered():
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -3074,8 +3314,8 @@ def test_optimizer_hints_unknown_field_raises():
     from django_strawberry_framework.exceptions import ConfigurationError
 
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
-
-        class ItemType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class ItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Item
                 fields = ("id", "name")
@@ -3087,8 +3327,8 @@ def test_optimizer_hints_non_hint_value_raises():
     from django_strawberry_framework.exceptions import ConfigurationError
 
     with pytest.raises(ConfigurationError, match="OptimizerHint instances"):
-
-        class ItemType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class ItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Item
                 fields = ("id", "name", "category")
@@ -3109,7 +3349,9 @@ def test_optimizer_hint_importable_from_top_level():
 
 
 @pytest.mark.django_db
-def test_plan_stashed_with_select_related(django_assert_num_queries):
+def test_plan_stashed_with_select_related(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """B5: the stashed plan contains the expected select_related entries."""
     services.seed_data(1)
 
@@ -3117,6 +3359,8 @@ def test_plan_stashed_with_select_related(django_assert_num_queries):
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -3129,19 +3373,13 @@ def test_plan_stashed_with_select_related(django_assert_num_queries):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    # Build a synthetic info to drive _optimize directly.
-    from graphql import GraphQLList, GraphQLNonNull
-
-    inner = schema._schema.type_map["ItemType"]
-    wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
-
-    # We need a real field_nodes to convert selections from.
-    # Execute the query to get a real result, but use a custom context
-    # to capture the plan.
+    # Execute the query with a custom context to capture the plan.
     ctx = SimpleNamespace()
     result = schema.execute_sync(
         "{ allItems { name category { name } } }",
@@ -3154,7 +3392,9 @@ def test_plan_stashed_with_select_related(django_assert_num_queries):
 
 
 @pytest.mark.django_db
-def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
+def test_plan_stashed_with_prefetch_related(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """B5: the stashed plan contains the expected prefetch_related entries."""
     services.seed_data(1)
 
@@ -3163,10 +3403,14 @@ def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
             model = Item
             fields = ("id", "name")
 
+    assert registry.get(Item) is ItemType
+
     class PropertyType(DjangoType):
         class Meta:
             model = Property
             fields = ("id", "name")
+
+    assert registry.get(Property) is PropertyType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -3177,7 +3421,9 @@ def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -3205,7 +3451,7 @@ def test_publish_plan_to_context_reuses_finalized_metadata():
     ).finalize()
     ctx = SimpleNamespace()
 
-    ext._publish_plan_to_context(plan, SimpleNamespace(context=ctx))
+    ext._publish_plan_to_context(plan, _as_resolve_info(SimpleNamespace(context=ctx)))
 
     assert ctx.dst_optimizer_plan is plan
     assert ctx.dst_optimizer_fk_id_elisions is plan.finalized_fk_id_elisions
@@ -3232,7 +3478,7 @@ def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan():
     assert plan.finalized_lookup_paths is None
     ctx = SimpleNamespace()
 
-    ext._publish_plan_to_context(plan, SimpleNamespace(context=ctx))
+    ext._publish_plan_to_context(plan, _as_resolve_info(SimpleNamespace(context=ctx)))
 
     assert ctx.dst_optimizer_fk_id_elisions == frozenset({"ItemType.category@allItems.category"})
     assert ctx.dst_optimizer_planned == frozenset({"ItemType.category@allItems.category"})
@@ -3291,11 +3537,14 @@ def test_stash_on_dict_subclass_writes_mapping_before_attributes():
     from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
-    class AttributeBackedDict(dict):
+    class AttributeBackedDict(dict[str, object]):
+        attributes: dict[str, object]
+
         def __init__(self) -> None:
             super().__init__()
             super().__setattr__("attributes", {})
 
+        @override
         def __setattr__(self, key: str, value: object) -> None:
             self.attributes[key] = value
 
@@ -3317,12 +3566,12 @@ def test_stash_on_non_dict_mapping_reads_correctly():
         __slots__ = ("_data",)
 
         def __init__(self):
-            self._data = {}
+            self._data: dict[str, object] = {}
 
-        def __setitem__(self, key, value):
+        def __setitem__(self, key: str, value: object):
             self._data[key] = value
 
-        def __getitem__(self, key):
+        def __getitem__(self, key: str) -> object:
             return self._data[key]
 
     ctx = NonDictMapping()
@@ -3351,7 +3600,7 @@ def test_get_context_value_swallows_attribute_error_from_getitem():
     class BridgedItemAccess:
         """Mimics ``StrawberryDjangoContext.__getitem__`` shape."""
 
-        def __getitem__(self, key):
+        def __getitem__(self, key: str):
             raise AttributeError(f"missing attribute {key!r}")
 
     sentinel = object()
@@ -3412,7 +3661,8 @@ def test_stash_falls_back_to_setitem_on_typeerror():
     from django_strawberry_framework.optimizer.extension import _stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
-    class TypeErrorOnSetattr(dict):
+    class TypeErrorOnSetattr(dict[str, object]):
+        @override
         def __setattr__(self, _key: str, _value: object) -> None:
             raise TypeError("read-only attribute access")
 
@@ -3438,7 +3688,8 @@ def test_stash_on_immutable_dict_subclass_is_silent():
     from django_strawberry_framework.optimizer._context import stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
-    class ImmutableDictSubclass(dict):
+    class ImmutableDictSubclass(dict[str, object]):
+        @override
         def __setitem__(self, _key: str, _value: object) -> None:
             raise AttributeError("this dict is immutable")
 
@@ -3458,10 +3709,12 @@ def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
     """
     from django_strawberry_framework.optimizer._context import stash_on_context
 
-    class GuardedMapping(dict):
+    class GuardedMapping(dict[str, object]):
+        @override
         def __setattr__(self, _key: str, _value: object) -> None:
             raise TypeError("no attribute writes")
 
+        @override
         def __setitem__(self, _key: str, _value: object) -> None:
             raise RuntimeError("guarded write rejected")
 
@@ -3629,16 +3882,20 @@ def test_relation_is_optimizer_scoped_unhashable_fail_closed():
     )
 
     # Inactive: returns False for unhashable shapes
-    assert not relation_is_optimizer_scoped({})
-    assert not relation_is_optimizer_scoped([])
+    # basedpyright: the unhashable key is the hostile input under test;
+    # relation_is_optimizer_scoped types the parameter as str
+    assert not relation_is_optimizer_scoped({})  # pyright: ignore[reportArgumentType]
+    assert not relation_is_optimizer_scoped([])  # pyright: ignore[reportArgumentType]
 
     # Active: still fail-closed (returns False rather than raising TypeError)
     frame = begin_execution_frame({}, nested=False)
     try:
         publish_scoped_relations({"valid@Type"})
         assert relation_is_optimizer_scoped("valid@Type")
-        assert not relation_is_optimizer_scoped({})
-        assert not relation_is_optimizer_scoped([])
+        # basedpyright: the unhashable key is the hostile input under test;
+        # relation_is_optimizer_scoped types the parameter as str
+        assert not relation_is_optimizer_scoped({})  # pyright: ignore[reportArgumentType]
+        assert not relation_is_optimizer_scoped([])  # pyright: ignore[reportArgumentType]
     finally:
         end_execution_frame(frame)
 
@@ -3729,7 +3986,9 @@ async def test_shared_singleton_answers_each_operation_with_its_own_context():
 class _UnsettledOptimizer(DjangoOptimizerExtension):
     """A subclass whose ``__init__`` never reaches the one that settles the record."""
 
-    def __init__(self) -> None:
+    # basedpyright: the stand-in skips the optimizer's constructor on purpose: the test
+    # proves a subclass with no settled configuration record is handled
+    def __init__(self) -> None:  # pyright: ignore[reportMissingSuperCall]
         pass
 
 
@@ -3777,7 +4036,7 @@ def test_an_optimizer_that_settled_no_configuration_reads_the_zero_argument_shap
     )
 
 
-def _published_optimizer_keys(context):
+def _published_optimizer_keys(context: object):
     """Every optimizer stash currently readable off a request context object."""
     from django_strawberry_framework.optimizer._context import (
         DST_OPTIMIZER_KEYS,
@@ -3816,6 +4075,8 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -3827,7 +4088,9 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
         @strawberry.field
         def nest(self, info: strawberry.Info) -> str:
@@ -3857,6 +4120,7 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     before, after = seen["context"]
     assert before is after
     assert after.query.startswith("{ nest")
+    assert outer.data is not None
     assert all(item["category"]["name"] for item in outer.data["allItems"])
 
     # The request context object is the OUTER operation's introspection medium:
@@ -3873,6 +4137,7 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
         context_value=SimpleNamespace(),
     )
     assert fresh.errors is None
+    assert fresh.data is not None
     assert all(item["category"]["name"] for item in fresh.data["allItems"])
 
 
@@ -3883,7 +4148,7 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
     ids=["consumer-before-the-optimizer", "consumer-after-the-optimizer"],
 )
 def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_plan(
-    consumer_first,
+    consumer_first: bool,
 ):
     """Whether an operation is nested is the runner's answer, not the hook order's.
 
@@ -3908,6 +4173,8 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -3917,13 +4184,16 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     seen = {}
 
     class _Nester(SchemaExtension):
         """A consumer extension that runs its own operation once, at teardown."""
 
+        @override
         def on_operation(self):
             yield
             if seen:
@@ -3931,6 +4201,7 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
             context = self.execution_context.context
             state = extension._operation_state()
             seen["published"] = [_published_optimizer_keys(context)]
+            assert state is not None
             seen["stashes"] = [dict(state.stashes)]
             inner = self.execution_context.schema.execute_sync(
                 "{ allItems { name category { id } } }",
@@ -3952,6 +4223,7 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
     )
 
     assert outer.errors is None, outer.errors
+    assert outer.data is not None
     assert all(item["category"]["name"] for item in outer.data["allItems"])
     published_before, published_after = seen["published"]
     stashes_before, stashes_after = seen["stashes"]
@@ -3975,6 +4247,8 @@ def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -3984,7 +4258,9 @@ def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4004,6 +4280,7 @@ def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
     )
     assert r2.errors is None
     assert "ItemType.category@allItems.category" not in shared.dst_optimizer_fk_id_elisions
+    assert r2.data is not None
     names = [it["category"]["name"] for it in r2.data["allItems"]]
     assert all(n for n in names)
 
@@ -4018,6 +4295,8 @@ def test_on_execute_clears_reused_context_planned_keys_across_executions():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -4027,7 +4306,9 @@ def test_on_execute_clears_reused_context_planned_keys_across_executions():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension(strictness="raise")
@@ -4064,7 +4345,9 @@ def test_empty_plan_still_stashed():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4103,7 +4386,9 @@ def test_optimizer_applies_only_for_selected_scalars():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4145,9 +4430,12 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
             calls.append(info)
             return queryset
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -4160,7 +4448,9 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4195,9 +4485,12 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
             calls.append(info)
             return queryset
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -4210,7 +4503,9 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4228,7 +4523,7 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
 def test_plan_relation_returns_prefetch_for_custom_get_queryset():
     """O6: the extension exposes the relation planner entry point."""
 
-    field = Item._meta.get_field("category")
+    field = FieldMeta.from_django_field(Item._meta.get_field("category"))
     info = SimpleNamespace()
 
     class FilteredCategoryType:
@@ -4237,11 +4532,13 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, passed_info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Category], passed_info: object, **kwargs: object):
             assert passed_info is info
             return queryset
 
-    kind, reason = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # plan_relation types the parameter as type[DjangoType]
+    kind, reason = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)  # pyright: ignore[reportArgumentType]
     assert kind == "prefetch"
     assert reason == "custom_get_queryset"
 
@@ -4261,6 +4558,8 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -4272,7 +4571,9 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.select_related("category")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.select_related("category")  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4320,6 +4621,8 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
             model = Item
             fields = ("id", "name")
 
+    assert registry.get(Item) is ItemType
+
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -4329,7 +4632,8 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
     captured: list[object] = []
 
     class _CaptureExt(DjangoOptimizerExtension):
-        def _optimize(self, result, info):
+        @override
+        def _optimize(self, result: object, info: GraphQLResolveInfo):
             optimized = super()._optimize(result, info)
             captured.append(optimized)
             return optimized
@@ -4338,7 +4642,9 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.prefetch_related(consumer_pf)
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.prefetch_related(consumer_pf)  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     capture_ext = _CaptureExt()
@@ -4357,7 +4663,10 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
     # The queryset that came out of ``_optimize`` carries exactly the
     # consumer's ``Prefetch`` - the optimizer entry was diffed away.
     optimized_qs = captured[0]
-    lookups = optimized_qs._prefetch_related_lookups
+    assert isinstance(optimized_qs, QuerySet)
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    lookups = optimized_qs._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
     assert lookups == (consumer_pf,)
 
 
@@ -4384,10 +4693,14 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
             model = Entry
             fields = ("id", "value")
 
+    assert registry.get(Entry) is EntryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "entries")
+
+    assert registry.get(Item) is ItemType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -4397,7 +4710,8 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     captured: list[object] = []
 
     class _CaptureExt(DjangoOptimizerExtension):
-        def _optimize(self, result, info):
+        @override
+        def _optimize(self, result: object, info: GraphQLResolveInfo):
             optimized = super()._optimize(result, info)
             captured.append(optimized)
             return optimized
@@ -4406,7 +4720,9 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.prefetch_related("items")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.prefetch_related("items")  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     capture_ext = _CaptureExt()
@@ -4416,7 +4732,10 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     )
     assert result.errors is None
     optimized_qs = captured[0]
-    lookups = optimized_qs._prefetch_related_lookups
+    assert isinstance(optimized_qs, QuerySet)
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    lookups = optimized_qs._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
     # Exactly one ``items`` lookup - the optimizer's ``Prefetch`` -
     # carrying the nested ``entries`` chain. The consumer's plain
     # ``"items"`` string was stripped.
@@ -4424,7 +4743,10 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     items_pf = lookups[0]
     assert isinstance(items_pf, Prefetch)
     assert items_pf.prefetch_to == "items"
-    nested = items_pf.queryset._prefetch_related_lookups
+    assert items_pf.queryset is not None
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    nested = items_pf.queryset._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
     assert any(getattr(entry, "prefetch_to", entry) == "entries" for entry in nested)
 
 
@@ -4436,7 +4758,8 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
 def test_extension_rejects_unknown_kwargs_at_construction():
     """Misspelled config (e.g. ``strict=`` instead of ``strictness=``) raises TypeError."""
     with pytest.raises(TypeError):
-        DjangoOptimizerExtension(strict=True)
+        # basedpyright: a deliberately misspelled keyword; the test proves construction rejects it
+        DjangoOptimizerExtension(strict=True)  # pyright: ignore[reportCallIssue]
 
 
 def test_extension_accepts_strawberry_execution_context_kwarg():
@@ -4493,7 +4816,9 @@ def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
     assert hint_is_skip(OptimizerHint.select_related()) is False
     # Unknown shape with no ``.skip`` attribute must not raise - the
     # schema audit's "never raises" contract depends on this.
-    assert hint_is_skip(object()) is False
+    # basedpyright: the unknown hint shape is the hostile input under test; hint_is_skip types
+    # the parameter as OptimizerHint | None
+    assert hint_is_skip(object()) is False  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -4531,11 +4856,15 @@ def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_mode
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
         @strawberry.field
         def all_admin_items(self) -> list[AdminItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4722,9 +5051,10 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
     finalize_django_types()
     schema = strawberry.Schema(query=Query, types=[ItemType])
     inner = schema._schema.type_map["AdminItemType"]
+    assert isinstance(inner, GraphQLObjectType)
     wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
     info = SimpleNamespace(return_type=wrapped, schema=schema._schema)
-    resolved = _resolve_model_from_return_type(info)
+    resolved = _resolve_model_from_return_type(_as_resolve_info(info))
     assert resolved is not None
     assert resolved.origin is AdminItemType
     assert resolved.model is Item
@@ -4753,31 +5083,37 @@ def test_optimizer_helper_extraction_no_regression():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "category")
 
     ext = DjangoOptimizerExtension(strictness="raise")
-    delegations: list[tuple] = []
+    delegations: list[tuple[object, ...]] = []
     real_apply_to = ext.apply_to
 
     def _spy_apply_to(
-        target_type,
-        target_model,
-        queryset,
-        info,
+        target_type: type[DjangoType] | None,
+        target_model: type[Model],
+        queryset: QuerySet[Model],
+        info: GraphQLResolveInfo,
     ):
         delegations.append((target_type, target_model))
         return real_apply_to(target_type, target_model, queryset, info)
 
-    ext.apply_to = _spy_apply_to
+    # basedpyright: the instance-level apply_to spy is the delegation probe under test; the class
+    # declares a method there
+    ext.apply_to = _spy_apply_to  # pyright: ignore[reportAttributeAccessIssue]
 
     @strawberry.type
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4802,8 +5138,10 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
     so connection-field plans hit the SAME instance-bound cache the middleware
     uses (rather than a throwaway cache-less extension).
     """
+    from django_strawberry_framework.optimizer._context import (
+        active_optimizer as _active_optimizer,
+    )
     from django_strawberry_framework.optimizer.extension import (
-        _active_optimizer,
         apply_connection_optimization,
     )
 
@@ -4814,18 +5152,20 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "category")
 
     ext = DjangoOptimizerExtension()
-    captured: dict = {}
+    captured: dict[str, object] = {}
 
     @strawberry.type
     class Query:
         @strawberry.field
-        def all_items(self, info: strawberry.types.Info) -> list[ItemType]:
+        def all_items(self, info: strawberry.Info[object, object]) -> list[ItemType]:
             # Inside a resolver the ``on_execute`` lifecycle has published the
             # active extension; the helper must discover it (not build a
             # throwaway). Apply twice so the second call is a cache hit on the
@@ -4833,7 +5173,9 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
             qs = Item.objects.all()
             apply_connection_optimization(ItemType, qs, info)
             captured["active"] = _active_optimizer()
-            return qs
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return qs  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4868,9 +5210,9 @@ def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets():
     ).finalize()
     ctx = SimpleNamespace()
 
-    ext._publish_plan_to_context(parent_plan, SimpleNamespace(context=ctx))
+    ext._publish_plan_to_context(parent_plan, _as_resolve_info(SimpleNamespace(context=ctx)))
     # The nested publish (a fallback pipeline re-entry) unions into the parent's stash.
-    ext._publish_plan_to_context(nested_plan, SimpleNamespace(context=ctx))
+    ext._publish_plan_to_context(nested_plan, _as_resolve_info(SimpleNamespace(context=ctx)))
 
     # The parent's resolver key + FK-id elision survive the nested publish.
     assert ctx.dst_optimizer_planned == frozenset(
@@ -4889,7 +5231,6 @@ def test_publish_plan_to_context_union_tolerates_non_set_existing_stash():
     """``_stash_union`` overwrites a non-set existing stash defensively (no crash)."""
     from django_strawberry_framework.optimizer._context import get_context_value
 
-    ext = DjangoOptimizerExtension(strictness="raise")
     ctx = SimpleNamespace()
     # Pre-seed a non-set value under the planned key (defensive shape).
     DjangoOptimizerExtension._stash_union(ctx, "dst_optimizer_planned", frozenset({"a"}))
@@ -4900,6 +5241,11 @@ def test_publish_plan_to_context_union_tolerates_non_set_existing_stash():
     ctx.dst_optimizer_planned = "not-a-set"
     DjangoOptimizerExtension._stash_union(ctx, "dst_optimizer_planned", frozenset({"c"}))
     assert get_context_value(ctx, "dst_optimizer_planned") == frozenset({"c"})
+
+
+def _is_resolver_key_set(value: object) -> TypeGuard[frozenset[str]]:
+    """Whether ``value`` is the frozenset of resolver keys the optimizer publishes."""
+    return isinstance(value, frozenset) and all(isinstance(key, str) for key in value)
 
 
 @pytest.mark.django_db
@@ -4937,6 +5283,8 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
             fields = ("id", "name")
             interfaces = (relay.Node,)
             filterset_class = ItemFilter
+
+    assert registry.get(Item) is ItemType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -4976,6 +5324,7 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
     )
     assert result.errors is None, result.errors
     planned = get_context_value(ctx, DST_OPTIMIZER_PLANNED, frozenset())
+    assert _is_resolver_key_set(planned)
     # The parent's planned ``items`` resolver key survives the nested fallback's
     # publish (the union foundation) - it is NOT shrunk away.
     assert any(key.startswith("CategoryType.items@") for key in planned), planned
@@ -5023,13 +5372,22 @@ def test_cascading_target_downgrades_join_to_prefetch():
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: strawberry.Info,
+            **kwargs: object,
+        ):
             user = getattr(info.context, "user", None)
             seen_users.append(user)
             # Cascade AND narrow by a user-derived predicate so the live request
             # user reaches the prefetch child queryset's compiled SQL.
+            assert user is not None
             queryset = queryset.filter(name=user.name)
             return apply_cascade_permissions(cls, queryset, info)
+
+    assert registry.get(Category) is CategoryType
 
     class ItemType(DjangoType):
         class Meta:
@@ -5042,7 +5400,9 @@ def test_cascading_target_downgrades_join_to_prefetch():
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     # One public category whose name matches the request user, one item under it.
@@ -5105,8 +5465,16 @@ def test_plan_with_cascading_hook_uncacheable():
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(
+            cls,
+            queryset: QuerySet[Category],
+            info: strawberry.Info,
+            **kwargs: object,
+        ):
             return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+
+    assert registry.get(Category) is CascadingCategoryType
 
     class CascadingItemType(DjangoType):
         class Meta:
@@ -5119,7 +5487,9 @@ def test_plan_with_cascading_hook_uncacheable():
     class CascadingQuery:
         @strawberry.field
         def all_items(self) -> list[CascadingItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     cascading_schema = strawberry.Schema(
@@ -5145,6 +5515,8 @@ def test_plan_with_cascading_hook_uncacheable():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is PlainCategoryType
+
     class PlainItemType(DjangoType):
         class Meta:
             model = Item
@@ -5156,7 +5528,9 @@ def test_plan_with_cascading_hook_uncacheable():
     class PlainQuery:
         @strawberry.field
         def all_items(self) -> list[PlainItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     plain_schema = strawberry.Schema(query=PlainQuery, extensions=[lambda: plain_ext])
@@ -5200,6 +5574,8 @@ def test_b8_pruned_select_related_stays_strictness_visible():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -5209,11 +5585,15 @@ def test_b8_pruned_select_related_stays_strictness_visible():
     class Query:
         @strawberry.field
         def projected_items(self) -> list[ItemType]:
-            return Item.objects.order_by("id").only("name")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.order_by("id").only("name")  # pyright: ignore[reportReturnType]
 
         @strawberry.field
         def planned_items(self) -> list[ItemType]:
-            return Item.objects.order_by("id")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.order_by("id")  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5256,10 +5636,14 @@ def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
             model = Entry
             fields = ("id", "value")
 
+    assert registry.get(Entry) is EntryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "entries")
+
+    assert registry.get(Item) is ItemType
 
     class CategoryType(DjangoType):
         class Meta:
@@ -5270,13 +5654,17 @@ def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
     class Query:
         @strawberry.field
         def objs(self) -> list[CategoryType]:
-            return Category.objects.all().prefetch_related(
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all().prefetch_related(  # pyright: ignore[reportReturnType]
                 Prefetch("items", queryset=Item.objects.filter(is_private=False)),
             )
 
         @strawberry.field
         def planned_objs(self) -> list[CategoryType]:
-            return Category.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all()  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5325,11 +5713,15 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
             model = Item
             fields = ("id", "name", "category")
 
+    assert registry.get(Item) is ItemType
+
     @strawberry.type
     class Query:
         @strawberry.field
         def objs(self) -> list[CategoryType]:
-            return Category.objects.all().prefetch_related(
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category.objects.all().prefetch_related(  # pyright: ignore[reportReturnType]
                 Prefetch("items", queryset=Item.objects.filter(is_private=False)),
             )
 
@@ -5344,6 +5736,7 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
         context_value=SimpleNamespace(),
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     ids = [item["category"]["id"] for obj in result.data["objs"] for item in obj["items"]]
     assert all(cid for cid in ids)
 
@@ -5371,6 +5764,8 @@ def test_strictness_reaches_an_execution_with_no_stashable_context():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -5380,7 +5775,9 @@ def test_strictness_reaches_an_execution_with_no_stashable_context():
     class Query:
         @strawberry.field
         def projected_items(self) -> list[ItemType]:
-            return Item.objects.order_by("id").only("name")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.order_by("id").only("name")  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5420,6 +5817,8 @@ def test_strictness_flags_a_relation_under_an_unplannable_root():
             model = Item
             fields = ("id", "name")
 
+    assert registry.get(Item) is ItemType
+
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -5429,7 +5828,9 @@ def test_strictness_flags_a_relation_under_an_unplannable_root():
     class Query:
         @strawberry.field
         def categories(self) -> list[CategoryType]:
-            return list(Category.objects.order_by("id"))
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return list(Category.objects.order_by("id"))  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     query = "{ categories { name items { name } } }"
@@ -5450,6 +5851,7 @@ def test_strictness_flags_a_relation_under_an_unplannable_root():
     )
     served = silent.execute_sync(query, context_value=SimpleNamespace())
     assert served.errors is None, served.errors
+    assert served.data is not None
     assert served.data["categories"]
 
 
@@ -5472,6 +5874,8 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
             model = Item
             fields = ("id", "name")
 
+    assert registry.get(Item) is ItemType
+
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -5481,7 +5885,9 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
     class Query:
         @strawberry.field
         async def categories(self) -> list[CategoryType]:
-            return [obj async for obj in Category.objects.order_by("id")]
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return [obj async for obj in Category.objects.order_by("id")]  # pyright: ignore[reportReturnType]
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5508,7 +5914,7 @@ def test_optimizer_unadapted_non_queryset_passthrough():
     from django_strawberry_framework.utils.querysets import unwrap_async_queryset_adapter
 
     ext = DjangoOptimizerExtension()
-    non_qs_result = ext._optimize([1, 2, 3], SimpleNamespace())
+    non_qs_result = ext._optimize([1, 2, 3], _as_resolve_info(SimpleNamespace()))
     assert non_qs_result == [1, 2, 3]
     assert not unwrap_async_queryset_adapter(non_qs_result)[1]
 
@@ -5525,8 +5931,9 @@ def test_optimizer_preserves_async_adapter_evaluated_cache():
     qs_eval._result_cache = []
     adapted_eval = wrap_async_queryset_adapter(qs_eval)
     assert unwrap_async_queryset_adapter(adapted_eval)[1]
-    eval_res = ext._optimize(adapted_eval, SimpleNamespace())
+    eval_res = ext._optimize(adapted_eval, _as_resolve_info(SimpleNamespace()))
     assert unwrap_async_queryset_adapter(eval_res)[1]
+    assert isinstance(eval_res, _AsyncQuerySetRows)
     assert eval_res._queryset is qs_eval
 
 
@@ -5540,14 +5947,19 @@ def test_optimizer_preserves_async_adapter_unresolved_type():
     ext = DjangoOptimizerExtension()
     qs_unresolved = Category.objects.all()
     adapted_unresolved = wrap_async_queryset_adapter(qs_unresolved)
+
+    def _no_type(name: str) -> None:
+        return None
+
     info_unresolved = SimpleNamespace(
         return_type=object(),
-        schema=SimpleNamespace(get_type=lambda name: None),
+        schema=SimpleNamespace(get_type=_no_type),
         field_name="unresolvedField",
         field_nodes=[],
     )
-    unresolved_res = ext._optimize(adapted_unresolved, info_unresolved)
+    unresolved_res = ext._optimize(adapted_unresolved, _as_resolve_info(info_unresolved))
     assert unwrap_async_queryset_adapter(unresolved_res)[1]
+    assert isinstance(unresolved_res, _AsyncQuerySetRows)
     assert unresolved_res._queryset is qs_unresolved
 
 
@@ -5579,8 +5991,9 @@ def test_optimizer_preserves_async_adapter_optimized_tail():
     )
     qs_valid = Category.objects.all()
     adapted_valid = wrap_async_queryset_adapter(qs_valid)
-    optimized_res = ext._optimize(adapted_valid, info_optimized)
+    optimized_res = ext._optimize(adapted_valid, _as_resolve_info(info_optimized))
     assert unwrap_async_queryset_adapter(optimized_res)[1]
+    assert isinstance(optimized_res, _AsyncQuerySetRows)
     assert optimized_res._queryset is not None
 
 
@@ -5593,7 +6006,7 @@ class _FrameSentinel:
     """A weak-referenceable value, so what a frame holds can be asked about."""
 
 
-def _read_optimizer_state_in_a_copied_context(copied) -> dict:
+def _read_optimizer_state_in_a_copied_context(copied: contextvars.Context) -> dict[str, object]:
     """Everything a task that copied an execution's context could read back."""
     from django_strawberry_framework.optimizer._context import (
         active_optimizer,
@@ -5605,7 +6018,7 @@ def _read_optimizer_state_in_a_copied_context(copied) -> dict:
         relation_is_optimizer_scoped,
     )
 
-    read: dict = {}
+    read: dict[str, object] = {}
 
     def _read() -> None:
         read["optimizer"] = active_optimizer()
@@ -5661,9 +6074,21 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
     )
     try:
         stash_for_optimizer(None, "probe", sentinels["stash"])
-        execution_plan_memo()["probe"] = sentinels["plans"]
-        cache_key_parts_memo()[1] = sentinels["key_parts"]
-        converted_selections_memo()["probe"] = sentinels["converted"]
+        plans_memo = execution_plan_memo()
+        assert plans_memo is not None
+        # basedpyright: a stand-in memo entry carrying only the weak-reference identity the
+        # code under test reads; the per-execution memos type their keys and values exactly
+        plans_memo["probe"] = sentinels["plans"]  # pyright: ignore[reportArgumentType]
+        key_parts_memo = cache_key_parts_memo()
+        assert key_parts_memo is not None
+        # basedpyright: a stand-in memo entry carrying only the weak-reference identity the
+        # code under test reads; the per-execution memos type their keys and values exactly
+        key_parts_memo[1] = sentinels["key_parts"]  # pyright: ignore[reportArgumentType]
+        selections_memo = converted_selections_memo()
+        assert selections_memo is not None
+        # basedpyright: a stand-in memo entry carrying only the weak-reference identity the
+        # code under test reads; the per-execution memos type their keys and values exactly
+        selections_memo["probe"] = sentinels["converted"]  # pyright: ignore[reportArgumentType]
         publish_scoped_relations({"probe@Type"})
         copied = contextvars.copy_context()
         inside = _read_optimizer_state_in_a_copied_context(copied)
@@ -5716,12 +6141,14 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "category")
 
-    seen: dict = {}
+    seen: dict[str, object] = {}
 
     @strawberry.type
     class Query:
@@ -5729,7 +6156,9 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
         def all_items(self, info: strawberry.Info) -> list[ItemType]:
             """Copy this operation's context, as a resolver starting a task does."""
             seen.setdefault("copied", contextvars.copy_context())
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     def _second_operation() -> None:
         """Run a whole operation from the copied context, after the first has ended."""
@@ -5748,9 +6177,14 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
     first = schema.execute_sync("{ allItems { name } }", context_value=SimpleNamespace())
     assert first.errors is None, first.errors
 
+    assert isinstance(seen["copied"], contextvars.Context)
     seen["copied"].run(_second_operation)
 
+    assert isinstance(seen["result"], ExecutionResult)
     assert seen["result"].errors is None, seen["result"].errors
+    assert seen["result"].data is not None
     assert seen["result"].data["allItems"][0]["category"]["name"]
-    assert seen["published"][DST_OPTIMIZER_PLAN] is not None
+    published = seen["published"]
+    assert isinstance(published, dict)
+    assert published[DST_OPTIMIZER_PLAN] is not None
     assert seen["after"] is None

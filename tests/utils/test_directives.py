@@ -20,7 +20,7 @@ from django_strawberry_framework.utils.directives import validated_field_directi
         (memoryview(b"@deprecated"), "memoryview"),
     ],
 )
-def test_char_wise_sequences_are_rejected_typed(value, type_name):
+def test_char_wise_sequences_are_rejected_typed(value: object, type_name: str):
     """The four Iterable-but-not-directives types reject at the construction line.
 
     A bare `str` iterates into characters and a `bytes` / `bytearray` /
@@ -50,7 +50,7 @@ def test_label_names_the_consuming_factory():
         ["a", "b"],
     ],
 )
-def test_ordinary_sequences_pass_through_as_tuples(supplied):
+def test_ordinary_sequences_pass_through_as_tuples(supplied: tuple[str, ...] | list[str]):
     """Benign input is returned as a tuple with its contents and order intact."""
     assert validated_field_directives("DjangoListField", supplied) == tuple(supplied)
 

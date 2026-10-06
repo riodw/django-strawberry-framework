@@ -50,6 +50,8 @@ the warning it gates in
 ``django_strawberry_framework/optimizer/nested_planner.py::_advise_composite_index``.
 """
 
+import logging
+from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
@@ -68,12 +70,20 @@ from django.contrib.postgres.indexes import (
 from django.db import models
 from django.db.models.expressions import Col
 from django.db.models.functions import Lower
+from django.db.models.options import Options
 from django.db.models.sql.query import Query
 from django.test import override_settings
 
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer import nested_planner
-from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+from django_strawberry_framework.optimizer.join_taxonomy import (
+    RelationJoinDescriptor,
+    classify_relation_join,
+)
+from django_strawberry_framework.optimizer.nested_fetch import (
+    NestedConnectionRequest,
+    StrategySelection,
+)
 from django_strawberry_framework.optimizer.nested_planner import (
     _INDEX_ABSENT,
     _INDEX_COVERED,
@@ -84,13 +94,14 @@ from django_strawberry_framework.optimizer.nested_planner import (
     _index_leading_terms,
     clear_index_advisory_dedup,
 )
+from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.utils.imports import import_attr_if_importable
 
 from ._link_models import LnkParent, LnkTag
 
 
 @pytest.fixture(autouse=True)
-def _reset_index_advisory_dedup():
+def _reset_index_advisory_dedup() -> Iterator[None]:
     """Clear the advisory dedup around every test in this module.
 
     The bounded ``_index_advisory_seen`` LRU makes one plan shape warn at most
@@ -388,7 +399,9 @@ class _IdxMtiTag(_IdxMtiTagBase):
     )
     rank = models.IntegerField(default=0)
 
-    class Meta:
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so _IdxMtiTagBase has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         app_label = "tests"
         managed = False
         ordering = ("label", "tag_base")
@@ -404,13 +417,18 @@ class _IdxMtiTagHolder(models.Model):
         managed = False
 
 
+def _meta(model: type[models.Model]) -> "Options[models.Model]":
+    """``model``'s options read through the model base, as the planner holds them."""
+    return model._meta
+
+
 class TestIndexLeadingTerms:
     """``_index_leading_terms`` maps index field names to ``(attname, descending)``."""
 
     def test_maps_field_names_to_terms(self) -> None:
         """A composite index resolves each field name to ``(attname, direction)``."""
-        index = _IdxChildComposite._meta.indexes[0]
-        assert _index_leading_terms(_IdxChildComposite._meta, index) == [
+        index = next(iter(_IdxChildComposite._meta.indexes))
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) == [
             ("parent_id", False),
             ("title", False),
             ("id", False),
@@ -419,25 +437,25 @@ class TestIndexLeadingTerms:
     def test_carries_descending_direction(self) -> None:
         """A ``-``-prefixed field resolves to the same attname flagged descending."""
         index = models.Index(fields=["parent", "-title"], name="idx_desc_title")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) == [
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) == [
             ("parent_id", False),
             ("title", True),
         ]
 
     def test_expression_index_returns_none(self) -> None:
         """An expression index (no ``.fields``) is uninspectable -> ``None``."""
-        index = _IdxChildExpr._meta.indexes[0]
-        assert _index_leading_terms(_IdxChildExpr._meta, index) is None
+        index = next(iter(_IdxChildExpr._meta.indexes))
+        assert _index_leading_terms(_meta(_IdxChildExpr), index) is None
 
     def test_unresolvable_field_returns_none(self) -> None:
         """A field name that no longer resolves degrades to ``None``, not raise."""
         index = models.Index(fields=["nope"], name="idx_missing_field")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) is None
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) is None
 
     def test_btree_index_is_inspectable(self) -> None:
         """PostgreSQL ``BTreeIndex`` is an ordinary ordered B-tree -> terms, like ``models.Index``."""
         index = BTreeIndex(fields=["parent", "title", "id"], name="idx_btree_cover")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) == [
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) == [
             ("parent_id", False),
             ("title", False),
             ("id", False),
@@ -453,10 +471,10 @@ class TestIndexLeadingTerms:
             SpGistIndex,
         ],
     )
-    def test_non_btree_access_method_is_uninspectable(self, index_cls) -> None:
+    def test_non_btree_access_method_is_uninspectable(self, index_cls: type[models.Index]) -> None:
         """A non-B-tree access method cannot serve an ordinary ORDER BY -> ``None`` (never covered)."""
         index = index_cls(fields=["title"], name=f"idx_{index_cls.__name__.lower()}")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) is None
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) is None
 
     def test_custom_index_subclass_is_uninspectable(self) -> None:
         """A custom ``Index`` subclass we cannot vouch for degrades to ``None``, not covered."""
@@ -465,7 +483,7 @@ class TestIndexLeadingTerms:
             pass
 
         index = _CustomIndex(fields=["parent", "title"], name="idx_custom_subclass")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) is None
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) is None
 
     def test_non_default_opclass_is_uninspectable(self) -> None:
         """A non-default opclass need not provide ordinary ordering -> ``None`` (never covered)."""
@@ -474,11 +492,11 @@ class TestIndexLeadingTerms:
             name="idx_opclass",
             opclasses=["varchar_pattern_ops"],
         )
-        assert _index_leading_terms(_IdxChildComposite._meta, index) is None
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) is None
 
     def test_descending_column_without_backend_ordering_is_uninspectable(
         self,
-        monkeypatch,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A ``-``-column is a physical DESC index ONLY where the backend supports it.
 
@@ -492,9 +510,12 @@ class TestIndexLeadingTerms:
             lambda: False,
         )
         index = models.Index(fields=["parent", "title", "-id"], name="idx_desc_unsupported")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) is None
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) is None
 
-    def test_descending_column_with_backend_ordering_is_inspectable(self, monkeypatch) -> None:
+    def test_descending_column_with_backend_ordering_is_inspectable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """With backend index-column ordering, a ``-``-column keeps its descending direction."""
         monkeypatch.setattr(
             nested_planner,
@@ -502,7 +523,7 @@ class TestIndexLeadingTerms:
             lambda: True,
         )
         index = models.Index(fields=["parent", "title", "-id"], name="idx_desc_supported")
-        assert _index_leading_terms(_IdxChildComposite._meta, index) == [
+        assert _index_leading_terms(_meta(_IdxChildComposite), index) == [
             ("parent_id", False),
             ("title", False),
             ("id", True),
@@ -512,7 +533,7 @@ class TestIndexLeadingTerms:
 class _FakeConnections:
     """A minimal ``connections``-handler stand-in: iterate alias names, index to a backend."""
 
-    def __init__(self, by_alias: dict) -> None:
+    def __init__(self, by_alias: dict[str, object]) -> None:
         self._by_alias = by_alias
 
     def __iter__(self):
@@ -543,7 +564,10 @@ class TestEveryBackendSupportsIndexColumnOrdering:
         """The real (SQLite) test database supports index-column ordering -> True."""
         assert nested_planner._every_backend_supports_index_column_ordering() is True
 
-    def test_divergent_alias_without_support_is_unproven(self, monkeypatch) -> None:
+    def test_divergent_alias_without_support_is_unproven(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """One incapable alias makes a DESC term unproven even when the default supports it."""
         monkeypatch.setattr(
             "django.db.connections",
@@ -556,7 +580,7 @@ class TestEveryBackendSupportsIndexColumnOrdering:
         )
         assert nested_planner._every_backend_supports_index_column_ordering() is False
 
-    def test_all_aliases_supporting_is_true(self, monkeypatch) -> None:
+    def test_all_aliases_supporting_is_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When every configured alias supports ordering, the DESC term is trusted."""
         monkeypatch.setattr(
             "django.db.connections",
@@ -569,12 +593,12 @@ class TestEveryBackendSupportsIndexColumnOrdering:
         )
         assert nested_planner._every_backend_supports_index_column_ordering() is True
 
-    def test_empty_configuration_is_unproven(self, monkeypatch) -> None:
+    def test_empty_configuration_is_unproven(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No configured databases -> nothing proves support -> ``False`` (unknown)."""
         monkeypatch.setattr("django.db.connections", _FakeConnections({}))
         assert nested_planner._every_backend_supports_index_column_ordering() is False
 
-    def test_enumeration_failure_is_fail_soft_false(self, monkeypatch) -> None:
+    def test_enumeration_failure_is_fail_soft_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A connection-handler error at plan time degrades to ``False`` (index UNKNOWN)."""
 
         class _Boom:
@@ -838,18 +862,23 @@ class TestAdviseCompositeIndex:
     """``_advise_composite_index`` warns only under DEBUG, on PROVEN absence only."""
 
     @staticmethod
-    def _join(column: str | None, content_type_column: str | None = None) -> SimpleNamespace:
-        return SimpleNamespace(
+    def _join(
+        column: str | None,
+        content_type_column: str | None = None,
+    ) -> RelationJoinDescriptor:
+        # basedpyright: a stand-in join descriptor carrying only the slots the code under test
+        # reads; _advise_composite_index types the parameter as RelationJoinDescriptor
+        return SimpleNamespace(  # pyright: ignore[reportReturnType]
             partition_expr=column,
             content_type_column=content_type_column,
         )
 
     @staticmethod
-    def _warnings(caplog) -> list:
+    def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
         return [r for r in caplog.records if r.levelname == "WARNING"]
 
     @override_settings(DEBUG=True)
-    def test_warns_when_no_covering_index(self, caplog) -> None:
+    def test_warns_when_no_covering_index(self, caplog: pytest.LogCaptureFixture) -> None:
         """A proven-missing composite index warns under DEBUG, naming model + columns."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join("parent_id"), ["title", "id"])
@@ -860,35 +889,38 @@ class TestAdviseCompositeIndex:
         assert "parent_id" in message
 
     @override_settings(DEBUG=False)
-    def test_debug_off_does_not_warn(self, caplog) -> None:
+    def test_debug_off_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
         """With DEBUG off the advisory drops to ``debug`` level (no WARNING)."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join("parent_id"), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_covered_shape_is_silent(self, caplog) -> None:
+    def test_covered_shape_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """A model whose composite index covers the shape emits nothing."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildComposite, self._join("parent_id"), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_fk_auto_index_only_shape_is_silent(self, caplog) -> None:
+    def test_fk_auto_index_only_shape_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """A single-column (connector-only) shape rides the FK index -> silent."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join("parent_id"), [])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_no_partition_expr_returns_early(self, caplog) -> None:
+    def test_no_partition_expr_returns_early(self, caplog: pytest.LogCaptureFixture) -> None:
         """No partition expression -> nothing to advise, no crash."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join(None), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_expression_only_index_suppresses_warning(self, caplog) -> None:
+    def test_expression_only_index_suppresses_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """An uninspectable expression index leaves absence UNPROVEN -> no warning.
 
         The fail-soft contract: ``_index_coverage`` returns ``unknown`` for
@@ -901,21 +933,21 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_mixed_direction_exact_cover_is_silent(self, caplog) -> None:
+    def test_mixed_direction_exact_cover_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """``title ASC, id DESC`` served by an index on ``(parent, title, -id)`` -> silent."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildMixed, self._join("parent_id"), ["title", "-id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_full_reverse_cover_is_silent(self, caplog) -> None:
+    def test_full_reverse_cover_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """``title ASC, id ASC`` served by the FULL reverse index ``(parent, -title, -id)``."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildReversed, self._join("parent_id"), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_partial_direction_flip_still_warns(self, caplog) -> None:
+    def test_partial_direction_flip_still_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         """A partial flip cannot be served without a sort, so the advisory still warns.
 
         The index ``(parent, title, -id)`` serves neither ``title ASC, id ASC``
@@ -930,7 +962,10 @@ class TestAdviseCompositeIndex:
         assert "(parent_id, title, id)" in warnings[0].getMessage()
 
     @override_settings(DEBUG=True)
-    def test_descending_order_annotates_desc_in_recommendation(self, caplog) -> None:
+    def test_descending_order_annotates_desc_in_recommendation(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """A descending order column is rendered ``DESC`` in the recommended shape."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join("parent_id"), ["title", "-id"])
@@ -939,7 +974,10 @@ class TestAdviseCompositeIndex:
         assert "id DESC" in warnings[0].getMessage()
 
     @override_settings(DEBUG=True)
-    def test_generic_relation_recommends_content_type_prefix(self, caplog) -> None:
+    def test_generic_relation_recommends_content_type_prefix(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """A ``GenericRelation`` window recommends ``(content_type_id, object_id, ...)``.
 
         The join descriptor contributes ``content_type_column`` ahead of the
@@ -949,8 +987,12 @@ class TestAdviseCompositeIndex:
         """
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         join = classify_relation_join(Branch._meta.get_field("tags"))
-        content_type_attname = TaggedItem._meta.get_field("content_type").attname
-        object_id_attname = TaggedItem._meta.get_field("object_id").attname
+        content_type_field = TaggedItem._meta.get_field("content_type")
+        object_id_field = TaggedItem._meta.get_field("object_id")
+        assert isinstance(content_type_field, models.Field)
+        assert isinstance(object_id_field, models.Field)
+        content_type_attname = content_type_field.attname
+        object_id_attname = object_id_field.attname
         _advise_composite_index(TaggedItem, join, ["id"])
         warnings = self._warnings(caplog)
         assert len(warnings) == 1
@@ -960,7 +1002,7 @@ class TestAdviseCompositeIndex:
         assert message.index(content_type_attname) < message.index(object_id_attname)
 
     @override_settings(DEBUG=True)
-    def test_expression_order_is_silent(self, caplog) -> None:
+    def test_expression_order_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """An expression order term (``Lower("title")``) keeps the advisory SILENT.
 
         The effective order ``(Lower("title"), "id")`` is only
@@ -974,7 +1016,7 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_related_span_order_is_silent(self, caplog) -> None:
+    def test_related_span_order_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """A related-span order term (``parent__title``) keeps the advisory SILENT.
 
         Same fail-soft as the expression case: a ``__``-spanning term is not a
@@ -987,7 +1029,7 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_nulls_placement_order_is_silent(self, caplog) -> None:
+    def test_nulls_placement_order_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """An explicit ``NULLS FIRST`` order term keeps the advisory SILENT.
 
         ``title ASC NULLS FIRST`` is not index-provable, so the order is UNKNOWN
@@ -1003,7 +1045,10 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_equality_column_in_order_head_is_stripped_and_covered(self, caplog) -> None:
+    def test_equality_column_in_order_head_is_stripped_and_covered(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """An order LED by the equality column is served by ``(parent_id, title, id)``.
 
         The window makes ``parent_id`` constant per partition, so ordering by
@@ -1021,7 +1066,10 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_equality_column_in_order_middle_is_stripped_and_covered(self, caplog) -> None:
+    def test_equality_column_in_order_middle_is_stripped_and_covered(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """The equality column mid-order is stripped too (constant within the partition)."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(
@@ -1032,7 +1080,7 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_unique_constraint_cover_is_silent(self, caplog) -> None:
+    def test_unique_constraint_cover_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """An exact composite ``UniqueConstraint`` covers the window -> no duplicate warning."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(
@@ -1043,21 +1091,21 @@ class TestAdviseCompositeIndex:
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_unique_together_cover_is_silent(self, caplog) -> None:
+    def test_unique_together_cover_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """Legacy ``unique_together`` covering the window is silent."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildUniqueTogether, self._join("parent_id"), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_partial_index_only_is_silent(self, caplog) -> None:
+    def test_partial_index_only_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """A model whose only exact-column index is PARTIAL leaves absence unproven -> silent."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildPartial, self._join("parent_id"), ["title", "id"])
         assert not self._warnings(caplog)
 
     @override_settings(DEBUG=True)
-    def test_repeated_plan_shape_warns_once(self, caplog) -> None:
+    def test_repeated_plan_shape_warns_once(self, caplog: pytest.LogCaptureFixture) -> None:
         """The SAME plan shape rebuilt every request warns at most once.
 
         A request-scoped plan (custom ``get_queryset``) is excluded from the
@@ -1070,7 +1118,7 @@ class TestAdviseCompositeIndex:
         assert len(self._warnings(caplog)) == 1
 
     @override_settings(DEBUG=True)
-    def test_dedup_does_not_hide_different_shapes(self, caplog) -> None:
+    def test_dedup_does_not_hide_different_shapes(self, caplog: pytest.LogCaptureFixture) -> None:
         """Genuinely different plan shapes each still warn once - the dedup never over-collapses."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         # Same model + connector, but different order terms -> a distinct shape.
@@ -1079,7 +1127,7 @@ class TestAdviseCompositeIndex:
         assert len(self._warnings(caplog)) == 2
 
     @override_settings(DEBUG=True)
-    def test_clear_dedup_re_enables_warning(self, caplog) -> None:
+    def test_clear_dedup_re_enables_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         """The reset seam lets one shape warn again (mirrors module-cache clears)."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join("parent_id"), ["title", "id"])
@@ -1087,7 +1135,10 @@ class TestAdviseCompositeIndex:
         _advise_composite_index(_IdxChildBare, self._join("parent_id"), ["title", "id"])
         assert len(self._warnings(caplog)) == 2
 
-    def test_bounded_dedup_evicts_least_recently_used_past_cap(self, monkeypatch) -> None:
+    def test_bounded_dedup_evicts_least_recently_used_past_cap(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """The dedup LRU is BOUNDED: a shape past the cap evicts the least-recently-used.
 
         Exercises ``_index_advisory_already_emitted`` directly under a tiny cap so
@@ -1112,7 +1163,7 @@ class TestAdviseCompositeIndex:
         )  # B was the evicted LRU -> re-emits (bounded, not silent forever)
 
     @override_settings(DEBUG=True)
-    def test_unresolvable_partition_expr_is_silent(self, caplog) -> None:
+    def test_unresolvable_partition_expr_is_silent(self, caplog: pytest.LogCaptureFixture) -> None:
         """A partition expression naming no column leaves nothing to advise -> silent."""
         caplog.set_level("WARNING", logger=optimizer_logger.name)
         _advise_composite_index(_IdxChildBare, self._join("ghost"), ["title", "id"])
@@ -1204,15 +1255,17 @@ class TestWindowPartitionField:
     )
     def test_partition_column_and_owner_table(
         self,
-        model,
-        name,
-        owner_table,
-        attname,
+        model: type[models.Model],
+        name: str,
+        owner_table: str,
+        attname: str,
     ) -> None:
         """The resolved column is a ``Col`` target on the table that holds it."""
         field = _relation(model, name)
         join = classify_relation_join(field)
         assert join.windowable
+        assert field.related_model is not None
+        assert join.partition_expr is not None
         assert isinstance(Query(field.related_model).resolve_ref(join.partition_expr), Col)
         partition_field = nested_planner._window_partition_field(
             field.related_model,
@@ -1237,7 +1290,7 @@ class TestAdvisoryReadsThePartitionColumn:
     """
 
     @staticmethod
-    def _advisories(caplog) -> list[str]:
+    def _advisories(caplog: pytest.LogCaptureFixture) -> list[str]:
         return [r.getMessage() for r in caplog.records if "composite index" in r.getMessage()]
 
     @override_settings(DEBUG=True)
@@ -1281,15 +1334,16 @@ class TestAdvisoryReadsThePartitionColumn:
     )
     def test_same_table_partition_recommends_exact_columns(
         self,
-        model,
-        name,
-        order_by,
-        columns,
-        caplog,
+        model: type[models.Model],
+        name: str,
+        order_by: list[str],
+        columns: str,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A partition column on the child's table leads the recommended composite."""
         caplog.set_level("DEBUG", logger=optimizer_logger.name)
         field = _relation(model, name)
+        assert field.related_model is not None
         _advise_composite_index(field.related_model, classify_relation_join(field), order_by)
         advisories = self._advisories(caplog)
         assert len(advisories) == 1
@@ -1313,14 +1367,15 @@ class TestAdvisoryReadsThePartitionColumn:
     )
     def test_cross_table_partition_is_silent(
         self,
-        model,
-        name,
-        order_by,
-        caplog,
+        model: type[models.Model],
+        name: str,
+        order_by: list[str],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A partition column off the child's table: no child-table index serves the page."""
         caplog.set_level("DEBUG", logger=optimizer_logger.name)
         field = _relation(model, name)
+        assert field.related_model is not None
         _advise_composite_index(field.related_model, classify_relation_join(field), order_by)
         assert not self._advisories(caplog)
 
@@ -1344,11 +1399,11 @@ class TestAdvisoryDeferredUntilWindowAccepted:
     class _RefuseEveryWindow:
         name = "refuse-all"
 
-        def plan(self, request, plan):
+        def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan):
             return False
 
     @staticmethod
-    def _warnings(caplog) -> list:
+    def _warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
         return [r for r in caplog.records if r.levelname == "WARNING"]
 
     @staticmethod
@@ -1361,7 +1416,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         clear_index_advisory_dedup()
 
     @pytest.fixture(autouse=True)
-    def _isolate_registry(self):
+    def _isolate_registry(self) -> Iterator[None]:
         """Clear the global registry / connection cache around this DB test.
 
         The test declares function-scope ``DjangoType`` classes; without isolation
@@ -1373,7 +1428,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         self._reset_type_caches()
 
     @staticmethod
-    def _shelf_books_schema(strategy):
+    def _shelf_books_schema(strategy: StrategySelection):
         """A ``shelves { booksConnection }`` schema running ``strategy``."""
         import strawberry
         from apps.library.models import Book, Shelf
@@ -1385,12 +1440,15 @@ class TestAdvisoryDeferredUntilWindowAccepted:
             finalize_django_types,
             strawberry_config,
         )
+        from django_strawberry_framework.registry import registry
 
         class BookNode(DjangoType):
             class Meta:
                 model = Book
                 fields = ("id", "title")
                 interfaces = (relay.Node,)
+
+        assert registry.get(Book) is BookNode
 
         class ShelfNode(DjangoType):
             class Meta:
@@ -1402,7 +1460,9 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         class Query:
             @strawberry.field
             def shelves(self) -> list[ShelfNode]:
-                return Shelf.objects.order_by("id")
+                # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+                # returns the model rows a DjangoType field resolves from, as the consumer corner does
+                return Shelf.objects.order_by("id")  # pyright: ignore[reportReturnType]
 
         finalize_django_types()
         ext = DjangoOptimizerExtension(nested_connection_strategy=strategy)
@@ -1413,7 +1473,10 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         )
 
     @override_settings(DEBUG=True)
-    def test_refusing_strategy_emits_no_advisory_but_windowed_does(self, caplog) -> None:
+    def test_refusing_strategy_emits_no_advisory_but_windowed_does(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         """A strategy that refuses every window advises no index; windowed advises one."""
         from apps.library.models import Book, Branch, Shelf
 
@@ -1427,6 +1490,7 @@ class TestAdvisoryDeferredUntilWindowAccepted:
         self._reset_type_caches()
         refused = self._shelf_books_schema(self._RefuseEveryWindow()).execute_sync(self._QUERY)
         assert refused.errors is None, refused.errors
+        assert refused.data is not None
         titles = [
             edge["node"]["title"]
             for edge in refused.data["shelves"][0]["booksConnection"]["edges"]

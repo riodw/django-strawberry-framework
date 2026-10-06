@@ -29,13 +29,14 @@ import inspect
 from unittest import mock
 
 import pytest
+import pytest_django
 from graphql.execution.execute import ExecutionContext
 
 from django_strawberry_framework import _graphql_core_patches as patches
 
 
 class _SimpleAsyncIterable:
-    def __init__(self, items):
+    def __init__(self, items: list[object]):
         self.items = items
 
     def __aiter__(self):
@@ -56,7 +57,9 @@ def test_patch_is_installed_at_app_load_and_apply_is_idempotent():
 def test_apply_reinstalls_a_reverted_executor_method():
     saved = ExecutionContext.__dict__["complete_list_value"]
     try:
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        ExecutionContext.complete_list_value = patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
         patches.apply()
         assert patches._patch_is_installed() is True
@@ -70,18 +73,23 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
     class Context:
         is_awaitable = staticmethod(inspect.isawaitable)
 
-        def complete_list_value(self, *_args):
+        def complete_list_value(self, *_args: object):
             async def child_completion():
                 return ["done"]
 
             return child_completion()
 
-    first = patches._original_complete_list_value(
-        Context(),
-        object(),
-        (),
-        object(),
-        object(),
+    original_complete_list_value = patches._original_complete_list_value
+    assert original_complete_list_value is not None
+    first = original_complete_list_value(
+        # basedpyright: a stand-in execution context plus placeholders the captured method only
+        # forwards to it; graphql-core types them as ExecutionContext, GraphQLList,
+        # list[FieldNode], GraphQLResolveInfo and Path
+        Context(),  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        (),  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
         _SimpleAsyncIterable([object()]),
     )
     assert inspect.isawaitable(first)
@@ -89,6 +97,7 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
     async def inspect_residual():
         residual = await first
         assert inspect.isawaitable(residual)
+        assert inspect.iscoroutine(residual)
         residual.close()
 
     import asyncio
@@ -97,7 +106,10 @@ def test_captured_upstream_still_returns_a_residual_awaitable():
 
 
 def test_apply_fails_loudly_when_upstream_shape_changes():
-    with mock.patch.object(patches, "_original_complete_list_value", lambda self: None):
+    def _one_argument_completer(self: object) -> None:
+        return None
+
+    with mock.patch.object(patches, "_original_complete_list_value", _one_argument_completer):
         with pytest.raises(RuntimeError, match="complete_list_value no longer"):
             patches.apply()
 
@@ -110,16 +122,18 @@ def test_apply_fails_loudly_when_upstream_shape_changes():
         ("_original_complete_list_value", "ExecutionContext.complete_list_value"),
     ],
 )
-def test_apply_fails_loudly_when_required_upstream_symbols_are_missing(name, message):
+def test_apply_fails_loudly_when_required_upstream_symbols_are_missing(name: str, message: str):
     with mock.patch.object(patches, name, None):
         with pytest.raises(RuntimeError, match=message):
             patches.apply()
 
 
-def test_apply_uses_independent_dependency_gate(settings):
+def test_apply_uses_independent_dependency_gate(settings: pytest_django.Settings):
     saved = ExecutionContext.__dict__["complete_list_value"]
     try:
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        ExecutionContext.complete_list_value = patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {
             "APPLY_UPSTREAM_PATCHES": {"graphql_core": False},
         }
@@ -135,10 +149,12 @@ def test_apply_uses_independent_dependency_gate(settings):
         ExecutionContext.complete_list_value = saved
 
 
-def test_apply_obeys_global_disable(settings):
+def test_apply_obeys_global_disable(settings: pytest_django.Settings):
     saved = ExecutionContext.__dict__["complete_list_value"]
     try:
-        ExecutionContext.complete_list_value = patches._original_complete_list_value
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        ExecutionContext.complete_list_value = patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
         patches.apply()
         assert patches._patch_is_installed() is False

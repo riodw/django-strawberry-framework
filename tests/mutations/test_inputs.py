@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import itertools
 import re
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 import pytest
 import strawberry
@@ -56,7 +58,13 @@ from apps.products.schema import CategoryType, ItemType
 from apps.scalars.models import MediaSpecimen
 from django.db import models
 from strawberry import UNSET, relay
-from strawberry.types.base import StrawberryList, StrawberryOptional
+from strawberry.types.base import (
+    StrawberryList,
+    StrawberryOptional,
+    get_object_definition,
+    has_object_definition,
+)
+from strawberry.types.field import StrawberryField
 
 import django_strawberry_framework
 from django_strawberry_framework import DjangoType, strawberry_config
@@ -90,9 +98,12 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import Upload
 from tests.optimizer import _link_models
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.utils.typing import ConcreteField
+
 
 @pytest.fixture(autouse=True)
-def _isolate_registry_and_ledger():
+def _isolate_registry_and_ledger() -> Iterator[None]:
     """Reset registry + the mutation-input ledger so each test starts clean.
 
     ``clear_mutation_input_namespace`` is not wired into
@@ -108,6 +119,13 @@ def _isolate_registry_and_ledger():
     clear_mutation_input_namespace()
 
 
+def _concrete_field(model: type[models.Model], name: str) -> ConcreteField:
+    """Read ``model``'s concrete column ``name`` (``get_field`` also returns reverse relations)."""
+    field = model._meta.get_field(name)
+    assert isinstance(field, models.Field)
+    return field
+
+
 _app_label_counter = itertools.count(1)
 
 
@@ -116,17 +134,17 @@ def _unique_app_label() -> str:
     return f"test_mutation_inputs__{next(_app_label_counter)}"
 
 
-def _field_map(input_cls: type) -> dict[str, object]:
+def _field_map(input_cls: type) -> dict[str, StrawberryField]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
     return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
 
 
-def _is_optional(field) -> bool:
+def _is_optional(field: StrawberryField) -> bool:
     """Return whether a Strawberry field's annotation is ``T | None``."""
     return isinstance(field.type, StrawberryOptional)
 
 
-def _inner_type(field):
+def _inner_type(field: StrawberryField):
     """Return the inner type of a ``StrawberryOptional`` field, else the type itself."""
     return field.type.of_type if isinstance(field.type, StrawberryOptional) else field.type
 
@@ -181,11 +199,15 @@ def test_editable_fields_freezes_one_shot_sequences():
     """One-shot ``fields`` / ``exclude`` iterables survive validation and narrowing."""
     selected = editable_input_fields(
         product_models.Item,
-        fields=iter(("name", "category")),
+        # basedpyright: the one-shot iterator is the input under test; editable_input_fields types
+        # the parameter as tuple[str, ...] | None
+        fields=iter(("name", "category")),  # pyright: ignore[reportArgumentType]
     )
     excluded = editable_input_fields(
         product_models.Item,
-        exclude=iter(("description", "is_private")),
+        # basedpyright: the one-shot iterator is the input under test; editable_input_fields types
+        # the parameter as tuple[str, ...] | None
+        exclude=iter(("description", "is_private")),  # pyright: ignore[reportArgumentType]
     )
     assert [field.name for field in selected] == ["name", "category"]
     assert [field.name for field in excluded] == ["name", "category", "attachment"]
@@ -394,8 +416,9 @@ def test_form_and_serializer_column_less_relation_share_queryset_annotation():
         serializer_converter as ser_converter,
     )
 
-    assert form_inputs.annotate_queryset_relation is annotate_queryset_relation
-    assert ser_converter.annotate_queryset_relation is annotate_queryset_relation
+    # basedpyright: the identity check reads the name through the importing module on purpose
+    assert form_inputs.annotate_queryset_relation is annotate_queryset_relation  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert ser_converter.annotate_queryset_relation is annotate_queryset_relation  # pyright: ignore[reportPrivateLocalImportUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +431,7 @@ def test_model_column_input_annotation_maps_file_and_scalar_columns():
     from django_strawberry_framework.types.converters import convert_scalar
 
     python_attr, graphql_name, annotation = model_column_input_annotation(
-        MediaSpecimen._meta.get_field("attachment"),
+        _concrete_field(MediaSpecimen, "attachment"),
         "MediaSpecimenInput",
         primary_of=lambda _model: None,
     )
@@ -416,7 +439,7 @@ def test_model_column_input_annotation_maps_file_and_scalar_columns():
     assert graphql_name == "attachment"
     assert annotation is Upload
 
-    label_field = MediaSpecimen._meta.get_field("label")
+    label_field = _concrete_field(MediaSpecimen, "label")
     python_attr, graphql_name, annotation = model_column_input_annotation(
         label_field,
         "MediaSpecimenInput",
@@ -456,7 +479,7 @@ def test_model_column_write_annotation_maps_file_and_scalar():
         )
         is Upload
     )
-    label_field = MediaSpecimen._meta.get_field("label")
+    label_field = _concrete_field(MediaSpecimen, "label")
     assert model_column_write_annotation(
         label_field,
         "MediaSpecimenInput",
@@ -471,9 +494,10 @@ def test_form_and_serializer_column_kind_share_model_column_owner():
         serializer_converter as ser_converter,
     )
 
-    assert form_inputs.model_column_write_kind is model_column_write_kind
-    assert ser_converter.model_column_write_kind is model_column_write_kind
-    assert ser_converter.model_column_write_annotation is model_column_write_annotation
+    # basedpyright: the identity check reads the name through the importing module on purpose
+    assert form_inputs.model_column_write_kind is model_column_write_kind  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert ser_converter.model_column_write_kind is model_column_write_kind  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert ser_converter.model_column_write_annotation is model_column_write_annotation  # pyright: ignore[reportPrivateLocalImportUsage]
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +542,8 @@ def test_o2o_to_relay_target_uses_globalid_id():
             model = library_models.Patron
             fields = ("id", "name")
 
+    assert registry.get(library_models.Patron) is PatronNode
+
     class MembershipCardNode(DjangoType, relay.Node):
         class Meta:
             model = library_models.MembershipCard
@@ -557,7 +583,9 @@ def test_consumer_override_freezes_one_shot_iterable():
         product_models.Item,
         operation_kind=CREATE,
         primary_type=ItemType,
-        overrides=iter(("category_id", "attachment")),
+        # basedpyright: the one-shot iterator is the input under test; build_mutation_input types
+        # the parameter as frozenset[str] | None
+        overrides=iter(("category_id", "attachment")),  # pyright: ignore[reportArgumentType]
     )
     fields = _field_map(cls)
     assert "category_id" not in fields
@@ -721,7 +749,8 @@ def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
     # ``from __future__ import annotations`` stringizes source-level annotations,
     # so set the resolver's ``__annotations__`` to real objects to reference the
     # generated input class as a schema-field argument type.
-    def _probe(inp) -> int:
+    # basedpyright: a GraphQL argument; Strawberry reads its type from the __annotations__ assigned below
+    def _probe(inp) -> int:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
         return 1
 
     _probe.__annotations__ = {"inp": input_cls, "return": int}
@@ -863,7 +892,8 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
     materialize_mutation_input_class(left.__name__, left)
     materialize_mutation_input_class(right.__name__, right)  # must not collide
 
-    def _probe(left_inp, right_inp) -> int:
+    # basedpyright: GraphQL arguments; Strawberry reads their types from the __annotations__ assigned below
+    def _probe(left_inp, right_inp) -> int:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
         return 1
 
     _probe.__annotations__ = {"left_inp": left, "right_inp": right, "return": int}
@@ -984,7 +1014,7 @@ def _media_specimen_node():
     ["optional_attachment", "spare_image"],
     ids=["blank", "null"],
 )
-def test_optional_file_column_defaults_to_unset(column):
+def test_optional_file_column_defaults_to_unset(column: str):
     """An optional file column on the create input defaults to ``UNSET``, not ``None``.
 
     ``optional_attachment`` is optional through ``blank=True`` and
@@ -1058,7 +1088,7 @@ def test_file_field_consumer_override_skips_generated_upload_field():
 
 def test_field_error_envelope_shape():
     """``FieldError`` has ``field: str`` (non-null) + ``messages: list[str]`` (non-null list)."""
-    definition = FieldError.__strawberry_definition__
+    definition = get_object_definition(FieldError, strict=True)
     fields = {f.python_name: f for f in definition.fields}
     assert fields["field"].type is str
     assert isinstance(fields["messages"].type, StrawberryList)
@@ -1077,7 +1107,7 @@ def test_field_error_field_set_is_frozen():
     ``path`` landed with nothing failing. Set equality is the gate: a flavor that
     wants a fifth field has to change this row on purpose.
     """
-    definition = FieldError.__strawberry_definition__
+    definition = get_object_definition(FieldError, strict=True)
     assert {f.python_name for f in definition.fields} == {
         "field",
         "messages",
@@ -1099,6 +1129,7 @@ def test_field_error_wire_name_set_on_a_generated_payload_is_frozen():
     _, relay_type = _make_relay_target()
     payload = build_payload_type("CreateThing", object_type=relay_type, object_slot="node")
     errors_field = {f.python_name: f for f in payload.__strawberry_definition__.fields}["errors"]
+    assert isinstance(errors_field.type, StrawberryList)
     error_type = errors_field.type.of_type
     assert error_type is FieldError
     # No member name carries an underscore, so the auto-camel-case of an
@@ -1106,7 +1137,7 @@ def test_field_error_wire_name_set_on_a_generated_payload_is_frozen():
     # ``strawberry.field(name=...)`` rename surfaces as ``graphql_name`` and fails.
     graphql_names = {
         field.graphql_name or field.python_name
-        for field in error_type.__strawberry_definition__.fields
+        for field in get_object_definition(error_type, strict=True).fields
     }
     assert graphql_names == {
         "field",
@@ -1177,7 +1208,10 @@ def test_payload_slot_defaults_from_object_type():
         "to_field_fk",
     ],
 )
-def test_editable_fields_keep_foreign_object_carriers_not_the_relation(child_name, names):
+def test_editable_fields_keep_foreign_object_carriers_not_the_relation(
+    child_name: str,
+    names: list[str],
+):
     """A forward ``ForeignObject`` is left out of the basis; its carrier columns stay in it.
 
     The relation stores no column of its own (its value is the carriers), the
@@ -1210,10 +1244,10 @@ def _carrier_backed_link_message(
 )
 @pytest.mark.parametrize("key", ["fields", "exclude"])
 def test_editable_fields_reject_naming_a_foreign_object(
-    child_name,
-    targets,
-    carriers,
-    key,
+    child_name: str,
+    targets: str,
+    carriers: str,
+    key: str,
 ):
     """Naming a forward ``ForeignObject`` in ``fields`` or ``exclude`` names its link columns.
 
@@ -1231,7 +1265,10 @@ def test_editable_fields_reject_naming_a_foreign_object(
         ConfigurationError,
         match=_carrier_backed_link_message(child_name, key, targets, carriers, remedy),
     ):
-        editable_input_fields(model, **{key: iter(("name", "parent"))})
+        # basedpyright: a dict splat is checked against every keyword of editable_input_fields; the
+        # one-shot iterator is the input under test, and the callee types fields and exclude as
+        # tuple[str, ...] | None
+        editable_input_fields(model, **{key: iter(("name", "parent"))})  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize(
@@ -1266,10 +1303,10 @@ def test_editable_fields_reject_naming_a_foreign_object(
     ids=["foreign_key_carrier", "pk_carrier", "pk_and_column_carriers"],
 )
 def test_editable_fields_offer_only_carriers_that_are_inputs(
-    from_fields,
-    to_fields,
-    carriers,
-    remedy,
+    from_fields: list[str],
+    to_fields: list[str],
+    carriers: str,
+    remedy: str,
 ):
     """The ``fields`` remedy names carrier FIELDS the input carries, and only those.
 
@@ -1306,7 +1343,7 @@ def test_editable_fields_offer_only_carriers_that_are_inputs(
     ):
         editable_input_fields(model, fields=("parent",))
     offered = [name for name in ("owner", "p_code") if f"({name})" in remedy]
-    assert [field.name for field in editable_input_fields(model, fields=offered)] == offered
+    assert [field.name for field in editable_input_fields(model, fields=tuple(offered))] == offered
 
 
 def test_editable_fields_report_fields_and_exclude_together_before_a_foreign_object():
@@ -1374,6 +1411,7 @@ def test_mutation_input_field_specs_rejects_non_column_attr():
     class Rogue:
         not_a_column: str
 
+    assert has_object_definition(Rogue)
     with pytest.raises(ConfigurationError, match="not_a_column"):
         mutation_input_field_specs(product_models.Item, Rogue)
 
@@ -1386,6 +1424,7 @@ def test_mutation_input_field_specs_rejects_generic_foreign_key_attr():
     class Rogue:
         content_object: str
 
+    assert has_object_definition(Rogue)
     with pytest.raises(ConfigurationError, match="content_object"):
         mutation_input_field_specs(library_models.TaggedItem, Rogue)
 
@@ -1400,6 +1439,7 @@ def test_mutation_input_field_specs_classifies_m2m():
     class Probe:
         genres: list[int]
 
+    assert has_object_definition(Probe)
     specs, model_fields = mutation_input_field_specs(library_models.Book, Probe)
     assert specs[0].kind == RELATION_MULTI
     assert specs[0].target_name == "genres"
@@ -1413,6 +1453,7 @@ def test_mutation_input_field_specs_marks_excluded_kind():
     class Probe:
         name: str
 
+    assert has_object_definition(Probe)
     specs, _model_fields = mutation_input_field_specs(
         product_models.Item,
         Probe,
@@ -1455,7 +1496,9 @@ def test_editable_input_fields_normalizes_its_declared_sequences():
     the form and serializer flavors.
     """
     with pytest.raises(ConfigurationError, match="not a bare string"):
-        editable_input_fields(product_models.Item, fields="name")
+        # basedpyright: the bare string is the hostile input under test; editable_input_fields
+        # types the parameter as tuple[str, ...] | None
+        editable_input_fields(product_models.Item, fields="name")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="duplicate field name"):
         editable_input_fields(product_models.Item, fields=("name", "name"))
 
@@ -1481,14 +1524,18 @@ def test_build_mutation_input_rejects_bare_string_overrides():
             product_models.Item,
             operation_kind=CREATE,
             primary_type=ItemType,
-            overrides="category_id",
+            # basedpyright: the bare string is the hostile input under test; build_mutation_input
+            # types the parameter as frozenset[str] | None
+            overrides="category_id",  # pyright: ignore[reportArgumentType]
         )
     with pytest.raises(ConfigurationError, match="overrides"):
         build_mutation_input(
             product_models.Item,
             operation_kind=CREATE,
             primary_type=ItemType,
-            overrides=b"name",
+            # basedpyright: the bare bytes value is the hostile input under test;
+            # build_mutation_input types the parameter as frozenset[str] | None
+            overrides=b"name",  # pyright: ignore[reportArgumentType]
         )
 
 
@@ -1506,6 +1553,7 @@ def test_mutation_input_field_specs_rejects_bare_string_excluded_attrs():
     class NameProbe:
         name: str
 
+    assert has_object_definition(NameProbe)
     with pytest.raises(ConfigurationError, match="excluded_attrs"):
         mutation_input_field_specs(
             product_models.Item,
@@ -1516,7 +1564,9 @@ def test_mutation_input_field_specs_rejects_bare_string_excluded_attrs():
         mutation_input_field_specs(
             product_models.Item,
             NameProbe,
-            excluded_attrs=b"name",
+            # basedpyright: the bare bytes value is the hostile input under test;
+            # mutation_input_field_specs types the parameter as Collection[str]
+            excluded_attrs=b"name",  # pyright: ignore[reportArgumentType]
         )
 
 
@@ -1543,5 +1593,7 @@ def test_build_payload_type_rejects_reserved_or_invalid_object_slot():
             build_payload_type(
                 "CreateThing",
                 object_type=relay_type,
-                object_slot=bad_slot,
+                # basedpyright: each invalid slot is the hostile input under test;
+                # build_payload_type types the parameter as str | None
+                object_slot=bad_slot,  # pyright: ignore[reportArgumentType]
             )

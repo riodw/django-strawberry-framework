@@ -17,12 +17,16 @@ int/str/UUID round-trips through the helper (kanban UUID types are non-Relay).
 """
 
 import uuid
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING
 
 import pytest
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
+from django.db import models
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -32,9 +36,12 @@ from django_strawberry_framework.testing.relay import decode_global_id, global_i
 from django_strawberry_framework.types import finalizer as types_finalizer
 from django_strawberry_framework.types import relay as types_relay
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.types.definition import GlobalIDStrategy
+
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
@@ -42,15 +49,15 @@ def _isolate_registry():
 
 
 def _make_node_type(
-    name,
+    name: str,
     *,
-    model=Category,
-    strategy=None,
-    interfaces=(relay.Node,),
-    primary=False,
+    model: type[models.Model] = Category,
+    strategy: "GlobalIDStrategy | None" = None,
+    interfaces: tuple[type, ...] = (relay.Node,),
+    primary: bool = False,
 ):
     """Build a (by default Relay-Node-shaped) ``DjangoType`` over ``model``."""
-    meta_attrs = {"model": model, "fields": ("id", "name"), "name": name}
+    meta_attrs: dict[str, object] = {"model": model, "fields": ("id", "name"), "name": name}
     if interfaces:
         meta_attrs["interfaces"] = interfaces
     if strategy is not None:
@@ -60,10 +67,11 @@ def _make_node_type(
     return type(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
 
 
-def _schema_with_row(node_type, model) -> strawberry.Schema:
+def _schema_with_row(node_type: type, model: type[models.Model]) -> strawberry.Schema:
     """Finalize, then build a schema exposing ``row`` -> the lowest-pk instance."""
 
-    def row() -> node_type:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def row() -> node_type:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         return model._default_manager.order_by("pk").first()
 
     query_cls = strawberry.type(type("Query", (), {"row": strawberry.field(resolver=row)}))
@@ -88,7 +96,9 @@ def test_global_id_for_type_strategy():
     row = Category.objects.order_by("pk").first()
     result = schema.execute_sync(_ROW_ID_QUERY)
     assert result.errors is None
+    assert result.data is not None
     live_id = result.data["row"]["id"]
+    assert row is not None
     assert live_id == global_id_for(category_node, row.pk)
     # The payload slot is the graphql_type_name (the honored ``Meta.name``).
     assert relay.GlobalID.from_id(live_id).type_name == "CategoryNode"
@@ -103,7 +113,9 @@ def test_global_id_for_type_plus_model_strategy():
     row = Category.objects.order_by("pk").first()
     result = schema.execute_sync(_ROW_ID_QUERY)
     assert result.errors is None
+    assert result.data is not None
     live_id = result.data["row"]["id"]
+    assert row is not None
     assert live_id == global_id_for(category_node, row.pk)
     assert relay.GlobalID.from_id(live_id).type_name == "products.category"
 
@@ -116,7 +128,7 @@ def test_global_id_for_type_plus_model_strategy():
 def _callable_strategy_type():
     """A Relay type whose ``Meta.globalid_strategy`` is a consumer callable."""
 
-    def _encoder(type_cls, model, root):
+    def _encoder(type_cls: type[DjangoType], model: type[models.Model], root: object):
         return "products.category"
 
     return _make_node_type("CategoryNode", strategy=_encoder)
@@ -132,7 +144,7 @@ def _custom_override_type():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: strawberry.Info[object, object]):
             return "ConsumerOwned"
 
     return CategoryNode
@@ -143,7 +155,10 @@ def _custom_override_type():
     [(_callable_strategy_type, "callable"), (_custom_override_type, "custom")],
     ids=["callable", "custom"],
 )
-def test_global_id_for_callable_or_custom_raises(build_type, expected_classification):
+def test_global_id_for_callable_or_custom_raises(
+    build_type: Callable[[], type],
+    expected_classification: str,
+):
     """``callable`` / ``custom`` encoders need a live root -> raise."""
     type_cls = build_type()
     finalize_django_types()
@@ -188,11 +203,14 @@ def test_global_id_for_non_node_hostile_repr_keeps_configuration_error_boundary(
     """A malformed input's broken ``repr`` cannot replace the typed rejection."""
 
     class _HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="not a registered DjangoType subclass"):
-        global_id_for(_HostileRepr(), 1)
+        # basedpyright: the instance with a raising repr is the hostile input under test;
+        # global_id_for types the parameter as type[object]
+        global_id_for(_HostileRepr(), 1)  # pyright: ignore[reportArgumentType]
 
 
 def test_global_id_for_rejects_inherited_or_stale_definitions():
@@ -211,7 +229,7 @@ def test_global_id_for_rejects_inherited_or_stale_definitions():
         global_id_for(type_cls, 1)
 
 
-def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch):
+def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch: pytest.MonkeyPatch):
     """A Phase-3 failure leaves the strategy stamped but ``finalized=False`` -> raise.
 
     ``install_globalid_typename_resolver`` stamps ``effective_globalid_strategy``
@@ -222,10 +240,11 @@ def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch):
     """
     category_node = _make_node_type("CategoryNode")
 
-    def _boom(*args, **kwargs):
+    def _boom(*args: object, **kwargs: object):
         raise RuntimeError("phase-3 boom")
 
-    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)  # pyright: ignore[reportPrivateLocalImportUsage]
     with pytest.raises(RuntimeError, match="phase-3 boom"):
         finalize_django_types()
 
@@ -261,7 +280,7 @@ def test_global_id_for_hostile_getattr_keeps_configuration_error_boundary():
     """An input whose __getattr__ raises is handled cleanly and raises ConfigurationError."""
 
     class _HostileGetattrMeta(type):
-        def __getattr__(cls, name):
+        def __getattr__(cls, name: str):
             raise RuntimeError("attribute access exploded")
 
     class _HostileClass(metaclass=_HostileGetattrMeta):

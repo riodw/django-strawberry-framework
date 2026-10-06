@@ -35,7 +35,7 @@ collected-item count matches the spec contract (one item from this file).
 from types import SimpleNamespace
 
 from apps.products.models import Category, Item
-from django.db.models import Prefetch
+from django.db.models import Model, Prefetch
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
@@ -44,7 +44,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
 
-def _sel(name, selections=None):
+def _sel(name: str, selections: list[SimpleNamespace] | None = None):
     """Build a synthetic ``SelectedField`` mirroring ``tests/optimizer/test_walker.py``."""
     return SimpleNamespace(
         name=name,
@@ -55,7 +55,12 @@ def _sel(name, selections=None):
     )
 
 
-def _register_type_definition(model, type_cls, *, optimizer_hints=None):
+def _register_type_definition(
+    model: type[Model],
+    type_cls: type,
+    *,
+    optimizer_hints: dict[str, OptimizerHint] | None = None,
+):
     """Register a minimal definition for walker-only synthetic type classes.
 
     Mirrors the helper at ``tests/optimizer/test_walker.py::_register_type_definition`` -
@@ -108,7 +113,9 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("id")])],
             Category,
-            source_type=ParentType,
+            # basedpyright: a plain stand-in class carrying only the hooks the code under test
+            # reads; plan_optimizations types the parameter as type[DjangoType] | None
+            source_type=ParentType,  # pyright: ignore[reportArgumentType]
         )
     finally:
         registry.clear()
@@ -122,5 +129,7 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
     # builds a fresh one with ``queryset=prefetch.queryset`` - same
     # queryset object reference either way, so ``_db`` survives by
     # reference. Verified at ``django_strawberry_framework/optimizer/walker.py::_prefetch_hint_for_path``.
-    prefetch = next(p for p in result._prefetch_related_lookups if p.prefetch_through == "items")
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    prefetch = next(p for p in result._prefetch_related_lookups if p.prefetch_through == "items")  # pyright: ignore[reportAttributeAccessIssue]
     assert prefetch.queryset._db == "shard_b"

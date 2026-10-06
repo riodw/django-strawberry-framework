@@ -21,7 +21,9 @@ import contextvars
 import gc
 import threading
 from collections import OrderedDict
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
+from typing import SupportsIndex, TypeVar, overload
 
 import pytest
 import strawberry
@@ -29,6 +31,7 @@ from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
 from django.db.models import F, Model, QuerySet
 from django.http import HttpRequest
 from graphql import GraphQLError
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
@@ -47,6 +50,14 @@ from django_strawberry_framework.orders.sets import (
 )
 from django_strawberry_framework.types.base import DjangoType
 from django_strawberry_framework.utils.querysets import model_for
+
+_M = TypeVar("_M", bound=Model)
+
+
+def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
+    """``input_cls`` as a constructor: the factory generates its keyword fields at run time."""
+    return input_cls
+
 
 # ---------------------------------------------------------------------------
 # Metaclass collection / override / binding
@@ -125,16 +136,21 @@ def test_metaclass_none_removal_survives_diamond_inheritance():
             fields = ["title"]
 
     class RemovedOwner(BaseOwner):
-        rel = None  # django-filter removal idiom
+        # basedpyright: the None tombstone is the django-filter removal idiom under test
+        rel = None  # pyright: ignore[reportIncompatibleUnannotatedOverride]
 
-        class Meta:
+        # basedpyright: an OrderSet subclass declares its own ``Meta`` (the django-filter idiom),
+        # never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Book
             fields = ["title"]
 
     class KeptOwner(BaseOwner):
         pass
 
-    class CombinedOwner(RemovedOwner, KeptOwner):
+    # basedpyright: RemovedOwner and KeptOwner carry unrelated ``Meta`` classes (each set declares
+    # its own); the MRO takes RemovedOwner's, the combination under test
+    class CombinedOwner(RemovedOwner, KeptOwner):  # pyright: ignore[reportIncompatibleVariableOverride]
         pass
 
     assert "rel" not in RemovedOwner.related_orders
@@ -285,7 +301,10 @@ def test_orderset_metaclass_and_expansion_share_factory_fields_owner():
     assert (
         OrderSetMetaclass.__new__.__globals__["promote_set_meta_fields"] is promote_set_meta_fields
     )
-    assert OrderSet._expand_meta_fields.__globals__["read_set_meta_fields"] is read_set_meta_fields
+    assert (
+        OrderSet._expand_meta_fields.__func__.__globals__["read_set_meta_fields"]
+        is read_set_meta_fields
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +378,7 @@ def test_orderset_all_excludes_virtual_generic_fields():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_orderset_state():
+def _isolate_orderset_state() -> Iterator[None]:
     """Clear class-level factory caches + per-test field-spec ledger."""
     _materialized_names.clear()
     _field_specs.clear()
@@ -380,7 +399,9 @@ def _every_row(scope: type[DjangoType]) -> QuerySet[Model]:
 def _make_info(user_is_anonymous: bool = False) -> SimpleNamespace:
     """Build a minimal ``info``-shaped stub with a Django ``HttpRequest`` on it."""
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=user_is_anonymous)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
+    # AbstractBaseUser | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=user_is_anonymous)  # pyright: ignore[reportAttributeAccessIssue]
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 
@@ -393,7 +414,7 @@ def _book_order_with_factory():
             fields = ["title", "subtitle"]
 
     factory = OrderArgumentsFactory(BookOrder)
-    input_cls = factory.arguments
+    input_cls = _keyword_constructor(factory.arguments)
     return BookOrder, input_cls
 
 
@@ -428,12 +449,12 @@ def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
             model = Book
             fields = ["title"]
 
-        def check_title_permission(self, request):
+        def check_title_permission(self, request: HttpRequest):
             if request.user.is_anonymous:
                 raise GraphQLError("staff only", extensions={"code": "ORDER_PERMISSION_DENIED"})
 
     factory = OrderArgumentsFactory(GatedAsyncOrder)
-    BookInput = factory.arguments
+    BookInput = _keyword_constructor(factory.arguments)
     input_value = [BookInput(title=Ordering.ASC)]
     info = _make_info(user_is_anonymous=True)
     queryset = Book.objects.all()
@@ -456,7 +477,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
             model = Shelf
             fields = ["code"]
 
-        def check_code_permission(self, request):
+        def check_code_permission(self, request: object):
             counts["code"] += 1
 
     class BookOrderDedup(OrderSet):
@@ -466,12 +487,14 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
             model = Book
             fields = ["title"]
 
-        def check_shelf_permission(self, request):
+        def check_shelf_permission(self, request: object):
             counts["shelf"] += 1
 
     factory = OrderArgumentsFactory(BookOrderDedup)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderDedupInputType"]
+    BookInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderDedupInputType"],
+    )
     input_value = [
         BookInput(shelf=ShelfInput(code=Ordering.ASC)),
         BookInput(shelf=ShelfInput(code=Ordering.DESC)),
@@ -556,7 +579,7 @@ def test_orderset_normalize_input_delegates_to_module_helper():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrderNormalize)
-    BookInput = factory.arguments
+    BookInput = _keyword_constructor(factory.arguments)
     input_value = [BookInput(title=Ordering.ASC)]
     result = BookOrderNormalize._normalize_input(input_value)
     assert result == [("title", Ordering.ASC)]
@@ -571,7 +594,7 @@ def test_orderset_direct_mapping_initializes_specs_before_permissions():
             model = Shelf
             fields = ["code"]
 
-        def check_code_permission(self, request):
+        def check_code_permission(self, request: object):
             raise GraphQLError("code gate fired")
 
     class BookOrderDirectMapping(OrderSet):
@@ -721,7 +744,8 @@ def test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empt
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             return [("title", None)]
 
     info = _make_info()
@@ -767,7 +791,8 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             return [("title", None)]
 
     info = _make_info()
@@ -783,7 +808,9 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
 
 def test_path_traverses_to_many_detects_multiplying_relations():
     """``_path_traverses_to_many`` flags reverse-FK / M2M paths, not scalar / to-one."""
-    from django_strawberry_framework.orders.sets import _path_traverses_to_many
+    from django_strawberry_framework.utils.relations import (
+        path_traverses_to_many as _path_traverses_to_many,
+    )
 
     assert _path_traverses_to_many(Branch, "shelves__code") is True  # reverse FK
     assert _path_traverses_to_many(Book, "genres__name") is True  # forward M2M
@@ -795,8 +822,10 @@ def test_path_traverses_to_many_detects_multiplying_relations():
 
 def test_path_traverses_to_many_is_cached():
     """Repeated to-many path checks reuse the metadata walk."""
-    from django_strawberry_framework.orders.sets import _path_traverses_to_many
     from django_strawberry_framework.utils import relations
+    from django_strawberry_framework.utils.relations import (
+        path_traverses_to_many as _path_traverses_to_many,
+    )
 
     relations._path_traverses_to_many_cache_clear()
     try:
@@ -834,8 +863,14 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
     assert isinstance(aggregate, Min)
     # Two order expressions: the aggregate alias (term 0) + the direct scalar (term 1).
     assert len(expressions) == 2
-    assert expressions[0].expression.name == alias  # orders by the annotation alias
-    assert expressions[1].expression.name == "name"  # scalar ordered directly
+    assert isinstance(expressions[0].expression, F)
+    assert isinstance(expressions[1].expression, F)
+    # orders by the annotation alias
+    # basedpyright: django-stubs omits F.name, reported as an unknown attribute
+    assert expressions[0].expression.name == alias  # pyright: ignore[reportAttributeAccessIssue]
+    # scalar ordered directly
+    # basedpyright: django-stubs omits F.name, reported as an unknown attribute
+    assert expressions[1].expression.name == "name"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
@@ -846,7 +881,9 @@ def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
     (a ``GenericForeignKey``), and a path that resolves entirely through to-one
     relations without ever reaching a to-many.
     """
-    from django_strawberry_framework.orders.sets import _path_traverses_to_many
+    from django_strawberry_framework.utils.relations import (
+        path_traverses_to_many as _path_traverses_to_many,
+    )
 
     # Unresolvable terminal / mid segment -> FieldDoesNotExist exit.
     assert _path_traverses_to_many(Branch, "does_not_exist") is False
@@ -877,8 +914,10 @@ def test_modelless_orderset_uses_queryset_model_for_to_many_order():
     Shelf.objects.create(code="c-code", branch=branch_two)
 
     factory = OrderArgumentsFactory(BranchOrderML)
-    BranchInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderMLInputType"]
+    BranchInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderMLInputType"],
+    )
     input_value = [BranchInput(shelves=ShelfInput(code=Ordering.ASC))]
 
     result = BranchOrderML.apply_sync(input_value, Branch.objects.all(), _make_info())
@@ -906,8 +945,10 @@ def test_queryset_model_overrides_conflicting_orderset_meta_model():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(MisdeclaredBranchOrder)
-    BranchInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+    BranchInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderInputType"],
+    )
     input_value = [BranchInput(shelves=ShelfInput(code=Ordering.ASC))]
     result = MisdeclaredBranchOrder.apply_sync(
         input_value,
@@ -927,14 +968,18 @@ def test_resolve_order_expressions_rejects_non_ordering_direction():
 
     with pytest.raises(ConfigurationError, match="received invalid order direction 'ASC'"):
         CustomBookOrder._resolve_order_expressions(
-            [("title", "ASC")],
+            # basedpyright: the string direction is the hostile input under test;
+            # _resolve_order_expressions types flat_orders as list[tuple[str, Ordering | None]]
+            [("title", "ASC")],  # pyright: ignore[reportArgumentType]
             model=Book,
             visible_rows=_every_row,
         )
 
     with pytest.raises(ConfigurationError, match="received invalid order direction 42"):
         CustomBookOrder._resolve_order_expressions(
-            [("title", 42)],
+            # basedpyright: the int direction is the hostile input under test;
+            # _resolve_order_expressions types flat_orders as list[tuple[str, Ordering | None]]
+            [("title", 42)],  # pyright: ignore[reportArgumentType]
             model=Book,
             visible_rows=_every_row,
         )
@@ -1102,7 +1147,7 @@ def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection()
     """
 
     class _NameSet:
-        def __init__(self, *names):
+        def __init__(self, *names: str):
             self._names = names
 
         def __iter__(self):
@@ -1111,7 +1156,7 @@ def test_orderset_expand_meta_fields_accepts_a_computed_re_readable_collection()
         def __len__(self):
             return len(self._names)
 
-        def __contains__(self, item):
+        def __contains__(self, item: object):
             return item in self._names
 
     class KeysViewOrder(OrderSet):
@@ -1217,7 +1262,9 @@ def test_resolve_order_expressions_handles_non_class_model_on_path_error():
     with pytest.raises(ConfigurationError, match="invalid order path 'bad_field' for model str"):
         CustomBookOrder._resolve_order_expressions(
             [("bad_field", Ordering.ASC)],
-            model="NotAModel",
+            # basedpyright: the string model is the hostile input under test;
+            # _resolve_order_expressions types the parameter as type[Model]
+            model="NotAModel",  # pyright: ignore[reportArgumentType]
             visible_rows=_every_row,
         )
 
@@ -1232,7 +1279,9 @@ def test_orderset_clear_order_input_namespace_clears_subclass_caches():
             fields = ["title"]
 
     class SubOrder(BaseOrder):
-        class Meta:
+        # basedpyright: an OrderSet subclass declares its own ``Meta`` (the django-filter idiom),
+        # never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Book
             fields = ["subtitle"]
 
@@ -1279,8 +1328,10 @@ def test_input_has_active_terms():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrder)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+    BookInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderInputType"],
+    )
 
     # Falsy / empty / unset cases
     assert not BookOrder._input_has_active_terms(None)
@@ -1310,7 +1361,8 @@ def test_input_has_active_terms_purity():
         _counter = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls._counter += 1
             if cls._counter % 2 == 1:
                 return [("title", Ordering.ASC)]
@@ -1334,7 +1386,8 @@ def test_input_has_active_terms_purity_structure_disagreement():
         _counter = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls._counter += 1
             if cls._counter % 2 == 1:
                 return []
@@ -1364,7 +1417,7 @@ def test_input_has_active_terms_purity_structure_disagreement():
         (["__ACTIVE_TITLE_BOOK_INPUT__", "__NULL_TITLE_BOOK_INPUT__"], True),
     ],
 )
-def test_input_has_active_terms_contract(input_value, expected):
+def test_input_has_active_terms_contract(input_value: object, expected: bool):
     """Pin OrderSet._input_has_active_terms against a comprehensive input variation matrix."""
 
     class ShelfOrder(OrderSet):
@@ -1380,8 +1433,10 @@ def test_input_has_active_terms_contract(input_value, expected):
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrder)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+    BookInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderInputType"],
+    )
 
     sentinel_map = {
         "__EMPTY_BOOK_INPUT__": [BookInput()],
@@ -1402,7 +1457,7 @@ def test_input_has_active_terms_contract(input_value, expected):
     assert BookOrder._input_has_active_terms(resolved_input) is expected
 
 
-def _attestations(orderset_class=None):
+def _attestations(orderset_class: type[OrderSet] | None = None):
     """Return the attestations the active ledger holds, optionally for one class.
 
     Reads the ledger's private record list because these are package tests of a
@@ -1410,8 +1465,7 @@ def _attestations(orderset_class=None):
     ``publish`` / ``claim``.
     """
     ledger = _ORDER_NORMALIZATION_CAPTURE.get()
-    if ledger is None:
-        return None
+    assert ledger is not None
     if orderset_class is None:
         return list(ledger._records)
     return [record for record in ledger._records if record.orderset_class is orderset_class]
@@ -1434,12 +1488,13 @@ def test_input_has_active_terms_independent_query_and_double_normalization():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object):
             cls.normalize_count += 1
             return super()._normalize_input(input_value)
 
     factory = OrderArgumentsFactory(TrackedOrder)
-    BookInput = factory.arguments
+    BookInput = _keyword_constructor(factory.arguments)
     active_input = [BookInput(title=Ordering.ASC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
     qs = Book.objects.all()
@@ -1504,7 +1559,8 @@ def test_applied_normalization_is_consumed_and_scoped_to_one_capture():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.ASC)]
 
@@ -1560,7 +1616,8 @@ def test_applied_normalization_record_pins_the_input_object_not_its_address():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             return [("title", Ordering.ASC)]
 
     info = SimpleNamespace(context={"request": HttpRequest()})
@@ -1599,7 +1656,8 @@ def test_applied_normalization_checks_input_identity():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.ASC)]
 
@@ -1626,7 +1684,8 @@ def test_applied_normalization_checks_orderset_class_identity():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             return [("title", Ordering.ASC)]
 
     class SecondOrder(OrderSet):
@@ -1637,7 +1696,8 @@ def test_applied_normalization_checks_orderset_class_identity():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.DESC)]
 
@@ -1660,11 +1720,13 @@ def test_public_apply_never_writes_the_consumer_context():
     mapping that forbids writes is never asked to accept one.
     """
 
-    class GuardedContext(dict):
-        def __setitem__(self, key, value):
+    class GuardedContext(dict[str, object]):
+        @override
+        def __setitem__(self, key: str, value: object):
             raise RuntimeError(f"guarded context written: {key}")
 
-        def __delitem__(self, key):
+        @override
+        def __delitem__(self, key: str):
             raise RuntimeError(f"guarded context cleared: {key}")
 
     class TitleOrder(OrderSet):
@@ -1676,7 +1738,7 @@ def test_public_apply_never_writes_the_consumer_context():
     plain = {"request": HttpRequest(), "consumer_marker": marker}
     guarded = GuardedContext()
     dict.__setitem__(guarded, "request", HttpRequest())
-    TitleInput = OrderArgumentsFactory(TitleOrder).arguments
+    TitleInput = _keyword_constructor(OrderArgumentsFactory(TitleOrder).arguments)
     order_input = [TitleInput(title=Ordering.ASC)]
 
     for context in (plain, guarded):
@@ -1703,7 +1765,7 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
             fields = ["title"]
 
     info = SimpleNamespace(context={"request": HttpRequest()})
-    TitleInput = OrderArgumentsFactory(TitleOrder).arguments
+    TitleInput = _keyword_constructor(OrderArgumentsFactory(TitleOrder).arguments)
 
     with pytest.raises(RuntimeError, match="body failed"):
         with capture_applied_order_normalization():
@@ -1711,7 +1773,7 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
             raise RuntimeError("body failed")
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
-    async def one_resolution(own_input):
+    async def one_resolution(own_input: object):
         with capture_applied_order_normalization():
             await TitleOrder.apply_async(own_input, Book.objects.all(), info)
             # Yield so the sibling task runs its own apply in between.
@@ -1733,8 +1795,8 @@ def test_capture_scope_is_reset_after_an_exception_and_isolated_per_async_task()
 
 def test_input_has_active_terms_sequence_controls_sync():
     """Load-bearing A/B/B and A/A/B/A normalization sequence controls under sync apply."""
-    return_a = [("title", Ordering.ASC)]
-    return_b = [("title", Ordering.DESC)]
+    return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
+    return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
     qs = Book.objects.all()
 
@@ -1748,7 +1810,8 @@ def test_input_has_active_terms_sequence_controls_sync():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
@@ -1774,7 +1837,8 @@ def test_input_has_active_terms_sequence_controls_sync():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
@@ -1789,8 +1853,8 @@ def test_input_has_active_terms_sequence_controls_sync():
 
 def test_input_has_active_terms_sequence_controls_async():
     """Load-bearing A/B/B and A/A/B/A normalization sequence controls under async apply."""
-    return_a = [("title", Ordering.ASC)]
-    return_b = [("title", Ordering.DESC)]
+    return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
+    return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
     qs = Book.objects.all()
 
@@ -1804,7 +1868,8 @@ def test_input_has_active_terms_sequence_controls_async():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
@@ -1834,7 +1899,8 @@ def test_input_has_active_terms_sequence_controls_async():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
@@ -1872,16 +1938,18 @@ def test_a_child_task_application_reaches_the_parents_check():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.ASC)]
 
         @classmethod
+        @override
         async def apply_async(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             return await asyncio.create_task(super().apply_async(input_value, queryset, info))
 
@@ -1910,8 +1978,8 @@ def test_a_child_delegated_impure_normalization_is_still_rejected():
     a page ordered by terms it never checked. With it, the parent claims A and
     the B it derives disagrees - the typed rejection the contract promises.
     """
-    return_a = [("title", Ordering.ASC)]
-    return_b = [("title", Ordering.DESC)]
+    return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
+    return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
 
     class ChildDelegatingAbbOrder(OrderSet):
@@ -1923,17 +1991,19 @@ def test_a_child_delegated_impure_normalization_is_still_rejected():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
 
         @classmethod
+        @override
         async def apply_async(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             return await asyncio.create_task(super().apply_async(input_value, queryset, info))
 
@@ -1958,8 +2028,8 @@ def test_two_applications_of_one_input_that_disagree_fail_closed():
     can say which one the returned queryset was ordered by, so the claim raises
     rather than choosing.
     """
-    return_a = [("title", Ordering.ASC)]
-    return_b = [("title", Ordering.DESC)]
+    return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
+    return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
 
     class DoubleAppliedOrder(OrderSet):
@@ -1971,7 +2041,8 @@ def test_two_applications_of_one_input_that_disagree_fail_closed():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
@@ -2009,7 +2080,8 @@ def test_two_applications_of_one_input_that_agree_are_claimed_once():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.ASC)]
 
@@ -2041,8 +2113,8 @@ def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
     catch is lost. Entries are claimed by class AND input identity, so the nested
     one is simply not the outer one's.
     """
-    return_a = [("title", Ordering.ASC)]
-    return_b = [("title", Ordering.DESC)]
+    return_a: list[tuple[str, Ordering | None]] = [("title", Ordering.ASC)]
+    return_b: list[tuple[str, Ordering | None]] = [("title", Ordering.DESC)]
     info = SimpleNamespace(context={"request": HttpRequest()})
 
     class NestedOrder(OrderSet):
@@ -2051,7 +2123,8 @@ def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             return [("title", Ordering.DESC)]
 
     nested_input = [{"title": "DESC"}]
@@ -2065,17 +2138,19 @@ def test_a_nested_orderset_between_apply_and_check_is_never_claimed():
         idx = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             res = cls.returns[cls.idx]
             cls.idx += 1
             return res
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             ordered = super().apply_sync(input_value, queryset, info)
             NestedOrder.apply_sync(nested_input, Book.objects.all(), info)
@@ -2111,7 +2186,8 @@ def test_an_unrelated_descendant_application_is_never_claimed():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.ASC)]
 
@@ -2154,7 +2230,8 @@ def test_a_claim_anywhere_in_the_resolution_is_the_only_claim():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.normalize_count += 1
             return [("title", Ordering.ASC)]
 
@@ -2201,11 +2278,12 @@ def test_a_worker_threads_application_reaches_the_ledger_its_parent_claims_from(
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object):
             cls.normalize_count += 1
             return super()._normalize_input(input_value)
 
-    WorkerInput = OrderArgumentsFactory(WorkerOrder).arguments
+    WorkerInput = _keyword_constructor(OrderArgumentsFactory(WorkerOrder).arguments)
     worker_input = [WorkerInput(title=Ordering.ASC)]
 
     with capture_applied_order_normalization():
@@ -2237,14 +2315,14 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing():
             model = Book
             fields = ["title"]
 
-    ConcurrentInput = OrderArgumentsFactory(ConcurrentOrder).arguments
+    ConcurrentInput = _keyword_constructor(OrderArgumentsFactory(ConcurrentOrder).arguments)
     inputs = [[ConcurrentInput(title=Ordering.ASC)] for _ in range(24)]
 
     with capture_applied_order_normalization():
         copied = contextvars.copy_context()
         start = threading.Barrier(len(inputs))
 
-        def apply_one(order_input):
+        def apply_one(order_input: object):
             start.wait()
             copied.run(ConcurrentOrder.apply_sync, order_input, Book.objects.all(), info)
 
@@ -2255,6 +2333,7 @@ def test_concurrent_threads_publishing_into_one_ledger_lose_nothing():
             worker.join()
 
         attested = _attestations(ConcurrentOrder)
+        assert attested is not None
         assert len(attested) == len(inputs)
         assert {id(record.input_value) for record in attested} == {id(value) for value in inputs}
 
@@ -2270,28 +2349,37 @@ def test_validate_normalized_terms_rejects_hostile_container_and_string_subclass
     """
     fired: list[str] = []
 
-    class HostileList(list):
+    class HostileList(list[object]):
+        @override
         def __iter__(self):
             fired.append("list.__iter__")
             return super().__iter__()
 
-    class HostileTuple(tuple):
+    class HostileTuple(tuple[object, ...]):
+        @override
         def __len__(self):
             fired.append("tuple.__len__")
             return super().__len__()
 
-        def __getitem__(self, index):
+        @overload
+        def __getitem__(self, index: SupportsIndex) -> object: ...
+        @overload
+        def __getitem__(self, index: slice) -> tuple[object, ...]: ...
+        @override
+        def __getitem__(self, index: SupportsIndex | slice) -> object:
             fired.append("tuple.__getitem__")
             return super().__getitem__(index)
 
     class HostileStr(str):
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             fired.append("str.__eq__")
             raise RuntimeError("hostile equality ran")
 
         __hash__ = str.__hash__
 
-        def __format__(self, spec):
+        @override
+        def __format__(self, spec: str):
             fired.append("str.__format__")
             raise RuntimeError("hostile format ran")
 
@@ -2325,7 +2413,8 @@ def test_validate_normalized_terms_rejects_hostile_container_and_string_subclass
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             return [(HostileStr("title"), Ordering.ASC)]
 
     with pytest.raises(
@@ -2344,16 +2433,18 @@ def test_input_has_active_terms_hostile_eq_and_repr():
     """Hostile non-primitive terms returned by _normalize_input raise ConfigurationError."""
 
     class HostileEqTerm:
-        def __init__(self, val):
+        def __init__(self, val: object):
             self.val = val
 
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             raise RuntimeError("hostile __eq__ called")
 
     class HostileReprTerm:
-        def __init__(self, val):
+        def __init__(self, val: object):
             self.val = val
 
+        @override
         def __repr__(self):
             raise RuntimeError("hostile __repr__ called")
 
@@ -2364,7 +2455,9 @@ def test_input_has_active_terms_hostile_eq_and_repr():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        # basedpyright: deliberately a non-str key, the invalid term the boundary refuses
+        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("title", Ordering.ASC), (HostileEqTerm("custom"), None)]
 
     with pytest.raises(
@@ -2380,7 +2473,9 @@ def test_input_has_active_terms_hostile_eq_and_repr():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        # basedpyright: deliberately a non-Ordering direction, the invalid term the boundary refuses
+        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("title", HostileReprTerm("boom"))]
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -2398,15 +2493,29 @@ def test_input_has_active_terms_public_apply_override_independence():
             fields = ["title"]
 
         @classmethod
-        def apply_sync(cls, input_value, queryset, info, **kwargs):
+        @override
+        def apply_sync(
+            cls,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
+            **kwargs: object,
+        ):
             return queryset.filter(pk__gt=0)
 
         @classmethod
-        async def apply_async(cls, input_value, queryset, info, **kwargs):
+        @override
+        async def apply_async(
+            cls,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
+            **kwargs: object,
+        ):
             return queryset.filter(pk__gt=0)
 
     factory = OrderArgumentsFactory(CustomApplyOrder)
-    BookInput = factory.arguments
+    BookInput = _keyword_constructor(factory.arguments)
     active_input = [BookInput(title=Ordering.ASC)]
     empty_input = [BookInput(title=None)]
 
@@ -2424,7 +2533,10 @@ def test_input_has_active_terms_public_apply_override_independence():
         ([("title", Ordering.ASC)], []),
     ],
 )
-def test_input_has_active_terms_purity_violation(first_return, second_return):
+def test_input_has_active_terms_purity_violation(
+    first_return: list[tuple[str, Ordering | None]],
+    second_return: list[tuple[str, Ordering | None]],
+):
     """Impure _normalize_input raising disagreement raises ConfigurationError naming the method."""
 
     class ImpureOrder(OrderSet):
@@ -2435,7 +2547,8 @@ def test_input_has_active_terms_purity_violation(first_return, second_return):
         calls = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
             cls.calls += 1
             if cls.calls % 2 == 1:
                 return first_return
@@ -2457,7 +2570,9 @@ def test_orderset_normalize_input_validation_contract():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        # basedpyright: deliberately a dict, the invalid data the boundary refuses
+        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return {"title": Ordering.ASC}
 
     with pytest.raises(
@@ -2472,7 +2587,9 @@ def test_orderset_normalize_input_validation_contract():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        # basedpyright: deliberately list terms, the invalid term shape the boundary refuses
+        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return [["title", Ordering.ASC]]
 
     with pytest.raises(
@@ -2487,7 +2604,9 @@ def test_orderset_normalize_input_validation_contract():
             fields = ["title"]
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        # basedpyright: deliberately a str direction, the invalid term the boundary refuses
+        def _normalize_input(cls, input_value: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return [("title", "ASC")]
 
     with pytest.raises(
@@ -2537,11 +2656,12 @@ def test_a_task_that_outlives_the_scope_cannot_reopen_the_closed_ledger():
         normalize_count = 0
 
         @classmethod
-        def _normalize_input(cls, input_value):
+        @override
+        def _normalize_input(cls, input_value: object):
             cls.normalize_count += 1
             return super()._normalize_input(input_value)
 
-    OutlivingInput = OrderArgumentsFactory(OutlivingOrder).arguments
+    OutlivingInput = _keyword_constructor(OrderArgumentsFactory(OutlivingOrder).arguments)
     order_input = [OutlivingInput(title=Ordering.ASC)]
     released = asyncio.Event()
     observed: dict[str, object] = {}
@@ -2588,7 +2708,7 @@ def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger
             model = Book
             fields = ["title"]
 
-    WorkerInput = OrderArgumentsFactory(OutlivingWorkerOrder).arguments
+    WorkerInput = _keyword_constructor(OrderArgumentsFactory(OutlivingWorkerOrder).arguments)
     worker_input = [WorkerInput(title=Ordering.ASC)]
 
     with capture_applied_order_normalization():
@@ -2610,7 +2730,7 @@ def test_a_worker_thread_that_outlives_the_scope_cannot_reopen_the_closed_ledger
     assert _ORDER_NORMALIZATION_CAPTURE.get() is None
 
 
-def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch):
+def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch: pytest.MonkeyPatch):
     """Closure runs first and in its own ``finally``; a broken reset cannot skip it.
 
     The tombstone is what descendants observe, so it must be set even when
@@ -2626,10 +2746,10 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch):
         def get(self):
             return real.get()
 
-        def set(self, value):
+        def set(self, value: _NormalizationLedger | None):
             return real.set(value)
 
-        def reset(self, token):
+        def reset(self, token: contextvars.Token[_NormalizationLedger | None]):
             real.reset(token)
             raise RuntimeError("reset failed")
 
@@ -2640,7 +2760,7 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch):
             model = Book
             fields = ["title"]
 
-    ResetInput = OrderArgumentsFactory(ResetFailureOrder).arguments
+    ResetInput = _keyword_constructor(OrderArgumentsFactory(ResetFailureOrder).arguments)
     order_input = [ResetInput(title=Ordering.ASC)]
     escaped: dict[str, object] = {}
 
@@ -2660,10 +2780,15 @@ def test_a_failing_binding_reset_still_leaves_the_ledger_closed(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _hiding_type(model, type_name, *, primary=True, **hidden):
+def _hiding_type(model: type[Model], type_name: str, *, primary: bool = True, **hidden: object):
     """Register a type for ``model`` whose ``get_queryset`` hides the rows matching ``hidden``."""
 
-    def get_queryset(cls, queryset, info, **kwargs):
+    def get_queryset(
+        cls: type[DjangoType],
+        queryset: QuerySet[Model],
+        info: object,
+        **kwargs: object,
+    ):
         return queryset.exclude(**hidden)
 
     return type(
@@ -2676,7 +2801,7 @@ def _hiding_type(model, type_name, *, primary=True, **hidden):
     )
 
 
-def _plain_type(model, name):
+def _plain_type(model: type[Model], name: str):
     """Register a type for ``model`` that keeps the identity ``get_queryset``."""
     return type(
         name,
@@ -2842,17 +2967,22 @@ def _secret_and_mid_shelf_books():
     ids=["to-one", "to-many"],
 )
 def test_apply_async_awaits_an_async_only_hook_behind_a_related_term(
-    model,
-    fields,
-    order_input,
-    expected,
+    model: type[Model],
+    fields: list[str],
+    order_input: list[dict[str, Ordering]],
+    expected: list[str],
 ):
     """``apply_async`` derives an async-only target ``get_queryset`` up front; ``apply_sync`` refuses it."""
     from asgiref.sync import sync_to_async
 
     from django_strawberry_framework.utils.querysets import SyncMisuseError
 
-    async def hide_secret_async(cls, queryset, info, **kwargs):
+    async def hide_secret_async(
+        cls: type[DjangoType],
+        queryset: QuerySet[Model],
+        info: object,
+        **kwargs: object,
+    ):
         return await sync_to_async(lambda: queryset.exclude(topic="secret"))()
 
     type(

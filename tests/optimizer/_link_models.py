@@ -17,6 +17,7 @@ models of ``tests/_relation_fixtures.py`` these may enter a test schema.
 import contextlib
 
 from django.db import models
+from django.db.backends.base.base import BaseDatabaseWrapper
 
 
 class LnkParent(models.Model):
@@ -182,7 +183,7 @@ _MODELS = (
 
 
 @contextlib.contextmanager
-def link_fixture_tables(connection):
+def link_fixture_tables(connection: BaseDatabaseWrapper):
     """Create the ``Lnk*`` tables and seed three parents; drop the tables on exit.
 
     Two parents share ``code="A"`` under different tenants, so a link that

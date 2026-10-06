@@ -30,7 +30,9 @@ import uuid
 import pytest
 import strawberry
 from django import forms
-from strawberry.types.base import StrawberryOptional
+from django.db import models
+from strawberry.types.base import StrawberryOptional, get_object_definition
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.forms.converter import (
@@ -73,7 +75,7 @@ from django_strawberry_framework.forms.converter import (
         (forms.TypedMultipleChoiceField(), list[str]),
     ],
 )
-def test_scalar_field_annotations(field, expected):
+def test_scalar_field_annotations(field: forms.Field, expected: object):
     """Each supported scalar form field maps to its Strawberry annotation, kind ``scalar``."""
     conversion = convert_form_field(field)
     assert conversion.annotation == expected
@@ -134,10 +136,11 @@ def test_null_boolean_validating_subclass_generates_required_input():
     from django_strawberry_framework.forms.inputs import build_form_input_class
 
     input_cls, _ = build_form_input_class(ProbeForm, operation_kind="form")
-    field = input_cls.__strawberry_definition__.fields[0]
+    field = get_object_definition(input_cls, strict=True).fields[0]
     assert not isinstance(field.type, StrawberryOptional)
 
-    def resolve_probe(inp):
+    # basedpyright: a GraphQL argument; Strawberry reads its type from the __annotations__ assigned below
+    def resolve_probe(inp):  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
         del inp
         return 1
 
@@ -145,7 +148,9 @@ def test_null_boolean_validating_subclass_generates_required_input():
 
     @strawberry.type
     class Query:
-        probe = strawberry.field(resolver=resolve_probe)
+        # basedpyright: Strawberry types the field from the resolver's run-time __annotations__
+        # set above; a class annotation would be a second, static declaration of that type
+        probe = strawberry.field(resolver=resolve_probe)  # pyright: ignore[reportGeneralTypeIssues]
 
     schema = strawberry.Schema(query=Query)
     assert "flag: Boolean!" in schema.as_str()
@@ -258,6 +263,7 @@ def test_unknown_field_with_hostile_repr_still_raises_configuration_error():
     """Formatting the unsupported-field diagnostic cannot replace its typed error."""
 
     class HostileField(forms.Field):
+        @override
         def __repr__(self):
             raise KeyboardInterrupt("repr trap")
 
@@ -300,10 +306,10 @@ def test_form_field_required_column_backed_variations():
 def test_custom_subclasses_of_precheck_kinds():
     """Custom subclasses of relation, file, and multi-choice fields resolve to expected kinds."""
 
-    class CustomModelChoiceField(forms.ModelChoiceField):
+    class CustomModelChoiceField(forms.ModelChoiceField[models.Model]):
         pass
 
-    class CustomModelMultipleChoiceField(forms.ModelMultipleChoiceField):
+    class CustomModelMultipleChoiceField(forms.ModelMultipleChoiceField[models.Model]):
         pass
 
     class CustomFileField(forms.FileField):

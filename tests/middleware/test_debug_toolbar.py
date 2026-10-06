@@ -20,16 +20,22 @@ import contextlib
 import importlib
 import re
 import sys
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
-from django.http import HttpResponse, StreamingHttpResponse
+from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
 from django.test import RequestFactory, modify_settings
 
 import django_strawberry_framework
 from tests._soft_dependency import evicted_modules, simulated_absence
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.middleware.debug_toolbar import DebugToolbarMiddleware
 
 _LEAF = "django_strawberry_framework.middleware.debug_toolbar"
 _PARENT = "django_strawberry_framework.middleware"
@@ -54,7 +60,7 @@ _HINT_SUBSTRING = "django-debug-toolbar>=7.0.0"
 
 
 @pytest.fixture
-def toolbar_leaf():
+def toolbar_leaf() -> Iterator[ModuleType]:
     """Import (or reuse) the leaf module with the ``debug_toolbar`` app installed.
 
     The first ``debug_toolbar.middleware`` import in a process defines the
@@ -68,14 +74,18 @@ def toolbar_leaf():
 
 
 @pytest.fixture
-def middleware(toolbar_leaf):
+def middleware(toolbar_leaf: ModuleType) -> DebugToolbarMiddleware:
     """The package middleware instance the targeted units drive directly.
 
     Depends on ``toolbar_leaf`` so ``debug_toolbar`` stays in ``INSTALLED_APPS``
-    for the unit's lifetime; ``lambda request: None`` is the sync ``get_response``
-    the stock ``__init__`` inspects (sync -> not async mode).
+    for the unit's lifetime; ``get_response`` returning ``None`` is the sync
+    ``get_response`` the stock ``__init__`` inspects (sync -> not async mode).
     """
-    return toolbar_leaf.DebugToolbarMiddleware(lambda request: None)
+
+    def get_response(request: HttpRequest) -> None:
+        return None
+
+    return toolbar_leaf.DebugToolbarMiddleware(get_response)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +144,7 @@ def test_leaf_import_raises_install_hint_when_toolbar_absent():
         assert isinstance(excinfo.value.__cause__, ImportError)
 
 
-def test_leaf_reimports_after_restore(toolbar_leaf):
+def test_leaf_reimports_after_restore(toolbar_leaf: ModuleType):
     """After restore the leaf imports again and both sides hold ONE object."""
     with _simulated_toolbar_absence():
         with pytest.raises(ImportError, match=_HINT_SUBSTRING):
@@ -148,7 +158,7 @@ def test_leaf_reimports_after_restore(toolbar_leaf):
     assert parent.debug_toolbar is leaf
 
 
-def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf):
+def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf: ModuleType):
     """A present-but-broken install propagates the RAW ImportError, unwrapped.
 
     The guard imports only the TOP-LEVEL package, so with ``debug_toolbar``
@@ -167,7 +177,10 @@ def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf):
         attr="middleware",
     ) as saved:
         sys.modules["debug_toolbar"] = saved["debug_toolbar"]  # top-level: present + real
-        sys.modules["debug_toolbar.middleware"] = None  # its submodule: broken
+        # its submodule: broken
+        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
+        # as the blocked-import sentinel
+        sys.modules["debug_toolbar.middleware"] = None  # pyright: ignore[reportArgumentType]
         with pytest.raises(ImportError, match="debug_toolbar.middleware") as excinfo:
             importlib.import_module(_LEAF)
         assert _HINT_SUBSTRING not in str(excinfo.value)
@@ -195,7 +208,7 @@ def test_leaf_import_requires_debug_toolbar_in_installed_apps():
                 importlib.import_module(_LEAF)
 
 
-def test_require_debug_toolbar_guard_unit(toolbar_leaf):
+def test_require_debug_toolbar_guard_unit(toolbar_leaf: ModuleType):
     """The thin-wrapper contract - module identity when present, hint when absent."""
     assert toolbar_leaf.require_debug_toolbar() is sys.modules["debug_toolbar"]
     with _simulated_toolbar_absence():
@@ -204,7 +217,7 @@ def test_require_debug_toolbar_guard_unit(toolbar_leaf):
         assert isinstance(excinfo.value.__cause__, ImportError)
 
 
-def test_install_hint_floor_matches_the_pyproject_dev_group_row(toolbar_leaf):
+def test_install_hint_floor_matches_the_pyproject_dev_group_row(toolbar_leaf: ModuleType):
     """The floor's three gated sites agree, including the one nothing imports.
 
     The hint-matching rows above compare the install hint against the re-typed
@@ -240,10 +253,10 @@ class _FakePanel:
 
     def __init__(
         self,
-        panel_id,
-        has_content,
-        title,
-        nav_subtitle,
+        panel_id: str,
+        has_content: bool,
+        title: str | Callable[[], str],
+        nav_subtitle: str | Callable[[], str],
     ):
         self.panel_id = panel_id
         self.has_content = has_content
@@ -260,7 +273,7 @@ class _FakeToolbar:
     for stats / server timing / headers) and ``render_toolbar()``.
     """
 
-    def __init__(self, request_id=None, enabled_panels=()):
+    def __init__(self, request_id: str | None = None, enabled_panels: Iterable[_FakePanel] = ()):
         self.request_id = request_id
         self.enabled_panels = list(enabled_panels)
 
@@ -268,7 +281,7 @@ class _FakeToolbar:
         return ""
 
 
-def test_streaming_response_gets_no_package_mutation(middleware):
+def test_streaming_response_gets_no_package_mutation(middleware: DebugToolbarMiddleware):
     """Streaming early-out - no package-specific mutation after the stock pass.
 
     Not "returns untouched" in the absolute sense: the stock postprocess runs
@@ -278,15 +291,23 @@ def test_streaming_response_gets_no_package_mutation(middleware):
     ``examples/fakeshop/test_query/test_debug_toolbar_api.py``.
     """
     request = RequestFactory().post("/graphql/")
-    request._is_graphiql = True
+    # basedpyright: the middleware stamps _is_graphiql on the request at run time; HttpRequest
+    # declares no such attribute
+    request._is_graphiql = True  # pyright: ignore[reportAttributeAccessIssue]
     response = StreamingHttpResponse(iter([b'{"data": 1}']), content_type="application/json")
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="stream-id"))
+    # basedpyright: the streaming response is the input under test, and a stand-in toolbar carries
+    # only the slots the code under test reads; _postprocess types them as HttpResponse and
+    # DebugToolbar
+    result = middleware._postprocess(request, response, _FakeToolbar(request_id="stream-id"))  # pyright: ignore[reportArgumentType]
     assert result is response
     # The streaming content is unchanged: no appended script, no injected payload.
-    assert b"".join(result.streaming_content) == b'{"data": 1}'
+    assert isinstance(result, StreamingHttpResponse)
+    streamed = result.streaming_content
+    assert isinstance(streamed, Iterator)  # the response under test streams a sync iterator
+    assert b"".join(streamed) == b'{"data": 1}'
 
 
-def test_get_payload_bails_without_request_id(toolbar_leaf):
+def test_get_payload_bails_without_request_id(toolbar_leaf: ModuleType):
     """No ``request_id`` -> ``None`` (the real toolbar always assigns one).
 
     Live named operations in
@@ -299,7 +320,7 @@ def test_get_payload_bails_without_request_id(toolbar_leaf):
     assert toolbar_leaf._get_payload(request, response, _FakeToolbar(request_id=None)) is None
 
 
-def test_get_payload_panel_title_only_when_has_content(toolbar_leaf):
+def test_get_payload_panel_title_only_when_has_content(toolbar_leaf: ModuleType):
     """Stock panels expose properties, so the callable arm is package-only.
 
     Sibling of the missing-``request_id`` row: ``has_content``-false -> ``title``
@@ -328,7 +349,7 @@ def test_get_payload_panel_title_only_when_has_content(toolbar_leaf):
     assert "TemplatesPanel" not in panels
 
 
-def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):
+def test_get_payload_bails_on_non_object_json_body(toolbar_leaf: ModuleType):
     """A non-object JSON body yields ``None``.
 
     A valid single GraphQL response is always a JSON object, so this branch is
@@ -341,7 +362,10 @@ def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):
 
 
 @pytest.mark.parametrize("content", [b"not json", b"\xff"])
-def test_malformed_json_body_gets_no_package_rewrite(middleware, content):
+def test_malformed_json_body_gets_no_package_rewrite(
+    middleware: DebugToolbarMiddleware,
+    content: bytes,
+):
     """A tagged declared-JSON body that cannot be parsed or decoded is not rewritten.
 
     A valid Strawberry operation always returns a JSON object, so the custom
@@ -351,18 +375,22 @@ def test_malformed_json_body_gets_no_package_rewrite(middleware, content):
     stock postprocess may still add its normal toolbar headers.
     """
     request = RequestFactory().post("/graphql/", data="{}", content_type="application/json")
-    request._is_graphiql = True
+    # basedpyright: the middleware stamps _is_graphiql on the request at run time; HttpRequest
+    # declares no such attribute
+    request._is_graphiql = True  # pyright: ignore[reportAttributeAccessIssue]
     response = HttpResponse(content, content_type="application/json; charset=utf-8")
     response["Content-Length"] = len(response.content)
 
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))
+    # basedpyright: a stand-in toolbar carrying only the slots the code under test reads;
+    # _postprocess types the parameter as DebugToolbar
+    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))  # pyright: ignore[reportArgumentType]
 
     assert result is response
     assert result.content == content
     assert int(result["Content-Length"]) == len(content)
 
 
-def test_process_view_tolerates_non_class_view_class(middleware):
+def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMiddleware):
     """A non-class ``view_class`` -> ``False``, no ``TypeError`` from ``issubclass``.
 
     Live HTML negatives in
@@ -374,12 +402,16 @@ def test_process_view_tolerates_non_class_view_class(middleware):
     """
     request = RequestFactory().get("/")
 
-    def view_func(request):
+    def view_func(request: HttpRequest):
         return None
 
-    view_func.view_class = "not-a-class"
+    # basedpyright: Django's ``as_view()`` callback contract puts ``view_class`` on a function;
+    # ``FunctionType`` declares none
+    view_func.view_class = "not-a-class"  # pyright: ignore[reportFunctionMemberAccess]
     middleware.process_view(request, view_func)
-    assert request._is_graphiql is False
+    # basedpyright: the middleware stamps _is_graphiql on the request at run time; HttpRequest
+    # declares no such attribute
+    assert request._is_graphiql is False  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # ---------------------------------------------------------------------------
@@ -397,22 +429,22 @@ def _template_text():
     ).read_text()
 
 
-def _present(needle):
+def _present(needle: str) -> Callable[[str], bool]:
     """Predicate: ``needle`` appears in the asset."""
     return lambda text: needle in text
 
 
-def _absent(needle):
+def _absent(needle: str) -> Callable[[str], bool]:
     """Predicate: ``needle`` does NOT appear in the asset."""
     return lambda text: needle not in text
 
 
-def _defined_once(needle):
+def _defined_once(needle: str) -> Callable[[str], bool]:
     """Predicate: ``needle`` appears exactly once (a spelling that must be single-sited)."""
     return lambda text: text.count(needle) == 1
 
 
-def _ordered(*needles):
+def _ordered(*needles: str):
     """Predicate: every ``needle`` is present, in this order, by first occurrence.
 
     Returns False rather than raising when one is missing, so a row that a
@@ -420,7 +452,7 @@ def _ordered(*needles):
     erroring out of the parametrized body.
     """
 
-    def predicate(text):
+    def predicate(text: str):
         if any(needle not in text for needle in needles):
             return False
         positions = [text.index(needle) for needle in needles]
@@ -429,7 +461,7 @@ def _ordered(*needles):
     return predicate
 
 
-def _adjacent(first, second):
+def _adjacent(first: str, second: str):
     """Predicate: ``second`` follows ``first`` with only whitespace between them.
 
     Ordering predicates compare indices, so a statement wrapped in a condition
@@ -437,7 +469,7 @@ def _adjacent(first, second):
     is exactly what an index comparison cannot see, and adjacency can.
     """
 
-    def predicate(text):
+    def predicate(text: str):
         if first not in text:
             return False
         rest = text[text.index(first) + len(first) :]
@@ -448,19 +480,19 @@ def _adjacent(first, second):
     return predicate
 
 
-def _own_statement_line(statement):
+def _own_statement_line(statement: str) -> Callable[[str], bool]:
     """Predicate: some line's content is exactly ``statement``, nothing guarding it inline."""
     return lambda text: any(line.strip() == statement for line in text.splitlines())
 
 
-def _unnested_within(opener, needle):
+def _unnested_within(opener: str, needle: str):
     """Predicate: ``needle`` sits at the block level ``opener`` opens, not inside a nested one.
 
     Braces between the two balance out when nothing has been wrapped around the
     needle; a block-form condition around it leaves one unclosed.
     """
 
-    def predicate(text):
+    def predicate(text: str):
         if opener not in text:
             return False
         rest = text[text.index(opener) + len(opener) :]
@@ -472,7 +504,7 @@ def _unnested_within(opener, needle):
     return predicate
 
 
-def _return_count_between(first, second, expected):
+def _return_count_between(first: str, second: str, expected: int):
     """Predicate: exactly ``expected`` ``return`` keywords sit between the two needles.
 
     Whether a statement is unconditional is a property of the answer - does
@@ -483,7 +515,7 @@ def _return_count_between(first, second, expected):
     counting the returns in the span answers the question directly.
     """
 
-    def predicate(text):
+    def predicate(text: str):
         if first not in text:
             return False
         rest = text[text.index(first) + len(first) :]
@@ -720,7 +752,10 @@ _TEMPLATE_CONTRACT = (
     _TEMPLATE_CONTRACT,
     ids=[name for name, _ in _TEMPLATE_CONTRACT],
 )
-def test_template_port_invariants_and_robustness_divergence(name, predicate):
+def test_template_port_invariants_and_robustness_divergence(
+    name: str,
+    predicate: Callable[[str], bool],
+):
     """One row per form the copied asset must keep, invariants and divergences alike.
 
     The suite has no JS runtime, so this does not prove the script WORKS - it

@@ -9,6 +9,7 @@ internals a request cannot name.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import get_args
 
 import pytest
@@ -16,6 +17,7 @@ import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category
 from django_filters import NumberFilter
+from strawberry.types.base import get_object_definition
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -32,7 +34,7 @@ from django_strawberry_framework.types.relay import apply_interfaces
 
 
 @pytest.fixture(autouse=True)
-def _isolate_state():
+def _isolate_state() -> Iterator[None]:
     registry.clear()
     _field_specs.clear()
     FilterArgumentsFactory.input_object_types.clear()
@@ -292,11 +294,12 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_relay_t
     # is a lazy reference to GenreFilterInputType.
     factory = FilterArgumentsFactory(BookFilterRelay)
     input_cls = factory.arguments
-    fields = {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
     genres_field = fields["genres"]
     # Strawberry resolves the `Annotated[..., strawberry.lazy(...)]` form
     # into a `LazyType` at field-collection time; both shapes are
     # accepted here so the test is robust to Strawberry version changes.
+    assert genres_field.type_annotation is not None
     type_annotation = genres_field.type_annotation.annotation
     non_none = [arg for arg in get_args(type_annotation) if arg is not type(None)]
     assert non_none, type_annotation
@@ -325,6 +328,8 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_rel
         class Meta:
             model = library_models.Shelf
 
+    assert registry.get(library_models.Shelf) is ShelfTypeNon
+
     class BookFilterNon(FilterSet):
         class Meta:
             model = library_models.Book
@@ -338,7 +343,8 @@ def test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_rel
     )
 
     input_cls = FilterArgumentsFactory(BookFilterNon).arguments
-    fields = {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
+    assert fields["shelf"].type_annotation is not None
     bag_annotation = fields["shelf"].type_annotation.annotation
     (bag_cls,) = [arg for arg in get_args(bag_annotation) if arg is not type(None)]
     bag = {f.python_name: f for f in bag_cls.__strawberry_definition__.fields}
@@ -392,8 +398,8 @@ def test_filter_arguments_factory_rejects_subclassing():
     ``__init_subclass__`` raises ``TypeError`` to enforce it.
     """
     with pytest.raises(TypeError) as excinfo:
-
-        class _SubFactory(FilterArgumentsFactory):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class _SubFactory(FilterArgumentsFactory):  # pyright: ignore[reportUnusedClass]
             pass
 
     assert "does not support subclassing" in str(excinfo.value)
@@ -410,7 +416,7 @@ def test_filter_arguments_factory_empty_filterset_emits_logic_fields():
 
     factory = FilterArgumentsFactory(EmptyFilter)
     input_cls = factory.arguments
-    field_names = {f.python_name for f in input_cls.__strawberry_definition__.fields}
+    field_names = {f.python_name for f in get_object_definition(input_cls, strict=True).fields}
     assert field_names == {"and_", "or_", "not_"}
 
 
@@ -426,7 +432,7 @@ def test_filter_arguments_factory_skips_placeholder_related_filter_target():
             fields = {"name": ["exact"]}
 
     factory = FilterArgumentsFactory(BranchFilterPlaceholder)
-    input_cls = factory.arguments
+    _ = factory.arguments
     assert "BranchFilterPlaceholderInputType" in FilterArgumentsFactory.input_object_types
 
 

@@ -20,6 +20,8 @@ to be read against the source.
 
 from __future__ import annotations
 
+from types import ModuleType
+
 import pytest
 
 from django_strawberry_framework.mutations import inputs as mutation_inputs
@@ -59,13 +61,13 @@ SHARED_CLOSURE_BODIES = (
 )
 
 
-def _row_id(row):
+def _row_id(row: tuple[ModuleType, str, ModuleType]):
     """`inputs.pascalize_token` - the module tail plus the symbol, unique per row."""
     module, symbol, _owner = row
     return f"{module.__name__.rsplit('.', 1)[-1]}.{symbol}"
 
 
-def _bound(module, symbol):
+def _bound(module: ModuleType, symbol: str):
     """Return `module`'s binding for `symbol`, failing (never erroring) when absent."""
     namespace = vars(module)
     if symbol not in namespace:
@@ -78,7 +80,11 @@ def _bound(module, symbol):
     SHARED_BINDINGS,
     ids=[_row_id(row) for row in SHARED_BINDINGS],
 )
-def test_serializer_flavor_binds_the_shared_object_itself(consumer, symbol, owner):
+def test_serializer_flavor_binds_the_shared_object_itself(
+    consumer: ModuleType,
+    symbol: str,
+    owner: ModuleType,
+):
     """The consumer's name IS the owner's object - not an equal-looking local copy."""
     assert _bound(consumer, symbol) is _bound(owner, symbol), (
         f"{consumer.__name__}.{symbol} is no longer {owner.__name__}.{symbol}; "
@@ -91,7 +97,11 @@ def test_serializer_flavor_binds_the_shared_object_itself(consumer, symbol, owne
     SHARED_CLOSURE_BODIES,
     ids=[_row_id(row) for row in SHARED_CLOSURE_BODIES],
 )
-def test_serializer_flavor_closures_share_one_body(consumer, symbol, twin):
+def test_serializer_flavor_closures_share_one_body(
+    consumer: ModuleType,
+    symbol: str,
+    twin: ModuleType,
+):
     """Factory-produced closures differ as objects, so the BODY is what must be one."""
     assert _bound(consumer, symbol).__code__ is _bound(twin, symbol).__code__, (
         f"{consumer.__name__}.{symbol} no longer shares a body with "

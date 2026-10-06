@@ -49,6 +49,7 @@ import difflib
 import json
 import os
 import types
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -64,7 +65,7 @@ ANCHOR = '    if value is None:\n        raise ValueError("no")'
 
 
 @pytest.fixture
-def fake_repo(tmp_path, monkeypatch):
+def fake_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"
     (repo / "package").mkdir(parents=True)
     target = repo / "package" / "views.py"
@@ -74,23 +75,28 @@ def fake_repo(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def scratch_root(tmp_path):
+def scratch_root(tmp_path: Path) -> Path:
     root = tmp_path / "scratch"
     (root / prove_failability.PRISTINE_DIRECTORY_NAME).mkdir(parents=True)
     return root
 
 
+def _never_identical(*args: object, **kwargs: object) -> bool:
+    """A ``filecmp.cmp`` stand-in that reports every pair as different."""
+    return False
+
+
 def _stub_run(
-    monkeypatch,
-    failed=(),
-    errored=(),
-    summary="stubbed",
-    code=1,
-    baseline_failed=(),
-    baseline_errored=(),
-    baseline_code=None,
-    first_call_is_baseline=True,
-):
+    monkeypatch: pytest.MonkeyPatch,
+    failed: Iterable[str] = (),
+    errored: Iterable[str] = (),
+    summary: str = "stubbed",
+    code: int = 1,
+    baseline_failed: Iterable[str] = (),
+    baseline_errored: Iterable[str] = (),
+    baseline_code: int | None = None,
+    first_call_is_baseline: bool = True,
+) -> list[prove_failability.ProofEntry]:
     """Stub ``_run_scope``: the first call is the baseline, every later one the mutant.
 
     The baseline run is the default, so a stub that returned the mutant's failure
@@ -102,9 +108,12 @@ def _stub_run(
     a validity channel and not a diagnostic: ``baseline_code`` defaults to the
     code a real pytest would return for the stubbed failure set.
     """
-    outcomes = []
+    outcomes: list[prove_failability.ProofEntry] = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         outcomes.append(entry)
         if first_call_is_baseline and len(outcomes) == 1:
             return prove_failability.RunOutcome(
@@ -128,8 +137,8 @@ def _stub_run(
     return outcomes
 
 
-def _manifest(tmp_path, **overrides):
-    entry = {
+def _manifest(tmp_path: Path, **overrides: object):
+    entry: dict[str, object] = {
         "label": "package/views.py::gate",
         "target": "package/views.py",
         "anchor": ANCHOR,
@@ -142,12 +151,12 @@ def _manifest(tmp_path, **overrides):
     return path
 
 
-def _single_entry(tmp_path, **overrides):
+def _single_entry(tmp_path: Path, **overrides: object):
     entries, _ = prove_failability.load_manifest(_manifest(tmp_path, **overrides))
     return entries[0]
 
 
-def _multi_manifest(tmp_path, count=3):
+def _multi_manifest(tmp_path: Path, count: int = 3):
     """Write a ``count``-entry manifest, so ``--only`` can select a genuine subset."""
     proofs = [
         {
@@ -164,17 +173,20 @@ def _multi_manifest(tmp_path, count=3):
     return path
 
 
-def _four_failing_rows(monkeypatch):
+def _four_failing_rows(monkeypatch: pytest.MonkeyPatch) -> list[prove_failability.ProofEntry]:
     """Stub every entry as a pinned boundary: 4 attributable rows each, so the run exits 0.
 
     ``_stub_run`` treats only the very first call as a baseline, which is right for a
     one-entry manifest; a multi-entry run needs a baseline/mutant pair per entry, or
     entries after the first difference to zero and grade weakly pinned.
     """
-    calls = []
+    calls: list[prove_failability.ProofEntry] = []
     failed = tuple(f"tests/test_x.py::test_{index}" for index in range(4))
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         calls.append(entry)
         if len(calls) % 2 == 1:
             return prove_failability.RunOutcome((), (), "baseline: stubbed", 0)
@@ -184,7 +196,10 @@ def _four_failing_rows(monkeypatch):
     return calls
 
 
-def _provenance(package_file, databases=(("default", "/ws/examples/fakeshop/db.sqlite3"),)):
+def _provenance(
+    package_file: str,
+    databases: tuple[tuple[str, str], ...] = (("default", "/ws/examples/fakeshop/db.sqlite3"),),
+):
     """Return one pytest process's provenance as the probe would have recorded it."""
     return prove_failability.Provenance(
         role="controller",
@@ -198,10 +213,10 @@ def _provenance(package_file, databases=(("default", "/ws/examples/fakeshop/db.s
 
 
 def test_a_proof_mutates_runs_restores_and_proves_the_restore_by_byte_comparison(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     seen = _stub_run(monkeypatch, failed=("tests/test_x.py::test_a", "tests/test_x.py::test_b"))
     entry = _single_entry(tmp_path)
@@ -220,16 +235,19 @@ def test_a_proof_mutates_runs_restores_and_proves_the_restore_by_byte_comparison
 
 
 def test_the_mutated_text_is_what_the_scope_actually_runs_against(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     target = fake_repo / "package" / "views.py"
     observed = {}
     calls = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         calls.append(entry)
         observed[f"text{len(calls)}"] = target.read_text(encoding="utf-8")
         if len(calls) == 1:
@@ -252,16 +270,19 @@ def test_the_mutated_text_is_what_the_scope_actually_runs_against(
 
 
 def test_a_delete_entry_removes_the_anchor_text(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     target = fake_repo / "package" / "views.py"
     observed = {}
     calls = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         calls.append(entry)
         # The second call is the mutant; the first is the unmutated baseline.
         observed["text"] = target.read_text(encoding="utf-8")
@@ -301,12 +322,12 @@ def test_a_delete_entry_removes_the_anchor_text(
     [("not in the file at all", 0), ("value", 3)],
 )
 def test_an_anchor_that_does_not_match_exactly_once_mutates_nothing(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
-    anchor,
-    expected,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    anchor: str,
+    expected: int,
 ):
     seen = _stub_run(monkeypatch)
     entry = _single_entry(tmp_path, anchor=anchor)
@@ -314,6 +335,7 @@ def test_an_anchor_that_does_not_match_exactly_once_mutates_nothing(
     result = prove_failability.execute_entry(entry, scratch_root)
 
     assert seen == []
+    assert result.failure is not None
     assert f"anchor matched {expected} times" in result.failure
     assert result.outcome is None
     assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
@@ -321,10 +343,10 @@ def test_an_anchor_that_does_not_match_exactly_once_mutates_nothing(
 
 
 def test_check_anchors_only_validates_without_mutating_or_running(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     seen = _stub_run(monkeypatch)
 
@@ -343,13 +365,14 @@ def test_check_anchors_only_validates_without_mutating_or_running(
 
 
 def test_a_failed_restore_raises_writes_a_marker_and_stops_the_run(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch)
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", lambda *args, **kwargs: False)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
 
     with pytest.raises(prove_failability.RestoreProofError):
         prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
@@ -363,18 +386,22 @@ def test_a_failed_restore_raises_writes_a_marker_and_stops_the_run(
 
 
 def test_an_unwritable_target_is_a_restore_proof_error_not_a_bare_oserror(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    def refuse(*args, **kwargs):
+    def refuse(*args: object, **kwargs: object):
         raise PermissionError("read-only file system")
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         # Break the restore only AFTER the pristine copy was taken, so the
         # failure lands where a real read-only tree would put it.
-        monkeypatch.setattr(prove_failability.shutil, "copyfile", refuse)
+        # basedpyright: patch the module object the code under test holds, not a fresh import of it
+        monkeypatch.setattr(prove_failability.shutil, "copyfile", refuse)  # pyright: ignore[reportPrivateLocalImportUsage]
         return prove_failability.RunOutcome((), (), "stubbed", 1)
 
     monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
@@ -384,26 +411,28 @@ def test_an_unwritable_target_is_a_restore_proof_error_not_a_bare_oserror(
 
 
 def test_a_pristine_copy_that_cannot_be_taken_stops_before_mutating(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     seen = _stub_run(monkeypatch)
 
-    def refuse(*args, **kwargs):
+    def refuse(*args: object, **kwargs: object):
         raise PermissionError("no space left on device")
 
-    monkeypatch.setattr(prove_failability.shutil, "copy2", refuse)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.shutil, "copy2", refuse)  # pyright: ignore[reportPrivateLocalImportUsage]
 
     result = prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
 
     assert seen == []
+    assert result.failure is not None
     assert "nothing was mutated" in result.failure
     assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
 
 
-def test_a_target_outside_the_repository_is_refused(fake_repo, tmp_path):
+def test_a_target_outside_the_repository_is_refused(fake_repo: Path, tmp_path: Path):
     outside = tmp_path / "outside.py"
     outside.write_text(SOURCE, encoding="utf-8")
 
@@ -411,21 +440,21 @@ def test_a_target_outside_the_repository_is_refused(fake_repo, tmp_path):
         prove_failability.load_manifest(_manifest(tmp_path, target=str(outside)))
 
 
-def test_a_scratch_root_inside_the_repository_is_refused(fake_repo):
+def test_a_scratch_root_inside_the_repository_is_refused(fake_repo: Path):
     with pytest.raises(prove_failability.ManifestError, match="inside the repository"):
         prove_failability._resolve_scratch_root(str(fake_repo / "docs"))
 
 
-def test_a_scratch_root_outside_the_repository_is_created(fake_repo, tmp_path):
+def test_a_scratch_root_outside_the_repository_is_created(fake_repo: Path, tmp_path: Path):
     resolved = prove_failability._resolve_scratch_root(str(tmp_path / "outside-scratch"))
 
     assert (resolved / prove_failability.PRISTINE_DIRECTORY_NAME).is_dir()
 
 
 def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_or_probe_paths(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Two verifiers proving one manifest against their own workspace copies, sharing one
     # --scratch-root: B's whole proof runs while A's mutation is live, which is how two
@@ -445,9 +474,13 @@ def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_
     probes = {"a": [], "b": []}
     seen = {}
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         calls.append(entry)
         name = "a" if entry is entry_a else "b"
+        assert capture is not None
         probes[name].append(capture.probe_output)
         directory = directory_a if name == "a" else directory_b
         if calls.count(entry) == 2:
@@ -491,12 +524,12 @@ def test_two_workspace_roots_under_one_scratch_root_never_share_pristine_marker_
     [("running", "still running"), ("gone", "no longer running")],
 )
 def test_a_live_marker_for_the_same_repository_root_refuses_the_run_and_is_kept(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
-    writer,
-    reading,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    writer: str,
+    reading: str,
 ):
     seen = _stub_run(monkeypatch)
     given = tmp_path / "outside-scratch"
@@ -526,12 +559,12 @@ def test_a_live_marker_for_the_same_repository_root_refuses_the_run_and_is_kept(
 
 @pytest.mark.parametrize(("holder", "expected_code"), [("running", 1), ("gone", 0)])
 def test_a_run_lock_held_by_a_running_process_refuses_and_a_stale_one_is_replaced(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
-    holder,
-    expected_code,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    holder: str,
+    expected_code: int,
 ):
     _four_failing_rows(monkeypatch)
     given = tmp_path / "outside-scratch"
@@ -553,14 +586,15 @@ def test_a_run_lock_held_by_a_running_process_refuses_and_a_stale_one_is_replace
 
 
 def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header_and_json(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     system_tmp = tmp_path / "system-tmp"
     system_tmp.mkdir()
-    monkeypatch.setattr(prove_failability.tempfile, "tempdir", str(system_tmp))
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.tempfile, "tempdir", str(system_tmp))  # pyright: ignore[reportPrivateLocalImportUsage]
     documents = []
     for run in range(2):
         _four_failing_rows(monkeypatch)
@@ -601,10 +635,10 @@ def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header
     ],
 )
 def test_manifest_refusals(
-    fake_repo,
-    tmp_path,
-    overrides,
-    expected,
+    fake_repo: Path,
+    tmp_path: Path,
+    overrides: dict[str, object],
+    expected: str,
 ):
     with pytest.raises(prove_failability.ManifestError, match=expected):
         prove_failability.load_manifest(_manifest(tmp_path, **overrides))
@@ -619,9 +653,9 @@ def test_manifest_refusals(
     ],
 )
 def test_a_label_whose_leading_path_disagrees_with_the_target_is_refused(
-    fake_repo,
-    tmp_path,
-    label,
+    fake_repo: Path,
+    tmp_path: Path,
+    label: str,
 ):
     # The fail-open this closes: `label` is free manifest text and `target` is resolved
     # separately, so an entry could name a PRODUCTION boundary while the bytes landed in
@@ -643,7 +677,11 @@ def test_a_label_whose_leading_path_disagrees_with_the_target_is_refused(
         'package/views.py #"raise ValueError"',
     ],
 )
-def test_a_label_that_claims_no_path_or_the_right_one_is_accepted(fake_repo, tmp_path, label):
+def test_a_label_that_claims_no_path_or_the_right_one_is_accepted(
+    fake_repo: Path,
+    tmp_path: Path,
+    label: str,
+):
     # Only DISAGREEMENT is refused, never absence: `AGENTS.md` "Source references in
     # docs and code comments" also blesses `path #"unique substring"` and a bare symbol,
     # so a label with no path prefix is a legitimate shape and must not be rejected. A
@@ -653,8 +691,8 @@ def test_a_label_that_claims_no_path_or_the_right_one_is_accepted(fake_repo, tmp
 
 
 def test_an_absolute_leading_path_and_a_top_level_one_are_both_read_as_path_claims(
-    fake_repo,
-    tmp_path,
+    fake_repo: Path,
+    tmp_path: Path,
 ):
     # Two spellings a substring comparison would get wrong: the same file given
     # absolutely (agrees - accept), and a repo-root file named without any `/` at all
@@ -680,7 +718,11 @@ def test_an_absolute_leading_path_and_a_top_level_one_are_both_read_as_path_clai
         "--maxfail",
     ],
 )
-def test_a_scope_that_stops_the_run_early_is_refused_like_cov(fake_repo, tmp_path, fragment):
+def test_a_scope_that_stops_the_run_early_is_refused_like_cov(
+    fake_repo: Path,
+    tmp_path: Path,
+    fragment: str,
+):
     # Verified against a real 9-row scope before this was written: `-n0 -x` grades a
     # 4-row boundary as 1 row (**WEAKLY PINNED**) and `-n0 --maxfail=3` grades it 3 rows
     # (inside the re-run acceptance floor), both at pytest exit 1 with every recorded field
@@ -704,7 +746,11 @@ def test_a_scope_that_stops_the_run_early_is_refused_like_cov(fake_repo, tmp_pat
         ["tests/test_exitfirst.py::test_maxfail"],
     ],
 )
-def test_a_scope_that_merely_narrows_the_row_set_is_not_refused(fake_repo, tmp_path, scope):
+def test_a_scope_that_merely_narrows_the_row_set_is_not_refused(
+    fake_repo: Path,
+    tmp_path: Path,
+    scope: list[str],
+):
     # `-k`, `--deselect` and a node id narrow the row set IDENTICALLY in the unmutated
     # and the mutated run, so the set difference stays a difference of the same rows - a
     # focused scope is the whole point. What is refused is a cut whose position depends
@@ -715,7 +761,10 @@ def test_a_scope_that_merely_narrows_the_row_set_is_not_refused(fake_repo, tmp_p
     )
 
 
-def test_a_missing_replacement_and_a_missing_anchor_are_both_refused(fake_repo, tmp_path):
+def test_a_missing_replacement_and_a_missing_anchor_are_both_refused(
+    fake_repo: Path,
+    tmp_path: Path,
+):
     path = tmp_path / "m.json"
     path.write_text(
         json.dumps({"proofs": [{"label": "x", "target": "package/views.py", "scope": ["a"]}]}),
@@ -743,12 +792,15 @@ def test_a_missing_replacement_and_a_missing_anchor_are_both_refused(fake_repo, 
         prove_failability.load_manifest(path)
 
 
-def test_an_unknown_entry_key_is_refused_so_a_typo_is_not_silently_ignored(fake_repo, tmp_path):
+def test_an_unknown_entry_key_is_refused_so_a_typo_is_not_silently_ignored(
+    fake_repo: Path,
+    tmp_path: Path,
+):
     with pytest.raises(prove_failability.ManifestError, match=r"unknown key\(s\) \['ancor'\]"):
         prove_failability.load_manifest(_manifest(tmp_path, ancor=ANCHOR))
 
 
-def test_a_multi_line_anchor_may_be_given_as_a_list_of_lines(fake_repo, tmp_path):
+def test_a_multi_line_anchor_may_be_given_as_a_list_of_lines(fake_repo: Path, tmp_path: Path):
     entry = _single_entry(
         tmp_path,
         anchor=["    if value is None:", '        raise ValueError("no")'],
@@ -759,7 +811,7 @@ def test_a_multi_line_anchor_may_be_given_as_a_list_of_lines(fake_repo, tmp_path
     assert entry.replacement == "    pass"
 
 
-def test_duplicate_labels_are_refused(fake_repo, tmp_path):
+def test_duplicate_labels_are_refused(fake_repo: Path, tmp_path: Path):
     entry = {
         "label": "same",
         "target": "package/views.py",
@@ -783,7 +835,7 @@ def test_duplicate_labels_are_refused(fake_repo, tmp_path):
         (["1", "1"], ["a"]),
     ],
 )
-def test_only_selects_by_index_or_label_substring(selectors, expected):
+def test_only_selects_by_index_or_label_substring(selectors: list[str], expected: list[str]):
     entries = [
         prove_failability.ProofEntry(name, prove_failability.REPO_ROOT, "x", "y", "m", ("s",))
         for name in ("a", "b", "c")
@@ -795,7 +847,7 @@ def test_only_selects_by_index_or_label_substring(selectors, expected):
 
 
 @pytest.mark.parametrize("selector", ["9", "nope"])
-def test_only_refuses_a_selector_that_matches_nothing(selector):
+def test_only_refuses_a_selector_that_matches_nothing(selector: str):
     entries = [
         prove_failability.ProofEntry("a", prove_failability.REPO_ROOT, "x", "y", "m", ("s",)),
     ]
@@ -850,7 +902,11 @@ def test_captured_log_records_above_the_short_summary_are_not_counted_as_errors(
         (4, False, False),
     ],
 )
-def test_the_acceptance_rule_flags_weak_pinning_and_the_rerun_floor(failed_rows, weak, floor):
+def test_the_acceptance_rule_flags_weak_pinning_and_the_rerun_floor(
+    failed_rows: int,
+    weak: bool,
+    floor: bool,
+):
     entry = prove_failability.ProofEntry(
         "label",
         prove_failability.REPO_ROOT,
@@ -874,10 +930,10 @@ def test_the_acceptance_rule_flags_weak_pinning_and_the_rerun_floor(failed_rows,
 
 
 def test_the_baseline_runs_by_default_and_excludes_rows_that_were_already_failing(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # No ``capture_baseline`` argument: the pre-mutation run is a mandatory field of
     # the record, so it is the default. One pre-existing failing row would otherwise
@@ -892,6 +948,7 @@ def test_the_baseline_runs_by_default_and_excludes_rows_that_were_already_failin
 
     assert len(calls) == 2
     assert result.baseline is not None
+    assert result.outcome is not None
     assert result.outcome.failed_node_ids == (
         "tests/test_x.py::test_flaky",
         "tests/test_x.py::test_boundary",
@@ -902,10 +959,10 @@ def test_the_baseline_runs_by_default_and_excludes_rows_that_were_already_failin
 
 
 def test_opting_out_of_the_baseline_records_the_missing_mandatory_field(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     calls = _stub_run(
         monkeypatch,
@@ -931,10 +988,10 @@ def test_opting_out_of_the_baseline_records_the_missing_mandatory_field(
 
 
 def test_collection_errors_make_the_count_invalid_rather_than_footnoted(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(
         monkeypatch,
@@ -957,10 +1014,10 @@ def test_collection_errors_make_the_count_invalid_rather_than_footnoted(
 
 
 def test_a_baseline_collection_error_also_invalidates_the_count(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # The pre-mutation run is the reference the mutant is differenced against, so a
     # scope that cannot even collect unmutated is no reference at all.
@@ -973,6 +1030,7 @@ def test_a_baseline_collection_error_also_invalidates_the_count(
     result = prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
 
     assert result.error_count == 1
+    assert result.invalid_count_reason is not None
     assert "in the baseline run" in result.invalid_count_reason
 
 
@@ -987,12 +1045,12 @@ def test_a_baseline_collection_error_also_invalidates_the_count(
     ],
 )
 def test_a_mutant_run_that_could_not_report_is_an_invalid_count_not_a_measured_zero(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
-    code,
-    reading,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
+    reading: str,
 ):
     # pytest emits no FAILED line for exit 5, 4, 2 or 3, which is textually identical
     # to a clean run of a boundary nothing pins. Recorded as a measured 0 the entry
@@ -1005,6 +1063,7 @@ def test_a_mutant_run_that_could_not_report_is_an_invalid_count_not_a_measured_z
     report = prove_failability.render_report([result])
 
     assert result.failed_count == 0
+    assert result.invalid_count_reason is not None
     assert f"the mutant run exited {code}" in result.invalid_count_reason
     assert reading in result.invalid_count_reason
     assert "INVALID COUNT" in prove_failability._verdict(result)
@@ -1020,10 +1079,10 @@ def test_a_mutant_run_that_could_not_report_is_an_invalid_count_not_a_measured_z
 
 
 def test_exit_five_reads_as_a_wrong_scope_and_every_other_code_as_a_broken_run(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # "Your scope matched no tests" is a different operator action from "your run blew
     # up" - correct the scope path or node id, versus fix the run - so the two must not
@@ -1040,21 +1099,23 @@ def test_exit_five_reads_as_a_wrong_scope_and_every_other_code_as_a_broken_run(
         scratch_root,
     ).invalid_count_reason
 
+    assert collected_nothing is not None
     assert "the scope matched no test at all" in collected_nothing
     assert "a node id that no longer exists" in collected_nothing
     assert "correct the scope and re-run" in collected_nothing
     assert "the run did not complete" not in collected_nothing
+    assert blew_up is not None
     assert "the run did not complete" in blew_up
     assert "the scope matched no test" not in blew_up
 
 
 @pytest.mark.parametrize("code", [5, 4, 2])
 def test_a_baseline_run_that_could_not_report_also_invalidates_the_count(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
-    code,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    code: int,
 ):
     # The pre-mutation run is the reference the mutant's failure set is differenced
     # against, so a baseline that never collected is no reference at all - and its
@@ -1069,6 +1130,7 @@ def test_a_baseline_run_that_could_not_report_also_invalidates_the_count(
     result = prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
 
     assert result.failed_count == 4
+    assert result.invalid_count_reason is not None
     assert f"the baseline run exited {code}" in result.invalid_count_reason
     assert "invalidates the difference as well" in result.invalid_count_reason
     assert "INVALID COUNT" in prove_failability._verdict(result)
@@ -1076,10 +1138,10 @@ def test_a_baseline_run_that_could_not_report_also_invalidates_the_count(
 
 
 def test_every_invalidating_reason_is_named_rather_than_only_the_first(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Three independent invalidations at once. Reporting one and dropping the others
     # would send the reader to fix the collection error and re-run into the same two
@@ -1089,16 +1151,17 @@ def test_every_invalidating_reason_is_named_rather_than_only_the_first(
     result = prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
 
     assert len(result.invalid_count_reasons) == 3
+    assert result.invalid_count_reason is not None
     assert "1 collection/setup error(s)" in result.invalid_count_reason
     assert "the mutant run exited 5" in result.invalid_count_reason
     assert "the baseline run exited 4" in result.invalid_count_reason
 
 
 def test_two_runs_that_failed_the_same_way_are_named_once_not_twice(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # A mistyped scope path collects nothing in either run, and repeating the same
     # paragraph under two headings is how a reader learns to skim the verdict.
@@ -1109,15 +1172,16 @@ def test_two_runs_that_failed_the_same_way_are_named_once_not_twice(
     assert result.invalid_count_reasons == (
         prove_failability._uncountable_run_reason("both the mutant and the baseline run", 5),
     )
+    assert result.invalid_count_reason is not None
     assert "both the mutant and the baseline run exited 5" in result.invalid_count_reason
     assert "invalidates the difference as well" in result.invalid_count_reason
 
 
 def test_a_genuinely_measured_zero_still_carries_the_why_zero_judgement_slot(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Exit 0 means the scope ran and every row passed: that IS a zero-row result, and
     # the judgement belongs there. The exit-code check must not swallow the real case.
@@ -1133,10 +1197,10 @@ def test_a_genuinely_measured_zero_still_carries_the_why_zero_judgement_slot(
 
 
 def test_main_fails_when_the_scope_collected_nothing_at_all(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     # A typo'd scope path or a retired node id exits 5 with no FAILED lines; the
     # record used to call that a measured 0 and hand it the why-0 slot.
@@ -1154,10 +1218,10 @@ def test_main_fails_when_the_scope_collected_nothing_at_all(
 
 
 def test_a_clean_run_has_no_error_count_and_no_invalid_verdict(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
 
@@ -1169,10 +1233,10 @@ def test_a_clean_run_has_no_error_count_and_no_invalid_verdict(
 
 
 def test_the_report_carries_the_scope_the_node_ids_and_the_restore_proof(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch, failed=("tests/test_x.py::test_a",), summary="1 failed in 1.00s")
 
@@ -1190,10 +1254,10 @@ def test_the_report_carries_the_scope_the_node_ids_and_the_restore_proof(
 
 
 def test_the_record_names_the_file_that_was_actually_mutated(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # `relative_target` was computed and rendered nowhere, so every file identity in the
     # emitted record came from the free-text label - the record could not name the file
@@ -1219,10 +1283,10 @@ def test_the_record_names_the_file_that_was_actually_mutated(
 
 
 def test_manifest_prose_accompanies_the_derived_mutation_and_never_replaces_it(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # The fail-open this closes: the manifest's optional free-text `mutation` was
     # rendered INSTEAD of the derived anchor -> replacement, so an entry claiming "the
@@ -1246,10 +1310,10 @@ def test_manifest_prose_accompanies_the_derived_mutation_and_never_replaces_it(
 
 
 def test_an_entry_without_prose_renders_the_derived_mutation_alone(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Absence of the "unverified prose" marker must mean something, so an entry that
     # made no claim does not get an empty one.
@@ -1267,10 +1331,10 @@ def test_an_entry_without_prose_renders_the_derived_mutation_alone(
 
 
 def test_the_table_prints_the_scope_as_a_runnable_command_not_a_bare_path(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # The independent re-run happens "at the scope the record names"; a bare path in
     # the column headed "Scope as run" forces the re-runner to reconstruct --no-cov and
@@ -1330,10 +1394,10 @@ def test_every_captured_field_of_a_run_outcome_is_load_bearing_in_the_record():
 
 
 def test_a_zero_row_entry_carries_a_why_zero_placeholder_the_tool_cannot_fill(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Weakly pinned and harness-impossible prescribe opposite responses, so the
     # emitted subsection must carry the slot rather than guess or omit it.
@@ -1349,10 +1413,10 @@ def test_a_zero_row_entry_carries_a_why_zero_placeholder_the_tool_cannot_fill(
 
 
 def test_a_nonzero_row_entry_carries_no_why_zero_placeholder(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
 
@@ -1362,10 +1426,10 @@ def test_a_nonzero_row_entry_carries_no_why_zero_placeholder(
 
 
 def test_a_row_that_is_only_zero_after_the_baseline_difference_still_gets_the_placeholder(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # The pre-existing row is the whole failure set, so nothing is attributable: the
     # fail-open this closes is exactly this entry reading as a pinned 1-row boundary.
@@ -1384,10 +1448,10 @@ def test_a_row_that_is_only_zero_after_the_baseline_difference_still_gets_the_pl
 
 
 def test_main_returns_zero_on_a_pinned_boundary_and_one_on_a_weakly_pinned_one(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     manifest = _manifest(tmp_path)
     scratch = tmp_path / "outside-scratch"
@@ -1401,10 +1465,10 @@ def test_main_returns_zero_on_a_pinned_boundary_and_one_on_a_weakly_pinned_one(
 
 
 def test_main_fails_when_collection_errors_make_the_count_invalid(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     # 4 attributable failures would be a pinned boundary; 8 rows that never ran mean
     # the run is not evidence of anything. This is the recorded csrf_exempt incident.
@@ -1425,10 +1489,10 @@ def test_main_fails_when_collection_errors_make_the_count_invalid(
 
 
 def test_main_refuses_output_without_a_baseline_and_runs_nothing(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     seen = _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
     output = tmp_path / "proofs.md"
@@ -1450,7 +1514,11 @@ def test_main_refuses_output_without_a_baseline_and_runs_nothing(
     assert "--no-baseline cannot be combined with --output" in capsys.readouterr().err
 
 
-def test_check_anchors_only_may_write_output_without_a_baseline(fake_repo, tmp_path, monkeypatch):
+def test_check_anchors_only_may_write_output_without_a_baseline(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     # Nothing ran, so there is no count for a missing baseline to inflate and the
     # emitted block says so in its own words rather than claiming a proof.
     seen = _stub_run(monkeypatch)
@@ -1473,7 +1541,11 @@ def test_check_anchors_only_may_write_output_without_a_baseline(fake_repo, tmp_p
     assert "no mutation was applied and no scope was run" in output.read_text(encoding="utf-8")
 
 
-def test_no_baseline_without_output_runs_the_scope_once(fake_repo, tmp_path, monkeypatch):
+def test_no_baseline_without_output_runs_the_scope_once(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     seen = _stub_run(
         monkeypatch,
         failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)),
@@ -1494,9 +1566,9 @@ def test_no_baseline_without_output_runs_the_scope_once(fake_repo, tmp_path, mon
 
 
 def test_the_legacy_baseline_flag_is_accepted_and_wins_over_no_baseline(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     seen = _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
 
@@ -1514,7 +1586,10 @@ def test_the_legacy_baseline_flag_is_accepted_and_wins_over_no_baseline(
     assert len(seen) == 2
 
 
-def test_main_reports_a_manifest_error_without_running_anything(tmp_path, capsys):
+def test_main_reports_a_manifest_error_without_running_anything(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     manifest = tmp_path / "broken.json"
     manifest.write_text("{not json", encoding="utf-8")
 
@@ -1523,13 +1598,14 @@ def test_main_reports_a_manifest_error_without_running_anything(tmp_path, capsys
 
 
 def test_main_aborts_with_a_dedicated_code_when_a_restore_cannot_be_proved(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     _stub_run(monkeypatch)
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", lambda *args, **kwargs: False)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
 
     code = prove_failability.main(
         [str(_manifest(tmp_path)), "--scratch-root", str(tmp_path / "outside-scratch")],
@@ -1540,15 +1616,16 @@ def test_main_aborts_with_a_dedicated_code_when_a_restore_cannot_be_proved(
 
 
 def test_a_failed_restore_still_writes_the_partial_report_to_the_output_path(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     # A partial record of a run that stopped with a possibly-live mutation is exactly
     # what the next reader needs; stdout-only would lose it.
     _stub_run(monkeypatch)
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", lambda *args, **kwargs: False)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
     output = tmp_path / "proofs.md"
 
     code = prove_failability.main(
@@ -1572,10 +1649,10 @@ def test_a_failed_restore_still_writes_the_partial_report_to_the_output_path(
 
 
 def test_an_only_run_labels_its_report_a_partial_record_at_both_ends_and_in_the_table(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     # The fail-open this closes: `--only 3 --output` used to emit a block textually
     # identical to a complete run's, so a record covering one boundary of twenty could
@@ -1617,9 +1694,9 @@ def test_an_only_run_labels_its_report_a_partial_record_at_both_ends_and_in_the_
 
 
 def test_a_full_run_says_nothing_about_selection_so_the_partial_notice_stays_meaningful(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Absence of the notice is only evidence if the notice is never noise, so a run
     # that covered the whole manifest emits no selection prose at all.
@@ -1646,9 +1723,9 @@ def test_a_full_run_says_nothing_about_selection_so_the_partial_notice_stays_mea
 
 
 def test_only_selectors_that_cover_the_whole_manifest_are_not_a_partial_record(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # Partial is about coverage, not about the flag: a selector set that names every
     # entry leaves no boundary unproved, so labelling it partial would be false.
@@ -1672,10 +1749,10 @@ def test_only_selectors_that_cover_the_whole_manifest_are_not_a_partial_record(
 
 
 def test_only_is_still_allowed_output_unlike_no_baseline_which_is_refused(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     # The two flags are not the same fault. --no-baseline omits a field ARTIFACT.md
     # requires, so no annotation can make that report a compliant record. --only emits
@@ -1727,12 +1804,17 @@ def test_only_is_still_allowed_output_unlike_no_baseline_which_is_refused(
     assert "--no-baseline cannot be combined with --output" in capsys.readouterr().err
 
 
-def test_an_aborted_narrowed_run_keeps_the_partial_record_notice(fake_repo, tmp_path, monkeypatch):
+def test_an_aborted_narrowed_run_keeps_the_partial_record_notice(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     # Two independent reasons the record is partial: the restore that stopped the run
     # and the selection that shrank it. The reader needs both, so neither replaces
     # the other.
     _stub_run(monkeypatch)
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", lambda *args, **kwargs: False)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
     output = tmp_path / "proofs.md"
 
     code = prove_failability.main(
@@ -1785,7 +1867,11 @@ def test_describe_selection_counts_coverage_rather_than_trusting_the_selector_li
     assert whole.selector_text == "no selector"
 
 
-def test_the_output_flag_writes_the_report_to_disk(fake_repo, tmp_path, monkeypatch):
+def test_the_output_flag_writes_the_report_to_disk(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
     output = tmp_path / "proofs.md"
 
@@ -1808,17 +1894,33 @@ def test_the_output_flag_writes_the_report_to_disk(fake_repo, tmp_path, monkeypa
 COUNT_ROW = "tests/test_x.py::test_query_count_is_flat_across_row_counts"
 
 
-def _run_with_expectation(tmp_path, scratch_root, monkeypatch, expect_failing, **stub):
-    _stub_run(monkeypatch, **stub)
+def _run_with_expectation(
+    tmp_path: Path,
+    scratch_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expect_failing: list[str],
+    *,
+    failed: tuple[str, ...] = (),
+    errored: tuple[str, ...] = (),
+    code: int = 1,
+    baseline_failed: tuple[str, ...] = (),
+):
+    _stub_run(
+        monkeypatch,
+        failed=failed,
+        errored=errored,
+        code=code,
+        baseline_failed=baseline_failed,
+    )
     entry = _single_entry(tmp_path, expect_failing=expect_failing)
     return prove_failability.execute_entry(entry, scratch_root)
 
 
 def test_a_declared_single_row_is_a_complete_proof_not_a_weak_pin(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # One query-count function asserting two cardinalities fails as one row; the row
     # count would grade it WEAKLY PINNED although it is exactly the row the proof names.
@@ -1833,6 +1935,7 @@ def test_a_declared_single_row_is_a_complete_proof_not_a_weak_pin(
     assert result.failed_count == 1
     assert result.is_weakly_pinned is False
     assert result.is_inside_rerun_floor is False
+    assert result.expectation is not None
     assert result.expectation.is_met is True
     verdict = prove_failability._verdict(result)
     assert "WEAKLY PINNED" not in verdict
@@ -1844,10 +1947,10 @@ def test_a_declared_single_row_is_a_complete_proof_not_a_weak_pin(
 
 
 def test_the_same_single_row_without_a_declaration_keeps_the_row_count_grading(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch, failed=(COUNT_ROW,))
 
@@ -1860,10 +1963,10 @@ def test_the_same_single_row_without_a_declaration_keeps_the_row_count_grading(
 
 
 def test_a_declared_set_names_missing_and_undeclared_rows(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     result = _run_with_expectation(
         tmp_path,
@@ -1873,6 +1976,7 @@ def test_a_declared_set_names_missing_and_undeclared_rows(
         failed=("tests/test_x.py::test_other",),
     )
 
+    assert result.expectation is not None
     assert result.expectation.missing == (COUNT_ROW,)
     assert result.expectation.unexpected == ("tests/test_x.py::test_other",)
     assert result.is_expectation_unmet is True
@@ -1884,10 +1988,10 @@ def test_a_declared_set_names_missing_and_undeclared_rows(
 
 
 def test_an_empty_declaration_is_a_behaviour_preservation_proof(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     preserved = _run_with_expectation(tmp_path, scratch_root, monkeypatch, [], code=0)
 
@@ -1905,15 +2009,16 @@ def test_an_empty_declaration_is_a_behaviour_preservation_proof(
         failed=("tests/test_x.py::test_a",),
     )
 
+    assert broken.expectation is not None
     assert broken.expectation.unexpected == ("tests/test_x.py::test_a",)
     assert prove_failability._exit_code([broken]) == 1
 
 
 def test_patterns_match_globs_and_parametrized_ids_literally(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     # ``[a-b]`` is a character class to fnmatch, so equality is tried first.
     parametrized = "tests/test_x.py::test_count[a-b]"
@@ -1929,14 +2034,15 @@ def test_patterns_match_globs_and_parametrized_ids_literally(
         ),
     )
 
+    assert result.expectation is not None
     assert result.expectation.is_met is True
 
 
 def test_a_declared_row_already_failing_before_the_mutation_is_named_as_such(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     result = _run_with_expectation(
         tmp_path,
@@ -1946,15 +2052,16 @@ def test_a_declared_row_already_failing_before_the_mutation_is_named_as_such(
         baseline_failed=(COUNT_ROW,),
     )
 
+    assert result.expectation is not None
     assert result.expectation.missing_but_failing_at_baseline == (COUNT_ROW,)
     assert "already failing before the mutation" in prove_failability._verdict(result)
 
 
 def test_a_declaration_does_not_rescue_an_invalid_count(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     result = _run_with_expectation(
         tmp_path,
@@ -1979,7 +2086,7 @@ def test_a_declaration_does_not_rescue_an_invalid_count(
         {"a": 1},
     ],
 )
-def test_a_declaration_must_be_a_list_of_node_ids(fake_repo, tmp_path, value):
+def test_a_declaration_must_be_a_list_of_node_ids(fake_repo: Path, tmp_path: Path, value: object):
     with pytest.raises(prove_failability.ManifestError, match="'expect_failing' must be a list"):
         prove_failability.load_manifest(_manifest(tmp_path, expect_failing=value))
 
@@ -1990,8 +2097,12 @@ def test_a_declaration_must_be_a_list_of_node_ids(fake_repo, tmp_path, value):
 OTHER_SOURCE = "def other(value):\n    return value + 1\n"
 
 
-def _sites_manifest(tmp_path, sites, **overrides):
-    entry = {"label": "package/views.py::gate", "sites": sites, "scope": ["tests/test_x.py"]}
+def _sites_manifest(tmp_path: Path, sites: object, **overrides: object):
+    entry: dict[str, object] = {
+        "label": "package/views.py::gate",
+        "sites": sites,
+        "scope": ["tests/test_x.py"],
+    }
     entry.update(overrides)
     path = tmp_path / "sites.json"
     path.write_text(json.dumps({"proofs": [entry]}), encoding="utf-8")
@@ -1999,7 +2110,7 @@ def _sites_manifest(tmp_path, sites, **overrides):
 
 
 @pytest.fixture
-def two_files(fake_repo):
+def two_files(fake_repo: Path) -> tuple[Path, Path]:
     other = fake_repo / "package" / "other.py"
     other.write_text(OTHER_SOURCE, encoding="utf-8")
     return fake_repo / "package" / "views.py", other
@@ -2013,15 +2124,18 @@ def _two_sites():
 
 
 def test_every_site_is_live_during_the_mutant_run_and_every_file_is_restored(
-    two_files,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    two_files: tuple[Path, Path],
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     views, other = two_files
     seen = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         seen.append((views.read_text(encoding="utf-8"), other.read_text(encoding="utf-8")))
         return prove_failability.RunOutcome((), (), "stubbed", 0)
 
@@ -2051,16 +2165,16 @@ def test_every_site_is_live_during_the_mutant_run_and_every_file_is_restored(
 
 
 def test_one_unprovable_restore_still_restores_every_other_site(
-    two_files,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    two_files: tuple[Path, Path],
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     views, other = two_files
     _stub_run(monkeypatch)
     real_restore = prove_failability._restore_and_prove
 
-    def restore(target, pristine):
+    def restore(target: Path, pristine: Path):
         if target == views:
             raise prove_failability.RestoreProofError(f"{target} could not be restored")
         return real_restore(target, pristine)
@@ -2083,10 +2197,10 @@ def test_one_unprovable_restore_still_restores_every_other_site(
 
 
 def test_a_site_that_does_not_match_names_itself_and_nothing_is_written(
-    two_files,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    two_files: tuple[Path, Path],
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     views, _ = two_files
     seen = _stub_run(monkeypatch)
@@ -2096,21 +2210,25 @@ def test_a_site_that_does_not_match_names_itself_and_nothing_is_written(
     result = prove_failability.execute_entry(_sites_manifest(tmp_path, sites), scratch_root)
 
     assert seen == []
+    assert result.failure is not None
     assert result.failure.startswith("site 2 (`package/other.py`): anchor matched 0 times")
     assert views.read_text(encoding="utf-8") == SOURCE
     assert not list((scratch_root / prove_failability.PRISTINE_DIRECTORY_NAME).iterdir())
 
 
 def test_two_anchor_sites_on_one_file_apply_in_order(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     views = fake_repo / "package" / "views.py"
     seen = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         seen.append(views.read_text(encoding="utf-8"))
         return prove_failability.RunOutcome((), (), "stubbed", 0)
 
@@ -2153,17 +2271,17 @@ def test_two_anchor_sites_on_one_file_apply_in_order(
     ],
 )
 def test_malformed_sites_are_refused(
-    fake_repo,
-    tmp_path,
-    sites,
-    overrides,
-    expected,
+    fake_repo: Path,
+    tmp_path: Path,
+    sites: object,
+    overrides: dict[str, object],
+    expected: str,
 ):
     with pytest.raises(prove_failability.ManifestError, match=expected):
         _sites_manifest(tmp_path, sites, **overrides)
 
 
-def test_a_pre_image_site_may_not_share_its_target(fake_repo, tmp_path):
+def test_a_pre_image_site_may_not_share_its_target(fake_repo: Path, tmp_path: Path):
     image = tmp_path / "views.pre"
     image.write_text("x = 1\n", encoding="utf-8")
     sites = [
@@ -2175,7 +2293,10 @@ def test_a_pre_image_site_may_not_share_its_target(fake_repo, tmp_path):
         _sites_manifest(tmp_path, sites)
 
 
-def test_a_multi_site_label_may_name_any_site_and_no_other_file(two_files, tmp_path):
+def test_a_multi_site_label_may_name_any_site_and_no_other_file(
+    two_files: tuple[Path, Path],
+    tmp_path: Path,
+):
     assert _sites_manifest(tmp_path, _two_sites(), label="package/other.py::other").label == (
         "package/other.py::other"
     )
@@ -2190,17 +2311,20 @@ PRE_IMAGE = "def gate(value):\n    return value\n"
 
 
 def test_a_pre_image_replaces_the_file_wholesale_and_is_restored(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     views = fake_repo / "package" / "views.py"
     (tmp_path / "inputs").mkdir()
     (tmp_path / "inputs" / "views.pre").write_text(PRE_IMAGE, encoding="utf-8")
     seen = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         seen.append(views.read_text(encoding="utf-8"))
         return prove_failability.RunOutcome((), (), "stubbed", 0)
 
@@ -2235,10 +2359,10 @@ def test_a_pre_image_replaces_the_file_wholesale_and_is_restored(
 
 
 def test_a_pre_image_identical_to_the_file_is_refused_before_anything_is_written(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     seen = _stub_run(monkeypatch)
     image = tmp_path / "same.pre"
@@ -2266,15 +2390,16 @@ def test_a_pre_image_identical_to_the_file_is_refused_before_anything_is_written
     )
 
     assert seen == []
+    assert result.failure is not None
     assert "would mutate nothing" in result.failure
 
 
 def _patch_file(
-    tmp_path,
-    pre,
-    post,
-    relative="package/views.py",
-    name="item.diff",
+    tmp_path: Path,
+    pre: str,
+    post: str,
+    relative: str = "package/views.py",
+    name: str = "item.diff",
 ):
     """Write the diff a caller saves from ``git diff <base> -- <path>`` (pre -> post)."""
     diff = "".join(
@@ -2290,8 +2415,12 @@ def _patch_file(
     return path
 
 
-def _reverse_patch_entry(tmp_path, patch, **fields):
-    entry = {"label": "gate", "reverse_patch": str(patch), "scope": ["tests/test_x.py"]}
+def _reverse_patch_entry(tmp_path: Path, patch: Path, **fields: object):
+    entry: dict[str, object] = {
+        "label": "gate",
+        "reverse_patch": str(patch),
+        "scope": ["tests/test_x.py"],
+    }
     entry.update(fields)
     manifest = tmp_path / "m.json"
     manifest.write_text(json.dumps({"proofs": [entry]}), encoding="utf-8")
@@ -2299,16 +2428,19 @@ def _reverse_patch_entry(tmp_path, patch, **fields):
 
 
 def test_a_reverse_patch_restores_the_pre_image_while_the_scope_runs(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     views = fake_repo / "package" / "views.py"
     patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE)
     seen = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         seen.append(views.read_text(encoding="utf-8"))
         return prove_failability.RunOutcome((), (), "stubbed", 0)
 
@@ -2325,7 +2457,10 @@ def test_a_reverse_patch_restores_the_pre_image_while_the_scope_runs(
         assert entry.mutation_sites[0].kind == prove_failability.REVERSE_PATCH_KIND
 
 
-def test_a_reverse_patch_spanning_two_files_becomes_two_sites(two_files, tmp_path):
+def test_a_reverse_patch_spanning_two_files_becomes_two_sites(
+    two_files: tuple[Path, Path],
+    tmp_path: Path,
+):
     views_patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE).read_text()
     other_patch = _patch_file(tmp_path, "x\n", OTHER_SOURCE, relative="package/other.py")
     both = tmp_path / "both.diff"
@@ -2339,10 +2474,10 @@ def test_a_reverse_patch_spanning_two_files_becomes_two_sites(two_files, tmp_pat
 
 
 def test_a_reverse_patch_whose_post_image_is_absent_mutates_nothing(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     seen = _stub_run(monkeypatch)
     patch = _patch_file(tmp_path, PRE_IMAGE, "def gate(value):\n    return value * 2\n")
@@ -2350,6 +2485,7 @@ def test_a_reverse_patch_whose_post_image_is_absent_mutates_nothing(
     result = prove_failability.execute_entry(_reverse_patch_entry(tmp_path, patch), scratch_root)
 
     assert seen == []
+    assert result.failure is not None
     assert "hunk 1 for package/views.py does not apply" in result.failure
     assert (fake_repo / "package" / "views.py").read_text(encoding="utf-8") == SOURCE
 
@@ -2370,7 +2506,7 @@ def test_a_repeated_post_image_is_located_by_the_hunk_header_alone():
         prove_failability._reverse_hunks(text, [nowhere], "f.py")
 
 
-def test_a_missing_final_newline_is_reverted_byte_for_byte(tmp_path):
+def test_a_missing_final_newline_is_reverted_byte_for_byte(tmp_path: Path):
     diff = (
         "--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n"
         "+c\n\\ No newline at end of file\n"
@@ -2391,10 +2527,10 @@ def test_a_missing_final_newline_is_reverted_byte_for_byte(tmp_path):
     ],
 )
 def test_a_patch_the_applier_cannot_revert_is_refused(
-    fake_repo,
-    tmp_path,
-    diff,
-    expected,
+    fake_repo: Path,
+    tmp_path: Path,
+    diff: str,
+    expected: str,
 ):
     patch = tmp_path / "bad.diff"
     patch.write_text(diff)
@@ -2403,7 +2539,10 @@ def test_a_patch_the_applier_cannot_revert_is_refused(
         _reverse_patch_entry(tmp_path, patch)
 
 
-def test_a_patch_without_a_section_for_the_target_is_refused(two_files, tmp_path):
+def test_a_patch_without_a_section_for_the_target_is_refused(
+    two_files: tuple[Path, Path],
+    tmp_path: Path,
+):
     patch = _patch_file(tmp_path, PRE_IMAGE, SOURCE)
 
     with pytest.raises(
@@ -2422,7 +2561,10 @@ def _load_probe():
     return probe
 
 
-def test_the_probe_records_package_file_database_names_and_crash_lines(tmp_path, monkeypatch):
+def test_the_probe_records_package_file_database_names_and_crash_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     output = tmp_path / "probe.jsonl"
     monkeypatch.setenv(prove_failability.PROBE_OUTPUT_ENV, str(output))
     monkeypatch.setenv(prove_failability.PROBE_PACKAGE_ENV, "django_strawberry_framework")
@@ -2462,8 +2604,8 @@ def test_the_probe_records_package_file_database_names_and_crash_lines(tmp_path,
 
 
 def test_an_xdist_worker_reports_provenance_but_leaves_rows_to_the_controller(
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     output = tmp_path / "probe.jsonl"
     monkeypatch.setenv(prove_failability.PROBE_OUTPUT_ENV, str(output))
@@ -2482,16 +2624,16 @@ def test_an_xdist_worker_reports_provenance_but_leaves_rows_to_the_controller(
 
 
 def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     entry = _single_entry(tmp_path)
     capture = prove_failability._new_capture(scratch_root, entry, "mutant")
     calls = []
 
-    def fake_subprocess_run(command, **kwargs):
+    def fake_subprocess_run(command: list[str], **kwargs: object):
         calls.append((command, kwargs))
         capture.probe_output.write_text(
             json.dumps({"kind": "failed", "nodeid": COUNT_ROW, "crash": "t.py:9: assert 6 == 1"})
@@ -2509,7 +2651,8 @@ def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
             returncode=1,
         )
 
-    monkeypatch.setattr(prove_failability.subprocess, "run", fake_subprocess_run)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.subprocess, "run", fake_subprocess_run)  # pyright: ignore[reportPrivateLocalImportUsage]
 
     outcome = prove_failability._run_scope(entry, capture)
 
@@ -2530,7 +2673,7 @@ def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
     assert f"FAILED {COUNT_ROW}" in log
 
 
-def test_a_run_that_imported_another_tree_is_an_invalid_count(fake_repo):
+def test_a_run_that_imported_another_tree_is_an_invalid_count(fake_repo: Path):
     entry = prove_failability.ProofEntry("a", fake_repo, "x", "y", "m", ("s",))
     inside = _provenance(str(fake_repo / "django_strawberry_framework" / "__init__.py"))
     outside = _provenance("/shared/checkout/django_strawberry_framework/__init__.py")
@@ -2541,26 +2684,24 @@ def test_a_run_that_imported_another_tree_is_an_invalid_count(fake_repo):
         "tests/test_x.py::d",
     )
 
-    honest = prove_failability.ProofResult(
-        entry,
-        prove_failability.RunOutcome(failing, (), "4 failed", 1, provenance=(inside,)),
-        "proved",
-        None,
-    )
+    outcome = prove_failability.RunOutcome(failing, (), "4 failed", 1, provenance=(inside,))
+    honest = prove_failability.ProofResult(entry, outcome, "proved", None)
     foreign = dataclasses.replace(
         honest,
-        outcome=dataclasses.replace(honest.outcome, provenance=(inside, outside)),
+        outcome=dataclasses.replace(outcome, provenance=(inside, outside)),
     )
 
     assert honest.invalid_count_reason is None
+    assert foreign.invalid_count_reason is not None
     assert "outside the tree under proof" in foreign.invalid_count_reason
     assert "/shared/checkout/" in foreign.invalid_count_reason
     # ``--workspace`` additionally refuses a run the probe observed nothing about.
     unobserved = dataclasses.replace(
         honest,
-        outcome=dataclasses.replace(honest.outcome, provenance=()),
+        outcome=dataclasses.replace(outcome, provenance=()),
         provenance_required=True,
     )
+    assert unobserved.invalid_count_reason is not None
     assert "reported no package `__file__`" in unobserved.invalid_count_reason
     assert dataclasses.replace(unobserved, provenance_required=False).invalid_count_reason is None
 
@@ -2577,16 +2718,19 @@ LONG_ANCHOR = ["    if value is None:", '        raise ValueError("no")']
 
 
 def test_the_json_record_carries_the_whole_mutation_blob_ids_and_provenance(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     long_line = "    return value  # " + "x" * 150
     target = fake_repo / "package" / "views.py"
     target.write_text(SOURCE.replace("    return value", long_line), encoding="utf-8")
     calls = []
 
-    def fake_run_scope(entry, capture=None):
+    def fake_run_scope(
+        entry: prove_failability.ProofEntry,
+        capture: prove_failability.RunCapture | None = None,
+    ):
         calls.append(capture)
         if len(calls) == 1:
             return prove_failability.RunOutcome((), (), "3 passed", 0, wall_seconds=1.0)
@@ -2653,9 +2797,14 @@ def test_the_json_record_carries_the_whole_mutation_blob_ids_and_provenance(
     assert "package `__file__`" in rendered
 
 
-def test_the_json_record_is_written_for_an_aborted_run_too(fake_repo, tmp_path, monkeypatch):
+def test_the_json_record_is_written_for_an_aborted_run_too(
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     _stub_run(monkeypatch)
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", lambda *args, **kwargs: False)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
     output = tmp_path / "proofs.json"
 
     code = prove_failability.main(
@@ -2677,10 +2826,10 @@ def test_the_json_record_is_written_for_an_aborted_run_too(fake_repo, tmp_path, 
 
 
 def test_workspace_refuses_a_repository_root_outside_the_given_path(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     seen = _stub_run(monkeypatch)
     elsewhere = tmp_path / "elsewhere"
@@ -2703,10 +2852,10 @@ def test_workspace_refuses_a_repository_root_outside_the_given_path(
 
 
 def test_workspace_refuses_a_checkout_that_holds_a_git_directory(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
-    capsys,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ):
     seen = _stub_run(monkeypatch)
     (fake_repo / ".git").mkdir()
@@ -2727,9 +2876,9 @@ def test_workspace_refuses_a_checkout_that_holds_a_git_directory(
 
 
 def test_workspace_accepts_the_copy_and_requires_observed_provenance(
-    fake_repo,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch, failed=tuple(f"tests/test_x.py::test_{i}" for i in range(4)))
     output = tmp_path / "proofs.json"
@@ -2760,10 +2909,10 @@ def test_workspace_accepts_the_copy_and_requires_observed_provenance(
 
 
 def test_an_original_shape_manifest_reads_and_grades_exactly_as_before(
-    fake_repo,
-    scratch_root,
-    tmp_path,
-    monkeypatch,
+    fake_repo: Path,
+    scratch_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     manifest = tmp_path / "historical.json"
     manifest.write_text(

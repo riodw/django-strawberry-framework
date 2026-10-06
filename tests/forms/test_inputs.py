@@ -32,7 +32,9 @@ fail-loud, shape identity, and throwaway-type id mapping.
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import strawberry
@@ -42,7 +44,10 @@ from apps.scalars import models as scalar_models
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
 from strawberry import UNSET, relay
-from strawberry.types.base import StrawberryOptional
+from strawberry.types.base import StrawberryOptional, get_object_definition
+from strawberry.types.enum import StrawberryEnumDefinition
+from strawberry.types.field import StrawberryField
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -53,11 +58,9 @@ from django_strawberry_framework.forms.converter import (
     SCALAR,
 )
 from django_strawberry_framework.forms.inputs import (
-    CREATE,
     CREATE_SHAPED_KINDS,
     FORM,
     INPUTS_MODULE_PATH,
-    PARTIAL,
     _model_column_for,
     build_form_input_class,
     build_form_inputs,
@@ -70,12 +73,23 @@ from django_strawberry_framework.forms.inputs import (
     normalize_form_field_basis,
     resolve_effective_form_fields,
 )
+from django_strawberry_framework.mutations.inputs import CREATE, PARTIAL
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.inputs import InputFieldSpec
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.forms.inputs import FormClass
+
+
+def _as_form_class(stand_in: object) -> FormClass:
+    """Hand a duck-typed form class to the column resolver that takes a form class."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # _model_column_for types the parameter as FormClass
+    return stand_in  # pyright: ignore[reportReturnType]
+
 
 @pytest.fixture(autouse=True)
-def _isolate_registry_and_ledger():
+def _isolate_registry_and_ledger() -> Iterator[None]:
     """Reset registry + the form-input ledger so each test starts clean.
 
     ``clear_form_input_namespace`` is not wired into ``registry.clear()``
@@ -90,17 +104,17 @@ def _isolate_registry_and_ledger():
     clear_form_input_namespace()
 
 
-def _field_map(input_cls: type) -> dict[str, object]:
+def _field_map(input_cls: type) -> dict[str, StrawberryField]:
     """Return ``python_name -> StrawberryField`` for a built input class."""
     return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
 
 
-def _is_optional(field) -> bool:
+def _is_optional(field: StrawberryField) -> bool:
     """Return whether a Strawberry field's annotation is ``T | None``."""
     return isinstance(field.type, StrawberryOptional)
 
 
-def _inner_type(field):
+def _inner_type(field: StrawberryField):
     """Return the inner type of a ``StrawberryOptional`` field, else the type itself."""
     return field.type.of_type if isinstance(field.type, StrawberryOptional) else field.type
 
@@ -168,7 +182,8 @@ def test_get_form_fields_does_not_instantiate_kwarg_requiring_form():
     class KwargForm(forms.Form):
         email = forms.EmailField()
 
-        def __init__(self, *args, user, **kwargs):
+        # basedpyright: verbatim forward to forms.Form.__init__; object fails its typed params
+        def __init__(self, *args: Any, user: object, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
             # No-arg instantiation would raise TypeError (missing ``user``); the
             # discovery never instantiates, so the shape is still readable.
             super().__init__(*args, **kwargs)
@@ -177,7 +192,9 @@ def test_get_form_fields_does_not_instantiate_kwarg_requiring_form():
     discovered = get_form_fields(KwargForm)
     assert list(discovered) == ["email"]
     with pytest.raises(TypeError):
-        KwargForm()  # proves the form genuinely cannot be instantiated no-arg
+        # basedpyright: deliberately omits ``user``; proves the form genuinely cannot be
+        # instantiated no-arg
+        KwargForm()  # pyright: ignore[reportCallIssue]
 
 
 def test_corrupted_base_fields_raises_typed_on_default_path():
@@ -193,7 +210,9 @@ def test_corrupted_base_fields_raises_typed_on_default_path():
     class Corrupt(forms.Form):
         pass
 
-    Corrupt.base_fields = 123
+    # basedpyright: the corrupt base_fields value is the hostile input under test; django-stubs
+    # types the slot as a field mapping
+    Corrupt.base_fields = 123  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="Corrupt"):
         build_form_inputs(Corrupt)
 
@@ -321,7 +340,7 @@ def test_guard_partial_required_column_less_fields_with_custom_form_fields():
 def _item_model_form():
     """A ``ModelForm`` over products ``Item`` with a non-model required ``confirm`` extra."""
 
-    class ItemModelForm(forms.ModelForm):
+    class ItemModelForm(forms.ModelForm[product_models.Item]):
         confirm = forms.BooleanField(required=True)
 
         class Meta:
@@ -408,7 +427,7 @@ def test_non_null_column_backed_null_boolean_stays_required():
     ``library.Issue.embargoed`` is the non-null ``BooleanField`` carrier.
     """
 
-    class IssueForm(forms.ModelForm):
+    class IssueForm(forms.ModelForm[library_models.Issue]):
         embargoed = forms.NullBooleanField(required=True)
 
         class Meta:
@@ -438,7 +457,7 @@ def test_column_backed_null_boolean_is_optional():
     ``scalars.NullableScalarSpecimen.flag`` is the nullable carrier.
     """
 
-    class NullableSpecimenForm(forms.ModelForm):
+    class NullableSpecimenForm(forms.ModelForm[scalar_models.NullableScalarSpecimen]):
         flag = forms.NullBooleanField()  # Django default required=True
 
         class Meta:
@@ -587,6 +606,7 @@ def test_choices_modelform_field_resolves_to_read_side_enum():
     form-field table (spec-038 Decision 7 - the shared-table drift guard).
     """
     from apps.library.models import Book
+    from django.db import models
 
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
@@ -595,20 +615,26 @@ def test_choices_modelform_field_resolves_to_read_side_enum():
             model = Book
             fields = ("id", "circulation_status")
 
-    class BookStatusForm(forms.ModelForm):
+    assert registry.get(Book) is BookType
+
+    class BookStatusForm(forms.ModelForm[Book]):
         class Meta:
             model = Book
             fields = ("circulation_status",)
 
     cre, _, _, _ = build_form_inputs(BookStatusForm, operation_kind=CREATE)
     fields = _field_map(cre)
-    read_enum = convert_choices_to_enum(Book._meta.get_field("circulation_status"), "BookType")
+    circulation_status = Book._meta.get_field("circulation_status")
+    assert isinstance(circulation_status, models.Field)
+    read_enum = convert_choices_to_enum(circulation_status, "BookType")
     # The generated input field uses the IDENTICAL enum object the read DjangoType
     # synthesizes (cached per column on the model field), not a parallel ``str``
     # mapping. Strawberry wraps the enum class in a ``StrawberryEnumDefinition`` on
     # the resolved field type, so compare its ``wrapped_cls`` against the raw enum
     # ``convert_choices_to_enum`` returns - same object proves the symmetric reuse.
-    assert _inner_type(fields["circulation_status"]).wrapped_cls is read_enum
+    inner = _inner_type(fields["circulation_status"])
+    assert isinstance(inner, StrawberryEnumDefinition)
+    assert inner.wrapped_cls is read_enum
 
 
 # ---------------------------------------------------------------------------
@@ -871,7 +897,9 @@ def test_build_form_inputs_rejects_out_of_vocabulary_operation_kind():
     with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 'partial'"):
         build_form_inputs(ProbeForm, operation_kind=PARTIAL)
     with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 42"):
-        build_form_inputs(ProbeForm, operation_kind=42)
+        # basedpyright: the non-str operation kind is the hostile input under test;
+        # build_form_inputs types the parameter as str
+        build_form_inputs(ProbeForm, operation_kind=42)  # pyright: ignore[reportArgumentType]
 
 
 def test_build_form_input_class_rejects_out_of_vocabulary_operation_kind():
@@ -881,7 +909,9 @@ def test_build_form_input_class_rejects_out_of_vocabulary_operation_kind():
         x = forms.CharField(required=False)
 
     with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 42"):
-        build_form_input_class(ProbeForm, operation_kind=42)
+        # basedpyright: the non-str operation kind is the hostile input under test;
+        # build_form_input_class types the parameter as str
+        build_form_input_class(ProbeForm, operation_kind=42)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="out-of-vocabulary operation_kind 'update'"):
         build_form_input_class(ProbeForm, operation_kind="update")
 
@@ -1020,7 +1050,7 @@ def test_extra_field_shadowing_reverse_relation_stays_scalar():
     rev = Category._meta.get_field("items")
     assert rev.is_relation and not rev.concrete
 
-    class CategoryForm(forms.ModelForm):
+    class CategoryForm(forms.ModelForm[Category]):
         items = forms.CharField()
 
         class Meta:
@@ -1048,7 +1078,7 @@ def test_extra_field_shadowing_generic_foreign_key_stays_scalar():
     """
     from apps.library.models import TaggedItem
 
-    class TaggedItemForm(forms.ModelForm):
+    class TaggedItemForm(forms.ModelForm[TaggedItem]):
         content_object = forms.CharField()
 
         class Meta:
@@ -1077,7 +1107,7 @@ def test_extra_field_shadowing_generic_relation_stays_scalar():
     """
     from apps.library.models import Branch
 
-    class BranchForm(forms.ModelForm):
+    class BranchForm(forms.ModelForm[Branch]):
         tags = forms.CharField()
 
         class Meta:
@@ -1101,7 +1131,7 @@ def test_guard_partial_required_column_less_fields_catches_dropped_gfk_extra():
     """guard_partial_required_column_less_fields catches dropped required GFK-shadowing extra fields."""
     from apps.library.models import TaggedItem
 
-    class TaggedItemForm(forms.ModelForm):
+    class TaggedItemForm(forms.ModelForm[TaggedItem]):
         content_object = forms.CharField(required=True)
 
         class Meta:
@@ -1131,7 +1161,8 @@ def test_digit_boundary_form_fields_survive_distinct_in_sdl():
         ("field2", "field2"),
     }
 
-    def _probe(inp) -> int:
+    # basedpyright: a GraphQL argument; Strawberry reads its type from the __annotations__ assigned below
+    def _probe(inp) -> int:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
         return 1
 
     _probe.__annotations__ = {"inp": cre, "return": int}
@@ -1194,7 +1225,7 @@ def test_honest_str_subclass_basis_name_still_builds():
     normalized = normalize_form_field_basis(form_cls, {PlainSub("good"): forms.CharField()})
     assert list(normalized) == ["good"]
     cre, _, _, _ = build_form_inputs(form_cls, form_fields=normalized)
-    field_names = {f.python_name for f in cre.__strawberry_definition__.fields}
+    field_names = {f.python_name for f in get_object_definition(cre, strict=True).fields}
     assert field_names == {"good"}
 
 
@@ -1210,6 +1241,7 @@ def test_basis_diagnostic_survives_hostile_repr_key():
     """
 
     class EvilRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("hostile repr")
 
@@ -1227,6 +1259,7 @@ def test_basis_diagnostic_typed_for_lying_isidentifier_str_subclass():
     """
 
     class LyingStr(str):
+        @override
         def isidentifier(self):
             raise RuntimeError("hostile isidentifier")
 
@@ -1267,7 +1300,7 @@ def test_model_column_for_typed_on_hostile_meta_model():
         _meta = BoomModelMeta()
 
     with pytest.raises(ConfigurationError, match="BoomModelForm.*corrupted"):
-        _model_column_for(BoomModelForm, "name")
+        _model_column_for(_as_form_class(BoomModelForm), "name")
 
 
 def test_model_column_for_typed_on_non_field_does_not_exist_get_field():
@@ -1278,20 +1311,20 @@ def test_model_column_for_typed_on_non_field_does_not_exist_get_field():
     form and the field.
     """
 
-    def _boom(name):
+    def _boom(name: str):
         raise RuntimeError("hostile get_field")
 
-    def _missing(name):
+    def _missing(name: str):
         raise FieldDoesNotExist(name)
 
     boom_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_boom))
     boom_form = SimpleNamespace(_meta=SimpleNamespace(model=boom_model))
     with pytest.raises(ConfigurationError, match="SimpleNamespace.*get_field raised RuntimeError"):
-        _model_column_for(boom_form, "name")
+        _model_column_for(_as_form_class(boom_form), "name")
 
     missing_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_missing))
     missing_form = SimpleNamespace(_meta=SimpleNamespace(model=missing_model))
-    assert _model_column_for(missing_form, "name") is None
+    assert _model_column_for(_as_form_class(missing_form), "name") is None
 
 
 def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback():
@@ -1310,7 +1343,7 @@ def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback():
         is_relation = False
         column = None
 
-    def _get_field(name):
+    def _get_field(name: str):
         if name == "reverse_m2m":
             return FakeReverseM2M()
         if name == "non_concrete":
@@ -1320,8 +1353,8 @@ def test_resolve_target_column_reverse_m2m_and_non_concrete_fallback():
     fake_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_get_field))
     fake_form = SimpleNamespace(_meta=SimpleNamespace(model=fake_model))
 
-    assert _model_column_for(fake_form, "reverse_m2m") is None
-    assert _model_column_for(fake_form, "non_concrete") is None
+    assert _model_column_for(_as_form_class(fake_form), "reverse_m2m") is None
+    assert _model_column_for(_as_form_class(fake_form), "non_concrete") is None
 
 
 def test_form_basis_content_identity_reraises_the_basis_typed_reject_verbatim():
@@ -1337,7 +1370,10 @@ def test_form_basis_content_identity_reraises_the_basis_typed_reject_verbatim():
     class _ClobberedBasesForm(forms.Form):
         name = forms.CharField()
 
-    _ClobberedBasesForm.base_fields = 42  # dict(42) raises TypeError inside the guard
+    # dict(42) raises TypeError inside the guard
+    # basedpyright: the corrupt base_fields value is the hostile input under test; django-stubs
+    # types the slot as a field mapping
+    _ClobberedBasesForm.base_fields = 42  # pyright: ignore[reportAttributeAccessIssue]
 
     from django_strawberry_framework.exceptions import ConfigurationError
     from django_strawberry_framework.forms.inputs import _form_basis_content_identity
@@ -1369,6 +1405,7 @@ def test_form_basis_content_identity_types_a_raw_requiredness_read_failure():
         armed = False
 
         @property
+        @override
         def required(self):
             # Django's ``Field.__init__`` both assigns and reads this slot; the read
             # turns hostile only AFTER construction (the projection reads it later).
@@ -1377,7 +1414,9 @@ def test_form_basis_content_identity_types_a_raw_requiredness_read_failure():
             return self._required_slot
 
         @required.setter
-        def required(self, value):
+        # basedpyright: the hostile shape under test, a ``required`` property whose read raises
+        # once armed; the checker rejects any property overriding a base class attribute
+        def required(self, value: bool):  # pyright: ignore[reportIncompatibleVariableOverride]
             self._required_slot = value
 
     class _PlainHostForm(forms.Form):

@@ -13,10 +13,11 @@ wire-visible wording end to end.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.error_policy import resolve_error_policy
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -32,7 +33,10 @@ class _ProbePolicy:
 _PROBE_DEFAULT = _ProbePolicy()
 
 
-def _resolve(explicit: object = None, setting: object = None) -> _ProbePolicy:
+def _resolve(
+    explicit: _ProbePolicy | Mapping[str, object] | None = None,
+    setting: object = None,
+) -> _ProbePolicy:
     return resolve_policy(
         explicit,
         policy_cls=_ProbePolicy,
@@ -97,7 +101,9 @@ def test_an_explicit_mapping_outranks_the_setting():
 
 def test_a_non_mapping_override_is_rejected_with_the_derived_article():
     with pytest.raises(ConfigurationError, match="must be a _ProbePolicy or a mapping"):
-        _resolve(12)
+        # basedpyright: the int policy is the hostile input under test; _resolve types the
+        # parameter as resolve_policy does: a policy, a mapping or None
+        _resolve(12)  # pyright: ignore[reportArgumentType]
 
 
 def test_unknown_keys_are_rejected_naming_the_valid_vocabulary():
@@ -110,42 +116,51 @@ def test_unknown_keys_are_rejected_naming_the_valid_vocabulary():
 # ---------------------------------------------------------------------------
 
 
-class _DivergentMapping(Mapping):
+class _DivergentMapping(Mapping[str, object]):
     """A stateful Mapping that yields a different key set on every full iteration."""
 
     def __init__(self, passes: list[list[tuple[str, object]]]) -> None:
         self._passes = [dict(pass_) for pass_ in passes]
         self._current: dict[str, object] = {}
 
+    @override
     def __iter__(self):
         self._current = self._passes.pop(0) if self._passes else {}
         return iter(self._current)
 
-    def __getitem__(self, key):
+    @override
+    def __getitem__(self, key: str):
         return self._current[key]
 
+    @override
     def __len__(self):
         return len(self._current)
 
 
-class _UnhashableKeyMapping(Mapping):
+class _UnhashableKeyMapping(Mapping[list[str], object]):
+    @override
     def __iter__(self):
         return iter((["k"],))
 
-    def __getitem__(self, key):
+    @override
+    def __getitem__(self, key: list[str]):
         return 1
 
+    @override
     def __len__(self):
         return 1
 
 
-class _RaisingIterMapping(Mapping):
+class _RaisingIterMapping(Mapping[str, object]):
+    @override
     def __iter__(self):
         raise RuntimeError("hostile __iter__")
 
-    def __getitem__(self, key):
+    @override
+    def __getitem__(self, key: str):
         return 1
 
+    @override
     def __len__(self):
         return 1
 
@@ -157,7 +172,11 @@ _FLAVORS = [
 
 
 @pytest.mark.parametrize(("resolver", "key", "value"), _FLAVORS)
-def test_a_divergent_one_shot_mapping_resolves_from_one_consumed_pass(resolver, key, value):
+def test_a_divergent_one_shot_mapping_resolves_from_one_consumed_pass(
+    resolver: Callable[[Mapping[str, object]], object],
+    key: str,
+    value: object,
+):
     """The mapping is consumed ONCE: pass 2 can no longer smuggle unknown keys.
 
     The pre-fix resolver validated unknown keys over one iteration and then
@@ -175,9 +194,13 @@ def test_a_divergent_one_shot_mapping_resolves_from_one_consumed_pass(resolver, 
     [row.values[0] for row in _FLAVORS],
     ids=["error-policy", "resource-policy"],
 )
-def test_an_unhashable_key_is_typed_rejected_not_a_bare_typeerror(resolver):
+def test_an_unhashable_key_is_typed_rejected_not_a_bare_typeerror(
+    resolver: Callable[[Mapping[str, object]], object],
+):
     with pytest.raises(ConfigurationError, match="must be strings|iteration failed"):
-        resolver(_UnhashableKeyMapping())
+        # basedpyright: the mapping with an unhashable key is the hostile input under test; each
+        # resolver types the parameter as Mapping[str, object]
+        resolver(_UnhashableKeyMapping())  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize(
@@ -185,20 +208,25 @@ def test_an_unhashable_key_is_typed_rejected_not_a_bare_typeerror(resolver):
     [row.values[0] for row in _FLAVORS],
     ids=["error-policy", "resource-policy"],
 )
-def test_a_raising_iterator_is_typed_rejected_not_leaked(resolver):
+def test_a_raising_iterator_is_typed_rejected_not_leaked(
+    resolver: Callable[[Mapping[str, object]], object],
+):
     with pytest.raises(ConfigurationError, match="iteration failed"):
         resolver(_RaisingIterMapping())
 
 
-class _TypedRaisingMapping(Mapping):
+class _TypedRaisingMapping(Mapping[str, object]):
     """A Mapping whose own materialization read fails with the typed error."""
 
+    @override
     def __iter__(self):
         raise ConfigurationError("hostile keys read")
 
-    def __getitem__(self, key):
+    @override
+    def __getitem__(self, key: str):
         return 1
 
+    @override
     def __len__(self):
         return 1
 
@@ -208,7 +236,9 @@ class _TypedRaisingMapping(Mapping):
     [row.values[0] for row in _FLAVORS],
     ids=["error-policy", "resource-policy"],
 )
-def test_a_configuration_error_from_materialization_propagates_unchanged(resolver):
+def test_a_configuration_error_from_materialization_propagates_unchanged(
+    resolver: Callable[[Mapping[str, object]], object],
+):
     """A ``ConfigurationError`` escaping ``dict(overrides)`` is re-raised verbatim.
 
     Materialization is a consumption point like any other: a typed rejection
@@ -225,7 +255,9 @@ def test_a_configuration_error_from_materialization_propagates_unchanged(resolve
     [row.values[0] for row in _FLAVORS],
     ids=["error-policy", "resource-policy"],
 )
-def test_a_hashable_non_string_key_is_typed_rejected_at_the_key_guard(resolver):
+def test_a_hashable_non_string_key_is_typed_rejected_at_the_key_guard(
+    resolver: Callable[[Mapping[str, object]], object],
+):
     """A hashable non-string override key still reaches the key-type guard.
 
     An unhashable key dies inside ``dict()`` materialization (the "iteration
@@ -234,4 +266,6 @@ def test_a_hashable_non_string_key_is_typed_rejected_at_the_key_guard(resolver):
     membership or ``sorted()`` over mixed keys.
     """
     with pytest.raises(ConfigurationError, match="must be strings"):
-        resolver({42: 1})
+        # basedpyright: the int-keyed mapping is the hostile input under test; each resolver types
+        # the parameter as Mapping[str, object]
+        resolver({42: 1})  # pyright: ignore[reportArgumentType]

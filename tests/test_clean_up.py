@@ -13,6 +13,8 @@ sibling in ``examples/fakeshop/test_query/``.
 from fnmatch import fnmatch
 from pathlib import Path
 
+import pytest
+
 from scripts import bug_hunt, clean_up
 
 
@@ -23,7 +25,10 @@ def _write(root: Path, relative_path: str) -> Path:
     return path
 
 
-def test_clean_up_targets_current_generated_artifacts(tmp_path, monkeypatch):
+def test_clean_up_targets_current_generated_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The cleaner deletes generated artifacts and leaves standing docs plus worker-memory shells."""
     monkeypatch.setattr(clean_up, "REPO_ROOT", tmp_path)
 

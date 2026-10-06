@@ -22,14 +22,16 @@ composed schema with the shipped mutation.
 
 from __future__ import annotations
 
+from collections.abc import Generator, Iterator
 from types import SimpleNamespace
 
 import pytest
 import strawberry
 from apps.products import models as product_models
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser, Permission
+from django.contrib.auth.models import AnonymousUser, Permission, User
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoModelPermission,
@@ -41,8 +43,8 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.mutations.operations import _OPERATION_PERMISSION_ACTION
 from django_strawberry_framework.mutations.permissions import (
-    _OPERATION_PERMISSION_ACTION,
     DenyAll,
     _require_sync_bool_auth_result,
     run_permission_classes,
@@ -53,20 +55,29 @@ from django_strawberry_framework.testing.relay import global_id_for
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Reset the registry (co-clears the mutation declaration registry) per test."""
     registry.clear()
     yield
     registry.clear()
 
 
-def _info_for(user) -> SimpleNamespace:
+def _as_strawberry_info(stand_in: object) -> strawberry.Info[object, object]:
+    """Hand a duck-typed info to a permission entry point that takes a Strawberry info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
+    # permission entry points type info as a concrete Strawberry Info
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _info_for(user: object) -> strawberry.Info[object, object]:
     """Build a stub ``info`` whose ``context.request.user`` is ``user``.
 
     Matches the ``info.context.request`` shape ``request_from_info`` resolves -
     the canonical Strawberry-Django context the read-side permission pipeline uses.
     """
-    return SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=user)))
+    return _as_strawberry_info(
+        SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=user))),
+    )
 
 
 def _create_item_mutation() -> type:
@@ -82,7 +93,7 @@ def _create_item_mutation() -> type:
 
 def _user_with_perms(*codenames: str):
     """Create a Django user holding exactly the named products permissions."""
-    user = get_user_model().objects.create_user(username="perm_probe", password="x")
+    user = User.objects.create_user(username="perm_probe", password="x")
     for codename in codenames:
         perm = Permission.objects.get(codename=codename, content_type__app_label="products")
         user.user_permissions.add(perm)
@@ -168,7 +179,7 @@ class _Query:
 _NO_ERROR_MASKING = {"enabled": False}
 
 
-def _build_auth_schema(*, create_permission_classes=None):
+def _build_auth_schema(*, create_permission_classes: list[type] | None = None):
     """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
 
     ``create_permission_classes`` overrides ``CreateItem.Meta.permission_classes``;
@@ -188,7 +199,7 @@ def _build_auth_schema(*, create_permission_classes=None):
             fields = ("id", "name")
             primary = True
 
-    create_meta_attrs = {"model": product_models.Item, "operation": "create"}
+    create_meta_attrs: dict[str, object] = {"model": product_models.Item, "operation": "create"}
     if create_permission_classes is not None:
         create_meta_attrs["permission_classes"] = create_permission_classes
     CreateItem = type(
@@ -219,10 +230,10 @@ def _build_auth_schema(*, create_permission_classes=None):
 
 
 def _execute(
-    schema,
-    query,
-    user,
-    variables,
+    schema: DjangoSchema,
+    query: str,
+    user: object,
+    variables: dict[str, object],
 ):
     """Execute ``query`` with ``info.context.request.user`` set to ``user``."""
     return schema.execute_sync(
@@ -256,6 +267,7 @@ def test_empty_permission_classes_never_resolves_request_auth():
         {"d": {"name": "Open", "categoryId": global_id_for(CategoryT, cat.pk)}},
     )
     assert res.errors is None, res.errors
+    assert res.data is not None
     assert res.data["createItem"]["node"]["name"] == "Open"
 
 
@@ -266,11 +278,11 @@ def test_permission_classes_override_deny_blocks_permitted_caller():
     class DenyAll:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return False
 
@@ -301,11 +313,11 @@ def test_async_has_permission_is_rejected_not_bypassed():
     class AsyncDeny:
         async def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return False
 
@@ -327,19 +339,18 @@ def test_awaitable_has_permission_is_rejected_not_bypassed():
     """A custom awaitable permission result cannot be treated as truthy authorization."""
 
     class DeferredDeny:
-        def __await__(self):
-            if False:
-                yield None
+        def __await__(self) -> Generator[None, None, bool]:
+            yield from ()  # resolves without suspending
             return False
 
     class AwaitableDeny:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return DeferredDeny()
 
@@ -364,17 +375,18 @@ def test_hostile_non_bool_permission_result_keeps_configuration_error():
     """A hostile ``__repr__`` cannot replace the typed non-bool auth failure."""
 
     class Hostile:
+        @override
         def __repr__(self):
             raise RuntimeError("repr escape")
 
     class HostileResult:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             del info, mutation, operation, data, instance
             return Hostile()
@@ -418,17 +430,21 @@ def test_async_check_permission_override_is_rejected_not_bypassed():
             fields = ("id", "name")
             primary = True
 
+    assert registry.get(product_models.Item) is ItemT
+
     class AsyncCheckCreateItem(DjangoMutation):
         class Meta:
             model = product_models.Item
             operation = "create"
 
-        async def check_permission(
+        @override
+        # basedpyright: deliberately async: the coroutine is the result the sync write-auth check refuses
+        async def check_permission(  # pyright: ignore[reportIncompatibleMethodOverride]
             self,
-            info,
-            operation,
-            data,
-            instance=None,
+            info: strawberry.Info,
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return False
 
@@ -464,7 +480,7 @@ def test_awaitable_has_perm_is_rejected_not_bypassed():
     class _AwaitablePermUser:
         is_authenticated = True
 
-        def has_perm(self, codename):
+        def has_perm(self, codename: str):
             async def _deny():
                 return False
 
@@ -486,7 +502,7 @@ def test_request_without_user_attribute_is_denied():
     branch is unreachable from a live ``/graphql/`` request and is earned here.
     """
     mutation = _create_item_mutation()
-    info = SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace()))
+    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace())))
     assert DjangoModelPermission().has_permission(info, mutation, "create", data=None) is False
 
 
@@ -511,11 +527,11 @@ def test_run_permission_classes_short_circuits_on_first_denial():
     class AllowingPerm:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             eval_order.append("AllowingPerm")
             return True
@@ -523,11 +539,11 @@ def test_run_permission_classes_short_circuits_on_first_denial():
     class DenyingPerm:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             eval_order.append("DenyingPerm")
             return False
@@ -535,11 +551,11 @@ def test_run_permission_classes_short_circuits_on_first_denial():
     class NeverReachedPerm:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             eval_order.append("NeverReachedPerm")
             return True
@@ -550,8 +566,10 @@ def test_run_permission_classes_short_circuits_on_first_denial():
         )
 
     result = run_permission_classes(
-        FakeMutation(),
-        info=SimpleNamespace(),
+        # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
+        # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
+        FakeMutation(),  # pyright: ignore[reportArgumentType]
+        info=_as_strawberry_info(SimpleNamespace()),
         operation="create",
         data=None,
         instance=None,
@@ -573,7 +591,7 @@ def test_run_permission_classes_short_circuits_on_first_denial():
         object(),
     ],
 )
-def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result):
+def test_require_sync_bool_auth_result_rejects_non_bool_values(invalid_result: object):
     """``_require_sync_bool_auth_result`` rejects non-bool values without coercion."""
     with pytest.raises(ConfigurationError, match="must return a bool"):
         _require_sync_bool_auth_result(invalid_result, owner="CustomPerm", method="has_permission")
@@ -602,16 +620,18 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
     class AllowAndPollute:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             # ``mutation`` IS the mutation class the walk passes; the pollution
             # reach is the exact object the walk would iterate live.
             try:
-                mutation._mutation_meta.permission_classes.clear()
+                # basedpyright: the reach into the walked class's snapshot is the hostile hook under
+                # test; the hook receives the class as type[object]
+                mutation._mutation_meta.permission_classes.clear()  # pyright: ignore[reportAttributeAccessIssue]
             except AttributeError:  # tuple substrate: in-place mutation refused
                 events.append("pollution-refused")
                 return True
@@ -621,11 +641,11 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
     class Denier:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             events.append("Denier")
             return False
@@ -638,8 +658,10 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
 
     assert (
         run_permission_classes(
-            ListSubstrateMutation(),
-            info=SimpleNamespace(),
+            # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
+            # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
+            ListSubstrateMutation(),  # pyright: ignore[reportArgumentType]
+            info=_as_strawberry_info(SimpleNamespace()),
             operation="create",
             data=None,
             instance=None,
@@ -660,8 +682,10 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
 
     assert (
         run_permission_classes(
-            TupleSubstrateMutation(),
-            info=SimpleNamespace(),
+            # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
+            # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
+            TupleSubstrateMutation(),  # pyright: ignore[reportArgumentType]
+            info=_as_strawberry_info(SimpleNamespace()),
             operation="create",
             data=None,
             instance=None,
@@ -692,11 +716,11 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
     class AllowAndRebind:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[DjangoMutation],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             # The hook's ``mutation`` IS the mutation class; the plain attribute
             # statement is the pre-fix persistent-bypass shape.
@@ -706,11 +730,11 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
     class Denier:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             denier_runs.append("Denier")
             return False
@@ -726,6 +750,8 @@ def test_hook_rebinding_the_validated_permission_slot_fails_closed():
             model = product_models.Item
             fields = ("id", "name")
             primary = True
+
+    assert registry.get(product_models.Item) is ItemT
 
     class CreateItem(DjangoMutation):
         class Meta:

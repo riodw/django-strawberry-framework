@@ -19,6 +19,7 @@ empty-input no-ops live in ``examples/fakeshop/test_query/test_library_api.py``,
 """
 
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet
@@ -266,11 +267,15 @@ def test_related_set_target_mixin():
     class _RelatedItem(RelatedSetTargetMixin):
         _target_attr = "_target"
         _owner_attr = "bound_owner"
+        # The slot ``_bind_owner`` fills under ``_owner_attr``; a bare annotation creates no
+        # attribute, so the first bind still finds it unset.
+        bound_owner: object
 
-        def __init__(self, target):
+        def __init__(self, target: object):
             self._target = target
 
-        def _validate_target(self, resolved):
+        @override
+        def _validate_target(self, resolved: object):
             """Permissive gate -- this test pins the bind/lazy machinery, not the gate."""
 
     class _OwnerOne:
@@ -281,11 +286,15 @@ def test_related_set_target_mixin():
 
     item = _RelatedItem(_TargetStub)
     # First bind records owner
-    item._bind_owner(_OwnerOne)
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # _bind_owner types the parameter as FilterSetMetaclass | OrderSetMetaclass
+    item._bind_owner(_OwnerOne)  # pyright: ignore[reportArgumentType]
     assert item.bound_owner is _OwnerOne
 
     # Second bind is idempotent no-op
-    item._bind_owner(_OwnerTwo)
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # _bind_owner types the parameter as FilterSetMetaclass | OrderSetMetaclass
+    item._bind_owner(_OwnerTwo)  # pyright: ignore[reportArgumentType]
     assert item.bound_owner is _OwnerOne
 
     # Resolved target returns resolved class
@@ -313,7 +322,7 @@ def test_related_set_target_mixin_hook_is_abstract_without_a_family_validator():
         _target_attr = "_target"
         _owner_attr = "bound_owner"
 
-        def __init__(self, target):
+        def __init__(self, target: object):
             self._target = target
 
     with pytest.raises(NotImplementedError, match="_validate_target"):
@@ -342,10 +351,11 @@ def test_related_set_target_mixin_gates_resolved_targets_at_the_seam():
         _target_attr = "_target"
         _owner_attr = "bound_owner"
 
-        def __init__(self, target):
+        def __init__(self, target: object):
             self._target = target
 
-        def _validate_target(self, resolved):
+        @override
+        def _validate_target(self, resolved: object):
             validated.append(resolved)
             if not (isinstance(resolved, type) and issubclass(resolved, _FamilyTarget)):
                 raise ConfigurationError(f"not a _FamilyTarget subclass: {resolved!r}")
@@ -400,12 +410,15 @@ def test_collect_related_declarations():
         pass
 
     class _NewCls:
-        pass
+        # The slot ``collection_attr`` names; a bare annotation adds nothing to ``__dict__``.
+        related_items: dict[str, _Decl]
 
     # inherit_from_bases=True merges base declarations and own items
     own_override = _Decl()
     collected = collect_related_declarations(
-        _NewCls,
+        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+        # collect_related_declarations types the parameter as FilterSetMetaclass | OrderSetMetaclass
+        _NewCls,  # pyright: ignore[reportArgumentType]
         (_BaseB,),
         own_items=[("beta", own_override), ("gamma", _Decl()), ("alpha", None)],
         declaration_type=_Decl,
@@ -427,7 +440,8 @@ def test_expanded_once():
     from django_strawberry_framework.sets_mixins import expanded_once
 
     class _ProbeSet:
-        pass
+        # The slot ``cache_attr`` names; a bare annotation adds nothing to ``__dict__``.
+        _cache: dict[str, bool]
 
     # If cached, returns cached without calling build
     _ProbeSet._cache = {"cached": True}
@@ -527,7 +541,9 @@ def test_active_input_permission_mixin_hooks():
         None,
         None,
         _fired={},
-        _bare=None,
+        # basedpyright: the no-op hook under test never reads _bare;
+        # _run_logic_permission_checks types the parameter as ActiveInputPermissionMixin
+        _bare=None,  # pyright: ignore[reportArgumentType]
         _depth=0,
     )
 
@@ -610,7 +626,9 @@ def test_collect_related_declarations_diamond_tombstone():
 
     # Left base comes first in bases list, has a tombstone attribute shadowing the declaration
     collected = collect_related_declarations(
-        _DiamondSubclass,
+        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+        # collect_related_declarations types the parameter as FilterSetMetaclass | OrderSetMetaclass
+        _DiamondSubclass,  # pyright: ignore[reportArgumentType]
         (_BaseLeft, _BaseRight),
         own_items=[],
         declaration_type=_Decl,
@@ -649,7 +667,9 @@ def test_collect_related_declarations_base_declarations_precedence():
         pass
 
     collected = collect_related_declarations(
-        _Subclass,
+        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+        # collect_related_declarations types the parameter as FilterSetMetaclass | OrderSetMetaclass
+        _Subclass,  # pyright: ignore[reportArgumentType]
         (_BaseWithAllDecls,),
         own_items=[],
         declaration_type=_Decl,
@@ -685,7 +705,7 @@ def test_active_input_permission_mixin_field_paths_and_branches():
     @dataclass
     class _ParentInput:
         title: str = "hello"
-        child: _ChildInput = None
+        child: _ChildInput | None = None
 
     class _ChildSet(ActiveInputPermissionMixin):
         _permission = ActiveInputPermissionAttrs(
@@ -693,7 +713,10 @@ def test_active_input_permission_mixin_field_paths_and_branches():
             target_attr="childset",
             traversal=SetInputTraversal(
                 related_attr="related_children",
-                field_specs={"sub_field": types.SimpleNamespace(django_source_path="sub_field")},
+                # basedpyright: a stand-in field-spec map keyed by attribute name, so the
+                # class-keyed lookup finds no spec; SetInputTraversal types the parameter as
+                # FieldSpecMap
+                field_specs={"sub_field": types.SimpleNamespace(django_source_path="sub_field")},  # pyright: ignore[reportArgumentType]
                 unset_sentinel=None,
             ),
         )
@@ -710,7 +733,10 @@ def test_active_input_permission_mixin_field_paths_and_branches():
             target_attr="childset",
             traversal=SetInputTraversal(
                 related_attr="related_children",
-                field_specs={"title": types.SimpleNamespace(django_source_path="title")},
+                # basedpyright: a stand-in field-spec map keyed by attribute name, so the
+                # class-keyed lookup finds no spec; SetInputTraversal types the parameter as
+                # FieldSpecMap
+                field_specs={"title": types.SimpleNamespace(django_source_path="title")},  # pyright: ignore[reportArgumentType]
                 unset_sentinel=None,
             ),
         )
@@ -755,7 +781,9 @@ def test_family_input_traversal_is_derived_from_the_permission_config():
     assert order_traversal.field_specs is _order_specs
 
 
-def test_order_normalizer_consumes_the_family_permission_traversal(monkeypatch):
+def test_order_normalizer_consumes_the_family_permission_traversal(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``normalize_input_value`` drives ``iter_active_fields`` with ``cls._input_traversal()``.
 
     Monkeypatch of the helper; a request cannot observe which config object
@@ -767,7 +795,7 @@ def test_order_normalizer_consumes_the_family_permission_traversal(monkeypatch):
     sentinel = object()
     captured = {}
 
-    def _spy(set_cls, input_value, config):
+    def _spy(set_cls: type[object], input_value: object, config: SetInputTraversal):
         captured["config"] = config
         return iter(())
 
@@ -779,14 +807,18 @@ def test_order_normalizer_consumes_the_family_permission_traversal(monkeypatch):
             target_attr="stubset",
             traversal=SetInputTraversal(
                 related_attr="related_stub",
-                field_specs={"a": "spec-a"},
+                # basedpyright: a stand-in field-spec map the normalizer only carries to the spy;
+                # SetInputTraversal types the parameter as FieldSpecMap
+                field_specs={"a": "spec-a"},  # pyright: ignore[reportArgumentType]
                 logic_keys=frozenset({"custom_op"}),
                 unset_sentinel=sentinel,
                 handle_top_level_list=True,
             ),
         )
 
-    assert order_inputs.normalize_input_value(_StubFamily, None) == []
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # normalize_input_value types the parameter as type[OrderSet]
+    assert order_inputs.normalize_input_value(_StubFamily, None) == []  # pyright: ignore[reportArgumentType]
     config = captured["config"]
     assert config.related_attr == "related_stub"
     assert config.unset_sentinel is sentinel
@@ -795,7 +827,9 @@ def test_order_normalizer_consumes_the_family_permission_traversal(monkeypatch):
     assert config.logic_keys == frozenset({"custom_op"})
 
 
-def test_filter_normalizer_consumes_the_family_permission_traversal(monkeypatch):
+def test_filter_normalizer_consumes_the_family_permission_traversal(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``FilterSet._normalize_input`` classifies through the derived config.
 
     The filter-side twin of
@@ -809,7 +843,7 @@ def test_filter_normalizer_consumes_the_family_permission_traversal(monkeypatch)
 
     captured = {}
 
-    def _spy(set_cls, input_value, config):
+    def _spy(set_cls: type[object], input_value: object, config: SetInputTraversal):
         captured["config"] = config
         return iter(())
 
@@ -874,7 +908,7 @@ def test_re_readable_gate_accepts_every_sized_collection():
     class _NameSet:
         """A minimal ``Collection`` that is none of the builtin containers."""
 
-        def __init__(self, *names):
+        def __init__(self, *names: str):
             self._names = names
 
         def __iter__(self):
@@ -883,7 +917,7 @@ def test_re_readable_gate_accepts_every_sized_collection():
         def __len__(self):
             return len(self._names)
 
-        def __contains__(self, item):
+        def __contains__(self, item: object):
             return item in self._names
 
     accepted = (

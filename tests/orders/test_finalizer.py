@@ -29,9 +29,11 @@ Finalize-time bind / orphan / collision have no request. Shipped
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable, Iterator
 
 import pytest
 from apps.library.models import Book, Branch, Genre, Shelf
+from django.db import models
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -50,11 +52,19 @@ from django_strawberry_framework.orders.inputs import (
     _materialized_names,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.finalizer import _bind_orderset_owner
 
 
+def _as_definition(stand_in: object) -> DjangoTypeDefinition:
+    """Hand a duck-typed owner definition to the binder that takes a ``DjangoTypeDefinition``."""
+    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+    # _bind_orderset_owner types the parameter as DjangoTypeDefinition
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     registry.clear()
     _field_specs.clear()
     _helper_referenced_ordersets.clear()
@@ -99,8 +109,8 @@ def test_meta_orderset_class_rejects_non_order_set():
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class BookType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BookType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = Book
                 fields = ("id", "title")
@@ -154,11 +164,13 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     original_get_fields = ShelfOrder.get_fields.__func__
 
     @classmethod
-    def instrumented_get_fields(cls):
+    def instrumented_get_fields(cls: type[OrderSet]):
         observations.append(cls._owner_definition is not None)
         return original_get_fields(cls)
 
-    ShelfOrder.get_fields = instrumented_get_fields
+    # basedpyright: the classmethod spy installed on the class is the probe under test; the
+    # checker compares the descriptor against the bound hook signature
+    ShelfOrder.get_fields = instrumented_get_fields  # pyright: ignore[reportAttributeAccessIssue]
     try:
 
         class BookType(DjangoType):
@@ -167,11 +179,15 @@ def test_phase_2_5_binds_all_owners_before_expansion():
                 fields = ("id", "title", "shelf")
                 orderset_class = BookOrder
 
+        assert registry.get(Book) is BookType
+
         class ShelfType(DjangoType):
             class Meta:
                 model = Shelf
                 fields = ("id", "code")
                 orderset_class = ShelfOrder
+
+        assert registry.get(Shelf) is ShelfType
 
         finalize_django_types()
 
@@ -204,11 +220,15 @@ def test_phase_2_5_unresolved_related_order_raises_at_finalize():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             orderset_class = BookOrder
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -237,11 +257,15 @@ def test_phase_2_5_non_import_get_fields_failure_rewraps_as_configuration_error(
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             orderset_class = BookOrder
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -268,7 +292,9 @@ def test_phase_2_5_non_order_set_related_target_raises_uniform_error():
         pass
 
     class BookOrder(OrderSet):
-        shelf = RelatedOrder(NotAnOrderSet, field_name="shelf")
+        # basedpyright: the non-OrderSet target is the hostile input under test; RelatedOrder types
+        # the parameter as _OrderSetTarget
+        shelf = RelatedOrder(NotAnOrderSet, field_name="shelf")  # pyright: ignore[reportArgumentType]
 
         class Meta:
             model = Book
@@ -279,11 +305,15 @@ def test_phase_2_5_non_order_set_related_target_raises_uniform_error():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             orderset_class = BookOrder
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -322,11 +352,15 @@ def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity()
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             orderset_class = BookOrder
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -357,10 +391,14 @@ def test_orphan_order_input_type_reference_raises_at_finalize():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -390,11 +428,15 @@ def test_phase_2_5_orphan_check_runs_before_materialization():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             orderset_class = WiredOrder
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError):
         finalize_django_types()
@@ -429,10 +471,14 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_orderset():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -468,11 +514,15 @@ def test_phase_2_5_subpass_4_materializes_input_classes_as_module_globals():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             orderset_class = BookOrder
+
+    assert registry.get(Book) is BookType
 
     finalize_django_types()
 
@@ -504,6 +554,8 @@ def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model():
             fields = ("id", "name")
             orderset_class = BookOrder
 
+    assert registry.get(Branch) is BranchType
+
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
     msg = str(exc_info.value)
@@ -519,7 +571,12 @@ def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model():
 # ---------------------------------------------------------------------------
 
 
-def _owner_definition_stub(name, *, model, graphql_name=None):
+def _owner_definition_stub(
+    name: str,
+    *,
+    model: type[models.Model],
+    graphql_name: str | None = None,
+):
     """Return a minimal owner-definition-shaped object for binding tests.
 
     ``model`` is the bound orderset's ``Meta.model``: a real owner definition always carries a
@@ -530,11 +587,16 @@ def _owner_definition_stub(name, *, model, graphql_name=None):
         origin = type(name, (), {"__qualname__": name})
         graphql_type_name = graphql_name or name
 
-        def __init__(self, resolver=None, *, m=model):
+        def __init__(
+            self,
+            resolver: Callable[[object], object] | None = None,
+            *,
+            m: type[models.Model] = model,
+        ):
             self._resolver = resolver
             self.model = m
 
-        def related_target_for(self, field_name):
+        def related_target_for(self, field_name: object):
             return self._resolver(field_name) if self._resolver is not None else None
 
     return _Stub
@@ -550,8 +612,8 @@ def test_bind_orderset_owner_idempotent_for_same_definition():
 
     Stub = _owner_definition_stub("OwnerType", model=Shelf)
     definition = Stub()
-    _bind_orderset_owner(ShelfOrder, definition)  # previous None -> bind
-    _bind_orderset_owner(ShelfOrder, definition)  # previous IS definition -> no-op
+    _bind_orderset_owner(ShelfOrder, _as_definition(definition))  # previous None -> bind
+    _bind_orderset_owner(ShelfOrder, _as_definition(definition))  # previous IS definition -> no-op
     assert ShelfOrder._owner_definition is definition
 
 
@@ -581,9 +643,9 @@ def test_bind_orderset_owner_rejects_diverging_related_targets():
     Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda f: (_PrevTargetDefinition, object()) if f == "shelf" else None)
     second = Stub(resolver=lambda f: (_NewTargetDefinition, object()) if f == "shelf" else None)
-    _bind_orderset_owner(BookOrder, first)
+    _bind_orderset_owner(BookOrder, _as_definition(first))
     with pytest.raises(ConfigurationError) as exc_info:
-        _bind_orderset_owner(BookOrder, second)
+        _bind_orderset_owner(BookOrder, _as_definition(second))
     msg = str(exc_info.value)
     assert "diverging targets" in msg
     assert "shelf" in msg
@@ -609,8 +671,8 @@ def test_bind_orderset_owner_continues_when_both_targets_unresolved():
     Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda _f: None)
     second = Stub(resolver=lambda _f: None)
-    _bind_orderset_owner(BookOrder, first)
-    _bind_orderset_owner(BookOrder, second)
+    _bind_orderset_owner(BookOrder, _as_definition(first))
+    _bind_orderset_owner(BookOrder, _as_definition(second))
     # First binding preserved.
     assert BookOrder._owner_definition is first
 
@@ -637,9 +699,9 @@ def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not()
     Stub = _owner_definition_stub("OwnerType", model=Book)
     first = Stub(resolver=lambda f: (_SomeTargetDefinition, object()) if f == "shelf" else None)
     second = Stub(resolver=lambda _f: None)
-    _bind_orderset_owner(BookOrder, first)
+    _bind_orderset_owner(BookOrder, _as_definition(first))
     with pytest.raises(ConfigurationError) as exc_info:
-        _bind_orderset_owner(BookOrder, second)
+        _bind_orderset_owner(BookOrder, _as_definition(second))
     assert "diverging targets" in str(exc_info.value)
 
 
@@ -666,7 +728,7 @@ def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
         model = Shelf
 
         @staticmethod
-        def related_target_for(_field):
+        def related_target_for(_field: object):
             return None
 
     class _PlainDefinition:
@@ -675,14 +737,14 @@ def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
         model = Shelf
 
         @staticmethod
-        def related_target_for(_field):
+        def related_target_for(_field: object):
             return None
 
-    _bind_orderset_owner(ShelfOrder, _RelayDefinition)
+    _bind_orderset_owner(ShelfOrder, _as_definition(_RelayDefinition))
     # Second distinct owner -- no raise, even though the "owners" diverge
     # on shape; the order side simply does not care about own-PK Relay
     # identity.
-    _bind_orderset_owner(ShelfOrder, _PlainDefinition)
+    _bind_orderset_owner(ShelfOrder, _as_definition(_PlainDefinition))
     assert ShelfOrder._owner_definition is _RelayDefinition
 
 
@@ -728,6 +790,8 @@ def test_finalize_django_types_is_idempotent_after_orderset_wiring():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
@@ -761,10 +825,14 @@ def test_phase_2_5_runs_under_relay_node_interface():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:

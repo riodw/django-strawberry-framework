@@ -70,8 +70,15 @@ def repo(tmp_path: Path) -> Path:
 @pytest.fixture
 def layout(repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> workspace.Layout:
     monkeypatch.delenv(workspace.SLOTS_ENV, raising=False)
-    monkeypatch.setattr(workspace, "_running_postgres", lambda _root: None)
-    monkeypatch.setattr(workspace, "_free_bytes", lambda _path: workspace.MIN_FREE_BYTES * 2)
+
+    def _no_running_postgres(_root: Path) -> None:
+        return None
+
+    def _ample_free_bytes(_path: Path) -> int:
+        return workspace.MIN_FREE_BYTES * 2
+
+    monkeypatch.setattr(workspace, "_running_postgres", _no_running_postgres)
+    monkeypatch.setattr(workspace, "_free_bytes", _ample_free_bytes)
     return workspace.Layout(repo, tmp_path / "ws" / workspace.repo_key(repo), "review")
 
 
@@ -353,12 +360,22 @@ def test_tree_digest_moves_with_content_and_not_with_order() -> None:
     assert workspace.tree_digest(entries) != workspace.tree_digest(changed)
 
 
+def _manifest(entries: dict[str, list[str | int]]) -> workspace._Manifest:
+    """A slot manifest holding ``entries`` and placeholder sync stamps."""
+    return {
+        "synced_at": "t",
+        "tree_digest": "d",
+        "package_digest": "p",
+        "entries": entries,
+    }
+
+
 def test_copy_edits_reports_changes_additions_and_deletions_but_not_caches(
     repo: Path,
     tmp_path: Path,
 ) -> None:
     copy = tmp_path / "copy"
-    manifest = {"entries": workspace.mirror_tree(repo, copy)}
+    manifest = _manifest(workspace.mirror_tree(repo, copy))
     assert workspace.copy_edits(copy, manifest) == []
 
     _write(copy / PACKAGE / "core.py", "CORE = 3\n")
@@ -379,7 +396,7 @@ def test_shared_moves_reports_what_the_shared_tree_changed_since_the_sync(
     repo: Path,
     tmp_path: Path,
 ) -> None:
-    manifest = {"entries": workspace.mirror_tree(repo, tmp_path / "copy")}
+    manifest = _manifest(workspace.mirror_tree(repo, tmp_path / "copy"))
     assert workspace.shared_moves(repo, manifest) == []
 
     _write(repo / PACKAGE / "core.py", "CORE = 'edited by Worker-2'\n")
@@ -404,7 +421,7 @@ def test_bind_reuses_an_address_and_gives_each_new_address_its_own_copy(
     workspace._mark_synced(
         layout,
         first.slot,
-        {"synced_at": "t", "tree_digest": "d", "package_digest": "p"},
+        _manifest({}),
     )
     again = workspace.bind(layout, _address("perf-1"))
     second = workspace.bind(layout, _address("mech-1"))
@@ -445,7 +462,11 @@ def test_bind_refuses_a_new_copy_below_the_free_disk_guard(
     layout: workspace.Layout,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(workspace, "_free_bytes", lambda _path: workspace.MIN_FREE_BYTES - 1)
+
+    def _short_free_bytes(_path: Path) -> int:
+        return workspace.MIN_FREE_BYTES - 1
+
+    monkeypatch.setattr(workspace, "_free_bytes", _short_free_bytes)
 
     with pytest.raises(workspace.WorkspaceError, match="GB free"):
         workspace.bind(layout, _address("perf-1"))
@@ -474,6 +495,7 @@ def test_release_keep_frees_a_phase_and_spares_the_pinned_copy(layout: workspace
 
     assert released == ["slot-2 review/pkg/a.py/performance", "slot-3 review/pkg/a.py/mechanics"]
     state = workspace._load_state(layout)
+    assert state["slots"]["slot-1"] is not None
     assert state["slots"]["slot-1"]["role"] == "before"
     assert state["items"]["pkg/a.py"]["item_baseline"] == "abc"
 
@@ -551,7 +573,7 @@ def test_gc_refuses_while_a_command_runs_unless_forced(layout: workspace.Layout)
 # --------------------------------------------------------------------------------------------
 
 
-def _probe(copy: Path, **databases: dict) -> dict:
+def _probe(copy: Path, **databases: workspace._ProbeDatabase) -> workspace._ProbeResult:
     return {
         "executable": str(copy / ".venv" / "bin" / "python"),
         "package_file": str(copy / PACKAGE / "__init__.py"),
@@ -559,7 +581,7 @@ def _probe(copy: Path, **databases: dict) -> dict:
     }
 
 
-def _sqlite(name: object) -> dict:
+def _sqlite(name: object) -> workspace._ProbeDatabase:
     return {"ENGINE": "django.db.backends.sqlite3", "NAME": str(name)}
 
 
@@ -591,7 +613,10 @@ def test_provenance_refuses_the_shared_package_and_the_tracked_database(
 
 def test_provenance_refuses_a_postgres_database_that_is_not_the_copys(tmp_path: Path) -> None:
     copy = tmp_path / "slot-1"
-    postgres = {"ENGINE": "django.db.backends.postgresql", "NAME": "fakeshop"}
+    postgres: workspace._ProbeDatabase = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "fakeshop",
+    }
 
     faults = workspace.provenance_faults(
         _probe(copy, default=postgres),
@@ -611,7 +636,11 @@ def test_audit_binds_cited_run_ids_and_fails_unknown_or_foreign_ones(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(workspace, "workspace_base", lambda _root: layout.base)
+
+    def _layout_base(_root: Path) -> Path:
+        return layout.base
+
+    monkeypatch.setattr(workspace, "workspace_base", _layout_base)
     copy = layout.slot_dir("slot-1")
     good = {
         "run_id": "review-20260924T120000-aaaaaa",
@@ -673,7 +702,11 @@ def test_postgres_finds_the_fakeshop_container_by_identity_not_port(
     ]
     answers = {"ps": "aaaaaaaaaaaa\nbbbbbbbbbbbb\n", "inspect": json.dumps(inspect)}
     postgres = workspace.Postgres(tmp_path)
-    monkeypatch.setattr(postgres, "_docker", lambda *args, **_kw: answers[args[0]])
+
+    def _answer(*args: str, **_kw: object) -> str:
+        return answers[args[0]]
+
+    monkeypatch.setattr(postgres, "_docker", _answer)
 
     assert postgres.find() == ("bbbbbbbbbbbb", "5432", workspace.COMPOSE_PROJECT)
 
@@ -684,11 +717,12 @@ def test_postgres_exact_match_never_takes_slot10_for_slot1(
 ) -> None:
     statements: list[str] = []
     postgres = workspace.Postgres(tmp_path)
-    monkeypatch.setattr(
-        postgres,
-        "sql",
-        lambda statement, database="postgres": statements.append(statement) or "",
-    )
+
+    def _record_statement(statement: str, database: str = "postgres") -> str:
+        statements.append(statement)
+        return ""
+
+    monkeypatch.setattr(postgres, "sql", _record_statement)
 
     postgres.databases("ws_abc_review_slot1", exact=True)
 
@@ -776,7 +810,7 @@ def test_summarize_suite_reads_summary_collected_and_coverage() -> None:
 
 
 def test_run_refuses_a_uv_command_with_the_refusal_exit_code(
-    capsys: pytest.CaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert (
         workspace.main(

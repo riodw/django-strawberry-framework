@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 from django import forms
 from rest_framework import serializers
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.forms import converter as form_converter
@@ -138,14 +139,16 @@ def test_unhandled_field_raises_via_factory():
     class _Unrelated:
         pass
 
-    def _factory(field):
+    def _factory(field: object):
         return ValueError(f"unsupported: {type(field).__name__}")
 
+    # Keyed by ``type[object]``: the unrelated field and the registry keys share no class.
+    scalar_registry: dict[type[object], object] = {_Child: "won't match"}
     with pytest.raises(ValueError, match="unsupported: _Unrelated"):
         convert_with_mro(
             _Unrelated(),
             isinstance_prechecks=[(_Base, lambda _f: "won't match")],
-            scalar_registry={_Child: "won't match"},
+            scalar_registry=scalar_registry,
             fallthrough_error_factory=_factory,
         )
 
@@ -154,7 +157,8 @@ def test_mro_walk_bypasses_hostile_field_metaclass_attribute_access():
     """A hostile ``__getattribute__`` cannot replace typed converter failure."""
 
     class HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__mro__":
                 raise RuntimeError("mro descriptor failed")
             return super().__getattribute__(name)
@@ -162,7 +166,10 @@ def test_mro_walk_bypasses_hostile_field_metaclass_attribute_access():
     class HostileFormField(forms.Field, metaclass=HostileMeta):
         pass
 
-    class HostileSerializerField(serializers.Field, metaclass=HostileMeta):
+    class HostileSerializerField(
+        serializers.Field[object, object, object, object],
+        metaclass=HostileMeta,
+    ):
         pass
 
     hostile_form = object.__new__(HostileFormField)
@@ -179,6 +186,7 @@ def test_mro_walk_bypasses_hostile_field_metaclass_hashing():
     """A hostile class hash cannot abort the registry walk."""
 
     class HostileMeta(type):
+        @override
         def __hash__(cls):
             raise RuntimeError("class hash failed")
 
@@ -203,13 +211,17 @@ def test_mro_walk_bypasses_a_hostile_metaclass_mro_property():
 
     class RaisingMroMeta(type):
         @property
+        @override
         def __mro__(cls):
             raise RuntimeError("hostile __mro__ property")
 
     class HostileFormField(forms.Field, metaclass=RaisingMroMeta):
         pass
 
-    class HostileSerializerField(serializers.Field, metaclass=RaisingMroMeta):
+    class HostileSerializerField(
+        serializers.Field[object, object, object, object],
+        metaclass=RaisingMroMeta,
+    ):
         pass
 
     hostile_form = object.__new__(HostileFormField)
@@ -233,6 +245,7 @@ def test_mro_walk_ignores_a_fake_mro_claiming_a_registered_class():
 
     class FakeMroMeta(type):
         @property
+        @override
         def __mro__(cls):
             return (forms.CharField, object)
 
@@ -255,9 +268,10 @@ def test_registry_walk_scans_a_snapshot_not_a_live_items_view():
     cannot abort a conversion.
     """
 
-    class MutatedDuringIteration(dict):
+    class MutatedDuringIteration(dict[type[_Child], object]):
         """Registry whose ``items()`` fails the way a mutated dict does."""
 
+        @override
         def items(self):
             raise RuntimeError("dictionary changed size during iteration")
 

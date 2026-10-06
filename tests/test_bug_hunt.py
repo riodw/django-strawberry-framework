@@ -24,9 +24,21 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
+def _one_module_listing(args: Sequence[str]) -> str:
+    return f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\0"
+
+
+def _skip_refresh(*args: object) -> None:
+    return None
+
+
+def _accept_commit(commit: str) -> None:
+    return None
+
+
 def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     full_sha = "1234567890abcdef1234567890abcdef12345678"
     release = "0.0.13"
@@ -60,7 +72,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
     )
 
     def fake_run_git(args: Sequence[str]) -> str:
-        responses = {
+        responses: dict[tuple[str, ...], str] = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): f"{full_sha}\n",
             ("status", "--short"): " M docs/GLOSSARY.md\n?? notes.md\n",
@@ -73,7 +85,11 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
         refreshes.append((commit, package_dir, target_dir))
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
-    monkeypatch.setattr(snapshot, "_run_git", lambda args: baseline_listing)
+
+    def fake_snapshot_git(args: Sequence[str]) -> str:
+        return baseline_listing
+
+    monkeypatch.setattr(snapshot, "_run_git", fake_snapshot_git)
     monkeypatch.setattr(bug_hunt, "_refresh_historical_package_snapshot", fake_refresh)
 
     assert bug_hunt.main([]) == 0
@@ -146,7 +162,7 @@ def test_generator_writes_autonomous_progress_and_preserves_existing_run(
 
 def test_empty_dicta_still_renders_the_package_questions_section(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty maintainer dicta means "no questions", never a missing section.
 
@@ -160,7 +176,7 @@ def test_empty_dicta_still_renders_the_package_questions_section(
     _write(tmp_path / bug_hunt.DICTA_PATH, "\n   \n")
 
     def fake_run_git(args: Sequence[str]) -> str:
-        responses = {
+        responses: dict[tuple[str, ...], str] = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
             ("status", "--short"): "",
@@ -168,12 +184,8 @@ def test_empty_dicta_still_renders_the_package_questions_section(
         return responses[tuple(args)]
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
-    monkeypatch.setattr(
-        snapshot,
-        "_run_git",
-        lambda args: f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\0",
-    )
-    monkeypatch.setattr(bug_hunt, "_refresh_historical_package_snapshot", lambda *args: None)
+    monkeypatch.setattr(snapshot, "_run_git", _one_module_listing)
+    monkeypatch.setattr(bug_hunt, "_refresh_historical_package_snapshot", _skip_refresh)
 
     assert bug_hunt.main([]) == 0
     report = (tmp_path / bug_hunt.BUG_HUNT_DIR / "bug_hunt-0_0_13.md").read_text(encoding="utf-8")
@@ -251,7 +263,9 @@ def test_no_shadow_reason_reads_exclusion_and_age_independently() -> None:
     )
 
 
-def test_baseline_python_paths_reads_the_commit_unfiltered(monkeypatch) -> None:
+def test_baseline_python_paths_reads_the_commit_unfiltered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Age comes from the commit's full listing, not the snapshot's eligible set."""
     calls: list[tuple[str, ...]] = []
 
@@ -312,12 +326,12 @@ def test_shadow_inputs_require_baseline_eligibility_and_a_complete_pair(tmp_path
 
 def test_snapshot_empty_inventory_publishes_an_empty_owned_directory(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     out_dir = tmp_path / snapshot.SHADOW_DIR
     _write(out_dir / "stale.stripped.py", "stale\n")
     _write(out_dir / "stale.overview.md", "stale\n")
-    monkeypatch.setattr(snapshot, "_validate_commit", lambda commit: None)
+    monkeypatch.setattr(snapshot, "_validate_commit", _accept_commit)
 
     def fake_run_git(args: Sequence[str]) -> str:
         if args[0] == "rev-parse":
@@ -330,12 +344,15 @@ def test_snapshot_empty_inventory_publishes_an_empty_owned_directory(
     assert list(out_dir.iterdir()) == []
 
 
-def test_snapshot_failure_never_publishes_partial_staging(tmp_path: Path, monkeypatch) -> None:
+def test_snapshot_failure_never_publishes_partial_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     out_dir = tmp_path / snapshot.SHADOW_DIR
     _write(out_dir / "previous.stripped.py", "previous\n")
     _write(out_dir / "previous.overview.md", "previous\n")
     paths = ["package/one.py", "package/two.py"]
-    monkeypatch.setattr(snapshot, "_validate_commit", lambda commit: None)
+    monkeypatch.setattr(snapshot, "_validate_commit", _accept_commit)
 
     def fake_run_git(args: Sequence[str]) -> str:
         if args[0] == "rev-parse":
@@ -377,7 +394,7 @@ def test_snapshot_validation_rejects_colliding_flat_artifact_names(tmp_path: Pat
 
 def test_snapshot_publish_failure_restores_the_previous_snapshot(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = tmp_path / "current"
     staging = tmp_path / "staging"
@@ -401,7 +418,7 @@ def test_snapshot_publish_failure_restores_the_previous_snapshot(
 
 def test_snapshot_rollback_failure_preserves_the_recovery_directory(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = tmp_path / "current"
     staging = tmp_path / "staging"
@@ -426,7 +443,10 @@ def test_snapshot_rollback_failure_preserves_the_recovery_directory(
     assert (backups[0] / "current" / "previous").read_text() == "previous\n"
 
 
-def test_git_tree_inventory_is_rooted_literal_and_nul_framed(tmp_path: Path, monkeypatch) -> None:
+def test_git_tree_inventory_is_rooted_literal_and_nul_framed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     subprocess.run(["git", "init", str(tmp_path)], check=True, capture_output=True)
     nested = tmp_path / "nested"
     nested.mkdir()
@@ -489,13 +509,16 @@ def test_package_dir_normalization_rejects_paths_outside_the_repository(
         snapshot.normalize_package_dir(tmp_path, "linked-package")
 
 
-def test_target_release_overrides_the_package_version(tmp_path: Path, monkeypatch) -> None:
+def test_target_release_overrides_the_package_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     package_root = tmp_path / bug_hunt.DEFAULT_PACKAGE_DIR
     _write(package_root / "__init__.py", '__version__ = "0.0.13"\n')
     _write(package_root / "module.py", "VALUE = None\n")
 
     def fake_run_git(args: Sequence[str]) -> str:
-        responses = {
+        responses: dict[tuple[str, ...], str] = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
             ("status", "--short"): "",
@@ -503,25 +526,21 @@ def test_target_release_overrides_the_package_version(tmp_path: Path, monkeypatc
         return responses[tuple(args)]
 
     monkeypatch.setattr(bug_hunt, "_run_git", fake_run_git)
-    monkeypatch.setattr(
-        snapshot,
-        "_run_git",
-        lambda args: f"{bug_hunt.DEFAULT_PACKAGE_DIR}/module.py\0",
-    )
-    monkeypatch.setattr(
-        bug_hunt,
-        "_refresh_historical_package_snapshot",
-        lambda *args: None,
-    )
+    monkeypatch.setattr(snapshot, "_run_git", _one_module_listing)
+    monkeypatch.setattr(bug_hunt, "_refresh_historical_package_snapshot", _skip_refresh)
 
     assert bug_hunt.main(["--target-release", "0.0.14"]) == 0
     output = tmp_path / bug_hunt.BUG_HUNT_DIR / "bug_hunt-0_0_14.md"
     assert "# Bug hunt: 0.0.14" in output.read_text(encoding="utf-8")
 
 
-def test_generator_rejects_invalid_target_release(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_generator_rejects_invalid_target_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     def fake_run_git(args: Sequence[str]) -> str:
-        responses = {
+        responses: dict[tuple[str, ...], str] = {
             ("rev-parse", "--show-toplevel"): f"{tmp_path}\n",
             ("rev-parse", "HEAD"): "1234567890abcdef1234567890abcdef12345678\n",
             ("status", "--short"): "",

@@ -7,21 +7,27 @@ elision SQL is ``examples/fakeshop/test_query/test_scalars_api.py``, and nested
 windows are ``examples/fakeshop/test_query/test_single_parent_fastpath_api.py``.
 """
 
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item
 from apps.products.services import seed_data
-from django.db.models import Prefetch
-from graphql import OperationType
+from django.db.models import Field, Model, Prefetch, QuerySet
+from graphql import GraphQLResolveInfo, OperationType
 from strawberry.relay.utils import to_base64
+from strawberry.schema.name_converter import HasGraphQLName, NameConverter
+from typing_extensions import override
 
-from django_strawberry_framework import OptimizerHint
+from django_strawberry_framework import DjangoType, OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.extension import mutation_payload_child_selections
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
-from django_strawberry_framework.optimizer.nested_fetch import unwindowable_child_queryset_reason
+from django_strawberry_framework.optimizer.nested_fetch import (
+    NestedConnectionRequest,
+    unwindowable_child_queryset_reason,
+)
 from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
     _apply_hint,
@@ -48,7 +54,7 @@ from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Clear the global registry around every walker test (order-independence).
 
     ``plan_optimizations`` resolves a relation's target type - and that type's
@@ -74,11 +80,11 @@ def _isolate_registry():
 
 
 def _sel(
-    name,
-    selections=None,
-    directives=None,
-    alias=None,
-    arguments=None,
+    name: str,
+    selections: list[SimpleNamespace] | None = None,
+    directives: dict[str, object] | None = None,
+    alias: str | None = None,
+    arguments: dict[str, object] | None = None,
 ):
     """Build a synthetic ``SelectedField``."""
     return SimpleNamespace(
@@ -90,14 +96,72 @@ def _sel(
     )
 
 
-def _prefetch_entry(plan, index=0):
+def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a duck-typed info to a planner entry point that takes a graphql-core resolve info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
+    # planner entry points type info as graphql-core's GraphQLResolveInfo
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _as_django_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a duck-typed stub class to a planner entry point that takes a ``DjangoType``."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
+    # planner entry points type the parameter as type[DjangoType]
+    return cls  # pyright: ignore[reportReturnType]
+
+
+class _HookStrategy:
+    """A consumer-authored strategy whose ``plan`` runs one hook."""
+
+    def __init__(
+        self,
+        name: str,
+        hook: Callable[[NestedConnectionRequest, OptimizationPlan], bool],
+    ) -> None:
+        self.name = name
+        self._hook = hook
+
+    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
+        return self._hook(request, plan)
+
+
+def _prefetches(lookups: Iterable[object]) -> list[Prefetch[str]]:
+    """Materialize ``lookups``, proving each is a ``Prefetch`` object."""
+    proven: list[Prefetch[str]] = []
+    for lookup in lookups:
+        assert isinstance(lookup, Prefetch)
+        proven.append(lookup)
+    return proven
+
+
+def _fake_fields(selections: Sequence[object]) -> list[SimpleNamespace]:
+    """``selections`` proven to be the ``_sel`` fakes the test built."""
+    fakes: list[SimpleNamespace] = []
+    for selection in selections:
+        assert isinstance(selection, SimpleNamespace)
+        fakes.append(selection)
+    return fakes
+
+
+def _attname(model: type[Model], name: str) -> str:
+    """The ``attname`` of ``model``'s concrete field ``name``."""
+    field = model._meta.get_field(name)
+    assert isinstance(field, Field)
+    return field.attname
+
+
+def _prefetch_entry(plan: OptimizationPlan, index: int = 0):
     """Return a prefetch entry and assert it is a ``Prefetch`` object."""
     entry = plan.prefetch_related[index]
     assert isinstance(entry, Prefetch)
     return entry
 
 
-def _inline_fragment(type_condition, selections=None, directives=None):
+def _inline_fragment(
+    type_condition: str,
+    selections: list[SimpleNamespace] | None = None,
+    directives: dict[str, object] | None = None,
+):
     """Build a synthetic ``InlineFragment``."""
     return SimpleNamespace(
         type_condition=type_condition,
@@ -107,10 +171,10 @@ def _inline_fragment(type_condition, selections=None, directives=None):
 
 
 def _fragment_spread(
-    name,
-    type_condition,
-    selections=None,
-    directives=None,
+    name: str,
+    type_condition: str,
+    selections: list[SimpleNamespace] | None = None,
+    directives: dict[str, object] | None = None,
 ):
     """Build a synthetic ``FragmentSpread``."""
     return SimpleNamespace(
@@ -122,12 +186,12 @@ def _fragment_spread(
 
 
 def _register_type_definition(
-    model,
-    type_cls,
+    model: type[Model],
+    type_cls: type,
     *,
-    optimizer_hints=None,
-    field_map=None,
-    primary=False,
+    optimizer_hints: dict[str, OptimizerHint] | None = None,
+    field_map: dict[str, FieldMeta] | None = None,
+    primary: bool = False,
 ):
     """Register a minimal definition for walker-only synthetic type classes."""
     selected_fields = tuple(model._meta.get_fields())
@@ -217,7 +281,7 @@ def test_record_select_path_keys_appends_unique_identities():
     assert plan.select_path_resolver_keys == {"category": ("a", "b", "c")}
 
 
-def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
+def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch: pytest.MonkeyPatch):
     """Regression: custom-pk Relay projection (the model pk attname is not ``"id"``).
 
     When a Relay-declared ``DjangoType`` is backed by a model whose pk
@@ -248,6 +312,7 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
 
         finalize_django_types()
         definition = registry.get_definition(CategoryNode)
+        assert definition is not None
         fake_field_map = {k: v for k, v in definition.field_map.items() if k != "id"}
         monkeypatch.setattr(definition, "field_map", fake_field_map)
         monkeypatch.setattr(Category._meta.pk, "attname", "name")
@@ -286,11 +351,15 @@ def test_plan_relay_id_projects_attname_when_pk_is_relation():
                 model = Patron
                 fields = ("name",)
 
+        assert registry.get(Patron) is PatronNode
+
         class PatronProfileNode(DjangoType):
             class Meta:
                 model = PatronProfile
                 fields = ("patron", "postal_code")
                 interfaces = (relay.Node,)
+
+        assert registry.get(PatronProfile) is PatronProfileNode
 
         finalize_django_types()
         plan = plan_optimizations([_sel("id")], PatronProfile)
@@ -309,9 +378,6 @@ def test_plan_relay_id_projects_attname_when_pk_is_relation():
 def test_plan_prefetches_relation_with_missing_related_model_defensively():
     """Defensive branch: relation fields without related_model become string prefetches."""
 
-    class FakeModel:
-        pass
-
     # Deliberately impossible in real Django; covers the defensive branch.
     fake_field = SimpleNamespace(
         name="generic",
@@ -321,9 +387,13 @@ def test_plan_prefetches_relation_with_missing_related_model_defensively():
         many_to_many=True,
         one_to_many=False,
     )
-    FakeModel._meta = SimpleNamespace(get_fields=lambda: [fake_field])
 
-    plan = plan_optimizations([_sel("generic")], FakeModel)
+    class FakeModel:
+        _meta = SimpleNamespace(get_fields=lambda: [fake_field])
+
+    # basedpyright: a stand-in model carrying only the slots the code under test reads;
+    # plan_optimizations types the parameter as type[Model]
+    plan = plan_optimizations([_sel("generic")], FakeModel)  # pyright: ignore[reportArgumentType]
 
     assert plan.prefetch_related == ("generic",)
     assert plan.planned_resolver_keys == ("generic@generic",)
@@ -331,9 +401,6 @@ def test_plan_prefetches_relation_with_missing_related_model_defensively():
 
 def test_plan_select_relation_with_missing_related_model_is_not_elided():
     """Defensive branch: FK-id elision is unsafe when related_model is missing."""
-
-    class FakeModel:
-        pass
 
     fake_field = SimpleNamespace(
         name="relation",
@@ -346,9 +413,13 @@ def test_plan_select_relation_with_missing_related_model_is_not_elided():
         one_to_many=False,
         auto_created=False,
     )
-    FakeModel._meta = SimpleNamespace(get_fields=lambda: [fake_field])
 
-    plan = plan_optimizations([_sel("relation", selections=[_sel("id")])], FakeModel)
+    class FakeModel:
+        _meta = SimpleNamespace(get_fields=lambda: [fake_field])
+
+    # basedpyright: a stand-in model carrying only the slots the code under test reads;
+    # plan_optimizations types the parameter as type[Model]
+    plan = plan_optimizations([_sel("relation", selections=[_sel("id")])], FakeModel)  # pyright: ignore[reportArgumentType]
 
     assert plan.select_related == ("relation",)
     assert plan.only_fields == ("relation_id",)
@@ -359,12 +430,12 @@ def test_unregistered_field_map_rejects_malformed_descriptor():
     """Unregistered planning stamps via ``from_django_field`` and fails typed-and-early."""
 
     class FakeModel:
-        pass
-
-    FakeModel._meta = SimpleNamespace(get_fields=lambda: [SimpleNamespace(name="x")])
+        _meta = SimpleNamespace(get_fields=lambda: [SimpleNamespace(name="x")])
 
     with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
-        plan_optimizations([_sel("x")], FakeModel)
+        # basedpyright: the model whose field lacks is_relation is the hostile input under test;
+        # plan_optimizations types the parameter as type[Model]
+        plan_optimizations([_sel("x")], FakeModel)  # pyright: ignore[reportArgumentType]
 
 
 def test_unregistered_field_map_stamps_a_multi_column_forward_foreign_object():
@@ -422,6 +493,8 @@ def test_plan_projects_digit_boundary_field_under_real_django_name():
             class Meta:
                 model = Publisher
                 fields = ("name",)
+
+        assert registry.get(Publisher) is PublisherNode
 
         class EditionNode(DjangoType):
             class Meta:
@@ -499,14 +572,13 @@ def test_name_resolution_defensively_skips_unusable_metadata():
             fields=(SimpleNamespace(python_name=None),),
         ),
     )
-    assert _graphql_names_by_python_name(type_cls, None) == {}
-    assert (
-        _field_by_graphql_name(
-            "missing",
-            {"broken": SimpleNamespace(name=None)},
-        )
-        is None
-    )
+    # basedpyright: the malformed Strawberry definition is the hostile input under test;
+    # _graphql_names_by_python_name types the parameter as type[DjangoType] | None
+    assert _graphql_names_by_python_name(type_cls, None) == {}  # pyright: ignore[reportArgumentType]
+    nameless_field_map = {"broken": SimpleNamespace(name=None)}
+    # basedpyright: the nameless field metadata is the hostile input under test;
+    # _field_by_graphql_name types the parameter as Mapping[str, FieldMeta]
+    assert _field_by_graphql_name("missing", nameless_field_map) is None  # pyright: ignore[reportArgumentType]
     assert _resolve_selection_target(
         "line2Connection",
         {},
@@ -516,17 +588,19 @@ def test_name_resolution_defensively_skips_unusable_metadata():
     ) == ("connection", "line_2", None)
 
 
-def _converter_info(name_converter=None):
+def _converter_info(name_converter: NameConverter | None = None) -> GraphQLResolveInfo:
     """Build a plan-time ``info`` whose schema config carries a name converter."""
     from strawberry.schema.config import StrawberryConfig
 
     config = StrawberryConfig()
     if name_converter is not None:
         config.name_converter = name_converter
-    return SimpleNamespace(
-        schema=SimpleNamespace(config=config),
-        path=None,
-        variable_values={},
+    return _as_resolve_info(
+        SimpleNamespace(
+            schema=SimpleNamespace(config=config),
+            path=None,
+            variable_values={},
+        ),
     )
 
 
@@ -550,7 +624,7 @@ def _declare_edition_node():
     return Edition, EditionNode
 
 
-def test_forward_name_maps_build_once_per_type_and_converter(monkeypatch):
+def test_forward_name_maps_build_once_per_type_and_converter(monkeypatch: pytest.MonkeyPatch):
     """Plan builds that miss the reversal share one name table per type and converter.
 
     Rebuilding the type's GraphQL-name table on every reverse miss made a
@@ -566,7 +640,7 @@ def test_forward_name_maps_build_once_per_type_and_converter(monkeypatch):
         builds = []
         real = walker_mod._graphql_names_by_python_name
 
-        def spy(type_cls, info):
+        def spy(type_cls: type[DjangoType] | None, info: object):
             builds.append(type_cls)
             return real(type_cls, info)
 
@@ -607,10 +681,11 @@ def test_forward_name_maps_answer_per_schema_converter():
     from strawberry.schema.name_converter import NameConverter
 
     class BookNumberConverter(NameConverter):
-        def get_graphql_name(self, field):
-            if field.python_name == "isbn_13":
+        @override
+        def get_graphql_name(self, obj: HasGraphQLName) -> str:
+            if obj.python_name == "isbn_13":
                 return "bookNumber"
-            return super().get_graphql_name(field)
+            return super().get_graphql_name(obj)
 
     registry.clear()
     try:
@@ -618,7 +693,7 @@ def test_forward_name_maps_answer_per_schema_converter():
         default_info = _converter_info()
         custom_info = _converter_info(BookNumberConverter())
 
-        def only(name, info):
+        def only(name: str, info: GraphQLResolveInfo):
             return plan_optimizations(
                 [_sel(name)],
                 edition,
@@ -818,7 +893,7 @@ def test_fragment_spread_from_multiple_sites_does_not_double_prefetch():
     # O4 may refine deduplication when nested Prefetch objects land.
     # For now, assert that the relation *is* in the plan and the count
     # is at most 2 (one per spread).
-    assert [prefetch.prefetch_to for prefetch in plan.prefetch_related] == ["items"]
+    assert [prefetch.prefetch_to for prefetch in _prefetches(plan.prefetch_related)] == ["items"]
 
 
 def test_plan_skips_fragment_with_skip_directive():
@@ -844,6 +919,7 @@ def test_merge_aliased_selections_merges_same_field():
     merged = _merge_aliased_selections([sel_a, sel_b])
     assert len(merged) == 1
     assert len(merged[0].selections) == 2
+    assert isinstance(merged[0], SimpleNamespace)
     assert merged[0]._optimizer_response_keys == ["first", "second"]
 
 
@@ -930,6 +1006,7 @@ def test_merge_aliased_selections_preserves_per_response_key_arguments():
     # Merge still proceeds; the first occurrence's ``arguments`` are kept.
     assert len(merged) == 1
     assert merged[0].arguments == {"active": True}
+    assert isinstance(merged[0], SimpleNamespace)
     assert merged[0]._optimizer_response_keys == ["first", "second"]
     # Per-response-key payloads recorded for both aliases; divergence detected.
     assert merged[0]._optimizer_response_key_arguments == {
@@ -1093,6 +1170,7 @@ def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
     """B2: O6 visibility hooks win over FK-id elision."""
     registry.clear()
 
+    @_as_django_type
     class FilteredCategoryType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -1101,7 +1179,7 @@ def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
             return queryset
 
     registry.register(Category, FilteredCategoryType)
@@ -1136,6 +1214,8 @@ def _printing_edition_key_only_plan():
         class Meta:
             model = Edition
             fields = ("isbn_13", "imprint")
+
+    assert registry.get(Edition) is EditionType
 
     class PrintingType(DjangoType):
         class Meta:
@@ -1229,6 +1309,8 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
                 fields = ("id", "name", "house_code")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Publisher) is PublisherType
+
         class EditionType(DjangoType):
             class Meta:
                 model = Edition
@@ -1248,7 +1330,7 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
     assert plan.only_fields == ("publisher_id", "publisher__id")
 
 
-def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch):
+def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch: pytest.MonkeyPatch):
     """B2: custom id resolver checks route through target definition metadata."""
     from apps.library.models import Edition, Publisher
 
@@ -1263,7 +1345,7 @@ def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch):
     assert definition is not None
     calls = []
 
-    def has_custom_id_resolver_for(pk_name):
+    def has_custom_id_resolver_for(pk_name: str):
         calls.append(pk_name)
         return True
 
@@ -1294,10 +1376,12 @@ def test_has_custom_id_resolver_fallback_matches_definition_path():
     """
     from strawberry import relay
 
+    @_as_django_type
     class PlainCustomTarget:
         def resolve_id(self):
             return "custom"
 
+    @_as_django_type
     class FrameworkDefaultTarget(relay.Node):
         pass
 
@@ -1320,9 +1404,10 @@ def test_has_custom_id_resolver_fallback_matches_definition_path():
 def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     """O6: a custom target ``get_queryset`` downgrades forward FK joins to ``Prefetch``."""
     registry.clear()
-    info = SimpleNamespace(field_name="allItems")
+    info = _as_resolve_info(SimpleNamespace(field_name="allItems"))
     calls = {}
 
+    @_as_django_type
     class FilteredCategoryType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -1331,7 +1416,7 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, passed_info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Category], passed_info: object, **kwargs: object):
             calls["queryset"] = queryset
             calls["info"] = passed_info
             return queryset.filter(is_private=False)
@@ -1353,6 +1438,7 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     prefetch = plan.prefetch_related[0]
     assert isinstance(prefetch, Prefetch)
     assert prefetch.prefetch_to == "category"
+    assert prefetch.queryset is not None
     assert prefetch.queryset.model is Category
     assert calls["queryset"].model is Category
     assert calls["info"] is info
@@ -1362,6 +1448,7 @@ def test_plan_keeps_select_related_when_target_uses_default_get_queryset():
     """O6: registered target types without custom ``get_queryset`` still use joins."""
     registry.clear()
 
+    @_as_django_type
     class DefaultCategoryType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -1387,6 +1474,7 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     registry.clear()
     calls = {}
 
+    @_as_django_type
     class FilteredItemType:
         __django_strawberry_definition__ = SimpleNamespace(model=Item)
 
@@ -1395,7 +1483,7 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Item], info: object, **kwargs: object):
             calls["queryset"] = queryset
             return queryset.filter(is_private=False)
 
@@ -1411,6 +1499,7 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     prefetch = plan.prefetch_related[0]
     assert isinstance(prefetch, Prefetch)
     assert prefetch.prefetch_to == "items"
+    assert prefetch.queryset is not None
     assert prefetch.queryset.model is Item
     assert calls["queryset"].model is Item
 
@@ -1427,6 +1516,7 @@ def test_plan_refuses_sliced_hook_result_for_plain_list_relation():
     """
     registry.clear()
 
+    @_as_django_type
     class SlicedItemType:
         __django_strawberry_definition__ = SimpleNamespace(model=Item)
 
@@ -1435,7 +1525,7 @@ def test_plan_refuses_sliced_hook_result_for_plain_list_relation():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Item], info: object, **kwargs: object):
             return queryset.order_by("pk")[:1]
 
     registry.register(Item, SlicedItemType)
@@ -1459,6 +1549,7 @@ def test_connection_child_seam_still_admits_a_sliced_hook_result():
     which is the one axis the two policies differ on.
     """
 
+    @_as_django_type
     class SlicedItemType:
         __django_strawberry_definition__ = SimpleNamespace(model=Item)
 
@@ -1467,10 +1558,10 @@ def test_connection_child_seam_still_admits_a_sliced_hook_result():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Item], info: object, **kwargs: object):
             return queryset.order_by("pk")[:1]
 
-    field = Category._meta.get_field("items")
+    field = FieldMeta.from_django_field(Category._meta.get_field("items"))
     admitted = _build_connection_child_queryset(
         field,
         SlicedItemType,
@@ -1499,9 +1590,13 @@ def test_plan_emits_nested_prefetch_chain_depth_2():
 
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
-    inner = outer.queryset._prefetch_related_lookups[0]
+    assert outer.queryset is not None
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
+    assert inner.queryset is not None
     assert inner.queryset.model is Entry
     fields, is_deferred = inner.queryset.query.deferred_loading
     assert fields == {"value", "item_id"}
@@ -1527,9 +1622,13 @@ def test_plan_emits_nested_prefetch_chain_depth_3_with_inner_select():
 
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
-    inner = outer.queryset._prefetch_related_lookups[0]
+    assert outer.queryset is not None
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
+    assert inner.queryset is not None
     assert inner.queryset.model is Entry
     assert inner.queryset.query.select_related == {"property": {}}
     fields, is_deferred = inner.queryset.query.deferred_loading
@@ -1558,6 +1657,7 @@ def test_plan_combines_prefetch_boundary_with_inner_select_related():
 
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
+    assert outer.queryset is not None
     assert outer.queryset.query.select_related == {"category": {}}
     fields, is_deferred = outer.queryset.query.deferred_loading
     assert fields == {"category_id", "category__name"}
@@ -1568,6 +1668,7 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
     """O4+O6: a nested custom ``get_queryset`` makes the root plan uncacheable."""
     registry.clear()
 
+    @_as_django_type
     class FilteredEntryType:
         __django_strawberry_definition__ = SimpleNamespace(model=Entry)
 
@@ -1576,7 +1677,7 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Entry], info: object, **kwargs: object):
             return queryset.filter(is_private=False)
 
     registry.register(Entry, FilteredEntryType)
@@ -1590,7 +1691,10 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
 
     assert plan.cacheable is False
     outer = _prefetch_entry(plan)
-    inner = outer.queryset._prefetch_related_lookups[0]
+    assert outer.queryset is not None
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
 
@@ -1680,10 +1784,15 @@ def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set():
         registry.clear()
 
     (planned,) = plan.prefetch_related
+    assert isinstance(planned, Prefetch)
     assert planned.prefetch_to == "items"
+    assert planned.queryset is not None
     assert planned.queryset.query.combinator is None
-    assert planned.queryset._db == "default"
-    assert planned.queryset._prefetch_related_lookups == ("entries",)
+    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
+    assert planned.queryset._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    assert planned.queryset._prefetch_related_lookups == ("entries",)  # pyright: ignore[reportAttributeAccessIssue]
     served = {
         category.pk: sorted(item.pk for item in category.items.all())
         for category in Category.objects.prefetch_related(planned)
@@ -1774,6 +1883,7 @@ def test_plan_prefetch_obj_hint_adapts_nested_selected_parent_prefix():
     prefetch = _prefetch_entry(plan)
     assert prefetch is not explicit
     assert prefetch.prefetch_to == "category__items"
+    assert prefetch.queryset is not None
     assert prefetch.queryset.model is Item
     fields, is_deferred = prefetch.queryset.query.deferred_loading
     assert fields == {"name"}
@@ -1812,6 +1922,7 @@ def test_plan_force_select_hint_uses_select_recursion():
     assert plan.planned_resolver_keys == ("ItemType.category@category", "items@category.items")
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "category__items"
+    assert prefetch.queryset is not None
     fields, is_deferred = prefetch.queryset.query.deferred_loading
     assert fields == {"name", "category_id"}
     assert is_deferred is False
@@ -1822,6 +1933,7 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
     registry.clear()
     calls = []
 
+    @_as_django_type
     class CategoryType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -1830,7 +1942,7 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
             return True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
             calls.append(info)
             return queryset.filter(is_private=False)
 
@@ -1859,6 +1971,7 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
     assert plan.only_fields == ("category_id",)
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "category"
+    assert prefetch.queryset is not None
     assert prefetch.queryset.model is Category
     assert prefetch.queryset.query.where
 
@@ -1965,11 +2078,16 @@ def test_plan_nested_prefetch_respects_fragment_alias_and_directive_shapes():
 
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
-    inner = outer.queryset._prefetch_related_lookups[0]
+    assert outer.queryset is not None
+    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
+    # attribute
+    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
     select_related = outer.queryset.query.select_related
-    assert select_related is False or "category" not in select_related
+    assert select_related is False or (
+        isinstance(select_related, dict) and "category" not in select_related
+    )
 
 
 def test_plan_merges_fragment_branches_before_prefetch_queryset_creation():
@@ -1991,6 +2109,7 @@ def test_plan_merges_fragment_branches_before_prefetch_queryset_creation():
     assert len(plan.prefetch_related) == 1
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
+    assert outer.queryset is not None
     fields, is_deferred = outer.queryset.query.deferred_loading
     assert fields == {"name", "description", "category_id"}
     assert is_deferred is False
@@ -2013,12 +2132,16 @@ def test_ensure_connector_only_fields_adds_m2m_target_pk():
         related_model=fake_related_model,
     )
 
-    _ensure_connector_only_fields(plan, fake_parent_field)
+    # basedpyright: a stand-in field carrying only the slots the code under test reads;
+    # _ensure_connector_only_fields types the parameter as FieldMeta
+    _ensure_connector_only_fields(plan, fake_parent_field)  # pyright: ignore[reportArgumentType]
 
     assert plan.only_fields == ["name", "id"]
 
 
-def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
+def test_ensure_connector_only_fields_logs_when_connector_unknown(
+    caplog: pytest.LogCaptureFixture,
+):
     """Connector injection logs when a relation lacks connector metadata."""
     from django_strawberry_framework.optimizer.walker import logger
 
@@ -2030,7 +2153,9 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
     )
 
     caplog.set_level("DEBUG", logger=logger.name)
-    _ensure_connector_only_fields(plan, fake_parent_field)
+    # basedpyright: a stand-in field carrying only the slots the code under test reads;
+    # _ensure_connector_only_fields types the parameter as FieldMeta
+    _ensure_connector_only_fields(plan, fake_parent_field)  # pyright: ignore[reportArgumentType]
 
     assert plan.only_fields == ("name",)
     assert any("could not resolve connector column" in r.message for r in caplog.records)
@@ -2130,7 +2255,11 @@ def test_plan_tolerates_optimizer_hints_set_to_none():
             return False
 
     _register_type_definition(Item, ItemType)
-    registry.get_definition(ItemType).optimizer_hints = None
+    item_definition = registry.get_definition(ItemType)
+    assert item_definition is not None
+    # basedpyright: the planted None is the misbehaving-writer input under test;
+    # DjangoTypeDefinition types optimizer_hints as a dict
+    item_definition.optimizer_hints = None  # pyright: ignore[reportAttributeAccessIssue]
     try:
         plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
     finally:
@@ -2145,6 +2274,7 @@ def test_plan_tolerates_registered_type_without_definition():
     """Shape guard: a stale registered type without definition metadata has no hints."""
     registry.clear()
 
+    @_as_django_type
     class ItemType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -2178,7 +2308,9 @@ def test_prefetch_hint_for_path_rejects_prefetch_without_lookup():
         r"requires a Prefetch with a lookup path",
     ):
         _prefetch_hint_for_path(
-            no_lookup,
+            # basedpyright: the lookup-less Prefetch surrogate is the hostile input under test;
+            # _prefetch_hint_for_path types the parameter as a Prefetch
+            no_lookup,  # pyright: ignore[reportArgumentType]
             django_name="items",
             full_path="category__items",
             type_name="CategoryType",
@@ -2249,6 +2381,7 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
     never actually planned.
     """
 
+    @_as_django_type
     class ItemType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -2259,7 +2392,7 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
 
     explicit = Prefetch("unrelated_relation", queryset=Entry.objects.all())
     hint = OptimizerHint.prefetch(explicit)
-    django_field = Item._meta.get_field("category")
+    django_field = FieldMeta.from_django_field(Item._meta.get_field("category"))
 
     with pytest.raises(
         ConfigurationError,
@@ -2299,7 +2432,7 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(only_fields=["id"])
-    parent_field = Patron._meta.get_field("card")
+    parent_field = FieldMeta.from_django_field(Patron._meta.get_field("card"))
     _ensure_connector_only_fields(plan, parent_field)
 
     assert "patron_id" in plan.only_fields
@@ -2318,11 +2451,11 @@ def test_ensure_connector_only_fields_adds_generic_content_type():
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(only_fields=["tag"])
-    parent_field = Branch._meta.get_field("tags")
+    parent_field = FieldMeta.from_django_field(Branch._meta.get_field("tags"))
     _ensure_connector_only_fields(plan, parent_field)
 
-    object_id = TaggedItem._meta.get_field("object_id").attname
-    content_type_id = TaggedItem._meta.get_field("content_type").attname
+    object_id = _attname(TaggedItem, "object_id")
+    content_type_id = _attname(TaggedItem, "content_type")
     assert object_id in plan.only_fields
     assert content_type_id in plan.only_fields
 
@@ -2353,10 +2486,11 @@ def test_generic_connection_node_selection_projects_content_type_column():
             source_type=branch_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         only_fields, defer = prefetch.queryset.query.deferred_loading
         assert defer is False
-        object_id = tagged_model._meta.get_field("object_id").attname
-        content_type_id = tagged_model._meta.get_field("content_type").attname
+        object_id = _attname(tagged_model, "object_id")
+        content_type_id = _attname(tagged_model, "content_type")
         assert {"tag", object_id, content_type_id} <= set(only_fields)
     finally:
         registry.clear()
@@ -2386,6 +2520,7 @@ def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
         def has_custom_get_queryset(cls):
             return False
 
+    @_as_django_type
     class AdminItemType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -2433,6 +2568,7 @@ def test_scalar_only_secondary_resolver_uses_secondary_field_map():
         def has_custom_get_queryset(cls):
             return False
 
+    @_as_django_type
     class AdminItemType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -2520,7 +2656,9 @@ def test_optimizer_walker_uses_primary_for_nested_relation_target():
     assert "name" not in only_clause
 
 
-def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatch):
+def test_walker_resolves_relation_targets_through_definition_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Registered relation targets route through ``DjangoTypeDefinition.related_target_for``."""
     registry.clear()
 
@@ -2529,6 +2667,7 @@ def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatc
         def has_custom_get_queryset(cls):
             return False
 
+    @_as_django_type
     class ItemType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -2564,27 +2703,29 @@ def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def _fake_info(relay_max_results=100):
+def _fake_info(relay_max_results: int = 100) -> GraphQLResolveInfo:
     """Build a minimal ``info`` exposing ``schema.config.relay_max_results`` and ``path``.
 
     ``SliceMetadata.from_arguments`` reads ``info.schema.config.relay_max_results``
     when ``max_results`` is left ``None``; the walker reads ``info.path`` for
     runtime-path identity. Nothing else on ``info`` is touched at plan time.
     """
-    return SimpleNamespace(
-        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
-        path=None,
-        variable_values={},
+    return _as_resolve_info(
+        SimpleNamespace(
+            schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
+            path=None,
+            variable_values={},
+        ),
     )
 
 
 def _conn_sel(
-    name,
+    name: str,
     *,
-    node_selections=None,
-    arguments=None,
-    alias=None,
-    scalar_children=None,
+    node_selections: Iterable[SimpleNamespace] | None = None,
+    arguments: dict[str, object] | None = None,
+    alias: str | None = None,
+    scalar_children: Iterable[str] | None = None,
 ):
     """Build a synthetic connection selection (``edges { node { ... } }`` wrapper)."""
     children = []
@@ -2688,6 +2829,7 @@ def test_windowed_prefetch_queryset_carries_non_pk_deterministic_order():
             source_type=card_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         assert tuple(prefetch.queryset.query.order_by) == ("decided_at", "id")
     finally:
         registry.clear()
@@ -2717,6 +2859,7 @@ def test_scalar_only_window_projects_non_pk_order_column():
             source_type=card_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         only_fields, defer = prefetch.queryset.query.deferred_loading
         assert defer is False
         # pk + reverse-FK connector (card_id) + the non-pk ORDER column (decided_at).
@@ -2836,8 +2979,10 @@ def test_relation_connections_slot_recorded():
         types = _connection_relay_types()
         genre_def = registry.get_definition(types["Genre"][1])
         # Genre.books (reverse M2M) synthesizes booksConnection.
+        assert genre_def is not None
         assert genre_def.relation_connections == {"books_connection": "books"}
         shelf_def = registry.get_definition(types["Shelf"][1])
+        assert shelf_def is not None
         assert shelf_def.relation_connections == {"books_connection": "books"}
     finally:
         registry.clear()
@@ -2859,6 +3004,8 @@ def test_relation_connections_slot_records_nothing_for_suppressed_shapes():
                 fields = ("id", "title")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Book) is BookType
+
         class GenreType(DjangoType):
             class Meta:
                 model = Genre
@@ -2868,6 +3015,7 @@ def test_relation_connections_slot_records_nothing_for_suppressed_shapes():
 
         finalize_django_types()
         genre_def = registry.get_definition(GenreType)
+        assert genre_def is not None
         # The "list" narrowing suppresses synthesis, so nothing is recorded.
         assert not (genre_def.relation_connections or {})
     finally:
@@ -2884,14 +3032,20 @@ def test_record_relation_connection_is_idempotent():
     from django_strawberry_framework.types.finalizer import _record_relation_connection
 
     definition = SimpleNamespace(relation_connections=None)
-    _record_relation_connection(definition, "books_connection", "books")
+    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+    # _record_relation_connection types the parameter as DjangoTypeDefinition
+    _record_relation_connection(definition, "books_connection", "books")  # pyright: ignore[reportArgumentType]
     assert definition.relation_connections == {"books_connection": "books"}
     # Idempotent re-write (the marker-``continue`` branch path).
-    _record_relation_connection(definition, "books_connection", "books")
+    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+    # _record_relation_connection types the parameter as DjangoTypeDefinition
+    _record_relation_connection(definition, "books_connection", "books")  # pyright: ignore[reportArgumentType]
     assert definition.relation_connections == {"books_connection": "books"}
 
 
-def test_relation_connections_slot_recorded_on_partial_finalize_rerun(monkeypatch):
+def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A partial finalize whose Phase 3 raised, then a re-run, still records the slot.
 
     Forces ``strawberry.type`` (Phase 3) to raise on the first
@@ -2915,34 +3069,41 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(monkeypatc
                 fields = ("id", "title")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Book) is BookType
+
         class GenreType(DjangoType):
             class Meta:
                 model = Genre
                 fields = ("id", "name", "books")
                 interfaces = (relay.Node,)
 
-        real_strawberry_type = finalizer_module.strawberry.type
+        # basedpyright: read the original through the module path the patch targets
+        real_strawberry_type = finalizer_module.strawberry.type  # pyright: ignore[reportPrivateLocalImportUsage]
 
-        def boom(cls=None, *args, **kwargs):
+        def boom(cls: object = None, *args: object, **kwargs: object) -> object:
             # Only the Phase-3 decoration of GenreType raises; synthesis
             # (Phase 2.5) internally calls ``strawberry.type`` to build the
             # connection class, which must still succeed.
             if cls is GenreType:
                 raise RuntimeError("forced Phase 3 failure for re-entrancy test")
-            return real_strawberry_type(cls, *args, **kwargs)
+            # basedpyright: verbatim forward to strawberry.type; object fails its overloads
+            return real_strawberry_type(cls, *args, **kwargs)  # pyright: ignore[reportArgumentType]
 
         # Synthesis (Phase 2.5) runs before Phase 3; make Phase 3 raise so the
         # marker is set but ``finalized`` stays False.
-        monkeypatch.setattr(finalizer_module.strawberry, "type", boom)
+        # basedpyright: patch the module object the code under test holds, not a fresh import of it
+        monkeypatch.setattr(finalizer_module.strawberry, "type", boom)  # pyright: ignore[reportPrivateLocalImportUsage]
         with pytest.raises(RuntimeError, match="forced Phase 3 failure"):
             finalize_django_types()
         genre_def = registry.get_definition(GenreType)
         # The first (raising) finalize already recorded the slot.
+        assert genre_def is not None
         assert genre_def.relation_connections == {"books_connection": "books"}
         # Wipe it and re-run with Phase 3 restored: the marker-``continue`` branch
         # must re-record the slot rather than skip it.
         genre_def.relation_connections = None
-        monkeypatch.setattr(finalizer_module.strawberry, "type", real_strawberry_type)
+        # basedpyright: patch the module object the code under test holds, not a fresh import of it
+        monkeypatch.setattr(finalizer_module.strawberry, "type", real_strawberry_type)  # pyright: ignore[reportPrivateLocalImportUsage]
         finalize_django_types()
         assert genre_def.relation_connections == {"books_connection": "books"}
     finally:
@@ -2982,6 +3143,7 @@ def test_nested_connection_planned_as_windowed_prefetch():
         # The window lands on the reserved ``to_attr``, lookup stays the accessor.
         assert prefetch.to_attr == "_dst_books_connection"
         assert prefetch.prefetch_through == "books"
+        assert prefetch.queryset is not None
         annotations = prefetch.queryset.query.annotations
         assert WINDOW_ROW_NUMBER in annotations
         # Nothing in the selection observes the count -> not annotated.
@@ -3024,6 +3186,8 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
                 fields = ("id", "run_size")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Printing) is PrintingNode
+
         class PublisherNode(DjangoType):
             class Meta:
                 model = Publisher
@@ -3035,6 +3199,7 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
         # The synthesis records the slot under the Python attr name; Strawberry
         # renders it in the schema as ``printings2Connection``.
         definition = registry.get_definition(PublisherNode)
+        assert definition is not None
         assert definition.relation_connections == {"printings_2_connection": "printings_2"}
 
         plan = plan_optimizations(
@@ -3057,18 +3222,24 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
         assert plan.planned_resolver_keys == ("PublisherNode.printings_2@printings2Connection",)
 
         class ConnectionNameConverter(NameConverter):
-            def get_graphql_name(self, field):
-                if field.python_name == "printings_2_connection":
+            @override
+            def get_graphql_name(self, obj: HasGraphQLName) -> str:
+                if obj.python_name == "printings_2_connection":
                     return "numberedRuns"
-                return super().get_graphql_name(field)
+                return super().get_graphql_name(obj)
 
-        custom_info = _fake_info()
-        custom_info.schema = SimpleNamespace(
-            _strawberry_schema=SimpleNamespace(
-                config=SimpleNamespace(
-                    name_converter=ConnectionNameConverter(),
-                    relay_max_results=100,
+        custom_info = _as_resolve_info(
+            SimpleNamespace(
+                schema=SimpleNamespace(
+                    _strawberry_schema=SimpleNamespace(
+                        config=SimpleNamespace(
+                            name_converter=ConnectionNameConverter(),
+                            relay_max_results=100,
+                        ),
+                    ),
                 ),
+                path=None,
+                variable_values={},
             ),
         )
         custom_plan = plan_optimizations(
@@ -3100,7 +3271,10 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
         pytest.param("hasPreviousPage", False, id="page-info-has-previous-only"),
     ],
 )
-def test_nested_connection_total_count_planned_only_when_observable(count_observer, expected):
+def test_nested_connection_total_count_planned_only_when_observable(
+    count_observer: str | None,
+    expected: bool,
+):
     """The count window follows spec-033 Decision 4 and the count-free probe.
 
     Only ``totalCount`` keeps the ``_dst_total_count`` annotation on this plain
@@ -3134,6 +3308,7 @@ def test_nested_connection_total_count_planned_only_when_observable(count_observ
             source_type=genre_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         assert (WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations) is expected
     finally:
         registry.clear()
@@ -3168,6 +3343,7 @@ def test_nested_connection_first_page_has_next_uses_probe_not_count():
             source_type=genre_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         assert WINDOW_TOTAL_COUNT not in prefetch.queryset.query.annotations
         sql = str(prefetch.queryset.query).upper()
         assert "<= 4" in sql  # the n+1 overfetch sentinel bound.
@@ -3204,6 +3380,7 @@ def test_nested_connection_first_page_total_count_keeps_count_and_skips_probe():
             source_type=genre_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         assert WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations
         sql = str(prefetch.queryset.query).upper()
         assert "<= 3" in sql  # the plain page bound - no overfetch sentinel.
@@ -3247,7 +3424,9 @@ def test_nested_connection_offset_window_count_free_unless_total_selected():
             info=_fake_info(),
             source_type=genre_type,
         )
-        assert WINDOW_TOTAL_COUNT not in _prefetch_entry(edges_only).queryset.query.annotations
+        edges_only_queryset = _prefetch_entry(edges_only).queryset
+        assert edges_only_queryset is not None
+        assert WINDOW_TOTAL_COUNT not in edges_only_queryset.query.annotations
 
         # totalCount selected on the same offset shape -> count kept.
         with_total = plan_optimizations(
@@ -3263,7 +3442,9 @@ def test_nested_connection_offset_window_count_free_unless_total_selected():
             info=_fake_info(),
             source_type=genre_type,
         )
-        assert WINDOW_TOTAL_COUNT in _prefetch_entry(with_total).queryset.query.annotations
+        with_total_queryset = _prefetch_entry(with_total).queryset
+        assert with_total_queryset is not None
+        assert WINDOW_TOTAL_COUNT in with_total_queryset.query.annotations
     finally:
         registry.clear()
 
@@ -3301,6 +3482,7 @@ def test_window_slice_from_first_after_literals():
             source_type=genre_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         sql = str(prefetch.queryset.query).upper()
         assert "_DST_ROW_NUMBER" in sql
         # offset 2 (after "1") + first 3 -> the window is bounded to row 5, NOT
@@ -3321,7 +3503,7 @@ def test_window_slice_coerces_int_literal_strings():
     ``SliceMetadata.from_arguments`` reaches its own ``isinstance`` gate (the
     shipped malformed-value behavior) rather than the walker pre-judging it.
     """
-    from django_strawberry_framework.optimizer.walker import _coerce_pagination_int
+    from django_strawberry_framework.optimizer.nested_planner import _coerce_pagination_int
 
     assert _coerce_pagination_int("2") == 2
     assert _coerce_pagination_int(2) == 2
@@ -3351,11 +3533,12 @@ def test_relay_max_results_from_optimizer_info_shapes():
             _strawberry_schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=7)),
         ),
     )
-    assert _relay_max_results_from_info(wrapped) == 7
+    assert _relay_max_results_from_info(_as_resolve_info(wrapped)) == 7
     # Test-stub shape: ``schema.config`` directly (no ``_strawberry_schema``).
     assert _relay_max_results_from_info(_fake_info(relay_max_results=42)) == 42
     # No config anywhere -> None (engine default applies downstream).
-    assert _relay_max_results_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
+    configless = _as_resolve_info(SimpleNamespace(schema=SimpleNamespace()))
+    assert _relay_max_results_from_info(configless) is None
 
 
 def test_window_slice_from_variables():
@@ -3393,6 +3576,7 @@ def test_window_slice_from_variables():
         )
         prefetch = _prefetch_entry(plan)
         assert prefetch.to_attr == "_dst_books_connection"
+        assert prefetch.queryset is not None
         sql = str(prefetch.queryset.query).upper()
         assert "_DST_ROW_NUMBER" in sql
         # offset 0 + first 5 -> bounded to row 5, NOT the relay_max_results cap.
@@ -3424,6 +3608,7 @@ def test_window_last_only_uses_reversed_row_number():
             source_type=genre_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         query = prefetch.queryset.query
         assert WINDOW_ROW_NUMBER_REVERSED in query.annotations
         # The reversed window MUST be bounded to ``last`` rows; assert the
@@ -3466,7 +3651,7 @@ def test_window_respects_relay_max_results():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("direction", ["reverse_m2m", "forward_m2m"])
-def test_m2m_shared_child_partitions_per_parent(direction):
+def test_m2m_shared_child_partitions_per_parent(direction: str):
     """Two parents sharing one child each receive that child in their OWN page.
 
     The M2M window partitions by the PARENT key, not the child pk. Under an
@@ -3569,7 +3754,10 @@ def test_nested_connection_two_level_recursion():
         outer = _prefetch_entry(plan)
         assert outer.to_attr == "_dst_books_connection"
         # The outer window's child queryset carries the inner window prefetch.
-        inner_prefetches = list(outer.queryset._prefetch_related_lookups)
+        assert outer.queryset is not None
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        inner_prefetches = list(outer.queryset._prefetch_related_lookups)  # pyright: ignore[reportAttributeAccessIssue]
         inner_to_attrs = [getattr(pf, "to_attr", None) for pf in inner_prefetches]
         assert "_dst_genres_connection" in inner_to_attrs
     finally:
@@ -3595,6 +3783,7 @@ def test_child_plan_projections_include_connector_and_ordering_columns():
             source_type=shelf_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         only_clause = set(prefetch.queryset.query.deferred_loading[0])
         # Reverse FK connector column (shelf_id) is force-included for attach.
         assert "shelf_id" in only_clause
@@ -3642,6 +3831,7 @@ def test_scalar_only_window_projects_pk_connector_and_order_columns():
             source_type=shelf_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         only_fields, defer = prefetch.queryset.query.deferred_loading
         # An `.only()` projection (defer=False), not full-row loading or `.defer()`.
         assert defer is False
@@ -3672,10 +3862,11 @@ def test_scalar_only_generic_window_projects_content_type_column():
             source_type=branch_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         only_fields, defer = prefetch.queryset.query.deferred_loading
         assert defer is False
-        object_id = tagged_model._meta.get_field("object_id").attname
-        content_type_id = tagged_model._meta.get_field("content_type").attname
+        object_id = _attname(tagged_model, "object_id")
+        content_type_id = _attname(tagged_model, "content_type")
         assert {tagged_model._meta.pk.attname, object_id, content_type_id} <= set(only_fields)
     finally:
         registry.clear()
@@ -3707,6 +3898,7 @@ def test_windowed_prefetch_queryset_carries_deterministic_order():
             source_type=shelf_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         assert tuple(prefetch.queryset.query.order_by) == ("id",)
     finally:
         registry.clear()
@@ -3723,7 +3915,10 @@ def test_windowed_prefetch_queryset_carries_deterministic_order():
     ],
     ids=["not-base64", "negative-one", "negative-two"],
 )
-def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(caplog, after):
+def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(
+    caplog: pytest.LogCaptureFixture,
+    after: str,
+):
     """A malformed ``after:`` cursor emits NO window but RECORDS the resolver key.
 
     Error-locality contract (spec-033 Decision 4 step f / Decision 8): the
@@ -3781,7 +3976,7 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key(caplog
         {"order_by": object()},  # camelization disabled
     ],
 )
-def test_fallback_not_planned_sidecar_input(sidecar):
+def test_fallback_not_planned_sidecar_input(sidecar: dict[str, object]):
     """A nested connection carrying ``filter:`` / ``orderBy:`` is left unplanned."""
     registry.clear()
     try:
@@ -3850,7 +4045,7 @@ def test_divergent_key_windows_shared_payload_uses_none_key():
     assert fallbacks == [(None, "unsupported pagination window")]
 
 
-def test_shared_window_sidecar_logs_response_keys_not_none(caplog):
+def test_shared_window_sidecar_logs_response_keys_not_none(caplog: pytest.LogCaptureFixture):
     """Shared-window sidecar fallback logs the real response keys, never ``None``."""
     from django_strawberry_framework.optimizer import logger
 
@@ -3884,7 +4079,7 @@ def test_shared_window_sidecar_logs_response_keys_not_none(caplog):
         registry.clear()
 
 
-def _prefetch_by_to_attr(plan):
+def _prefetch_by_to_attr(plan: OptimizationPlan):
     """Map ``to_attr -> Prefetch`` for every generated window prefetch."""
     return {
         pf.to_attr: pf
@@ -3930,7 +4125,9 @@ def test_divergent_aliases_plan_one_window_per_response_key():
         by_attr = _prefetch_by_to_attr(plan)
         assert set(by_attr) == {"_dst_books$a_connection", "_dst_books$b_connection"}
         # Each per-key window carries ITS alias's page bound.
+        assert by_attr["_dst_books$a_connection"].queryset is not None
         assert "<= 2" in str(by_attr["_dst_books$a_connection"].queryset.query)
+        assert by_attr["_dst_books$b_connection"].queryset is not None
         assert "<= 5" in str(by_attr["_dst_books$b_connection"].queryset.query)
         # Both keys planned -> both resolver identities recorded (strictness-silent).
         assert len(plan.planned_resolver_keys) == 2
@@ -3988,7 +4185,7 @@ def test_divergent_duplicate_payloads_still_plan_per_key():
         registry.clear()
 
 
-def test_divergent_mixed_sidecar_plans_only_the_plain_key(caplog):
+def test_divergent_mixed_sidecar_plans_only_the_plain_key(caplog: pytest.LogCaptureFixture):
     """A sidecar-carrying alias falls back alone; its divergent sibling still plans.
 
     ``a`` carries ``filter:`` (per-parent, strictness-VISIBLE - no resolver
@@ -4160,6 +4357,7 @@ def test_divergent_union_observer_keeps_count_on_every_window():
             ("_dst_books$b_connection", "<= 5", "<= 6"),
         ):
             queryset = by_attr[to_attr].queryset
+            assert queryset is not None
             assert WINDOW_TOTAL_COUNT in queryset.query.annotations
             sql = str(queryset.query)
             assert page_bound in sql  # plain page bound - no overfetch sentinel.
@@ -4288,9 +4486,12 @@ def test_nested_same_key_conflict_leaves_only_the_nested_level_unplanned():
         # The conflicted nested connection planned NO window on either child
         # queryset (a first-payload-wins window would serve ``b`` a wrong page).
         for prefetch in by_attr.values():
+            assert prefetch.queryset is not None
             nested_attrs = [
                 getattr(nested, "to_attr", None)
-                for nested in prefetch.queryset._prefetch_related_lookups
+                # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as
+                # an unknown attribute
+                for nested in prefetch.queryset._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
             ]
             assert not any("_dst_genres" in str(attr) for attr in nested_attrs)
         # Outer keys planned; the conflicted nested relation recorded nothing
@@ -4385,6 +4586,8 @@ def test_fallback_not_planned_skip_hint():
                 fields = ("id", "title")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Book) is BookType
+
         class GenreType(DjangoType):
             class Meta:
                 model = Genre
@@ -4411,7 +4614,7 @@ def test_fallback_not_planned_skip_hint():
         registry.clear()
 
 
-def test_skip_hint_with_sidecar_does_not_log_sidecar(caplog):
+def test_skip_hint_with_sidecar_does_not_log_sidecar(caplog: pytest.LogCaptureFixture):
     """SKIP on a sidecar-carrying shared-window connection stays silent.
 
     Relation-level SKIP runs before the arguments-derived sidecar gate, so
@@ -4434,6 +4637,8 @@ def test_skip_hint_with_sidecar_does_not_log_sidecar(caplog):
                 model = Book
                 fields = ("id", "title")
                 interfaces = (relay.Node,)
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -4534,6 +4739,7 @@ def test_alias_merge_totalCount_observer_keeps_count_and_skips_probe():
         )
         prefetch = _prefetch_entry(plan)
         # One merged window; the count survives (probe skipped).
+        assert prefetch.queryset is not None
         assert WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations
         sql = str(prefetch.queryset.query).upper()
         assert "<= 2" in sql  # plain page bound - no overfetch sentinel.
@@ -4592,7 +4798,7 @@ def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch(
             source_type=genre_type,
         )
         to_attrs = {getattr(pf, "to_attr", None) for pf in plan.prefetch_related}
-        prefetch_throughs = {pf.prefetch_through for pf in plan.prefetch_related}
+        prefetch_throughs = {pf.prefetch_through for pf in _prefetches(plan.prefetch_related)}
         # List sibling (no to_attr) and the window (to_attr) share lookup "books"
         # but distinct prefetch_to, so no Django duplicate-lookup error.
         assert None in to_attrs
@@ -4610,7 +4816,7 @@ def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch(
         delta_to_attrs = {getattr(pf, "to_attr", None) for pf in delta.prefetch_related}
         assert None in delta_to_attrs
         assert "_dst_books_connection" in delta_to_attrs
-        assert {pf.prefetch_through for pf in delta.prefetch_related} == {"books"}
+        assert {pf.prefetch_through for pf in _prefetches(delta.prefetch_related)} == {"books"}
     finally:
         registry.clear()
 
@@ -4632,8 +4838,11 @@ def test_visibility_target_window_flips_cacheable_false():
                 interfaces = (relay.Node,)
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: QuerySet[Book], info: object):
                 return queryset.filter(circulation_status="available")
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -4678,10 +4887,13 @@ def test_distinct_child_queryset_left_unplanned_for_correct_total_count():
                 interfaces = (relay.Node,)
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: QuerySet[Book], info: object):
                 # A visibility join that de-duplicates: window Count(1) OVER would
                 # over-count pre-DISTINCT rows, so the window must not be planned.
                 return queryset.distinct()
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -4711,7 +4923,7 @@ def test_distinct_child_queryset_left_unplanned_for_correct_total_count():
         registry.clear()
 
 
-def _genre_books_connection_with_nested_relation_types(*, distinct):
+def _genre_books_connection_with_nested_relation_types(*, distinct: bool):
     """Register ``GenreType`` / ``BookType`` (``BookType`` exposes the ``shelf`` FK).
 
     The node child ``shelf { id }`` is a nested RELATION, so the child plan
@@ -4732,6 +4944,8 @@ def _genre_books_connection_with_nested_relation_types(*, distinct):
             fields = ("id", "code")
             interfaces = (relay.Node,)
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
@@ -4741,8 +4955,11 @@ def _genre_books_connection_with_nested_relation_types(*, distinct):
         if distinct:
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: QuerySet[Book], info: object):
                 return queryset.distinct()
+
+    assert registry.get(Book) is BookType
 
     class GenreType(DjangoType):
         class Meta:
@@ -4841,6 +5058,8 @@ def test_secondary_type_relation_shapes_nested_recognition():
                 fields = ("id", "title")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Book) is BookType
+
         class GenrePrimary(DjangoType):
             class Meta:
                 model = Genre
@@ -4849,12 +5068,16 @@ def test_secondary_type_relation_shapes_nested_recognition():
                 relation_shapes = {"books": "list"}
                 primary = True
 
+        assert registry.get(Genre) is GenrePrimary
+
         class GenreSecondary(DjangoType):
             class Meta:
                 model = Genre
                 fields = ("id", "name", "books")
                 interfaces = (relay.Node,)
                 relation_shapes = {"books": "connection"}
+
+        assert registry.model_for_type(GenreSecondary) is Genre
 
         finalize_django_types()
         # Nested recognition routes through the primary (which narrowed to list),
@@ -4893,11 +5116,15 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
                 fields = ("id", "code")
                 interfaces = (relay.Node,)
 
+        assert registry.get(Shelf) is ShelfType
+
         class BookType(DjangoType):
             class Meta:
                 model = Book
                 fields = ("id", "title", "shelf")
                 interfaces = (relay.Node,)
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -4917,6 +5144,7 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
         )
         prefetch = _prefetch_entry(plan)
         child_qs = prefetch.queryset
+        assert child_qs is not None
         assert "shelf" in str(child_qs.query.select_related)
         # Window annotations are still present alongside the only() mask.
         from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
@@ -4935,7 +5163,7 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
 # assertion lives in the fakeshop live suite.
 
 
-def _op_info(operation, relay_max_results=100):
+def _op_info(operation: OperationType, relay_max_results: int = 100) -> GraphQLResolveInfo:
     """Build a minimal operation-bearing ``info`` for the G2 gate.
 
     Mirrors ``_fake_info``'s ``schema.config`` / ``path`` shape (so
@@ -4945,11 +5173,13 @@ def _op_info(operation, relay_max_results=100):
     the partial-``info`` defensive arm; this factory exercises the
     QUERY / MUTATION / SUBSCRIPTION arms without mutating the shared helper.
     """
-    return SimpleNamespace(
-        operation=SimpleNamespace(operation=operation),
-        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
-        path=None,
-        variable_values={},
+    return _as_resolve_info(
+        SimpleNamespace(
+            operation=SimpleNamespace(operation=operation),
+            schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
+            path=None,
+            variable_values={},
+        ),
     )
 
 
@@ -4974,7 +5204,7 @@ def test_mutation_queryset_drops_only_keeps_select_prefetch():
     assert plan.prefetch_related != ()
 
 
-def _mutation_payload_selection(slot="node"):
+def _mutation_payload_selection(slot: str = "node"):
     """Build the PAYLOAD-level selection a mutation field returns.
 
     ``<field> { <slot> { name category { name } entries { name } } errors { ... } }``
@@ -4998,7 +5228,7 @@ def _mutation_payload_selection(slot="node"):
     )
 
 
-def _mutation_refetch_selections(info, slot="node"):
+def _mutation_refetch_selections(info: GraphQLResolveInfo, slot: str = "node"):
     """Derive the re-fetch child selections through the PRODUCTION extractor.
 
     Runs ``optimizer/extension.py::mutation_payload_child_selections`` - the same
@@ -5007,11 +5237,14 @@ def _mutation_refetch_selections(info, slot="node"):
     rather than a hand-restated copy of it. If the flattening changes shape, the
     derived list changes and the plan assertions move with it.
     """
-    return mutation_payload_child_selections(slot)([_mutation_payload_selection(slot)], info)
+    payload = _mutation_payload_selection(slot)
+    # basedpyright: a stand-in selection carrying only the slots the code under test reads;
+    # mutation_payload_child_selections types the parameter as list[Selection]
+    return mutation_payload_child_selections(slot)([payload], info)  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize("slot", ["node", "result"])
-def test_mutation_payload_child_selections_flattens_slot_children_only(slot):
+def test_mutation_payload_child_selections_flattens_slot_children_only(slot: str):
     """The production extractor flattens ``<slot>``'s children and drops ``errors``.
 
     The coupling pin for the mirror below (spec-036 Decision 9): a mutation payload
@@ -5021,8 +5254,9 @@ def test_mutation_payload_child_selections_flattens_slot_children_only(slot):
     ``errors`` envelope sibling never reaches the walker.
     """
     derived = _mutation_refetch_selections(_op_info(OperationType.MUTATION), slot)
-    assert [selection.name for selection in derived] == ["name", "category", "entries"]
-    assert [child.name for child in derived[1].selections] == ["name"]
+    fields = _fake_fields(derived)
+    assert [selection.name for selection in fields] == ["name", "category", "entries"]
+    assert [child.name for child in fields[1].selections] == ["name"]
 
 
 def test_mutation_refetch_plan_drops_only_keeps_relations():
@@ -5090,6 +5324,7 @@ def test_mutation_to_many_prefetch_no_deferred_loading():
     )
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
+    assert outer.queryset is not None
     assert outer.queryset.query.deferred_loading == (frozenset(), True)
 
 
@@ -5113,6 +5348,7 @@ def test_mutation_scalar_only_connection_window_no_only():
             source_type=shelf_type,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         assert prefetch.queryset.query.deferred_loading == (frozenset(), True)
         # The window itself is still planned (annotation present, prefetch kept).
         from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
@@ -5127,7 +5363,10 @@ def test_mutation_scalar_only_connection_window_no_only():
     [(OperationType.MUTATION, ()), (OperationType.QUERY, ("label", "slug"))],
     ids=["mutation_gated", "query_projects"],
 )
-def test_connection_parent_link_columns_follow_the_projection_gate(operation, expected_only):
+def test_connection_parent_link_columns_follow_the_projection_gate(
+    operation: OperationType,
+    expected_only: tuple[str, ...],
+):
     """The nested-connection planner's parent link-column append sits behind the gate.
 
     A reverse ``to_field`` link needs the parent's ``slug`` loaded for its attach
@@ -5221,20 +5460,20 @@ def test_enable_only_defaults_enabled_without_info():
     plan = plan_optimizations([_sel("name")], Category, info=None)
     assert plan.only_fields == ("name",)
     # Partial info whose ``operation`` is absent -> enabled, no AttributeError.
-    plan = plan_optimizations([_sel("name")], Category, info=SimpleNamespace())
+    plan = plan_optimizations([_sel("name")], Category, info=_as_resolve_info(SimpleNamespace()))
     assert plan.only_fields == ("name",)
     # Partial info whose ``operation`` is ``None`` -> enabled.
     plan = plan_optimizations(
         [_sel("name")],
         Category,
-        info=SimpleNamespace(operation=None),
+        info=_as_resolve_info(SimpleNamespace(operation=None)),
     )
     assert plan.only_fields == ("name",)
     # ``operation.operation`` is ``None`` -> enabled.
     plan = plan_optimizations(
         [_sel("name")],
         Category,
-        info=SimpleNamespace(operation=SimpleNamespace(operation=None)),
+        info=_as_resolve_info(SimpleNamespace(operation=SimpleNamespace(operation=None))),
     )
     assert plan.only_fields == ("name",)
     # Truth table on the helper directly.
@@ -5284,7 +5523,10 @@ def test_mutation_id_only_relation_still_records_elision():
 # ---------------------------------------------------------------------------
 
 
-def _shelf_types_with_consumer_books(namespace_extra=None, meta_extra=None):
+def _shelf_types_with_consumer_books(
+    namespace_extra: dict[str, object] | None = None,
+    meta_extra: dict[str, object] | None = None,
+):
     """Register ``BookType`` + a ``ShelfType`` whose ``books`` the consumer owns.
 
     ``namespace_extra`` lands on the ``ShelfType`` class body (the assigned
@@ -5301,8 +5543,10 @@ def _shelf_types_with_consumer_books(namespace_extra=None, meta_extra=None):
             model = Book
             fields = ("id", "title", "shelf")
 
-    def _curated_books(root) -> list[BookType]:
-        return list(root.books.order_by("title")[:2])
+    def _curated_books(root: Shelf) -> list[BookType]:
+        # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+        # returns the model rows a DjangoType field resolves from, as the consumer corner does
+        return list(root.books.order_by("title")[:2])  # pyright: ignore[reportReturnType]
 
     namespace = {
         "__annotations__": {},
@@ -5393,10 +5637,14 @@ def test_default_relations_still_plan_grandchildren_under_resolvers():
                 model = Shelf
                 fields = ("id", "code")
 
+        assert registry.get(Shelf) is ShelfType
+
         class BookType(DjangoType):
             class Meta:
                 model = Book
                 fields = ("id", "title", "shelf")
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -5416,21 +5664,25 @@ def test_default_relations_still_plan_grandchildren_under_resolvers():
             source_type=GenreType,
         )
         prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset is not None
         child_query = prefetch.queryset.query
         # The grandchild relation is planned INSIDE the prefetch child queryset.
-        assert "shelf" in (child_query.select_related or {})
+        assert isinstance(child_query.select_related, dict)
+        assert "shelf" in child_query.select_related
         assert plan.planned_resolver_keys
     finally:
         registry.clear()
 
 
-def _mutate_every_plan_field(plan, label):
+def _mutate_every_plan_field(plan: OptimizationPlan, label: str):
     """Make a strategy candidate visibly dirty across every construction field."""
-    plan.select_related.extend([f"{label}_select", f"{label}_select"])
-    plan.prefetch_related.extend([f"{label}_prefetch", f"{label}_prefetch"])
-    plan.only_fields.extend([f"{label}_only", f"{label}_only"])
-    plan.fk_id_elisions.extend([f"{label}_elision", f"{label}_elision"])
-    plan.planned_resolver_keys.extend([f"{label}_planned", f"{label}_planned"])
+    # basedpyright: the in-place extend on the unfinalized candidate's list is the dirty mutation
+    # under test; the plan declares the field as a read-only Sequence
+    plan.select_related.extend([f"{label}_select", f"{label}_select"])  # pyright: ignore[reportAttributeAccessIssue]
+    plan.prefetch_related.extend([f"{label}_prefetch", f"{label}_prefetch"])  # pyright: ignore[reportAttributeAccessIssue]
+    plan.only_fields.extend([f"{label}_only", f"{label}_only"])  # pyright: ignore[reportAttributeAccessIssue]
+    plan.fk_id_elisions.extend([f"{label}_elision", f"{label}_elision"])  # pyright: ignore[reportAttributeAccessIssue]
+    plan.planned_resolver_keys.extend([f"{label}_planned", f"{label}_planned"])  # pyright: ignore[reportAttributeAccessIssue]
     plan.select_path_resolver_keys[f"{label}_select"] = (f"{label}_planned", f"{label}_planned")
     plan.cacheable = False
 
@@ -5448,12 +5700,12 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
         end_execution_frame,
     )
 
-    def decline_after_mutation(request, plan):
+    def decline_after_mutation(request: NestedConnectionRequest, plan: OptimizationPlan):
         _mutate_every_plan_field(plan, "leaked")
         return False
 
     registry.clear()
-    refusing = SimpleNamespace(name="refuse-all", plan=decline_after_mutation)
+    refusing = _HookStrategy(name="refuse-all", hook=decline_after_mutation)
     frame = begin_execution_frame({}, nested=False, strategy=refusing)
     try:
         types = _connection_relay_types()
@@ -5489,12 +5741,12 @@ def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once():
         end_execution_frame,
     )
 
-    def accept_after_mutation(request, plan):
+    def accept_after_mutation(request: NestedConnectionRequest, plan: OptimizationPlan):
         _mutate_every_plan_field(plan, "accepted")
         return True
 
     registry.clear()
-    accepting = SimpleNamespace(name="accept-all", plan=accept_after_mutation)
+    accepting = _HookStrategy(name="accept-all", hook=accept_after_mutation)
     frame = begin_execution_frame({}, nested=False, strategy=accepting)
     try:
         types = _connection_relay_types()
@@ -5535,17 +5787,18 @@ def test_raising_nested_fetch_strategy_leaves_parent_byte_identical():
     )
     from django_strawberry_framework.optimizer.walker import _plan_connection_relation
 
-    def raise_after_mutation(request, plan):
+    def raise_after_mutation(request: NestedConnectionRequest, plan: OptimizationPlan):
         _mutate_every_plan_field(plan, "leaked")
         raise RuntimeError("strategy exploded")
 
     registry.clear()
-    raising = SimpleNamespace(name="raise-all", plan=raise_after_mutation)
+    raising = _HookStrategy(name="raise-all", hook=raise_after_mutation)
     frame = begin_execution_frame({}, nested=False, strategy=raising)
     try:
         types = _connection_relay_types()
         genre_type = types["Genre"][1]
         definition = registry.get_definition(genre_type)
+        assert definition is not None
         parent = OptimizationPlan(
             select_related=["existing-select"],
             prefetch_related=["existing-prefetch"],
@@ -5605,10 +5858,13 @@ def test_connection_custom_get_queryset_builds_base_child_queryset_once():
                 interfaces = (relay.Node,)
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: QuerySet[Book], info: object):
                 nonlocal calls
                 calls += 1
                 return queryset
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -5659,11 +5915,15 @@ def test_connection_default_manager_unsafe_queryset_is_left_unplanned():
                 model = Patron
                 fields = ("name",)
 
+        assert registry.get(Patron) is PatronNode
+
         class AnnotationNode(DjangoType):
             class Meta:
                 model = Annotation
                 fields = ("id", "body")
                 interfaces = (relay.Node,)
+
+        assert registry.get(Annotation) is AnnotationNode
 
         class PatronProfileNode(DjangoType):
             class Meta:
@@ -5730,9 +5990,11 @@ def test_lateral_strategy_plans_a_lateral_queryset_through_the_walker():
             source_type=genre_type,
         )
         (entry,) = plan.prefetch_related
+        assert isinstance(entry, Prefetch)
         assert isinstance(entry.queryset, LateralQuerySet)
         assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
         spec = entry.queryset._dst_lateral_spec
+        assert spec is not None
         assert spec.parent_link_table == "library_book_genres"
         assert spec.parent_link_column == "genre_id"
         assert plan.planned_resolver_keys != []
@@ -5758,12 +6020,19 @@ def test_select_related_paths_carry_their_resolver_keys():
     assert set(keys) <= set(plan.planned_resolver_keys)
 
 
+_UNSAFE_CHILD_SHAPES: list[tuple[Callable[[QuerySet[Model]], QuerySet[Model]], str]] = [
+    (lambda qs: qs[:10], "sliced"),
+    (lambda qs: qs.select_for_update(), "select_for_update"),
+]
+
+
 @pytest.mark.parametrize("strategy_name", ["windowed", "lateral"])
-@pytest.mark.parametrize(
-    ("shape", "reason"),
-    [(lambda qs: qs[:10], "sliced"), (lambda qs: qs.select_for_update(), "select_for_update")],
-)
-def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_name, shape, reason):
+@pytest.mark.parametrize(("shape", "reason"), _UNSAFE_CHILD_SHAPES)
+def test_unsafe_child_queryset_left_unplanned_under_both_strategies(
+    strategy_name: str,
+    shape: Callable[[QuerySet[Model]], QuerySet[Model]],
+    reason: str,
+):
     """Unsafe consumer ``get_queryset`` shapes never reach a fetch strategy.
 
     A sliced child queryset used to crash INSIDE
@@ -5796,8 +6065,11 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
                 interfaces = (relay.Node,)
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: QuerySet[Book], info: object):
                 return shape(queryset)
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -5828,7 +6100,7 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_nam
 
 
 @pytest.mark.parametrize("strategy_name", ["windowed", "lateral"])
-def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name):
+def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name: str):
     """A combined ``get_queryset`` child reaches the fetch strategy as its primary-key set.
 
     The seal rebuilds the combinator as a single-table ``pk__in`` membership
@@ -5857,8 +6129,11 @@ def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name
                 interfaces = (relay.Node,)
 
             @classmethod
-            def get_queryset(cls, queryset, info):
+            @override
+            def get_queryset(cls, queryset: QuerySet[Book], info: object):
                 return queryset.filter(title="a").union(queryset.filter(title="b"))
+
+        assert registry.get(Book) is BookType
 
         class GenreType(DjangoType):
             class Meta:
@@ -5879,8 +6154,13 @@ def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name
             info=_fake_info(),
             source_type=GenreType,
         )
-        windows = [pf for pf in plan.prefetch_related if pf.to_attr == "_dst_books_connection"]
+        windows = [
+            pf
+            for pf in _prefetches(plan.prefetch_related)
+            if pf.to_attr == "_dst_books_connection"
+        ]
         assert len(windows) == 1
+        assert windows[0].queryset is not None
         assert windows[0].queryset.query.combinator is None
         assert plan.planned_resolver_keys
     finally:
@@ -5948,6 +6228,7 @@ def test_consumer_assigned_relation_may_hint_prefetch_with_to_attr():
             source_type=shelf_type,
         )
         (entry,) = plan.prefetch_related
+        assert isinstance(entry, Prefetch)
         assert entry.to_attr == "curated_books"
     finally:
         registry.clear()
@@ -6026,6 +6307,7 @@ async def test_generic_connection_planning_does_no_sync_db_io_under_async():
         # constant baked in - Django adds it alias-late at fetch time).
         prefetch = _prefetch_entry(plan)
         assert prefetch.to_attr == "_dst_tags_connection"
+        assert prefetch.queryset is not None
         child_where = str(prefetch.queryset.query.where)
         assert "content_type" not in child_where
     finally:

@@ -12,19 +12,23 @@ These tests don't require ``FAKESHOP_SHARDED=1``; the helper operates
 on any Django connection, and the `default` alias is always present.
 """
 
+from collections.abc import Callable
 from unittest import mock
 
 import pytest
 from django.db import connections
+from typing_extensions import override
 
 from django_strawberry_framework import _django_patches
 from django_strawberry_framework.testing import safe_wrap_connection_method
 
 
-def _database_failure(wrapped):
-    if _django_patches._DatabaseFailure is None:
+def _database_failure(wrapped: Callable[..., object]):
+    # basedpyright: the package's drift sentinel (None when Django drops the class) is the value read
+    if _django_patches._DatabaseFailure is None:  # pyright: ignore[reportPrivateLocalImportUsage]
         pytest.skip("Django private _DatabaseFailure symbol is unavailable.")
-    return _django_patches._DatabaseFailure(wrapped, "test message")
+    # basedpyright: the package's drift sentinel (None when Django drops the class) is the value read
+    return _django_patches._DatabaseFailure(wrapped, "test message")  # pyright: ignore[reportPrivateLocalImportUsage]
 
 
 def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure():
@@ -54,7 +58,9 @@ def test_safe_wrap_connection_method_declines_when_database_failure_in_place():
     original_cursor = connection.cursor
 
     django_wrapper = _database_failure(original_cursor)
-    connection.cursor = django_wrapper
+    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
+    # declares cursor as a method
+    connection.cursor = django_wrapper  # pyright: ignore[reportAttributeAccessIssue]
 
     consumer_wrapper = mock.Mock(name="consumer_wrapper")
 
@@ -137,7 +143,9 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
 
     # Simulate Django's setUpClass installing the ``_DatabaseFailure``.
     django_wrapper = _database_failure(sentinel_original)
-    connection.cursor = django_wrapper
+    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
+    # declares cursor as a method
+    connection.cursor = django_wrapper  # pyright: ignore[reportAttributeAccessIssue]
 
     # The consumer attempts to wrap and is correctly declined - Django
     # already wrapped first. Wrap-time half of defense-in-depth fires.
@@ -153,10 +161,12 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
     # (the unwrap-time half) against a synthetic narrow-allow-list
     # test class. Should restore the original cursor cleanly.
     class _NarrowTest(TransactionTestCase):
-        databases = frozenset()  # exclude every alias including default
+        databases = set()  # exclude every alias including default
 
     try:
-        _NarrowTest._remove_databases_failures()
+        # basedpyright: django-stubs omits TransactionTestCase._remove_databases_failures, reported
+        # as an unknown attribute
+        _NarrowTest._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
         # Wrapper unwrapped to the sentinel original.
         assert connection.cursor is sentinel_original
     finally:
@@ -184,7 +194,9 @@ def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
     installed_before = connection.__dict__.get("cursor")
 
     with pytest.raises(TypeError, match="non-callable wrapper"):
-        safe_wrap_connection_method(connection, "cursor", 42)
+        # basedpyright: the non-callable wrapper is the hostile input under test;
+        # safe_wrap_connection_method types the parameter as a callable
+        safe_wrap_connection_method(connection, "cursor", 42)  # pyright: ignore[reportArgumentType]
 
     assert connection.__dict__.get("cursor") is installed_before
 
@@ -195,11 +207,14 @@ def test_safe_wrap_connection_method_keeps_type_error_boundary_for_hostile_repr(
     installed_before = connection.__dict__.get("cursor")
 
     class _HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
     with pytest.raises(TypeError, match="non-callable wrapper"):
-        safe_wrap_connection_method(connection, "cursor", _HostileRepr())
+        # basedpyright: the non-callable wrapper with a raising repr is the hostile input under
+        # test; safe_wrap_connection_method types the parameter as a callable
+        safe_wrap_connection_method(connection, "cursor", _HostileRepr())  # pyright: ignore[reportArgumentType]
 
     assert connection.__dict__.get("cursor") is installed_before
 
@@ -210,7 +225,7 @@ def test_safe_wrap_connection_method_accepts_callable_class_instance():
     original_cursor = connection.cursor
 
     class _CallableWrapper:
-        def __call__(self, *args, **kwargs):
+        def __call__(self, *args: object, **kwargs: object):
             return original_cursor(*args, **kwargs)
 
     instance = _CallableWrapper()

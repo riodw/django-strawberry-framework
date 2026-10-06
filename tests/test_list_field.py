@@ -53,8 +53,9 @@ import gc
 import inspect
 import pickle
 import warnings
+from collections.abc import Callable, Generator, Iterator
 from types import SimpleNamespace
-from typing import Any
+from typing import TypeVar
 
 import pytest
 import strawberry
@@ -63,13 +64,17 @@ from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
 from django.db import models
-from django.db.models import Value
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.models import QuerySet, Value
 from django.db.models.functions import Lower, Now, Random, RowNumber
+from django.db.models.sql.compiler import SQLCompiler
 from django.test import RequestFactory
-from graphql import GraphQLError
+from graphql import GraphQLError, GraphQLResolveInfo
 from strawberry.schema_directive import Location as _DirectiveLocation
 from strawberry.schema_directive import schema_directive as _schema_directive
 from strawberry.types import Info
+from strawberry.types.arguments import StrawberryArgument
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoListField,
@@ -95,6 +100,7 @@ from django_strawberry_framework.list_field import (
     _synthesized_list_signature,
     _validate_djangotype_target,
 )
+from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.resource_policy import (
     ResourcePolicy,
@@ -102,9 +108,32 @@ from django_strawberry_framework.resource_policy import (
 from django_strawberry_framework.types.relay import SyncMisuseError
 from django_strawberry_framework.utils.querysets import require_orderset_class
 
+_M = TypeVar("_M", bound=models.Model)
+
+
+def _as_strawberry_info(stand_in: object) -> Info[object, object]:
+    """Hand a duck-typed info to a list-field helper that takes a Strawberry info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
+    # list-field helpers type info as a concrete Strawberry Info
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a duck-typed info to the optimizer hook that takes a graphql-core info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads;
+    # DjangoOptimizerExtension._optimize types info as graphql-core's GraphQLResolveInfo
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _as_orderset_class(cls: type[object]) -> type[OrderSet]:
+    """Hand a plain class to the capture scope that takes an ``OrderSet`` class."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # _order_normalization_scope types the parameter as type[OrderSet]
+    return cls  # pyright: ignore[reportReturnType]
+
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry() -> None:
+def _isolate_global_registry() -> Iterator[None]:
     """Clear the global registry on entry/exit so tests touching it don't leak.
 
     Mirrors the autouse fixture in ``tests/test_registry.py::_isolate_global_registry``. Tests
@@ -140,7 +169,9 @@ def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
         ConfigurationError,
         match=r"DjangoListField requires a DjangoType class; got",
     ):
-        DjangoListField(non_class)
+        # basedpyright: the non-class value is the hostile input under test; DjangoListField types
+        # the parameter as type[object]
+        DjangoListField(non_class)  # pyright: ignore[reportArgumentType]
 
 
 def test_djangolistfield_rejects_non_djangotype_class() -> None:
@@ -216,7 +247,9 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
         ConfigurationError,
         match=r"DjangoListField resolver must be callable\.",
     ):
-        DjangoListField(_T, resolver="not callable")
+        # basedpyright: the non-callable resolver is the hostile input under test; DjangoListField
+        # types the parameter as a callable
+        DjangoListField(_T, resolver="not callable")  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +265,7 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
 class _HostileRepr:
     """A deployment value whose repr detonates."""
 
+    @override
     def __repr__(self) -> str:
         raise RuntimeError("hostile __repr__ detonated")
 
@@ -245,7 +279,10 @@ class _HostileNameMeta(type):
     """
 
     @property
-    def __name__(cls) -> str:
+    @override
+    # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises; the
+    # checker rejects any property overriding a base class attribute
+    def __name__(cls) -> str:  # pyright: ignore[reportIncompatibleVariableOverride]
         raise RuntimeError("hostile __name__ detonated")
 
 
@@ -281,7 +318,9 @@ def test_djangolistfield_non_class_guard_survives_a_hostile_repr() -> None:
     RuntimeError replaced the promised typed rejection.
     """
     with pytest.raises(ConfigurationError, match="requires a DjangoType class"):
-        DjangoListField(_HostileRepr())
+        # basedpyright: the non-class value whose repr raises is the hostile input under test;
+        # DjangoListField types the parameter as type[object]
+        DjangoListField(_HostileRepr())  # pyright: ignore[reportArgumentType]
 
 
 def test_djangolistfield_non_djangotype_guard_survives_a_hostile_metaclass_name() -> None:
@@ -353,7 +392,9 @@ def test_djangolistfield_rejects_non_iterable_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives could not be read",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=42)
+        # basedpyright: the non-iterable directives value is the hostile input under test;
+        # DjangoListField types the parameter as Sequence[object]
+        DjangoListField(_DirectiveHolderType(), directives=42)  # pyright: ignore[reportArgumentType]
 
 
 def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
@@ -362,7 +403,9 @@ def test_djangolistfield_rejects_hostile_iterator_directives() -> None:
         ConfigurationError,
         match=r"DjangoListField directives could not be read",
     ):
-        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())
+        # basedpyright: the raising directives iterable is the hostile input under test;
+        # DjangoListField types the parameter as Sequence[object]
+        DjangoListField(_DirectiveHolderType(), directives=_ExplodingDirectives())  # pyright: ignore[reportArgumentType]
 
 
 def test_djangolistfield_passes_real_directive_instances_through() -> None:
@@ -397,14 +440,14 @@ async def test_djangolistfield_sync_resolver_returning_future_cancels_it() -> No
     """
 
     await sync_to_async(services.seed_data)(1)
-    captured: dict[str, asyncio.Future] = {}
+    captured: dict[str, asyncio.Future[object]] = {}
 
     class CategoryType(DjangoType):
         class Meta:
             model = Category
             fields = ("id", "name")
 
-    def _sync_resolver_returning_future(root: Any, info: Info) -> Any:
+    def _sync_resolver_returning_future(root: object, info: Info) -> asyncio.Future[object]:
         future = asyncio.get_running_loop().create_future()
         captured["future"] = future
         return future
@@ -468,10 +511,29 @@ def test_list_argument_error_rejects_an_unknown_reason_and_renders_bools():
         in str(err)
     )
     with pytest.raises(ValueError, match="Unknown ListArgumentError reason 'custom_reason'"):
-        ListArgumentError("items", "arg", "custom_reason", value=42)
+        # basedpyright: the unknown reason is the hostile input under test; ListArgumentError types
+        # the parameter as _ListArgumentReason
+        ListArgumentError("items", "arg", "custom_reason", value=42)  # pyright: ignore[reportArgumentType]
 
 
-def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(arm_resource_budget):
+def _named_argument(name: str) -> SimpleNamespace:
+    """An argument definition carrying only its ``name``."""
+    return SimpleNamespace(name=name)
+
+
+def _python_named_argument(name: str) -> SimpleNamespace:
+    """An argument definition carrying only its ``python_name``."""
+    return SimpleNamespace(python_name=name)
+
+
+def _no_argument_definition(name: str) -> None:
+    """A resolver with no definition for any parameter."""
+    return None
+
+
+def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """Neither a valid normalization nor a rejection invokes ``name_converter``.
 
     The converter is consumer code that Strawberry already ran while building
@@ -484,35 +546,43 @@ def test_resolve_argument_wire_name_never_runs_the_schema_name_converter(arm_res
         def __init__(self):
             self.calls = 0
 
-        def from_argument(self, arg):
+        def from_argument(self, arg: StrawberryArgument) -> str:
             self.calls += 1
-            return arg.name
+            return arg.python_name
 
     converter = DummyConverter()
     schema_config = SimpleNamespace(name_converter=converter)
     info = SimpleNamespace(
         context={},
         schema=SimpleNamespace(config=schema_config),
-        get_argument_definition=lambda name: SimpleNamespace(name=name),
+        get_argument_definition=_named_argument,
     )
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
-    record = _normalize_list_arguments("items", info, None, False, offset=10, limit=20)
+    record = _normalize_list_arguments(
+        "items",
+        _as_strawberry_info(info),
+        None,
+        False,
+        offset=10,
+        limit=20,
+    )
     assert record.offset == 10
     assert record.limit == 20
     assert converter.calls == 0
 
     with pytest.raises(ListArgumentError) as exc_info:
-        _normalize_list_arguments("items", info, None, False, offset=-1)
+        _normalize_list_arguments("items", _as_strawberry_info(info), None, False, offset=-1)
     assert exc_info.value.reason == "negative"
+    assert exc_info.value.extensions is not None
     assert exc_info.value.extensions["argument"] == "offset"
     assert converter.calls == 0
 
 
 @pytest.mark.parametrize("argument", ["offset", "limit"])
 def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_run(
-    argument,
-    arm_resource_budget,
+    argument: str,
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """``offset`` / ``limit`` must be EXACT ints, so no subclass hook reaches the boundary.
 
@@ -527,15 +597,18 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
     fired: list[str] = []
 
     class HostileInt(int):
-        def __lt__(self, other):
+        @override
+        def __lt__(self, other: object):
             fired.append("__lt__")
             raise RuntimeError("hostile comparison ran")
 
-        def __gt__(self, other):
+        @override
+        def __gt__(self, other: object):
             fired.append("__gt__")
             raise RuntimeError("hostile comparison ran")
 
-        def __format__(self, spec):
+        @override
+        def __format__(self, spec: str):
             fired.append("__format__")
             raise RuntimeError("hostile format ran")
 
@@ -543,15 +616,22 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, **{argument: HostileInt(5)})
+        _normalize_list_arguments(
+            "items",
+            _as_strawberry_info(info),
+            None,
+            False,
+            **{argument: HostileInt(5)},
+        )
     assert exc.value.argument == argument
     assert exc.value.reason == "non_integer"
+    assert isinstance(exc.value.value, str)
     assert exc.value.value.startswith("HostileInt")
     assert fired == []
 
 
 def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raising(
-    arm_resource_budget,
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """A plain ``int`` too large for CPython to stringify still rejects as a typed error.
 
@@ -563,7 +643,13 @@ def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raisi
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset=10**10000)
+        _normalize_list_arguments(
+            "items",
+            _as_strawberry_info(info),
+            None,
+            False,
+            offset=10**10000,
+        )
     assert exc.value.reason == "over_ceiling"
     assert exc.value.ceiling == 100
     assert "<unprintable int>" in str(exc.value)
@@ -593,10 +679,10 @@ def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raisi
     ],
 )
 def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
-    argument,
-    value,
-    rendered,
-    arm_resource_budget,
+    argument: str,
+    value: object,
+    rendered: str,
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """GraphQL ``Int`` coercion never hands ``_normalize_list_arguments`` a bool, str, or float.
 
@@ -607,21 +693,34 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, **{argument: value})
+        _normalize_list_arguments(
+            "items",
+            _as_strawberry_info(info),
+            None,
+            False,
+            **{argument: value},
+        )
     assert exc.value.argument == argument
     assert exc.value.reason == "non_integer"
     assert exc.value.value == rendered
 
 
 def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_integers(
-    arm_resource_budget,
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """A direct call that GraphQL ``Int`` cannot assemble still names ``offset`` first."""
     info = SimpleNamespace(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
-        _normalize_list_arguments("items", info, None, False, offset="bad", limit=101)
+        _normalize_list_arguments(
+            "items",
+            _as_strawberry_info(info),
+            None,
+            False,
+            offset="bad",
+            limit=101,
+        )
     assert exc.value.argument == "offset"
     assert exc.value.reason == "non_integer"
 
@@ -649,6 +748,7 @@ async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
         async def __anext__(self):
             raise StopAsyncIteration
 
+        @override
         def __getattribute__(self, name: str):
             if name == "aclose":
                 raise RuntimeError("hostile aclose on tracker")
@@ -656,7 +756,7 @@ async def test_async_iterable_early_cleanup_hostile_aclose_lookup_notes():
 
     tracker = HostileTracker()
 
-    async def resolver_async_iter(root, info, **kwargs):
+    async def resolver_async_iter(root: object, info: object, **kwargs: object):
         return tracker
 
     @strawberry.type
@@ -700,7 +800,8 @@ async def test_async_completion_adapter_semantics():
     assert not hasattr(adapter, "__iter__")
 
     with pytest.raises(TypeError, match="is not iterable"):
-        for _ in adapter:
+        # basedpyright: the test proves the async-only adapter refuses sync iteration
+        for _ in adapter:  # pyright: ignore[reportGeneralTypeIssues]
             pass
 
     rows = [r async for r in adapter]
@@ -722,6 +823,8 @@ def test_list_field_signature_without_orderset():
         class Meta:
             model = Item
             fields = ("id", "name")
+
+    assert registry.get(Item) is NoOrderType
 
     finalize_django_types()
     sig, ann = _synthesized_list_signature(None)
@@ -754,6 +857,8 @@ def test_list_field_signature_with_orderset():
             fields = ("id", "name")
             orderset_class = ItemOrder
 
+    assert registry.get(Item) is WithOrderType
+
     finalize_django_types()
     sig, ann = _synthesized_list_signature(ItemOrder)
 
@@ -780,7 +885,7 @@ def test_list_field_signature_with_orderset():
         "positive_offset_and_order_without_orderset",
     ],
 )
-def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(shape):
+def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(shape: str):
     """The normalization handoff is paid for by the one request shape that consumes it.
 
     ``OrderSet._input_has_active_terms`` has exactly one caller - the non-zero
@@ -799,10 +904,16 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
     from django_strawberry_framework.list_field import _order_normalization_scope
     from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 
+    @_as_orderset_class
     class SomeOrder:
         pass
 
-    def _record(*, offset=None, limit=None, order_by_supplied=False):
+    def _record(
+        *,
+        offset: int | None = None,
+        limit: int | None = None,
+        order_by_supplied: bool = False,
+    ):
         return _ListArguments(
             offset=offset,
             limit=limit,
@@ -830,6 +941,7 @@ def test_the_capture_scope_opens_for_a_positive_offset_with_an_orderset():
     from django_strawberry_framework.list_field import _order_normalization_scope
     from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 
+    @_as_orderset_class
     class SomeOrder:
         pass
 
@@ -864,10 +976,11 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
     from django_strawberry_framework.orders import OrderSet
 
     reads: list[str] = []
-    state = {"armed": False, "decoy": None}
+    state: dict[str, object] = {"armed": False, "decoy": None}
 
     class CountingMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if state["armed"] and name == "__django_strawberry_definition__":
                 reads.append(name)
                 if state["decoy"] is not None:
@@ -882,11 +995,12 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
         applies = 0
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             PublishedOrder.applies += 1
             return super().apply_sync(input_value, queryset, info)
@@ -897,11 +1011,12 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
             fields = ["name"]
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             raise AssertionError("the field dispatched through a re-read OrderSet")
 
@@ -944,6 +1059,7 @@ def test_list_field_reads_the_target_definition_once_and_dispatches_through_it()
     )
     assert result.errors is None, result.errors
     assert reads == ["__django_strawberry_definition__"]
+    assert result.data is not None
     returned = {row["name"] for row in result.data["items"]}
     assert target_item.name in returned
     # Rows of the decoy definition's table never appear: the seed and both seals
@@ -964,10 +1080,11 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
     from django_strawberry_framework.orders import OrderSet
 
     reads: list[str] = []
-    state = {"armed": False, "decoy": None}
+    state: dict[str, object] = {"armed": False, "decoy": None}
 
     class CountingMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if state["armed"] and name == "__django_strawberry_definition__":
                 reads.append(name)
                 if state["decoy"] is not None:
@@ -985,11 +1102,12 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
             fields = ["name"]
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             raise AssertionError("the field dispatched through a re-read OrderSet")
 
@@ -1010,8 +1128,11 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
     target_item = services.seed_decoy_and_target_rows()["item"]
     decoy_names = set(Category.objects.values_list("name", flat=True))
 
+    def _all_items(root: object, info: object) -> QuerySet[Item]:
+        return Item.objects.all()
+
     state["armed"] = True
-    field = DjangoListField(ResolverCountedType, resolver=lambda root, info: Item.objects.all())
+    field = DjangoListField(ResolverCountedType, resolver=_all_items)
     assert reads == ["__django_strawberry_definition__"]
     state["decoy"] = ResolverDecoyTargetType.__django_strawberry_definition__
 
@@ -1026,6 +1147,7 @@ def test_a_consumer_resolver_list_field_also_reads_the_definition_only_at_constr
     )
     assert result.errors is None, result.errors
     assert reads == ["__django_strawberry_definition__"]
+    assert result.data is not None
     returned = {row["name"] for row in result.data["items"]}
     assert target_item.name in returned
     assert not returned & decoy_names
@@ -1054,7 +1176,9 @@ def test_an_abstract_model_type_serves_concrete_rows_and_its_default_seed_names_
 
         @strawberry.field
         def reading_lists(self) -> list[TitledEntryType]:
-            return list(library_models.ReadingList.objects.all())
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return list(library_models.ReadingList.objects.all())  # pyright: ignore[reportReturnType]
 
     schema = strawberry.Schema(query=Query)
     context = {"request": RequestFactory().get("/")}
@@ -1077,11 +1201,12 @@ def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
     call take one model by construction.
     """
     reads: list[str] = []
-    state = {"armed": False, "decoy": None}
+    state: dict[str, object] = {"armed": False, "decoy": None}
     seen_models: list[type] = []
 
     class CountingMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if state["armed"] and name == "__django_strawberry_definition__":
                 reads.append(name)
                 if state["decoy"] is not None:
@@ -1094,7 +1219,8 @@ def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info):
+        @override
+        def get_queryset(cls, queryset: QuerySet[_M], info: object):
             seen_models.append(queryset.model)
             # Narrow to the two probe rows, one per table, so the answer names
             # which table the seed and the seals were over.
@@ -1127,6 +1253,7 @@ def test_the_default_seed_and_both_visibility_seals_use_the_captured_model():
     )
     assert result.errors is None, result.errors
     assert seen_models == [Item]
+    assert result.data is not None
     assert [row["name"] for row in result.data["items"]] == [target_item.name]
     assert services.DECOY_CATEGORY_NAME in decoy_names
     assert reads == ["__django_strawberry_definition__"]
@@ -1144,10 +1271,14 @@ def test_list_field_rejects_a_target_whose_definition_hides_its_model():
             raise RuntimeError("model read exploded")
 
     with pytest.raises(ConfigurationError, match="could not read the model from the definition"):
-        _model_from_definition(ExplodingDefinition())
+        # basedpyright: the definition whose model read raises is the hostile input under test;
+        # _model_from_definition types the parameter as DjangoTypeDefinition
+        _model_from_definition(ExplodingDefinition())  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ConfigurationError, match="whose model is not a Django model"):
-        _model_from_definition(SimpleNamespace(origin=None, model="Item"))
+        # basedpyright: the definition whose model is a string is the hostile input under test;
+        # _model_from_definition types the parameter as DjangoTypeDefinition
+        _model_from_definition(SimpleNamespace(origin=None, model="Item"))  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize(
@@ -1160,7 +1291,7 @@ def test_list_field_rejects_a_target_whose_definition_hides_its_model():
         None,
     ],
 )
-def test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean(value):
+def test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean(value: object):
     """A misspelled trusted opt-in fails at the line that wrote the field.
 
     ``trusted_max_rows`` is the one field option whose effect is to let a
@@ -1179,11 +1310,13 @@ def test_a_list_field_trusted_max_rows_opt_in_must_be_exactly_boolean(value):
         ConfigurationError,
         match="DjangoListField trusted_max_rows must be exactly True or False",
     ):
-        DjangoListField(TrustedFlagType, max_rows=50, trusted_max_rows=value)
+        # basedpyright: each non-bool opt-in is the hostile input under test; DjangoListField types
+        # the parameter as bool
+        DjangoListField(TrustedFlagType, max_rows=50, trusted_max_rows=value)  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.parametrize("value", [True, False])
-def test_an_exact_boolean_trusted_max_rows_builds_the_field(value):
+def test_an_exact_boolean_trusted_max_rows_builds_the_field(value: bool):
     class ExactFlagType(DjangoType):
         class Meta:
             model = Item
@@ -1193,7 +1326,9 @@ def test_an_exact_boolean_trusted_max_rows_builds_the_field(value):
     assert DjangoListField(ExactFlagType, max_rows=50, trusted_max_rows=value) is not None
 
 
-def test_list_field_direct_call_safe_non_integer_rendering(arm_resource_budget):
+def test_list_field_direct_call_safe_non_integer_rendering(
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """Safe rendering of non-integer values in ListArgumentError message."""
     info = SimpleNamespace(context={}, schema=None)
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
@@ -1201,7 +1336,7 @@ def test_list_field_direct_call_safe_non_integer_rendering(arm_resource_budget):
     with pytest.raises(ListArgumentError) as exc_info:
         _normalize_list_arguments(
             "test_field",
-            info,
+            _as_strawberry_info(info),
             None,
             False,
             offset="<script>alert(1)</script>",
@@ -1220,7 +1355,9 @@ def test_list_field_error_pickle_round_trip():
         ceiling=10,
         order_argument="sort",
     )
-    err.custom_tag = "tagged"
+    # basedpyright: the undeclared attribute is the extra instance state the roundtrip must carry;
+    # ListArgumentError declares no such attribute
+    err.custom_tag = "tagged"  # pyright: ignore[reportAttributeAccessIssue]
 
     dumped = pickle.dumps(err)
     restored = pickle.loads(dumped)
@@ -1235,13 +1372,17 @@ def test_list_field_error_pickle_round_trip():
     assert getattr(restored, "custom_tag", None) == "tagged"
 
 
-def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(arm_resource_budget):
+def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """Direct-call stubs fall back to the default spelling; a definition alone is not a name."""
     info_no_def = SimpleNamespace(schema=None)
-    assert _resolve_argument_wire_name(info_no_def, "offset") == "offset"
-    assert _resolve_argument_wire_name(info_no_def, "limit") == "limit"
-    assert _resolve_argument_wire_name(info_no_def, "order_by") == "orderBy"
-    assert _resolve_argument_wire_name(info_no_def, "custom_arg") == "custom_arg"
+    assert _resolve_argument_wire_name(_as_strawberry_info(info_no_def), "offset") == "offset"
+    assert _resolve_argument_wire_name(_as_strawberry_info(info_no_def), "limit") == "limit"
+    assert _resolve_argument_wire_name(_as_strawberry_info(info_no_def), "order_by") == "orderBy"
+    assert (
+        _resolve_argument_wire_name(_as_strawberry_info(info_no_def), "custom_arg") == "custom_arg"
+    )
 
     class ArgDef:
         name = "order_by"
@@ -1250,28 +1391,49 @@ def test_list_field_direct_call_schema_name_fallback_and_definition_lookup(arm_r
 
     # A definition but no ``_raw_info``: no executable schema published a name, so
     # the default spelling is the only truthful answer.
+
+    def _order_by_definition(name: str) -> ArgDef:
+        return ArgDef()
+
     info_stub = SimpleNamespace(
         schema=SimpleNamespace(config=SimpleNamespace(name_converter=object())),
-        get_argument_definition=lambda name: ArgDef(),
+        get_argument_definition=_order_by_definition,
         context={},
     )
     arm_resource_budget(info_stub.context, ResourcePolicy(max_list_rows=10))
-    _normalize_list_arguments("field", info_stub, None, False, offset=1, limit=2)
+    _normalize_list_arguments(
+        "field",
+        _as_strawberry_info(info_stub),
+        None,
+        False,
+        offset=1,
+        limit=2,
+    )
     with pytest.raises(ListArgumentError) as exc_info:
-        _normalize_list_arguments("field", info_stub, None, False, offset=-1)
+        _normalize_list_arguments("field", _as_strawberry_info(info_stub), None, False, offset=-1)
+    assert exc_info.value.extensions is not None
     assert exc_info.value.extensions["argument"] == "offset"
 
 
 def test_published_wire_name_rejects_malformed_schema_metadata():
     """Executable-schema metadata that cannot name the argument is a configuration error."""
-    from graphql import GraphQLArgument, GraphQLField, GraphQLInt, GraphQLObjectType
+    from graphql import (
+        GraphQLArgument,
+        GraphQLField,
+        GraphQLInt,
+        GraphQLObjectType,
+        GraphQLScalarType,
+    )
 
     from django_strawberry_framework.list_field import _published_wire_name
+
+    # graphql-core's ``GraphQLNamedType.__new__`` widens every built-in scalar to its base.
+    assert isinstance(GraphQLInt, GraphQLScalarType)
 
     arg_def = SimpleNamespace(python_name="offset")
 
     # 1. No ``_raw_info`` at all: a direct-call stub, so no published name.
-    assert _published_wire_name(SimpleNamespace(), arg_def, "offset") is None
+    assert _published_wire_name(_as_strawberry_info(SimpleNamespace()), arg_def, "offset") is None
 
     # 2. A ``_raw_info`` read that fails for any other reason is a broken schema.
     class ExplodingInfo:
@@ -1283,7 +1445,9 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
         ConfigurationError,
         match="Failed to read the schema field for argument 'offset'",
     ):
-        _published_wire_name(ExplodingInfo(), arg_def, "offset")
+        # basedpyright: the info whose _raw_info read raises is the hostile input under test;
+        # _published_wire_name types info as a concrete Strawberry Info
+        _published_wire_name(ExplodingInfo(), arg_def, "offset")  # pyright: ignore[reportArgumentType]
 
     # 3. The field exists but no argument carries this definition back-reference.
     other_def = SimpleNamespace(python_name="offset")
@@ -1297,7 +1461,7 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
     raw = SimpleNamespace(parent_type=parent, field_name="cats")
     info = SimpleNamespace(_raw_info=raw, field_name="cats")
     with pytest.raises(ConfigurationError, match="has a definition but no published wire name"):
-        _published_wire_name(info, arg_def, "offset")
+        _published_wire_name(_as_strawberry_info(info), arg_def, "offset")
 
     # 4. The parent type does not even publish the field.
     raw_missing = SimpleNamespace(parent_type=parent, field_name="missing")
@@ -1306,7 +1470,7 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
         ConfigurationError,
         match="Failed to read the published arguments for 'offset'",
     ):
-        _published_wire_name(info_missing, arg_def, "offset")
+        _published_wire_name(_as_strawberry_info(info_missing), arg_def, "offset")
 
     # 5. The matching back-reference returns the published key, whatever its spelling.
     field_ok = GraphQLField(
@@ -1317,47 +1481,64 @@ def test_published_wire_name_rejects_malformed_schema_metadata():
     )
     parent_ok = GraphQLObjectType("Query", {"cats": field_ok})
     info_ok = SimpleNamespace(_raw_info=SimpleNamespace(parent_type=parent_ok, field_name="cats"))
-    assert _published_wire_name(info_ok, arg_def, "offset") == "OFFSET"
+    assert _published_wire_name(_as_strawberry_info(info_ok), arg_def, "offset") == "OFFSET"
 
 
-def test_list_field_record_independence(arm_resource_budget):
+def test_list_field_record_independence(
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """_ListArguments fields operate independently without proxy conflation."""
     info = SimpleNamespace(context={}, schema=None)
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     # Omitted arguments
-    rec_empty = _normalize_list_arguments("f", info, None, False)
+    rec_empty = _normalize_list_arguments("f", _as_strawberry_info(info), None, False)
     assert rec_empty.any_argument_supplied is False
     assert rec_empty.offset is None
     assert rec_empty.limit is None
     assert rec_empty.order_by_supplied is False
 
     # offset=0 with no limit produces omission-identical window
-    rec_zero = _normalize_list_arguments("f", info, None, False, offset=0)
+    rec_zero = _normalize_list_arguments("f", _as_strawberry_info(info), None, False, offset=0)
     assert rec_zero.any_argument_supplied is True
     assert rec_zero.offset == 0
     assert rec_zero.limit is None
 
     # order_by_supplied drives queryset_required even when order_by=[]
-    rec_order_empty = _normalize_list_arguments("f", info, None, False, order_by=[])
+    rec_order_empty = _normalize_list_arguments(
+        "f",
+        _as_strawberry_info(info),
+        None,
+        False,
+        order_by=[],
+    )
     assert rec_order_empty.order_by_supplied is True
     assert rec_order_empty.order_by == []
 
     from django_strawberry_framework.list_field import _build_non_queryset_rejection_error
 
-    rejection = _build_non_queryset_rejection_error(rec_order_empty, info)
+    rejection = _build_non_queryset_rejection_error(rec_order_empty, _as_strawberry_info(info))
     assert isinstance(rejection, ListArgumentError)
     assert rejection.reason == "queryset_required"
 
 
-def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch):
+def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch: pytest.MonkeyPatch):
     """The no-argument normalization path is allocation-only and policy-free."""
+
+    def _policy_must_not_resolve(_info: object) -> None:
+        pytest.fail("omitted arguments must not resolve policy")
+
     monkeypatch.setattr(
         "django_strawberry_framework.list_field.policy_from_info",
-        lambda _info: pytest.fail("omitted arguments must not resolve policy"),
+        _policy_must_not_resolve,
     )
 
-    record = _normalize_list_arguments("items", SimpleNamespace(), None, False)
+    record = _normalize_list_arguments(
+        "items",
+        _as_strawberry_info(SimpleNamespace()),
+        None,
+        False,
+    )
 
     assert record == _ListArguments(None, None, None, False, False)
 
@@ -1394,13 +1575,17 @@ def test_field_and_orderset_metadata_reads_fail_closed():
     class Target:
         __django_strawberry_definition__ = HostileDefinition()
 
-    assert _field_label(HostileInfo()) == "DjangoListField"
-    assert _field_label(SimpleNamespace(field_name="items")) == "items"
+    # basedpyright: the info whose field_name read raises is the hostile input under test;
+    # _field_label types info as a concrete Strawberry Info
+    assert _field_label(HostileInfo()) == "DjangoListField"  # pyright: ignore[reportArgumentType]
+    assert _field_label(_as_strawberry_info(SimpleNamespace(field_name="items"))) == "items"
     # The sidecar read fails LOUDLY rather than answering None: publishing a
     # schema without ``orderBy`` for a target that declares one would be a
     # silent SDL change at the line that wrote the field.
     with pytest.raises(ConfigurationError, match="could not read Meta.orderset_class"):
-        _orderset_class_from_definition(Target.__django_strawberry_definition__)
+        # basedpyright: the definition whose orderset_class read raises is the hostile input under
+        # test; _orderset_class_from_definition types the parameter as DjangoTypeDefinition
+        _orderset_class_from_definition(Target.__django_strawberry_definition__)  # pyright: ignore[reportArgumentType]
 
 
 def test_argument_definition_metadata_reads_fail_closed():
@@ -1410,14 +1595,16 @@ def test_argument_definition_metadata_reads_fail_closed():
             raise RuntimeError("unreadable argument metadata")
 
     with pytest.raises(ConfigurationError, match="argument-definition resolver"):
-        _resolve_argument_wire_name(HostileInfo(), "offset")
+        # basedpyright: the info whose get_argument_definition read raises is the hostile input
+        # under test; _resolve_argument_wire_name types info as a concrete Strawberry Info
+        _resolve_argument_wire_name(HostileInfo(), "offset")  # pyright: ignore[reportArgumentType]
 
-    def raise_from_lookup(_name):
+    def raise_from_lookup(_name: str):
         raise RuntimeError("unreadable argument definition")
 
     with pytest.raises(ConfigurationError, match="definition for argument"):
         _resolve_argument_wire_name(
-            SimpleNamespace(get_argument_definition=raise_from_lookup),
+            _as_strawberry_info(SimpleNamespace(get_argument_definition=raise_from_lookup)),
             "offset",
         )
 
@@ -1427,7 +1614,7 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
     from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
 
     class InstrumentedAsyncSource:
-        def __init__(self, fail_close=False):
+        def __init__(self, fail_close: bool = False):
             self.fail_close = fail_close
             self.anext_calls = 0
             self.aclose_calls = 0
@@ -1456,7 +1643,11 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
     # Clean close
     src_clean = InstrumentedAsyncSource(fail_close=False)
     with pytest.raises(ListArgumentError) as exc_clean:
-        await _handle_non_queryset_rejections_async(src_clean, args_record, info)
+        await _handle_non_queryset_rejections_async(
+            src_clean,
+            args_record,
+            _as_strawberry_info(info),
+        )
     assert exc_clean.value.reason == "queryset_required"
     assert src_clean.anext_calls == 0
     assert src_clean.aclose_calls == 1
@@ -1464,7 +1655,11 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
     # Cleanup error attaches note without masking ListArgumentError
     src_fail = InstrumentedAsyncSource(fail_close=True)
     with pytest.raises(ListArgumentError) as exc_fail:
-        await _handle_non_queryset_rejections_async(src_fail, args_record, info)
+        await _handle_non_queryset_rejections_async(
+            src_fail,
+            args_record,
+            _as_strawberry_info(info),
+        )
     assert exc_fail.value.reason == "queryset_required"
     assert src_fail.anext_calls == 0
     assert src_fail.aclose_calls == 1
@@ -1483,7 +1678,7 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
 
     # 1. Non-adapted queryset stays non-adapted
     qs = Category.objects.all()
-    info_unresolved = SimpleNamespace(field_name="cats", return_type=object())
+    info_unresolved = _as_resolve_info(SimpleNamespace(field_name="cats", return_type=object()))
     out1 = ext._optimize(qs, info_unresolved)
     assert not unwrap_async_queryset_adapter(out1)[1]
     assert out1 is qs
@@ -1512,18 +1707,22 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
     out4 = ext._optimize(adapter_sliced, info_unresolved)
     assert unwrap_async_queryset_adapter(out4)[1]
     unwrapped4, _ = unwrap_async_queryset_adapter(out4)
+    assert isinstance(unwrapped4, models.QuerySet)
     assert unwrapped4.query.low_mark == 2
     assert unwrapped4.query.high_mark == 5
 
 
-def test_list_field_deadline_check_position(monkeypatch, arm_resource_budget):
+def test_list_field_deadline_check_position(
+    monkeypatch: pytest.MonkeyPatch,
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """check_deadline is invoked in pre-fetch position for argument-bearing requests."""
     import django_strawberry_framework.resource_policy as rp
 
     check_calls = 0
     orig_check = rp.check_deadline
 
-    def spy_check(info):
+    def spy_check(info: object):
         nonlocal check_calls
         check_calls += 1
         return orig_check(info)
@@ -1553,7 +1752,7 @@ def test_list_field_deadline_check_position(monkeypatch, arm_resource_budget):
     res = _execute_queryset_pipeline_sync(
         ItemDeadType,
         Item.objects.all(),
-        info,
+        _as_strawberry_info(info),
         args_record,
         max_rows=10,
         trusted_max_rows=False,
@@ -1577,7 +1776,7 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
         _validate_post_orderset_result,
     )
 
-    class CustomQuerySetSubclass(models.QuerySet):
+    class CustomQuerySetSubclass(models.QuerySet[Item]):
         pass
 
     class ItemSealType(DjangoType):
@@ -1599,9 +1798,11 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
 
     # 2. Routing intent: _db is None accepted when _hints match, rejected when _hints differ
     qs_match = Item.objects.all()
-    qs_match._hints = {"shard": "a"}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    qs_match._hints = {"shard": "a"}  # pyright: ignore[reportAttributeAccessIssue]
     base_with_hints = Item.objects.all()
-    base_with_hints._hints = {"shard": "a"}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    base_with_hints._hints = {"shard": "a"}  # pyright: ignore[reportAttributeAccessIssue]
     sealed_hints = _validate_post_orderset_result(
         ItemSealType,
         _snapshot_routing_intent(base_with_hints, "Custom.apply"),
@@ -1611,7 +1812,8 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
     assert type(sealed_hints) is models.QuerySet
 
     qs_mismatch = Item.objects.all()
-    qs_mismatch._hints = {"shard": "b"}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    qs_mismatch._hints = {"shard": "b"}  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="changed database routing intent"):
         _validate_post_orderset_result(
             ItemSealType,
@@ -1621,11 +1823,13 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
         )
 
 
-def test_list_field_declined_sync_cleanup_generator_suspended(arm_resource_budget):
+def test_list_field_declined_sync_cleanup_generator_suspended(
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """Declined sync cleanup: generator truncated by client window stays suspended and resumable."""
     finally_ran = False
 
-    def sync_numbers():
+    def sync_numbers() -> Generator[int, None, None]:
         nonlocal finally_ran
         try:
             yield from range(10)
@@ -1660,7 +1864,7 @@ def test_list_field_declined_sync_cleanup_generator_suspended(arm_resource_budge
 _PREDICATE_STAMP = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
 
 
-def _predicate_ordering(lookup, threshold):
+def _predicate_ordering(lookup: str, threshold: object):
     """A conditional ordering whose predicate compares ``lookup`` against ``threshold``."""
     return (
         models.Case(
@@ -1679,10 +1883,12 @@ def test_order_term_classifier_rejects_a_non_expression_term():
     """
     from django_strawberry_framework.list_field import _is_deterministic_order_term
 
-    assert _is_deterministic_order_term(SimpleNamespace(), 42) is False
+    # basedpyright: the path under test never reads the query; _is_deterministic_order_term types
+    # the parameter as Query
+    assert _is_deterministic_order_term(SimpleNamespace(), 42) is False  # pyright: ignore[reportArgumentType]
 
 
-def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch):
+def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch: pytest.MonkeyPatch):
     """Two models whose defaults order by each other compile to an error, never to a page.
 
     Django raises ``FieldError("Infinite loop caused by ordering.")`` for such a
@@ -1697,7 +1903,9 @@ def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch):
     assert _is_model_default_ordering_active(library_models.Shelf.objects.all()) is False
 
 
-def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(monkeypatch):
+def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A path piece Django reads as a transform or a lookup is not a column this package can name.
 
     Only a path resolving to a field all the way down says what the rows are
@@ -1710,7 +1918,9 @@ def test_order_term_classifier_refuses_a_piece_that_is_not_a_field(monkeypatch):
     assert _is_model_default_ordering_active(library_models.Shelf.objects.all()) is False
 
 
-def test_order_term_classifier_reads_a_reverse_relation_target_ordering(monkeypatch):
+def test_order_term_classifier_reads_a_reverse_relation_target_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A reverse relation expands into its own model's default exactly as a forward one does.
 
     The name in front of the ordering is a relation either way, and the order the
@@ -1727,7 +1937,9 @@ def test_order_term_classifier_reads_a_reverse_relation_target_ordering(monkeypa
     assert _is_model_default_ordering_active(library_models.Branch.objects.all()) is True
 
 
-def test_order_term_classifier_follows_a_chain_of_relation_defaults(monkeypatch):
+def test_order_term_classifier_follows_a_chain_of_relation_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Expansion is recursive, so a random default two relations away still decides.
 
     ``Book`` orders by its shelf, the shelf by its branch, and the branch at
@@ -1758,7 +1970,9 @@ def test_order_reference_classifier_reads_the_annotation_a_reference_names():
     assert _has_deterministic_ordering(queryset) is False
 
 
-def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(monkeypatch):
+def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A reference lifted out of an expanded ordering names a column, not another default.
 
     Only a string term reaches the compiler's relation expansion. A ``Book``
@@ -1778,28 +1992,40 @@ def test_order_reference_classifier_keeps_an_expanded_reference_a_column_order(m
 class _SubclassedLower(Lower):
     """A subclass of an approved function: an approved name over a different ``as_sql``."""
 
-    def as_sql(self, compiler, connection, **extra_context):
-        return "RANDOM()", []
+    @override
+    def as_sql(
+        self,
+        compiler: SQLCompiler,
+        connection: BaseDatabaseWrapper,
+        function: str | None = None,
+        template: str | None = None,
+        arg_joiner: str | None = None,
+        **extra_context: object,
+    ) -> tuple[str, tuple[str | int, ...]]:
+        return "RANDOM()", ()
 
 
 class _SubclassedF(models.F):
     """A subclass of the reference form: an ordinary name over a different resolution."""
 
-    def resolve_expression(self, *args, **kwargs):
+    @override
+    def resolve_expression(self, *args: object, **kwargs: object):
         return Random()
 
 
 class _SubclassedQ(models.Q):
     """A subclass of the predicate form, resolving to SQL instead of to its children."""
 
-    def resolve_expression(self, *args, **kwargs):
+    @override
+    # basedpyright: deliberately resolves to foreign SQL, the predicate subclass the guard refuses
+    def resolve_expression(self, *args: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
         return Random()
 
 
 class _ResolvingName(str):
     """A field path that is an expression, because it carries ``resolve_expression``."""
 
-    def resolve_expression(self, *args, **kwargs):
+    def resolve_expression(self, *args: object, **kwargs: object):
         return Random()
 
 
@@ -1832,7 +2058,7 @@ class _ResolvingName(str):
         "name-that-resolves",
     ],
 )
-def test_order_term_classifier_admits_only_named_forms(term, expected):
+def test_order_term_classifier_admits_only_named_forms(term: object, expected: bool):
     """A node is read through because this package names its form, never because it has children.
 
     An expression's sources say nothing about the SQL it wraps them in, and a
@@ -1852,7 +2078,9 @@ def test_order_term_classifier_admits_only_named_forms(term, expected):
     assert _is_deterministic_order_term(query, term) is expected
 
 
-def test_order_predicate_classifier_refuses_an_unresolvable_reference(monkeypatch):
+def test_order_predicate_classifier_refuses_an_unresolvable_reference(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A predicate naming neither an annotation nor a field is a reference nobody can read.
 
     The comparison still reaches the statement, so a head this package cannot
@@ -1875,9 +2103,9 @@ def test_order_predicate_classifier_refuses_an_unresolvable_reference(monkeypatc
     ids=["readable-alias", "unreadable-alias"],
 )
 def test_order_predicate_classifier_reads_the_annotation_under_a_transform_chain(
-    monkeypatch,
-    aliased,
-    expected,
+    monkeypatch: pytest.MonkeyPatch,
+    aliased: models.Expression,
+    expected: bool,
 ):
     """A lookup is a reference plus trailing lookups, and the reference is what decides.
 
@@ -1899,7 +2127,9 @@ def test_order_predicate_classifier_reads_the_annotation_under_a_transform_chain
 
 
 @pytest.mark.django_db
-def test_is_model_default_ordering_active_rejects_a_grouped_queryset(monkeypatch):
+def test_is_model_default_ordering_active_rejects_a_grouped_queryset(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Grouping suppresses model default ordering the same way ``QuerySet.ordered`` does.
 
     A grouped source has one live spelling (``test_list_field_api.py``'s row-count
@@ -1957,12 +2187,12 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
             model = Category
             fields = ("id", "name")
 
-    base_qs = Category.objects.all()
-
     class PoisonAttr:
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             raise RuntimeError("PoisonAttr __eq__ called")
 
+        @override
         def __repr__(self):
             raise RuntimeError("PoisonAttr __repr__ called")
 
@@ -1982,8 +2212,9 @@ def test_list_field_post_orderset_validator_zero_consumer_dispatch():
     assert _routing_hints_equal({}, {}) is True
 
     # Rejection of routing changes without calling consumer __getattribute__
-    class PoisonGetattributeQS(models.QuerySet):
-        def __getattribute__(self, name):
+    class PoisonGetattributeQS(models.QuerySet[Category]):
+        @override
+        def __getattribute__(self, name: str):
             if name in ("_db", "_hints"):
                 raise RuntimeError(f"consumer __getattribute__ called for {name}")
             return super().__getattribute__(name)
@@ -2010,14 +2241,19 @@ def test_list_arguments_immutability():
         any_argument_supplied=True,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        args.offset = 5
+        # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+        # checker rejects assignment to a frozen field
+        args.offset = 5  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        args.limit = 20
+        # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+        # checker rejects assignment to a frozen field
+        args.limit = 20  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        args.extra_attribute = "disallowed"
+        # basedpyright: the undeclared slot write is the rejected operation under test
+        args.extra_attribute = "disallowed"  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch):
+def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch: pytest.MonkeyPatch):
     """_is_model_default_ordering_active requires exact boolean True identity."""
     from django_strawberry_framework.list_field import _is_model_default_ordering_active
 
@@ -2032,10 +2268,14 @@ def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch):
         get_meta=lambda: Category._meta,
     )
     qs_mock = SimpleNamespace(model=Category, query=query_mock)
-    assert _is_model_default_ordering_active(qs_mock) is False
+    # basedpyright: a stand-in queryset carrying only the slots the code under test reads;
+    # _is_model_default_ordering_active types the parameter as QuerySet
+    assert _is_model_default_ordering_active(qs_mock) is False  # pyright: ignore[reportArgumentType]
 
     query_mock.default_ordering = True
-    assert _is_model_default_ordering_active(qs_mock) is True
+    # basedpyright: a stand-in queryset carrying only the slots the code under test reads;
+    # _is_model_default_ordering_active types the parameter as QuerySet
+    assert _is_model_default_ordering_active(qs_mock) is True  # pyright: ignore[reportArgumentType]
 
 
 def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition():
@@ -2050,16 +2290,16 @@ def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition(
     # A resolver that has no definition for the parameter.
     info_no_argdef = SimpleNamespace(
         schema=None,
-        get_argument_definition=lambda name: None,
+        get_argument_definition=_no_argument_definition,
     )
-    assert _resolve_argument_wire_name(info_no_argdef, "limit") == "limit"
+    assert _resolve_argument_wire_name(_as_strawberry_info(info_no_argdef), "limit") == "limit"
 
     # A definition, but no ``_raw_info`` carrying a published argument map.
     info_no_schema = SimpleNamespace(
         schema=None,
-        get_argument_definition=lambda name: SimpleNamespace(python_name=name),
+        get_argument_definition=_python_named_argument,
     )
-    assert _resolve_argument_wire_name(info_no_schema, "offset") == "offset"
+    assert _resolve_argument_wire_name(_as_strawberry_info(info_no_schema), "offset") == "offset"
 
 
 def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata():
@@ -2077,13 +2317,13 @@ def test_list_field_wire_name_resolution_surfaces_broken_schema_metadata():
 
     info = SimpleNamespace(
         _raw_info=ExplodingRawInfo(),
-        get_argument_definition=lambda name: SimpleNamespace(python_name=name),
+        get_argument_definition=_python_named_argument,
     )
     with pytest.raises(
         ConfigurationError,
         match="Failed to read the schema field for argument 'order_by'",
     ):
-        _resolve_argument_wire_name(info, "order_by")
+        _resolve_argument_wire_name(_as_strawberry_info(info), "order_by")
 
 
 def test_require_orderset_class_rejects_a_target_without_one():
@@ -2097,12 +2337,16 @@ def test_require_orderset_class_rejects_a_target_without_one():
     class Orderless:
         __django_strawberry_definition__ = SimpleNamespace(orderset_class=None)
 
-    assert _orderset_class_from_definition(Orderless.__django_strawberry_definition__) is None
+    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+    # _orderset_class_from_definition types the parameter as DjangoTypeDefinition
+    assert _orderset_class_from_definition(Orderless.__django_strawberry_definition__) is None  # pyright: ignore[reportArgumentType]
     with pytest.raises(
         ConfigurationError,
         match=r"Field target Orderless has no orderset_class configured\.",
     ):
-        require_orderset_class(Orderless, None)
+        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+        # require_orderset_class types the parameter as type[DjangoType]
+        require_orderset_class(Orderless, None)  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.django_db
@@ -2126,11 +2370,12 @@ def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects():
             fields = ["name"]
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: QuerySet[_M],
+            info: object,
         ):
             # Publishes the normalization record, then returns a candidate the
             # seal rejects.
@@ -2152,7 +2397,7 @@ def test_djangolistfield_resets_the_capture_scope_when_the_seal_rejects():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
 
-    context: dict = {"request": RequestFactory().get("/")}
+    context: dict[str, object] = {"request": RequestFactory().get("/")}
     result = schema.execute_sync(
         "{ cats(orderBy: [{name: ASC}]) { id name } }",
         context_value=context,
@@ -2173,7 +2418,7 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
     from django_strawberry_framework.list_field import _handle_non_queryset_rejections_async
 
     class InstrumentedAsyncSource:
-        def __init__(self, fail_close=False):
+        def __init__(self, fail_close: bool = False):
             self.fail_close = fail_close
             self.anext_calls = 0
             self.aclose_calls = 0
@@ -2190,7 +2435,7 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
             if self.fail_close:
                 raise RuntimeError("aclose error")
 
-    def _broken_definition_lookup(name):
+    def _broken_definition_lookup(name: str):
         raise RuntimeError("simulated definition lookup failure")
 
     info = SimpleNamespace(
@@ -2211,13 +2456,21 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
         ConfigurationError,
         match="Failed to read the definition for argument 'order_by'",
     ):
-        await _handle_non_queryset_rejections_async(src_clean, args_record, info)
+        await _handle_non_queryset_rejections_async(
+            src_clean,
+            args_record,
+            _as_strawberry_info(info),
+        )
     assert src_clean.anext_calls == 0
     assert src_clean.aclose_calls == 1
 
     src_fail = InstrumentedAsyncSource(fail_close=True)
     with pytest.raises(ConfigurationError) as exc_fail:
-        await _handle_non_queryset_rejections_async(src_fail, args_record, info)
+        await _handle_non_queryset_rejections_async(
+            src_fail,
+            args_record,
+            _as_strawberry_info(info),
+        )
     assert src_fail.anext_calls == 0
     assert src_fail.aclose_calls == 1
     notes = getattr(exc_fail.value, "__notes__", [])
@@ -2225,7 +2478,7 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
 
     # A source that is not async-only owes no close on the same exit.
     with pytest.raises(ConfigurationError):
-        await _handle_non_queryset_rejections_async([1, 2], args_record, info)
+        await _handle_non_queryset_rejections_async([1, 2], args_record, _as_strawberry_info(info))
 
 
 # =============================================================================
@@ -2233,17 +2486,20 @@ async def test_list_field_rejected_async_iterator_is_closed_when_building_the_re
 # =============================================================================
 
 
-def _swap_definition_attribute(target_type, replacement):
+@contextlib.contextmanager
+def _swap_definition_attribute(
+    target_type: type[DjangoType],
+    replacement: object,
+) -> Generator[None, None, None]:
     """Put ``replacement`` on ``target_type``'s definition attribute, restoring after."""
     original = target_type.__dict__["__django_strawberry_definition__"]
-    target_type.__django_strawberry_definition__ = replacement
+    # basedpyright: the planted stand-in definition is the hostile input under test; DjangoType
+    # types the slot as DjangoTypeDefinition
+    target_type.__django_strawberry_definition__ = replacement  # pyright: ignore[reportAttributeAccessIssue]
     try:
         yield
     finally:
         target_type.__django_strawberry_definition__ = original
-
-
-_swap_definition_attribute = contextlib.contextmanager(_swap_definition_attribute)
 
 
 def test_djangolistfield_rejects_a_fabricated_same_origin_definition() -> None:
@@ -2369,7 +2625,7 @@ def _execution_mode_schema() -> DjangoSchema:
             model = Category
             fields = ("id", "name")
 
-    def _sync_consumer(root: Any, info: Info) -> Any:
+    def _sync_consumer(root: object, info: Info) -> QuerySet[Category]:
         """A plain ``def`` returning a queryset, which is the committed sync wrapper."""
         return Category.objects.all()
 
@@ -2395,7 +2651,7 @@ _EXECUTION_MODE_FIELD_IDS = ["default-resolver", "sync-consumer-resolver"]
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("field", _EXECUTION_MODE_FIELDS, ids=_EXECUTION_MODE_FIELD_IDS)
-def test_a_list_field_completes_synchronously_outside_an_event_loop(field) -> None:
+def test_a_list_field_completes_synchronously_outside_an_event_loop(field: str) -> None:
     """The ordinary synchronous state: no loop, the synchronous executor, real rows."""
     services.seed_data(1)
     schema = _execution_mode_schema()
@@ -2403,13 +2659,14 @@ def test_a_list_field_completes_synchronously_outside_an_event_loop(field) -> No
     result = schema.execute_sync(f"{{ {field} {{ name }} }}")
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert len(result.data[field]) == Category.objects.count()
 
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("field", _EXECUTION_MODE_FIELDS, ids=_EXECUTION_MODE_FIELD_IDS)
-async def test_a_list_field_completes_asynchronously_inside_an_event_loop(field) -> None:
+async def test_a_list_field_completes_asynchronously_inside_an_event_loop(field: str) -> None:
     """The ordinary asynchronous state: a loop, the async executor, real rows."""
     await sync_to_async(services.seed_data)(1)
     schema = await sync_to_async(_execution_mode_schema)()
@@ -2417,13 +2674,16 @@ async def test_a_list_field_completes_asynchronously_inside_an_event_loop(field)
     result = await schema.execute(f"{{ {field} {{ name }} }}")
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert len(result.data[field]) == await Category.objects.acount()
 
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("field", _EXECUTION_MODE_FIELDS, ids=_EXECUTION_MODE_FIELD_IDS)
-async def test_a_list_field_refuses_a_synchronous_operation_inside_an_event_loop(field) -> None:
+async def test_a_list_field_refuses_a_synchronous_operation_inside_an_event_loop(
+    field: str,
+) -> None:
     """The third state, which is a misuse rather than a branch.
 
     ``execute_sync`` under a running loop holds the operation with the
@@ -2450,6 +2710,7 @@ async def test_a_list_field_refuses_a_synchronous_operation_inside_an_event_loop
         gc.collect()
 
     assert result.data is None
+    assert result.errors is not None
     assert isinstance(result.errors[0].original_error, SyncMisuseError)
     assert "await schema.execute" in str(result.errors[0])
     assert [str(warning.message) for warning in caught] == []

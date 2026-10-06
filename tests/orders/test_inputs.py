@@ -17,6 +17,7 @@ The sections below cover ``convert_order_field_to_input_annotation`` /
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable, Iterator
 
 import pytest
 from django.db.models import F
@@ -32,8 +33,13 @@ from django_strawberry_framework.orders.inputs import (
 )
 
 
+def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
+    """``input_cls`` as a constructor: the factory generates its keyword fields at run time."""
+    return input_cls
+
+
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry):
+def _isolate_registry(isolate_global_registry: None) -> None:
     """Clear the global registry and input ledgers around every test here.
 
     The module declares function-scope ``OrderSet`` subclasses whose
@@ -129,7 +135,8 @@ def test_ordering_resolve_wraps_value_in_f_expression():
     expr = Ordering.ASC.resolve("shelf__code")
     # ``OrderBy.expression`` holds the wrapped ``F("shelf__code")``.
     assert isinstance(expr.expression, F)
-    assert expr.expression.name == "shelf__code"
+    # basedpyright: django-stubs omits F.name, reported as an unknown attribute
+    assert expr.expression.name == "shelf__code"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +145,7 @@ def test_ordering_resolve_wraps_value_in_f_expression():
 
 
 @pytest.fixture
-def _materialization_cleanup():
+def _materialization_cleanup() -> Iterator[None]:
     """Strip any test-emitted ledger / module-global state after each test."""
     names_before = set(_materialized_names.keys())
     yield
@@ -151,7 +158,7 @@ def _materialization_cleanup():
             delattr(module, name)
 
 
-def test_materialize_input_class_writes_to_module_global(_materialization_cleanup):
+def test_materialize_input_class_writes_to_module_global(_materialization_cleanup: None):
     """Materialization pins the class in ``sys.modules[INPUTS_MODULE_PATH]``."""
 
     class Foo:
@@ -163,7 +170,7 @@ def test_materialize_input_class_writes_to_module_global(_materialization_cleanu
     assert _materialized_names["FooInputType"] is Foo
 
 
-def test_materialize_input_class_is_idempotent_on_same_pair(_materialization_cleanup):
+def test_materialize_input_class_is_idempotent_on_same_pair(_materialization_cleanup: None):
     """Second call with the same ``(name, cls)`` short-circuits to no-op."""
 
     class Foo:
@@ -174,7 +181,7 @@ def test_materialize_input_class_is_idempotent_on_same_pair(_materialization_cle
     assert _materialized_names["FooInputType"] is Foo
 
 
-def test_materialize_input_class_raises_on_collision(_materialization_cleanup):
+def test_materialize_input_class_raises_on_collision(_materialization_cleanup: None):
     """A second class under the same name raises ``ConfigurationError``."""
 
     class FooA:
@@ -243,8 +250,10 @@ def test_normalize_input_value_walks_nested_relatedorder_into_flat_field_paths()
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrder)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+    BookInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderInputType"],
+    )
     input_value = BookInput(shelf=ShelfInput(code=Ordering.ASC))
     flat = normalize_input_value(BookOrder, input_value)
     assert flat == [("shelf__code", Ordering.ASC)]
@@ -281,7 +290,7 @@ def test_normalize_input_value_skips_null_direction_leaves():
             fields = ["title", "subtitle"]
 
     factory = OrderArgumentsFactory(BookOrderNull)
-    BookInput = factory.arguments
+    BookInput = _keyword_constructor(factory.arguments)
     flat = normalize_input_value(
         BookOrderNull,
         [BookInput(title=None, subtitle=Ordering.ASC)],
@@ -304,7 +313,7 @@ def test_normalize_input_value_handles_top_level_list_of_dataclass_elements():
             fields = ["title", "subtitle"]
 
     factory = OrderArgumentsFactory(BookOrderMulti)
-    BookInput = factory.arguments
+    BookInput = _keyword_constructor(factory.arguments)
     flat = normalize_input_value(
         BookOrderMulti,
         [BookInput(title=Ordering.ASC), BookInput(subtitle=Ordering.DESC_NULLS_LAST)],
@@ -368,8 +377,10 @@ def test_normalize_input_value_raw_dict_matches_dataclass_form():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(BookOrderDictEq)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderDictEqInputType"]
+    BookInput = _keyword_constructor(factory.arguments)
+    ShelfInput = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["ShelfOrderDictEqInputType"],
+    )
 
     dataclass_form = normalize_input_value(
         BookOrderDictEq,
@@ -488,7 +499,7 @@ def test_field_specs_populated_by_build_input_fields_for_relatedorder():
 
 
 @pytest.fixture
-def _namespace_cleanup():
+def _namespace_cleanup() -> Iterator[None]:
     """Strip test-emitted ledger / module-global state + factory caches."""
     from django_strawberry_framework.orders.factories import OrderArgumentsFactory
     from django_strawberry_framework.orders.inputs import (
@@ -511,7 +522,7 @@ def _namespace_cleanup():
     OrderArgumentsFactory._type_orderset_registry.clear()
 
 
-def test_clear_order_input_namespace_resets_materialized_names_ledger(_namespace_cleanup):
+def test_clear_order_input_namespace_resets_materialized_names_ledger(_namespace_cleanup: None):
     """``_materialized_names`` is emptied."""
     from django_strawberry_framework.orders.inputs import (
         _materialized_names,
@@ -528,7 +539,7 @@ def test_clear_order_input_namespace_resets_materialized_names_ledger(_namespace
     assert _materialized_names == {}
 
 
-def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cleanup):
+def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cleanup: None):
     """The materialized class stays on the module dict per spec-028 Decision 9."""
     from django_strawberry_framework.orders.inputs import (
         INPUTS_MODULE_PATH,
@@ -548,7 +559,7 @@ def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cle
     assert module.FooParkedOrderInputType is FooParked
 
 
-def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespace_cleanup):
+def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespace_cleanup: None):
     """``OrderArgumentsFactory`` class-level caches are emptied."""
     from django_strawberry_framework.orders.factories import OrderArgumentsFactory
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
@@ -560,13 +571,17 @@ def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespac
         pass
 
     OrderArgumentsFactory.input_object_types["FakeOrderInputType"] = _FakeInput
-    OrderArgumentsFactory._type_orderset_registry["FakeOrderInputType"] = _FakeOrder
+    # basedpyright: a plain stand-in class the clear only evicts; OrderArgumentsFactory types the
+    # registry values as type[OrderSet]
+    OrderArgumentsFactory._type_orderset_registry["FakeOrderInputType"] = _FakeOrder  # pyright: ignore[reportArgumentType]
     clear_order_input_namespace()
     assert OrderArgumentsFactory.input_object_types == {}
     assert OrderArgumentsFactory._type_orderset_registry == {}
 
 
-def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(_namespace_cleanup):
+def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(
+    _namespace_cleanup: None,
+):
     """Every ``OrderSet`` subclass's phase-2.5 binding slots are reset."""
     from collections import OrderedDict
 
@@ -576,7 +591,9 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(_nam
     class BindStateOrder(OrderSet):
         pass
 
-    BindStateOrder._owner_definition = "stub_owner"
+    # basedpyright: the stub value only marks the slot bound for the reset under test; OrderSet
+    # types _owner_definition as DjangoTypeDefinition | None
+    BindStateOrder._owner_definition = "stub_owner"  # pyright: ignore[reportAttributeAccessIssue]
     BindStateOrder._expanded_fields = OrderedDict([("title", None)])
     BindStateOrder._is_expanding_fields = True
     assert "_owner_definition" in BindStateOrder.__dict__
@@ -619,7 +636,9 @@ def test_order_input_type_raises_typeerror_for_non_orderset():
     from django_strawberry_framework.orders import order_input_type
 
     with pytest.raises(TypeError):
-        order_input_type(int)
+        # basedpyright: the non-OrderSet class is the hostile input under test; order_input_type
+        # types the parameter as type[OrderSet]
+        order_input_type(int)  # pyright: ignore[reportArgumentType]
 
 
 def test_order_input_type_records_orderset_into_helper_referenced_set():
@@ -683,7 +702,7 @@ def test_order_input_subscript_returns_the_order_input_type_element_annotation()
     assert isinstance(forward, ForwardRef)
     assert forward.__forward_arg__ == "HelperOrderDInputType"
     assert forward == get_args(called)[0]
-    assert [getattr(marker, "module", None) for marker in subscripted.__metadata__] == [
+    assert [getattr(marker, "module", None) for marker in get_args(subscripted)[1:]] == [
         INPUTS_MODULE_PATH,
     ]
 
@@ -719,10 +738,13 @@ def test_order_input_subscript_rejects_non_orderset_naming_the_subscript():
 
     initial = set(_helper_referenced_ordersets)
     with pytest.raises(TypeError) as excinfo:
-        OrderInput[int]
+        # basedpyright: a non-OrderSet subscript is the bad input this test proves is rejected
+        OrderInput[int]  # pyright: ignore[reportInvalidTypeArguments]
     assert str(excinfo.value) == "OrderInput[...] requires an OrderSet subclass; got <class 'int'>"
     with pytest.raises(TypeError) as excinfo:
-        order_input_type(int)
+        # basedpyright: the non-OrderSet class is the hostile input under test; order_input_type
+        # types the parameter as type[OrderSet]
+        order_input_type(int)  # pyright: ignore[reportArgumentType]
     assert str(excinfo.value) == (
         "order_input_type() requires an OrderSet subclass; got <class 'int'>"
     )
@@ -750,8 +772,12 @@ def test_registry_clear_invokes_clear_order_input_namespace():
 
     materialize_input_class("LedgerStubOrderInputType", _LedgerStub)
     OrderArgumentsFactory.input_object_types["LedgerStubOrderInputType"] = _LedgerStub
-    OrderArgumentsFactory._type_orderset_registry["LedgerStubOrderInputType"] = _LedgerStub
-    _field_specs[("stub", "title")] = "fake"
+    # basedpyright: a plain stand-in class the clear only evicts; OrderArgumentsFactory types the
+    # registry values as type[OrderSet]
+    OrderArgumentsFactory._type_orderset_registry["LedgerStubOrderInputType"] = _LedgerStub  # pyright: ignore[reportArgumentType]
+    # basedpyright: a stand-in ledger entry the clear only evicts; _field_specs types its keys as
+    # tuple[type[OrderSet], str] and its values as FieldSpec
+    _field_specs[("stub", "title")] = "fake"  # pyright: ignore[reportArgumentType]
 
     registry.clear()
 
@@ -988,7 +1014,7 @@ def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declarati
 
     clear_order_input_namespace()
     marker = object()
-    fired: list[str] = []
+    fired: list[object] = []
 
     class OverrideOrder(OrderSet):
         _permission = replace(
@@ -1001,7 +1027,7 @@ def test_ensure_field_specs_derives_the_unset_sentinel_from_the_family_declarati
             fields = ["title"]
 
         @classmethod
-        def check_title_permission(cls, request):
+        def check_title_permission(cls, request: object):
             fired.append(request)
 
     # The override IS the family's unsupplied rule end-to-end.
@@ -1047,7 +1073,7 @@ def test_normalize_input_value_rejects_invalid_direction_type():
 
 
 def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(
-    _namespace_cleanup,
+    _namespace_cleanup: None,
 ):
     """Covers ``orders/inputs.py::normalize_input_value`` #"if child_orderset is None:".
 
@@ -1152,8 +1178,10 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules():
     try:
         # A ``None`` entry makes the ``_safe_import`` lookup return ``None``,
         # so both ``is not None`` blocks are skipped.
-        sys.modules[factories_name] = None
-        sys.modules[sets_name] = None
+        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
+        # as the blocked-import sentinel
+        sys.modules[factories_name] = None  # pyright: ignore[reportArgumentType]
+        sys.modules[sets_name] = None  # pyright: ignore[reportArgumentType]
         # Must not raise even though neither submodule can be imported.
         clear_order_input_namespace()
     finally:
@@ -1212,9 +1240,13 @@ def test_normalize_input_value_handles_3_tier_deep_related_order_chain():
             fields = ["title"]
 
     factory = OrderArgumentsFactory(Tier1Order)
-    Tier1Input = factory.arguments
-    Tier2Input = OrderArgumentsFactory.input_object_types["Tier2OrderInputType"]
-    Tier3Input = OrderArgumentsFactory.input_object_types["Tier3OrderInputType"]
+    Tier1Input = _keyword_constructor(factory.arguments)
+    Tier2Input = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["Tier2OrderInputType"],
+    )
+    Tier3Input = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["Tier3OrderInputType"],
+    )
 
     val = Tier1Input(
         title=Ordering.ASC,

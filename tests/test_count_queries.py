@@ -12,6 +12,7 @@ reached by a query.
 
 import importlib
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -21,7 +22,7 @@ SCRIPTS = Path(_bench_common.__file__).resolve().parent
 
 
 @pytest.fixture
-def count_queries(monkeypatch):
+def count_queries(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Import ``scripts/count_queries.py`` the way it runs: scripts dir on ``sys.path``."""
     monkeypatch.syspath_prepend(str(SCRIPTS))
     return importlib.import_module("count_queries")
@@ -39,12 +40,16 @@ def count_queries(monkeypatch):
         ([6, 5, 4], "mixed"),
     ],
 )
-def test_counts_classify_by_shape_across_cardinalities(count_queries, counts, verdict):
+def test_counts_classify_by_shape_across_cardinalities(
+    count_queries: ModuleType,
+    counts: list[int],
+    verdict: str,
+):
     """Equal counts are batched, a rise at every step scales, anything else is mixed."""
     assert count_queries.classify_counts(counts) == verdict
 
 
-def test_one_count_has_no_verdict(count_queries):
+def test_one_count_has_no_verdict(count_queries: ModuleType):
     """A single cardinality cannot show a shape, so classification refuses."""
     with pytest.raises(ValueError, match="two or more"):
         count_queries.classify_counts([4])
@@ -59,12 +64,16 @@ def test_one_count_has_no_verdict(count_queries):
         ([6, None], False),
     ],
 )
-def test_verdict_is_evidence_only_when_root_rows_grew(count_queries, root_rows, grew):
+def test_verdict_is_evidence_only_when_root_rows_grew(
+    count_queries: ModuleType,
+    root_rows: list[int | None],
+    grew: bool,
+):
     """Flat or unknown root rows mean the added parents never reached a resolver."""
     assert count_queries.rows_grew(root_rows) is grew
 
 
-def test_cardinalities_parse_sorted_and_refuse_zero_or_repeats(count_queries):
+def test_cardinalities_parse_sorted_and_refuse_zero_or_repeats(count_queries: ModuleType):
     """Cells run ascending; 0 fakes a slope and a repeat measures nothing new."""
     assert count_queries.parse_cardinalities("30,2,10") == [2, 10, 30]
     with pytest.raises(ValueError, match="positive"):
@@ -73,7 +82,7 @@ def test_cardinalities_parse_sorted_and_refuse_zero_or_repeats(count_queries):
         count_queries.parse_cardinalities("2,2,10")
 
 
-def _report(counts, *, sha1="abc", verdict="batched"):
+def _report(counts: list[int], *, sha1: str = "abc", verdict: str = "batched"):
     report = _bench_common.build_report(
         tool="count_queries",
         provenance={"package_file": "/tree/pkg/__init__.py"},
@@ -88,7 +97,7 @@ def _report(counts, *, sha1="abc", verdict="batched"):
     return report
 
 
-def test_compare_prints_per_cardinality_deltas_and_both_verdicts(count_queries):
+def test_compare_prints_per_cardinality_deltas_and_both_verdicts(count_queries: ModuleType):
     """Each cardinality shows before, after and signed delta, then the verdict change."""
     before = _report([4, 4, 4])
     after = _report([4, 13, 33], verdict="scales with cardinality")
@@ -104,7 +113,7 @@ def test_compare_prints_per_cardinality_deltas_and_both_verdicts(count_queries):
     ]
 
 
-def test_compare_refuses_a_different_operation(count_queries):
+def test_compare_refuses_a_different_operation(count_queries: ModuleType):
     """Deltas between two operations mean nothing, so the comparison refuses."""
     before = _report([4, 4, 4], sha1="abc")
     after = _report([4, 4, 4], sha1="def")
@@ -113,7 +122,7 @@ def test_compare_refuses_a_different_operation(count_queries):
         count_queries.compare_reports(before, after)
 
 
-def test_builtin_operations_name_a_known_seeder(count_queries):
+def test_builtin_operations_name_a_known_seeder(count_queries: ModuleType):
     """Every built-in operation seeds rows its root field reads."""
     assert {op.seeder for op in count_queries.BUILTIN_OPERATIONS.values()} <= {
         "products",

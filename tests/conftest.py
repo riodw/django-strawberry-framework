@@ -34,10 +34,16 @@ relaxing ``-W error`` or filtering the warning.
 
 import asyncio
 import contextlib
+import sqlite3
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING
 
 import pytest
 from django.apps import apps
 from django.db.backends.sqlite3 import base as sqlite_base
+
+if TYPE_CHECKING:
+    from django_strawberry_framework import ResourcePolicy
 
 # Raw ``sqlite3.Connection`` handles opened while an event loop was running -
 # i.e. the context-local, per-asyncio-task connections that nothing else will
@@ -51,7 +57,10 @@ _context_local_connections = []
 _original_get_new_connection = sqlite_base.DatabaseWrapper.get_new_connection
 
 
-def _tracking_get_new_connection(self, conn_params):
+def _tracking_get_new_connection(
+    self: sqlite_base.DatabaseWrapper,
+    conn_params: object,
+) -> sqlite3.Connection:
     """Register connections opened under a running loop, then delegate."""
     connection = _original_get_new_connection(self, conn_params)
     try:
@@ -67,7 +76,7 @@ sqlite_base.DatabaseWrapper.get_new_connection = _tracking_get_new_connection
 
 
 @pytest.fixture
-def isolate_global_registry():
+def isolate_global_registry() -> Iterator[None]:
     """Clear the global registry and the connection-type cache around a test.
 
     The shared test-isolation invariant for modules that declare fresh
@@ -89,7 +98,7 @@ def isolate_global_registry():
 
 
 @pytest.fixture
-def arm_resource_budget():
+def arm_resource_budget() -> "Iterator[Callable[[object, ResourcePolicy], None]]":
     """Return ``arm(context, policy)``, arming a budget the way the resource extension does.
 
     ``begin_resource_budget`` is the production entry point: it arms the policy
@@ -104,7 +113,7 @@ def arm_resource_budget():
 
     scopes = []
 
-    def arm(context, policy):
+    def arm(context: object, policy: "ResourcePolicy") -> None:
         scopes.append(begin_resource_budget(context, policy))
 
     yield arm
@@ -113,7 +122,7 @@ def arm_resource_budget():
 
 
 @pytest.fixture(autouse=True)
-def _close_context_local_db_connections():
+def _close_context_local_db_connections() -> Iterator[None]:
     """Close per-task SQLite connections an async test left open.
 
     Runs as a *sync* fixture so its teardown always executes (an ``async``
@@ -130,7 +139,7 @@ def _close_context_local_db_connections():
 
 
 @pytest.fixture(autouse=True)
-def _restore_app_registry():
+def _restore_app_registry() -> Iterator[None]:
     """Leave ``django.apps.apps`` holding exactly the models the test found.
 
     Django registers a model in ``django.apps.apps.all_models[app_label]`` at class

@@ -18,6 +18,7 @@ model.
 
 import sys
 import types
+from collections.abc import Iterator
 from enum import Enum
 from io import StringIO
 from typing import NewType
@@ -31,6 +32,8 @@ from django.db import models
 from django.utils.module_loading import import_string
 from strawberry import relay
 from strawberry.schema.name_converter import NameConverter
+from strawberry.types.base import StrawberryObjectDefinition
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types, strawberry_config
 from django_strawberry_framework.management.commands.inspect_django_type import (
@@ -45,14 +48,14 @@ from tests.optimizer import _link_models
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
     registry.clear()
 
 
-def _make_test_module(monkeypatch, **attrs):
+def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object):
     module = types.ModuleType("test_module")
     for key, value in attrs.items():
         setattr(module, key, value)
@@ -60,7 +63,7 @@ def _make_test_module(monkeypatch, **attrs):
     return module
 
 
-def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch):
+def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch: pytest.MonkeyPatch):
     """Every ambiguity candidate is a directly reusable dotted object path."""
     module_a = types.ModuleType("management_duplicate_types_a")
     module_b = types.ModuleType("management_duplicate_types_b")
@@ -72,14 +75,16 @@ def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch):
         (DjangoType,),
         {"__module__": module_a.__name__, "Meta": meta_a},
     )
-    module_a.DupType = duplicate_a
+    # basedpyright: the stub module is built at run time; ModuleType declares no DupType
+    module_a.DupType = duplicate_a  # pyright: ignore[reportAttributeAccessIssue]
     meta_b = type("Meta", (), {"model": Item, "fields": ("id", "name")})
     duplicate_b = type(
         "DupType",
         (DjangoType,),
         {"__module__": module_b.__name__, "Meta": meta_b},
     )
-    module_b.DupType = duplicate_b
+    # basedpyright: the stub module is built at run time; ModuleType declares no DupType
+    module_b.DupType = duplicate_b  # pyright: ignore[reportAttributeAccessIssue]
 
     path_a = f"{module_a.__name__}.DupType"
     path_b = f"{module_b.__name__}.DupType"
@@ -105,12 +110,13 @@ def test_schema_help_documents_naming_and_cold_process_requirements():
     )
 
 
-def test_schema_option_uses_schema_naming_configuration(monkeypatch):
+def test_schema_option_uses_schema_naming_configuration(monkeypatch: pytest.MonkeyPatch):
     """``--schema`` makes object and scalar names match that schema's actual SDL."""
 
     class PrefixedNames(NameConverter):
-        def from_object(self, definition):
-            return f"Api{super().from_object(definition)}"
+        @override
+        def from_object(self, object_type: StrawberryObjectDefinition) -> str:
+            return f"Api{super().from_object(object_type)}"
 
     TokenValue = NewType("TokenValue", str)
     token_definition = strawberry.scalar(name="OpaqueToken", serialize=str)
@@ -120,6 +126,8 @@ def test_schema_option_uses_schema_naming_configuration(monkeypatch):
             model = Category
             primary = True
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemRefType(DjangoType):
         description: TokenValue
@@ -161,7 +169,9 @@ def test_schema_option_uses_schema_naming_configuration(monkeypatch):
     assert "description: OpaqueToken!" in sdl
 
 
-def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(monkeypatch):
+def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A custom ``NameConverter``'s SDL name resolves as a bare name AND titles the table.
 
     The operator pastes the name they see in the schema (``ApiItemRefType`` under a
@@ -173,14 +183,17 @@ def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(monkeypatch
     """
 
     class PrefixedNames(NameConverter):
-        def from_object(self, definition):
-            return f"Api{super().from_object(definition)}"
+        @override
+        def from_object(self, object_type: StrawberryObjectDefinition) -> str:
+            return f"Api{super().from_object(object_type)}"
 
     class CategoryType(DjangoType):
         class Meta:
             model = Category
             primary = True
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryType
 
     class ItemRefType(DjangoType):
         class Meta:
@@ -212,7 +225,7 @@ def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(monkeypatch
     assert title.startswith("ApiItemRefType  (model:")
 
 
-def test_abstract_base_without_definition_raises_command_error(monkeypatch):
+def test_abstract_base_without_definition_raises_command_error(monkeypatch: pytest.MonkeyPatch):
     # A DjangoType subclass with no Meta never registers a definition.
     class AbstractBase(DjangoType):
         pass
@@ -222,7 +235,7 @@ def test_abstract_base_without_definition_raises_command_error(monkeypatch):
         call_command("inspect_django_type", "test_module.AbstractBase")
 
 
-def test_unfinalized_type_raises_command_error(monkeypatch):
+def test_unfinalized_type_raises_command_error(monkeypatch: pytest.MonkeyPatch):
     # A concrete registered DjangoType whose definition.finalized is False
     # (finalize_django_types() has not run) is a distinct branch from the
     # no-definition case above.
@@ -240,7 +253,7 @@ def test_unfinalized_type_raises_command_error(monkeypatch):
 def test_matched_scalar_key_names_supported_mro_ancestor():
     # A consumer subclass of a supported field must report the SCALAR_MAP row
     # that actually fired (the matched MRO ancestor), not its own concrete class.
-    class CustomTextField(models.TextField):
+    class CustomTextField(models.TextField[str, str]):
         pass
 
     assert _matched_scalar_key(CustomTextField()) == "TextField"
@@ -261,7 +274,9 @@ def test_sdl_type_name_ignores_inherited_strawberry_definition():
     definition = types.SimpleNamespace(graphql_type_name="PendingAlias")
 
     assert "__strawberry_definition__" not in PendingChild.__dict__
-    assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"
+    # basedpyright: a plain stand-in class and a stand-in definition carrying only the slots the
+    # code under test reads; _sdl_type_name types them as type[DjangoType] and DjangoTypeDefinition
+    assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"  # pyright: ignore[reportArgumentType]
 
 
 def test_render_annotation_renders_multi_member_union():
@@ -295,6 +310,8 @@ def test_inspect_unresolved_forward_ref_relation_raises_command_error():
             model = Category
             fields = ("id", "items")
 
+    assert registry.get(Category) is CatType
+
     finalize_django_types()
     with pytest.raises(CommandError, match=r"unresolved Strawberry forward reference"):
         call_command("inspect_django_type", "CatType")
@@ -322,6 +339,8 @@ def test_inspect_direct_relay_node_inheritance_suppresses_pk_row():
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryNode
 
     finalize_django_types()
     out = StringIO()
@@ -353,6 +372,8 @@ def test_inspect_one_to_one_pk_on_relay_type_reports_relation_row():
             model = Patron
             primary = True
             fields = ("id", "name")
+
+    assert registry.get(Patron) is InspRelPkTargetType
 
     class InspRelPkProfileType(DjangoType):
         class Meta:
@@ -398,11 +419,15 @@ def test_inspect_mti_parent_link_pk_on_relay_type_reports_relation_row():
             primary = True
             fields = ("id", "name")
 
+    assert registry.get(Venue) is InspRelPkParentType
+
     class InspRelPkChildType(DjangoType):
         class Meta:
             model = LendingDesk
             fields = ("venue_ptr", "window_count")
             interfaces = (relay.Node,)
+
+    assert registry.get(LendingDesk) is InspRelPkChildType
 
     finalize_django_types()
     out = StringIO()
@@ -430,12 +455,16 @@ def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
             fields = ("id", "name")
             name = "Category"
 
+    assert registry.get(Category) is RenamedCategoryType
+
     class ItemRefType(DjangoType):
         name: State
 
         class Meta:
             model = Item
             fields = ("id", "name", "category")
+
+    assert registry.get(Item) is ItemRefType
 
     finalize_django_types()
     out = StringIO()
@@ -458,7 +487,7 @@ def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
     ],
     ids=["two_column_fo", "one_column_fo", "to_field_fk"],
 )
-def test_inspect_labels_a_forward_foreign_object_by_its_link(child_name, label):
+def test_inspect_labels_a_forward_foreign_object_by_its_link(child_name: str, label: str):
     """A forward ``ForeignObject`` row reads ``forward ForeignObject``; a ``ForeignKey`` ``forward FK``.
 
     Only a ``ForeignKey`` (any ``to_field``) stores the link in a column of its
@@ -498,10 +527,14 @@ def test_bare_name_meta_name_collision_with_python_name_is_ambiguous():
             fields = ("id", "name")
             name = "ItemType"
 
+    assert registry.get(Category) is CategoryView
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name")
+
+    assert registry.get(Item) is ItemType
 
     finalize_django_types()
     with pytest.raises(CommandError, match=r"ItemType is ambiguous") as exc_info:

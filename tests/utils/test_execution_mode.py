@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 import strawberry
+from strawberry.types import ExecutionResult
 
 from django_strawberry_framework import DjangoSchema, ErrorPolicy, SyncMisuseError
 from django_strawberry_framework.utils.execution_mode import (
@@ -84,8 +85,13 @@ async def test_a_streamed_operation_is_asynchronous_too():
     """``stream`` and ``subscribe`` come through the same flag as ``execute``."""
     stream = await _schema().stream("{ readings }")
     frames = [frame async for frame in stream]
+    data: list[object] = []
+    for frame in frames:
+        # An operation without ``@defer``/``@stream`` yields whole results, never patch frames.
+        assert isinstance(frame, ExecutionResult)
+        data.append(frame.data)
 
-    assert [frame.data for frame in frames] == [{"readings": "OperationMode.ASYNC|True|True"}]
+    assert data == [{"readings": "OperationMode.ASYNC|True|True"}]
 
 
 @pytest.mark.asyncio
@@ -106,6 +112,7 @@ async def test_a_synchronous_operation_inside_a_running_loop_stays_synchronous()
     refused = schema.execute_sync("{ readings }")
 
     assert refused.data is None
+    assert refused.errors is not None
     assert isinstance(refused.errors[0].original_error, SyncMisuseError)
     assert "await schema.execute" in str(refused.errors[0])
     assert "worker thread" in str(refused.errors[0])

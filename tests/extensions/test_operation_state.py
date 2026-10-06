@@ -30,12 +30,22 @@ import asyncio
 import contextvars
 import gc
 import weakref
-from collections.abc import AsyncGenerator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterable,
+)
 from types import SimpleNamespace
+from typing import TypedDict
 
 import pytest
 import strawberry
 from strawberry.extensions.base_extension import SchemaExtension
+from strawberry.types import ExecutionContext, ExecutionResult
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoSchema
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -68,6 +78,13 @@ from django_strawberry_framework.utils.execution_mode import (
 from django_strawberry_framework.utils.operation_lease import OperationLease
 
 
+class _NestingSeen(TypedDict):
+    """The nesting answer of each operation run, and whether the inner one has run."""
+
+    nested_rows: list[bool]
+    ran: bool
+
+
 @strawberry.type
 class _Query:
     """One field, so an operation exists to bind state for."""
@@ -77,26 +94,28 @@ class _Query:
         return "hi"
 
 
-class _Probe(_OperationBoundExtension):
+class _Probe(_OperationBoundExtension[OperationState]):
     """An operation-bound extension that records what it saw, per hook."""
 
     def __init__(self) -> None:
         super().__init__()
         self.seen: list[object] = []
 
+    @override
     def on_operation(self):
         """Record the context bound for this operation, on both halves."""
         self.seen.append(self.execution_context)
         yield
         self.seen.append(self.execution_context)
 
-    def get_results(self) -> dict:
+    @override
+    def get_results(self) -> dict[str, object]:
         """Record what result collection sees, which upstream runs after teardown."""
         self.seen.append(("results", self.execution_context))
         return {}
 
 
-class _SilentProbe(_OperationBoundExtension):
+class _SilentProbe(_OperationBoundExtension[OperationState]):
     """An operation-bound extension that holds the hook without holding the operation.
 
     The retention rows take a weak reference to a request context and assert it
@@ -107,15 +126,18 @@ class _SilentProbe(_OperationBoundExtension):
     runner. This one binds and records nothing.
     """
 
+    @override
     def on_operation(self):
         """Bind for the operation and keep no part of it."""
         yield
 
 
-class _Unbuilt(_OperationBoundExtension):
+class _Unbuilt(_OperationBoundExtension[OperationState]):
     """A subclass whose ``__init__`` never reaches the one that settles the carrier."""
 
-    def __init__(self) -> None:
+    # basedpyright: the stand-in skips the base constructor on purpose: the test
+    # proves a subclass with no settled carrier is refused
+    def __init__(self) -> None:  # pyright: ignore[reportMissingSuperCall]
         pass
 
 
@@ -143,7 +165,9 @@ def test_an_assignment_under_a_django_schema_records_nothing_to_be_read_later():
     extension = _Probe()
     context = SimpleNamespace(schema=DjangoSchema(query=_Query))
 
-    extension.execution_context = context
+    # basedpyright: the stand-in context written through the engine's assignment path is the
+    # input under test; the extension types the slot as ExecutionContext | None
+    extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
 
     assert extension.execution_context is None
     assert extension._operation_state() is None
@@ -165,7 +189,9 @@ def test_the_runner_builds_every_state_from_the_context_it_is_handed():
     extensions = schema.get_extensions(sync=True)
     probe = next(entry for entry in extensions if isinstance(entry, _Probe))
 
-    runner = schema.create_extensions_runner(context, extensions)
+    # basedpyright: a stand-in execution context carrying only the slots the code under test reads;
+    # create_extensions_runner types the parameter as ExecutionContext
+    runner = schema.create_extensions_runner(context, extensions)  # pyright: ignore[reportArgumentType]
 
     assert probe.execution_context is None  # nothing is bound outside a scope
     with runner.operation():
@@ -178,7 +204,7 @@ def test_the_runner_builds_every_state_from_the_context_it_is_handed():
     [None, "forged"],
     ids=["none", "a-forged-context-naming-the-real-schema"],
 )
-def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned):
+def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned: str | None):
     """A resolver holds the extension, so the setter is reachable from a request.
 
     Assigning a context of its own - including one naming the real schema, which
@@ -192,13 +218,15 @@ def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned):
     class _Forged:
         """A context object a resolver could build, naming the real schema."""
 
-        def __init__(self, schema):
+        def __init__(self, schema: DjangoSchema):
             self.schema = schema
 
     forged = None if assigned is None else _Forged(schema)
     forged_ref = None if forged is None else weakref.ref(forged)
 
-    shared.execution_context = forged
+    # basedpyright: the stand-in context written through the engine's assignment path is the
+    # input under test; the extension types the slot as ExecutionContext | None
+    shared.execution_context = forged  # pyright: ignore[reportAttributeAccessIssue]
     assert shared.execution_context is None
     assert shared._operation_state() is None
 
@@ -268,6 +296,7 @@ def test_a_failure_between_the_runner_and_the_operation_retains_nothing():
         """Refuse the capability probe upstream makes while building the middleware."""
 
         @classmethod
+        @override
         def _implements_resolve(cls) -> bool:
             raise RuntimeError("capability probe failed")
 
@@ -326,9 +355,10 @@ def test_a_hook_that_raises_while_setting_up_still_resets_every_binding():
     """The wrapped scope failing is not the binding failing, and both have to unwind."""
 
     class _RaisingSetup(SchemaExtension):
-        def on_operation(self):
+        @override
+        def on_operation(self) -> Generator[None, None, None]:
+            yield from ()  # a generator hook that fails before its first yield
             raise RuntimeError("setup refused")
-            yield  # unreachable, the hook raises first
 
     shared = _Probe()
     schema = DjangoSchema(query=_Query, extensions=[lambda: shared, _RaisingSetup])
@@ -367,9 +397,11 @@ async def test_a_hook_that_raises_while_setting_up_resets_on_the_async_path_too(
     """The async twin of the wrapped-scope failure."""
 
     class _RaisingSetup(SchemaExtension):
+        @override
         async def on_operation(self):
             raise RuntimeError("setup refused")
-            yield  # unreachable, the hook raises first
+            # basedpyright: the yield only makes this hook an async generator; it never runs
+            yield  # pyright: ignore[reportUnreachable]
 
     shared = _Probe()
     schema = DjangoSchema(query=_Query, extensions=[lambda: shared, _RaisingSetup])
@@ -394,6 +426,7 @@ async def test_a_closed_stream_leaves_no_state_bound_and_the_next_operation_is_c
 
     stream = await schema.stream("{ hello }")
     first = await anext(stream)
+    assert isinstance(first, ExecutionResult)
     assert first.errors is None
     await stream.aclose()
 
@@ -447,7 +480,10 @@ async def test_a_cancelled_stream_leaves_no_state_bound_either():
     ],
     ids=["resource-policy", "error-policy", "debug"],
 )
-def test_rerunning_a_constructor_on_an_accepted_extension_is_refused(factory, refusal):
+def test_rerunning_a_constructor_on_an_accepted_extension_is_refused(
+    factory: type[SchemaExtension],
+    refusal: str,
+):
     """An accepted instance is reachable from every resolver, and so is its ``__init__``.
 
     A second call would mint a second binding carrier, leaving the runner
@@ -478,7 +514,7 @@ def test_rerunning_the_optimizer_constructor_is_refused():
 #: One attack per row, and one row per test node: they are independent attempts
 #: on the same object, so an aggregate node would report the first failure and
 #: leave the rest of the matrix unrun.
-_CARRIER_ATTACKS = [
+_CARRIER_ATTACKS: list[tuple[Callable[[_Probe], object], str]] = [
     (lambda extension: setattr(extension, "execution_context", None), "ignored"),
     (lambda extension: extension.__dict__.update(_compatibility_state=None), "ignored"),
     (lambda extension: extension.__init__(), "refused"),
@@ -492,7 +528,10 @@ _CARRIER_ATTACK_IDS = ["assign-the-context", "inject-a-carrier", "rerun-the-cons
     _CARRIER_ATTACKS,
     ids=_CARRIER_ATTACK_IDS,
 )
-def test_a_resolver_cannot_reach_the_binding_carrier(attack, expected):
+def test_a_resolver_cannot_reach_the_binding_carrier(
+    attack: Callable[[_Probe], object],
+    expected: str,
+):
     """The mechanism that CARRIES operation state is state in its own right.
 
     Distinct from the configuration-tamper rows: those are about the policy a
@@ -561,7 +600,9 @@ def test_a_plain_strawberry_schema_gets_operation_local_state_from_the_instance(
     extension = _Probe()
     context = SimpleNamespace(schema=strawberry.Schema(query=_Query))
 
-    extension.execution_context = context
+    # basedpyright: the stand-in context written through the engine's assignment path is the
+    # input under test; the extension types the slot as ExecutionContext | None
+    extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
 
     assert extension.execution_context is context
     state = extension._operation_state()
@@ -584,7 +625,9 @@ def test_a_context_that_refuses_to_say_which_schema_it_belongs_to_takes_the_loca
     extension = _Probe()
     context = _Hostile()
 
-    extension.execution_context = context
+    # basedpyright: the stand-in context written through the engine's assignment path is the
+    # input under test; the extension types the slot as ExecutionContext | None
+    extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
 
     assert extension.execution_context is context
 
@@ -592,7 +635,7 @@ def test_a_context_that_refuses_to_say_which_schema_it_belongs_to_takes_the_loca
 def test_nested_execution_restores_the_outer_operations_state():
     """The inner operation binds its own state and the outer one gets its own back."""
     shared = _Probe()
-    outer_during: list[object] = []
+    outer_during: list[tuple[object, object]] = []
 
     @strawberry.type
     class NestingQuery:
@@ -614,6 +657,7 @@ def test_nested_execution_restores_the_outer_operations_state():
     assert result.errors is None
     before, after = outer_during[0]
     assert before is after
+    assert isinstance(after, ExecutionContext)
     assert after.query == "{ nested }"
 
 
@@ -628,12 +672,16 @@ class _RefusingAssignment(SchemaExtension):
     armed = True
 
     @property
+    @override
     def execution_context(self):
         """Whatever this extension was last given, which is nothing while armed."""
         return self.__dict__.get("_context")
 
     @execution_context.setter
-    def execution_context(self, value) -> None:
+    # basedpyright: the hostile shape under test, an ``execution_context`` property whose setter
+    # refuses assignment while armed; the checker rejects any property overriding a base class
+    # attribute
+    def execution_context(self, value: ExecutionContext | None) -> None:  # pyright: ignore[reportIncompatibleVariableOverride]
         if type(self).armed:
             raise RuntimeError("assignment refused")
         self.__dict__["_context"] = value
@@ -643,17 +691,17 @@ class _RequestContext:
     """A request context value a weak reference can be taken of."""
 
 
-async def _run_execute_sync(schema, context_value):
+async def _run_execute_sync(schema: DjangoSchema, context_value: object):
     """Run one synchronous operation, awaited like its two siblings."""
     schema.execute_sync("{ hello }", context_value=context_value)
 
 
-async def _run_execute(schema, context_value):
+async def _run_execute(schema: DjangoSchema, context_value: object):
     """Run one asynchronous operation."""
     await schema.execute("{ hello }", context_value=context_value)
 
 
-async def _run_stream(schema, context_value):
+async def _run_stream(schema: DjangoSchema, context_value: object):
     """Consume one streamed operation, which is where its assignment loop runs."""
     stream = await schema.stream("{ hello }", context_value=context_value)
     async for _frame in stream:
@@ -666,7 +714,9 @@ async def _run_stream(schema, context_value):
     ids=["execute_sync", "execute", "stream"],
 )
 @pytest.mark.asyncio
-async def test_a_setter_raising_in_the_engines_assignment_loop_leaves_no_request_behind(run):
+async def test_a_setter_raising_in_the_engines_assignment_loop_leaves_no_request_behind(
+    run: Callable[[DjangoSchema, object], Awaitable[None]],
+):
     """Upstream spells the assignment loop three times, and all three run before the runner.
 
     A later entry's setter raising there is a failure with no operation teardown
@@ -704,10 +754,11 @@ def test_a_state_constructor_that_raises_retains_neither_the_context_nor_a_parti
     extensions that came before it.
     """
 
-    class _RefusingState(_OperationBoundExtension):
+    class _RefusingState(_OperationBoundExtension[OperationState]):
         """An operation-bound extension whose state constructor refuses."""
 
-        def _new_operation_state(self, execution_context):
+        @override
+        def _new_operation_state(self, execution_context: ExecutionContext):
             raise RuntimeError("state refused")
 
     shared = _Probe()
@@ -731,7 +782,20 @@ def test_a_state_constructor_that_raises_retains_neither_the_context_nor_a_parti
 # ---------------------------------------------------------------------------
 
 
-def _spawning_schema(shared, seen, release):
+async def _aclose_stream(stream: object) -> None:
+    """Close a popped ``schema.stream`` source, holding no reference past the call."""
+    assert isinstance(stream, AsyncGenerator)
+    await stream.aclose()
+
+
+async def _await_spawned_task(seen: dict[str, object]) -> None:
+    """Wait for the child task a resolver stored under ``seen["task"]``."""
+    task = seen["task"]
+    assert isinstance(task, asyncio.Future)
+    await task
+
+
+def _spawning_schema(shared: _SilentProbe, seen: dict[str, object], release: asyncio.Event):
     """A schema whose resolver starts a task that reads the extension now and later.
 
     The child's first read happens while the operation is still bound and is
@@ -770,7 +834,7 @@ async def test_a_task_started_inside_the_operation_reads_nothing_once_it_ends():
     copy answers with nothing once the operation is over.
     """
     shared = _SilentProbe()
-    seen: dict = {}
+    seen: dict[str, object] = {}
     release = asyncio.Event()
     schema = _spawning_schema(shared, seen, release)
     sentinel = _RequestContext()
@@ -781,7 +845,7 @@ async def test_a_task_started_inside_the_operation_reads_nothing_once_it_ends():
 
     del sentinel, result
     release.set()
-    await seen["task"]
+    await _await_spawned_task(seen)
 
     assert seen["bound_during"] is True
     assert seen["state"] is None
@@ -802,7 +866,7 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
     the task inside nothing when it finishes.
     """
     shared = _SilentProbe()
-    seen: dict = {}
+    seen: dict[str, object] = {}
     release = asyncio.Event()
 
     @strawberry.type
@@ -822,7 +886,9 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
 
         @strawberry.field
         def spawn_hello(self, info: strawberry.Info) -> str:
-            seen["nested_rows"] = [*seen.get("nested_rows", []), operation_is_nested()]
+            rows = seen.get("nested_rows", [])
+            assert isinstance(rows, list)
+            seen["nested_rows"] = [*rows, operation_is_nested()]
             return "hi"
 
     schema = DjangoSchema(query=SpawningQuery, extensions=[lambda: shared])
@@ -830,8 +896,9 @@ async def test_a_surviving_task_that_starts_its_own_operation_ends_with_nothing_
     assert result.errors is None, result.errors
 
     release.set()
-    await seen["task"]
+    await _await_spawned_task(seen)
 
+    assert isinstance(seen["inner"], ExecutionResult)
     assert seen["inner"].data == {"spawnHello": "hi"}
     assert seen["after"] is None
     assert seen["before"] is False
@@ -852,18 +919,19 @@ async def test_a_child_released_during_result_collection_reads_a_closed_binding(
     answers the second.
     """
     shared = _SilentProbe()
-    seen: dict = {}
+    seen: dict[str, object] = {}
     release = asyncio.Event()
 
     class _Collecting(SchemaExtension):
         """Pauses result collection long enough for the resolver's child to run."""
 
-        async def get_results(self) -> dict:
+        @override
+        async def get_results(self) -> dict[str, object]:
             """Release the child, wait for it, and record what the runner still owns."""
             if "during" in seen:
                 return {}
             release.set()
-            await seen["task"]
+            await _await_spawned_task(seen)
             seen["during"] = shared._operation_state()
             return {}
 
@@ -901,11 +969,11 @@ async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either():
     released once the stream is closed.
     """
     shared = _SilentProbe()
-    seen: dict = {}
+    seen: dict[str, object] = {}
     release = asyncio.Event()
     started = asyncio.Event()
     schema = _spawning_schema(shared, seen, release)
-    request = {"context": _RequestContext()}
+    request: dict[str, object] = {"context": _RequestContext()}
     reference = weakref.ref(request["context"])
 
     async def _drive():
@@ -931,11 +999,11 @@ async def test_a_task_outliving_a_cancelled_stream_reads_nothing_either():
     # (``django_strawberry_framework/consumers.py::_stop_aware_results`` closes
     # the source at revocation); left to the asyncgen finalizer, ``reference()``
     # would answer on the interpreter's timing.
-    await request.pop("stream").aclose()
+    await _aclose_stream(request.pop("stream"))
     request.clear()
     del task
     release.set()
-    await seen["task"]
+    await _await_spawned_task(seen)
 
     assert seen["bound_during"] is True
     assert seen["state"] is None
@@ -952,12 +1020,13 @@ async def test_result_collection_is_inside_the_operation_it_collects_for():
     scope has unwound, so this is the one place where "the outer operation's
     hooks have all returned" and "the outer operation is over" come apart.
     """
-    seen: dict = {"nested_rows": [], "ran": False}
+    seen: _NestingSeen = {"nested_rows": [], "ran": False}
 
     class _Collecting(SchemaExtension):
         """A consumer extension that runs its own operation while results are collected."""
 
-        async def get_results(self) -> dict:
+        @override
+        async def get_results(self) -> dict[str, object]:
             """Run one inner operation from the outer operation's collection scope."""
             if seen["ran"]:
                 return {}
@@ -968,6 +1037,7 @@ async def test_result_collection_is_inside_the_operation_it_collects_for():
     class _Inner(SchemaExtension):
         """Records the nesting answer of whichever operation it runs in."""
 
+        @override
         def on_operation(self):
             """Record what the operation about to run answers, once per operation."""
             seen["nested_rows"].append(operation_is_nested())
@@ -989,11 +1059,12 @@ def test_a_nested_runner_knows_it_is_inside_another_operation():
     from a consumer extension's teardown begins after every optimizer hook of
     the outer operation has already returned, and is still inside it.
     """
-    seen: dict = {"nested_rows": [], "ran": False}
+    seen: _NestingSeen = {"nested_rows": [], "ran": False}
 
     class _Teardown(SchemaExtension):
         """A consumer extension that runs its own operation at teardown."""
 
+        @override
         def on_operation(self):
             """Run one inner operation once the outer operation's hooks are done."""
             yield
@@ -1005,6 +1076,7 @@ def test_a_nested_runner_knows_it_is_inside_another_operation():
     class _Inner(SchemaExtension):
         """Records the nesting answer of whichever operation it runs in."""
 
+        @override
         def on_operation(self):
             """Record what the operation about to run answers, once per operation."""
             seen["nested_rows"].append(operation_is_nested())
@@ -1028,10 +1100,10 @@ _STREAM_OPTIMIZER = DjangoOptimizerExtension()
 
 
 def _ticking_schema(
-    seen,
-    frames=3,
-    extensions=(),
-    rows=None,
+    seen: dict[str, object],
+    frames: int = 3,
+    extensions: Iterable[Callable[[], SchemaExtension]] = (),
+    rows: int | None = None,
 ):
     """A subscription whose resolver records what each frame is bound to."""
 
@@ -1042,7 +1114,9 @@ def _ticking_schema(
             """Record one row per frame, then yield it."""
             try:
                 for index in range(frames):
-                    seen["rows"].append(
+                    frame_rows = seen["rows"]
+                    assert isinstance(frame_rows, list)
+                    frame_rows.append(
                         (
                             operation_is_nested(),
                             armed_resource_policy() is not None,
@@ -1058,24 +1132,26 @@ def _ticking_schema(
         query=_Query,
         subscription=TickingSubscription,
         extensions=list(extensions),
-        **({} if rows is None else {"resource_policy": ResourcePolicy(max_list_rows=rows)}),
+        resource_policy=None if rows is None else ResourcePolicy(max_list_rows=rows),
     )
 
 
-def _read_in_the_copied_context(seen) -> dict:
+def _read_in_the_copied_context(seen: dict[str, object]) -> dict[str, object]:
     """What a context copied while a frame was produced answers afterwards."""
-    read: dict = {}
+    read: dict[str, object] = {}
 
     def _read() -> None:
         read["armed"] = armed_resource_policy()
         read["nested_scope"] = _RUNNER_SCOPES.get()
         read["optimizer"] = active_optimizer()
 
-    seen["copied"].run(_read)
+    copied = seen["copied"]
+    assert isinstance(copied, contextvars.Context)
+    copied.run(_read)
     return read
 
 
-async def _frame_in_its_own_task(stream):
+async def _frame_in_its_own_task(stream: AsyncIterator[ExecutionResult]):
     """Pull one frame from ``stream`` in a task of its own."""
     return await asyncio.ensure_future(stream.__anext__())
 
@@ -1091,7 +1167,7 @@ async def test_a_stream_frame_produced_in_another_task_is_bound_to_its_operation
     admitted under. The runner rebinds around each resumption, so a frame
     produced in a second task is the same operation as the frame before it.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     schema = _ticking_schema(seen, extensions=[lambda: _STREAM_OPTIMIZER])
     stream = await schema.subscribe("subscription { ticks }")
 
@@ -1115,12 +1191,14 @@ async def test_a_stream_resumed_with_asend_from_another_task_is_bound_the_same_w
     outside its own operation. The row after this one is the control: the frame
     is the next one either way, and both are bound.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     schema = _ticking_schema(seen, extensions=[lambda: _STREAM_OPTIMIZER])
     stream = await schema.subscribe("subscription { ticks }")
 
     first = await _frame_in_its_own_task(stream)
-    second = await asyncio.ensure_future(stream.asend("discarded"))
+    # basedpyright: the sent value is discarded by the stream under test; strawberry types the
+    # subscription stream's send type as None
+    second = await asyncio.ensure_future(stream.asend("discarded"))  # pyright: ignore[reportArgumentType]
 
     assert first.data == {"ticks": "tick-0"}
     assert second.data == {"ticks": "tick-1"}
@@ -1138,7 +1216,7 @@ async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal():
     disarmed, nothing bound, the resolver's own ``finally`` run, and the request
     released.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     shared = _SilentProbe()
     schema = _ticking_schema(seen, extensions=[lambda: shared, lambda: _STREAM_OPTIMIZER])
     context = _RequestContext()
@@ -1152,6 +1230,7 @@ async def test_a_stream_closed_from_another_task_leaves_every_scope_terminal():
 
     assert seen["closed"] is True
     assert read["armed"] is None
+    assert isinstance(read["nested_scope"], OperationLease)
     assert read["nested_scope"].held() is None
     assert read["optimizer"] is None
     assert shared.execution_context is None
@@ -1170,7 +1249,7 @@ async def test_a_stream_cancelled_in_one_task_is_closable_from_another():
     a client disconnect. Closing from the connection's own task is what runs the
     teardown, and it must not raise a token error on the way.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     schema = _ticking_schema(seen)
     stream = await schema.subscribe("subscription { ticks }")
 
@@ -1198,7 +1277,7 @@ async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operati
     both have to be the operation's own: the resolver's ``finally``, and the
     teardown that disarms what the operation armed.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     schema = _ticking_schema(seen)
     stream = await schema.subscribe("subscription { ticks }")
     await _frame_in_its_own_task(stream)
@@ -1211,9 +1290,11 @@ async def test_a_stream_thrown_into_from_another_task_tears_down_its_own_operati
     final = await asyncio.ensure_future(_throw_and_close())
     read = _read_in_the_copied_context(seen)
 
+    assert final.errors is not None
     assert [error.message for error in final.errors] == ["dropped"]
     assert seen["closed"] is True
     assert read["armed"] is None
+    assert isinstance(read["nested_scope"], OperationLease)
     assert read["nested_scope"].held() is None
 
 
@@ -1233,7 +1314,7 @@ async def test_a_paused_stream_leaves_no_binding_in_the_task_that_drove_it():
     operation, and an unrelated call made there has to be answered by the
     context it was handed rather than by a paused stream's ceiling.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     schema = _ticking_schema(seen, rows=7)
     stream = await schema.subscribe("subscription { ticks }")
     strict = SimpleNamespace(context={})
@@ -1262,8 +1343,8 @@ async def test_two_streams_interleaved_in_one_task_each_keep_their_own_budget():
     any two frames, and closing one stream must not change what the other's next
     frame is bounded by.
     """
-    narrow: dict = {"rows": []}
-    wide: dict = {"rows": []}
+    narrow: dict[str, object] = {"rows": []}
+    wide: dict[str, object] = {"rows": []}
     narrow_stream = await _ticking_schema(narrow, rows=3).subscribe("subscription { ticks }")
     wide_stream = await _ticking_schema(wide, rows=9).subscribe("subscription { ticks }")
 
@@ -1291,9 +1372,9 @@ async def test_a_stream_driven_inside_an_operation_restores_the_outer_budget():
     one bound would answer the outer request with the inner ceiling. The resume
     restores the exact predecessor in the task it is running in.
     """
-    inner: dict = {"rows": []}
+    inner: dict[str, object] = {"rows": []}
     inner_schema = _ticking_schema(inner, rows=7)
-    between: list = []
+    between: list[object] = []
 
     @strawberry.type
     class DrivingQuery:
@@ -1323,7 +1404,7 @@ async def test_a_child_started_after_a_frame_was_yielded_copies_no_live_budget()
     bound there travels with it - and a job that outlived nothing at all would
     be bounded by a request still in flight.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
     schema = _ticking_schema(seen, rows=7)
     stream = await schema.subscribe("subscription { ticks }")
 
@@ -1375,7 +1456,9 @@ class _RefusingToSaySchema:
         "none",
     ],
 )
-def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(forge):
+def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(
+    forge: Callable[[], object],
+):
     """The engine's assignment is the package's signal, not the consumer's channel.
 
     A shared extension is reachable from every resolver the schema serves, and
@@ -1387,7 +1470,7 @@ def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(forge
     the request.
     """
     shared = _SilentProbe()
-    forged: dict = {}
+    forged: dict[str, object] = {}
 
     @strawberry.type
     class TamperingQuery:
@@ -1396,7 +1479,9 @@ def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(forge
             """Assign one forged value to the shared extension."""
             value = forge()
             forged["value"] = value
-            shared.execution_context = value
+            # basedpyright: the stand-in context written through the engine's assignment path is the
+            # input under test; the extension types the slot as ExecutionContext | None
+            shared.execution_context = value  # pyright: ignore[reportAttributeAccessIssue]
             return "tampered"
 
     schema = DjangoSchema(query=TamperingQuery, extensions=[lambda: shared])
@@ -1421,7 +1506,7 @@ async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
     it would poison is every direct read the process makes afterwards.
     """
     shared = _SilentProbe()
-    seen: dict = {}
+    seen: dict[str, object] = {}
     release = asyncio.Event()
 
     @strawberry.type
@@ -1434,7 +1519,9 @@ async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
                 await release.wait()
                 forged = _Forged()
                 seen["reference"] = weakref.ref(forged)
-                shared.execution_context = forged
+                # basedpyright: the stand-in context written through the engine's assignment path is the
+                # input under test; the extension types the slot as ExecutionContext | None
+                shared.execution_context = forged  # pyright: ignore[reportAttributeAccessIssue]
 
             seen["task"] = asyncio.ensure_future(child())
             return "spawned"
@@ -1443,11 +1530,13 @@ async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
     assert (await schema.execute("{ spawn }")).errors is None
 
     release.set()
-    await seen["task"]
+    await _await_spawned_task(seen)
 
     assert shared.execution_context is None
     gc.collect()
-    assert seen["reference"]() is None
+    reference = seen["reference"]
+    assert isinstance(reference, weakref.ref)
+    assert reference() is None
 
 
 def test_an_extension_a_raw_schema_used_first_is_managed_once_a_django_schema_runs_it():
@@ -1478,14 +1567,16 @@ def test_an_extension_a_raw_schema_used_first_is_managed_once_a_django_schema_ru
 # The operation's executor mode
 
 
-def _mode_schema(seen):
+def _mode_schema(seen: dict[str, object]):
     """A schema whose resolver records the mode, and can start a nested operation."""
 
     @strawberry.type
     class ModeQuery:
         @strawberry.field
         def mode(self) -> str:
-            seen.setdefault("rows", []).append(current_operation_mode())
+            rows = seen.setdefault("rows", [])
+            assert isinstance(rows, list)
+            rows.append(current_operation_mode())
             seen.setdefault("copied", contextvars.copy_context())
             return "read"
 
@@ -1502,7 +1593,9 @@ def test_a_chain_that_declares_no_mode_binds_none():
     to ambient dispatch, which is what upstream would have done anyway.
     """
     runner = DjangoExtensionsRunner(
-        execution_context=SimpleNamespace(),
+        # basedpyright: a stand-in execution context carrying only the slots the code under test
+        # reads; DjangoExtensionsRunner types the parameter as ExecutionContext
+        execution_context=SimpleNamespace(),  # pyright: ignore[reportArgumentType]
         extensions=[SchemaExtension()],
     )
 
@@ -1520,7 +1613,7 @@ async def test_a_nested_operation_restores_the_outer_mode_on_the_way_out():
     returns, the outer operation is asynchronous again - and nothing about the
     inner one may survive into it.
     """
-    seen: dict = {}
+    seen: dict[str, object] = {}
     inner_schema, _ = _mode_schema(seen)
 
     @strawberry.type
@@ -1550,14 +1643,16 @@ async def test_a_task_that_copied_an_operations_context_reads_no_mode():
     resolver's background task would otherwise go on reading the mode of an
     operation that finished - and answer a field factory with it.
     """
-    seen: dict = {}
+    seen: dict[str, object] = {}
     schema, _ = _mode_schema(seen)
 
     assert (await schema.execute("{ mode }")).errors is None
     assert seen["rows"] == [OperationMode.ASYNC]
 
-    read: dict = {}
-    seen["copied"].run(lambda: read.update(mode=current_operation_mode()))
+    read: dict[str, OperationMode | None] = {}
+    copied = seen["copied"]
+    assert isinstance(copied, contextvars.Context)
+    copied.run(lambda: read.update(mode=current_operation_mode()))
 
     assert read == {"mode": None}
 
@@ -1571,7 +1666,7 @@ async def test_every_frame_of_a_stream_carries_the_operations_mode():
     wrapper rebinds it in the driving task, which is what keeps a subscription's
     resolvers from falling back to the ambient loop halfway through.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
 
     @strawberry.type
     class TickingSubscription:
@@ -1579,7 +1674,9 @@ async def test_every_frame_of_a_stream_carries_the_operations_mode():
         async def ticks(self) -> AsyncGenerator[str, None]:
             """Record the mode this frame is produced under, then yield it."""
             for index in range(2):
-                seen["rows"].append(current_operation_mode())
+                rows = seen["rows"]
+                assert isinstance(rows, list)
+                rows.append(current_operation_mode())
                 yield f"tick-{index}"
 
     schema = DjangoSchema(query=_Query, subscription=TickingSubscription)
@@ -1602,7 +1699,7 @@ async def test_a_cancelled_stream_leaves_no_mode_bound():
     binding has to come off that path too, or the next operation in that task
     starts with a mode that belongs to a request nobody is serving.
     """
-    seen: dict = {"rows": []}
+    seen: dict[str, object] = {"rows": []}
 
     @strawberry.type
     class TickingSubscription:
@@ -1610,7 +1707,9 @@ async def test_a_cancelled_stream_leaves_no_mode_bound():
         async def ticks(self) -> AsyncGenerator[str, None]:
             """Yield forever, so cancellation is the only way out."""
             while True:
-                seen["rows"].append(current_operation_mode())
+                rows = seen["rows"]
+                assert isinstance(rows, list)
+                rows.append(current_operation_mode())
                 yield "tick"
 
     schema = DjangoSchema(query=_Query, subscription=TickingSubscription)
@@ -1644,12 +1743,13 @@ async def test_an_operation_that_fails_in_front_of_its_hooks_binds_no_mode_eithe
     """
 
     class _RaisingSetup(SchemaExtension):
-        def on_operation(self):
+        @override
+        def on_operation(self) -> Generator[None, None, None]:
             """Fail where the operation scope would otherwise open."""
+            yield from ()  # a generator hook that fails before its first yield
             raise RuntimeError("setup")
-            yield  # unreachable, the hook raises first
 
-    seen: dict = {}
+    seen: dict[str, object] = {}
     _, mode_query = _mode_schema(seen)
     failing = DjangoSchema(query=mode_query, extensions=[_RaisingSetup])
 

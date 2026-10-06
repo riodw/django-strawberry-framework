@@ -5,6 +5,8 @@ building a throwaway ``strawberry.Schema``, before any HTTP view. Live
 finalized types live in ``examples/fakeshop/test_query/test_schema_composition_api.py``.
 """
 
+from collections.abc import Iterator
+
 import pytest
 import strawberry
 from apps.products.models import Item
@@ -14,7 +16,7 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield

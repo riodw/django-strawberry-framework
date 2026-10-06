@@ -16,17 +16,20 @@ injectivity -- construction and private helpers a request cannot name.
 from __future__ import annotations
 
 import typing
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, get_args, get_origin
+from typing import Protocol, get_args, get_origin, runtime_checkable
 
 import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
+from django.db.models import QuerySet
 from django_filters import BaseInFilter, BooleanFilter, CharFilter, ChoiceFilter
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -77,8 +80,21 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
 
 
+def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
+    """``input_cls`` as a constructor: its keyword fields are generated at run time."""
+    return input_cls
+
+
+@runtime_checkable
+class _ScratchInput(Protocol):
+    """The two fields the scratch ``build_input_class`` call generates."""
+
+    name: str | None
+    count: int | None
+
+
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     registry.clear()
     _field_specs.clear()
     _helper_referenced_filtersets.clear()
@@ -206,9 +222,13 @@ def test_logic_operator_descriptors_and_mappings():
     assert isinstance(LOGIC_OPERATORS_BY_WIRE, MappingProxyType)
     assert isinstance(LOGIC_OPERATORS_BY_PYTHON_ATTR, MappingProxyType)
     with pytest.raises(TypeError):
-        LOGIC_OPERATORS_BY_WIRE["custom"] = LOGIC_OP_AND
+        # basedpyright: the table is a read-only MappingProxyType; the test proves item assignment
+        # raises TypeError
+        LOGIC_OPERATORS_BY_WIRE["custom"] = LOGIC_OP_AND  # pyright: ignore[reportIndexIssue]
     with pytest.raises(TypeError):
-        LOGIC_OPERATORS_BY_PYTHON_ATTR["custom_"] = LOGIC_OP_AND
+        # basedpyright: the table is a read-only MappingProxyType; the test proves item assignment
+        # raises TypeError
+        LOGIC_OPERATORS_BY_PYTHON_ATTR["custom_"] = LOGIC_OP_AND  # pyright: ignore[reportIndexIssue]
     assert LOGIC_OP_AND.is_sequence is True
     assert LOGIC_OP_OR.is_sequence is True
     assert LOGIC_OP_NOT.is_sequence is False
@@ -244,7 +264,8 @@ def test_build_input_class_returns_strawberry_input_decorated_dataclass():
         "ScratchInput",
         [("name", str | None, {"default": None}), ("count", int | None, {"default": None})],
     )
-    instance = cls(name="hi", count=3)
+    instance = _keyword_constructor(cls)(name="hi", count=3)
+    assert isinstance(instance, _ScratchInput)
     assert instance.name == "hi"
     assert instance.count == 3
     assert hasattr(cls, "__strawberry_definition__")
@@ -441,17 +462,18 @@ def test_overlap_head_emits_one_bag_with_each_lookup_keeping_its_own_form_key():
     }
 
 
+def _normalize_name_mapping(cls: type[FilterSet]) -> object:
+    return cls._normalize_input({"name": {"i_contains": "x"}})
+
+
 @pytest.mark.parametrize(
     "build",
     [
         pytest.param(_build_input_fields, id="input-build"),
-        pytest.param(
-            lambda cls: cls._normalize_input({"name": {"i_contains": "x"}}),
-            id="direct-mapping",
-        ),
+        pytest.param(_normalize_name_mapping, id="direct-mapping"),
     ],
 )
-def test_two_filters_on_one_head_lookup_slot_raise(build: Any):
+def test_two_filters_on_one_head_lookup_slot_raise(build: Callable[[type[FilterSet]], object]):
     """A declared filter and a generated one claiming one ``(head, lookup)`` slot raise.
 
     The declared ``name`` (``icontains`` over ``city``) and the generated
@@ -600,9 +622,12 @@ def test_convert_filter_to_input_annotation_rejects_unknown_method_filter():
     # `method` is set but whose `field` is `None` (the unknown-form-shape
     # case). Mutating `Filter.field` globally would leak the override
     # across tests, so we build a per-test subclass instead.
+    def _passthrough_method(qs: object, name: str, value: object) -> object:
+        return qs
+
     class _NoFieldFilter:
         extra = {}
-        method = staticmethod(lambda qs, name, value: qs)
+        method = staticmethod(_passthrough_method)
         field = None
         lookup_expr = "exact"
 
@@ -616,13 +641,16 @@ def test_convert_filter_to_input_annotation_rejects_unknown_method_filter():
     # catch-all where `method is not None and form_field is None`
     # raises.
     with pytest.raises(ConfigurationError):
-        convert_filter_to_input_annotation(f, None)
+        # basedpyright: a stand-in filter carrying only the slots the code under test reads;
+        # convert_filter_to_input_annotation types the parameter as Filter
+        convert_filter_to_input_annotation(f, None)  # pyright: ignore[reportArgumentType]
 
 
 def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed():
     """Malformed filters with raising ``__repr__`` still raise ConfigurationError."""
 
     class BadRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -633,9 +661,12 @@ def test_convert_filter_to_input_annotation_keeps_hostile_diagnostics_typed():
         lookup_expr = "exact"
 
     with pytest.raises(ConfigurationError, match="unprintable"):
-        convert_filter_to_input_annotation(NoFieldFilter(), None)
+        # basedpyright: the filter whose method repr raises is the hostile input under test;
+        # convert_filter_to_input_annotation types the parameter as Filter
+        convert_filter_to_input_annotation(NoFieldFilter(), None)  # pyright: ignore[reportArgumentType]
 
     class BadChoiceFilter(ChoiceFilter):
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -675,6 +706,7 @@ def test_normalize_input_value_encodes_globalid_object_to_wire_form():
     gid = relay.GlobalID(type_name="X", node_id="42")
     encoded = normalize_input_value(f, gid)
     assert encoded == str(gid)
+    assert isinstance(encoded, str)
     round_tripped = relay.GlobalID.from_id(encoded)
     assert (round_tripped.type_name, round_tripped.node_id) == ("X", "42")
 
@@ -778,8 +810,8 @@ def test_normalize_input_value_range_filter_drops_unset_axes_partial_range():
 
     @dataclass
     class _RangeInput:
-        start: Any = strawberry.UNSET
-        end: Any = strawberry.UNSET
+        start: object = strawberry.UNSET
+        end: object = strawberry.UNSET
 
     # Dataclass inputs with UNSET
     assert normalize_input_value(
@@ -856,6 +888,7 @@ def test_normalize_input_value_global_id_list():
     gid_b = relay.GlobalID(type_name="X", node_id="2")
     encoded = normalize_input_value(f, [gid_a, gid_b])
     assert encoded == [str(gid_a), str(gid_b)]
+    assert isinstance(encoded, list)
     decoded = [relay.GlobalID.from_id(value) for value in encoded]
     assert [(g.type_name, g.node_id) for g in decoded] == [("X", "1"), ("X", "2")]
 
@@ -975,7 +1008,7 @@ def test_filter_input_type_returns_annotated_with_lazy_module_path():
             fields = {"name": ["exact"]}
 
     result = filter_input_type(MyFilter)
-    metadata = result.__metadata__
+    metadata = get_args(result)[1:]
     # The strawberry.lazy marker is a `StrawberryLazyReference` whose
     # `module` attr carries the module path.
     assert any(getattr(marker, "module", None) == INPUTS_MODULE_PATH for marker in metadata)
@@ -990,7 +1023,7 @@ def test_filter_input_type_returns_forwardref_in_annotation_args():
             fields = {"name": ["exact"]}
 
     result = filter_input_type(MyFilter)
-    inner = result.__args__[0]
+    inner = get_args(result)[0]
     assert isinstance(inner, typing.ForwardRef)
     assert inner.__forward_arg__ == "MyFilterInputType"
 
@@ -1017,24 +1050,30 @@ def test_filter_input_type_is_idempotent_under_repeated_calls():
     second = filter_input_type(MyFilter)
     third = filter_input_type(MyFilter)
     assert len(_helper_referenced_filtersets) == 1
-    assert first.__args__[0].__forward_arg__ == second.__args__[0].__forward_arg__
-    assert second.__args__[0].__forward_arg__ == third.__args__[0].__forward_arg__
+    assert get_args(first)[0].__forward_arg__ == get_args(second)[0].__forward_arg__
+    assert get_args(second)[0].__forward_arg__ == get_args(third)[0].__forward_arg__
 
 
 def test_filter_input_type_rejects_non_filterset():
     """`int` / non-FilterSet class / `None` all raise TypeError naming the bad value."""
     with pytest.raises(TypeError) as excinfo:
-        filter_input_type(42)
+        # basedpyright: the non-class value is the hostile input under test; filter_input_type
+        # types the parameter as type[FilterSet]
+        filter_input_type(42)  # pyright: ignore[reportArgumentType]
     assert "42" in str(excinfo.value)
 
     class NotAFilter:
         pass
 
     with pytest.raises(TypeError):
-        filter_input_type(NotAFilter)
+        # basedpyright: the non-FilterSet class is the hostile input under test; filter_input_type
+        # types the parameter as type[FilterSet]
+        filter_input_type(NotAFilter)  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(TypeError):
-        filter_input_type(None)
+        # basedpyright: the None target is the hostile input under test; filter_input_type types
+        # the parameter as type[FilterSet]
+        filter_input_type(None)  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -1057,7 +1096,7 @@ def test_filter_input_subscript_returns_the_filter_input_type_annotation():
     assert isinstance(inner, typing.ForwardRef)
     assert inner.__forward_arg__ == "MyFilterInputType"
     assert inner == get_args(called)[0]
-    assert [getattr(marker, "module", None) for marker in subscripted.__metadata__] == [
+    assert [getattr(marker, "module", None) for marker in get_args(subscripted)[1:]] == [
         INPUTS_MODULE_PATH,
     ]
 
@@ -1083,11 +1122,14 @@ def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript():
         pass
 
     with pytest.raises(TypeError) as excinfo:
-        FilterInput[NotAFilter]
+        # basedpyright: a non-FilterSet subscript is the bad input this test proves is rejected
+        FilterInput[NotAFilter]  # pyright: ignore[reportInvalidTypeArguments]
     assert str(excinfo.value).startswith("FilterInput[...] requires a FilterSet subclass; got ")
     assert "NotAFilter" in str(excinfo.value)
     with pytest.raises(TypeError, match=r"^filter_input_type\(\) requires a FilterSet subclass"):
-        filter_input_type(NotAFilter)
+        # basedpyright: the non-FilterSet class is the hostile input under test; filter_input_type
+        # types the parameter as type[FilterSet]
+        filter_input_type(NotAFilter)  # pyright: ignore[reportArgumentType]
     assert _helper_referenced_filtersets == set()
 
 
@@ -1105,7 +1147,7 @@ def test_filter_input_subscript_rejects_non_filterset_naming_the_subscript():
         "___",
     ],
 )
-def test_pascal_case_raises_for_no_word_character_input(bad):
+def test_pascal_case_raises_for_no_word_character_input(bad: str):
     """`_pascal_case` raises rather than silently returning `""`."""
     with pytest.raises(ConfigurationError) as excinfo:
         _pascal_case(bad)
@@ -1126,7 +1168,7 @@ def test_pascal_case_converts_separators():
         "___",
     ],
 )
-def test_type_name_for_raises_for_no_word_character_field_path(bad):
+def test_type_name_for_raises_for_no_word_character_field_path(bad: str):
     """``type_name_for`` raises rather than silently collapsing to the root name.
 
     The guard is hoisted from ``_pascal_case`` (the direct
@@ -1299,6 +1341,9 @@ def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_t
 
     from django_strawberry_framework.filters.sets import filter_generation_provenance
 
+    def _category_queryset_extra(_field: object) -> dict[str, object]:
+        return {"queryset": Category.objects.all()}
+
     class ItemFilter(FilterSet):
         class Meta:
             model = Item
@@ -1306,7 +1351,7 @@ def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_t
             filter_overrides = {
                 models.ForeignKey: {
                     "filter_class": django_filters.ModelChoiceFilter,
-                    "extra": lambda _field: {"queryset": Category.objects.all()},
+                    "extra": _category_queryset_extra,
                 },
             }
 
@@ -1317,6 +1362,7 @@ def test_filter_overrides_model_choice_keys_keep_their_class_and_type_from_the_t
     assert isinstance(in_, DjangoBaseInFilter)
     assert isinstance(in_, django_filters.ModelChoiceFilter)
     for leaf in (exact, in_):
+        assert leaf.queryset is not None
         assert leaf.queryset.model is Category
         record = filter_generation_provenance(leaf)
         assert record is not None
@@ -1368,9 +1414,14 @@ def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_f
     """
     import django_filters
 
+    def _request_categories(_request: object) -> QuerySet[Category]:
+        return Category.objects.all()
+
     class ItemFilter(FilterSet):
         owner = django_filters.ModelChoiceFilter(
-            queryset=lambda _request: Category.objects.all(),
+            # basedpyright: types-django-filter types ``queryset`` as a ``QuerySet``;
+            # ``QuerySetRequestMixin.get_queryset`` calls a callable one with the request
+            queryset=_request_categories,  # pyright: ignore[reportArgumentType]
             method="filter_owner",
         )
 
@@ -1380,10 +1431,10 @@ def test_model_choice_filter_with_no_column_source_names_the_filterset_and_the_f
 
         def filter_owner(
             self,
-            queryset: Any,
+            queryset: QuerySet[Item],
             _name: str,
             _value: object,
-        ) -> Any:
+        ) -> QuerySet[Item]:
             return queryset
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -1469,7 +1520,9 @@ def test_element_annotation_fallback_branches_when_model_field_is_none():
 
     class NoFieldTypedFilter(TypedFilter):
         @property
-        def field(self):
+        @override
+        # basedpyright: deliberately a filter with no form field, the input that takes the fallback
+        def field(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             return None
 
     # Form field present -> resolved via `_scalar_from_form_field`
@@ -1588,14 +1641,14 @@ def test_range_input_type_name_is_scoped_per_filterset():
             model = library_models.Branch
             fields = []
 
-    def _range_cls_of(bag):
+    def _range_cls_of(bag: type):
         for annotation in bag.__annotations__.values():
             for arg in get_args(annotation):
                 if getattr(arg, "__name__", "").endswith("RangeInputType"):
                     return arg
         raise AssertionError("no RangeInputType found in operator bag")
 
-    def _bag(triples):
+    def _bag(triples: list[tuple[str, object, dict[str, object]]]):
         by_attr = {p: a for p, a, _ in triples}
         return next(x for x in get_args(by_attr["price"]) if x is not type(None))
 
@@ -1683,7 +1736,9 @@ def test_model_field_for_filter_returns_none_without_model():
     class _NoMeta:
         pass
 
-    assert _model_field_for_filter(_NoMeta, GlobalIDFilter(field_name="id")) is None
+    # basedpyright: the class without _meta is the hostile input under test;
+    # _model_field_for_filter types the parameter as type[FilterSet]
+    assert _model_field_for_filter(_NoMeta, GlobalIDFilter(field_name="id")) is None  # pyright: ignore[reportArgumentType]
 
 
 def test_model_field_for_filter_returns_none_without_field_name():
@@ -1941,8 +1996,10 @@ def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
     try:
         # Setting the module entry to ``None`` makes the best-effort lookup of
         # each module raise ImportError internally, exercising both skips.
-        sys.modules[factories_name] = None
-        sys.modules[sets_name] = None
+        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
+        # as the blocked-import sentinel
+        sys.modules[factories_name] = None  # pyright: ignore[reportArgumentType]
+        sys.modules[sets_name] = None  # pyright: ignore[reportArgumentType]
         # Must not raise even though neither submodule can be imported.
         clear_filter_input_namespace()
     finally:
@@ -2047,7 +2104,8 @@ def test_relay_relation_isnull_generates_boolean_input_not_globalid_list():
     # String and reject the Boolean. The resolver's annotations are assigned as
     # real objects (not strings) so this module's ``from __future__ import
     # annotations`` cannot stringify the per-test bag class out of scope.
-    def _probe(genres=None) -> str:
+    # basedpyright: the resolver's GraphQL argument type is assigned through __annotations__ below
+    def _probe(genres=None) -> str:  # pyright: ignore[reportMissingParameterType, reportUnknownParameterType]
         if genres is None:
             return "omitted"
         return f"isNull={genres.is_null!r}"
@@ -2070,6 +2128,7 @@ def test_relay_relation_isnull_generates_boolean_input_not_globalid_list():
         """,
     )
     assert introspection.errors is None, introspection.errors
+    assert introspection.data is not None
     input_fields = {
         field["name"]: field["type"] for field in introspection.data["__type"]["inputFields"]
     }

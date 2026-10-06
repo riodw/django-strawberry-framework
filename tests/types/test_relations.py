@@ -24,15 +24,20 @@ from django_strawberry_framework.types.relations import (
 class _NonHashableField:
     """Stand-in for relation metadata whose ``__hash__`` is ``None``."""
 
-    __hash__ = None
+    # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
+    __hash__ = None  # pyright: ignore[reportAssignmentType]
 
 
 def _build_pending() -> PendingRelation:
     return PendingRelation(
-        source_type=type("Src", (), {}),
+        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+        # PendingRelation types source_type as type[DjangoType]
+        source_type=type("Src", (), {}),  # pyright: ignore[reportArgumentType]
         source_model=Category,
         field_name="items",
-        django_field=_NonHashableField(),
+        # basedpyright: the unhashable field is the hostile input under test; PendingRelation types
+        # django_field as ModelField
+        django_field=_NonHashableField(),  # pyright: ignore[reportArgumentType]
         related_model=Item,
     )
 
@@ -81,4 +86,6 @@ def test_pending_relation_is_frozen_dataclass():
     pending = _build_pending()
 
     with pytest.raises(FrozenInstanceError):
-        pending.field_name = "mutated"
+        # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+        # checker rejects assignment to a frozen field
+        pending.field_name = "mutated"  # pyright: ignore[reportAttributeAccessIssue]

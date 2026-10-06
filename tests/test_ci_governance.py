@@ -20,7 +20,9 @@ behavior, so this module adds no package coverage surface.
 import ast
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any, TypeAlias
 
 import pytest
 import yaml
@@ -52,6 +54,10 @@ IMAGE_REFERENCE = re.compile(
 # and therefore already covered by the commit under review.
 LOCAL_ACTION_PREFIX = "./"
 
+# basedpyright: a parsed workflow is an untyped YAML tree (yaml.safe_load returns Any); the rows
+# read its nested values by key
+_YAMLMapping: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+
 
 def _workflow_paths():
     paths = sorted(WORKFLOW_DIR.glob("*.yml")) + sorted(WORKFLOW_DIR.glob("*.yaml"))
@@ -59,7 +65,7 @@ def _workflow_paths():
     return paths
 
 
-def _load(path):
+def _load(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
@@ -67,16 +73,16 @@ WORKFLOW_PATHS = _workflow_paths()
 WORKFLOW_IDS = [path.name for path in WORKFLOW_PATHS]
 
 
-def _jobs(workflow):
+def _jobs(workflow: _YAMLMapping) -> _YAMLMapping:
     return workflow.get("jobs") or {}
 
 
-def _steps(job):
+def _steps(job: _YAMLMapping) -> list[_YAMLMapping]:
     return job.get("steps") or []
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_workflow_parses(path):
+def test_workflow_parses(path: Path):
     """Every workflow is loadable YAML with at least one job."""
     workflow = _load(path)
     assert isinstance(workflow, dict), f"{path.name}: workflow is not a mapping"
@@ -84,7 +90,7 @@ def test_workflow_parses(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_workflow_declares_top_level_read_only_permissions(path):
+def test_workflow_declares_top_level_read_only_permissions(path: Path):
     """Each workflow pins a read-only default GITHUB_TOKEN scope.
 
     Without an explicit block the token inherits the repository default, which
@@ -100,7 +106,7 @@ def test_workflow_declares_top_level_read_only_permissions(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_no_job_grants_repository_write(path):
+def test_no_job_grants_repository_write(path: Path):
     """No job may grant ``contents: write``.
 
     Nothing in this repository's CI pushes commits, tags, or releases. A
@@ -120,7 +126,7 @@ def test_no_job_grants_repository_write(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_every_job_declares_a_timeout(path):
+def test_every_job_declares_a_timeout(path: Path):
     """Every job bounds its own wall-clock time.
 
     Each job here either installs dependencies from the network or runs the test
@@ -141,7 +147,7 @@ def test_every_job_declares_a_timeout(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_every_job_declares_a_runner(path):
+def test_every_job_declares_a_runner(path: Path):
     """Every job says what it runs on, so the whole file stays schedulable.
 
     ``runs-on`` is required. Omitting it does not fail the one job: GitHub
@@ -162,7 +168,7 @@ def test_every_job_declares_a_runner(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_every_external_action_is_pinned_to_a_full_commit_sha(path):
+def test_every_external_action_is_pinned_to_a_full_commit_sha(path: Path):
     """Third-party and first-party actions alike are pinned by commit SHA.
 
     ``actions/checkout@v6`` re-resolves on every run, so the code executing in
@@ -185,7 +191,7 @@ def test_every_external_action_is_pinned_to_a_full_commit_sha(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_pinned_actions_keep_a_readable_version_comment(path):
+def test_pinned_actions_keep_a_readable_version_comment(path: Path):
     """A SHA pin carries a ``# vX.Y.Z`` comment so a reader can tell what it is.
 
     Asserted against the raw text, because YAML parsing discards comments.
@@ -205,7 +211,7 @@ def test_pinned_actions_keep_a_readable_version_comment(path):
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_checkout_steps_do_not_persist_credentials(path):
+def test_checkout_steps_do_not_persist_credentials(path: Path):
     """No checkout persists its credential into ``.git/config``.
 
     ``actions/checkout`` writes an extraheader credential by default, leaving a
@@ -226,7 +232,7 @@ def test_checkout_steps_do_not_persist_credentials(path):
             )
 
 
-def _workflow_image_references(path):
+def _workflow_image_references(path: Path):
     executable = "\n".join(
         line.split("#", 1)[0] for line in path.read_text(encoding="utf-8").splitlines()
     )
@@ -240,7 +246,7 @@ def test_workflow_container_images_are_present():
 
 
 @pytest.mark.parametrize("path", WORKFLOW_PATHS, ids=WORKFLOW_IDS)
-def test_container_images_are_pinned_by_digest(path):
+def test_container_images_are_pinned_by_digest(path: Path):
     """Every container image started by a workflow is digest-pinned.
 
     A ``postgres:16`` tag is rebuilt upstream and silently becomes a different
@@ -294,7 +300,7 @@ OPTIMIZER_EXTENSION = "DjangoOptimizerExtension"
 OPTIMIZER_FIX = f"optimizer = {OPTIMIZER_EXTENSION}(...) then extensions=[lambda: optimizer]"
 
 
-def _forbidden_optimizer_entries(source, label):
+def _forbidden_optimizer_entries(source: str, label: str) -> list[tuple[int, str, str]]:
     """Yield ``(lineno, form, snippet)`` per forbidden optimizer ``extensions=`` entry.
 
     Takes source TEXT plus a label rather than a path, so the control rows below
@@ -315,7 +321,7 @@ def _forbidden_optimizer_entries(source, label):
     for node in ast.walk(tree):
         if isinstance(node, (ast.List, ast.Tuple)):
             sequence_elements.update(id(element) for element in node.elts)
-    found = []
+    found: list[tuple[int, str, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Lambda):
             body = node.body
@@ -388,7 +394,7 @@ MUST_NOT_FLAG_SNIPPETS = [
     [snippet for _, snippet in MUST_FLAG_SNIPPETS],
     ids=[name for name, _ in MUST_FLAG_SNIPPETS],
 )
-def test_forbidden_optimizer_form_classifier_flags_every_forbidden_shape(snippet):
+def test_forbidden_optimizer_form_classifier_flags_every_forbidden_shape(snippet: str):
     """Each forbidden shape the sweep claims to catch is exhibited as its own row.
 
     These rows are the sweep's positive control. Without them the sweep can go
@@ -406,7 +412,7 @@ def test_forbidden_optimizer_form_classifier_flags_every_forbidden_shape(snippet
     [snippet for _, snippet in MUST_NOT_FLAG_SNIPPETS],
     ids=[name for name, _ in MUST_NOT_FLAG_SNIPPETS],
 )
-def test_forbidden_optimizer_form_classifier_ignores_the_permitted_shapes(snippet):
+def test_forbidden_optimizer_form_classifier_ignores_the_permitted_shapes(snippet: str):
     """The negative control: only the optimizer's own two forbidden forms match.
 
     ``DjangoDebugExtension``'s docstring REQUIRES the bare class and forbids a
@@ -525,7 +531,7 @@ def _committable_python_files():
     return {name for name in completed.stdout.split("\0") if name}
 
 
-def _unreported_required_files(answer):
+def _unreported_required_files(answer: Iterable[str]):
     """Return the paths a coherent oracle answer must carry that ``answer`` lacks.
 
     A pure function over one git answer, so the control rows below can feed it
@@ -537,7 +543,7 @@ def _unreported_required_files(answer):
     return sorted(set(ORACLE_REQUIRED_FILES) - set(answer))
 
 
-def _unrepresented_corpus_regions(required):
+def _unrepresented_corpus_regions(required: Iterable[str]):
     """Return the corpus regions ``required`` names no file inside.
 
     ``ORACLE_REQUIRED_FILES`` is the only hardcoded tuple this gate reads that
@@ -562,7 +568,7 @@ def _unrepresented_corpus_regions(required):
     return unrepresented
 
 
-def _forbidden_entries_in(paths):
+def _forbidden_entries_in(paths: Iterable[Path]) -> list[str]:
     """Return one formatted violation string per forbidden entry found in ``paths``.
 
     Split out of the sweep so the find-and-format path can be exercised against a
@@ -571,7 +577,7 @@ def _forbidden_entries_in(paths):
     reporter that had stopped formatting anything would read exactly like a clean
     tree.
     """
-    violations = []
+    violations: list[str] = []
     for path in paths:
         display = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
         violations.extend(
@@ -662,7 +668,10 @@ INCOHERENT_ORACLE_ANSWERS = [
     [(answer, expected) for _, answer, expected in INCOHERENT_ORACLE_ANSWERS],
     ids=[name for name, _, _ in INCOHERENT_ORACLE_ANSWERS],
 )
-def test_the_corpus_census_refuses_an_incoherent_oracle_answer(answer, expected):
+def test_the_corpus_census_refuses_an_incoherent_oracle_answer(
+    answer: Iterable[str],
+    expected: str,
+):
     """An under-enumerating oracle is refused by name, not by size.
 
     These are the answers the live tree cannot produce, so nothing else here runs
@@ -683,7 +692,7 @@ def test_the_corpus_census_accepts_a_complete_oracle_answer():
 
 
 @pytest.mark.parametrize("region", CORPUS_REGIONS, ids=CORPUS_REGIONS)
-def test_the_oracle_requirement_reaches_every_corpus_region(region):
+def test_the_oracle_requirement_reaches_every_corpus_region(region: str):
     """What the oracle must report stays as wide as the corpus it is asked about.
 
     Narrowing ``CORPUS_REACH_FILES`` deletes reach rows instead of failing one,
@@ -729,7 +738,10 @@ NARROWED_REQUIREMENTS = [
     [(required, expected) for _, required, expected in NARROWED_REQUIREMENTS],
     ids=[name for name, _, _ in NARROWED_REQUIREMENTS],
 )
-def test_a_narrowed_oracle_requirement_names_the_region_it_lost(required, expected):
+def test_a_narrowed_oracle_requirement_names_the_region_it_lost(
+    required: Iterable[str],
+    expected: str,
+):
     """A requirement that stopped covering a region is refused, by region.
 
     The refusing direction of the guard above, which the shipped requirement can
@@ -744,7 +756,7 @@ def test_a_narrowed_oracle_requirement_names_the_region_it_lost(required, expect
 
 
 @pytest.mark.parametrize("relative", CORPUS_REACH_FILES, ids=CORPUS_REACH_FILES)
-def test_the_sweep_corpus_reaches_each_load_bearing_file(relative):
+def test_the_sweep_corpus_reaches_each_load_bearing_file(relative: str):
     """Each file the gate's answer depends on is inside the corpus, by name.
 
     The census above catches any narrowing; these rows say which files a
@@ -769,7 +781,11 @@ def test_the_sweep_corpus_reaches_each_load_bearing_file(relative):
     ],
     ids=["bare-class", "constructing-lambda"],
 )
-def test_the_sweep_reports_a_planted_violation_with_its_file_and_line(tmp_path, entry, form):
+def test_the_sweep_reports_a_planted_violation_with_its_file_and_line(
+    tmp_path: Path,
+    entry: str,
+    form: str,
+):
     """The find-and-format path is pinned independently of the live tree.
 
     The sweep's own row can only ever report success while the repository is
@@ -783,7 +799,7 @@ def test_the_sweep_reports_a_planted_violation_with_its_file_and_line(tmp_path, 
     assert reported[0].startswith(f"{planted}:3: {form}: "), reported[0]
 
 
-def test_the_sweep_reports_nothing_for_a_planted_permitted_form(tmp_path):
+def test_the_sweep_reports_nothing_for_a_planted_permitted_form(tmp_path: Path):
     """The reporter's negative direction: a clean file yields no violation."""
     planted = tmp_path / "planted_schema.py"
     planted.write_text(

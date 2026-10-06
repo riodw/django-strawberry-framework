@@ -20,6 +20,7 @@ import contextlib
 import subprocess
 import sys
 import types
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 
@@ -28,7 +29,9 @@ from django.contrib.sessions.backends.signed_cookies import (
     SessionStore as SignedCookieSessionStore,
 )
 from django.contrib.sessions.middleware import SessionMiddleware
+from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
+from typing_extensions import override
 
 import django_strawberry_framework.auth as auth_pkg
 from django_strawberry_framework.auth.sessions import (
@@ -49,7 +52,7 @@ from tests.auth._helpers import _drain_until
 _SIGNED_COOKIES_ENGINE = "django.contrib.sessions.backends.signed_cookies"
 
 
-def _adapter(scope):
+def _adapter(scope: Mapping[str, object]):
     """Wrap a fabricated scope in a ChannelsRequestAdapter with a stub wrapped request."""
     return ChannelsRequestAdapter(object(), scope)
 
@@ -77,7 +80,7 @@ def test_classify_channels_websocket_scope():
     [None, "lifespan", "sse"],
     ids=["none", "lifespan", "sse"],
 )
-def test_classify_rejects_missing_or_unknown_scope_type(scope_type):
+def test_classify_rejects_missing_or_unknown_scope_type(scope_type: str | None):
     scope = {} if scope_type is None else {"type": scope_type}
     with pytest.raises(ConfigurationError, match="unsupported `type`"):
         classify_transport(_adapter(scope))
@@ -147,7 +150,7 @@ def test_auth_submodule_import_stays_channels_free():
 
 def test_require_session_returns_the_present_django_session():
     request = RequestFactory().post("/graphql/")
-    SessionMiddleware(lambda _r: None).process_request(request)
+    SessionMiddleware(lambda _r: HttpResponse()).process_request(request)
     assert require_session(request, Transport.DJANGO_HTTP) is request.session
 
 
@@ -209,7 +212,7 @@ async def test_scope_lock_serializes_two_operations_on_one_scope():
     under the suite's ``-W error`` policy, would surface as a ``RuntimeWarning``
     misattributed to a later test).
     """
-    scope = {"type": "websocket"}
+    scope: dict[str, object] = {"type": "websocket"}
     adapter = _adapter(scope)
 
     a_holds = asyncio.Event()
@@ -231,6 +234,7 @@ async def test_scope_lock_serializes_two_operations_on_one_scope():
     try:
         await a_holds.wait()
         lock = scope[_SCOPE_LOCK_KEY]
+        assert isinstance(lock, asyncio.Lock)
         # Advance the loop until B is genuinely parked on the shared lock: a
         # contended ``acquire`` enqueues a waiter on ``lock._waiters``. Only then is
         # "B is blocked behind A" an established fact rather than a timing guess.
@@ -290,7 +294,9 @@ def test_signed_cookie_detection_follows_a_subclassed_engine():
     class SessionStore(SignedCookieSessionStore):
         pass
 
-    module.SessionStore = SessionStore
+    # basedpyright: the stub engine module is built at run time; ModuleType declares no
+    # SessionStore
+    module.SessionStore = SessionStore  # pyright: ignore[reportAttributeAccessIssue]
     sys.modules[module_name] = module
     try:
         with override_settings(SESSION_ENGINE=module_name):
@@ -332,7 +338,7 @@ async def test_cancelling_a_task_holding_the_scope_lock_releases_it():
     cancelled holder can never orphan a held lock. A subsequent acquisition on the
     same scope acquires the same lock object immediately.
     """
-    scope = {"type": "websocket"}
+    scope: dict[str, object] = {"type": "websocket"}
     adapter = _adapter(scope)
     holding = asyncio.Event()
     never = asyncio.Event()  # deliberately never set: the holder parks until cancelled
@@ -346,6 +352,7 @@ async def test_cancelling_a_task_holding_the_scope_lock_releases_it():
     try:
         await holding.wait()
         lock = scope[_SCOPE_LOCK_KEY]
+        assert isinstance(lock, asyncio.Lock)
         assert lock.locked()
 
         task.cancel()
@@ -372,7 +379,7 @@ async def test_cancelling_a_task_waiting_on_the_scope_lock_leaves_it_acquirable(
     cancelled while parked on the waiter queue, then A releases. A fresh operation
     must still acquire the lock -- a cancelled waiter leaves no wedged state.
     """
-    scope = {"type": "websocket"}
+    scope: dict[str, object] = {"type": "websocket"}
     adapter = _adapter(scope)
     a_holds = asyncio.Event()
     a_may_release = asyncio.Event()
@@ -391,6 +398,7 @@ async def test_cancelling_a_task_waiting_on_the_scope_lock_leaves_it_acquirable(
     try:
         await a_holds.wait()
         lock = scope[_SCOPE_LOCK_KEY]
+        assert isinstance(lock, asyncio.Lock)
         await _drain_until(lambda: bool(getattr(lock, "_waiters", None)))
 
         tb.cancel()
@@ -471,8 +479,9 @@ def test_no_process_global_lock_registry_in_the_sessions_module():
 
 
 def test_classify_hostile_scope_get_is_contained():
-    class HostileGet(dict):
-        def get(self, key, default=None):
+    class HostileGet(dict[str, object]):
+        @override
+        def get(self, key: str, default: object = None):
             raise RuntimeError("hostile get")
 
     with pytest.raises(ConfigurationError, match="could not read.*`type`"):
@@ -481,7 +490,8 @@ def test_classify_hostile_scope_get_is_contained():
 
 def test_classify_hostile_scope_eq_is_contained():
     class EvilStr(str):
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             raise ValueError("evil eq")
 
     evil = EvilStr("http")
@@ -491,10 +501,12 @@ def test_classify_hostile_scope_eq_is_contained():
 
 def test_classify_hostile_scope_bad_repr_is_contained():
     class BadRepr:
+        @override
         def __repr__(self) -> str:
             raise TypeError("bad repr")
 
-        def __eq__(self, other) -> bool:
+        @override
+        def __eq__(self, other: object) -> bool:
             return False
 
     with pytest.raises(ConfigurationError, match="unsupported `type`") as exc_info:
@@ -505,6 +517,7 @@ def test_classify_hostile_scope_bad_repr_is_contained():
 def test_classify_hostile_adapter_scope_is_contained():
     class BadScopeAdapter(ChannelsRequestAdapter):
         @property
+        @override
         def scope(self):
             raise AttributeError("bad scope")
 
@@ -524,7 +537,7 @@ def test_require_session_hostile_descriptor_is_contained():
 
 def test_require_session_hostile_getattr_is_contained():
     class HostileGetAttr:
-        def __getattr__(self, name):
+        def __getattr__(self, name: str):
             if name == "session":
                 raise ValueError("hostile getattr")
             raise AttributeError(name)
@@ -536,6 +549,7 @@ def test_require_session_hostile_getattr_is_contained():
 def test_require_mutable_scope_hostile_scope_property_is_contained():
     class BadScopeAdapter(ChannelsRequestAdapter):
         @property
+        @override
         def scope(self):
             raise RuntimeError("bad scope")
 
@@ -548,26 +562,32 @@ def test_require_mutable_scope_hostile_scope_property_is_contained():
 async def test_scope_lock_hostile_get_is_contained():
     from collections.abc import MutableMapping
 
-    class HostileGetMutable(MutableMapping):
-        def __init__(self, data):
+    class HostileGetMutable(MutableMapping[str, object]):
+        def __init__(self, data: Mapping[str, object]):
             self._d = dict(data)
 
-        def __getitem__(self, k):
+        @override
+        def __getitem__(self, k: str):
             return self._d[k]
 
-        def __setitem__(self, k, v):
+        @override
+        def __setitem__(self, k: str, v: object):
             self._d[k] = v
 
-        def __delitem__(self, k):
+        @override
+        def __delitem__(self, k: str):
             del self._d[k]
 
+        @override
         def __iter__(self):
             return iter(self._d)
 
+        @override
         def __len__(self) -> int:
             return len(self._d)
 
-        def get(self, k, default=None):
+        @override
+        def get(self, k: str, default: object = None):
             raise KeyError("hostile get")
 
     adapter = _adapter(HostileGetMutable({"type": "websocket"}))
@@ -577,8 +597,9 @@ async def test_scope_lock_hostile_get_is_contained():
 
 
 async def test_scope_lock_hostile_setitem_is_contained():
-    class HostileSet(dict):
-        def __setitem__(self, k, v):
+    class HostileSet(dict[str, object]):
+        @override
+        def __setitem__(self, k: str, v: object):
             if k == _SCOPE_LOCK_KEY:
                 raise ValueError("hostile set")
             super().__setitem__(k, v)
@@ -600,7 +621,9 @@ async def test_scope_lock_corrupted_non_lock_value_is_contained():
 def test_uses_signed_cookie_sessions_non_class_store_is_contained():
     module_name = "tests.auth._stub_bad_store_sessions"
     module = types.ModuleType(module_name)
-    module.SessionStore = "not a class"
+    # basedpyright: the stub engine module is built at run time; ModuleType declares no
+    # SessionStore
+    module.SessionStore = "not a class"  # pyright: ignore[reportAttributeAccessIssue]
     sys.modules[module_name] = module
     try:
         with override_settings(SESSION_ENGINE=module_name):
@@ -612,7 +635,8 @@ def test_uses_signed_cookie_sessions_non_class_store_is_contained():
 
 def test_classify_hostile_websocket_eq_is_contained():
     class EvilWebSocket(str):
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             if other == "http":
                 return False
             raise RuntimeError("evil ws eq")
@@ -622,12 +646,13 @@ def test_classify_hostile_websocket_eq_is_contained():
         classify_transport(_adapter({"type": evil}))
 
 
-def test_require_mutable_scope_isinstance_raising_is_contained(monkeypatch):
+def test_require_mutable_scope_isinstance_raising_is_contained(monkeypatch: pytest.MonkeyPatch):
     import django_strawberry_framework.auth.sessions as sessions_mod
     from django_strawberry_framework.auth.sessions import _require_mutable_scope
 
     class BadMappingMeta(type):
-        def __instancecheck__(cls, instance):
+        @override
+        def __instancecheck__(cls, instance: object):
             raise RuntimeError("hostile isinstance")
 
     class BadMapping(metaclass=BadMappingMeta):
@@ -639,20 +664,22 @@ def test_require_mutable_scope_isinstance_raising_is_contained(monkeypatch):
         _require_mutable_scope(adapter)
 
 
-async def test_scope_lock_isinstance_lock_raising_is_contained(monkeypatch):
+async def test_scope_lock_isinstance_lock_raising_is_contained(monkeypatch: pytest.MonkeyPatch):
     import django_strawberry_framework.auth.sessions as sessions_mod
 
     class ExplodingLock(asyncio.Lock):
         pass
 
     class BadLockMeta(type):
-        def __instancecheck__(cls, instance):
+        @override
+        def __instancecheck__(cls, instance: object):
             raise ValueError("hostile lock isinstance")
 
     class BadLockType(metaclass=BadLockMeta):
         pass
 
-    monkeypatch.setattr(sessions_mod.asyncio, "Lock", BadLockType)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(sessions_mod.asyncio, "Lock", BadLockType)  # pyright: ignore[reportPrivateLocalImportUsage]
     scope = {"type": "websocket", _SCOPE_LOCK_KEY: ExplodingLock()}
     adapter = _adapter(scope)
     with pytest.raises(ConfigurationError, match="could not be inspected"):
@@ -662,6 +689,7 @@ async def test_scope_lock_isinstance_lock_raising_is_contained(monkeypatch):
 
 async def test_scope_lock_acquire_raising_is_contained():
     class RaisingLock(asyncio.Lock):
+        @override
         async def acquire(self):
             raise RuntimeError("hostile acquire")
 
@@ -672,10 +700,12 @@ async def test_scope_lock_acquire_raising_is_contained():
             pass
 
 
-def test_uses_signed_cookie_sessions_store_resolution_hostile_is_contained(monkeypatch):
+def test_uses_signed_cookie_sessions_store_resolution_hostile_is_contained(
+    monkeypatch: pytest.MonkeyPatch,
+):
     import django_strawberry_framework.auth.sessions as sessions_mod
 
-    def _raise(*_args, **_kwargs):
+    def _raise(*_args: object, **_kwargs: object):
         raise RuntimeError("hostile store resolve")
 
     monkeypatch.setattr(sessions_mod, "session_store_class", _raise)
@@ -683,10 +713,12 @@ def test_uses_signed_cookie_sessions_store_resolution_hostile_is_contained(monke
         uses_signed_cookie_sessions()
 
 
-def test_uses_signed_cookie_sessions_store_resolution_configuration_error_propagates(monkeypatch):
+def test_uses_signed_cookie_sessions_store_resolution_configuration_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+):
     import django_strawberry_framework.auth.sessions as sessions_mod
 
-    def _raise_config(*_args, **_kwargs):
+    def _raise_config(*_args: object, **_kwargs: object):
         raise ConfigurationError("bad engine")
 
     monkeypatch.setattr(sessions_mod, "session_store_class", _raise_config)
@@ -698,6 +730,7 @@ async def test_scope_lock_acquire_configuration_error_propagates():
     from django_strawberry_framework.exceptions import ConfigurationError
 
     class ConfigErrorLock(asyncio.Lock):
+        @override
         async def acquire(self):
             raise ConfigurationError("hostile config inside lock")
 
@@ -710,6 +743,7 @@ async def test_scope_lock_acquire_configuration_error_propagates():
 
 async def test_scope_lock_acquire_cancelled_error_propagates():
     class CancelLock(asyncio.Lock):
+        @override
         async def acquire(self):
             raise asyncio.CancelledError("cancel me")
 
@@ -728,18 +762,23 @@ async def test_scope_lock_acquire_cancelled_error_propagates():
 def test_classify_hostile_class_property_is_contained():
     class Hostile:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise TypeError("hostile class")
 
     with pytest.raises(ConfigurationError, match="could not classify"):
         classify_transport(Hostile())
 
 
-def test_classify_hostile_class_property_on_second_isinstance_is_contained(monkeypatch):
+def test_classify_hostile_class_property_on_second_isinstance_is_contained(
+    monkeypatch: pytest.MonkeyPatch,
+):
     import django_strawberry_framework.auth.sessions as sessions_mod
 
     class BadMeta(type):
-        def __instancecheck__(cls, instance):
+        @override
+        def __instancecheck__(cls, instance: object):
             raise TypeError("hostile HttpRequest isinstance")
 
     class BadHttpRequest(metaclass=BadMeta):
@@ -784,9 +823,12 @@ def test_require_session_success_does_not_touch_transport_value():
         def value(self):
             raise AssertionError("should not touch value on success")
 
+        @override
         def __repr__(self) -> str:
             raise AssertionError("should not repr on success")
 
     request = RequestFactory().post("/graphql/")
-    SessionMiddleware(lambda _r: None).process_request(request)
-    assert require_session(request, EvilTransport()) is request.session
+    SessionMiddleware(lambda _r: HttpResponse()).process_request(request)
+    # basedpyright: the transport whose value and repr raise is the hostile input under test;
+    # require_session types the parameter as Transport
+    assert require_session(request, EvilTransport()) is request.session  # pyright: ignore[reportArgumentType]

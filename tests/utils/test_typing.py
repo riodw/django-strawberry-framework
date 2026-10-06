@@ -10,6 +10,7 @@ import typing
 from typing import Any
 
 import pytest
+from typing_extensions import override
 
 import django_strawberry_framework.utils.typing as typing_module
 from django_strawberry_framework.utils.typing import (
@@ -58,7 +59,9 @@ def test_unwrap_return_type_handles_bare_typing_list():
     ``get_args(rt)[0]`` and ``IndexError``'d here; the fix returns ``Any``
     as the "unknown element type" sentinel.
     """
-    assert unwrap_return_type(typing.List) is Any  # noqa: UP006
+    # basedpyright: the bare deprecated ``typing.List`` alias is the input under test; ``list``
+    # is covered by the next test and cannot reach the ``get_args(...) == ()`` list-origin branch
+    assert unwrap_return_type(typing.List) is Any  # noqa: UP006  # pyright: ignore[reportDeprecated]
 
 
 def test_unwrap_return_type_handles_bare_builtin_list():
@@ -103,11 +106,11 @@ def test_unwrap_graphql_type_peels_all_of_type_layers():
         pass
 
     class NonNull:
-        def __init__(self, of_type):
+        def __init__(self, of_type: object):
             self.of_type = of_type
 
     class List:
-        def __init__(self, of_type):
+        def __init__(self, of_type: object):
             self.of_type = of_type
 
     wrapped = NonNull(List(NonNull(Inner)))
@@ -122,7 +125,7 @@ def test_unwrap_graphql_type_peels_a_deep_but_finite_stack():
         pass
 
     class Wrap:
-        def __init__(self, of_type):
+        def __init__(self, of_type: object):
             self.of_type = of_type
 
     wrapped = Inner
@@ -164,7 +167,7 @@ def test_unwrap_container_type_raises_on_cyclic_container_stack():
     """A cyclic container chain hits the Power-of-Ten bound and fails loud."""
     from strawberry.types.base import StrawberryList
 
-    cyclic = StrawberryList(of_type=None)
+    cyclic = StrawberryList(of_type=str)
     cyclic.of_type = cyclic  # never bottoms out
 
     with pytest.raises(RuntimeError, match="cyclic or corrupt"):
@@ -254,7 +257,7 @@ _async_static_partial_obj = staticmethod(functools.partial(_AsyncCallable()))
         (_async_static_partial_obj, True),  # staticmethod descriptor around a partial instance
     ],
 )
-def test_is_async_callable_sees_through_supported_wrappers(value, expected):
+def test_is_async_callable_sees_through_supported_wrappers(value: object, expected: bool):
     """The predicate sees through supported async callable wrappers.
 
     These are the shapes ``inspect.iscoroutinefunction`` alone misses; both the
@@ -292,9 +295,13 @@ def test_schema_config_from_info_prefers_wrapped_then_direct():
             config=SimpleNamespace(relay_max_results=99),
         ),
     )
-    assert schema_config_from_info(wrapped).relay_max_results == 7
+    wrapped_config = schema_config_from_info(wrapped)
+    assert wrapped_config is not None
+    assert wrapped_config.relay_max_results == 7
     direct = SimpleNamespace(schema=SimpleNamespace(config=SimpleNamespace(name_converter="nc")))
-    assert schema_config_from_info(direct).name_converter == "nc"
+    direct_config = schema_config_from_info(direct)
+    assert direct_config is not None
+    assert direct_config.name_converter == "nc"
     assert schema_config_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
     assert schema_config_from_info(SimpleNamespace()) is None
     assert schema_config_from_info(None) is None
@@ -317,7 +324,9 @@ def test_schema_config_from_info_explicit_none_wrapped_falls_back_to_direct():
         ),
     )
     assert strawberry_schema_from_info(info) is None
-    assert schema_config_from_info(info).relay_max_results == 42
+    config = schema_config_from_info(info)
+    assert config is not None
+    assert config.relay_max_results == 42
     # And when both the wrapped dig and the direct config are absent, ``None``.
     no_config = SimpleNamespace(schema=SimpleNamespace(_strawberry_schema=None))
     assert schema_config_from_info(no_config) is None
@@ -330,7 +339,7 @@ def test_unwrap_graphql_type_accepts_exact_wrapper_depth():
         pass
 
     class Wrap:
-        def __init__(self, of_type):
+        def __init__(self, of_type: object):
             self.of_type = of_type
 
     wrapped = Inner
@@ -377,8 +386,9 @@ def test_callable_inspection_target_accepts_exact_wrapper_depth():
 def test_callable_inspection_target_raises_on_cyclic_partial_stack():
     """A cyclic partial wrapper stack raises RuntimeError instead of hanging."""
 
-    class CyclicPartial(functools.partial):
+    class CyclicPartial(functools.partial[int]):
         @property
+        @override
         def func(self):
             return self
 
@@ -390,8 +400,11 @@ def test_callable_inspection_target_raises_on_cyclic_partial_stack():
 def test_callable_inspection_target_raises_on_cyclic_staticmethod_stack():
     """A cyclic staticmethod wrapper stack raises RuntimeError instead of hanging."""
 
-    class CyclicStaticMethod(staticmethod):
+    # basedpyright: staticmethod is not subscriptable at runtime before Python 3.11, and a
+    # class base is evaluated on the 3.10 floor
+    class CyclicStaticMethod(staticmethod):  # pyright: ignore[reportMissingTypeArgument]
         @property
+        @override
         def __func__(self):
             return self
 
@@ -403,8 +416,9 @@ def test_callable_inspection_target_raises_on_cyclic_staticmethod_stack():
 def test_is_async_callable_raises_on_cyclic_wrapper_stack():
     """The async predicate fails loud via RuntimeError when given a cyclic callable."""
 
-    class CyclicPartial(functools.partial):
+    class CyclicPartial(functools.partial[int]):
         @property
+        @override
         def func(self):
             return self
 
@@ -429,6 +443,7 @@ def test_is_async_callable_sees_through_an_async_call_metaclass():
     """
 
     class _AsyncMeta(type):
+        @override
         async def __call__(cls): ...
 
     class _UsesAsyncMeta(metaclass=_AsyncMeta): ...
@@ -454,8 +469,10 @@ def test_unwrap_non_null_peels_only_non_null_layers():
     why the resource policy's list-vs-connection classification could not use it
     and grew raw ``while isinstance`` loops instead.
     """
-    from graphql import GraphQLList, GraphQLNonNull, GraphQLString
+    from graphql import GraphQLList, GraphQLNonNull, GraphQLScalarType, GraphQLString
 
+    # graphql-core's ``GraphQLNamedType.__new__`` widens every built-in scalar to its base.
+    assert isinstance(GraphQLString, GraphQLScalarType)
     inner = GraphQLList(GraphQLNonNull(GraphQLString))
     assert unwrap_non_null(GraphQLNonNull(inner)) is inner
     assert unwrap_non_null(inner) is inner
@@ -470,11 +487,14 @@ def test_unwrap_non_null_raises_on_a_cyclic_non_null_chain():
     this replaced looked safe. A hand-built or corrupted wrapper is the case the
     bound exists for, and an unbounded loop on one hangs rather than failing.
     """
-    from graphql import GraphQLNonNull
+    from graphql import GraphQLNonNull, GraphQLNullableType
 
-    class _CyclicNonNull(GraphQLNonNull):
-        def __init__(self):
-            self.of_type = self
+    class _CyclicNonNull(GraphQLNonNull[GraphQLNullableType]):
+        # basedpyright: GraphQLNonNull's constructor refuses a non-null wrapped type, so the
+        # cyclic chain under test can only be built by skipping it
+        def __init__(self):  # pyright: ignore[reportMissingSuperCall]
+            # basedpyright: a non-null wrapping a non-null is the malformed chain under test
+            self.of_type = self  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(RuntimeError, match="unwrap_non_null"):
         unwrap_non_null(_CyclicNonNull())

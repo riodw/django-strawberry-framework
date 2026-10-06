@@ -60,9 +60,12 @@ import datetime
 import os
 import re
 import uuid
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
+from typing import TypeAlias
 
 import pytest
+import pytest_django
 from apps.library.models import (
     Branch,
     CirculationDesk,
@@ -84,8 +87,10 @@ from django.db import models
 from django.http import HttpRequest
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
+from typing_extensions import override
 
 from django_strawberry_framework import (
+    DjangoType,
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -104,13 +109,16 @@ from django_strawberry_framework.permissions import (
 from django_strawberry_framework.registry import registry
 from tests.optimizer import _link_models
 
+#: A ``get_queryset`` hook as ``_make_type`` installs it (``classmethod``-wrapped).
+_Hook: TypeAlias = Callable[[type[DjangoType], models.QuerySet[models.Model], object], object]
+
 # ``info`` is threaded into each target hook but never read by the synthetic
 # hooks below (they narrow unconditionally), so a placeholder namespace suffices.
 _INFO = SimpleNamespace(context=SimpleNamespace(user=None))
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
@@ -118,7 +126,7 @@ def _isolate_registry():
 
 
 @pytest.fixture(autouse=True)
-def _assert_contextvar_clean():
+def _assert_contextvar_clean() -> Iterator[None]:
     """The traversal-state var must be reset to ``None`` after every test.
 
     A test that leaves ``_cascade_state`` set would leak stale traversal state
@@ -131,7 +139,7 @@ def _assert_contextvar_clean():
 
 
 @contextlib.contextmanager
-def _tables(*model_classes):
+def _tables(*model_classes: type[models.Model]):
     """Create real tables for ``managed = False`` synthetic models, then drop them.
 
     The ``connection.schema_editor()`` create/delete pattern from
@@ -150,12 +158,12 @@ def _tables(*model_classes):
 
 
 def _make_type(
-    name,
-    model,
+    name: str,
+    model: type[models.Model],
     *,
-    get_queryset=None,
-    fields=("id",),
-    primary=True,
+    get_queryset: _Hook | None = None,
+    fields: tuple[str, ...] = ("id",),
+    primary: bool = True,
 ):
     """Declare a ``DjangoType`` over ``model``, optionally with a cascading hook.
 
@@ -182,7 +190,7 @@ def _make_type(
     )
 
 
-def _cascade_only(cls, qs, info):
+def _cascade_only(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     """A hook that cascades and nothing else - the pure re-entrant shape.
 
     Shared by the cycle fixtures (ring / diamond / self) and the transitive-chain
@@ -198,7 +206,7 @@ def _cascade_only(cls, qs, info):
 # =============================================================================
 
 
-def _cascading_hook(**hidden):
+def _cascading_hook(**hidden: object) -> _Hook:
     """Build the recurring cascade-and-hide hook narrowing out the rows matching ``hidden``."""
     return lambda cls, qs, info: apply_cascade_permissions(
         cls,
@@ -249,7 +257,7 @@ def test_hook_exception_propagates_and_resets_state():
     """
     raiser_venue = _make_type("RaiserAType", Venue)
 
-    def _boom(cls, qs, info):
+    def _boom(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         raise RuntimeError("boom")
 
     _make_type("RaiserBType", RepairTicket, get_queryset=_boom)
@@ -309,8 +317,9 @@ def test_longer_cycle_renders_full_path():
 def test_root_queryset_filter_override_is_neutralized_by_sealing():
     """A hostile root ``filter`` override cannot erase a cascade predicate."""
 
-    class FilterEraser(models.QuerySet):
-        def filter(self, *args, **kwargs):
+    class FilterEraser(models.QuerySet[_CtParent]):
+        @override
+        def filter(self, *args: object, **kwargs: object):
             return _CtParent.objects.all()
 
     with _tables(_CtTarget, _CtParent):
@@ -496,7 +505,7 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
     ["LnkPairChild", "LnkColumnChild"],
     ids=["two_column_fo", "one_column_fo"],
 )
-def test_forward_foreign_object_of_any_width_is_an_unsupported_edge(child_name):
+def test_forward_foreign_object_of_any_width_is_an_unsupported_edge(child_name: str):
     """A forward ``ForeignObject`` is unsupported whether it joins on two columns or one.
 
     Neither width is a ``ForeignKey``: the relation has no column of its own to
@@ -523,7 +532,7 @@ def test_gfk_default_walk_preflights_closed():
     """
     hook_calls = []
 
-    def _counting_hook(cls, qs, info):
+    def _counting_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         hook_calls.append(cls)
         return qs
 
@@ -620,7 +629,10 @@ def test_mti_multiple_parent_links_both_cascade():
             managed = False
 
     class MtiBoth(MtiLeftBase, MtiRightBase):
-        class Meta:
+        # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model
+        # keeps one), so MtiLeftBase and MtiRightBase have no Meta at run time for this one to
+        # subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             app_label = "products"
             managed = False
 
@@ -680,7 +692,7 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     # what actually pins spec-034 Decision 8.
     received_dbs = []
 
-    def _record_alias_hook(cls, qs, info):
+    def _record_alias_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         received_dbs.append(qs.db)
         return qs.exclude(name="hidden")
 
@@ -688,9 +700,11 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     _make_type("AliasItemType", Item, primary=False)
     finalize_django_types()
 
+    item_type = registry.get(Item)
+    assert item_type is not None
     # The caller resolved ``shard_b`` explicitly; the cascade subquery must inherit it.
     result = apply_cascade_permissions(
-        registry.get(Item),
+        item_type,
         Item.objects.using("shard_b").all(),
         _INFO,
     )
@@ -712,7 +726,9 @@ def test_multi_db_subquery_pinned_to_caller_alias():
 
 
 @pytest.mark.django_db(transaction=True)
-def test_identity_hook_targets_compose_default_manager(django_assert_num_queries):
+def test_identity_hook_targets_compose_default_manager(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """A registered identity-hook target STILL composes its ``_default_manager``.
 
     The previous ``has_custom_get_queryset() is False`` skip silently bypassed a
@@ -731,7 +747,9 @@ def test_identity_hook_targets_compose_default_manager(django_assert_num_queries
     entry_type = _make_type("IdentEntryType", Entry, primary=False)
     finalize_django_types()
 
-    assert registry.get(Item).has_custom_get_queryset() is False
+    item_primary = registry.get(Item)
+    assert item_primary is not None
+    assert item_primary.has_custom_get_queryset() is False
 
     entry = services.seed_cascade_identity_chain()["entry"]
 
@@ -808,7 +826,9 @@ def test_secondary_type_never_cascade_target():
     item_type = _make_type("SecItemType", Item, primary=False)
     finalize_django_types()
 
-    assert registry.get(Category).has_custom_get_queryset() is False  # the primary
+    category_primary = registry.get(Category)
+    assert category_primary is not None
+    assert category_primary.has_custom_get_queryset() is False  # the primary
 
     services.seed_public_category_with_item()
 
@@ -884,7 +904,9 @@ class _CtTargetChild(_CtTarget):
 
     extra = models.TextField()
 
-    class Meta:
+    # basedpyright: Django's ModelBase pops a concrete model's Meta (only an abstract model keeps
+    # one), so _CtTarget has no Meta at run time for this one to subclass
+    class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
         app_label = "products"
         managed = False
 
@@ -908,7 +930,7 @@ class _CtParent(models.Model):
         managed = False
 
 
-def _register_ct_pair(hook):
+def _register_ct_pair(hook: _Hook | None):
     """Register the hook-return fixture pair; return the parent type."""
     _make_type("CtTargetType", _CtTarget, get_queryset=hook)
     parent_type = _make_type("CtParentType", _CtParent, primary=False)
@@ -916,11 +938,15 @@ def _register_ct_pair(hook):
     return parent_type
 
 
-def _values_projection(cls, qs, info):
+def _values_projection(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.exclude(name="hidden").values("id", "name")
 
 
-def _values_list_projection(cls, qs, info):
+def _values_list_projection(
+    cls: type[DjangoType],
+    qs: models.QuerySet[models.Model],
+    info: object,
+):
     return qs.exclude(name="hidden").values_list("name")
 
 
@@ -932,7 +958,7 @@ def _values_list_projection(cls, qs, info):
         pytest.param(_values_list_projection, id="values-list"),
     ],
 )
-def test_hook_values_and_values_list_projections_are_normalized(hook):
+def test_hook_values_and_values_list_projections_are_normalized(hook: _Hook):
     """A hook's ``.values(...)`` / ``.values_list(...)`` return is re-projected safely.
 
     The subquery is normalized to ``field.target_field.attname``, so a consumer
@@ -954,22 +980,34 @@ def test_hook_values_and_values_list_projections_are_normalized(hook):
         assert keeps in result
 
 
+def _union_of_two_names(qs: models.QuerySet[models.Model]) -> models.QuerySet[models.Model]:
+    return qs.filter(name="t").union(qs.filter(name="u"))
+
+
+def _intersection_without_hidden(
+    qs: models.QuerySet[models.Model],
+) -> models.QuerySet[models.Model]:
+    return qs.exclude(name="hidden").intersection(qs.exclude(name="u"))
+
+
+def _difference_without_hidden(
+    qs: models.QuerySet[models.Model],
+) -> models.QuerySet[models.Model]:
+    return qs.exclude(name="u").difference(qs.filter(name="hidden"))
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "combine",
     [
-        pytest.param(lambda qs: qs.filter(name="t").union(qs.filter(name="u")), id="union"),
-        pytest.param(
-            lambda qs: qs.exclude(name="hidden").intersection(qs.exclude(name="u")),
-            id="intersection",
-        ),
-        pytest.param(
-            lambda qs: qs.exclude(name="u").difference(qs.filter(name="hidden")),
-            id="difference",
-        ),
+        pytest.param(_union_of_two_names, id="union"),
+        pytest.param(_intersection_without_hidden, id="intersection"),
+        pytest.param(_difference_without_hidden, id="difference"),
     ],
 )
-def test_combined_hook_return_narrows_by_its_primary_key_set(combine):
+def test_combined_hook_return_narrows_by_its_primary_key_set(
+    combine: Callable[[models.QuerySet[models.Model]], models.QuerySet[models.Model]],
+):
     """A combined hook return composes as the membership test on the target rows it selects.
 
     The seal hands the cascade the combinator's primary-key set, which the edge
@@ -988,7 +1026,7 @@ def test_combined_hook_return_narrows_by_its_primary_key_set(combine):
         assert sorted(result.values_list("name", flat=True)) == ["keeps"]
 
 
-def _profiles_by_genre(*, visible, hidden, attack_code):
+def _profiles_by_genre(*, visible: Genre, hidden: Genre, attack_code: str):
     """Seed one ``PatronProfile`` per genre, keyed by genre name through ``favorite_genre``."""
     for postal_code, genre in (("keeps", visible), (attack_code, hidden)):
         PatronProfile.objects.create(
@@ -1037,51 +1075,59 @@ def test_to_field_edge_compares_target_column():
     assert PatronProfile.objects.get(postal_code="keeps") in result
 
 
-def _hook_returns_list(cls, qs, info):
+def _hook_returns_list(
+    cls: type[DjangoType],
+    qs: models.QuerySet[models.Model],
+    info: object,
+) -> list[object]:
     return []
 
 
-def _hook_unrelated_model(cls, qs, info):
+def _hook_unrelated_model(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return _CtOther.objects.using(qs.db).all()
 
 
-def _hook_mti_child(cls, qs, info):
+def _hook_mti_child(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return _CtTargetChild.objects.using(qs.db).all()
 
 
-def _hook_sliced(cls, qs, info):
+def _hook_sliced(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs[:5]
 
 
-def _hook_distinct(cls, qs, info):
+def _hook_distinct(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.distinct("name")
 
 
-def _hook_union_all(cls, qs, info):
+def _hook_union_all(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.union(qs, all=True)
 
 
-def _hook_intersection_values(cls, qs, info):
+def _hook_intersection_values(
+    cls: type[DjangoType],
+    qs: models.QuerySet[models.Model],
+    info: object,
+):
     return qs.intersection(qs).values("id")
 
 
-def _hook_grouped_count(cls, qs, info):
+def _hook_grouped_count(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.annotate(n=models.Count("id"))
 
 
-def _hook_grouped_values(cls, qs, info):
+def _hook_grouped_values(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.values("name").annotate(n=models.Count("id"))
 
 
-def _hook_extra_shadow(cls, qs, info):
+def _hook_extra_shadow(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.extra(select={"id": "name"})
 
 
-def _hook_annotate_shadow(cls, qs, info):
+def _hook_annotate_shadow(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.values("name").annotate(id=models.Value(1))
 
 
-def _hook_off_alias(cls, qs, info):
+def _hook_off_alias(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     return qs.using("bogus_alias")
 
 
@@ -1106,7 +1152,7 @@ def _hook_off_alias(cls, qs, info):
         pytest.param(_hook_off_alias, "alias", id="off-alias"),
     ],
 )
-def test_hook_return_rejections_fail_closed(hook, match):
+def test_hook_return_rejections_fail_closed(hook: _Hook, match: str):
     """Non-queryset / wrong-table / sliced / distinct / combined / grouped / shadowed / re-aliased returns raise.
 
     Every shape that would compose a wrong or wrong-database membership predicate
@@ -1186,11 +1232,16 @@ def test_hostile_hook_clone_override_is_neutralized_by_sealing_in_cascade():
     visibility predicate survives, and the composed ``__in`` subquery carries it.
     """
 
-    class _StickyQuerySet(models.QuerySet):
+    class _StickyQuerySet(models.QuerySet[_CtTarget]):
+        @override
         def all(self):  # a predicate-dropping clone if ever dispatched
             return _CtTarget.objects.all()
 
-    def _hostile_hook(cls, qs, info):
+    def _hostile_hook(
+        cls: type[DjangoType],
+        qs: models.QuerySet[models.Model],
+        info: object,
+    ) -> models.QuerySet[_CtTarget]:
         return models.QuerySet.filter(
             _StickyQuerySet(model=_CtTarget, using=qs.db),
             name="visible",
@@ -1216,11 +1267,20 @@ def test_hostile_values_override_end_to_end_is_neutralized_by_sealing():
     is filtered out end-to-end. Real visible/hidden rows make the assertion non-vacuous.
     """
 
-    class _ValuesEraser(models.QuerySet):
-        def _values(self, *fields, **expressions):  # re-projects the UNFILTERED set
-            return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)
+    class _ValuesEraser(models.QuerySet[_CtTarget]):
+        def _values(
+            self,
+            *fields: str,
+            **expressions: object,
+        ) -> object:  # re-projects the UNFILTERED set
+            # basedpyright: django-stubs omits QuerySet._values, reported as an unknown attribute
+            return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)  # pyright: ignore[reportAttributeAccessIssue]
 
-    def _hostile_hook(cls, qs, info):
+    def _hostile_hook(
+        cls: type[DjangoType],
+        qs: models.QuerySet[models.Model],
+        info: object,
+    ) -> models.QuerySet[_CtTarget]:
         return models.QuerySet.filter(
             _ValuesEraser(model=_CtTarget, using=qs.db),
             name="visible",
@@ -1255,9 +1315,10 @@ def test_unsealable_hook_query_class_fails_closed_with_cascade_prose():
     class _ForeignQuery(sql.Query):
         pass
 
-    def _hostile_hook(cls, qs, info):
+    def _hostile_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         target = _CtTarget.objects.filter(name="visible").using(qs.db)
-        target._query = _ForeignQuery(_CtTarget)
+        # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+        target._query = _ForeignQuery(_CtTarget)  # pyright: ignore[reportAttributeAccessIssue]
         return target
 
     registry.clear()
@@ -1279,7 +1340,7 @@ class _ConsumerUpper(models.Func):
 def test_a_hook_carrying_a_consumer_expression_names_what_the_cascade_can_rebuild():
     """An edge hook refused as ``untrusted`` names the full cause list and the advice."""
 
-    def _hook(cls, qs, info):
+    def _hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         return _CtTarget.objects.using(qs.db).annotate(u=_ConsumerUpper(models.F("name")))
 
     registry.clear()
@@ -1310,12 +1371,12 @@ def test_annotation_alias_shadow_cannot_bypass_visibility():
     with _tables(_CtTarget, _CtParent):
         visible = _CtTarget.objects.create(name="visible")
         hidden = _CtTarget.objects.create(name="hidden")
-        keeps = _CtParent.objects.create(name="keeps", target=visible)
-        attack = _CtParent.objects.create(name="attack", target=hidden)
+        _CtParent.objects.create(name="keeps", target=visible)
+        _CtParent.objects.create(name="attack", target=hidden)
 
         # The malicious hook: narrow to the nominally visible target, but alias
         # the pk to the hidden row's id so a naive re-projection would select it.
-        def _shadow_hook(cls, qs, info):
+        def _shadow_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
             return qs.filter(name="visible").values("name").annotate(id=models.Value(hidden.pk))
 
         parent_type = _register_ct_pair(_shadow_hook)
@@ -1374,7 +1435,7 @@ def test_nested_application_off_root_alias_fails_closed():
     against the pinned root alias and fails closed.
     """
 
-    def _realiasing_hook(cls, qs, info):
+    def _realiasing_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         return apply_cascade_permissions(cls, qs.using("bogus_alias"), info)
 
     registry.clear()
@@ -1388,7 +1449,7 @@ def _root_manager():
     return _CtParent.objects
 
 
-def _root_list():
+def _root_list() -> list[object]:
     return []
 
 
@@ -1427,7 +1488,7 @@ def _root_combined_all():
         ),
     ],
 )
-def test_root_queryset_shape_rejections(root_factory, match):
+def test_root_queryset_shape_rejections(root_factory: Callable[[], object], match: str):
     """The root call rejects non-querysets, wrong-model, sliced, and duplicate-keeping roots loudly.
 
     A sliced root cannot be ``.filter(...)``-narrowed; without the up-front
@@ -1446,7 +1507,9 @@ def test_root_queryset_shape_rejections(root_factory, match):
     """
     parent_type = _register_ct_pair(None)
     with pytest.raises(ConfigurationError, match=match):
-        apply_cascade_permissions(parent_type, root_factory(), _INFO)
+        # basedpyright: each malformed root is the hostile input under test;
+        # apply_cascade_permissions types the parameter as QuerySet
+        apply_cascade_permissions(parent_type, root_factory(), _INFO)  # pyright: ignore[reportArgumentType]
     assert _cascade_state.get() is None
 
 
@@ -1488,7 +1551,8 @@ def test_unsealable_root_query_class_fails_closed_with_cascade_prose():
 
     parent_type = _register_ct_pair(None)
     hostile_root = _CtParent.objects.all()
-    hostile_root._query = _ForeignRootQuery(_CtParent)
+    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
+    hostile_root._query = _ForeignRootQuery(_CtParent)  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(
         ConfigurationError,
@@ -1547,7 +1611,7 @@ def test_fields_scopes_walk():
     subset of cascade edges.
     """
 
-    def _exclude_private(cls, qs, info):
+    def _exclude_private(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         return qs.filter(is_private=False)
 
     _make_type("FsItemType", Item, get_queryset=_exclude_private)
@@ -1652,7 +1716,9 @@ def test_fields_non_iterable_raises_configuration_error():
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
-        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=1)
+        # basedpyright: the non-iterable fields value is the hostile input under test;
+        # apply_cascade_permissions types the parameter as Iterable[str] | None
+        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=1)  # pyright: ignore[reportArgumentType]
     message = str(excinfo.value)
     assert "non-string iterable" in message
     assert "1" in message
@@ -1669,7 +1735,9 @@ def test_fields_unhashable_entry_raises_configuration_error():
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
-        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[["item"]])
+        # basedpyright: the unhashable fields entry is the hostile input under test;
+        # apply_cascade_permissions types the parameter as Iterable[str] | None
+        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[["item"]])  # pyright: ignore[reportArgumentType]
     message = str(excinfo.value)
     assert "field-name strings" in message
     assert "['item']" in message or '["item"]' in message
@@ -1686,7 +1754,9 @@ def test_fields_non_string_entry_raises_configuration_error():
     finalize_django_types()
 
     with pytest.raises(ConfigurationError) as excinfo:
-        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[1])
+        # basedpyright: the non-str fields entry is the hostile input under test;
+        # apply_cascade_permissions types the parameter as Iterable[str] | None
+        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[1])  # pyright: ignore[reportArgumentType]
     message = str(excinfo.value)
     assert "field-name strings" in message
     # Not the misleading "not cascadable" name-diff wording.
@@ -1735,7 +1805,7 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
     cascade consumer at an "async resolver" would be a dead end.
     """
 
-    async def _async_hook(cls, qs, info):
+    async def _async_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         return qs
 
     _make_type("AsyncTargetItemType", Item, get_queryset=_async_hook)
@@ -1788,7 +1858,7 @@ async def test_aapply_async_target_hook_still_raises():
     """An ``async def`` target hook raises SyncMisuseError from the async variant too (Decision 10)."""
     from asgiref.sync import sync_to_async
 
-    async def _async_hook(cls, qs, info):
+    async def _async_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         return qs
 
     @sync_to_async
@@ -1805,7 +1875,7 @@ async def test_aapply_async_target_hook_still_raises():
     assert _cascade_state.get() is None
 
 
-def _specimen(label, **fields):
+def _specimen(label: str, **fields: object):
     """Create a ``ScalarSpecimen`` row carrying only the columns a cascade pin reads."""
     return ScalarSpecimen.objects.create(
         label=label,
@@ -1917,8 +1987,9 @@ def test_two_overlapping_threads_isolate_traversal_state():
 
     barrier = threading.Barrier(2, timeout=10)
 
-    def _parking_hook(cls, qs, info):
+    def _parking_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         barrier.wait()  # both walks are provably in-flight together
+        assert isinstance(info, SimpleNamespace)
         if getattr(info.context, "fail", False):
             raise RuntimeError("thread boom")
         return qs.exclude(name="hidden")
@@ -1929,7 +2000,7 @@ def test_two_overlapping_threads_isolate_traversal_state():
 
     outcomes = {}
 
-    def _run(label, fail):
+    def _run(label: str, fail: bool):
         info = SimpleNamespace(context=SimpleNamespace(user=None, fail=fail))
         try:
             result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), info)
@@ -1994,7 +2065,7 @@ async def test_aapply_gather_restores_task_contexts():
 # =============================================================================
 
 
-def _exclude_private(cls, qs, info):
+def _exclude_private(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
     """The recurring cascading hook: row-narrow ``is_private=False`` then cascade.
 
     Re-declared locally, matching its sibling hooks above rather than sharing one
@@ -2004,7 +2075,7 @@ def _exclude_private(cls, qs, info):
     return apply_cascade_permissions(cls, qs.filter(is_private=False), info)
 
 
-def _gate_info(*, is_staff):
+def _gate_info(*, is_staff: bool):
     """``info``-shaped stub carrying ``info.context.request`` with a ``user``.
 
     The gate resolves the request through ``utils/permissions.py::request_from_info``
@@ -2013,7 +2084,9 @@ def _gate_info(*, is_staff):
     ``tests/orders/test_sets.py::_make_info``.
     """
     request = HttpRequest()
-    request.user = SimpleNamespace(is_staff=is_staff)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_staff=is_staff)  # pyright: ignore[reportAttributeAccessIssue]
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 
@@ -2024,7 +2097,7 @@ class _StaffOnlyCategoryFilter(FilterSet):
         model = Category
         fields = {"name": ["exact"]}
 
-    def check_name_permission(self, request):
+    def check_name_permission(self, request: object):
         user = getattr(request, "user", None)
         if not user or not user.is_staff:
             raise GraphQLError("You must be a staff user to filter by Category name.")
@@ -2046,14 +2119,16 @@ class _StaffOnlyCategoryOrder(OrderSet):
         model = Category
         fields = ["name"]
 
-    def check_name_permission(self, request):
+    def check_name_permission(self, request: object):
         user = getattr(request, "user", None)
         if not user or not user.is_staff:
             raise GraphQLError("You must be a staff user to order by Category name.")
 
     @classmethod
-    def _normalize_input(cls, input_value):
+    @override
+    def _normalize_input(cls, input_value: object) -> list[tuple[str, Ordering | None]]:
         # Mirror the active-input dict to the flat ordering tuples.
+        assert isinstance(input_value, dict)
         return list(input_value.items())
 
 
@@ -2069,13 +2144,13 @@ class _StaffOnlyItemFilter(FilterSet):
         model = Item
         fields = {"name": ["exact"]}
 
-    def check_name_permission(self, request):
+    def check_name_permission(self, request: object):
         user = getattr(request, "user", None)
         if not user or not user.is_staff:
             raise GraphQLError("You must be a staff user to filter by Item name.")
 
 
-def _anonymous_narrowed_categories(type_name):
+def _anonymous_narrowed_categories(type_name: str) -> tuple[type, models.QuerySet[models.Model]]:
     """Return ``(type, narrowed qs)`` after the type's own anonymous ``get_queryset``."""
     category_type = _make_type(type_name, Category, get_queryset=_exclude_private)
     finalize_django_types()

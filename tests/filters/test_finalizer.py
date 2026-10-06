@@ -28,12 +28,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Shelf
+from django.db.models import Model, QuerySet
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -54,12 +57,13 @@ from django_strawberry_framework.filters.inputs import (
     materialize_input_class,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.finalizer import _bind_filterset_owner
 from django_strawberry_framework.types.relay import apply_interfaces
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     registry.clear()
     _field_specs.clear()
     _helper_referenced_filtersets.clear()
@@ -115,11 +119,13 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     original_get_filters = GenreFilter.get_filters.__func__
 
     @classmethod
-    def instrumented_get_filters(cls):
+    def instrumented_get_filters(cls: type[FilterSet]):
         observations.append(cls._owner_definition is not None)
         return original_get_filters(cls)
 
-    GenreFilter.get_filters = instrumented_get_filters
+    # basedpyright: the classmethod spy installed on the class is the probe under test; the
+    # checker compares the descriptor against the bound hook signature
+    GenreFilter.get_filters = instrumented_get_filters  # pyright: ignore[reportAttributeAccessIssue]
     try:
 
         class BookType(DjangoType):
@@ -133,17 +139,23 @@ def test_phase_2_5_binds_all_owners_before_expansion():
                 )
                 filterset_class = BookFilter
 
+        assert registry.get(Book) is BookType
+
         class GenreType(DjangoType):
             class Meta:
                 model = Genre
                 fields = ("id", "name")
                 filterset_class = GenreFilter
 
+        assert registry.get(Genre) is GenreType
+
         class ShelfType(DjangoType):
             class Meta:
                 model = Shelf
                 fields = ("id", "code")
                 filterset_class = ShelfFilter
+
+        assert registry.get(Shelf) is ShelfType
 
         finalize_django_types()
 
@@ -197,11 +209,15 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity():
             primary = True
             filterset_class = BookFilter
 
+    assert registry.get(Book) is RelayBookType
+
     class PlainBookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title")
             filterset_class = BookFilter
+
+    assert registry.model_for_type(PlainBookType) is Book
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -241,6 +257,8 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
             primary = True
             filterset_class = BookFilter
 
+    assert registry.get(Book) is PermissiveBookType
+
     class RestrictiveBookType(DjangoType):
         class Meta:
             model = Book
@@ -248,9 +266,12 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
             filterset_class = BookFilter
 
         @classmethod
-        def get_queryset(cls, queryset, info):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Book], info: object):
             # A distinct visibility hook: excludes a subset the permissive owner shows.
             return queryset.exclude(title="secret")
+
+    assert registry.model_for_type(RestrictiveBookType) is Book
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -285,7 +306,8 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
         # (``__init_subclass__`` early-returns on ``meta is None``); both concrete
         # owners inherit this one ``get_queryset`` function.
         @classmethod
-        def get_queryset(cls, queryset, info):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Book], info: object):
             # cls-parameterized in spirit: the hook body can branch on ``cls`` even
             # when the function object is shared, so the shared filterset's
             # related-branch visibility is owner-dependent despite the identity.
@@ -298,11 +320,15 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
             primary = True
             filterset_class = BookFilter
 
+    assert registry.get(Book) is PrimaryBookType
+
     class SecondaryBookType(_VisibleBooksBase):
         class Meta:
             model = Book
             fields = ("id", "title")
             filterset_class = BookFilter
+
+    assert registry.model_for_type(SecondaryBookType) is Book
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -356,10 +382,14 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class PrimaryBookType(DjangoType):
         class Meta:
@@ -417,10 +447,14 @@ def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -463,10 +497,14 @@ def test_orphan_filter_input_type_reference_raises_at_finalize():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -477,6 +515,8 @@ def test_orphan_filter_input_type_reference_raises_at_finalize():
                 "shelf",
                 "genres",
             )
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -518,10 +558,14 @@ def test_phase_2_5_orphan_check_runs_before_materialization():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -533,6 +577,8 @@ def test_phase_2_5_orphan_check_runs_before_materialization():
                 "genres",
             )
             filterset_class = WiredFilter
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError):
         finalize_django_types()
@@ -578,10 +624,14 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -592,6 +642,8 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
                 "shelf",
                 "genres",
             )
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -635,10 +687,14 @@ def test_phase_2_5_subpass_3_materializes_input_classes_as_module_globals():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -650,6 +706,8 @@ def test_phase_2_5_subpass_3_materializes_input_classes_as_module_globals():
                 "genres",
             )
             filterset_class = BookFilter
+
+    assert registry.get(Book) is BookType
 
     finalize_django_types()
 
@@ -822,10 +880,14 @@ def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -837,6 +899,8 @@ def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
                 "genres",
             )
             filterset_class = BookFilter
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -879,6 +943,8 @@ def test_phase_2_5_unregistered_related_filter_target_raises_at_finalize():
             model = Book
             fields = ("id", "title")
             filterset_class = BookFilter
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -926,11 +992,15 @@ def test_phase_2_5_unregistered_target_check_walks_transitive_filtersets():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class BookType(DjangoType):
         class Meta:
             model = Book
             fields = ("id", "title", "shelf")
             filterset_class = BookFilter
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -970,10 +1040,14 @@ def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -985,6 +1059,8 @@ def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error
                 "genres",
             )
             filterset_class = BookFilter
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -1013,10 +1089,14 @@ def test_phase_2_5_runs_under_relay_node_interface():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -1046,7 +1126,14 @@ def test_phase_2_5_runs_under_relay_node_interface():
 # ---------------------------------------------------------------------------
 
 
-def _owner_definition_stub(name, *, model):
+def _as_definition(stand_in: object) -> DjangoTypeDefinition:
+    """Hand a duck-typed owner definition to the binder that takes a ``DjangoTypeDefinition``."""
+    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+    # _bind_filterset_owner types the parameter as DjangoTypeDefinition
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _owner_definition_stub(name: str, *, model: type[Model]):
     """Return a minimal owner-definition-shaped object for binding tests.
 
     ``model`` is the bound filterset's ``Meta.model``: a real owner definition always carries a
@@ -1062,10 +1149,10 @@ def _owner_definition_stub(name, *, model):
         # these tests isolate the target-resolution branches they exercise.
         has_custom_get_queryset = False
 
-        def __init__(self, resolver=None):
+        def __init__(self, resolver: Callable[[str], object] | None = None):
             self._resolver = resolver
 
-        def related_target_for(self, field_name):
+        def related_target_for(self, field_name: str):
             return self._resolver(field_name) if self._resolver is not None else None
 
     return _Stub
@@ -1080,7 +1167,7 @@ def test_bind_filterset_owner_idempotent_for_same_definition():
             fields = {"code": ["exact"]}
 
     Stub = _owner_definition_stub("OwnerType", model=Shelf)
-    definition = Stub()
+    definition = _as_definition(Stub())
     _bind_filterset_owner(ShelfFilter, definition)  # previous None -> bind
     _bind_filterset_owner(ShelfFilter, definition)  # previous IS definition -> return
     assert ShelfFilter._owner_definition is definition
@@ -1102,8 +1189,8 @@ def test_bind_filterset_owner_continues_when_both_targets_unresolved():
             fields = {"title": ["exact"]}
 
     Stub = _owner_definition_stub("OwnerType", model=Book)
-    first = Stub(resolver=lambda _f: None)
-    second = Stub(resolver=lambda _f: None)
+    first = _as_definition(Stub(resolver=lambda _f: None))
+    second = _as_definition(Stub(resolver=lambda _f: None))
     _bind_filterset_owner(BookFilter, first)
     # Second distinct owner: ``shelf`` resolves to None from both -> continue,
     # no raise, and the first binding is preserved.
@@ -1236,8 +1323,8 @@ def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not(
 
     Stub = _owner_definition_stub("OwnerType", model=Book)
     target_def = type("ResolvedShelfDefinition", (), {"origin": type("ResolvedShelfType", (), {})})
-    first = Stub(resolver=lambda _f: None)
-    second = Stub(resolver=lambda _f: (target_def, object()))
+    first = _as_definition(Stub(resolver=lambda _f: None))
+    second = _as_definition(Stub(resolver=lambda _f: (target_def, object())))
     _bind_filterset_owner(BookFilter, first)
     with pytest.raises(ConfigurationError) as excinfo:
         _bind_filterset_owner(BookFilter, second)
@@ -1268,10 +1355,14 @@ def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
             model = Shelf
             fields = ("id", "code")
 
+    assert registry.get(Shelf) is ShelfType
+
     class GenreType(DjangoType):
         class Meta:
             model = Genre
             fields = ("id", "name")
+
+    assert registry.get(Genre) is GenreType
 
     class BookType(DjangoType):
         class Meta:
@@ -1283,6 +1374,8 @@ def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
                 "genres",
             )
             filterset_class = BookFilter
+
+    assert registry.get(Book) is BookType
 
     with pytest.raises(ConfigurationError) as excinfo:
         finalize_django_types()
@@ -1305,7 +1398,7 @@ def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
     naming the filterset and field.
     """
 
-    def encode(type_cls, model, root):
+    def encode(type_cls: type[DjangoType], model: type[Model], root: object):
         return "GenreType"
 
     class GenreFilter(FilterSet):
@@ -1321,6 +1414,8 @@ def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
             primary = True
             globalid_strategy = encode
             filterset_class = GenreFilter
+
+    assert registry.get(Genre) is GenreType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -1351,8 +1446,10 @@ def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target():
             filterset_class = GenreFilter
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: object):
             return "GenreType"
+
+    assert registry.get(Genre) is GenreType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -1410,7 +1507,9 @@ def test_finalize_surfaces_the_related_filter_target_gate_identity():
         """A plain class: the mis-typed RelatedFilter target."""
 
     class BrokenFilter(FilterSet):
-        branch = RelatedFilter(_NotAFilterSet, field_name="branch")
+        # basedpyright: the non-FilterSet target is the hostile input under test; RelatedFilter
+        # types the parameter as _FilterSetTarget
+        branch = RelatedFilter(_NotAFilterSet, field_name="branch")  # pyright: ignore[reportArgumentType]
 
         class Meta:
             model = Shelf
@@ -1421,6 +1520,8 @@ def test_finalize_surfaces_the_related_filter_target_gate_identity():
             model = Shelf
             fields = ("id", "code")
             filterset_class = BrokenFilter
+
+    assert registry.get(Shelf) is ShelfType
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()

@@ -12,7 +12,10 @@ No GraphQL document can observe those dunders; input SDL lives in
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
+from collections.abc import Callable, Collection
+
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.canonical import (
@@ -21,53 +24,69 @@ from django_strawberry_framework.utils.canonical import (
 )
 
 
-class _LyingDict(dict):
+class _LyingDict(dict[str, object]):
     """A ``dict`` subclass whose overridden views report contents it does not hold."""
 
-    def items(self):
+    @override
+    # basedpyright: deliberately lying views, the hooks canonicalization must not dispatch through
+    def items(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return [("lied", "pair")]
 
-    def keys(self):
+    @override
+    # basedpyright: deliberately lying views, the hooks canonicalization must not dispatch through
+    def keys(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return ["lied"]
 
-    def values(self):
+    @override
+    # basedpyright: deliberately lying views, the hooks canonicalization must not dispatch through
+    def values(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return ["pair"]
 
+    @override
     def __iter__(self):
         return iter(["lied"])
 
+    @override
     def __len__(self):
         return 99
 
 
-class _LyingSet(set):
+class _LyingSet(set[object]):
+    @override
     def __iter__(self):
         return iter(["lied"])
 
+    @override
     def __len__(self):
         return 99
 
 
-class _LyingFrozenSet(frozenset):
+class _LyingFrozenSet(frozenset[object]):
+    @override
     def __iter__(self):
         return iter(["lied"])
 
+    @override
     def __len__(self):
         return 99
 
 
-class _LyingList(list):
+class _LyingList(list[object]):
+    @override
     def __iter__(self):
         return iter(["lied"])
 
+    @override
     def __len__(self):
         return 99
 
 
-class _LyingTuple(tuple):
+class _LyingTuple(tuple[object, ...]):
+    @override
     def __iter__(self):
         return iter(["lied"])
 
+    @override
     def __len__(self):
         return 99
 
@@ -93,11 +112,13 @@ class _PlainIterable:
 class _ConstantRepr:
     """Distinct instances that all render identically, the collapse a bare key allows."""
 
+    @override
     def __repr__(self):
         return "<same>"
 
 
 class _RaisingRepr:
+    @override
     def __repr__(self):
         raise RuntimeError("hostile __repr__ detonated")
 
@@ -105,16 +126,19 @@ class _RaisingRepr:
 class _HostileStr(str):
     """A ``str`` subclass that detonates the moment anything renders it."""
 
+    @override
     def __str__(self):
         raise RuntimeError("hostile __str__ detonated")
 
-    def __format__(self, spec):
+    @override
+    def __format__(self, spec: str):
         raise RuntimeError("hostile __format__ detonated")
 
 
 class _LyingStr(str):
     """A ``str`` subclass whose ``__repr__`` hands back a hostile ``str`` subclass."""
 
+    @override
     def __repr__(self):
         return _HostileStr("forged")
 
@@ -157,7 +181,10 @@ def test_base_container_values_reads_a_dict_subclass_through_the_base_items_slot
         "tuple",
     ],
 )
-def test_base_container_values_reads_subclasses_through_the_base_iterator(factory, expected):
+def test_base_container_values_reads_subclasses_through_the_base_iterator(
+    factory: Callable[[], Collection[str]],
+    expected: tuple[str, ...],
+):
     """A subclass's ``__iter__`` / ``__len__`` override is bypassed on every shape."""
     value = factory()
 

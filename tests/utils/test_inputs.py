@@ -7,13 +7,16 @@ Shipped filter/order input names live in
 """
 
 import sys
-from types import SimpleNamespace
+from dataclasses import dataclass
+from typing import ClassVar
 
 import pytest
 import strawberry
+from typing_extensions import override
 
 from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 from django_strawberry_framework.utils.canonical import base_container_values
 from django_strawberry_framework.utils.inputs import (
     FILTERSET_FIELDS_ALIAS,
@@ -75,11 +78,12 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
     The shared builder now pins every field's package-derived name, so both survive.
     """
 
-    class _ProbeSet:  # stand-in set class; only ``__qualname__`` is read (error path).
+    # stand-in set class; only ``__qualname__`` is read (error path).
+    class _ProbeSet(ClassBasedTypeNameMixin):
         pass
 
     entries = [("field_2", object()), ("field2", object())]
-    field_specs: dict = {}
+    field_specs: dict[tuple[type[_ProbeSet], str], GeneratedInputFieldSpec] = {}
     triples = emit_set_input_field_triples(
         _ProbeSet,
         entries,
@@ -97,7 +101,8 @@ def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
     @strawberry.type
     class Query:
         @strawberry.field
-        def probe(self, inp: input_cls) -> int:
+        # basedpyright: Strawberry reads this annotation at runtime; the input class is built by the helper under test
+        def probe(self, inp: input_cls) -> int:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
             return 1
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())
@@ -132,7 +137,9 @@ def test_builder_rejects_duplicate_effective_graphql_names():
 
 def test_builder_rejects_malformed_field_kwargs_with_configuration_error():
     with pytest.raises(ConfigurationError, match="field kwargs must be a mapping"):
-        build_strawberry_input_class("MalformedFieldKwargsInput", [("name", int, object())])
+        # basedpyright: the non-mapping field kwargs is the hostile input under test;
+        # build_strawberry_input_class types each triple's kwargs as Mapping[str, object] | None
+        build_strawberry_input_class("MalformedFieldKwargsInput", [("name", int, object())])  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +157,7 @@ def test_builder_rejects_malformed_field_kwargs_with_configuration_error():
         ("__", "__"),
     ],
 )
-def test_graphql_camel_name(value, expected):
+def test_graphql_camel_name(value: str, expected: str):
     """Head lowercased, rest PascalCased; no-word-token inputs pass through."""
     assert graphql_camel_name(value) == expected
 
@@ -265,7 +272,9 @@ def test_safe_import_returns_none_for_unimportable_module():
     fake_name = "django_strawberry_framework._nonexistent_substrate_probe"
     saved = sys.modules.get(fake_name)
     try:
-        sys.modules[fake_name] = None
+        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
+        # as the blocked-import sentinel
+        sys.modules[fake_name] = None  # pyright: ignore[reportArgumentType]
         assert _safe_import(fake_name, "anything") is None
     finally:
         if saved is None:
@@ -317,7 +326,8 @@ def test_input_field_spec_carries_five_axes_and_optional_source():
     assert with_source.kind == "relation_single"
     # Frozen.
     with pytest.raises((AttributeError, TypeError)):
-        with_source.source = "other"
+        # basedpyright: a write to the frozen dataclass is the rejected operation under test
+        with_source.source = "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_make_input_namespace_returns_ledger_materialize_clear_trio():
@@ -360,10 +370,12 @@ def test_set_input_type_name_delegates_to_type_name_for():
 
     class _Named:
         @classmethod
-        def type_name_for(cls, _field_path=None):
+        def type_name_for(cls, _field_path: str | None = None):
             return f"{cls.__name__}InputType"
 
-    assert set_input_type_name(_Named) == "_NamedInputType"
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # set_input_type_name types the parameter as type[ClassBasedTypeNameMixin]
+    assert set_input_type_name(_Named) == "_NamedInputType"  # pyright: ignore[reportArgumentType]
 
 
 def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_clear():
@@ -478,27 +490,35 @@ def test_input_builder_wraps_unreadable_and_malformed_field_specifications():
             raise RuntimeError("field specs exploded")
 
     with pytest.raises(ConfigurationError, match="field specifications could not be read"):
-        build_strawberry_input_class("UnreadableInput", _UnreadableSpecs())
+        # basedpyright: the unreadable field-spec container is the hostile input under test;
+        # build_strawberry_input_class types the parameter as a Sequence of triples
+        build_strawberry_input_class("UnreadableInput", _UnreadableSpecs())  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="must contain.*triples"):
-        build_strawberry_input_class("MalformedInput", [("name", int)])
+        # basedpyright: the two-member field spec is the hostile input under test;
+        # build_strawberry_input_class types the parameter as a Sequence of triples
+        build_strawberry_input_class("MalformedInput", [("name", int)])  # pyright: ignore[reportArgumentType]
 
 
 def test_meta_fields_canonicalization_bypasses_hostile_containers_and_reprs():
     """``Meta.fields`` canonicalization never trusts consumer container hooks or reprs."""
 
     class _HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("hostile repr")
 
-    class _HostileDict(dict):
+    class _HostileDict(dict[str, object]):
+        @override
         def items(self):
             raise RuntimeError("hostile items")
 
-    class _HostileSet(set):
+    class _HostileSet(set[object]):
+        @override
         def __iter__(self):
             raise RuntimeError("hostile set iterator")
 
-    class _HostileList(list):
+    class _HostileList(list[object]):
+        @override
         def __iter__(self):
             raise RuntimeError("hostile list iterator")
 
@@ -546,10 +566,11 @@ def test_set_metaclasses_share_the_fields_alias_owner():
     from django_strawberry_framework.filters import sets as filter_sets
     from django_strawberry_framework.orders import sets as order_sets
 
-    assert filter_sets.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS
-    assert filter_sets.promote_set_meta_fields is promote_set_meta_fields
-    assert order_sets.promote_set_meta_fields is promote_set_meta_fields
-    assert order_sets.read_set_meta_fields is read_set_meta_fields
+    # basedpyright: the identity check reads the name through the importing module on purpose
+    assert filter_sets.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert filter_sets.promote_set_meta_fields is promote_set_meta_fields  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert order_sets.promote_set_meta_fields is promote_set_meta_fields  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert order_sets.read_set_meta_fields is read_set_meta_fields  # pyright: ignore[reportPrivateLocalImportUsage]
     assert "promote_set_meta_fields" in filter_sets.FilterSetMetaclass.__new__.__code__.co_names
     assert "promote_set_meta_fields" in order_sets.OrderSetMetaclass.__new__.__code__.co_names
     assert "read_set_meta_fields" in order_sets.OrderSet._expand_meta_fields.__code__.co_names
@@ -562,7 +583,9 @@ def test_promote_set_meta_fields_writes_the_alias_onto_class_meta():
         filter_fields = ["code"]
 
     assert promote_set_meta_fields(Meta, fields_alias=FILTERSET_FIELDS_ALIAS) == ["code"]
-    assert Meta.fields == ["code"]
+    # basedpyright: promote_set_meta_fields writes ``fields`` onto the class at run time; the
+    # checker sees only the declared body
+    assert Meta.fields == ["code"]  # pyright: ignore[reportAttributeAccessIssue]
     assert Meta.filter_fields == ["code"]
 
 
@@ -615,8 +638,9 @@ def test_write_flavor_shape_caches_share_get_or_store_owner():
     from django_strawberry_framework.mutations import sets as mutation_sets
     from django_strawberry_framework.rest_framework import inputs as ser_inputs
 
-    assert mutation_sets.get_or_store_shape_build is get_or_store_shape_build
-    assert ser_inputs.get_or_store_shape_build is get_or_store_shape_build
+    # basedpyright: the identity check reads the name through the importing module on purpose
+    assert mutation_sets.get_or_store_shape_build is get_or_store_shape_build  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert ser_inputs.get_or_store_shape_build is get_or_store_shape_build  # pyright: ignore[reportPrivateLocalImportUsage]
 
 
 def test_pascalize_token_is_injective_across_legal_field_name_boundaries():
@@ -692,16 +716,26 @@ def test_name_set_input_type_name_token_boundaries_do_not_collide():
     assert left == "ItemA_ubCInput" and right == "ItemAB_ucInput"
 
 
+@dataclass(frozen=True)
+class _CollisionSpec:
+    """The naming record the collision walker reads, plus the target and source it is asked for."""
+
+    input_attr: str
+    graphql_name: str
+    target_name: str
+    source: str
+
+
 def test_input_collision_walker_reports_shared_write_sources():
     """The optional source axis detects two distinct fields writing one attribute."""
     specs = [
-        SimpleNamespace(
+        _CollisionSpec(
             input_attr="name",
             graphql_name="name",
             target_name="name",
             source="name",
         ),
-        SimpleNamespace(
+        _CollisionSpec(
             input_attr="alias",
             graphql_name="alias",
             target_name="alias",
@@ -772,21 +806,23 @@ def test_generated_input_arguments_factory_tolerates_none_or_missing_related_att
     """GeneratedInputArgumentsFactory does not crash when related_attr is None or missing."""
     from django_strawberry_framework.utils.inputs import GeneratedInputArgumentsFactory
 
-    class _ProbeFactory(GeneratedInputArgumentsFactory):
+    class _ProbeFactory(GeneratedInputArgumentsFactory[ClassBasedTypeNameMixin]):
         _factory_label = "ProbeFactory"
         _family_label = "ProbeSet"
         _rename_noun = "probe set"
         _related_attr = "related_probes"
         _related_target_attr = "target"
         input_object_types = {}
-        _collision_registry = {}
+        _collision_registry_attr = "_probe_registry"
+        _probe_registry: ClassVar[dict[str, type[ClassBasedTypeNameMixin]]] = {}
 
+        @override
         def _build_input_triples(
             self,
-            set_cls,
-            type_name,
-            owner_definition,
-        ):
+            set_cls: type[ClassBasedTypeNameMixin],
+            type_name: str,
+            owner_definition: object,
+        ) -> list[tuple[str, object, dict[str, object]]]:
             return [("id", int | None, {"default": None})]
 
     class _SetWithNoneRelated:
@@ -796,7 +832,9 @@ def test_generated_input_arguments_factory_tolerates_none_or_missing_related_att
         def type_name_for(cls):
             return "SetWithNoneRelatedInput"
 
-    factory = _ProbeFactory(_SetWithNoneRelated)
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+    # GeneratedInputArgumentsFactory types the parameter as type[ClassBasedTypeNameMixin]
+    factory = _ProbeFactory(_SetWithNoneRelated)  # pyright: ignore[reportArgumentType]
     input_cls = factory.arguments
     assert input_cls is not None
     assert input_cls.__name__ == "SetWithNoneRelatedInput"
@@ -833,10 +871,10 @@ def test_emit_rejects_graphql_name_collision_across_distinct_python_attrs():
     earlier one's field in the generated input dataclass.
     """
 
-    class _ProbeSet:
+    class _ProbeSet(ClassBasedTypeNameMixin):
         __qualname__ = "_ProbeSet"
 
-    field_specs: dict = {}
+    field_specs: dict[tuple[type[_ProbeSet], str], GeneratedInputFieldSpec] = {}
     with pytest.raises(ConfigurationError, match="GraphQL input field name 'fooBar'"):
         emit_set_input_field_triples(
             _ProbeSet,
@@ -854,7 +892,7 @@ def test_emit_rejects_graphql_name_collision_across_distinct_python_attrs():
 def test_emit_rejects_flatten_collision_between_traversal_and_declared_member():
     """``a__b`` (a relation traversal) flattens onto the declared member ``a_b``."""
 
-    class _ProbeSet:
+    class _ProbeSet(ClassBasedTypeNameMixin):
         __qualname__ = "_ProbeSet"
 
     with pytest.raises(ConfigurationError, match="both generate the input attribute 'a_b'"):
@@ -870,6 +908,10 @@ def test_emit_rejects_flatten_collision_between_traversal_and_declared_member():
         )
 
 
+def _class_name(cls: type) -> str:
+    return cls.__name__
+
+
 def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision():
     """``field_specs`` rows commit only after the WHOLE set walks clean.
 
@@ -879,35 +921,38 @@ def test_emit_stages_field_specs_atomically_across_a_clean_walk_then_collision()
     rows emitted by earlier clean members do not survive either.
     """
 
-    class _ProbeSet:
+    class _ProbeSet(ClassBasedTypeNameMixin):
         __qualname__ = "_ProbeSet"
 
-    def _emit(entries, field_specs):
+    def _emit(
+        entries: list[tuple[str, object]],
+        field_specs: dict[tuple[type, str], GeneratedInputFieldSpec],
+    ):
         return emit_set_input_field_triples(
             _ProbeSet,
             entries,
             related_target_of=lambda _t, _e: (False, None),
             related_source_path_of=lambda t, _e: t,
             leaf_of=lambda _t, _pa, _e: (int | None, _t),
-            input_type_name_for=lambda cls: cls.__name__,
+            input_type_name_for=_class_name,
             module_path=__name__,
             field_specs=field_specs,
         )
 
     # A collision on the FIRST colliding pair commits nothing.
-    collision: dict = {}
+    collision: dict[tuple[type, str], GeneratedInputFieldSpec] = {}
     with pytest.raises(ConfigurationError, match="both generate the input attribute"):
         _emit([("a_b", object()), ("a__b", object())], collision)
     assert collision == {}
 
     # Clean members that emit BEFORE the late colliding member drop too.
-    late: dict = {}
+    late: dict[tuple[type, str], GeneratedInputFieldSpec] = {}
     with pytest.raises(ConfigurationError, match="both generate the input attribute"):
         _emit([("a_b", object()), ("b", object()), ("a__b", object())], late)
     assert late == {}
 
     # The clean walk still commits every row.
-    clean: dict = {}
+    clean: dict[tuple[type, str], GeneratedInputFieldSpec] = {}
     triples = _emit([("a_b", object()), ("b", object())], clean)
     assert [triple[0] for triple in triples] == ["a_b", "b"]
     assert set(clean) == {(_ProbeSet, "a_b"), (_ProbeSet, "b")}

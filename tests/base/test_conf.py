@@ -16,9 +16,12 @@ have no live pin. Constructor precedence lives in
 ``tests/test_error_policy.py`` and ``tests/test_resource_policy.py``.
 """
 
+from collections.abc import Iterable
 from types import MappingProxyType
 
 import pytest
+import pytest_django
+from typing_extensions import override
 
 from django_strawberry_framework import conf
 from django_strawberry_framework.conf import (
@@ -70,7 +73,7 @@ def test_settings_user_settings_accepts_mapping_values():
     assert s.user_settings == {"X": "y"}
 
 
-def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
+def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings: pytest_django.Settings):
     """``None`` normalizes to ``{}`` on ``Settings.user_settings``.
 
     The request-shaped half (``/graphql/`` still serves under
@@ -87,7 +90,9 @@ def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
 # ---------------------------------------------------------------------------
 
 
-def test_reload_settings_refreshes_singleton_when_our_key_changes(settings):
+def test_reload_settings_refreshes_singleton_when_our_key_changes(
+    settings: pytest_django.Settings,
+):
     """Changing our key mutates the singleton ``settings`` instance in place."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "f1"}
     assert conf.settings.FILTER_KEY == "f1"
@@ -102,7 +107,7 @@ def test_reload_settings_for_unrelated_key_keeps_singleton():
     assert conf.settings is sentinel
 
 
-def test_reload_settings_updates_already_imported_reference(settings):
+def test_reload_settings_updates_already_imported_reference(settings: pytest_django.Settings):
     """A reference bound via ``from .conf import settings`` must see updates.
 
     Pins the contract that ``reload_settings`` mutates the existing instance
@@ -155,7 +160,9 @@ def test_settings_reload_with_none_restores_lazy_load():
 def test_settings_reload_rejects_non_mapping_value():
     s = Settings({"A": 1})
     with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*str"):
-        s.reload("bad")
+        # basedpyright: the string settings value is the hostile input under test; Settings.reload
+        # types the parameter as Mapping[str, object] | None
+        s.reload("bad")  # pyright: ignore[reportArgumentType]
     assert s.user_settings == {"A": 1}
 
 
@@ -178,10 +185,10 @@ def test_settings_uninitialized_user_settings_does_not_recurse():
         _ = s._user_settings
 
 
-def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch):
+def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch: pytest.MonkeyPatch):
     """An AttributeError in _normalize_user_settings must not trigger infinite recursion in __getattr__."""
 
-    def racy_normalize(value):
+    def racy_normalize(value: object):
         raise AttributeError("Simulated normalization AttributeError")
 
     monkeypatch.setattr(conf, "_normalize_user_settings", racy_normalize)
@@ -196,26 +203,37 @@ def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch):
 
 
 @pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
-def test_upstream_patches_enabled_defaults_true_when_key_absent(settings, dependency):
+def test_upstream_patches_enabled_defaults_true_when_key_absent(
+    settings: pytest_django.Settings,
+    dependency: str,
+):
     """Missing key (or whole dict) -> ``True``: consumers opt out, not in."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
     assert upstream_patches_enabled(dependency) is True
 
 
 @pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
-def test_upstream_patches_enabled_true_when_set_true(settings, dependency):
+def test_upstream_patches_enabled_true_when_set_true(
+    settings: pytest_django.Settings,
+    dependency: str,
+):
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
     assert upstream_patches_enabled(dependency) is True
 
 
 @pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
-def test_upstream_patches_enabled_false_when_set_false(settings, dependency):
+def test_upstream_patches_enabled_false_when_set_false(
+    settings: pytest_django.Settings,
+    dependency: str,
+):
     """The plain global ``False`` keeps its pre-mapping semantics (back-compat)."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
     assert upstream_patches_enabled(dependency) is False
 
 
-def test_upstream_patches_enabled_mapping_opts_out_per_dependency(settings):
+def test_upstream_patches_enabled_mapping_opts_out_per_dependency(
+    settings: pytest_django.Settings,
+):
     """A mapping disables exactly the named dependency; missing names stay on.
 
     The per-dependency escape hatch: ``{"django": False}`` silences the
@@ -230,13 +248,18 @@ def test_upstream_patches_enabled_mapping_opts_out_per_dependency(settings):
 
 
 @pytest.mark.parametrize("dependency", _PATCH_DEPENDENCIES, ids=_PATCH_DEPENDENCIES)
-def test_upstream_patches_enabled_empty_mapping_keeps_every_patch_on(settings, dependency):
+def test_upstream_patches_enabled_empty_mapping_keeps_every_patch_on(
+    settings: pytest_django.Settings,
+    dependency: str,
+):
     """An empty mapping is "no opt-outs", identical to the missing key."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {}}
     assert upstream_patches_enabled(dependency) is True
 
 
-def test_upstream_patches_enabled_mapping_accepts_non_dict_mappings(settings):
+def test_upstream_patches_enabled_mapping_accepts_non_dict_mappings(
+    settings: pytest_django.Settings,
+):
     """Any ``Mapping`` works, mirroring ``_normalize_user_settings``'s contract."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {
         "APPLY_UPSTREAM_PATCHES": MappingProxyType({"strawberry": False}),
@@ -245,7 +268,7 @@ def test_upstream_patches_enabled_mapping_accepts_non_dict_mappings(settings):
     assert upstream_patches_enabled("django") is True
 
 
-def test_upstream_patches_enabled_rejects_unknown_mapping_name(settings):
+def test_upstream_patches_enabled_rejects_unknown_mapping_name(settings: pytest_django.Settings):
     """A typo'd dependency name must not silently keep patching.
 
     The whole mapping is validated on every read: the raise fires even when
@@ -256,14 +279,14 @@ def test_upstream_patches_enabled_rejects_unknown_mapping_name(settings):
         upstream_patches_enabled("django")
 
 
-def test_upstream_patches_enabled_rejects_non_bool_mapping_value(settings):
+def test_upstream_patches_enabled_rejects_non_bool_mapping_value(settings: pytest_django.Settings):
     """``{"django": "false"}`` must fail loud, not silently invert intent."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": "false"}}
     with pytest.raises(ConfigurationError, match="must be a bool"):
         upstream_patches_enabled("django")
 
 
-def test_upstream_patches_enabled_rejects_non_string_mapping_key(settings):
+def test_upstream_patches_enabled_rejects_non_string_mapping_key(settings: pytest_django.Settings):
     """A non-string mapping key gets the ``ConfigurationError`` framing, not a ``TypeError``.
 
     Mixed unorderable key types (``{1: False, "x": False}``) once leaked
@@ -292,7 +315,10 @@ def test_upstream_patches_enabled_rejects_non_string_mapping_key(settings):
         "none",
     ],
 )
-def test_upstream_patches_enabled_rejects_non_bool_non_mapping_value(settings, value):
+def test_upstream_patches_enabled_rejects_non_bool_non_mapping_value(
+    settings: pytest_django.Settings,
+    value: str | int | None,
+):
     """A non-bool/non-mapping top-level value fails loud.
 
     Closes the old ``bool()`` coercion's silent wrong-shape acceptance: a
@@ -329,7 +355,8 @@ def test_testing_endpoint_setting_carries_pytest_collection_guard():
     function, its ``str`` return trips ``PytestReturnNotNoneWarning``, and
     the suite fails under ``filterwarnings = error`` at this very import.
     """
-    assert testing_endpoint_setting.__test__ is False
+    # basedpyright: ``conf.py`` sets ``__test__`` on the function; ``FunctionType`` declares none
+    assert testing_endpoint_setting.__test__ is False  # pyright: ignore[reportFunctionMemberAccess]
 
 
 def test_single_parent_fast_path_setting_defaults_true_when_absent():
@@ -339,7 +366,9 @@ def test_single_parent_fast_path_setting_defaults_true_when_absent():
     assert single_parent_fast_path_setting() is True
 
 
-def test_single_parent_fast_path_setting_reads_explicit_values_live(settings):
+def test_single_parent_fast_path_setting_reads_explicit_values_live(
+    settings: pytest_django.Settings,
+):
     """An explicit boolean is read LIVE - each dict assignment triggers reload_settings.
 
     The flag is consumed at FETCH time (``optimizer/single_parent_fetch.py``), so
@@ -354,7 +383,9 @@ def test_single_parent_fast_path_setting_reads_explicit_values_live(settings):
     assert single_parent_fast_path_setting() is True
 
 
-def test_single_parent_fast_path_setting_is_an_unvalidated_toggle(settings):
+def test_single_parent_fast_path_setting_is_an_unvalidated_toggle(
+    settings: pytest_django.Settings,
+):
     """The toggle is a pure on/off read: any value passes through, consumed by truthiness.
 
     Unlike ``NESTED_CONNECTION_STRATEGY`` (validated in ``resolve_strategy``
@@ -376,7 +407,7 @@ def test_single_parent_fast_path_setting_is_an_unvalidated_toggle(settings):
 # ---------------------------------------------------------------------------
 
 
-def test_delattr_clears_stale_cache_and_restores_defaults(settings):
+def test_delattr_clears_stale_cache_and_restores_defaults(settings: pytest_django.Settings):
     """``del settings.DJANGO_STRAWBERRY_FRAMEWORK`` must not leave stale overrides.
 
     pytest-django's ``SettingsWrapper.__delattr__`` deletes the key on a
@@ -437,7 +468,7 @@ def test_delattr_clears_stale_cache_and_restores_defaults(settings):
     assert error_policy_setting() is None
 
 
-def test_setting_reader_helpers_default_and_override_values(settings):
+def test_setting_reader_helpers_default_and_override_values(settings: pytest_django.Settings):
     """Direct unit test for each thin reader helper in conf.py."""
     from django_strawberry_framework.conf import (
         error_policy_setting,
@@ -480,7 +511,9 @@ def test_setting_reader_helpers_default_and_override_values(settings):
     assert error_policy_setting() == {"enabled": True}
 
 
-def test_django_backed_resync_fails_loud_after_silent_bad_replacement(settings):
+def test_django_backed_resync_fails_loud_after_silent_bad_replacement(
+    settings: pytest_django.Settings,
+):
     """A live non-mapping that never reached ``reload`` must fail on next read.
 
     Covers the gap where ``django.conf.settings`` already holds a rejected
@@ -519,7 +552,7 @@ def test_django_backed_resync_fails_loud_after_silent_bad_replacement(settings):
     conf.settings.reload({})
 
 
-def test_explicit_settings_instance_ignores_django_delattr(settings):
+def test_explicit_settings_instance_ignores_django_delattr(settings: pytest_django.Settings):
     """``Settings(mapping)`` is not django-backed; live django changes must not clobber it."""
     s = Settings({"OWN": 1})
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"OTHER": 2}
@@ -538,7 +571,9 @@ def test_normalize_hostile_isinstance_raises_configurationerror():
 
     class Boom:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("hostile __class__ boom")
 
     with pytest.raises(ConfigurationError, match="must be a mapping"):
@@ -549,13 +584,16 @@ def test_normalize_hostile_iter_raises_configurationerror():
     """``dict(value)`` raising must be contained as ``ConfigurationError``."""
     from collections.abc import Mapping
 
-    class HostileIter(Mapping):
-        def __getitem__(self, key):
+    class HostileIter(Mapping[str, object]):
+        @override
+        def __getitem__(self, key: str):
             return 1
 
+        @override
         def __iter__(self):
             raise RuntimeError("hostile __iter__ boom")
 
+        @override
         def __len__(self):
             return 1
 
@@ -567,13 +605,16 @@ def test_normalize_hostile_iter_raising_configurationerror_propagates():
     """A ``ConfigurationError`` from ``dict(value)`` must propagate without wrapping."""
     from collections.abc import Mapping
 
-    class HostileConfigError(Mapping):
-        def __getitem__(self, key):
+    class HostileConfigError(Mapping[str, object]):
+        @override
+        def __getitem__(self, key: str):
             raise ConfigurationError("hostile config boom")
 
+        @override
         def __iter__(self):
             yield "x"
 
+        @override
         def __len__(self):
             return 1
 
@@ -584,8 +625,9 @@ def test_normalize_hostile_iter_raising_configurationerror_propagates():
 def test_normalize_dict_subclass_hostile_getitem_is_sanitized():
     """A ``dict`` subclass with hostile ``__getitem__`` is copied into a plain ``dict``."""
 
-    class HostileDict(dict):
-        def __getitem__(self, key):
+    class HostileDict(dict[str, object]):
+        @override
+        def __getitem__(self, key: str):
             raise RuntimeError("hostile boom")
 
     d = HostileDict({"A": 1})
@@ -601,8 +643,9 @@ def test_normalize_dict_subclass_hostile_getitem_is_sanitized():
 def test_settings_getattr_hostile_lookup_becomes_configurationerror():
     """A non-``KeyError`` lookup failure via ``__getattr__`` must become ``ConfigurationError``."""
 
-    class HostileLookup(dict):
-        def __getitem__(self, key):
+    class HostileLookup(dict[object, object]):
+        @override
+        def __getitem__(self, key: object):
             raise RuntimeError("hostile lookup boom")
 
     s = Settings.__new__(Settings)
@@ -618,17 +661,22 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool():
     """``__class__``-spoofing liar that passes ``isinstance(..., bool)`` must not disable patches."""
     from collections.abc import Mapping
 
-    class LiarMapping(Mapping):
+    class LiarMapping(Mapping[str, object]):
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             return bool
 
-        def __getitem__(self, key):
+        @override
+        def __getitem__(self, key: str):
             return False
 
+        @override
         def __iter__(self):
             return iter([])
 
+        @override
         def __len__(self):
             return 0
 
@@ -647,7 +695,9 @@ def test_upstream_patches_enabled_liar_bool_is_not_bool():
 
     class LiarScalar:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__``: the forged type is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             return bool
 
         def __bool__(self):
@@ -667,7 +717,9 @@ def test_upstream_patches_enabled_hostile_isinstance_becomes_configurationerror(
 
     class Boom:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("hostile __class__ boom")
 
     s = Settings({"APPLY_UPSTREAM_PATCHES": Boom()})
@@ -682,13 +734,16 @@ def test_upstream_patches_enabled_hostile_iter_becomes_configurationerror():
     """``dict(configured)`` raising during mapping copy must be contained."""
     from collections.abc import Mapping
 
-    class HostileIter(Mapping):
-        def __getitem__(self, key):
+    class HostileIter(Mapping[str, object]):
+        @override
+        def __getitem__(self, key: str):
             return True
 
+        @override
         def __iter__(self):
             raise RuntimeError("hostile __iter__ boom")
 
+        @override
         def __len__(self):
             return 1
 
@@ -705,13 +760,15 @@ def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationer
 
     class HostileKey:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("hostile __class__ boom")
 
     # Need a mapping whose key is hostile; dict() will preserve that key object
     hostile_key = HostileKey()
 
-    class HostileMapping(dict):
+    class HostileMapping(dict[object, object]):
         def __init__(self):
             super().__init__({hostile_key: True})
 
@@ -724,7 +781,7 @@ def test_upstream_patches_enabled_hostile_key_isinstance_becomes_configurationer
 
 
 def test_upstream_patches_enabled_hostile_iteration_generic_becomes_configurationerror(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """Any unexpected exception during mapping validation must be contained."""
     import builtins
@@ -734,7 +791,7 @@ def test_upstream_patches_enabled_hostile_iteration_generic_becomes_configuratio
 
     real_set = builtins.set
 
-    def hostile_set(*args, **kwargs):
+    def hostile_set(*args: Iterable[object], **kwargs: object) -> set[object]:
         # Only sabotage the specific set(plain) call inside the function:
         # it is called with a dict containing the dependency names.
         # Avoid breaking pytest's own set() calls on other dicts.
@@ -763,7 +820,10 @@ def test_normalize_hostile_metaclass_name_property_contained():
 
     class BadMeta(type):
         @property
-        def __name__(cls):
+        @override
+        # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises;
+        # the checker rejects any property overriding a base class attribute
+        def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("hostile __name__ boom")
 
     class Evil(metaclass=BadMeta):
@@ -772,7 +832,9 @@ def test_normalize_hostile_metaclass_name_property_contained():
     with pytest.raises(ConfigurationError, match="must be a mapping or None; got object"):
         conf._normalize_user_settings(Evil())
     with pytest.raises(ConfigurationError, match="must be a mapping or None; got object"):
-        Settings(Evil())
+        # basedpyright: the object whose class __name__ raises is the hostile input under test;
+        # Settings types the parameter as Mapping[str, object] | None
+        Settings(Evil())  # pyright: ignore[reportArgumentType]
 
 
 def test_upstream_patches_enabled_hostile_metaclass_value_contained():
@@ -780,7 +842,10 @@ def test_upstream_patches_enabled_hostile_metaclass_value_contained():
 
     class BadMeta(type):
         @property
-        def __name__(cls):
+        @override
+        # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises;
+        # the checker rejects any property overriding a base class attribute
+        def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("hostile __name__ boom")
 
     class Evil(metaclass=BadMeta):
@@ -799,7 +864,10 @@ def test_upstream_patches_enabled_hostile_metaclass_mapping_value_contained():
 
     class BadMeta(type):
         @property
-        def __name__(cls):
+        @override
+        # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises;
+        # the checker rejects any property overriding a base class attribute
+        def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("hostile __name__ boom")
 
     class Evil(metaclass=BadMeta):

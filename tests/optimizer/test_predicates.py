@@ -12,7 +12,8 @@ and
 import pytest
 from apps.library.models import Book, Branch, Genre, Loan, Shelf
 from django.db import connection, router
-from django.db.models import Value
+from django.db.models import CompositePrimaryKey, Model, QuerySet, Value
+from django.db.models.lookups import Lookup
 
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.predicates import (
@@ -31,7 +32,7 @@ from tests._relation_fixtures import (
 pytestmark = pytest.mark.django_db
 
 
-def _compose(outer, child_predicate):
+def _compose(outer: QuerySet[Model], child_predicate: dict[str, object]):
     """Mirror the real caller shape: correlate, filter the inner, attach, apply."""
     inner = correlated_inner_root(outer).filter(**child_predicate)
     qs, cond = attach_exists(outer, inner)
@@ -116,7 +117,7 @@ def test_same_alias_guard():
         attach_exists(Book.objects.all(), inner)
 
 
-def test_alias_mismatch_message_reports_the_compared_values(monkeypatch):
+def test_alias_mismatch_message_reports_the_compared_values(monkeypatch: pytest.MonkeyPatch):
     """The mismatch guard snapshots both ``.db`` resolutions before comparing
     and formats its message from the snapshots.
 
@@ -128,7 +129,7 @@ def test_alias_mismatch_message_reports_the_compared_values(monkeypatch):
     """
     reads = {"n": 0}
 
-    def flip(model_instance=None, **hints):
+    def flip(model_instance: object = None, **hints: object):
         reads["n"] += 1
         return "default" if reads["n"] % 2 else "nonexistent"
 
@@ -196,8 +197,11 @@ def test_composite_pk_correlation_executes_on_composite_fixture():
     # comparison), keeping the single-implementation claim.
     inner_root = correlated_inner_root(RpCompositeParent.objects.all())
     (child,) = inner_root.query.where.children
+    assert isinstance(child, Lookup)
     assert child.lookup_name == "exact"
-    assert tuple(child.lhs.targets) == tuple(RpCompositeParent._meta.pk.fields)
+    composite_pk = RpCompositeParent._meta.pk
+    assert isinstance(composite_pk, CompositePrimaryKey)
+    assert tuple(child.lhs.targets) == tuple(composite_pk.fields)
     assert child.rhs.name == "pk"
     assert "OuterRef" in type(child.rhs).__name__
 

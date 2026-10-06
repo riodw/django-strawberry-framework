@@ -41,8 +41,9 @@ from __future__ import annotations
 import datetime
 import decimal
 import uuid
+from collections.abc import Callable, Iterator
 from enum import Enum
-from typing import get_args, get_origin
+from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 import pytest
 import strawberry
@@ -52,6 +53,7 @@ from apps.scalars import models as scalar_models
 from django.db import models
 from rest_framework import serializers
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -73,9 +75,13 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 )
 from django_strawberry_framework.scalars import Upload
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.rest_framework.serializer_converter import DRFField
+    from django_strawberry_framework.utils.typing import ConcreteField
+
 
 @pytest.fixture
-def _restore_converter_registry():
+def _restore_converter_registry() -> Iterator[None]:
     """Snapshot + restore the module converter registry so a test registration cannot leak.
 
     The serializer-field converter registry mirrors the read-side ``SCALAR_MAP``: a
@@ -89,21 +95,30 @@ def _restore_converter_registry():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Reset the registry so each test's products / fixture ``DjangoType``s start clean."""
     registry.clear()
     yield
     registry.clear()
 
 
-def _bind(field: serializers.Field, name: str) -> serializers.Field:
+def _bind(field: DRFField, name: str) -> DRFField:
     """Bind a serializer field (DRF populates ``field_name`` / ``source`` / ``source_attrs``).
 
     The schema-time discovery reads bound fields (DRF binds during ``.fields``
     materialization), so the converter's ``source``-axis / ``field_name`` reads
     require a bound field. Direct converter tests bind explicitly.
     """
-    field.bind(name, None)
+    # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
+    # unparented bound field)
+    field.bind(name, None)  # pyright: ignore[reportArgumentType]
+    return field
+
+
+def _concrete_field(model: type[models.Model], name: str) -> ConcreteField:
+    """Read ``model``'s concrete column ``name`` (``get_field`` also returns reverse relations)."""
+    field = model._meta.get_field(name)
+    assert isinstance(field, models.Field)
     return field
 
 
@@ -115,10 +130,14 @@ def _register_products_types() -> None:
             model = product_models.Category
             fields = ("id", "name")
 
+    assert registry.get(product_models.Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = product_models.Item
             fields = ("id", "name", "category")
+
+    assert registry.get(product_models.Item) is ItemType
 
 
 def _make_relay_target():
@@ -158,7 +177,7 @@ def _make_relay_target():
         (serializers.JSONField(), strawberry.scalars.JSON),
     ],
 )
-def test_scalar_field_annotations(field, expected):
+def test_scalar_field_annotations(field: DRFField, expected: object):
     """Each supported scalar serializer field maps to its Strawberry annotation, kind ``scalar``."""
     conversion = convert_serializer_field(_bind(field, "f"))
     assert conversion.annotation == expected
@@ -228,7 +247,7 @@ def test_list_field_relation_child_raises():
 def test_list_field_nested_serializer_child_raises():
     """A ``ListField`` whose child is a nested serializer raises."""
 
-    class Inner(serializers.Serializer):
+    class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
     field = _bind(serializers.ListField(child=Inner()), "items")
@@ -272,7 +291,7 @@ def test_serializer_only_many_related_field_maps_to_globalid_list():
 def test_nested_serializer_field_raises():
     """A nested ``Serializer`` field raises (the 036 nested-write non-goal)."""
 
-    class Inner(serializers.Serializer):
+    class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
     with pytest.raises(ConfigurationError, match="nested"):
@@ -282,7 +301,7 @@ def test_nested_serializer_field_raises():
 def test_list_serializer_field_raises():
     """A ``ListSerializer`` (a ``many=True`` nested serializer) raises."""
 
-    class Inner(serializers.Serializer):
+    class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
     with pytest.raises(ConfigurationError, match="nested"):
@@ -292,7 +311,7 @@ def test_list_serializer_field_raises():
 def test_is_nested_serializer_field_detects_nested_and_scalar():
     """``is_nested_serializer_field`` is True for a nested serializer / list, False for a scalar."""
 
-    class Inner(serializers.Serializer):
+    class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
     assert serializer_converter.is_nested_serializer_field(_bind(Inner(), "single"))
@@ -303,7 +322,7 @@ def test_is_nested_serializer_field_detects_nested_and_scalar():
 def test_nested_serializer_child_reports_single_vs_many():
     """``nested_serializer_child`` peels a ``ListSerializer`` to its child (many=True) vs a single (many=False)."""
 
-    class Inner(serializers.Serializer):
+    class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
     single = _bind(Inner(), "single")
@@ -326,15 +345,17 @@ def test_resolve_serializer_field_rejects_nested_over_relation_column():
     relation-id input.
     """
 
-    class ItemInline(serializers.ModelSerializer):
-        class Meta:
+    class ItemInline(serializers.ModelSerializer[product_models.Item]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("name",)
 
-    class CategorySer(serializers.ModelSerializer):
+    class CategorySer(serializers.ModelSerializer[product_models.Category]):
         items = ItemInline(many=True)
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Category
             fields = ("name", "items")
 
@@ -429,11 +450,13 @@ def test_unknown_custom_field_subclass_raises():
     exists - there is no silent ``String`` fallback.
     """
 
-    class CustomField(serializers.Field):
-        def to_internal_value(self, data):  # never called in conversion.
+    class CustomField(serializers.Field[object, object, object, object]):
+        @override
+        def to_internal_value(self, data: object):  # never called in conversion.
             return data
 
-        def to_representation(self, value):  # never called in conversion.
+        @override
+        def to_representation(self, value: object):  # never called in conversion.
             return value
 
     with pytest.raises(
@@ -456,7 +479,7 @@ def test_unknown_custom_field_subclass_raises():
         ("category_pk", "category_pk", "categoryPk"),
     ],
 )
-def test_id_like_suffix_rule(declared, expected_attr, expected_graphql):
+def test_id_like_suffix_rule(declared: str, expected_attr: str, expected_graphql: str):
     """A single relation's declared name drives the input attr / GraphQL name (no doubling)."""
     attr, graphql = serializer_field_graphql_name(declared, RELATION_SINGLE)
     assert attr == expected_attr
@@ -479,16 +502,18 @@ def test_renamed_scalar_resolves_backing_column_via_source():
     """``full_name = CharField(source="name")`` resolves the ``name`` column, keeps the declared name."""
     _register_products_types()
 
-    class RenamedSer(serializers.ModelSerializer):
+    class RenamedSer(serializers.ModelSerializer[product_models.Item]):
         full_name = serializers.CharField(source="name")
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("full_name",)
 
     field = RenamedSer().fields["full_name"]
     # Backing column resolved via source, not declared name.
     column = backing_model_field(product_models.Item, field)
+    assert column is not None
     assert column.name == "name"
     python_attr, _annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
     assert python_attr == "full_name"
@@ -502,13 +527,14 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     """``category_pk = PrimaryKeyRelatedField(source="category")`` -> ``categoryPk``, column via source."""
     _register_products_types()
 
-    class RenamedSer(serializers.ModelSerializer):
+    class RenamedSer(serializers.ModelSerializer[product_models.Item]):
         category_pk = serializers.PrimaryKeyRelatedField(
             queryset=product_models.Category.objects.all(),
             source="category",
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("category_pk",)
 
@@ -528,14 +554,15 @@ def test_model_backed_relation_cardinality_mismatch_raises():
     """A DRF ``many=True`` relation cannot masquerade as a scalar FK input."""
     _register_products_types()
 
-    class MismatchedSer(serializers.ModelSerializer):
+    class MismatchedSer(serializers.ModelSerializer[product_models.Item]):
         category_ids = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=product_models.Category.objects.all(),
             source="category",
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("category_ids",)
 
@@ -551,6 +578,8 @@ def _register_relay_shelf_primary() -> None:
             fields = ("id", "code")
             primary = True
 
+    assert registry.get(library_models.Shelf) is ShelfProbeType
+
 
 def _register_tagged_item_primary() -> None:
     class TaggedItemProbeType(DjangoType):
@@ -559,6 +588,8 @@ def _register_tagged_item_primary() -> None:
             fields = ("id",)
             primary = True
 
+    assert registry.get(library_models.TaggedItem) is TaggedItemProbeType
+
 
 def _register_membership_card_primary() -> None:
     class MembershipCardProbeType(DjangoType):
@@ -566,6 +597,8 @@ def _register_membership_card_primary() -> None:
             model = library_models.MembershipCard
             fields = ("id", "barcode")
             primary = True
+
+    assert registry.get(library_models.MembershipCard) is MembershipCardProbeType
 
 
 def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
@@ -580,13 +613,14 @@ def test_many_pk_related_field_over_reverse_fk_column_emits_multi():
     """
     _register_relay_shelf_primary()
 
-    class BranchSer(serializers.ModelSerializer):
+    class BranchSer(serializers.ModelSerializer[library_models.Branch]):
         shelves = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.Shelf.objects.all(),
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Branch
             fields = ("name", "shelves")
 
@@ -612,14 +646,15 @@ def test_many_pk_related_field_over_generic_relation_column_emits_multi():
     tags_rel = library_models.Branch._meta.get_field("tags")
     assert tags_rel.one_to_many is True and tags_rel.many_to_many is False
 
-    class BranchTagSer(serializers.ModelSerializer):
+    class BranchTagSer(serializers.ModelSerializer[library_models.Branch]):
         tagged = serializers.PrimaryKeyRelatedField(
             many=True,
             source="tags",
             queryset=library_models.TaggedItem.objects.all(),
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Branch
             fields = ("name", "tagged")
 
@@ -647,12 +682,13 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
     assert type(rel).__name__ == "OneToOneRel"
     assert serializer_converter._model_relation_cardinality(rel) is False
 
-    class PatronSer(serializers.ModelSerializer):
+    class PatronSer(serializers.ModelSerializer[library_models.Patron]):
         card = serializers.PrimaryKeyRelatedField(
             queryset=library_models.MembershipCard.objects.all(),
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Patron
             fields = ("name", "card")
 
@@ -671,13 +707,14 @@ def test_single_pk_related_field_over_reverse_o2o_column_emits_single():
 def test_many_over_reverse_o2o_column_is_rejected():
     """many=True over a reverse OneToOneRel is a cardinality mismatch (a collection lie)."""
 
-    class PatronSer(serializers.ModelSerializer):
+    class PatronSer(serializers.ModelSerializer[library_models.Patron]):
         card = serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=library_models.MembershipCard.objects.all(),
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Patron
             fields = ("name", "card")
 
@@ -695,13 +732,14 @@ def test_model_backed_slug_related_field_raises():
     """
     _register_products_types()
 
-    class SlugSer(serializers.ModelSerializer):
+    class SlugSer(serializers.ModelSerializer[product_models.Item]):
         category = serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("category",)
 
@@ -714,10 +752,11 @@ def test_dotted_source_on_model_column_field_raises():
     """A dotted ``source`` on a model-column-converting field raises ``ConfigurationError``."""
     _register_products_types()
 
-    class DottedSer(serializers.ModelSerializer):
+    class DottedSer(serializers.ModelSerializer[product_models.Item]):
         nm = serializers.CharField(source="category.name")
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("nm",)
 
@@ -771,7 +810,7 @@ def test_serializer_only_relation_resolves_target_from_queryset_model():
     """A plain-``Serializer`` relation resolves its target from ``field.queryset.model``."""
     _register_products_types()
 
-    class PlainSer(serializers.Serializer):
+    class PlainSer(serializers.Serializer[object]):
         cat = serializers.PrimaryKeyRelatedField(queryset=product_models.Category.objects.all())
 
     field = PlainSer().fields["cat"]
@@ -786,7 +825,7 @@ def test_serializer_only_relation_to_relay_target_uses_globalid():
     """A serializer-only relation to a Relay primary becomes ``GlobalID``."""
     relay_target, _ = _make_relay_target()
 
-    class PlainSer(serializers.Serializer):
+    class PlainSer(serializers.Serializer[object]):
         target = serializers.PrimaryKeyRelatedField(queryset=relay_target.objects.all())
 
     field = PlainSer().fields["target"]
@@ -802,7 +841,7 @@ def test_relation_with_no_backing_column_and_no_queryset_raises():
     """
     _register_products_types()
 
-    class PlainSer(serializers.Serializer):
+    class PlainSer(serializers.Serializer[object]):
         rel = serializers.PrimaryKeyRelatedField(read_only=True)
 
     field = PlainSer().fields["rel"]
@@ -814,8 +853,9 @@ def test_relation_target_with_no_registered_primary_raises():
     """A relation whose target model has no registered primary DjangoType raises."""
 
     # No DjangoType registered for Category in this test -> the raise fires.
-    class ItemSer(serializers.ModelSerializer):
-        class Meta:
+    class ItemSer(serializers.ModelSerializer[product_models.Item]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("category",)
 
@@ -838,7 +878,7 @@ def test_relation_target_with_no_registered_primary_raises():
         (serializers.DurationField(), str),
     ],
 )
-def test_expanded_scalar_matrix(field, expected):
+def test_expanded_scalar_matrix(field: DRFField, expected: object):
     """Each expanded-matrix scalar maps to its EXPLICIT annotation, kind ``scalar``.
 
     ``DictField`` -> ``JSON``; ``IPAddressField`` / ``FilePathField`` -> ``str``;
@@ -859,7 +899,7 @@ def test_hstore_field_maps_to_json_via_mro():
 
 def test_model_field_maps_via_wrapped_model_field():
     """``ModelField`` resolves its scalar through the wrapped Django ``model_field`` (#7)."""
-    field = serializers.ModelField(model_field=product_models.Item._meta.get_field("name"))
+    field = serializers.ModelField(model_field=_concrete_field(product_models.Item, "name"))
     conversion = convert_serializer_field(_bind(field, "nm"))
     assert conversion.annotation is str
     assert conversion.kind == SCALAR
@@ -867,7 +907,9 @@ def test_model_field_maps_via_wrapped_model_field():
 
 def test_model_field_without_wrapped_field_raises():
     """A ``ModelField`` with no wrapped ``model_field`` fails loud (no scalar to resolve)."""
-    field = serializers.ModelField(model_field=None)
+    # basedpyright: the missing wrapped model field is the hostile input under test; drf-stubs
+    # types model_field as a Django Field
+    field = serializers.ModelField(model_field=None)  # pyright: ignore[reportArgumentType]
     field.field_name = "x"
     with pytest.raises(ConfigurationError, match="ModelField with no wrapped model_field"):
         convert_serializer_field(field)
@@ -876,7 +918,7 @@ def test_model_field_without_wrapped_field_raises():
 def test_model_field_over_unsupported_column_fails_loud():
     """A ``ModelField`` over an UNsupported column type raises (via ``scalar_for_field``, no ``String``)."""
 
-    class WeirdField(models.Field):
+    class WeirdField(models.Field[object, object]):
         pass
 
     weird = WeirdField()
@@ -892,17 +934,19 @@ def test_model_field_over_unsupported_column_fails_loud():
 # ---------------------------------------------------------------------------
 
 
-class _CustomHexField(serializers.Field):
+class _CustomHexField(serializers.Field[object, object, object, object]):
     """A custom DRF field whose MRO has NO supported ancestor (unregistered -> raises)."""
 
-    def to_internal_value(self, data):  # never called in conversion.
+    @override
+    def to_internal_value(self, data: object):  # never called in conversion.
         return data
 
-    def to_representation(self, value):  # never called in conversion.
+    @override
+    def to_representation(self, value: object):  # never called in conversion.
         return value
 
 
-def test_unregistered_custom_field_raises_then_registered_maps(_restore_converter_registry):
+def test_unregistered_custom_field_raises_then_registered_maps(_restore_converter_registry: None):
     """A custom field raises until a converter is registered, then maps - and no catch-all appears."""
     # Unregistered: the fail-loud raise (no silent ``String``).
     with pytest.raises(
@@ -921,20 +965,22 @@ def test_unregistered_custom_field_raises_then_registered_maps(_restore_converte
 
 
 def test_registered_converter_malformed_return_is_configuration_error(
-    _restore_converter_registry,
+    _restore_converter_registry: None,
 ):
     """A registered converter must return the typed scalar conversion value object."""
-    register_serializer_field_converter(_CustomHexField, lambda _field: None)
+    # basedpyright: the converter returning None is the hostile input under test;
+    # register_serializer_field_converter types the parameter as SerializerFieldConverter
+    register_serializer_field_converter(_CustomHexField, lambda _field: None)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="must return SerializerFieldConversion"):
         convert_serializer_field(_bind(_CustomHexField(), "c"))
 
 
 def test_registered_converter_exception_is_wrapped_as_configuration_error(
-    _restore_converter_registry,
+    _restore_converter_registry: None,
 ):
     """A converter that raises is reported against the registry, not as its own exception."""
 
-    def broken_converter(_field):
+    def broken_converter(_field: DRFField):
         raise RuntimeError("converter failed")
 
     register_serializer_field_converter(_CustomHexField, broken_converter)
@@ -942,7 +988,9 @@ def test_registered_converter_exception_is_wrapped_as_configuration_error(
         convert_serializer_field(_bind(_CustomHexField(), "c"))
 
 
-def test_registered_converter_relation_kind_is_configuration_error(_restore_converter_registry):
+def test_registered_converter_relation_kind_is_configuration_error(
+    _restore_converter_registry: None,
+):
     """A scalar registry extension cannot bypass framework-owned relation handling."""
     register_serializer_field_converter(
         _CustomHexField,
@@ -956,7 +1004,9 @@ def test_registered_converter_relation_kind_is_configuration_error(_restore_conv
         convert_serializer_field(_bind(_CustomHexField(), "c"))
 
 
-def test_register_converter_resolves_unregistered_subclass_via_mro(_restore_converter_registry):
+def test_register_converter_resolves_unregistered_subclass_via_mro(
+    _restore_converter_registry: None,
+):
     """A registered converter also covers the field class's unregistered subclasses (MRO walk)."""
     register_serializer_field_converter(
         _CustomHexField,
@@ -969,9 +1019,12 @@ def test_register_converter_resolves_unregistered_subclass_via_mro(_restore_conv
     assert convert_serializer_field(_bind(_CustomHexSubclass(), "c")).annotation is str
 
 
-def test_register_converter_override_guard(_restore_converter_registry):
+def test_register_converter_override_guard(_restore_converter_registry: None):
     """Re-registering an already-mapped class raises unless ``override=True``."""
-    conv = lambda field: SerializerFieldConversion(annotation=int, required=field.required)  # noqa: E731
+
+    def conv(field: DRFField) -> SerializerFieldConversion:
+        return SerializerFieldConversion(annotation=int, required=field.required)
+
     with pytest.raises(ConfigurationError, match="already registered for 'CharField'"):
         register_serializer_field_converter(serializers.CharField, conv)
     # ``override=True`` replaces it.
@@ -988,19 +1041,26 @@ def test_register_converter_override_guard(_restore_converter_registry):
         pytest.param(serializers.CharField(), id="field-instance"),
     ],
 )
-def test_register_converter_rejects_non_field_class(_restore_converter_registry, field_class):
+def test_register_converter_rejects_non_field_class(
+    _restore_converter_registry: None,
+    field_class: object,
+):
     """``field_class`` must be a ``serializers.Field`` subclass."""
     with pytest.raises(ConfigurationError, match="must be a serializers.Field subclass"):
         register_serializer_field_converter(
-            field_class,
+            # basedpyright: each non-class field_class is the hostile input under test;
+            # register_serializer_field_converter types the parameter as type[object]
+            field_class,  # pyright: ignore[reportArgumentType]
             lambda field: SerializerFieldConversion(annotation=str, required=field.required),
         )
 
 
-def test_register_converter_rejects_non_callable(_restore_converter_registry):
+def test_register_converter_rejects_non_callable(_restore_converter_registry: None):
     """``converter`` must be callable."""
     with pytest.raises(ConfigurationError, match="must be\n?.*callable|callable"):
-        register_serializer_field_converter(_CustomHexField, "not-a-callable")
+        # basedpyright: the non-callable converter is the hostile input under test;
+        # register_serializer_field_converter types the parameter as SerializerFieldConverter
+        register_serializer_field_converter(_CustomHexField, "not-a-callable")  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1071,7 @@ def test_register_converter_rejects_non_callable(_restore_converter_registry):
 def test_serializer_only_choicefield_becomes_enum():
     """A serializer-only ``ChoiceField`` resolves to a generated GraphQL enum (schema precision)."""
 
-    class ChoiceSer(serializers.Serializer):
+    class ChoiceSer(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
 
     field = ChoiceSer().fields["color"]
@@ -1024,7 +1084,7 @@ def test_serializer_only_choicefield_becomes_enum():
 def test_serializer_only_multiple_choicefield_becomes_list_enum():
     """A serializer-only ``MultipleChoiceField`` resolves to ``list[<enum>]``."""
 
-    class MultiSer(serializers.Serializer):
+    class MultiSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")])
 
     field = MultiSer().fields["tags"]
@@ -1038,7 +1098,7 @@ def test_serializer_only_multiple_choicefield_becomes_list_enum():
 def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member():
     """``MultipleChoiceField(allow_blank=True)`` admits ``""`` per element, so its enum carries ``BLANK``."""
 
-    class MultiSer(serializers.Serializer):
+    class MultiSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(choices=[("a", "A")], allow_blank=True)
 
     field = MultiSer().fields["tags"]
@@ -1050,15 +1110,17 @@ def test_serializer_only_multiple_choicefield_allow_blank_enum_has_blank_member(
 def test_declared_choicefield_allow_blank_over_model_column_enum_has_blank_member():
     """A declared ``ChoiceField(allow_blank=True)`` over a plain column emits its enum with ``BLANK``."""
 
-    class DeclaredSer(serializers.ModelSerializer):
+    class DeclaredSer(serializers.ModelSerializer[library_models.Shelf]):
         topic = serializers.ChoiceField(choices=[("x", "X")], allow_blank=True)
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Shelf
             fields = ("topic",)
 
     field = DeclaredSer().fields["topic"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "x": "x"}
 
 
@@ -1084,13 +1146,14 @@ _BLANK_COLUMN_REMEDY = (
 def test_declared_choice_allow_blank_over_strict_choice_column_refused():
     """``allow_blank=True`` over a ``blank=False`` choice column would write an unreadable ``""``."""
 
-    class BlankStatusSer(serializers.ModelSerializer):
+    class BlankStatusSer(serializers.ModelSerializer[library_models.Book]):
         circulation_status = serializers.ChoiceField(
             choices=[("available", "Available")],
             allow_blank=True,
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1109,14 +1172,15 @@ def test_declared_choice_allow_blank_over_strict_choice_column_refused():
 def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
     """The column is resolved through ``source``; the message names the declared field."""
 
-    class RenamedStatusSer(serializers.ModelSerializer):
+    class RenamedStatusSer(serializers.ModelSerializer[library_models.Book]):
         status = serializers.ChoiceField(
             choices=[("available", "Available")],
             allow_blank=True,
             source="circulation_status",
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("status",)
 
@@ -1135,8 +1199,9 @@ def test_source_mapped_choice_allow_blank_over_strict_choice_column_refused():
 def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
     """An auto-generated choice field given ``allow_blank`` by ``extra_kwargs`` is refused too."""
 
-    class ExtraBlankSer(serializers.ModelSerializer):
-        class Meta:
+    class ExtraBlankSer(serializers.ModelSerializer[library_models.Book]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("circulation_status",)
             extra_kwargs = {"circulation_status": {"allow_blank": True}}
@@ -1196,17 +1261,18 @@ def test_extra_kwargs_allow_blank_over_strict_choice_column_refused():
     ],
 )
 def test_declared_choice_value_missing_from_column_enum_refused(
-    declared,
-    allow_blank,
-    missing,
-    remedy,
+    declared: list[tuple[str, str]],
+    allow_blank: bool,
+    missing: str,
+    remedy: str,
 ):
     """Every value the serializer admits must be a member of the column's read enum."""
 
-    class ValueSer(serializers.ModelSerializer):
+    class ValueSer(serializers.ModelSerializer[library_models.Book]):
         circulation_status = serializers.ChoiceField(choices=declared, allow_blank=allow_blank)
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1222,18 +1288,24 @@ def test_declared_choice_value_missing_from_column_enum_refused(
     )
 
 
-def _integer_choice_column(**kwargs):
+def _integer_choice_column(
+    *,
+    blank: bool = False,
+    null: bool = False,
+) -> models.IntegerField[object, object]:
     """An integer choice column bound to a stand-in model (only ``__name__`` is read)."""
-    column = models.IntegerField(choices=[(1, "One"), (2, "Two")], **kwargs)
+    column = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=blank, null=null)
     column.set_attributes_from_name("rank")
-    column.model = type("Ranked", (), {})
+    # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
+    # as a Model subclass
+    column.model = type("Ranked", (), {})  # pyright: ignore[reportAttributeAccessIssue]
     return column
 
 
 def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_remedy():
     """An integer column never stores ``""``, so ``blank=True`` is no remedy: only the field is."""
 
-    class RankSer(serializers.Serializer):
+    class RankSer(serializers.Serializer[object]):
         rank = serializers.ChoiceField(choices=[(1, "One")], allow_blank=True)
 
     column = _integer_choice_column(blank=True, null=True)
@@ -1254,7 +1326,7 @@ def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_reme
 def test_choice_values_compared_as_the_column_reads_them_back():
     """A declared ``"1"`` over an integer column is stored and read back as ``1``: accepted."""
 
-    class RankSer(serializers.Serializer):
+    class RankSer(serializers.Serializer[object]):
         rank = serializers.ChoiceField(choices=[("1", "One"), (2, "Two")])
 
     serializer_converter._reject_choice_values_outside_column_enum(
@@ -1270,12 +1342,14 @@ def test_integer_choices_column_accepts_its_own_choices():
         LOW = 1, "Low"
         HIGH = 2, "High"
 
-    class RankSer(serializers.Serializer):
+    class RankSer(serializers.Serializer[object]):
         rank = serializers.ChoiceField(choices=Rank.choices)
 
     column = models.IntegerField(choices=Rank.choices)
     column.set_attributes_from_name("rank")
-    column.model = type("Ranked", (), {})
+    # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
+    # as a Model subclass
+    column.model = type("Ranked", (), {})  # pyright: ignore[reportAttributeAccessIssue]
     serializer_converter._reject_choice_values_outside_column_enum(
         RankSer().fields["rank"],
         column,
@@ -1286,20 +1360,22 @@ def test_declared_choice_allow_blank_over_blank_choice_column_accepted():
     """Over a ``blank=True`` choice column both the input enum and the read enum carry ``BLANK``."""
     from django_strawberry_framework.types.converters import convert_choices_to_enum
 
-    class ConditionSer(serializers.ModelSerializer):
+    class ConditionSer(serializers.ModelSerializer[library_models.Shelf]):
         condition = serializers.ChoiceField(
             choices=library_models.Shelf.Condition.choices,
             allow_blank=True,
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Shelf
             fields = ("condition",)
 
     field = ConditionSer().fields["condition"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Shelf, "X")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
     read_enum = convert_choices_to_enum(
-        library_models.Shelf._meta.get_field("condition"),
+        _concrete_field(library_models.Shelf, "condition"),
         "ShelfReadType",
     )
     assert {member.name: member.value for member in annotation}["BLANK"] == ""
@@ -1313,30 +1389,34 @@ def test_declared_choice_allow_blank_over_strict_non_choice_column_accepted():
     declared field out of the refusal.
     """
 
-    class TitleChoiceSer(serializers.ModelSerializer):
+    class TitleChoiceSer(serializers.ModelSerializer[library_models.Book]):
         title = serializers.ChoiceField(choices=[("dune", "Dune")], allow_blank=True)
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("title",)
 
     field = TitleChoiceSer().fields["title"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "dune": "dune"}
 
 
 def test_serializer_only_choice_allow_blank_on_model_serializer_accepted():
     """A choice field with no backing column keeps the ``BLANK`` member ``allow_blank`` adds."""
 
-    class ExtraChoiceSer(serializers.ModelSerializer):
+    class ExtraChoiceSer(serializers.ModelSerializer[library_models.Book]):
         mood = serializers.ChoiceField(choices=[("calm", "Calm")], allow_blank=True)
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("mood",)
 
     field = ExtraChoiceSer().fields["mood"]
     _attr, annotation, _spec = resolve_serializer_field(field, library_models.Book, "X")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
     assert {member.name: member.value for member in annotation} == {"BLANK": "", "calm": "calm"}
 
 
@@ -1351,12 +1431,13 @@ def _multiple_choice_refusal(serializer_name: str, field_name: str) -> str:
 
 
 def _declared_multiple_choice_ser():
-    class MultiStatusSer(serializers.ModelSerializer):
+    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
         circulation_status = serializers.MultipleChoiceField(
             choices=library_models.Book.CirculationStatus.choices,
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1364,13 +1445,14 @@ def _declared_multiple_choice_ser():
 
 
 def _source_mapped_multiple_choice_ser():
-    class MultiStatusSer(serializers.ModelSerializer):
+    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
         statuses = serializers.MultipleChoiceField(
             choices=library_models.Book.CirculationStatus.choices,
             source="circulation_status",
         )
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("statuses",)
 
@@ -1378,10 +1460,11 @@ def _source_mapped_multiple_choice_ser():
 
 
 def _generated_multiple_choice_ser():
-    class MultiStatusSer(serializers.ModelSerializer):
+    class MultiStatusSer(serializers.ModelSerializer[library_models.Book]):
         serializer_choice_field = serializers.MultipleChoiceField
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = library_models.Book
             fields = ("circulation_status",)
 
@@ -1397,7 +1480,12 @@ def _generated_multiple_choice_ser():
     ],
     ids=["declared", "source-mapped", "serializer-choice-field"],
 )
-def test_multiple_choice_over_single_value_choice_column_refused(make_serializer):
+def test_multiple_choice_over_single_value_choice_column_refused(
+    make_serializer: Callable[
+        [],
+        tuple[type[serializers.ModelSerializer[library_models.Book]], str],
+    ],
+):
     """A ``MultipleChoiceField`` stores its list as one value no member of the column's enum reads.
 
     Every choice it declares is a column choice, so only the list shape is refused.
@@ -1415,7 +1503,10 @@ def test_multiple_choice_over_single_value_choice_column_refused(make_serializer
     [(library_models.Book, "title"), (scalar_models.ScalarSpecimen, "payload")],
     ids=["text-column", "json-column"],
 )
-def test_multiple_choice_over_column_without_choices_accepted(model, column_name):
+def test_multiple_choice_over_column_without_choices_accepted(
+    model: type[models.Model],
+    column_name: str,
+):
     """A column without ``choices`` has no read enum to hold the list to: the field is accepted."""
     meta = type("Meta", (), {"model": model, "fields": (column_name,)})
     multi_field = serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")])
@@ -1431,15 +1522,16 @@ def test_multiple_choice_over_column_without_choices_accepted(model, column_name
     assert {member.value for member in inner} == {"a", "b"}
 
 
-class _FakeArrayField(models.Field):
+class _FakeArrayField(models.Field[object, object]):
     """An ``ArrayField`` stand-in: ``django.contrib.postgres`` needs a Postgres driver."""
 
-    def __init__(self, base_field, **kwargs):
+    # basedpyright: verbatim forward to Field.__init__; object fails its typed params
+    def __init__(self, base_field: models.Field[object, object], **kwargs: Any):  # pyright: ignore[reportExplicitAny]
         super().__init__(**kwargs)
         self.base_field = base_field
 
 
-def _array_choice_column(monkeypatch, *, blank=False):
+def _array_choice_column(monkeypatch: pytest.MonkeyPatch, *, blank: bool = False):
     """A ``tags`` array column whose ``base_field`` declares ``a`` / ``b``."""
     from django_strawberry_framework.types import converters
 
@@ -1449,18 +1541,21 @@ def _array_choice_column(monkeypatch, *, blank=False):
     tagged = type("Tagged", (), {})
     for field in (column, element):
         field.set_attributes_from_name("tags")
-        field.model = tagged
+        # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
+        # as a Model subclass
+        field.model = tagged  # pyright: ignore[reportAttributeAccessIssue]
     return column
 
 
-def _multi_tags_field(**kwargs):
-    class TagsSer(serializers.Serializer):
+# basedpyright: verbatim forward to MultipleChoiceField.__init__; object fails its typed params
+def _multi_tags_field(**kwargs: Any) -> DRFField:  # pyright: ignore[reportExplicitAny]
+    class TagsSer(serializers.Serializer[object]):
         tags = serializers.MultipleChoiceField(**kwargs)
 
     return TagsSer().fields["tags"]
 
 
-def test_multiple_choice_over_array_choice_column_accepted(monkeypatch):
+def test_multiple_choice_over_array_choice_column_accepted(monkeypatch: pytest.MonkeyPatch):
     """Each element is stored through ``base_field``, whose enum carries every declared choice."""
     column = _array_choice_column(monkeypatch)
     field = _multi_tags_field(choices=[("a", "A"), ("b", "B")])
@@ -1483,10 +1578,10 @@ def test_multiple_choice_over_array_choice_column_accepted(monkeypatch):
     ids=["unknown-element", "blank-element"],
 )
 def test_multiple_choice_element_missing_from_array_base_enum_refused(
-    monkeypatch,
-    kwargs,
-    missing,
-    remedy,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict[str, object],
+    missing: str,
+    remedy: str,
 ):
     """An element value the ``base_field``'s read enum lacks is refused, named on the column."""
     column = _array_choice_column(monkeypatch)
@@ -1496,7 +1591,9 @@ def test_multiple_choice_element_missing_from_array_base_enum_refused(
     assert str(exc_info.value) == _value_refusal("TagsSer", "tags", missing, "Tagged.tags", remedy)
 
 
-def test_multiple_choice_blank_element_over_blank_array_base_accepted(monkeypatch):
+def test_multiple_choice_blank_element_over_blank_array_base_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A ``blank=True`` ``base_field`` reads ``""`` as ``BLANK``, so ``allow_blank`` is accepted."""
     column = _array_choice_column(monkeypatch, blank=True)
     field = _multi_tags_field(choices=[("a", "A")], allow_blank=True)
@@ -1508,7 +1605,7 @@ def test_multiple_choice_blank_element_over_blank_array_base_accepted(monkeypatc
 def test_serializer_only_filepathfield_stays_str_not_enum():
     """A ``FilePathField`` (a ``ChoiceField`` subclass with DYNAMIC choices) stays ``str``, never an enum."""
 
-    class PathSer(serializers.Serializer):
+    class PathSer(serializers.Serializer[object]):
         p = serializers.FilePathField(path="/tmp")
 
     field = PathSer().fields["p"]
@@ -1520,7 +1617,7 @@ def test_serializer_only_choice_enum_dedupes_by_name():
     """Two resolves of the same serializer-only choice field share ONE enum object (dedupe)."""
 
     def _resolve():
-        class ChoiceSer(serializers.Serializer):
+        class ChoiceSer(serializers.Serializer[object]):
             color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
 
         return resolve_serializer_field(ChoiceSer().fields["color"], None, "X")[1]
@@ -1531,10 +1628,10 @@ def test_serializer_only_choice_enum_dedupes_by_name():
 def test_serializer_only_choice_enum_name_collision_with_diverging_members_raises():
     """Reusing an enum NAME with a DIFFERENT member set fails loud (no silent reuse)."""
 
-    class SerA(serializers.Serializer):
+    class SerA(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("r", "Red")])
 
-    class SerB(serializers.Serializer):
+    class SerB(serializers.Serializer[object]):
         color = serializers.ChoiceField(choices=[("b", "Blue")])
 
     resolve_serializer_field(SerA().fields["color"], None, "X")
@@ -1551,10 +1648,11 @@ def test_consumer_declared_scalar_disagreeing_with_column_raises():
     """A consumer-declared field whose scalar disagrees with the model column fails loud."""
     _register_products_types()
 
-    class MismatchSer(serializers.ModelSerializer):
+    class MismatchSer(serializers.ModelSerializer[product_models.Item]):
         name = serializers.IntegerField()  # column is TextField -> str; declared int -> disagree.
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("name",)
 
@@ -1567,10 +1665,11 @@ def test_consumer_declared_scalar_agreeing_with_column_ok():
     """A benign rename (``CharField`` over a text column) AGREES and resolves to the model scalar."""
     _register_products_types()
 
-    class AgreeSer(serializers.ModelSerializer):
+    class AgreeSer(serializers.ModelSerializer[product_models.Item]):
         display_name = serializers.CharField(source="name")
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("display_name",)
 
@@ -1594,10 +1693,11 @@ def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation(
     """A declared model-backed field whose converter is not scalar falls back to the column type."""
     _register_products_types()
 
-    class FileOverrideSer(serializers.ModelSerializer):
+    class FileOverrideSer(serializers.ModelSerializer[product_models.Item]):
         attachment = serializers.FileField(source="name")
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("attachment",)
 
@@ -1611,8 +1711,9 @@ def test_auto_generated_model_field_is_not_conflict_checked():
     """An AUTO-generated ModelSerializer field routes through the model converter (no conflict check)."""
     _register_products_types()
 
-    class AutoSer(serializers.ModelSerializer):
-        class Meta:
+    class AutoSer(serializers.ModelSerializer[product_models.Item]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("name",)
 
@@ -1687,10 +1788,13 @@ def test_serializer_field_description_hostile_metadata_is_configuration_error():
         def __bool__(self):
             raise KeyboardInterrupt("bool trap")
 
+        @override
         def __str__(self):
             raise RuntimeError("str trap")
 
-    field = _bind(serializers.CharField(help_text=HostileText()), "name")
+    # basedpyright: the raising help text is the hostile input under test; drf-stubs types
+    # help_text as _StrOrPromise | None
+    field = _bind(serializers.CharField(help_text=HostileText()), "name")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="metadata that cannot be rendered"):
         serializer_field_description(field)
 
@@ -1711,7 +1815,9 @@ def test_serializer_field_description_handles_an_unreadable_field_name_in_diagno
             raise RuntimeError("name unavailable")
 
     with pytest.raises(ConfigurationError, match="Serializer field <unavailable>"):
-        serializer_field_description(HostileField())
+        # basedpyright: the field whose reads raise is the hostile input under test;
+        # serializer_field_description types the parameter as DRFField
+        serializer_field_description(HostileField())  # pyright: ignore[reportArgumentType]
 
 
 def test_declared_choicefield_over_model_column_emits_serializer_enum():
@@ -1723,10 +1829,11 @@ def test_declared_choicefield_over_model_column_emits_serializer_enum():
     """
     _register_products_types()
 
-    class ChoiceOverColumnSer(serializers.ModelSerializer):
+    class ChoiceOverColumnSer(serializers.ModelSerializer[product_models.Item]):
         status = serializers.ChoiceField(source="name", choices=[("a", "A"), ("b", "B")])
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("status",)
 
@@ -1741,10 +1848,11 @@ def test_non_relation_field_over_relation_column_fails_loud():
     """A non-relation field (e.g. CharField) explicitly mapped over a relation column raises ConfigurationError."""
     _register_products_types()
 
-    class BadRelSer(serializers.ModelSerializer):
+    class BadRelSer(serializers.ModelSerializer[product_models.Item]):
         category = serializers.CharField()
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("category",)
 
@@ -1759,10 +1867,11 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
 
     from apps.library.models import Book
 
-    class BookStatusSer(serializers.ModelSerializer):
+    class BookStatusSer(serializers.ModelSerializer[Book]):
         circulation_status = serializers.IntegerField()
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Book
             fields = ("circulation_status",)
 
@@ -1774,7 +1883,9 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
 def test_list_field_with_no_child_raises_configuration_error():
     """ListField with default child=None raises ConfigurationError requesting a typed child."""
     field = serializers.ListField()
-    field.bind("tags", None)
+    # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
+    # unparented bound field)
+    field.bind("tags", None)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="ListField with no explicit child field"):
         convert_serializer_field(field)
 
@@ -1782,7 +1893,7 @@ def test_list_field_with_no_child_raises_configuration_error():
 def test_unsupported_serializer_field_without_field_name_raises_cleanly():
     """An unmapped serializer field without field_name raises ConfigurationError without AttributeError."""
 
-    class CustomUnsupported(serializers.Field):
+    class CustomUnsupported(serializers.Field[object, object, object, object]):
         pass
 
     field = CustomUnsupported()
@@ -1797,14 +1908,17 @@ def test_unsupported_serializer_field_with_hostile_field_name_repr():
     """An unmapped serializer field with a hostile field_name repr raises ConfigurationError with <unavailable>."""
 
     class HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("hostile repr")
 
-    class HostileField(serializers.Field):
+    class HostileField(serializers.Field[object, object, object, object]):
         pass
 
     field = HostileField()
-    field.field_name = HostileRepr()
+    # basedpyright: the hostile field_name is the input under test; DRF types the slot as
+    # str | None
+    field.field_name = HostileRepr()  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(
         ConfigurationError,
         match="on serializer field <unavailable>",
@@ -1815,10 +1929,11 @@ def test_unsupported_serializer_field_with_hostile_field_name_repr():
 def test_backing_model_field_nonexistent_column_returns_none():
     """A serializer field referencing a non-existent model field returns None."""
 
-    class MissingFieldSer(serializers.ModelSerializer):
+    class MissingFieldSer(serializers.ModelSerializer[product_models.Item]):
         extra = serializers.CharField(source="nonexistent_column")
 
-        class Meta:
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = product_models.Item
             fields = ("extra",)
 
@@ -1831,8 +1946,9 @@ def test_resolve_serializer_field_model_backed_file_field():
 
     from apps.scalars.models import MediaSpecimen
 
-    class MediaSpecimenSer(serializers.ModelSerializer):
-        class Meta:
+    class MediaSpecimenSer(serializers.ModelSerializer[MediaSpecimen]):
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = MediaSpecimen
             fields = ("attachment",)
 
@@ -1851,7 +1967,7 @@ def test_resolve_serializer_field_model_backed_file_field():
 def test_resolve_serializer_field_column_less_file_field():
     """A FileField on a plain Serializer resolves to Upload annotation and kind FILE."""
 
-    class PlainFileSer(serializers.Serializer):
+    class PlainFileSer(serializers.Serializer[object]):
         avatar = serializers.FileField()
 
     field = PlainFileSer().fields["avatar"]

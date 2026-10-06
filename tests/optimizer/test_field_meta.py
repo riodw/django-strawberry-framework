@@ -7,9 +7,12 @@ walker metadata have no wire shape. Relation SQL on shipped types is
 
 import copy
 import pickle
+from collections.abc import Iterable, Iterator
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
+import pytest_django
 import strawberry
 from apps.library.models import (
     Book,
@@ -24,6 +27,7 @@ from apps.library.models import (
 )
 from apps.products import services
 from apps.products.models import Category, Item
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -32,9 +36,19 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.relations import has_composite_pk
 from tests._relation_fixtures import RpCompositeParent
 
+if TYPE_CHECKING:
+    from django_strawberry_framework.utils.typing import ModelField
+
+
+def _as_field(stand_in: object) -> "ModelField":
+    """Hand a duck-typed field descriptor to the stamp that takes a Django field."""
+    # basedpyright: a stand-in field carrying only the slots the code under test reads;
+    # FieldMeta.from_django_field types the parameter as a Django field
+    return stand_in  # pyright: ignore[reportReturnType]
+
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
@@ -218,7 +232,7 @@ def test_from_django_field_duck_typed_double_keeps_attname_without_concrete():
         related_model=Category,
         target_field=SimpleNamespace(name="id", attname="id"),
     )
-    fm = FieldMeta.from_django_field(double)
+    fm = FieldMeta.from_django_field(_as_field(double))
     assert fm.attname == "author_id"
 
 
@@ -237,7 +251,7 @@ def test_from_django_field_django_52_m2m_shape_stamps_attname_none():
         attname="genres",
         related_model=Genre,
     )
-    fm = FieldMeta.from_django_field(double)
+    fm = FieldMeta.from_django_field(_as_field(double))
     assert fm.attname is None
     assert fm.many_to_many is True
 
@@ -310,7 +324,9 @@ def test_from_django_field_rejects_non_django_input():
         pass
 
     with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
-        FieldMeta.from_django_field(NotAField())
+        # basedpyright: the attribute-less object is the hostile input under test;
+        # FieldMeta.from_django_field types the parameter as a Django field
+        FieldMeta.from_django_field(NotAField())  # pyright: ignore[reportArgumentType]
 
 
 def test_from_django_field_rejects_partial_shape():
@@ -320,13 +336,16 @@ def test_from_django_field_rejects_partial_shape():
         name = "x"
 
     with pytest.raises(OptimizerError):
-        FieldMeta.from_django_field(PartialField())
+        # basedpyright: the field without is_relation is the hostile input under test;
+        # FieldMeta.from_django_field types the parameter as a Django field
+        FieldMeta.from_django_field(PartialField())  # pyright: ignore[reportArgumentType]
 
 
 def test_from_django_field_rejects_hostile_required_attributes_safely():
     """Malformed field descriptors cannot replace the typed error with their own failure."""
 
     class HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("repr should never run")
 
@@ -339,35 +358,46 @@ def test_from_django_field_rejects_hostile_required_attributes_safely():
 
     for field in (HostileRepr(), HostileAttribute()):
         with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
-            FieldMeta.from_django_field(field)
+            # basedpyright: each raising descriptor is the hostile input under test;
+            # FieldMeta.from_django_field types the parameter as a Django field
+            FieldMeta.from_django_field(field)  # pyright: ignore[reportArgumentType]
 
 
 def test_target_pk_name_defensively_resolves_and_contains_errors():
     """_target_pk_name returns model's pk name or None without raising unhandled errors."""
     assert _target_pk_name(None) is None
-    assert _target_pk_name("string_model") is None
-    assert _target_pk_name(object()) is None
-    assert _target_pk_name(SimpleNamespace(_meta=None)) is None
-    assert _target_pk_name(SimpleNamespace(_meta=SimpleNamespace(pk=None))) is None
-    assert _target_pk_name(SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace()))) is None
-    assert (
-        _target_pk_name(SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace(name=123))))
-        is None
-    )
+    # basedpyright: each non-model is the hostile input under test; _target_pk_name types the
+    # parameter as type[Model] | None
+    assert _target_pk_name("string_model") is None  # pyright: ignore[reportArgumentType]
+    assert _target_pk_name(object()) is None  # pyright: ignore[reportArgumentType]
+    assert _target_pk_name(SimpleNamespace(_meta=None)) is None  # pyright: ignore[reportArgumentType]
+    pk_less = SimpleNamespace(_meta=SimpleNamespace(pk=None))
+    nameless_pk = SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace()))
+    non_str_pk = SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace(name=123)))
+    # basedpyright: each malformed pk is the hostile input under test; _target_pk_name types the
+    # parameter as type[Model] | None
+    assert _target_pk_name(pk_less) is None  # pyright: ignore[reportArgumentType]
+    assert _target_pk_name(nameless_pk) is None  # pyright: ignore[reportArgumentType]
+    assert _target_pk_name(non_str_pk) is None  # pyright: ignore[reportArgumentType]
 
     class HostileMeta:
         @property
         def _meta(self):
             raise RuntimeError("hostile _meta access")
 
-    assert _target_pk_name(HostileMeta()) is None
+    # basedpyright: the raising _meta is the hostile input under test; _target_pk_name types
+    # the parameter as type[Model] | None
+    assert _target_pk_name(HostileMeta()) is None  # pyright: ignore[reportArgumentType]
 
     class HostilePkMeta:
         @property
         def pk(self):
             raise RuntimeError("hostile pk property")
 
-    assert _target_pk_name(SimpleNamespace(_meta=HostilePkMeta())) is None
+    raising_pk = SimpleNamespace(_meta=HostilePkMeta())
+    # basedpyright: the raising pk is the hostile input under test; _target_pk_name types the
+    # parameter as type[Model] | None
+    assert _target_pk_name(raising_pk) is None  # pyright: ignore[reportArgumentType]
     assert _target_pk_name(Category) == "id"
 
 
@@ -375,7 +405,9 @@ def test_from_django_field_rejects_non_string_field_name():
     """Non-string field names are rejected with OptimizerError at stamp time."""
     non_str_field = SimpleNamespace(name=123, is_relation=False)
     with pytest.raises(OptimizerError, match="expected a string field name"):
-        FieldMeta.from_django_field(non_str_field)
+        # basedpyright: the non-str field name is the hostile input under test;
+        # FieldMeta.from_django_field types the parameter as a Django field
+        FieldMeta.from_django_field(non_str_field)  # pyright: ignore[reportArgumentType]
 
 
 def test_from_django_field_rejects_hostile_or_invalid_relation_metadata():
@@ -444,7 +476,9 @@ def test_field_meta_is_frozen():
     """FieldMeta instances are immutable."""
     fm = FieldMeta(name="test")
     with pytest.raises((AttributeError, TypeError)):
-        fm.name = "other"
+        # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+        # checker rejects assignment to a frozen field
+        fm.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_field_meta_slots_hashing_and_copy():
@@ -502,7 +536,7 @@ def test_fk_id_elision_edge_cases():
         related_model=Category,
         target_field=SimpleNamespace(name="code", attname="code"),
     )
-    fm_to_field = FieldMeta.from_django_field(fake_to_field_fk)
+    fm_to_field = FieldMeta.from_django_field(_as_field(fake_to_field_fk))
     assert fm_to_field.target_field_name == "code"
     assert fm_to_field.target_pk_name == "id"
     assert fm_to_field.fk_id_elision_eligible is False
@@ -520,7 +554,7 @@ def test_fk_id_elision_edge_cases():
         related_model=RpCompositeParent,
         target_field=SimpleNamespace(name="id", attname="id"),
     )
-    fm_comp = FieldMeta.from_django_field(fake_comp_fk)
+    fm_comp = FieldMeta.from_django_field(_as_field(fake_comp_fk))
     assert fm_comp.fk_id_elision_eligible is False
 
 
@@ -599,6 +633,8 @@ def test_definition_field_map_contains_relations():
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -649,7 +685,7 @@ def test_walker_plan_never_projects_non_column_relation_names():
     """
     from django_strawberry_framework.optimizer.walker import plan_optimizations
 
-    def sel(name, children=()):
+    def sel(name: str, children: Iterable[SimpleNamespace] = ()):
         return SimpleNamespace(name=name, selections=list(children), arguments=None, alias=None)
 
     m2m_plan = plan_optimizations([sel("genres", [sel("id"), sel("name")])], Book, None)
@@ -666,7 +702,9 @@ def test_walker_plan_never_projects_non_column_relation_names():
 
 
 @pytest.mark.django_db
-def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
+def test_walker_produces_same_plan_with_cached_map(
+    django_assert_num_queries: pytest_django.DjangoAssertNumQueries,
+):
     """B7: the walker's plan is identical whether it uses the cached map or _meta."""
     import strawberry
 
@@ -679,6 +717,8 @@ def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryType
+
     class ItemType(DjangoType):
         class Meta:
             model = Item
@@ -688,7 +728,9 @@ def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Item.objects.all()  # pyright: ignore[reportReturnType]
 
     from types import SimpleNamespace
 
@@ -761,6 +803,8 @@ def test_mti_child_type_renders_parent_link_non_null():
             model = Venue
             fields = ("id", "name")
 
+    assert registry.get(Venue) is VenueNode
+
     class LendingDeskNode(DjangoType):
         class Meta:
             model = LendingDesk
@@ -781,8 +825,11 @@ def test_mti_child_type_renders_parent_link_non_null():
 def test_from_django_field_non_string_attributes():
     """FieldMeta.from_django_field safely coerces non-string attributes and rejects non-string field_name."""
     # Non-string field_name raises OptimizerError
+    non_str_name = SimpleNamespace(name=123, is_relation=False)
     with pytest.raises(OptimizerError, match="expected a string field name"):
-        FieldMeta.from_django_field(SimpleNamespace(name=123, is_relation=False))
+        # basedpyright: the non-str field name is the hostile input under test;
+        # FieldMeta.from_django_field types the parameter as a Django field
+        FieldMeta.from_django_field(non_str_name)  # pyright: ignore[reportArgumentType]
     with pytest.raises(OptimizerError, match="expected a string field name"):
         FieldMeta._from_field_shape(SimpleNamespace(), is_relation=True, field_name=123)
 
@@ -800,7 +847,7 @@ def test_from_django_field_non_string_attributes():
         one_to_one=False,
         null=True,
     )
-    fm = FieldMeta.from_django_field(fake_field)
+    fm = FieldMeta.from_django_field(_as_field(fake_field))
     assert fm.name == "test_field"
     assert fm.target_field_name is None
     assert fm.target_field_attname is None
@@ -819,7 +866,7 @@ def test_from_django_field_many_side_nullability_short_circuits():
         object_id_field_name="object_id",
         null=True,
     )
-    fm_generic = FieldMeta.from_django_field(generic_with_null)
+    fm_generic = FieldMeta.from_django_field(_as_field(generic_with_null))
     assert fm_generic.relation_kind == "generic"
     assert fm_generic.is_many_side is True
     assert fm_generic.nullable is False
@@ -831,7 +878,7 @@ def test_from_django_field_many_side_nullability_short_circuits():
         many_to_many=True,
         null=True,
     )
-    fm_m2m = FieldMeta.from_django_field(m2m_with_null)
+    fm_m2m = FieldMeta.from_django_field(_as_field(m2m_with_null))
     assert fm_m2m.relation_kind == "many"
     assert fm_m2m.is_many_side is True
     assert fm_m2m.nullable is False
@@ -844,7 +891,7 @@ def test_from_django_field_many_side_nullability_short_circuits():
         auto_created=True,
         null=True,
     )
-    fm_rev_fk = FieldMeta.from_django_field(reverse_fk_with_null)
+    fm_rev_fk = FieldMeta.from_django_field(_as_field(reverse_fk_with_null))
     assert fm_rev_fk.relation_kind == "reverse_many_to_one"
     assert fm_rev_fk.is_many_side is True
     assert fm_rev_fk.nullable is False
@@ -885,7 +932,7 @@ _LINK_COLUMN_ROWS = {
 
 
 @pytest.mark.parametrize("row", list(_LINK_COLUMN_ROWS), ids=list(_LINK_COLUMN_ROWS))
-def test_from_django_field_stamps_reverse_link_columns(row):
+def test_from_django_field_stamps_reverse_link_columns(row: str):
     """A reverse FK / O2O stamps its child carriers and its non-pk parent targets.
 
     Primary-key targets (an ordinary pk, each ``CompositePrimaryKey`` member) are
@@ -917,7 +964,11 @@ def test_from_django_field_stamps_reverse_link_columns(row):
     ],
     ids=["fk", "one_column_fo", "to_field_fk"],
 )
-def test_from_django_field_stamps_forward_link_carriers(owner, field_name, carriers):
+def test_from_django_field_stamps_forward_link_carriers(
+    owner: str,
+    field_name: str,
+    carriers: tuple[str, ...],
+):
     """A forward relation's source row carries its link's carriers, never its ``attname``.
 
     A one-column ``ForeignObject``'s ``attname`` is the relation name and its
@@ -974,7 +1025,11 @@ def test_from_django_field_multi_column_forward_foreign_object_has_no_single_tar
         "reverse_pk_custom_through",
     ],
 )
-def test_from_django_field_stamps_m2m_through_source_targets(owner, field_name, source_targets):
+def test_from_django_field_stamps_m2m_through_source_targets(
+    owner: str,
+    field_name: str,
+    source_targets: tuple[str, ...],
+):
     """An M2M hop's source row carries the non-pk column its through table's source FK targets.
 
     Auto-created and pk-targeted custom through tables target the source pk, so

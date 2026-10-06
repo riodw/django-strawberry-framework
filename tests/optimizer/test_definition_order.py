@@ -8,25 +8,29 @@ hooked-target Prefetch SQL is
 ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query``.
 """
 
+from collections.abc import Iterator
+
 import pytest
 import strawberry
 from apps.library.models import Book, Genre, MembershipCard, Patron
 from apps.products.models import Category, Item
+from django.db.models import Model
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.walker import plan_optimizations, plan_relation
 from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
     registry.clear()
 
 
-def _sel(name, selections=None):
+def _sel(name: str, selections: list[object] | None = None):
     """Build a synthetic selected field."""
     from types import SimpleNamespace
 
@@ -39,9 +43,11 @@ def _sel(name, selections=None):
     )
 
 
-def _model_field(model: type, name: str):
-    """Return a Django field by name, including reverse relations."""
-    return next(field for field in model._meta.get_fields() if field.name == name)
+def _model_field(model: type[Model], name: str) -> FieldMeta:
+    """Return a Django field by name, including reverse relations, as the walker wraps it."""
+    return FieldMeta.from_django_field(
+        next(field for field in model._meta.get_fields() if field.name == name),
+    )
 
 
 def test_plan_relation_decisions_match_cardinality_after_finalization():
@@ -117,6 +123,8 @@ def test_check_schema_returns_no_warnings_for_registered_cyclic_targets():
             model = Item
             fields = ("id", "name")
 
+    assert registry.get(Item) is ItemType
+
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -162,6 +170,8 @@ def test_annotation_only_relation_override_still_plans_prefetch():
         class Meta:
             model = Category
             fields = ("id", "name", "items")
+
+    assert registry.get(Category) is CategoryType
 
     finalize_django_types()
 

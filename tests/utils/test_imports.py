@@ -15,6 +15,7 @@ import sys
 import types
 
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.utils import imports as imports_module
 from django_strawberry_framework.utils.imports import (
@@ -28,14 +29,17 @@ _HINT = "TestFeature requires somepackage. Install it with `pip install somepack
 
 
 class _HostileString(str):
+    @override
     def __hash__(self):
         raise RuntimeError("hostile hash")
 
+    @override
     def __str__(self):
         raise RuntimeError("hostile string")
 
 
 class _HostileHint(str):
+    @override
     def __str__(self):
         raise RuntimeError("hostile hint")
 
@@ -57,31 +61,38 @@ def test_require_optional_module_raises_the_hint_and_chains_the_original():
     assert "definitely_not_an_installed_module_dsf" in str(exc_info.value.__cause__)
 
 
-def test_require_optional_module_does_not_memoize(monkeypatch):
+def test_require_optional_module_does_not_memoize(monkeypatch: pytest.MonkeyPatch):
     """Each call re-runs the import so eviction-based absence tests can re-hit the guard."""
     calls: list[str] = []
     real_import_module = importlib.import_module
 
-    def recording_import_module(name, package=None):
+    def recording_import_module(name: str, package: str | None = None):
         calls.append(name)
         return real_import_module(name, package)
 
-    monkeypatch.setattr(imports_module.importlib, "import_module", recording_import_module)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(imports_module.importlib, "import_module", recording_import_module)  # pyright: ignore[reportPrivateLocalImportUsage]
     require_optional_module("sys", install_hint=_HINT)
     require_optional_module("sys", install_hint=_HINT)
     assert calls == ["sys", "sys"]
 
 
-def test_import_attr_if_importable_returns_the_attribute_on_an_importable_module(monkeypatch):
+def test_import_attr_if_importable_returns_the_attribute_on_an_importable_module(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A reachable module returns its named attribute unchanged."""
     fake = types.ModuleType("dsf_fake_importable_module")
     marker = object()
-    fake.Marker = marker
+    # basedpyright: ModuleType declares no settable attributes; the planted module attribute is
+    # the input the helper reads
+    fake.Marker = marker  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, "dsf_fake_importable_module", fake)
     assert import_attr_if_importable("dsf_fake_importable_module", "Marker") is marker
 
 
-def test_import_attr_if_importable_returns_none_when_the_module_is_unimportable(monkeypatch):
+def test_import_attr_if_importable_returns_none_when_the_module_is_unimportable(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A ``None`` entry in ``sys.modules`` makes ``import_module`` raise ``ImportError``;
     the helper swallows it and returns ``None`` so callers skip an absent optional module.
     """
@@ -89,7 +100,9 @@ def test_import_attr_if_importable_returns_none_when_the_module_is_unimportable(
     assert import_attr_if_importable("dsf_absent_optional_module", "Anything") is None
 
 
-def test_import_attr_if_importable_raises_when_importable_module_lacks_the_attr(monkeypatch):
+def test_import_attr_if_importable_raises_when_importable_module_lacks_the_attr(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """An importable module missing the expected attribute fails loud (``AttributeError``)
     rather than silently degrading - a broken environment, not an absent optional dependency.
     """
@@ -107,7 +120,7 @@ def test_loaded_attr_returns_none_without_importing_absent_module():
     assert module_path not in sys.modules
 
 
-def test_loaded_attr_returns_none_when_module_is_none_sentinel(monkeypatch):
+def test_loaded_attr_returns_none_when_module_is_none_sentinel(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "dsf_sentinel_none_module", None)
     assert loaded_attr("dsf_sentinel_none_module", "Anything") is None
 
@@ -139,11 +152,13 @@ def test_import_attr_if_importable_returns_none_on_absent_module():
     assert import_attr_if_importable("definitely_not_an_installed_module_dsf", "Anything") is None
 
 
-def test_import_helpers_normalize_hostile_string_subclass_names(monkeypatch):
+def test_import_helpers_normalize_hostile_string_subclass_names(monkeypatch: pytest.MonkeyPatch):
     """A hostile name must not escape through ``sys.modules`` hashing or getattr."""
     module_path = "dsf_hostile_name_module"
     fake = types.ModuleType(module_path)
-    fake.Marker = object()
+    # basedpyright: ModuleType declares no settable attributes; the planted module attribute is
+    # the input the helper reads
+    fake.Marker = object()  # pyright: ignore[reportAttributeAccessIssue]
     monkeypatch.setitem(sys.modules, module_path, fake)
     hostile_path = _HostileString(module_path)
     hostile_attr = _HostileString("Marker")

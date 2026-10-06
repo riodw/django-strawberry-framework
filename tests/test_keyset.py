@@ -27,18 +27,21 @@ These stay package-side because they assert what a live query cannot:
 """
 
 import base64
+from typing import TYPE_CHECKING
 
 import pytest
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
-from graphql import GraphQLError
-from strawberry.relay.utils import to_base64
+from django.db.models import Field, Model, Prefetch, QuerySet
+from graphql import GraphQLError, GraphQLResolveInfo
+from strawberry.relay.utils import from_base64, to_base64
 
 import django_strawberry_framework as framework
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.keyset import (
     _CURSOR_ENCRYPTION_CONTEXT,
     KEYSET_CURSOR_PREFIX,
+    CursorColumn,
     KeysetCursor,
     KeysetSeek,
     KeysetSeekPlan,
@@ -50,7 +53,6 @@ from django_strawberry_framework.keyset import (
     cursor_columns_for,
     decode_keyset_cursor,
     encode_keyset_cursor,
-    from_base64,
     keyset_seek_greater,
     keyset_seek_q,
     keyset_seek_sql,
@@ -68,6 +70,13 @@ from django_strawberry_framework.utils.connections import (
 )
 from tests._soft_dependency import simulated_absence
 
+if TYPE_CHECKING:
+    from django.utils.tree import _NodeChildren
+
+    from django_strawberry_framework.optimizer.lateral_fetch import LateralWindowSpec
+    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
+    from django_strawberry_framework.utils.typing import ConcreteField
+
 ISSUE_ORDER = ("-number", "id")
 
 
@@ -79,7 +88,11 @@ def _fingerprint():
     return order_fingerprint(ISSUE_ORDER)
 
 
-def _mint(row, columns=None, fingerprint=None):
+def _mint(
+    row: object,
+    columns: tuple[CursorColumn, ...] | None = None,
+    fingerprint: str | None = None,
+):
     return encode_keyset_cursor(
         columns or _issue_columns(),
         row,
@@ -136,7 +149,10 @@ def test_validate_cursor_field_accepts_declared_shape():
         "empty",
     ],
 )
-def test_validate_cursor_field_references_match_declaration_rules(cursor_field, expected):
+def test_validate_cursor_field_references_match_declaration_rules(
+    cursor_field: tuple[str, ...],
+    expected: str,
+):
     """Finalization applies the same entry syntax and duplicate rules as class creation."""
     with pytest.raises(ConfigurationError, match=expected):
         validate_cursor_field_columns("IssueType", Issue, cursor_field)
@@ -265,8 +281,10 @@ def test_decode_rejects_tampered_ciphertext():
         )
 
 
-def _encrypted_payload_cursor(payload):
-    return to_base64(KEYSET_CURSOR_PREFIX, _encrypt_cursor_payload(payload))
+def _encrypted_payload_cursor(payload: object):
+    # basedpyright: each payload the encoder would never mint is the hostile input under test;
+    # _encrypt_cursor_payload types the parameter as dict[str, str | list[str]]
+    return to_base64(KEYSET_CURSOR_PREFIX, _encrypt_cursor_payload(payload))  # pyright: ignore[reportArgumentType]
 
 
 def test_decode_rejects_non_dict_payload():
@@ -320,7 +338,7 @@ def test_decode_rejects_unparsable_value_shape():
 
 
 @pytest.mark.django_db
-def test_decode_without_secret_key_fallbacks_attribute(monkeypatch):
+def test_decode_without_secret_key_fallbacks_attribute(monkeypatch: pytest.MonkeyPatch):
     """When SECRET_KEY_FALLBACKS attribute is absent on settings, decryption still works."""
     from django.conf import settings as django_settings
 
@@ -337,17 +355,24 @@ def test_decode_without_secret_key_fallbacks_attribute(monkeypatch):
     assert decoded.values[0] == 1
 
 
+def _concrete_field(model: type[Model], name: str) -> "ConcreteField":
+    """Read ``model``'s concrete column ``name`` (``get_field`` also returns reverse relations)."""
+    field = model._meta.get_field(name)
+    assert isinstance(field, Field)
+    return field
+
+
 def test_serialize_cursor_value_uses_field_codec():
-    number_field = Issue._meta.get_field("number")
+    number_field = _concrete_field(Issue, "number")
     assert serialize_cursor_value(number_field, 7) == "7"
 
 
 def test_serialize_cursor_value_rejects_null():
     """NULL must not reach ``value_to_string`` (Char/Text would mint ``"None"``)."""
-    title_field = Issue._meta.get_field("title")
+    title_field = _concrete_field(Issue, "title")
     with pytest.raises(ValueError, match="NULL value for keyset cursor column"):
         serialize_cursor_value(title_field, None)
-    number_field = Issue._meta.get_field("number")
+    number_field = _concrete_field(Issue, "number")
     with pytest.raises(ValueError, match="NULL value for keyset cursor column"):
         serialize_cursor_value(number_field, None)
 
@@ -471,9 +496,16 @@ class _FakeInfo:
     schema = _FakeSchema()
 
 
+def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a duck-typed info to a bounds helper that takes a resolve info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the shared
+    # bounds helpers type info as a Strawberry Info or graphql-core's GraphQLResolveInfo
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
 def test_derive_keyset_window_bounds_forward_shapes():
     bounds = derive_keyset_window_bounds(
-        _FakeInfo(),
+        _as_resolve_info(_FakeInfo()),
         before=None,
         after="x",
         first=3,
@@ -482,7 +514,7 @@ def test_derive_keyset_window_bounds_forward_shapes():
     )
     assert (bounds.offset, bounds.limit, bounds.reverse) == (0, 3, False)
     unbounded = derive_keyset_window_bounds(
-        _FakeInfo(),
+        _as_resolve_info(_FakeInfo()),
         before=None,
         after="x",
         first=None,
@@ -495,7 +527,7 @@ def test_derive_keyset_window_bounds_forward_shapes():
 def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
     with pytest.raises(UnwindowableConnection):
         derive_keyset_window_bounds(
-            _FakeInfo(),
+            _as_resolve_info(_FakeInfo()),
             before="x",
             after=None,
             first=1,
@@ -504,7 +536,7 @@ def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
         )
     with pytest.raises(UnwindowableConnection):
         derive_keyset_window_bounds(
-            _FakeInfo(),
+            _as_resolve_info(_FakeInfo()),
             before=None,
             after=None,
             first=None,
@@ -516,7 +548,7 @@ def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
 def test_derive_keyset_window_bounds_first_validation():
     with pytest.raises(ValueError, match="non-negative"):
         derive_keyset_window_bounds(
-            _FakeInfo(),
+            _as_resolve_info(_FakeInfo()),
             before=None,
             after=None,
             first=-1,
@@ -525,7 +557,7 @@ def test_derive_keyset_window_bounds_first_validation():
         )
     with pytest.raises(ValueError, match="cannot be higher than 50"):
         derive_keyset_window_bounds(
-            _FakeInfo(),
+            _as_resolve_info(_FakeInfo()),
             before=None,
             after=None,
             first=51,
@@ -535,16 +567,18 @@ def test_derive_keyset_window_bounds_first_validation():
 
 
 def test_resolve_relay_max_results_precedence():
-    assert resolve_relay_max_results(_FakeInfo(), 7) == 7
-    assert resolve_relay_max_results(_FakeInfo(), None) == 50
+    assert resolve_relay_max_results(_as_resolve_info(_FakeInfo()), 7) == 7
+    assert resolve_relay_max_results(_as_resolve_info(_FakeInfo()), None) == 50
 
     class _StrawberryWrapped:
         class schema:  # noqa: N801 - shape stub
             class _strawberry_schema:  # noqa: N801 - shape stub
                 config = _FakeConfig()
 
-    assert resolve_relay_max_results(_StrawberryWrapped(), None) == 50
-    assert resolve_relay_max_results(object(), None) == 100
+    assert resolve_relay_max_results(_as_resolve_info(_StrawberryWrapped()), None) == 50
+    # basedpyright: the slotless object is the input under test (the default applies);
+    # resolve_relay_max_results types info as EitherInfo | None
+    assert resolve_relay_max_results(object(), None) == 100  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +729,12 @@ def test_apply_window_pagination_rejects_reversed_keyset_seek():
 # ---------------------------------------------------------------------------
 
 
-def _issue_lateral_request(seek, *, with_total_count=False, next_page_probe=False):
+def _issue_lateral_request(
+    seek: KeysetSeek | None,
+    *,
+    with_total_count: bool = False,
+    next_page_probe: bool = False,
+):
     from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
     from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
 
@@ -718,16 +757,34 @@ def _issue_lateral_request(seek, *, with_total_count=False, next_page_probe=Fals
     )
 
 
-def _plan_lateral(request):
+def _plan_lateral(request: "NestedConnectionRequest") -> QuerySet[Model]:
     from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan()
     assert LATERAL_STRATEGY.plan(request, plan)
-    return plan.prefetch_related[0].queryset
+    entry = plan.prefetch_related[0]
+    assert isinstance(entry, Prefetch)
+    queryset = entry.queryset
+    assert queryset is not None
+    return queryset
 
 
-def _issue_seek(values=(3, 1), order=ISSUE_ORDER, flip=False):
+def _lateral_spec(queryset: QuerySet[Model]) -> "LateralWindowSpec":
+    """Return the spec a lateral plan carries, asserting the plan stayed lateral."""
+    from django_strawberry_framework.optimizer.lateral_fetch import LateralQuerySet
+
+    assert isinstance(queryset, LateralQuerySet)
+    spec = queryset._dst_lateral_spec
+    assert spec is not None
+    return spec
+
+
+def _issue_seek(
+    values: tuple[object, ...] = (3, 1),
+    order: tuple[str, ...] = ISSUE_ORDER,
+    flip: bool = False,
+):
     return KeysetSeek(
         columns=cursor_columns_for(Issue, order),
         cursor=KeysetCursor(values=values),
@@ -745,6 +802,7 @@ def test_lateral_count_free_keyset_renders_in_branch_seek():
     lateral_queryset = _plan_lateral(_issue_lateral_request(seek, next_page_probe=True))
     assert isinstance(lateral_queryset, LateralQuerySet)
     spec = lateral_queryset._dst_lateral_spec
+    assert spec is not None
     assert spec.keyset_seek is seek
     sql, params = build_lateral_sql(spec, [1, 2], quote_name=lambda name: f'"{name}"')
     # Mixed directions (-number, id): redundant leading bound + OR expansion,
@@ -768,12 +826,12 @@ def test_lateral_count_free_keyset_renders_in_branch_seek():
 def test_lateral_keyset_prepares_values_through_model_fields():
     from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
 
-    spec = _plan_lateral(
-        _issue_lateral_request(_issue_seek(), next_page_probe=True),
-    )._dst_lateral_spec
+    spec = _lateral_spec(
+        _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True)),
+    )
     prepared = []
 
-    def prepare_value(field, value):
+    def prepare_value(field: "ConcreteField", value: object):
         prepared.append((field.attname, value))
         return f"{field.attname}:{value}"
 
@@ -801,7 +859,7 @@ def test_lateral_uniform_keyset_renders_row_value_seek():
 
     seek = _issue_seek(order=("number", "id"))
     request = replace(_issue_lateral_request(seek), order_by=("number", "id"))
-    spec = _plan_lateral(request)._dst_lateral_spec
+    spec = _lateral_spec(_plan_lateral(request))
     sql, params = build_lateral_sql(spec, [1], quote_name=lambda name: f'"{name}"')
     assert '("library_issue"."number", "library_issue"."id") > (%s, %s)' in sql
     assert params == [
@@ -819,7 +877,7 @@ def test_lateral_single_column_keyset_renders_scalar_seek():
 
     seek = _issue_seek(values=(5,), order=("pk",))
     request = replace(_issue_lateral_request(seek), order_by=("pk",))
-    spec = _plan_lateral(request)._dst_lateral_spec
+    spec = _lateral_spec(_plan_lateral(request))
     sql, params = build_lateral_sql(spec, [1], quote_name=lambda name: f'"{name}"')
     assert '"library_issue"."id" > %s' in sql
     assert params == [1, 5, 2]
@@ -846,25 +904,45 @@ def test_lateral_seek_arity_mismatch_downgrades_to_windowed():
 
 
 def test_lateral_fetch_recognizes_planned_seek_residue():
-    from django_strawberry_framework.optimizer.lateral_fetch import _recognize_lateral_fetch
+    from django_strawberry_framework.optimizer.lateral_fetch import (
+        LateralQuerySet,
+        _recognize_lateral_fetch,
+    )
 
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
-    spec = lateral_queryset._dst_lateral_spec
+    spec = _lateral_spec(lateral_queryset)
     filtered = lateral_queryset.filter(periodical__in=[1, 2])
-    assert _recognize_lateral_fetch(filtered, spec).parent_ids == [1, 2]
+    assert isinstance(filtered, LateralQuerySet)
+    recognized = _recognize_lateral_fetch(filtered, spec)
+    assert recognized is not None
+    assert recognized.parent_ids == [1, 2]
 
 
 def test_lateral_fetch_rejects_foreign_filters_and_missing_seek():
-    from django_strawberry_framework.optimizer.lateral_fetch import _recognize_lateral_fetch
+    from django_strawberry_framework.optimizer.lateral_fetch import (
+        LateralQuerySet,
+        _recognize_lateral_fetch,
+    )
 
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
-    spec = lateral_queryset._dst_lateral_spec
+    spec = _lateral_spec(lateral_queryset)
     # A consumer filter beside the seek: never swallowed as the seek.
     poisoned = lateral_queryset.filter(periodical__in=[1]).filter(title__startswith="x")
+    assert isinstance(poisoned, LateralQuerySet)
     assert _recognize_lateral_fetch(poisoned, spec) is None
     # A seek-bearing spec over a body whose seek residue is ABSENT: mismatch.
-    stripped = _plan_lateral(_issue_lateral_request(None, next_page_probe=True))
-    assert _recognize_lateral_fetch(stripped.filter(periodical__in=[1]), spec) is None
+    stripped = _plan_lateral(_issue_lateral_request(None, next_page_probe=True)).filter(
+        periodical__in=[1],
+    )
+    assert isinstance(stripped, LateralQuerySet)
+    assert _recognize_lateral_fetch(stripped, spec) is None
+
+
+def _as_seek_nodes(*nodes: object) -> "_NodeChildren":
+    """Hand malformed seek-node doubles to the structural matcher."""
+    # basedpyright: the malformed seek-node doubles are the hostile input under test;
+    # _keyset_seek_quals_match types the parameter as django-stubs' WHERE children
+    return list(nodes)  # pyright: ignore[reportReturnType]
 
 
 def test_lateral_seek_quals_match_rejects_shape_drift():
@@ -872,19 +950,24 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
     from dataclasses import replace
     from types import SimpleNamespace
 
+    from django.db.models.lookups import Lookup
+    from django.db.models.sql.where import WhereNode
+
     from django_strawberry_framework.optimizer.lateral_fetch import (
         _is_window_qual,
         _keyset_seek_quals_match,
     )
 
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
-    spec = lateral_queryset._dst_lateral_spec
+    spec = _lateral_spec(lateral_queryset)
     seek_nodes = [
         child for child in lateral_queryset.query.where.children if not _is_window_qual(child)
     ]
     assert len(seek_nodes) == 2
     lead, expansion = seek_nodes
     assert _keyset_seek_quals_match([lead, expansion], spec)
+    assert isinstance(lead, Lookup)
+    assert isinstance(expansion, WhereNode)
     # Wrong count.
     assert not _keyset_seek_quals_match([lead], spec)
     # Swapped order (lead is not the comparison chain).
@@ -902,7 +985,7 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
         lhs=SimpleNamespace(target=None),
         rhs=lead.rhs,
     )
-    assert not _keyset_seek_quals_match([targetless_lead, expansion], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(targetless_lead, expansion), spec)
     foreign_target = SimpleNamespace(
         column=spec.order_columns[0][0],
         model=SimpleNamespace(_meta=SimpleNamespace(db_table="foreign_table")),
@@ -912,13 +995,13 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
         lhs=SimpleNamespace(target=foreign_target),
         rhs=lead.rhs,
     )
-    assert not _keyset_seek_quals_match([foreign_lead, expansion], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(foreign_lead, expansion), spec)
 
     # Single-column cursors take the scalar expansion branch.
     single_seek = _issue_seek(values=(5,), order=("pk",))
     single_request = replace(_issue_lateral_request(single_seek), order_by=("pk",))
     single_queryset = _plan_lateral(single_request)
-    single_spec = single_queryset._dst_lateral_spec
+    single_spec = _lateral_spec(single_queryset)
     single_nodes = [
         child for child in single_queryset.query.where.children if not _is_window_qual(child)
     ]
@@ -927,14 +1010,14 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
     arms = list(expansion.children)
     bad_lookup = SimpleNamespace(lookup_name="wrong")
     invalid_expansion = SimpleNamespace(children=None, negated=False, connector="OR")
-    assert not _keyset_seek_quals_match([lead, invalid_expansion], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(lead, invalid_expansion), spec)
 
     bad_first_arm = SimpleNamespace(
         children=[bad_lookup, arms[1]],
         negated=False,
         connector="OR",
     )
-    assert not _keyset_seek_quals_match([lead, bad_first_arm], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(lead, bad_first_arm), spec)
 
     malformed_second_arm = SimpleNamespace(children=None, negated=False, connector="AND")
     malformed_expansion = SimpleNamespace(
@@ -942,8 +1025,9 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
         negated=False,
         connector="OR",
     )
-    assert not _keyset_seek_quals_match([lead, malformed_expansion], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(lead, malformed_expansion), spec)
 
+    assert isinstance(arms[1], WhereNode)
     second_children = list(arms[1].children)
     bad_equal_arm = SimpleNamespace(
         children=[bad_lookup, second_children[1]],
@@ -955,7 +1039,7 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
         negated=False,
         connector="OR",
     )
-    assert not _keyset_seek_quals_match([lead, bad_equal_expansion], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(lead, bad_equal_expansion), spec)
 
     bad_cmp_arm = SimpleNamespace(
         children=[second_children[0], bad_lookup],
@@ -967,4 +1051,4 @@ def test_lateral_seek_quals_match_rejects_shape_drift():
         negated=False,
         connector="OR",
     )
-    assert not _keyset_seek_quals_match([lead, bad_cmp_expansion], spec)
+    assert not _keyset_seek_quals_match(_as_seek_nodes(lead, bad_cmp_expansion), spec)

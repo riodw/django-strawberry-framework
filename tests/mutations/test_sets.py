@@ -32,12 +32,15 @@ from __future__ import annotations
 
 import re
 import sys
+from collections.abc import Iterator
 
 import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
 from strawberry import relay
+from strawberry.types.base import get_object_definition
+from typing_extensions import override
 
 import django_strawberry_framework
 from django_strawberry_framework import (
@@ -64,8 +67,13 @@ from django_strawberry_framework.registry import registry
 from tests.optimizer import _link_models
 
 
+def _meta_class(**attrs: object) -> type[object]:
+    """A ``Meta`` class carrying exactly ``attrs``, the shape ``_validate_meta`` reads."""
+    return type("Meta", (), attrs)
+
+
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Reset the registry (co-clearing mutation ledgers + the shape build cache).
 
     ``registry.clear()`` co-clears ``clear_mutation_input_namespace`` (input +
@@ -87,8 +95,8 @@ def _isolate_registry():
 def test_meta_without_model_raises():
     """A ``Meta`` with no resolvable model raises naming ``Meta.model``."""
     with pytest.raises(ConfigurationError, match="no resolvable model"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 operation = "create"
 
@@ -102,8 +110,8 @@ def test_meta_model_string_raises_at_class_creation():
     class`` posture so a typo'd / lazy string never reaches finalize.
     """
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = "Item"
                 operation = "create"
@@ -112,8 +120,8 @@ def test_meta_model_string_raises_at_class_creation():
 def test_meta_model_instance_raises_at_class_creation():
     """A model *instance* ``Meta.model`` raises at class creation (not finalize)."""
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item()
                 operation = "create"
@@ -122,8 +130,8 @@ def test_meta_model_instance_raises_at_class_creation():
 def test_meta_bad_operation_raises():
     """An ``operation`` outside the valid set raises naming the bad value + valid set."""
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "upsert"
@@ -132,8 +140,8 @@ def test_meta_bad_operation_raises():
 def test_meta_missing_operation_raises():
     """A missing ``operation`` raises the same operation error (``None`` is not valid)."""
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
 
@@ -141,8 +149,8 @@ def test_meta_missing_operation_raises():
 def test_meta_unknown_key_raises():
     """A stray ``Meta`` key raises the typo guard (mutation-local allowed set)."""
     with pytest.raises(ConfigurationError, match="unknown keys"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -152,8 +160,8 @@ def test_meta_unknown_key_raises():
 def test_meta_fields_and_exclude_both_raises():
     """Declaring both ``fields`` and ``exclude`` raises (mutual exclusion at creation)."""
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -170,8 +178,8 @@ def test_meta_duplicate_fields_raises():
     naming the repeated field.
     """
     with pytest.raises(ConfigurationError, match="duplicate field name"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -181,8 +189,8 @@ def test_meta_duplicate_fields_raises():
 def test_meta_duplicate_exclude_raises():
     """A repeated name in ``Meta.exclude`` is rejected the same way, naming ``exclude``."""
     with pytest.raises(ConfigurationError, match="Meta.exclude declares duplicate"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -198,8 +206,8 @@ def test_meta_unknown_fields_raises_at_class_creation():
     that walk at class creation (form-flavor parity).
     """
     with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -222,8 +230,8 @@ def test_meta_fields_naming_a_foreign_object_raises_at_class_creation():
             "mutation input. Name its carrier field(s) (p_tenant, p_code) in `fields` instead.",
         ),
     ):
-
-        class CreatePairChild(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreatePairChild(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = _link_models.LnkPairChild
                 operation = "create"
@@ -233,8 +241,8 @@ def test_meta_fields_naming_a_foreign_object_raises_at_class_creation():
 def test_meta_empty_fields_raises_at_class_creation():
     """``Meta.fields = ()`` on create/update raises at class creation (empty input)."""
     with pytest.raises(ConfigurationError, match="narrowed the editable column set to empty"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -244,8 +252,8 @@ def test_meta_empty_fields_raises_at_class_creation():
 def test_meta_fields_non_string_entry_raises():
     """A non-string entry in ``Meta.fields`` raises at class creation."""
     with pytest.raises(ConfigurationError, match="non-string entry"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -262,8 +270,8 @@ def test_meta_delete_with_fields_raises():
     outright regardless of whether the names are valid.
     """
     with pytest.raises(ConfigurationError, match="id-only and takes no input"):
-
-        class DeleteItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class DeleteItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "delete"
@@ -273,8 +281,8 @@ def test_meta_delete_with_fields_raises():
 def test_meta_delete_with_exclude_raises():
     """The same rejection applies to ``Meta.exclude`` on a delete operation."""
     with pytest.raises(ConfigurationError, match="id-only and takes no input"):
-
-        class DeleteItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class DeleteItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "delete"
@@ -288,8 +296,8 @@ def test_meta_input_class_not_strawberry_input_raises():
         pass
 
     with pytest.raises(ConfigurationError, match="@strawberry.input"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -310,8 +318,8 @@ def test_meta_input_class_diverging_field_names_raises():
         category: int  # should be ``category_id`` per the generated scheme
 
     with pytest.raises(ConfigurationError, match="diverge from the generated naming scheme"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -344,7 +352,11 @@ def test_meta_input_class_following_scheme_validates_clean():
         ("update", "input_class", "create"),
     ),
 )
-def test_meta_inapplicable_input_override_raises(operation, override_name, applies_to):
+def test_meta_inapplicable_input_override_raises(
+    operation: str,
+    override_name: str,
+    applies_to: str,
+):
     """Every input override fails loud when its operation cannot consume it."""
 
     @strawberry.input
@@ -361,8 +373,8 @@ def test_meta_inapplicable_input_override_raises(operation, override_name, appli
         ConfigurationError,
         match=rf"Meta\.{override_name} applies only to operation='{applies_to}'",
     ):
-
-        class MisconfiguredItemMutation(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class MisconfiguredItemMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             Meta = mutation_meta
 
 
@@ -373,7 +385,11 @@ def test_meta_inapplicable_input_override_raises(operation, override_name, appli
         ("update", "partial_input_class", "input_class"),
     ),
 )
-def test_meta_applicable_input_override_is_accepted(operation, override_name, other_override_name):
+def test_meta_applicable_input_override_is_accepted(
+    operation: str,
+    override_name: str,
+    other_override_name: str,
+):
     """Create and update retain the one consumer override each binds."""
 
     @strawberry.input
@@ -416,11 +432,11 @@ def test_permission_classes_explicit_override_honored():
     class AllowAll:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return True
 
@@ -439,11 +455,11 @@ def test_permission_classes_sequence_is_normalized_to_an_immutable_tuple():
     class AllowAll:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return True
 
@@ -467,17 +483,17 @@ def test_permission_classes_bare_class_raises():
     class AllowAll:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return True
 
     with pytest.raises(ConfigurationError, match="must be a sequence of"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -487,8 +503,8 @@ def test_permission_classes_bare_class_raises():
 def test_permission_classes_bare_string_raises():
     """A bare string ``permission_classes`` raises (would iterate as characters)."""
     with pytest.raises(ConfigurationError, match="must be a sequence of"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -506,17 +522,17 @@ def test_permission_classes_instance_entry_raises():
     class AllowAll:
         def has_permission(
             self,
-            info,
-            mutation,
-            operation,
-            data,
-            instance=None,
+            info: object,
+            mutation: type[object],
+            operation: str,
+            data: object,
+            instance: object = None,
         ):
             return True
 
     with pytest.raises(ConfigurationError, match="not a permission class exposing has_permission"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -530,8 +546,8 @@ def test_permission_classes_entry_without_has_permission_raises():
         pass
 
     with pytest.raises(ConfigurationError, match="not a permission class exposing has_permission"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -548,7 +564,8 @@ def test_resolve_model_seam_lets_subclass_supply_model_without_meta_model():
 
     class FlavorMutation(DjangoMutation):
         @classmethod
-        def _resolve_model(cls, meta):
+        @override
+        def _resolve_model(cls, meta: type[object]):
             # The 0.0.12 / 0.0.13 flavors derive the model from form_class /
             # serializer_class; emulate that here with a stand-in source.
             return getattr(meta, "_model_source", None)
@@ -601,10 +618,12 @@ def test_late_declaration_after_finalize_raises():
             fields = ("id", "name")
             primary = True
 
+    assert registry.get(product_models.Item) is ItemType2
+
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="after finalization"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -687,15 +706,19 @@ def test_bind_materializes_input_and_payload_globals():
     assert UpdateItem._primary_type is not None
     create_attrs = {spec.input_attr for spec in CreateItem._input_field_specs or ()}
     assert create_attrs == {
-        field.python_name for field in CreateItem._input_class.__strawberry_definition__.fields
+        field.python_name
+        for field in get_object_definition(CreateItem._input_class, strict=True).fields
     }
     assert "category_id" in create_attrs
+    assert CreateItem._model_fields_by_attr is not None
     assert CreateItem._model_fields_by_attr["category_id"] is (
         product_models.Item._meta.get_field("category")
     )
 
 
-def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
+def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A re-call after a fixable post-bind finalization failure succeeds, not a masked collision.
 
     ``finalize_django_types()`` documents recover-in-place: fix the offending
@@ -768,7 +791,7 @@ def test_bind_merges_consumer_input_class_with_generated_remainder():
 
     merged = _materialized_names["ItemInput"]
     assert CreateItem._input_class is merged
-    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(merged, strict=True).fields}
     # Generated remainder filled in (the partial-replacement bug would drop these).
     assert "category_id" in fields
     assert "is_private" in fields
@@ -803,7 +826,7 @@ def test_bind_merges_consumer_partial_input_class_for_update():
 
     merged = _materialized_names["ItemPartialInput"]
     assert UpdateItem._input_class is merged
-    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(merged, strict=True).fields}
     assert "category_id" in fields  # generator filled the rest
     assert fields["name"].description == "custom partial"  # consumer field honored
 
@@ -837,6 +860,8 @@ def test_bind_rejects_raw_pk_relation_override_for_relay_target():
             operation = "create"
             input_class = RawPkItemInput
 
+    assert CreateItem in iter_mutations()
+
     with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
 
@@ -854,6 +879,8 @@ def test_bind_rejects_raw_pk_relation_override_on_partial_input():
             model = product_models.Item
             operation = "update"
             partial_input_class = RawPkItemPartial
+
+    assert UpdateItem in iter_mutations()
 
     with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
@@ -887,7 +914,7 @@ def test_bind_accepts_globalid_relation_override_for_relay_target():
 
     merged = _materialized_names["ItemInput"]
     assert CreateItem._input_class is merged
-    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(merged, strict=True).fields}
     assert fields["category_id"].description == "custom category ref"  # consumer field honored
     assert "name" in fields  # generator filled the rest
 
@@ -942,6 +969,8 @@ def test_bind_rejects_m2m_relation_override_as_scalar_globalid():
             fields = ("title", "shelf", "genres")
             input_class = BadBookInput
 
+    assert CreateBook in iter_mutations()
+
     with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
 
@@ -967,6 +996,8 @@ def test_bind_rejects_m2m_relation_override_as_nested_globalid_list():
             fields = ("title", "shelf", "genres")
             input_class = BadBookInput
 
+    assert CreateBook in iter_mutations()
+
     with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
 
@@ -991,6 +1022,8 @@ def test_bind_rejects_fk_relation_override_as_globalid_list():
             model = product_models.Item
             operation = "create"
             input_class = BadItemInput
+
+    assert CreateItem in iter_mutations()
 
     with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
@@ -1020,8 +1053,9 @@ def test_bind_accepts_m2m_relation_override_as_globalid_list():
 
     finalize_django_types()
 
+    assert CreateBook._input_class is not None
     merged = _materialized_names[CreateBook._input_class.__name__]
-    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(merged, strict=True).fields}
     assert fields["genres"].description == "custom genres ref"  # consumer field honored
     assert "shelf_id" in fields  # generator filled the FK remainder
 
@@ -1115,6 +1149,7 @@ def test_bind_dedupes_fields_with_complementary_exclude():
     assert CreateViaFields._input_class is CreateViaExclude._input_class
     # The shared type is a narrowed, shape-derived name (not the canonical
     # ``ItemInput``, since the effective set is only ``{name}``).
+    assert CreateViaFields._input_class is not None
     assert CreateViaFields._input_class.__name__ != "ItemInput"
 
 
@@ -1142,10 +1177,14 @@ def test_bind_merged_and_generated_same_shape_distinct_representations_raise():
             operation = "create"
             input_class = CustomItemInput
 
+    assert CreateItemCustom in iter_mutations()
+
     class CreateItemPlain(DjangoMutation):
         class Meta:
             model = product_models.Item
             operation = "create"
+
+    assert CreateItemPlain in iter_mutations()
 
     with pytest.raises(ConfigurationError, match="ItemInput"):
         finalize_django_types()
@@ -1189,7 +1228,7 @@ def test_registry_clear_co_clears_mutation_namespace_and_declarations():
 
     finalize_django_types()
     assert hasattr(sys.modules[INPUTS_MODULE_PATH], "ItemInput")  # materialized
-    assert iter_mutations()  # non-empty before clear
+    assert CreateItem in iter_mutations()  # non-empty before clear
 
     registry.clear()
 
@@ -1214,6 +1253,8 @@ def test_bind_no_registered_type_raises_no_type_to_return():
             model = library_models.Periodical
             operation = "create"
 
+    assert CreatePeriodical in iter_mutations()
+
     with pytest.raises(ConfigurationError, match="no type to return"):
         finalize_django_types()
 
@@ -1234,10 +1275,14 @@ def test_bind_resolve_primary_distinguishes_ambiguous_from_zero_type():
             model = library_models.Issue
             fields = ("id", "title")
 
+    assert registry.get(library_models.Issue) is IssueTypeA
+
     class IssueTypeB(DjangoType):
         class Meta:
             model = library_models.Issue
             fields = ("id", "title")
+
+    assert registry.model_for_type(IssueTypeB) is library_models.Issue
 
     class CreateIssue(DjangoMutation):
         class Meta:
@@ -1245,7 +1290,11 @@ def test_bind_resolve_primary_distinguishes_ambiguous_from_zero_type():
             operation = "create"
 
     with pytest.raises(ConfigurationError, match="multiple registered DjangoTypes"):
-        _resolve_primary_type(CreateIssue, library_models.Issue)
+        # basedpyright: DjangoMutation declares _primary_type as a bound
+        # ClassVar[type[DjangoType]], which the protocol's mutable type[DjangoType] | None slot
+        # rejects as invariant; _resolve_primary_type types the parameter as
+        # _BoundDeclaration[type[DjangoType]]
+        _resolve_primary_type(CreateIssue, library_models.Issue)  # pyright: ignore[reportArgumentType]
 
     # The full finalize path catches this earlier at the Phase-1 ambiguity audit.
     with pytest.raises(ConfigurationError, match="multiple registered DjangoType subclasses"):
@@ -1265,8 +1314,8 @@ def test_mutation_meta_key_rejected_on_django_type_meta():
     confirming this slice added no key to ``ALLOWED_META_KEYS`` (Decision 12).
     """
     with pytest.raises(ConfigurationError, match="Unknown Meta keys"):
-
-        class ItemTypeBad(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class ItemTypeBad(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 fields = ("id", "name")
@@ -1360,8 +1409,8 @@ def test_django_mutation_and_permission_are_public_exports():
 def test_meta_fields_bare_string_raises():
     """A bare-string ``Meta.fields`` (would iterate as characters) raises at class creation."""
     with pytest.raises(ConfigurationError, match="not a bare string"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -1376,8 +1425,8 @@ def test_meta_permission_classes_non_iterable_raises():
     branch instead, surfacing the same fail-loud ``ConfigurationError`` at class creation.
     """
     with pytest.raises(ConfigurationError, match="must be a sequence of"):
-
-        class CreateItem(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -1400,10 +1449,14 @@ def test_bind_skips_relation_lock_for_non_relay_target():
             model = product_models.Category
             fields = ("id", "name")
 
+    assert registry.get(product_models.Category) is NonNodeCategoryType
+
     class NonNodeItemType(DjangoType):
         class Meta:
             model = product_models.Item
             fields = ("id", "name", "category")
+
+    assert registry.get(product_models.Item) is NonNodeItemType
 
     @strawberry.input
     class CustomItemInput:
@@ -1421,7 +1474,9 @@ def test_bind_skips_relation_lock_for_non_relay_target():
 
     merged = _materialized_names["ItemInput"]
     assert CreateItem._input_class is merged
-    field_names = {field.python_name for field in merged.__strawberry_definition__.fields}
+    field_names = {
+        field.python_name for field in get_object_definition(merged, strict=True).fields
+    }
     assert {"name", "category_id"} <= field_names
 
 
@@ -1495,6 +1550,7 @@ def test_model_flavor_input_seams_produce_today_defaults():
     # must match the descriptor the bind / build_mutation_input path uses, so the
     # field's lazy data: ref can never disagree with the materialized class name.
     create_meta = CreateItem._mutation_meta
+    assert create_meta.model is not None
     assert (
         CreateItem.input_type_name(create_meta)
         == mutation_input_shape(
@@ -1505,6 +1561,7 @@ def test_model_flavor_input_seams_produce_today_defaults():
         ).type_name
     )
     update_meta = UpdateItemName._mutation_meta
+    assert update_meta.model is not None
     assert (
         UpdateItemName.input_type_name(update_meta)
         == mutation_input_shape(
@@ -1525,7 +1582,7 @@ def test_model_flavor_input_seams_produce_today_defaults():
     assert CreateItem._input_class is materialized
     # The input carries the model's editable columns (name + category_id), proving
     # it is the model-column input, not a form-derived one.
-    field_names = {f.python_name for f in materialized.__strawberry_definition__.fields}
+    field_names = {f.python_name for f in get_object_definition(materialized, strict=True).fields}
     editable = {f.name for f in editable_input_fields(product_models.Item)}
     assert "name" in field_names
     assert "category_id" in field_names  # FK -> <field>_id scheme
@@ -1574,6 +1631,8 @@ def test_make_declaration_registry_dedupes_and_rejects_post_finalize():
             model = product_models.Item
             fields = ("id", "name")
             primary = True
+
+    assert registry.get(product_models.Item) is ItemType
 
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="ProbeFlavor .* after finalization"):
@@ -1645,13 +1704,17 @@ def test_mutation_shape_build_cache_clears_via_registry_and_direct_clear():
     the same dict.
     """
     probe_key = ("probe", "create", frozenset({"name"}))
-    _shape_build_cache[probe_key] = object
+    # basedpyright: a stand-in key and class the clear only evicts; _shape_build_cache types its
+    # entries as (model, operation, names) -> input class
+    _shape_build_cache[probe_key] = object  # pyright: ignore[reportArgumentType]
     assert probe_key in _shape_build_cache
 
     clear_mutation_shape_build_cache()
     assert _shape_build_cache == {}
 
-    _shape_build_cache[probe_key] = object
+    # basedpyright: a stand-in key and class the clear only evicts; _shape_build_cache types its
+    # entries as (model, operation, names) -> input class
+    _shape_build_cache[probe_key] = object  # pyright: ignore[reportArgumentType]
     registry.clear()
     assert _shape_build_cache == {}
 
@@ -1722,6 +1785,7 @@ def test_require_subclass_accepts_expected_and_rejects_with_safe_repr():
     )
 
     class Hostile:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -1749,24 +1813,23 @@ def test_require_subclass_accepts_expected_and_rejects_with_safe_repr():
 
 def test_require_non_delete_operation_accepts_create_update_and_rejects_delete():
     """The shared create/update lookup is the membership test both model-backed flavors use."""
-    from types import SimpleNamespace
-
     from django_strawberry_framework.mutations.sets import require_non_delete_operation
 
     assert (
-        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace(operation="create"))
+        require_non_delete_operation("ProbeBase", "Probe", _meta_class(operation="create"))
         == "create"
     )
     assert (
-        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace(operation="update"))
+        require_non_delete_operation("ProbeBase", "Probe", _meta_class(operation="update"))
         == "update"
     )
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace(operation="delete"))
+        require_non_delete_operation("ProbeBase", "Probe", _meta_class(operation="delete"))
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        require_non_delete_operation("ProbeBase", "Probe", SimpleNamespace())
+        require_non_delete_operation("ProbeBase", "Probe", _meta_class())
 
     class Hostile:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -1774,7 +1837,7 @@ def test_require_non_delete_operation_accepts_create_update_and_rejects_delete()
         require_non_delete_operation(
             "ProbeBase",
             "Probe",
-            SimpleNamespace(operation=Hostile()),
+            _meta_class(operation=Hostile()),
         )
 
 
@@ -1815,30 +1878,26 @@ def test_require_model_class_accepts_model_and_rejects_string_or_instance():
 
 def test_normalize_meta_field_selection_returns_normalized_pair():
     """The shared fields/exclude pair normalizes both keys with one flavor label."""
-    from types import SimpleNamespace
-
     from django_strawberry_framework.mutations.sets import normalize_meta_field_selection
 
     assert normalize_meta_field_selection(
-        SimpleNamespace(fields=["name"], exclude=None),
+        _meta_class(fields=["name"], exclude=None),
         flavor="DjangoMutation",
     ) == (("name",), None)
     with pytest.raises(ConfigurationError, match="not a bare string"):
         normalize_meta_field_selection(
-            SimpleNamespace(fields="name", exclude=None),
+            _meta_class(fields="name", exclude=None),
             flavor="DjangoMutation",
         )
 
 
 def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out():
     """Model-backed flavors share the DjangoModelPermission default + FOR UPDATE pair."""
-    from types import SimpleNamespace
-
     from django_strawberry_framework.mutations.sets import model_backed_permission_and_lock
 
     classes, lock = model_backed_permission_and_lock(
         "Probe",
-        SimpleNamespace(),
+        _meta_class(),
         flavor="DjangoMutation",
     )
     assert classes == (DjangoModelPermission,)
@@ -1846,7 +1905,7 @@ def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out():
 
     classes, lock = model_backed_permission_and_lock(
         "Probe",
-        SimpleNamespace(select_for_update=False, permission_classes=[]),
+        _meta_class(select_for_update=False, permission_classes=[]),
         flavor="DjangoMutation",
     )
     assert classes == ()
@@ -1859,10 +1918,15 @@ def test_bind_mutation_outputs_stashes_model_less_payload_and_slots():
     from django_strawberry_framework.mutations.sets import bind_mutation_outputs
 
     class BindOutputsProbe:
-        pass
+        _primary_type: type[DjangoType] | None
+        _input_class: type[object] | None
+        _payload_type_name: str | None
 
     sentinel = object()
-    bind_mutation_outputs(BindOutputsProbe, input_cls=sentinel, object_type=None)
+    # basedpyright: a plain stand-in class carrying only the slots the code under test writes, and
+    # a sentinel input class it only stashes; bind_mutation_outputs types them as _BoundDeclaration
+    # and type[object] | None
+    bind_mutation_outputs(BindOutputsProbe, input_cls=sentinel, object_type=None)  # pyright: ignore[reportArgumentType]
     assert BindOutputsProbe._primary_type is None
     assert BindOutputsProbe._input_class is sentinel
     assert BindOutputsProbe._payload_type_name == "BindOutputsProbePayload"
@@ -1922,7 +1986,7 @@ def test_model_and_form_validate_ride_shared_meta_helpers():
         lambda: None,
     ],
 )
-def test_reject_unknown_meta_keys_rejects_non_class_meta(invalid_meta):
+def test_reject_unknown_meta_keys_rejects_non_class_meta(invalid_meta: object):
     """reject_unknown_meta_keys raises ConfigurationError if meta is not a class."""
     from django_strawberry_framework.mutations.sets import reject_unknown_meta_keys
 
@@ -1942,10 +2006,10 @@ def test_reject_unknown_meta_keys_rejects_non_class_meta(invalid_meta):
         None,
     ],
 )
-def test_require_non_delete_operation_rejects_unhashable_and_non_string_operation(invalid_op):
+def test_require_non_delete_operation_rejects_unhashable_and_non_string_operation(
+    invalid_op: object,
+):
     """require_non_delete_operation raises ConfigurationError for unhashable or non-string operations."""
-    from types import SimpleNamespace
-
     from django_strawberry_framework.mutations.sets import require_non_delete_operation
 
     with pytest.raises(
@@ -1955,7 +2019,7 @@ def test_require_non_delete_operation_rejects_unhashable_and_non_string_operatio
         require_non_delete_operation(
             "DjangoModelFormMutation",
             "BadOpMutation",
-            SimpleNamespace(operation=invalid_op),
+            _meta_class(operation=invalid_op),
         )
 
 
@@ -1971,7 +2035,9 @@ def test_require_non_delete_operation_rejects_unhashable_and_non_string_operatio
         None,
     ],
 )
-def test_django_mutation_validate_meta_rejects_unhashable_and_non_string_operation(invalid_op):
+def test_django_mutation_validate_meta_rejects_unhashable_and_non_string_operation(
+    invalid_op: object,
+):
     """DjangoMutation._validate_meta raises ConfigurationError for unhashable or non-string operations."""
     _declare_products_primaries()
 
@@ -1979,17 +2045,19 @@ def test_django_mutation_validate_meta_rejects_unhashable_and_non_string_operati
         ConfigurationError,
         match=r"DjangoMutation BadOpMutation\.Meta\.operation must be one of \['create', 'delete', 'update'\]; got ",
     ):
-
-        class BadOpMutation(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadOpMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = invalid_op
 
 
 class _HostileRepr:
+    @override
     def __repr__(self):
         raise RuntimeError("HostileRepr exploded")
 
+    @override
     def __str__(self):
         raise RuntimeError("HostileRepr str exploded")
 
@@ -2066,7 +2134,9 @@ def test_reject_unknown_meta_keys_non_string_dict_keys():
     """reject_unknown_meta_keys handles non-string keys in vars(meta) cleanly."""
     from django_strawberry_framework.mutations.sets import reject_unknown_meta_keys
 
-    meta = type("NonStrKeyMeta", (), {123: "foo"})
+    # basedpyright: the non-str namespace key is the hostile input under test; typeshed types the
+    # type() namespace as dict[str, Any]
+    meta = type("NonStrKeyMeta", (), {123: "foo"})  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match=r"TestMutation\.Meta has unknown keys: \[123\]"):
         reject_unknown_meta_keys("TestMutation", meta, frozenset({"model", "operation"}))
 
@@ -2080,8 +2150,8 @@ def test_django_mutation_validate_meta_hostile_values_containment():
         ConfigurationError,
         match=r"DjangoMutation BadModelMutation resolved model must be a Django model class",
     ):
-
-        class BadModelMutation(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadModelMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = hostile
                 operation = "create"
@@ -2090,8 +2160,8 @@ def test_django_mutation_validate_meta_hostile_values_containment():
         ConfigurationError,
         match=r"DjangoMutation BadLockMutation\.Meta\.select_for_update must be a bool",
     ):
-
-        class BadLockMutation(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadLockMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -2101,8 +2171,8 @@ def test_django_mutation_validate_meta_hostile_values_containment():
         ConfigurationError,
         match=r"DjangoMutation BadInputMutation\.Meta\.input_class must be a @strawberry\.input-decorated type",
     ):
-
-        class BadInputMutation(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadInputMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -2111,8 +2181,6 @@ def test_django_mutation_validate_meta_hostile_values_containment():
 
 def test_validate_permission_classes_custom_base_label_and_flavor_forwarding():
     """_validate_permission_classes and model_backed_permission_and_lock format with base_label."""
-    from types import SimpleNamespace
-
     from django_strawberry_framework.mutations.sets import (
         _validate_permission_classes,
         model_backed_permission_and_lock,
@@ -2136,7 +2204,7 @@ def test_validate_permission_classes_custom_base_label_and_flavor_forwarding():
     ):
         model_backed_permission_and_lock(
             "BadPermsMutation",
-            SimpleNamespace(permission_classes=[123]),
+            _meta_class(permission_classes=[123]),
             flavor="DjangoModelFormMutation",
         )
 
@@ -2144,6 +2212,7 @@ def test_validate_permission_classes_custom_base_label_and_flavor_forwarding():
 class _HostileHashStr(str):
     """A str subclass whose __hash__ raises (hostile-Meta containment parity test)."""
 
+    @override
     def __hash__(self) -> int:
         raise RuntimeError("hostile hash")
 
@@ -2162,8 +2231,8 @@ def test_django_mutation_validate_meta_hostile_hash_operation_safe_containment()
         ConfigurationError,
         match=r"DjangoMutation BadOpMutation\.Meta\.operation must be one of",
     ):
-
-        class BadOpMutation(DjangoMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadOpMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = product_models.Item
                 operation = _HostileHashStr("create")
@@ -2175,8 +2244,6 @@ def test_require_non_delete_operation_hostile_hash_safe_containment():
     The shared non-delete reject used by form and serializer flavors also guards
     its frozenset membership test against hash failures.
     """
-    from types import SimpleNamespace
-
     from django_strawberry_framework.mutations.sets import require_non_delete_operation
 
     with pytest.raises(
@@ -2186,7 +2253,7 @@ def test_require_non_delete_operation_hostile_hash_safe_containment():
         require_non_delete_operation(
             "SerializerMutation",
             "BadOpMutation",
-            SimpleNamespace(operation=_HostileHashStr("create")),
+            _meta_class(operation=_HostileHashStr("create")),
         )
 
 
@@ -2226,6 +2293,7 @@ def test_make_declaration_registry_identity_dedup_hostile_eq_safe_containment():
     reg = make_declaration_registry("ProbeRegistry")
 
     class HostileEqMeta(type):
+        @override
         def __eq__(cls, other: object) -> bool:
             raise RuntimeError("hostile eq")
 

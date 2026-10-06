@@ -7,12 +7,13 @@ and ``first``/``last`` refusals live in
 ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 import strawberry
-from strawberry.relay.types import to_base64
-from strawberry.relay.utils import SliceMetadata
+from strawberry.relay.utils import SliceMetadata, to_base64
 
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.resource_policy import ResourcePolicy
@@ -23,6 +24,7 @@ from django_strawberry_framework.utils.connections import (
     ConnectionWindowBounds,
     FetchMode,
     UnwindowableConnection,
+    WindowRangePlan,
     assert_relay_pagination_bound,
     assert_window_fetch_mode,
     assert_window_fetch_mode_for,
@@ -41,6 +43,17 @@ from django_strawberry_framework.utils.connections import (
 _MAX = 100
 
 
+@dataclass(frozen=True)
+class _Window:
+    """The raw window arguments ``assert_window_fetch_mode_for`` reads."""
+
+    offset: int
+    limit: int | None
+    reverse: bool
+    with_total_count: bool
+    next_page_probe: bool
+
+
 def test_last_only_window_limit_is_literal_last_not_expected():
     """A ``last``-only window's bound is the literal ``last``, NOT ``slice_meta.expected``.
 
@@ -50,7 +63,9 @@ def test_last_only_window_limit_is_literal_last_not_expected():
     row filter and the window would over-fetch every child row. The shared helper
     must return ``limit == last`` instead.
     """
-    slice_meta = SliceMetadata.from_arguments(None, last=2, max_results=_MAX)
+    # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types the
+    # parameter as a required Info
+    slice_meta = SliceMetadata.from_arguments(None, last=2, max_results=_MAX)  # pyright: ignore[reportArgumentType]
     assert slice_meta.expected is None  # the trap the helper must not fall into
 
     bounds = derive_connection_window_bounds(
@@ -77,7 +92,9 @@ def test_forward_window_limit_is_expected_and_not_reverse():
     assert bounds == ConnectionWindowBounds(offset=0, limit=3, reverse=False)
 
 
-def test_offset_window_applies_request_page_ceiling_to_plan_cap(arm_resource_budget):
+def test_offset_window_applies_request_page_ceiling_to_plan_cap(
+    arm_resource_budget: Callable[[object, ResourcePolicy], None],
+):
     """The optimizer window cannot fetch past the request's page-size policy."""
     context = {}
     arm_resource_budget(context, ResourcePolicy(max_page_size=5))
@@ -87,7 +104,10 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(arm_resource_bud
     )
 
     bounds = derive_connection_window_bounds(
-        info,
+        # basedpyright: a stand-in info carrying only the slots the code under test reads;
+        # derive_connection_window_bounds types info as EitherInfo (a concrete Strawberry Info or
+        # graphql-core's GraphQLResolveInfo)
+        info,  # pyright: ignore[reportArgumentType]
         before=None,
         after=to_base64("arrayconnection", "3"),
         first=None,
@@ -100,10 +120,12 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(arm_resource_bud
 
 def test_before_with_last_is_a_forward_window_not_reverse():
     """``before`` + ``last`` resolves to a forward offset window (reverse stays False)."""
-    after = SliceMetadata.from_arguments(None, first=5, max_results=_MAX)
+    # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types the
+    # parameter as a required Info
+    after = SliceMetadata.from_arguments(None, first=5, max_results=_MAX)  # pyright: ignore[reportArgumentType]
     # Build a real ``before`` cursor from the forward window's end so the helper
     # takes the ``before is not None`` path that keeps ``reverse`` False.
-    from strawberry.relay.types import to_base64
+    from strawberry.relay.utils import to_base64
 
     before_cursor = to_base64("arrayconnection", after.end)
     bounds = derive_connection_window_bounds(
@@ -132,7 +154,9 @@ def test_after_with_last_is_unwindowable_not_reverse_with_offset():
     """
     after_cursor = to_base64("arrayconnection", "3")
     slice_meta = SliceMetadata.from_arguments(
-        None,
+        # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types
+        # the parameter as a required Info
+        None,  # pyright: ignore[reportArgumentType]
         before=None,
         after=after_cursor,
         first=None,
@@ -186,7 +210,9 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
     after_cursor = to_base64("arrayconnection", "3")
     before_cursor = to_base64("arrayconnection", "2")
     slice_meta = SliceMetadata.from_arguments(
-        None,
+        # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types
+        # the parameter as a required Info
+        None,  # pyright: ignore[reportArgumentType]
         before=before_cursor,
         after=after_cursor,
         max_results=_MAX,
@@ -234,7 +260,10 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
         "index",
     ],
 )
-def test_decode_offset_cursor_returns_the_minted_index_or_none_when_absent(value, expected):
+def test_decode_offset_cursor_returns_the_minted_index_or_none_when_absent(
+    value: str | None,
+    expected: int | None,
+):
     """An absent cursor is ``None`` by the engine's truthiness; a minted one is its index.
 
     The wire sees only rejections and served pages; the decoded value itself is
@@ -290,7 +319,7 @@ def test_zero_width_after_before_stays_windowable():
     ("offset", "limit", "message"),
     [(-1, 2, "window offset cannot be negative"), (4, -2, "window limit cannot be negative")],
 )
-def test_window_range_plan_rejects_negative_direct_bounds(offset, limit, message):
+def test_window_range_plan_rejects_negative_direct_bounds(offset: int, limit: int, message: str):
     """A malformed internal request fails loud instead of changing its range."""
     with pytest.raises(OptimizerError, match=message):
         window_range_plan(offset=offset, limit=limit, reverse=False)
@@ -532,7 +561,7 @@ def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
     request flags.
     """
     assert_window_fetch_mode_for(
-        SimpleNamespace(
+        _Window(
             offset=2,
             limit=None,
             reverse=False,
@@ -543,7 +572,7 @@ def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
     # The same params on the bounded offset page DO engage the probe -> reject.
     with pytest.raises(OptimizerError, match="mutually exclusive"):
         assert_window_fetch_mode_for(
-            SimpleNamespace(
+            _Window(
                 offset=2,
                 limit=3,
                 reverse=False,
@@ -553,7 +582,7 @@ def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
         )
 
 
-def _rows(*row_numbers):
+def _rows(*row_numbers: int):
     return [SimpleNamespace(rn=n) for n in row_numbers]
 
 
@@ -694,12 +723,12 @@ def test_split_window_rows_composed_offset_probe_drops_marker_and_sentinel():
     ],
 )
 def test_window_range_plan_mode_table(
-    offset,
-    limit,
-    reverse,
-    expect_marker,
-    expect_probe,
-    expect_mode,
+    offset: int,
+    limit: int | None,
+    reverse: bool,
+    expect_marker: bool,
+    expect_probe: bool,
+    expect_mode: FetchMode,
 ):
     """Fetch-mode decision table for ``window_range_plan`` (probe passed on).
 
@@ -782,10 +811,10 @@ _FETCH_MODE_TRIPLE = {
     ],
 )
 def test_fetch_mode_maps_to_the_count_probe_constant_false_triple(
-    plan,
-    has_next_selected,
-    total_selected,
-    expected_mode,
+    plan: WindowRangePlan,
+    has_next_selected: bool,
+    total_selected: bool,
+    expected_mode: FetchMode,
 ):
     """Each ``FetchMode`` resolves to exactly one (count, probe, constant_false) triple.
 

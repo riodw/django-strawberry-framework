@@ -16,11 +16,21 @@ document. Consumer ``orderBy`` walks live in
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
+from django.db import models
 
 from django_strawberry_framework import sets_mixins
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import OrderSet, RelatedOrder
+
+
+def _as_model(stand_in: object) -> type[models.Model]:
+    """Hand a duck-typed model to a ``Meta`` validator that reads ``meta.model``."""
+    # basedpyright: a stand-in model carrying only the slots the code under test reads;
+    # _validate_orderset_class types meta.model as type[Model]
+    return stand_in  # pyright: ignore[reportReturnType]
 
 
 class AOrder(OrderSet):
@@ -132,7 +142,7 @@ def test_validate_orderset_class_returns_none_for_missing_value():
     from django_strawberry_framework.types.base import _validate_orderset_class
 
     class FakeMeta:
-        model = type("FakeModel", (), {})
+        model: ClassVar[type[models.Model]] = _as_model(type("FakeModel", (), {}))
 
     assert _validate_orderset_class(FakeMeta, None) is None
 
@@ -145,7 +155,7 @@ def test_validate_orderset_class_accepts_order_set_subclass():
         pass
 
     class FakeMeta:
-        model = type("FakeModel", (), {})
+        model: ClassVar[type[models.Model]] = _as_model(type("FakeModel", (), {}))
 
     assert _validate_orderset_class(FakeMeta, MyOrder) is MyOrder
 
@@ -161,7 +171,7 @@ def test_validate_orderset_class_rejects_non_order_set():
         pass
 
     class FakeMeta:
-        model = type("FakeModel", (), {})
+        model: ClassVar[type[models.Model]] = _as_model(type("FakeModel", (), {}))
 
     with _pytest.raises(ConfigurationError) as exc_info:
         _validate_orderset_class(FakeMeta, NotAnOrderSet)
@@ -259,7 +269,9 @@ def test_related_order_rejects_plain_class_target_with_typed_error():
     """
 
     class Owner(OrderSet):
-        shelf = RelatedOrder(_NotAnOrderSet, field_name="shelf")
+        # basedpyright: the non-OrderSet target is the hostile input under test; RelatedOrder types
+        # the parameter as _OrderSetTarget
+        shelf = RelatedOrder(_NotAnOrderSet, field_name="shelf")  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ConfigurationError) as exc_info:
         _ = Owner.shelf.orderset
@@ -289,7 +301,9 @@ def test_related_order_rejects_filterset_target():
             fields = ["code"]
 
     class Owner(OrderSet):
-        shelf = RelatedOrder(ShelfFilter, field_name="shelf")
+        # basedpyright: the FilterSet target is the hostile input under test; RelatedOrder types
+        # the parameter as _OrderSetTarget
+        shelf = RelatedOrder(ShelfFilter, field_name="shelf")  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ConfigurationError) as exc_info:
         _ = Owner.shelf.orderset
@@ -302,7 +316,9 @@ def test_related_order_rejects_factory_returning_non_class():
     """A factory resolving to a non-class is rejected by the same gate."""
 
     class Owner(OrderSet):
-        shelf = RelatedOrder(lambda: object(), field_name="shelf")
+        # basedpyright: the factory returning a non-class is the hostile input under test;
+        # RelatedOrder types the parameter as _OrderSetTarget
+        shelf = RelatedOrder(lambda: object(), field_name="shelf")  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ConfigurationError) as exc_info:
         _ = Owner.shelf.orderset
@@ -311,7 +327,9 @@ def test_related_order_rejects_factory_returning_non_class():
 
 def test_related_order_target_gate_names_unbound_owner():
     """A never-bound declaration reports ``<unbound>`` as its owner label."""
-    related = RelatedOrder(_NotAnOrderSet, field_name="a")
+    # basedpyright: the non-OrderSet target is the hostile input under test; RelatedOrder types the
+    # parameter as _OrderSetTarget
+    related = RelatedOrder(_NotAnOrderSet, field_name="a")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError) as exc_info:
         _ = related.orderset
     assert "<unbound>" in str(exc_info.value)

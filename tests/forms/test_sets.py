@@ -38,11 +38,15 @@ from __future__ import annotations
 
 import itertools
 import sys
+from collections.abc import Callable, Iterator
 
 import pytest
 import strawberry
 from apps.products import models as product_models
 from django import forms
+from django.db import models
+from strawberry.types.base import get_object_definition
+from typing_extensions import override
 
 import django_strawberry_framework
 from django_strawberry_framework import (
@@ -59,7 +63,6 @@ from django_strawberry_framework.forms import (
 from django_strawberry_framework.forms import (
     DjangoModelFormMutation as DjangoModelFormMutationFromForms,
 )
-from django_strawberry_framework.forms.inputs import CREATE
 from django_strawberry_framework.forms.inputs import (
     INPUTS_MODULE_PATH as FORMS_INPUTS_MODULE_PATH,
 )
@@ -75,6 +78,7 @@ from django_strawberry_framework.forms.sets import (
     clear_form_shape_build_cache,
     iter_form_mutations,
 )
+from django_strawberry_framework.mutations.inputs import CREATE
 from django_strawberry_framework.mutations.inputs import (
     _materialized_names as mutation_materialized_names,
 )
@@ -84,7 +88,7 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Reset the registry (now co-clearing the form-input ledger + the plain-form registry).
 
     ``registry.clear()`` is wired this slice to co-clear
@@ -110,7 +114,7 @@ def _unique_app_label() -> str:
 def _item_model_form():
     """A ``ModelForm`` over products ``Item`` (the ``ModelForm`` flavor fixture)."""
 
-    class ItemModelForm(forms.ModelForm):
+    class ItemModelForm(forms.ModelForm[product_models.Item]):
         class Meta:
             model = product_models.Item
             fields = ("name", "category", "is_private")
@@ -166,8 +170,8 @@ def test_bases_exported_from_package_root():
 def test_modelform_missing_form_class_raises():
     """A ``DjangoModelFormMutation`` with no ``Meta.form_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no form_class"):
-
-        class CreateItem(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 operation = "create"
 
@@ -175,8 +179,8 @@ def test_modelform_missing_form_class_raises():
 def test_plain_form_missing_form_class_raises():
     """A ``DjangoFormMutation`` with no ``Meta.form_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no form_class"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 pass
 
@@ -185,8 +189,8 @@ def test_modelform_with_plain_form_raises():
     """A plain ``forms.Form`` on ``DjangoModelFormMutation`` raises (must be a ModelForm)."""
     form_cls = _contact_form()
     with pytest.raises(ConfigurationError, match="must be a forms.ModelForm subclass"):
-
-        class CreateThing(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateThing(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -201,8 +205,8 @@ def test_plain_base_with_modelform_raises_naming_modelform_base():
     """
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="use DjangoModelFormMutation"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
 
@@ -214,8 +218,8 @@ def test_plain_base_form_class_not_a_form_raises():
         pass
 
     with pytest.raises(ConfigurationError, match="must be a forms.Form subclass"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = NotAForm
 
@@ -228,12 +232,12 @@ def test_modelform_with_no_resolvable_model_raises():
     letting ``form_class._meta.model`` surface a raw ``AttributeError``.
     """
 
-    class NoModelForm(forms.ModelForm):
+    class NoModelForm(forms.ModelForm[models.Model]):
         name = forms.CharField()
 
     with pytest.raises(ConfigurationError, match="resolves no model"):
-
-        class CreateThing(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateThing(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = NoModelForm
                 operation = "create"
@@ -246,10 +250,12 @@ def test_modelform_non_model_meta_model_raises_at_class_creation():
     swap still must not snapshot and crash at bind. Rides ``require_model_class``.
     """
     form_cls = _item_model_form()
-    form_cls._meta.model = "Item"
+    # basedpyright: the string model swapped onto the form's options is the hostile input under
+    # test; django-stubs types the slot as the model class
+    form_cls._meta.model = "Item"  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-
-        class CreateThing(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateThing(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -262,7 +268,9 @@ def test_default_form_field_hook_rejects_a_class_without_form_metadata():
         pass
 
     with pytest.raises(ConfigurationError, match="cannot resolve Meta.form_class"):
-        _default_mutation_get_form_fields(MissingFormMetadata)
+        # basedpyright: the class without form metadata is the hostile input under test;
+        # _default_mutation_get_form_fields types the parameter as a form-mutation class
+        _default_mutation_get_form_fields(MissingFormMetadata)  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -274,8 +282,8 @@ def test_modelform_delete_operation_rejected():
     """``operation = "delete"`` on ``DjangoModelFormMutation`` is rejected (no form delete)."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-
-        class DeleteItem(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class DeleteItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = "delete"
@@ -285,8 +293,8 @@ def test_modelform_missing_operation_rejected():
     """A missing ``operation`` on the ``ModelForm`` base is rejected (``None`` invalid)."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-
-        class CreateItem(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
 
@@ -304,13 +312,13 @@ def test_modelform_missing_operation_rejected():
         None,
     ],
 )
-def test_plain_base_rejects_any_operation(operation):
+def test_plain_base_rejects_any_operation(operation: str | None):
     """The plain ``DjangoFormMutation`` base rejects ANY ``Meta.operation`` (Decision 10)."""
     form_cls = _contact_form()
     declared_operation = operation  # bind to a local: a class body cannot read the param name.
     with pytest.raises(ConfigurationError, match="operation is not supported"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = declared_operation
@@ -325,7 +333,7 @@ def test_plain_base_rejects_any_operation(operation):
         None,
     ],
 )
-def test_plain_base_rejects_inherited_meta_operation(operation):
+def test_plain_base_rejects_inherited_meta_operation(operation: str | None):
     """Decision 10 rejects ``Meta.operation`` inherited via a shared Meta parent too.
 
     ``form_class`` / ``permission_classes`` resolve through ``getattr`` (MRO-visible),
@@ -342,8 +350,8 @@ def test_plain_base_rejects_inherited_meta_operation(operation):
         operation = declared_operation
 
     with pytest.raises(ConfigurationError, match="operation is not supported"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta(SharedMeta):
                 pass
 
@@ -428,8 +436,8 @@ def test_modelform_unknown_meta_key_raises():
     """A stray ``Meta`` key on the ``ModelForm`` base raises the typo guard."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown keys"):
-
-        class CreateItem(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -440,8 +448,8 @@ def test_plain_form_model_key_is_unknown():
     """``model`` is NOT an allowed plain-form key (it dropped from the form allowed set)."""
     form_cls = _contact_form()
     with pytest.raises(ConfigurationError, match="unknown keys"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 model = product_models.Item
@@ -451,8 +459,8 @@ def test_modelform_fields_and_exclude_both_raises():
     """Declaring both ``fields`` and ``exclude`` on the ``ModelForm`` base raises."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-
-        class CreateItem(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -468,8 +476,8 @@ def test_plain_form_fields_and_exclude_both_raises():
         b = forms.CharField()
 
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = MultiForm
                 fields = ("a",)
@@ -477,7 +485,7 @@ def test_plain_form_fields_and_exclude_both_raises():
 
 
 @pytest.mark.parametrize("narrowing", ["fields", "exclude"])
-def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing):
+def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing: str):
     """One-shot ``Meta.fields`` / ``Meta.exclude`` iterables survive class validation.
 
     Validation must normalize the declaration before the effective-field check consumes
@@ -490,21 +498,15 @@ def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing)
         subject = forms.CharField(required=False)
 
     declaration = iter(("message",) if narrowing == "fields" else ("subject",))
-    if narrowing == "fields":
 
-        class Submit(DjangoFormMutation):
-            class Meta:
-                form_class = TwoFieldForm
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = TwoFieldForm
+            if narrowing == "fields":
                 fields = declaration
-                permission_classes = []
-
-    else:
-
-        class Submit(DjangoFormMutation):
-            class Meta:
-                form_class = TwoFieldForm
+            else:
                 exclude = declaration
-                permission_classes = []
+            permission_classes = []
 
     assert Submit._mutation_meta.fields == (("message",) if narrowing == "fields" else None)
     assert Submit._mutation_meta.exclude == (("subject",) if narrowing == "exclude" else None)
@@ -513,7 +515,9 @@ def test_plain_form_one_shot_narrowing_is_snapshotted_before_finalize(narrowing)
 
 
 @pytest.mark.parametrize("escape", [RuntimeError, KeyboardInterrupt])
-def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(escape):
+def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(
+    escape: type[BaseException],
+):
     """A broken permission iterable cannot escape class validation as its raw exception.
 
     The normalization catches ``BaseException``, so an iterable raising from outside
@@ -525,8 +529,8 @@ def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(esca
             raise escape("permission iterator exploded")
 
     with pytest.raises(ConfigurationError, match="permission_classes must be a sequence"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = _contact_form()
                 permission_classes = BrokenPermissions()
@@ -536,12 +540,13 @@ def test_plain_form_hostile_form_repr_maps_to_configuration_error():
     """An invalid form-class value with a broken repr still yields a typed config error."""
 
     class HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = HostileRepr()
 
@@ -550,8 +555,8 @@ def test_modelform_unknown_field_name_routes_through_slice1_narrowing():
     """An unknown ``Meta.fields`` name routes through the narrowing fail-loud."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown form field"):
-
-        class CreateItem(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -570,7 +575,7 @@ def test_cached_build_form_input_runs_required_guard_per_declaration():
     second call returned the cached value and silently skipped the guard.
     """
 
-    class _RequiredExtraForm(forms.ModelForm):
+    class _RequiredExtraForm(forms.ModelForm[product_models.Item]):
         confirm = forms.CharField()  # required, no model column - dropped by the narrowing below
 
         class Meta:
@@ -606,7 +611,10 @@ def test_cached_build_form_input_runs_required_guard_per_declaration():
     [(DjangoModelFormMutation, _item_model_form), (DjangoFormMutation, _contact_form)],
     ids=["modelform", "plain_form"],
 )
-def test_get_form_only_override_trips_the_construction_hook_waiver(mutation_base, form_factory):
+def test_get_form_only_override_trips_the_construction_hook_waiver(
+    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    form_factory: Callable[[], type[forms.BaseForm]],
+):
     """Overriding ONLY ``get_form`` counts as a construction-hook override on both flavors.
 
     ``_form_kwargs_overridden`` tests BOTH construction hooks, and every other
@@ -619,17 +627,17 @@ def test_get_form_only_override_trips_the_construction_hook_waiver(mutation_base
     simply always ``True``.
     """
     form_cls = form_factory()
-    meta_body = {"form_class": form_cls}
+    meta_body: dict[str, object] = {"form_class": form_cls}
     if mutation_base is DjangoModelFormMutation:
         meta_body["operation"] = "create"
 
     def get_form(
-        self,
-        info,
+        self: DjangoFormMutation | DjangoModelFormMutation,
+        info: strawberry.Info[object, object],
         *,
-        data,
-        files,
-        instance=None,
+        data: dict[str, object],
+        files: dict[str, object],
+        instance: models.Model | None = None,
     ):
         return form_cls(
             **self.get_form_kwargs(info, data=data, files=files, instance=instance),
@@ -645,6 +653,8 @@ def test_get_form_only_override_trips_the_construction_hook_waiver(mutation_base
         (mutation_base,),
         {"Meta": type("Meta", (), dict(meta_body))},
     )
+    assert issubclass(Overriding, mutation_base)
+    assert issubclass(Inheriting, mutation_base)
 
     assert _form_kwargs_overridden(Overriding, mutation_base) is True
     assert _form_kwargs_overridden(Inheriting, mutation_base) is False
@@ -700,8 +710,8 @@ def test_plain_form_rejects_model_permission_at_class_creation():
 
     for offending in (DjangoModelPermission, CustomModelPermission):
         with pytest.raises(ConfigurationError, match="requires a model"):
-
-            class Submit(DjangoFormMutation):
+            # basedpyright: the class statement is the call under test and raises, so the name is never bound
+            class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
                 class Meta:
                     form_class = form_cls
                     permission_classes = [offending]
@@ -766,10 +776,12 @@ def test_plain_form_late_declaration_after_finalize_raises():
             fields = ("id", "name")
             primary = True
 
+    assert registry.get(product_models.Item) is ItemType
+
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="DjangoFormMutation .* after finalization"):
-
-        class Submit(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = _contact_form()
 
@@ -810,7 +822,7 @@ def test_modelform_bind_materializes_form_input_into_forms_namespace():
     assert CreateItem._payload_type_name == "CreateItemPayload"
     assert CreateItem._primary_type is not None
     payload = mutation_materialized_names["CreateItemPayload"]
-    slots = {f.python_name for f in payload.__strawberry_definition__.fields}
+    slots = {f.python_name for f in get_object_definition(payload, strict=True).fields}
     assert "errors" in slots
     assert "node" in slots  # Item is Relay-shaped -> node slot
 
@@ -832,7 +844,7 @@ def test_plain_form_bind_materializes_input_and_ok_errors_payload():
     assert Submit._payload_type_name == "SubmitPayload"
     assert Submit._primary_type is None
     payload = mutation_materialized_names["SubmitPayload"]
-    slots = {f.python_name for f in payload.__strawberry_definition__.fields}
+    slots = {f.python_name for f in get_object_definition(payload, strict=True).fields}
     assert slots == {"ok", "errors"}
 
 
@@ -843,6 +855,7 @@ def test_plain_form_get_form_fields_hook_controls_input_basis():
 
     class Submit(DjangoFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             fields = super().get_form_fields()
             fields["injected"] = forms.CharField(required=False)
@@ -854,7 +867,11 @@ def test_plain_form_get_form_fields_hook_controls_input_basis():
 
     finalize_django_types()
 
-    slots = {field.python_name for field in Submit._input_class.__strawberry_definition__.fields}
+    assert Submit._input_class is not None
+    slots = {
+        field.python_name
+        for field in get_object_definition(Submit._input_class, strict=True).fields
+    }
     assert slots == {"message", "injected"}
 
 
@@ -872,15 +889,20 @@ def test_default_get_form_fields_uses_frozen_form_class_snapshot():
             form_class = FormA
             permission_classes = []
 
-    Submit.Meta.form_class = FormB
+    # basedpyright: the post-declaration Meta drift is the input under test; the checker reads
+    # form_class as the declared FormA class
+    Submit.Meta.form_class = FormB  # pyright: ignore[reportAttributeAccessIssue]
     finalize_django_types()
 
     assert Submit._mutation_meta.form_class is FormA
     assert Submit._input_class is form_materialized_names["FormAInput"]
     assert {
-        field.python_name for field in Submit._input_class.__strawberry_definition__.fields
+        field.python_name
+        for field in get_object_definition(Submit._input_class, strict=True).fields
     } == {"alpha"}
-    bound = Submit().get_form(None, data={"alpha": "ok"}, files={})
+    # basedpyright: the path under test never reads info; get_form types the parameter as a
+    # required Info
+    bound = Submit().get_form(None, data={"alpha": "ok"}, files={})  # pyright: ignore[reportArgumentType]
     assert isinstance(bound, FormA)
 
 
@@ -891,6 +913,7 @@ def test_modelform_get_form_fields_hook_controls_input_basis():
 
     class CreateItem(DjangoModelFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             fields = super().get_form_fields()
             fields["injected"] = forms.CharField(required=False)
@@ -902,8 +925,10 @@ def test_modelform_get_form_fields_hook_controls_input_basis():
 
     finalize_django_types()
 
+    assert CreateItem._input_class is not None
     slots = {
-        field.python_name for field in CreateItem._input_class.__strawberry_definition__.fields
+        field.python_name
+        for field in get_object_definition(CreateItem._input_class, strict=True).fields
     }
     assert "injected" in slots
 
@@ -915,6 +940,7 @@ def test_get_form_fields_hook_basis_drives_required_guard():
 
     class Submit(DjangoFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             fields = super().get_form_fields()
             fields["injected"] = forms.CharField(required=True)
@@ -925,13 +951,18 @@ def test_get_form_fields_hook_basis_drives_required_guard():
             fields = ("message",)
             permission_classes = []
 
+    assert Submit in iter_form_mutations()
+
     with pytest.raises(ConfigurationError, match="injected"):
         finalize_django_types()
 
 
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 @pytest.mark.parametrize("bad_hook", [None, "not-callable"])
-def test_non_callable_get_form_fields_is_configuration_error(mutation_base, bad_hook):
+def test_non_callable_get_form_fields_is_configuration_error(
+    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    bad_hook: str | None,
+):
     """A malformed hook declaration fails as typed configuration, not raw ``TypeError``."""
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
     meta_attrs = (
@@ -948,7 +979,9 @@ def test_non_callable_get_form_fields_is_configuration_error(mutation_base, bad_
 
 
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
-def test_plain_function_get_form_fields_hook_is_configuration_error(mutation_base):
+def test_plain_function_get_form_fields_hook_is_configuration_error(
+    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+):
     """A plain (non-classmethod) multi-arg hook fails as typed configuration, not raw ``TypeError``.
 
     The hook invocation is the typed boundary both flavors' ``_validate_meta`` and
@@ -964,7 +997,7 @@ def test_plain_function_get_form_fields_hook_is_configuration_error(mutation_bas
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_form_fields(self, info=None):
+    def get_form_fields(self: object, info: object = None):
         del self, info
         return {"message": forms.CharField()}
 
@@ -982,7 +1015,9 @@ def test_plain_function_get_form_fields_hook_is_configuration_error(mutation_bas
 
 
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
-def test_raising_get_form_fields_body_is_configuration_error(mutation_base):
+def test_raising_get_form_fields_body_is_configuration_error(
+    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+):
     """A hook body raising mid-call is reported as typed configuration, not the raw exception.
 
     The invocation boundary catches ``BaseException`` (mirroring
@@ -996,7 +1031,7 @@ def test_raising_get_form_fields_body_is_configuration_error(mutation_base):
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_exploding_form_fields(cls):
+    def get_exploding_form_fields(cls: type):
         raise RuntimeError("hook exploded")
 
     with pytest.raises(
@@ -1023,7 +1058,7 @@ def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged():
     """
     form_cls = _contact_form()
 
-    def get_config_error_form_fields(cls):
+    def get_config_error_form_fields(cls: type):
         raise ConfigurationError("the hook's own typed reject")
 
     with pytest.raises(ConfigurationError, match="hook's own typed reject") as excinfo:
@@ -1035,7 +1070,7 @@ def test_get_form_fields_hook_raising_configuration_error_reraises_unchanged():
                 "Meta": type(
                     "Meta",
                     (),
-                    {"form_class": _contact_form(), "permission_classes": []},
+                    {"form_class": form_cls, "permission_classes": []},
                 ),
             },
         )
@@ -1050,7 +1085,7 @@ def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
     exception body must not defeat the typed message assembly).
     """
 
-    def get_empty_error_form_fields(cls):
+    def get_empty_error_form_fields(cls: type):
         raise ValueError
 
     with pytest.raises(ConfigurationError, match="calling it raised ValueError: no detail"):
@@ -1073,7 +1108,10 @@ def test_get_form_fields_hook_raising_empty_exception_reports_no_detail():
     "hook_style",
     ["zero_arg_plain_function", "staticmethod_lambda"],
 )
-def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(mutation_base, hook_style):
+def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(
+    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    hook_style: str,
+):
     """A zero-arg plain function / ``@staticmethod`` hook still binds (permissive posture).
 
     Both are callable zero-arg, so the invocation boundary accepts them and the
@@ -1105,7 +1143,10 @@ def test_zero_arg_and_staticmethod_get_form_fields_hooks_are_accepted(mutation_b
 
 @pytest.mark.parametrize("mutation_base", [DjangoFormMutation, DjangoModelFormMutation])
 @pytest.mark.parametrize("bad_return", [None, ["message"], [("message",)]])
-def test_malformed_get_form_fields_return_is_configuration_error(mutation_base, bad_return):
+def test_malformed_get_form_fields_return_is_configuration_error(
+    mutation_base: type[DjangoFormMutation] | type[DjangoModelFormMutation],
+    bad_return: list[str] | list[tuple[str, ...]] | None,
+):
     """Malformed hook returns fail through the typed configuration boundary for both bases."""
 
     form_cls = _contact_form() if mutation_base is DjangoFormMutation else _item_model_form()
@@ -1115,7 +1156,7 @@ def test_malformed_get_form_fields_return_is_configuration_error(mutation_base, 
         else {"form_class": form_cls, "operation": "create"}
     )
 
-    def get_bad_form_fields(cls):
+    def get_bad_form_fields(cls: type):
         del cls
         return bad_return
 
@@ -1130,7 +1171,9 @@ def test_malformed_get_form_fields_return_is_configuration_error(mutation_base, 
         )
 
 
-def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
+def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A plain-form re-finalize after a fixable post-bind failure succeeds, not a masked collision.
 
     The plain-form sibling of the mutation retry-idempotency guard. ``bind_form_mutations``
@@ -1203,6 +1246,8 @@ def test_modelform_no_registered_primary_type_raises_at_finalize():
             form_class = form_cls
             operation = "create"
 
+    assert CreateItem in iter_mutations()
+
     # No DjangoType declared for Item this build.
     with pytest.raises(ConfigurationError, match="no registered DjangoType|no type to return"):
         finalize_django_types()
@@ -1227,7 +1272,9 @@ def test_plain_form_default_perform_mutate_calls_form_save():
             form_class = SavingForm
             permission_classes = []
 
-    Submit().perform_mutate(SavingForm(data={"message": "x"}), info=None)
+    # basedpyright: the path under test never reads info; perform_mutate types the parameter as a
+    # required Info
+    Submit().perform_mutate(SavingForm(data={"message": "x"}), info=None)  # pyright: ignore[reportArgumentType]
     assert called["saved"] is True
 
 
@@ -1241,11 +1288,11 @@ def test_plain_form_default_perform_mutate_calls_form_save():
         lambda: None,
     ],
 )
-def test_plain_form_mutation_rejects_non_class_meta(invalid_meta):
+def test_plain_form_mutation_rejects_non_class_meta(invalid_meta: object):
     """A non-class Meta on DjangoFormMutation raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match=r"BadMeta\.Meta must be a class; got "):
-
-        class BadMeta(DjangoFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadMeta(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
             Meta = invalid_meta
 
 
@@ -1259,11 +1306,11 @@ def test_plain_form_mutation_rejects_non_class_meta(invalid_meta):
         lambda: None,
     ],
 )
-def test_modelform_mutation_rejects_non_class_meta(invalid_meta):
+def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object):
     """A non-class Meta on DjangoModelFormMutation raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match=r"BadModelMeta\.Meta must be a class; got "):
-
-        class BadModelMeta(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadModelMeta(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             Meta = invalid_meta
 
 
@@ -1279,7 +1326,7 @@ def test_modelform_mutation_rejects_non_class_meta(invalid_meta):
         None,
     ],
 )
-def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_op):
+def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_op: object):
     """An unhashable or non-string operation on DjangoModelFormMutation raises ConfigurationError."""
     form_cls = _item_model_form()
 
@@ -1287,8 +1334,8 @@ def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_
         ConfigurationError,
         match=r"Meta\.operation must be one of \['create', 'update'\]; got ",
     ):
-
-        class BadOp(DjangoModelFormMutation):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BadOp(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 form_class = form_cls
                 operation = invalid_op
@@ -1326,20 +1373,24 @@ def test_plain_form_check_permission_seam():
             form_class = _contact_form()
             permission_classes = []
 
-    assert AllowMutation().check_permission(None, operation="form", data={}) is True
+    # basedpyright: the path under test never reads info; check_permission types the parameter
+    # as a required Info
+    assert AllowMutation().check_permission(None, operation="form", data={}) is True  # pyright: ignore[reportArgumentType]
 
     class DenyMutation(DjangoFormMutation):
         class Meta:
             form_class = _contact_form()
             permission_classes = [DenyAll]
 
-    assert DenyMutation().check_permission(None, operation="form", data={}) is False
+    # basedpyright: the path under test never reads info; check_permission types the parameter
+    # as a required Info
+    assert DenyMutation().check_permission(None, operation="form", data={}) is False  # pyright: ignore[reportArgumentType]
 
 
 def test_cached_build_form_input_partial_column_less_guard():
     """PARTIAL build path executes guard_partial_required_column_less_fields and builds partial."""
 
-    class ExtraRequiredForm(forms.ModelForm):
+    class ExtraRequiredForm(forms.ModelForm[product_models.Item]):
         confirm = forms.CharField(required=True)
 
         class Meta:
@@ -1376,14 +1427,19 @@ def test_form_shape_build_cache_clears_via_registry_and_direct_clear():
     ``clear_form_shape_build_cache`` and ``registry.clear()`` both empty the same
     dict (the ``forms.shape_cache`` subsystem clear).
     """
-    probe_key = ("probe", "form", frozenset({"message"}))
-    _form_shape_build_cache[probe_key] = object
+    probe_key = (
+        forms.Form,
+        "form",
+        frozenset({"message"}),
+        (),
+    )
+    _form_shape_build_cache[probe_key] = (object, [])
     assert probe_key in _form_shape_build_cache
 
     clear_form_shape_build_cache()
     assert _form_shape_build_cache == {}
 
-    _form_shape_build_cache[probe_key] = object
+    _form_shape_build_cache[probe_key] = (object, [])
     registry.clear()
     assert _form_shape_build_cache == {}
 
@@ -1406,6 +1462,7 @@ def test_shared_hook_intermediate_base_siblings_dedupe():
 
     class BaseSubmit(DjangoFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             fields = dict(form_cls.base_fields)
             fields["injected"] = forms.CharField(required=False)
@@ -1424,7 +1481,11 @@ def test_shared_hook_intermediate_base_siblings_dedupe():
     finalize_django_types()
 
     assert SiblingA._input_class is SiblingB._input_class
-    slots = {field.python_name for field in SiblingA._input_class.__strawberry_definition__.fields}
+    assert SiblingA._input_class is not None
+    slots = {
+        field.python_name
+        for field in get_object_definition(SiblingA._input_class, strict=True).fields
+    }
     assert slots == {"message", "injected"}
 
 
@@ -1435,6 +1496,7 @@ def test_modelform_shared_hook_siblings_dedupe():
 
     class BaseCreateItem(DjangoModelFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             return dict(form_cls.base_fields)
 
@@ -1462,21 +1524,21 @@ def test_distinct_hook_functions_identical_bases_dedupe():
     ``(name, type, requiredness, related model)`` tuples share one cache entry."""
     form_cls = _contact_form()
 
-    def hook_a(cls):
-        return dict(form_cls.base_fields)
-
-    def hook_b(cls):
-        return dict(form_cls.base_fields)
-
     class TwinA(DjangoFormMutation):
-        get_form_fields = classmethod(hook_a)
+        @classmethod
+        @override
+        def get_form_fields(cls):
+            return dict(form_cls.base_fields)
 
         class Meta:
             form_class = form_cls
             permission_classes = []
 
     class TwinB(DjangoFormMutation):
-        get_form_fields = classmethod(hook_b)
+        @classmethod
+        @override
+        def get_form_fields(cls):
+            return dict(form_cls.base_fields)
 
         class Meta:
             form_class = form_cls
@@ -1503,6 +1565,7 @@ def test_default_hook_and_custom_hook_same_basis_dedupe():
 
     class CustomSameBasis(DjangoFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             return dict(form_cls.base_fields)
 
@@ -1530,6 +1593,7 @@ def test_stateful_shared_hook_requiredness_drift_is_loud():
 
     class StatefulBase(DjangoFormMutation):
         @classmethod
+        @override
         def get_form_fields(cls):
             fields = dict(TwoFieldForm.base_fields)
             fields["injected"] = forms.CharField(required=cls.__name__ == "DriftA")
@@ -1540,10 +1604,14 @@ def test_stateful_shared_hook_requiredness_drift_is_loud():
             form_class = TwoFieldForm
             permission_classes = []
 
+    assert DriftA in iter_form_mutations()
+
     class DriftB(StatefulBase):
         class Meta:
             form_class = TwoFieldForm
             permission_classes = []
+
+    assert DriftB in iter_form_mutations()
 
     with pytest.raises(ConfigurationError, match="materialized by two distinct"):
         finalize_django_types()
@@ -1567,10 +1635,14 @@ def test_two_distinct_form_classes_sharing_name_still_collide():
             form_class = make_form()
             permission_classes = []
 
+    assert FormA in iter_form_mutations()
+
     class FormB(DjangoFormMutation):
         class Meta:
             form_class = make_form()
             permission_classes = []
+
+    assert FormB in iter_form_mutations()
 
     with pytest.raises(ConfigurationError, match="materialized by two distinct"):
         finalize_django_types()

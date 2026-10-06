@@ -45,13 +45,14 @@ from types import SimpleNamespace
 import pytest
 from apps.library.models import Book, Issue, LendingDesk, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
-from django.db.models import Count, F
+from django.db.models import Count, F, Model, QuerySet
 from django.http import HttpRequest
-from graphql import GraphQLError
+from graphql import GraphQLError, GraphQLResolveInfo
 from strategy_schemas import make_django_type
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.connection import (
+    DjangoConnection,
     _connection_type_for,
     _keyset_connection_context,
     _keyset_order_ref,
@@ -61,6 +62,7 @@ from django_strawberry_framework.connection import (
     _WindowedConnectionRows,
 )
 from django_strawberry_framework.keyset import (
+    DeclaredCursorState,
     cursor_columns_for,
     declared_cursor_state_for_definition,
     order_fingerprint,
@@ -81,12 +83,12 @@ ISSUE_ORDER = ("-number", "id")
 
 
 @pytest.fixture(autouse=True)
-def _registry(isolate_global_registry):
+def _registry(isolate_global_registry: None) -> None:
     """Registry + connection-type-cache isolation around every test here."""
     return isolate_global_registry
 
 
-def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra):
+def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra: object):
     return make_django_type(
         name,
         Issue,
@@ -99,11 +101,16 @@ def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra):
     )
 
 
-def _issue_state(issue_type):
+def _issue_connection_of(node_type: type[DjangoType]) -> type[DjangoConnection[Issue]]:
+    """The generated connection class over ``node_type``, an ``Issue`` node."""
+    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
+    assert issubclass(connection_type, DjangoConnection)
+    return connection_type
+
+
+def _issue_state(issue_type: type):
     finalize_django_types()
-    return _keyset_connection_context(
-        _connection_type_for(issue_type, issue_type.__django_strawberry_definition__),
-    )
+    return _keyset_connection_context(_issue_connection_of(issue_type))
 
 
 # =============================================================================
@@ -114,7 +121,7 @@ def _issue_state(issue_type):
 def test_keyset_connection_context_resolves_and_caches():
     issue_type = _make_issue_type()
     finalize_django_types()
-    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
+    connection_type = _issue_connection_of(issue_type)
     state = _keyset_connection_context(connection_type)
     assert state is not None
     assert state.cursor_field == ISSUE_ORDER
@@ -126,7 +133,7 @@ def test_keyset_connection_context_resolves_and_caches():
 def test_keyset_connection_context_is_none_for_offset_types():
     plain_type = make_django_type("PlainIssueNode", Issue, ("id", "number"))
     finalize_django_types()
-    connection_type = _connection_type_for(plain_type, plain_type.__django_strawberry_definition__)
+    connection_type = _issue_connection_of(plain_type)
     assert _keyset_connection_context(connection_type) is None
     # The negative result is cached too (the ``False`` sentinel round-trip).
     assert _keyset_connection_context(connection_type) is None
@@ -143,7 +150,7 @@ def test_keyset_connection_context_resolves_without_connection_opt_in():
     """
     issue_type = _make_issue_type("BareKeysetNode", connection=None)
     finalize_django_types()
-    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
+    connection_type = _issue_connection_of(issue_type)
     state = _keyset_connection_context(connection_type)
     assert state is not None
     assert state.cursor_field == ISSUE_ORDER
@@ -177,7 +184,7 @@ def test_declared_cursor_state_for_definition_none_without_cursor_field():
 def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
     issue_type = _make_issue_type("KeysetBackwardWindowNode")
     finalize_django_types()
-    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
+    connection_type = _issue_connection_of(issue_type)
     periodical = Periodical.objects.create(name="P")
     for number in (1, 2, 3):
         Issue.objects.create(periodical=periodical, number=number, title=f"i{number}")
@@ -194,10 +201,14 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
         _raw_info=SimpleNamespace(field_nodes=[]),
         schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
     )
-    connection_payload = connection_type.resolve_connection(wrapper, info=info, last=2)
+    # basedpyright: a stand-in info carrying only the slots the code under test reads, and the
+    # package's own _WindowedConnectionRows marker; DjangoConnection.resolve_connection types info
+    # as a concrete Strawberry Info and nodes as Strawberry's NodeIterableType
+    connection_payload = connection_type.resolve_connection(wrapper, info=info, last=2)  # pyright: ignore[reportArgumentType]
     # ``last`` over a window wrapper cannot be served by the (forward-only)
     # keyset window - the wrapper's fallback queryset routes through the
     # keyset slicer instead, backward semantics intact.
+    assert isinstance(connection_payload, DjangoConnection)
     assert [edge.node.title for edge in connection_payload.edges] == ["i2", "i1"]
     assert connection_payload.page_info.has_previous_page is True
 
@@ -206,7 +217,7 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
 def test_counted_keyset_window_without_seek_count_falls_back():
     issue_type = _make_issue_type("KeysetCountDriftNode")
     state = _issue_state(issue_type)
-    connection_type = _connection_type_for(issue_type, issue_type.__django_strawberry_definition__)
+    connection_type = _issue_connection_of(issue_type)
     row = SimpleNamespace(
         id=1,
         number=1,
@@ -225,12 +236,16 @@ def test_counted_keyset_window_without_seek_count_falls_back():
             ),
         ],
     )
-    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Issue.objects.all())
+    # basedpyright: a stand-in row carrying only the window columns the code under test reads;
+    # _WindowedConnectionRows types rows as list[Model]
+    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Issue.objects.all())  # pyright: ignore[reportArgumentType]
     assert (
         _resolve_from_window(
             connection_type,
             window,
-            info=info,
+            # basedpyright: a stand-in info carrying only the slots the code under test reads;
+            # _resolve_from_window types info as a concrete Strawberry Info
+            info=info,  # pyright: ignore[reportArgumentType]
             offset=0,
             limit=2,
             want_count=False,
@@ -248,7 +263,21 @@ def test_counted_keyset_window_without_seek_count_falls_back():
 
 def _issue_order_state():
     issue_type = _make_issue_type("KeysetOrderStateNode")
-    return _issue_state(issue_type)
+    state = _issue_state(issue_type)
+    assert state is not None
+    return state
+
+
+def _state_stub(model: type[Model], cursor_field: tuple[str, ...]) -> DeclaredCursorState:
+    """A hand-built declared state over ``model`` whose definition carries only the model."""
+    return DeclaredCursorState(
+        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+        # DeclaredCursorState types the slot as DjangoTypeDefinition
+        definition=SimpleNamespace(model=model),  # pyright: ignore[reportArgumentType]
+        cursor_field=cursor_field,
+        columns=cursor_columns_for(model, cursor_field),
+        fingerprint=order_fingerprint(cursor_field),
+    )
 
 
 @pytest.mark.django_db
@@ -258,6 +287,7 @@ def test_keyset_order_state_default_order_reuses_declared_columns():
         state,
         Issue.objects.order_by(*ISSUE_ORDER),
     )
+    assert state is not None
     assert columns is state.columns
     assert fingerprint == state.fingerprint
     # The defensive no-order shape gets the declared order applied.
@@ -286,24 +316,14 @@ def test_keyset_order_state_rejects_explicit_nulls_positioning():
 def test_keyset_order_state_rejects_nullable_columns():
     # A hand-built state over Book (whose ``subtitle`` is nullable) - the
     # arm is unreachable over Issue, whose columns are all non-null.
-    state_stub = SimpleNamespace(
-        definition=SimpleNamespace(model=Book),
-        cursor_field=("title", "id"),
-        columns=cursor_columns_for(Book, ("title", "id")),
-        fingerprint=order_fingerprint(("title", "id")),
-    )
+    state_stub = _state_stub(Book, ("title", "id"))
     with pytest.raises(GraphQLError, match="'subtitle' is nullable"):
         _keyset_order_state(state_stub, Book.objects.order_by("subtitle", "id"))
 
 
 @pytest.mark.django_db
 def test_keyset_order_state_rejects_json_columns():
-    state_stub = SimpleNamespace(
-        definition=SimpleNamespace(model=ScalarSpecimen),
-        cursor_field=("label",),
-        columns=cursor_columns_for(ScalarSpecimen, ("label",)),
-        fingerprint=order_fingerprint(("label",)),
-    )
+    state_stub = _state_stub(ScalarSpecimen, ("label",))
     with pytest.raises(GraphQLError, match="ordering differs between database backends"):
         _keyset_order_state(
             state_stub,
@@ -317,13 +337,8 @@ def test_keyset_order_state_rejects_json_columns():
     [("card__barcode", "id"), ("loans__note", "id")],
     ids=["optional-o2o", "multivalued-reverse"],
 )
-def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order):
-    state_stub = SimpleNamespace(
-        definition=SimpleNamespace(model=Patron),
-        cursor_field=("name",),
-        columns=cursor_columns_for(Patron, ("name",)),
-        fingerprint=order_fingerprint(("name",)),
-    )
+def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order: tuple[str, str]):
+    state_stub = _state_stub(Patron, ("name",))
     with pytest.raises(GraphQLError, match="cannot anchor stable cursors"):
         _keyset_order_state(state_stub, Patron.objects.order_by(*order))
 
@@ -331,7 +346,10 @@ def test_keyset_order_state_rejects_optional_or_multivalued_related_paths(order)
 @pytest.mark.django_db
 @pytest.mark.parametrize("spelling", ["flat", "nested"])
 @pytest.mark.parametrize("hides", [True, False], ids=["hiding-target", "identity-target"])
-def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(hides, spelling):
+def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(
+    hides: bool,
+    spelling: str,
+):
     """A related ``orderBy:`` value through a type that hides rows is nullable, so refused.
 
     ``OrderSet`` reads ``periodical__name`` as ``NULL`` for a periodical the
@@ -342,9 +360,16 @@ def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(h
         "Meta": type("Meta", (), {"model": Periodical, "fields": "__all__"}),
     }
     if hides:
-        attrs["get_queryset"] = classmethod(
-            lambda cls, queryset, info, **kwargs: queryset.exclude(name="secret"),
-        )
+
+        def _hide_secret(
+            cls: type[DjangoType],
+            queryset: QuerySet[Periodical],
+            info: object,
+            **kwargs: object,
+        ) -> QuerySet[Periodical]:
+            return queryset.exclude(name="secret")
+
+        attrs["get_queryset"] = classmethod(_hide_secret)
     type("KeysetPeriodicalNode", (DjangoType,), attrs)
     state = _issue_order_state()
 
@@ -367,7 +392,9 @@ def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(h
     )
 
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=True)  # pyright: ignore[reportAttributeAccessIssue]
     ordered = IssuePeriodicalOrder.apply_sync(
         [periodical_term, {"number": Ordering.DESC}],
         Issue.objects.all(),
@@ -388,11 +415,18 @@ def test_keyset_order_ref_parses_strings_and_rejects_nulls():
     assert _keyset_order_ref(SimpleNamespace(expression=None, descending=False)) is None
 
 
+def _resolved_name(model: type[Model], path: str) -> str:
+    """Resolve ``path`` on ``model`` and return the terminal field's name, failing on ``None``."""
+    field = _resolve_order_path_field(model, path)
+    assert field is not None
+    return field.name
+
+
 def test_resolve_order_path_field_arms():
     # Local column; pk alias; related path terminal.
-    assert _resolve_order_path_field(Issue, "number").name == "number"
-    assert _resolve_order_path_field(Issue, "pk").name == "id"
-    assert _resolve_order_path_field(Issue, "periodical__name").name == "name"
+    assert _resolved_name(Issue, "number") == "number"
+    assert _resolved_name(Issue, "pk") == "id"
+    assert _resolved_name(Issue, "periodical__name") == "name"
     # Unknown segment; relation terminal; a path THROUGH a non-relation;
     # optional reverse-one and multi-valued reverse paths.
     assert _resolve_order_path_field(Issue, "nope") is None
@@ -409,20 +443,28 @@ def test_resolve_order_path_field_arms():
         null=False,
         related_model=None,
     )
-    detached_model = SimpleNamespace(
-        _meta=SimpleNamespace(get_field=lambda _name: detached_relation),
-    )
-    assert _resolve_order_path_field(detached_model, "relation__value") is None
+
+    def _detached_relation(_name: str) -> object:
+        return detached_relation
+
+    detached_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_detached_relation))
+    # basedpyright: a stand-in model carrying only the slots the code under test reads;
+    # _resolve_order_path_field types the parameter as type[Model]
+    assert _resolve_order_path_field(detached_model, "relation__value") is None  # pyright: ignore[reportArgumentType]
 
     virtual_field = SimpleNamespace(
         is_relation=False,
         concrete=False,
         related_model=None,
     )
-    virtual_model = SimpleNamespace(
-        _meta=SimpleNamespace(get_field=lambda _name: virtual_field),
-    )
-    assert _resolve_order_path_field(virtual_model, "virtual") is None
+
+    def _virtual_field(_name: str) -> object:
+        return virtual_field
+
+    virtual_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_virtual_field))
+    # basedpyright: a stand-in model carrying only the slots the code under test reads;
+    # _resolve_order_path_field types the parameter as type[Model]
+    assert _resolve_order_path_field(virtual_model, "virtual") is None  # pyright: ignore[reportArgumentType]
 
 
 def test_resolve_order_path_field_accepts_mti_parent_link():
@@ -430,7 +472,7 @@ def test_resolve_order_path_field_accepts_mti_parent_link():
     parent_link = LendingDesk._meta.pk
     assert parent_link.name == "venue_ptr"
 
-    assert _resolve_order_path_field(LendingDesk, "venue_ptr__name").name == "name"
+    assert _resolved_name(LendingDesk, "venue_ptr__name") == "name"
 
 
 # =============================================================================
@@ -442,6 +484,13 @@ class _FakeInfo:
     schema = SimpleNamespace(config=SimpleNamespace(relay_max_results=100))
 
 
+def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a duck-typed info to the nested-planner slice helper."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads;
+    # _keyset_window_slice_from_arguments types info as graphql-core's GraphQLResolveInfo
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
 @pytest.mark.django_db
 def test_keyset_window_slice_from_arguments_arms():
     issue_type = _make_issue_type("KeysetWalkerSliceNode")
@@ -449,15 +498,17 @@ def test_keyset_window_slice_from_arguments_arms():
     state = declared_cursor_state_for_definition(issue_type.__django_strawberry_definition__)
     assert state is not None
     columns, fingerprint = state.columns, state.fingerprint
-    info = _FakeInfo()
+    info = _as_resolve_info(_FakeInfo())
 
     # No cursor: a plain forward window, no seek.
-    window, seek = _keyset_window_slice_from_arguments(
+    sliced = _keyset_window_slice_from_arguments(
         {"first": 2},
         info,
         columns=columns,
         fingerprint=fingerprint,
     )
+    assert sliced is not None
+    window, seek = sliced
     assert (window.offset, window.limit, window.reverse) == (0, 2, False)
     assert seek is None
 
@@ -467,12 +518,14 @@ def test_keyset_window_slice_from_arguments_arms():
     from django_strawberry_framework.keyset import encode_keyset_cursor
 
     cursor = encode_keyset_cursor(columns, issue, fingerprint=fingerprint)
-    window, seek = _keyset_window_slice_from_arguments(
+    sliced = _keyset_window_slice_from_arguments(
         {"first": 2, "after": cursor},
         info,
         columns=columns,
         fingerprint=fingerprint,
     )
+    assert sliced is not None
+    window, seek = sliced
     assert (window.offset, window.limit, window.reverse) == (0, 2, False)
     assert seek is not None
     assert seek.cursor.values == (1, issue.pk)
@@ -536,7 +589,9 @@ def test_extend_only_projection_passthrough_arms():
     ``test_async_keyset_deferred_cursor_column_is_loaded`` (async ``defer()``).
     """
     sentinel = object()
-    assert _extend_only_projection(sentinel, ("number",)) is sentinel
+    # basedpyright: the non-queryset sentinel is the input under test (passed through
+    # untouched); _extend_only_projection types the parameter as QuerySet
+    assert _extend_only_projection(sentinel, ("number",)) is sentinel  # pyright: ignore[reportArgumentType]
 
     plain = Issue.objects.all()
     assert _extend_only_projection(plain, ("number",)) is plain
@@ -546,13 +601,17 @@ def test_extend_only_projection_passthrough_arms():
     assert _extend_only_projection(deferred, ("number",)) is deferred
     masked_deferred = Issue.objects.defer("number", "title")
     extended_deferred = _extend_only_projection(masked_deferred, ("number",))
-    names, defer_flag = deferred_loading_of(extended_deferred)
+    loading = deferred_loading_of(extended_deferred)
+    assert loading is not None
+    names, defer_flag = loading
     assert defer_flag is True
     assert names == frozenset({"title"})
     covered = Issue.objects.only("number", "id")
     assert _extend_only_projection(covered, ("number",)) is covered
     only_qs = Issue.objects.only("title")
     extended_only = _extend_only_projection(only_qs, ("number",))
-    names, defer_flag = deferred_loading_of(extended_only)
+    loading = deferred_loading_of(extended_only)
+    assert loading is not None
+    names, defer_flag = loading
     assert defer_flag is False
     assert names == frozenset({"number", "title"})

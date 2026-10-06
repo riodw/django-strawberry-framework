@@ -9,28 +9,34 @@ none of those are a JSON selection.
 """
 
 import functools
+from typing import Any
 
 import pytest
+import pytest_django
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
-from django.db.models import CompositePrimaryKey
+from django.db.models import CompositePrimaryKey, Model, QuerySet
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, conf, finalize_django_types
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import ConfigurationError, _safe_class_name
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import base as types_base
 from django_strawberry_framework.types import finalizer as types_finalizer
-from django_strawberry_framework.types.base import _build_annotations, _validate_interfaces
+from django_strawberry_framework.types.base import (
+    _build_annotations,
+    _ModelMeta,
+    _validate_interfaces,
+)
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relay import (
     _resolve_id_attr_default,
     _resolve_id_default,
     _resolve_node_default,
     _resolve_nodes_default,
-    _safe_class_name,
     apply_interfaces,
     decode_global_id,
     encode_typename,
@@ -41,21 +47,38 @@ from django_strawberry_framework.utils.querysets import model_for
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry(isolate_global_registry):
+def _isolate_registry(isolate_global_registry: None) -> None:
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
-def _meta(**attrs):
+def _meta(**attrs: object) -> _ModelMeta:
     """Build a throw-away ``Meta`` class with ``model=Category`` plus extras."""
     attrs.setdefault("model", Category)
-    return type("Meta", (), attrs)
+    # basedpyright: the class type() builds carries model=Category in a namespace the checker
+    # cannot read; the Meta validators type the parameter as _ModelMeta
+    return type("Meta", (), attrs)  # pyright: ignore[reportReturnType]
+
+
+def _as_django_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a plain host class to a builder that takes a ``DjangoType``."""
+    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
+    # interface builders type the parameter as type[DjangoType]
+    return cls  # pyright: ignore[reportReturnType]
+
+
+def _as_definition(stand_in: object) -> DjangoTypeDefinition:
+    """Hand a duck-typed definition to ``apply_interfaces``, which takes a real definition."""
+    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
+    # apply_interfaces types the parameter as DjangoTypeDefinition
+    return stand_in  # pyright: ignore[reportReturnType]
 
 
 def test_safe_class_name_renders_non_string_metaclass_name_metadata():
     """A non-string ``__name__`` renders through ``repr`` instead of escaping."""
 
     class _NonStringNameMeta(type):
+        @override
         def __getattribute__(cls, name: str):
             if name == "__name__":
                 return 42
@@ -89,7 +112,7 @@ def test_meta_interfaces_accepted():
         (relay.Node),
     ],
 )
-def test_meta_interfaces_accepts_single_interface_class(raw):
+def test_meta_interfaces_accepts_single_interface_class(raw: object):
     """A single class, a one-tuple, and the missing-comma spelling all normalize."""
     meta = _meta(interfaces=raw)
     assert _validate_interfaces(meta) == (relay.Node,)
@@ -104,7 +127,7 @@ def test_meta_interfaces_accepts_single_interface_class(raw):
         42,
     ],
 )
-def test_meta_interfaces_rejects_non_sequence(raw):
+def test_meta_interfaces_rejects_non_sequence(raw: object):
     meta = _meta(interfaces=raw)
     with pytest.raises(ConfigurationError, match="must be a tuple/list"):
         _validate_interfaces(meta)
@@ -137,7 +160,7 @@ def test_meta_interfaces_rejects_non_interface_classes():
     "entry",
     [object(), 42],
 )
-def test_meta_interfaces_rejects_non_class_entries(entry):
+def test_meta_interfaces_rejects_non_class_entries(entry: object):
     """Non-class non-string entries (instances, ints) raise the must-contain-interface-classes error."""
     meta = _meta(interfaces=(entry,))
     with pytest.raises(ConfigurationError, match="must contain interface classes"):
@@ -175,7 +198,7 @@ def test_meta_interfaces_stored_on_definition():
     meta = _meta(interfaces=(relay.Node,))
     normalized = _validate_interfaces(meta)
     definition = DjangoTypeDefinition(
-        origin=object,
+        origin=_as_django_type(object),
         model=Category,
         name=None,
         description=None,
@@ -228,7 +251,7 @@ def test_class_already_inherits_relay_node_directly():
     assert relay.Node in _Host.__mro__
 
 
-def test_relay_node_with_composite_pk_raises(monkeypatch):
+def test_relay_node_with_composite_pk_raises(monkeypatch: pytest.MonkeyPatch):
     """Composite-pk + ``relay.Node`` is rejected at finalization (Phase 2.5).
 
     The fakeshop apps do not ship a composite-pk model, so the test
@@ -245,12 +268,16 @@ def test_relay_node_with_composite_pk_raises(monkeypatch):
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Category) is CategoryNode
+
     monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
     with pytest.raises(ConfigurationError, match="composite primary key"):
         finalize_django_types()
 
 
-def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
+def test_composite_pk_with_explicit_node_id_annotation_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A consumer ``id: relay.NodeID[str]`` escape hatch bypasses the composite-pk gate.
 
     An unconditional composite-pk rejection would ignore an explicit
@@ -268,6 +295,7 @@ def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
 
     monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     assert CategoryNode.resolve_id_attr() == "name"
 
 
@@ -322,11 +350,13 @@ def test_consumer_declared_is_type_of_is_preserved():
     """
     sentinel = object()
 
-    def consumer_is_type_of(obj, info):
+    def consumer_is_type_of(obj: object, info: object):
         return sentinel
 
     class CustomNode(DjangoType):
-        is_type_of = consumer_is_type_of
+        # basedpyright: the consumer callable returns a sentinel, not a bool, so the identity
+        # assert below proves this callable is the one that survives
+        is_type_of = consumer_is_type_of  # pyright: ignore[reportAssignmentType]
 
         class Meta:
             model = Category
@@ -340,7 +370,8 @@ def test_is_type_of_hostile_hint_descriptor_falls_back_to_instance_check():
     """A hostile Relay hint descriptor cannot break concrete-type dispatch."""
 
     class HostileObject:
-        def __getattribute__(self, name):
+        @override
+        def __getattribute__(self, name: str):
             if name == "_dsf_node_type_hint":
                 raise RuntimeError("hostile hint descriptor")
             return super().__getattribute__(name)
@@ -380,7 +411,7 @@ def test_relay_node_strips_django_id_annotation():
         pass
 
     synthesized, _ = _build_annotations(
-        _Host,
+        _as_django_type(_Host),
         fields,
         source_model=Category,
         interfaces=(relay.Node,),
@@ -420,7 +451,7 @@ def test_extended_node_interface_subclass_suppresses_id_annotation():
         pass
 
     synthesized, _ = _build_annotations(
-        _Host,
+        _as_django_type(_Host),
         fields,
         source_model=Category,
         interfaces=(CustomNode,),
@@ -442,7 +473,7 @@ def test_non_relay_type_keeps_id_int():
         pass
 
     synthesized, _ = _build_annotations(
-        _Host,
+        _as_django_type(_Host),
         fields,
         source_model=Category,
         interfaces=(),
@@ -468,13 +499,12 @@ def _build_fake_root(id_value: int):
     that shape here so the fallback branch has a faithful test.
     """
 
-    class _FakeRoot:
-        pass
-
     # Mimic ``root.__class__._meta.pk.attname`` so the "pk" -> "id"
     # coercion in ``_resolve_id_default`` resolves cleanly.
-    _FakeRoot._meta = Category._meta
-    _FakeRoot.id = id_value
+    class _FakeRoot:
+        _meta = Category._meta
+        id = id_value
+
     return _FakeRoot()
 
 
@@ -510,6 +540,7 @@ def test_resolve_id_attr_falls_back_to_pk():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     assert CategoryNode.resolve_id_attr() == "pk"
     # Direct helper exercise: the fallback fires when ``NodeIDAnnotationError`` raises.
     assert _resolve_id_attr_default(CategoryNode) == "pk"
@@ -530,8 +561,11 @@ def test_resolve_id_uses_dict_cache():
     row = Category.objects.only("id", "name").first()
     assert row is not None
     # Force a known pk into ``__dict__`` so the cache branch fires.
-    row.__dict__["id"] = 9999
-    assert CategoryNode.resolve_id(row, info=None) == "9999"
+    vars(row)["id"] = 9999
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    assert CategoryNode.resolve_id(row, info=None) == "9999"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_resolve_id_falls_back_to_getattr():
@@ -553,7 +587,10 @@ def test_resolve_id_falls_back_to_getattr():
     finalize_django_types()
     fake = _build_fake_root(42)
     assert "id" not in fake.__dict__
-    assert CategoryNode.resolve_id(fake, info=None) == "42"
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    assert CategoryNode.resolve_id(fake, info=None) == "42"  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db
@@ -568,15 +605,19 @@ def test_resolve_node_applies_get_queryset():
             interfaces = (relay.Node,)
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
             return queryset.filter(is_private=False)
 
     finalize_django_types()
     public_row = Category.objects.filter(is_private=False).first()
     private_row = Category.objects.filter(is_private=True).first()
     assert public_row is not None and private_row is not None
-    assert CategoryNode.resolve_node(info=None, node_id=public_row.id).pk == public_row.pk
-    assert CategoryNode.resolve_node(info=None, node_id=private_row.id) is None
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    assert CategoryNode.resolve_node(info=None, node_id=public_row.pk).pk == public_row.pk  # pyright: ignore[reportAttributeAccessIssue]
+    assert CategoryNode.resolve_node(info=None, node_id=private_row.pk) is None  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db
@@ -602,10 +643,16 @@ def test_resolve_node_accepts_strawberry_positional_call_shape():
     target = Category.objects.first()
     assert target is not None
     # Positional node_id matches Strawberry's bound call site exactly.
-    result = CategoryNode.resolve_node(str(target.pk), info=None)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    result = CategoryNode.resolve_node(str(target.pk), info=None)  # pyright: ignore[reportAttributeAccessIssue]
     assert result is not None and result.pk == target.pk
     # required=True via positional node_id keeps the same shape.
-    required_result = CategoryNode.resolve_node(str(target.pk), info=None, required=True)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    required_result = CategoryNode.resolve_node(str(target.pk), info=None, required=True)  # pyright: ignore[reportAttributeAccessIssue]
     assert required_result.pk == target.pk
 
 
@@ -622,7 +669,10 @@ def test_resolve_node_required_raises_for_missing():
 
     finalize_django_types()
     with pytest.raises(Category.DoesNotExist):
-        CategoryNode.resolve_node(info=None, node_id=99999, required=True)
+        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
+        # run time; relay.Node's own signature types its rows as the node class, not the model rows
+        # the installed default reads and returns
+        CategoryNode.resolve_node(info=None, node_id=99999, required=True)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db
@@ -641,10 +691,13 @@ def test_resolve_nodes_accepts_generator_node_ids():
     a, b = rows[0], rows[1]
     node_ids = (
         relay.GlobalID(type_name="CategoryNode", node_id=str(node_id))
-        for node_id in (a.id, 999999, b.id)
+        for node_id in (a.pk, 999999, b.pk)
     )
 
-    results = CategoryNode.resolve_nodes(
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    results = CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
         info=None,
         node_ids=node_ids,
         required=False,
@@ -676,9 +729,12 @@ def test_resolve_nodes_required_raises_for_missing():
     a = Category.objects.first()
     assert a is not None
     with pytest.raises(Category.DoesNotExist):
-        CategoryNode.resolve_nodes(
+        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
+        # run time; relay.Node's own signature types its rows as the node class, not the model rows
+        # the installed default reads and returns
+        CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
             info=None,
-            node_ids=[a.id, 999999],
+            node_ids=[a.pk, 999999],
             required=True,
         )
 
@@ -695,7 +751,10 @@ def test_resolve_nodes_without_ids_returns_full_queryset():
             interfaces = (relay.Node,)
 
     finalize_django_types()
-    qs = CategoryNode.resolve_nodes(info=None)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    qs = CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
     assert qs.model is Category
     assert qs.count() == Category.objects.count()
 
@@ -728,7 +787,10 @@ async def test_resolve_node_async_context():
     target = await Category.objects.afirst()
     assert target is not None
 
-    result = await CategoryNode.resolve_node(info=None, node_id=target.id)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    result = await CategoryNode.resolve_node(info=None, node_id=target.pk)  # pyright: ignore[reportAttributeAccessIssue]
     assert result is not None
     assert result.pk == target.pk
 
@@ -740,7 +802,10 @@ async def test_resolve_node_async_context_required():
     target = await Category.objects.afirst()
     assert target is not None
 
-    result = await CategoryNode.resolve_node(info=None, node_id=target.id, required=True)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    result = await CategoryNode.resolve_node(info=None, node_id=target.pk, required=True)  # pyright: ignore[reportAttributeAccessIssue]
     assert result is not None
     assert result.pk == target.pk
 
@@ -752,9 +817,12 @@ async def test_resolve_nodes_async_context():
     rows = [row async for row in Category.objects.order_by("id")[:2]]
     a, b = rows[0], rows[1]
 
-    result = await CategoryNode.resolve_nodes(
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    result = await CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
         info=None,
-        node_ids=[a.id, 999999, b.id],
+        node_ids=[a.pk, 999999, b.pk],
         required=False,
     )
     assert [obj.pk if obj is not None else None for obj in result] == [a.pk, None, b.pk]
@@ -773,7 +841,10 @@ async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     ``spec-015-relay_interfaces-0_0_5``.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node)()
-    qs = await CategoryNode.resolve_nodes(info=None)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    qs = await CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
     assert qs.model is Category
     rows = [row async for row in qs]
     assert len(rows) == await Category.objects.acount()
@@ -795,7 +866,9 @@ def _build_seeded_category_node_with_async_get_queryset():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        # basedpyright: an ``async def get_queryset`` is a supported hook (awaited on the async path) that the base's sync return type does not declare
+        async def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return queryset.filter(is_private=False)
 
     finalize_django_types()
@@ -817,10 +890,16 @@ async def test_resolve_node_async_awaits_async_get_queryset():
     private_row = await Category.objects.filter(is_private=True).afirst()
     assert public_row is not None and private_row is not None
 
-    public_result = await CategoryNode.resolve_node(public_row.pk, info=None)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    public_result = await CategoryNode.resolve_node(public_row.pk, info=None)  # pyright: ignore[reportAttributeAccessIssue]
     assert public_result is not None and public_result.pk == public_row.pk
     # Rows the async hook filters out are invisible to the node lookup.
-    assert await CategoryNode.resolve_node(private_row.pk, info=None) is None
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    assert await CategoryNode.resolve_node(private_row.pk, info=None) is None  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -840,7 +919,10 @@ async def test_resolve_nodes_async_awaits_async_get_queryset():
     assert len(public_rows) == 2 and private_row is not None
     a, b = public_rows
 
-    result = await CategoryNode.resolve_nodes(
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    result = await CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
         info=None,
         node_ids=[a.pk, private_row.pk, b.pk],
         required=False,
@@ -859,7 +941,10 @@ async def test_resolve_nodes_async_no_ids_awaits_async_get_queryset():
     the hook's predicate.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
-    qs = await CategoryNode.resolve_nodes(info=None)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    qs = await CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
     rows = [row async for row in qs]
     # Every returned row must satisfy the async hook's predicate.
     assert rows
@@ -883,12 +968,17 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        # basedpyright: deliberately async on the sync path: the coroutine is the input the guard refuses
+        async def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return queryset
 
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="returned a coroutine"):
-        CategoryNode.resolve_node(1, info=None)
+        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
+        # run time; relay.Node's own signature types its rows as the node class, not the model rows
+        # the installed default reads and returns
+        CategoryNode.resolve_node(1, info=None)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_sync_misuse_raises_sync_misuse_error_subclass():
@@ -915,12 +1005,17 @@ def test_sync_misuse_raises_sync_misuse_error_subclass():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        # basedpyright: deliberately async on the sync path: the coroutine is the input the guard refuses
+        async def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return queryset
 
     finalize_django_types()
     with pytest.raises(SyncMisuseError, match="returned a coroutine"):
-        CategoryNode.resolve_node(1, info=None)
+        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
+        # run time; relay.Node's own signature types its rows as the node class, not the model rows
+        # the installed default reads and returns
+        CategoryNode.resolve_node(1, info=None)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_resolve_nodes_sync_with_async_get_queryset_raises():
@@ -939,12 +1034,17 @@ def test_resolve_nodes_sync_with_async_get_queryset_raises():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):
+        @override
+        # basedpyright: deliberately async on the sync path: the coroutine is the input the guard refuses
+        async def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return queryset
 
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="returned a coroutine"):
-        CategoryNode.resolve_nodes(info=None)
+        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
+        # run time; relay.Node's own signature types its rows as the node class, not the model rows
+        # the installed default reads and returns
+        CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 async def test_consumer_async_resolve_node_wins():
@@ -960,9 +1060,9 @@ async def test_consumer_async_resolve_node_wins():
         @classmethod
         async def resolve_node(
             cls,
-            info,
-            node_id,
-            required=False,
+            info: object,
+            node_id: object,
+            required: bool = False,
         ):
             return sentinel
 
@@ -999,7 +1099,7 @@ def test_consumer_resolve_id_wins():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_id(cls, root, info) -> str:
+        def resolve_id(cls, root: object, info: object) -> str:
             return sentinel_id
 
     finalize_django_types()
@@ -1019,9 +1119,9 @@ def test_consumer_resolve_node_wins():
         @classmethod
         def resolve_node(
             cls,
-            info,
-            node_id,
-            required=False,
+            info: object,
+            node_id: object,
+            required: bool = False,
         ):
             return sentinel
 
@@ -1042,9 +1142,9 @@ def test_consumer_resolve_nodes_wins():
         @classmethod
         def resolve_nodes(
             cls,
-            info,
-            node_ids=None,
-            required=False,
+            info: object,
+            node_ids: object = None,
+            required: bool = False,
         ):
             return sentinel
 
@@ -1076,6 +1176,7 @@ def test_node_id_annotation_overrides_default_id_attr():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     assert CategoryNode.resolve_id_attr() == "name"
 
 
@@ -1100,7 +1201,9 @@ def test_relay_chain_child_resolvers_do_not_recurse():
             interfaces = (relay.Node,)
 
     class ChildNode(ParentNode):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
@@ -1109,14 +1212,21 @@ def test_relay_chain_child_resolvers_do_not_recurse():
     # The four defaults live on the parent only; the child inherits them.
     assert "resolve_id_attr" in ParentNode.__dict__
     assert "resolve_id_attr" not in ChildNode.__dict__
+    assert implements_relay_node(ParentNode)
     assert ParentNode.resolve_id_attr() == "pk"
-    assert ChildNode.resolve_id_attr() == "pk"
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    assert ChildNode.resolve_id_attr() == "pk"  # pyright: ignore[reportAttributeAccessIssue]
 
     row = Item.objects.first()
     assert row is not None
-    assert ChildNode.resolve_id(row, info=None) == str(row.pk)
-    assert ChildNode.resolve_node(str(row.pk), info=None).pk == row.pk
-    assert [obj.pk for obj in ChildNode.resolve_nodes(info=None, node_ids=[str(row.pk)])] == [
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    assert ChildNode.resolve_id(row, info=None) == str(row.pk)  # pyright: ignore[reportAttributeAccessIssue]
+    assert ChildNode.resolve_node(str(row.pk), info=None).pk == row.pk  # pyright: ignore[reportAttributeAccessIssue]
+    assert [obj.pk for obj in ChildNode.resolve_nodes(info=None, node_ids=[str(row.pk)])] == [  # pyright: ignore[reportAttributeAccessIssue]
         row.pk,
     ]
 
@@ -1139,12 +1249,16 @@ def test_relay_chain_child_node_id_annotation_wins():
     class ChildNode(ParentNode):
         name: relay.NodeID[str]
 
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(ParentNode)
+    assert implements_relay_node(ChildNode)
     assert ParentNode.resolve_id_attr() == "pk"
     assert ChildNode.resolve_id_attr() == "name"
 
@@ -1174,17 +1288,21 @@ def test_relay_chain_distinct_node_ids_resolve_independently_any_call_order():
     class ChildNode(ParentNode):
         created_date: relay.NodeID[str]
 
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(ParentNode)
+    assert implements_relay_node(ChildNode)
     assert ParentNode.resolve_id_attr() == "name"  # parent FIRST - the failing order
     assert ChildNode.resolve_id_attr() == "created_date"
 
 
-def test_resolve_id_attr_reads_stamp_without_rescanning(monkeypatch):
+def test_resolve_id_attr_reads_stamp_without_rescanning(monkeypatch: pytest.MonkeyPatch):
     """Post-finalize ``resolve_id_attr`` is a dict read, not an annotation scan.
 
     The ``"pk"`` fallback never landed in Strawberry's success-only
@@ -1203,10 +1321,11 @@ def test_resolve_id_attr_reads_stamp_without_rescanning(monkeypatch):
     finalize_django_types()
     assert CategoryNode.__dict__["_dsf_relay_id_attr"] == "pk"
 
-    def _boom(cls):
+    def _boom(cls: object):
         raise AssertionError("upstream scan must not run for a stamped type")
 
     monkeypatch.setattr(relay.Node, "resolve_id_attr", classmethod(_boom))
+    assert implements_relay_node(CategoryNode)
     assert CategoryNode.resolve_id_attr() == "pk"
 
 
@@ -1232,12 +1351,14 @@ def test_resolve_id_attr_live_scan_fallback_for_post_finalize_subclasses():
     class LateWithNodeID(CategoryNode):
         name: relay.NodeID[str]
 
+    assert implements_relay_node(LatePlain)
+    assert implements_relay_node(LateWithNodeID)
     assert "_dsf_relay_id_attr" not in LatePlain.__dict__
     assert _resolve_id_attr_default(LatePlain) == "pk"
     assert _resolve_id_attr_default(LateWithNodeID) == "name"
 
 
-def test_relay_chain_composite_pk_child_still_gated(monkeypatch):
+def test_relay_chain_composite_pk_child_still_gated(monkeypatch: pytest.MonkeyPatch):
     """The composite-pk gate is not bypassed by an inherited framework default.
 
     The gate used to call ``type_cls.resolve_id_attr()`` expecting
@@ -1255,10 +1376,14 @@ def test_relay_chain_composite_pk_child_still_gated(monkeypatch):
             interfaces = (relay.Node,)
 
     class ChildNode(ParentNode):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Category
             fields = ("id", "name")
             interfaces = (relay.Node,)
+
+    assert registry.get(Category) is ChildNode
 
     monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
     with pytest.raises(ConfigurationError, match="composite primary key"):
@@ -1304,7 +1429,7 @@ def test_apply_interfaces_skips_already_present_bases():
     class _SyntheticDef:
         interfaces = (relay.Node,)
 
-    apply_interfaces(_Host, _SyntheticDef)
+    apply_interfaces(_Host, _as_definition(_SyntheticDef))
     assert _Host.__bases__ == original_bases
 
 
@@ -1332,7 +1457,7 @@ def test_apply_interfaces_wraps_typeerror_as_configuration_error():
         interfaces = (_BadInterface,)
 
     with pytest.raises(ConfigurationError, match="cannot add interface"):
-        apply_interfaces(_Host, _SyntheticDef)
+        apply_interfaces(_as_django_type(_Host), _as_definition(_SyntheticDef))
 
 
 def test_model_for_returns_registered_model():
@@ -1366,14 +1491,19 @@ def test_resolve_id_default_unit_dict_cache_and_getattr_branches():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     # Dict-cache hit: explicitly seed ``__dict__``.
     inst = Category(id=7, name="x")
-    inst.__dict__["id"] = 7
-    assert _resolve_id_default(CategoryNode, inst, info=None) == "7"
+    vars(inst)["id"] = 7
+    # basedpyright: the path under test never reads info; _resolve_id_default types the parameter
+    # as a required Info
+    assert _resolve_id_default(CategoryNode, inst, info=None) == "7"  # pyright: ignore[reportArgumentType]
     # Cache-miss fallback to ``getattr``: synthetic root whose ``__dict__``
     # is empty but whose class-level ``id`` attribute resolves the value.
     fake = _build_fake_root(12)
-    assert _resolve_id_default(CategoryNode, fake, info=None) == "12"
+    # basedpyright: the path under test never reads info, and the synthetic root is the stand-in
+    # row the getattr fallback reads; _resolve_id_default types them as a required Info and a Model
+    assert _resolve_id_default(CategoryNode, fake, info=None) == "12"  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.django_db
@@ -1388,10 +1518,15 @@ def test_resolve_node_default_invoked_via_helper():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     target = Category.objects.first()
     assert target is not None
-    result = _resolve_node_default(CategoryNode, info=None, node_id=target.id)
-    assert result is not None and result.pk == target.pk
+    # basedpyright: the path under test never reads info; _resolve_node_default types the parameter
+    # as a required Info
+    result = _resolve_node_default(CategoryNode, info=None, node_id=target.pk)  # pyright: ignore[reportArgumentType]
+    assert result is not None
+    assert isinstance(result, Category)
+    assert result.pk == target.pk
 
 
 @pytest.mark.django_db
@@ -1406,15 +1541,19 @@ def test_resolve_nodes_default_invoked_via_helper():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     target = Category.objects.first()
     assert target is not None
-    global_id = relay.GlobalID(type_name="CategoryNode", node_id=str(target.id))
+    global_id = relay.GlobalID(type_name="CategoryNode", node_id=str(target.pk))
     result = _resolve_nodes_default(
         CategoryNode,
-        info=None,
+        # basedpyright: the path under test never reads info; _resolve_nodes_default types the
+        # parameter as a required Info
+        info=None,  # pyright: ignore[reportArgumentType]
         node_ids=[global_id],
         required=False,
     )
+    assert isinstance(result, list)
     assert len(result) == 1
     assert result[0] is not None and result[0].pk == target.pk
 
@@ -1429,6 +1568,7 @@ def test_install_relay_node_resolvers_idempotent():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    assert implements_relay_node(CategoryNode)
     snapshot = {
         attr: CategoryNode.__dict__[attr]
         for attr in (
@@ -1473,7 +1613,7 @@ def test_direct_relay_node_inheritance_suppresses_id_annotation():
         pass
 
     synthesized, _ = _build_annotations(
-        _Host,
+        _as_django_type(_Host),
         fields,
         source_model=Category,
         interfaces=(),
@@ -1521,10 +1661,15 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
     # Sanity: the injected defaults actually fetch by pk through ``get_queryset``.
     target = Category.objects.first()
     assert target is not None
-    assert CategoryNode.resolve_node(str(target.pk), info=None).pk == target.pk
+    # basedpyright: the path under test never reads info; relay.Node.resolve_node types the
+    # parameter as a required Info
+    resolved = CategoryNode.resolve_node(str(target.pk), info=None)  # pyright: ignore[reportArgumentType]
+    assert resolved is not None
+    assert isinstance(resolved, Category)
+    assert resolved.pk == target.pk
 
 
-def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
+def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch: pytest.MonkeyPatch):
     """Direct ``relay.Node`` inheritance + composite pk raises at finalization.
 
     The composite-pk gate must fire for every Relay-shaped type, including
@@ -1538,25 +1683,31 @@ def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
             model = Category
             fields = ("id", "name")
 
+    assert registry.get(Category) is CategoryNode
+
     monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
     with pytest.raises(ConfigurationError, match="composite primary key"):
         finalize_django_types()
 
 
-def test_composite_pk_diagnostic_survives_hostile_model_name(monkeypatch):
+def test_composite_pk_diagnostic_survives_hostile_model_name(monkeypatch: pytest.MonkeyPatch):
     """A hostile model ``__name__`` cannot replace the composite-pk error."""
 
     class HostileName(str):
+        @override
         def __str__(self):
             raise RuntimeError("hostile model name")
 
-        def __format__(self, spec):
+        @override
+        def __format__(self, spec: str):
             raise RuntimeError("hostile model format")
 
     class CategoryNode(DjangoType, relay.Node):
         class Meta:
             model = Category
             fields = ("id", "name")
+
+    assert registry.get(Category) is CategoryNode
 
     # ``__name__`` is NOT restorable by ``monkeypatch``: a class carries it on the
     # ``type`` descriptor rather than in its own ``__dict__``, so monkeypatch reads
@@ -1599,6 +1750,7 @@ def test_install_relay_node_resolvers_preserves_consumer_override():
     # Manually drive the host class through Phase 2.5 without finalizing the
     # whole registry (the goal is to exercise the install helper directly).
     CategoryNode.__bases__ = (*CategoryNode.__bases__, relay.Node)
+    assert implements_relay_node(CategoryNode)
     install_relay_node_resolvers(CategoryNode)
     assert CategoryNode.__dict__["resolve_id_attr"].__func__ is consumer_func
     assert CategoryNode.resolve_id_attr() == sentinel_value
@@ -1608,7 +1760,8 @@ def test_apply_interfaces_diagnostic_survives_hostile_class_names():
     """An MRO TypeError cannot escape while naming hostile interface classes."""
 
     class HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name in {"__name__", "__qualname__"}:
                 raise RuntimeError(f"hostile {name}")
             return super().__getattribute__(name)
@@ -1623,7 +1776,7 @@ def test_apply_interfaces_diagnostic_survives_hostile_class_names():
         interfaces = (BadInterface,)
 
     with pytest.raises(ConfigurationError, match="cannot add interface"):
-        apply_interfaces(Host, Definition)
+        apply_interfaces(_as_django_type(Host), _as_definition(Definition))
 
 
 # ---------------------------------------------------------------------------
@@ -1633,7 +1786,7 @@ def test_apply_interfaces_diagnostic_survives_hostile_class_names():
 # ---------------------------------------------------------------------------
 
 
-def _emitted_typename(type_cls, *, node_id="1"):
+def _emitted_typename(type_cls: type[DjangoType], *, node_id: str = "1") -> str:
     """Return the GlobalID type-name slot a finalized Relay type emits.
 
     For ``model`` / ``type+model`` / ``callable`` the framework-installed
@@ -1643,14 +1796,16 @@ def _emitted_typename(type_cls, *, node_id="1"):
     """
 
     class _FakeRoot:
-        pass
+        _meta = type_cls.__django_strawberry_definition__.model._meta
+        id = node_id
 
-    _FakeRoot._meta = type_cls.__django_strawberry_definition__.model._meta
-    _FakeRoot.id = node_id
-    return type_cls.resolve_typename(_FakeRoot(), None)
+    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
+    # time; relay.Node's own signature types its rows as the node class, not the model rows the
+    # installed default reads and returns
+    return type_cls.resolve_typename(_FakeRoot(), None)  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def _definition_of(type_cls):
+def _definition_of(type_cls: type[DjangoType]):
     return type_cls.__django_strawberry_definition__
 
 
@@ -1684,6 +1839,7 @@ def test_globalid_type_strategy_emits_graphql_type_name():
     # No closure was installed: ``resolve_typename`` is still Strawberry's
     # default (returns ``info.path.typename`` == the GraphQL type name), so the
     # emitted slot is byte-identical to pre-0.0.9.
+    assert implements_relay_node(CategoryNode)
     assert CategoryNode.resolve_typename.__func__ is node_default
     assert _definition_of(CategoryNode).graphql_type_name == "CategoryNode"
 
@@ -1706,7 +1862,7 @@ def test_globalid_type_plus_model_emits_model_label():
 def test_globalid_callable_strategy_emits_custom():
     """A callable returns the type-name slot and it appears in the emitted GlobalID."""
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return f"custom:{model._meta.label_lower}"
 
     class CategoryNode(DjangoType):
@@ -1730,13 +1886,13 @@ def test_globalid_callable_strategy_emits_custom():
         b"bytes",
     ],
 )
-def test_globalid_callable_non_string_return_raises(bad_return):
+def test_globalid_callable_non_string_return_raises(bad_return: object):
     """A callable returning a non-``str`` / empty value raises ConfigurationError.
 
     The installed closure raises (not Strawberry's ``Node._id`` ``AssertionError``).
     """
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return bad_return
 
     class CategoryNode(DjangoType):
@@ -1755,13 +1911,15 @@ def test_globalid_callable_string_subclass_is_normalized():
     """A callable encoder's hostile ``str`` subclass cannot escape later encoding."""
 
     class HostileString(str):
+        @override
         def __str__(self):
             raise RuntimeError("hostile string")
 
-        def __format__(self, spec):
+        @override
+        def __format__(self, spec: str):
             raise RuntimeError("hostile format")
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return HostileString("custom-payload")
 
     class CategoryNode(DjangoType):
@@ -1792,7 +1950,7 @@ def test_encode_typename_helper_dispatch():
     assert encode_typename(definition, "type+model", CategoryNode, object()) == "products.category"
     assert encode_typename(definition, "type", CategoryNode, object()) == "CategoryNode"
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return "from-callable"
 
     assert encode_typename(definition, encoder, CategoryNode, object()) == "from-callable"
@@ -1808,7 +1966,7 @@ def test_consumer_resolve_typename_override_preserved_and_recorded_custom():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: object):
             return "ConsumerOwned"
 
     consumer_func = CategoryNode.__dict__["resolve_typename"].__func__
@@ -1829,14 +1987,16 @@ def test_resolve_typename_override_plus_meta_strategy_raises():
             globalid_strategy = "model"
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: object):
             return "ConsumerOwned"
+
+    assert registry.get(Category) is CategoryNode
 
     with pytest.raises(ConfigurationError, match="resolve_typename override"):
         finalize_django_types()
 
 
-def test_resolve_typename_override_plus_setting_does_not_raise(settings):
+def test_resolve_typename_override_plus_setting_does_not_raise(settings: pytest_django.Settings):
     """An override + only the schema-wide setting is NOT a conflict (setting is a default)."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
 
@@ -1847,7 +2007,7 @@ def test_resolve_typename_override_plus_setting_does_not_raise(settings):
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: object):
             return "ConsumerOwned"
 
     finalize_django_types()
@@ -1871,7 +2031,7 @@ def test_globalid_default_is_model():
 # --- model-label-routing audit (multi-type models) -------------------------
 
 
-def _build_multi_type(primary_strategy, secondary_strategy):
+def _build_multi_type(primary_strategy: str | None, secondary_strategy: str | None):
     """Register two Relay-Node DjangoTypes on ``Item`` with given strategies.
 
     Returns ``(PrimaryType, SecondaryType)``. The primary carries
@@ -1928,7 +2088,9 @@ def test_model_label_routing_audit_passes_model_primary_with_type_secondary():
     finalize_django_types()  # no raise
 
 
-def test_model_label_secondary_collapse_warns_and_routes_to_primary(caplog):
+def test_model_label_secondary_collapse_warns_and_routes_to_primary(
+    caplog: pytest.LogCaptureFixture,
+):
     """A ``model`` primary + default-``model`` secondary: legal, but the secondary's
     GlobalID collapses onto the primary - so finalize WARNS (not raises) and the
     secondary's emitted ID decodes to the primary type.
@@ -1954,7 +2116,7 @@ def test_model_label_secondary_collapse_warns_and_routes_to_primary(caplog):
     assert decode_global_id(_encoded_id(secondary, node_id="42")) == (primary, "42")
 
 
-def test_model_label_no_collapse_warning_when_secondary_is_type(caplog):
+def test_model_label_no_collapse_warning_when_secondary_is_type(caplog: pytest.LogCaptureFixture):
     """A ``type`` secondary stays self-routing, so the collapse warning is silent.
 
     The negative twin of the collapse pin: opting the secondary into ``type``
@@ -2021,12 +2183,16 @@ def test_routing_audit_non_relay_primary_remediation_names_relay_shape():
             primary = True
             name = "PlainPrimaryItem"
 
+    assert registry.get(Item) is PlainPrimary
+
     class EmitterNode(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
             name = "EmitterItem"
+
+    assert registry.model_for_type(EmitterNode) is Item
 
     with pytest.raises(ConfigurationError) as excinfo:
         finalize_django_types()
@@ -2042,7 +2208,7 @@ def test_routing_audit_non_relay_primary_remediation_names_relay_shape():
 # --- inherited framework closures (concrete Relay child of a concrete parent)
 
 
-def _framework_closure_func(type_cls):
+def _framework_closure_func(type_cls: type[DjangoType]):
     """Return the ``__func__`` of ``type_cls``'s OWN resolve_typename, or None."""
     own = type_cls.__dict__.get("resolve_typename")
     return getattr(own, "__func__", None)
@@ -2065,7 +2231,9 @@ def test_concrete_relay_child_of_concrete_parent_records_own_strategy():
             name = "PrimaryItem"
 
     class AdminItemNode(ItemNode):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
@@ -2100,7 +2268,9 @@ def test_concrete_relay_child_with_meta_strategy_finalizes_cleanly():
             name = "PrimaryItem"
 
     class TypedChild(ItemNode):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
@@ -2131,7 +2301,9 @@ def test_type_strategy_child_shadows_inherited_framework_closure():
             name = "PrimaryItem"
 
     class TypeScopedChild(ItemNode):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
@@ -2154,7 +2326,7 @@ def test_routing_audit_sees_child_true_recorded_strategy():
     The child's true ``model`` recording must trip the routing audit.
     """
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return "custom-payload"
 
     class PrimaryNode(DjangoType):
@@ -2166,6 +2338,8 @@ def test_routing_audit_sees_child_true_recorded_strategy():
             name = "PrimaryItem"
             globalid_strategy = "type"
 
+    assert registry.get(Item) is PrimaryNode
+
     class CallableParent(DjangoType):
         class Meta:
             model = Item
@@ -2175,7 +2349,9 @@ def test_routing_audit_sees_child_true_recorded_strategy():
             globalid_strategy = encoder
 
     class DefaultChild(CallableParent):
-        class Meta:
+        # basedpyright: DjangoType reads only the class's own ``Meta`` (``cls.__dict__``); the
+        # child declares a fresh one, never a subclass of the parent's
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
             model = Item
             fields = ("id", "name")
             interfaces = (relay.Node,)
@@ -2197,7 +2373,7 @@ def test_plain_function_resolve_typename_is_not_classified_override():
     over it - pinned here so the marker-based discrimination stays explicit.
     """
 
-    def resolve_typename(root, info):
+    def resolve_typename(root: object, info: object):
         return "PlainFunction"
 
     class CategoryNode(DjangoType):
@@ -2206,7 +2382,10 @@ def test_plain_function_resolve_typename_is_not_classified_override():
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
-    CategoryNode.resolve_typename = resolve_typename
+    # basedpyright: the planted plain-function resolve_typename is the override shape under test;
+    # finalize_django_types() has not yet injected relay.Node, so the declared class has no such
+    # attribute
+    CategoryNode.resolve_typename = resolve_typename  # pyright: ignore[reportAttributeAccessIssue]
     finalize_django_types()
     assert _definition_of(CategoryNode).effective_globalid_strategy == "model"
     assert _framework_closure_func(CategoryNode) is not None
@@ -2216,10 +2395,10 @@ def test_plain_function_resolve_typename_is_not_classified_override():
 # --- the RELAY_GLOBALID_STRATEGY setting path (callable arity/sync reuse) ----
 
 
-def test_callable_setting_well_formed_accepted(settings):
+def test_callable_setting_well_formed_accepted(settings: pytest_django.Settings):
     """A well-formed callable ``RELAY_GLOBALID_STRATEGY`` setting is accepted (-> ``callable``)."""
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return "from-setting"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2235,10 +2414,10 @@ def test_callable_setting_well_formed_accepted(settings):
     assert _emitted_typename(CategoryNode) == "from-setting"
 
 
-def test_callable_setting_wrong_arity_raises(settings):
+def test_callable_setting_wrong_arity_raises(settings: pytest_django.Settings):
     """A wrong-arity callable setting raises at finalization, naming the setting."""
 
-    def encoder(type_cls, model):
+    def encoder(type_cls: type[DjangoType], model: type[Model]):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2249,14 +2428,16 @@ def test_callable_setting_wrong_arity_raises(settings):
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Category) is CategoryNode
+
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
 
 
-def test_callable_setting_async_raises(settings):
+def test_callable_setting_async_raises(settings: pytest_django.Settings):
     """An ``async def`` callable setting raises at finalization, naming the setting."""
 
-    async def encoder(type_cls, model, root):
+    async def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2267,11 +2448,13 @@ def test_callable_setting_async_raises(settings):
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Category) is CategoryNode
+
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
 
 
-def test_callable_setting_async_callable_object_raises(settings):
+def test_callable_setting_async_callable_object_raises(settings: pytest_django.Settings):
     """A callable *instance* with ``async def __call__`` as the setting raises too.
 
     The setting path shares ``_validate_globalid_callable`` with the ``Meta`` path,
@@ -2282,9 +2465,9 @@ def test_callable_setting_async_callable_object_raises(settings):
     class Encoder:
         async def __call__(
             self,
-            type_cls,
-            model,
-            root,
+            type_cls: type[DjangoType],
+            model: type[Model],
+            root: object,
         ):
             return "x"
 
@@ -2296,11 +2479,13 @@ def test_callable_setting_async_callable_object_raises(settings):
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Category) is CategoryNode
+
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
 
 
-def test_callable_setting_partial_wrapped_async_callable_raises(settings):
+def test_callable_setting_partial_wrapped_async_callable_raises(settings: pytest_django.Settings):
     """A ``functools.partial`` around an async callable instance as the setting raises too.
 
     Shares ``_validate_globalid_callable`` (and its partial-unwrapping sync-ness
@@ -2311,9 +2496,9 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
     class Encoder:
         async def __call__(
             self,
-            type_cls,
-            model,
-            root,
+            type_cls: type[DjangoType],
+            model: type[Model],
+            root: object,
         ):
             return "x"
 
@@ -2327,6 +2512,8 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Category) is CategoryNode
+
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
 
@@ -2339,7 +2526,7 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_setting_raises_when_all_types_meta_override(settings):
+def test_invalid_setting_raises_when_all_types_meta_override(settings: pytest_django.Settings):
     """An invalid setting raises even when every Relay type overrides via Meta.
 
     Pre-snapshot the setting was read once per DEFAULTED type, so a schema where
@@ -2355,11 +2542,13 @@ def test_invalid_setting_raises_when_all_types_meta_override(settings):
             interfaces = (relay.Node,)
             globalid_strategy = "type"
 
+    assert registry.get(Category) is CategoryNode
+
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
 
 
-def test_setting_error_framing_tracks_the_conf_key_constant(settings):
+def test_setting_error_framing_tracks_the_conf_key_constant(settings: pytest_django.Settings):
     """The setting-path error subject IS ``conf.RELAY_GLOBALID_STRATEGY_KEY``.
 
     Pins the single-source rule: the validator names the setting through
@@ -2375,11 +2564,15 @@ def test_setting_error_framing_tracks_the_conf_key_constant(settings):
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Category) is CategoryNode
+
     with pytest.raises(ConfigurationError, match=conf.RELAY_GLOBALID_STRATEGY_KEY):
         finalize_django_types()
 
 
-def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(settings):
+def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(
+    settings: pytest_django.Settings,
+):
     """An invalid setting raises even when the only type overrides ``resolve_typename``."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}
 
@@ -2390,22 +2583,31 @@ def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(set
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: object):
             return "ConsumerOwned"
+
+    assert registry.get(Category) is CategoryNode
 
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
+
+
+def _two_arg_strategy(type_cls: object, model: object) -> str:
+    return "x"
 
 
 @pytest.mark.parametrize(
     "bad_value",
     [
         "nonsense",
-        lambda type_cls, model: "x",  # wrong arity (2-arg)
+        _two_arg_strategy,  # wrong arity (2-arg)
     ],
     ids=["invalid-string", "wrong-arity-callable"],
 )
-def test_invalid_setting_raises_with_zero_relay_types(settings, bad_value):
+def test_invalid_setting_raises_with_zero_relay_types(
+    settings: pytest_django.Settings,
+    bad_value: object,
+):
     """An explicitly invalid setting raises with ZERO Relay types registered.
 
     Pins the new fail-loud scope: the snapshot is computed unconditionally, so an
@@ -2417,10 +2619,12 @@ def test_invalid_setting_raises_with_zero_relay_types(settings, bad_value):
         finalize_django_types()
 
 
-def test_invalid_async_callable_setting_raises_with_zero_relay_types(settings):
+def test_invalid_async_callable_setting_raises_with_zero_relay_types(
+    settings: pytest_django.Settings,
+):
     """An ``async def`` callable setting raises with zero Relay types (sync-ness check)."""
 
-    async def encoder(type_cls, model, root):
+    async def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2428,7 +2632,10 @@ def test_invalid_async_callable_setting_raises_with_zero_relay_types(settings):
         finalize_django_types()
 
 
-def test_setting_read_and_validated_once_per_finalize(settings, monkeypatch):
+def test_setting_read_and_validated_once_per_finalize(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """N defaulted types -> exactly ONE setting read AND ONE validation per finalize.
 
     Counting monkeypatches on BOTH ``conf.relay_globalid_strategy_setting`` and
@@ -2461,7 +2668,9 @@ def test_setting_read_and_validated_once_per_finalize(settings, monkeypatch):
         read_calls += 1
         return real_read()
 
-    def _counting_validate(*args, **kwargs):
+    # basedpyright: verbatim forward to _validate_globalid_strategy (the spy replaces it); object
+    # fails its typed params
+    def _counting_validate(*args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
         nonlocal validate_calls
         validate_calls += 1
         return real_validate(*args, **kwargs)
@@ -2476,7 +2685,10 @@ def test_setting_read_and_validated_once_per_finalize(settings, monkeypatch):
     assert _definition_of(ItemNode).effective_globalid_strategy == "type"
 
 
-def test_no_request_time_setting_read(settings, monkeypatch):
+def test_no_request_time_setting_read(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """After finalize, id / typename resolution never re-reads the setting.
 
     The strategy is resolved once (finalize) into the installed closure, so a
@@ -2500,7 +2712,10 @@ def test_no_request_time_setting_read(settings, monkeypatch):
     assert _emitted_typename(CategoryNode) == "products.category"
 
 
-def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(settings, monkeypatch):
+def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A retry after a partial finalize with a CHANGED setting raises (no mixed schema).
 
     A Phase-3 failure stamps >= 1 type under the snapshotted value while leaving
@@ -2516,10 +2731,11 @@ def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(settings, monk
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
-    def _boom(*args, **kwargs):
+    def _boom(*args: object, **kwargs: object):
         raise RuntimeError("phase-3 boom")
 
-    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)  # pyright: ignore[reportPrivateLocalImportUsage]
     with pytest.raises(RuntimeError, match="phase-3 boom"):
         finalize_django_types()
     # The type was stamped under the snapshot in Phase 2.5, before Phase 3 failed.
@@ -2545,7 +2761,7 @@ def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(settings, monk
     assert _definition_of(CategoryNodeRebuilt).effective_globalid_strategy == "type+model"
 
 
-def test_clear_and_rebuild_flips_strategy_no_process_global(settings):
+def test_clear_and_rebuild_flips_strategy_no_process_global(settings: pytest_django.Settings):
     """override_settings + registry.clear() + rebuild flips the schema-wide strategy.
 
     Proves the snapshot's cache boundary is the registry lifecycle, not a
@@ -2583,7 +2799,7 @@ def test_clear_and_rebuild_flips_strategy_no_process_global(settings):
 # ---------------------------------------------------------------------------
 
 
-def _emitted_type_name_slot(type_cls):
+def _emitted_type_name_slot(type_cls: type[DjangoType]) -> str:
     """Return the ``GlobalID`` type-name slot a finalized type emits.
 
     The ``type`` strategy installs no closure (it keeps Strawberry's default,
@@ -2598,7 +2814,7 @@ def _emitted_type_name_slot(type_cls):
     return _emitted_typename(type_cls)
 
 
-def _encoded_id(type_cls, *, node_id="1"):
+def _encoded_id(type_cls: type[DjangoType], *, node_id: str = "1"):
     """Return the base64 ``GlobalID`` string a finalized Relay type emits."""
     return str(relay.GlobalID(_emitted_type_name_slot(type_cls), node_id))
 
@@ -2642,7 +2858,7 @@ def test_decode_type_strategy_honors_meta_name_round_trip():
 
 
 @pytest.mark.parametrize("strategy", ["model", "type", "type+model"])
-def test_encode_decode_round_trip_decodable_strategies(strategy):
+def test_encode_decode_round_trip_decodable_strategies(strategy: str):
     """Encode -> decode symmetry for the three decodable strategies (callable is encode-only)."""
 
     class CategoryNode(DjangoType):
@@ -2684,6 +2900,8 @@ def test_decode_model_strategy_rejects_type_name_id():
             interfaces = (relay.Node,)
             globalid_strategy = "model"
 
+    assert registry.get(Category) is CategoryNode
+
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="not decodable"):
         decode_global_id(relay.GlobalID("CategoryNode", "1"))
@@ -2699,6 +2917,8 @@ def test_decode_type_strategy_rejects_model_label_id():
             interfaces = (relay.Node,)
             globalid_strategy = "type"
 
+    assert registry.get(Category) is CategoryNode
+
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="not decodable"):
         decode_global_id(relay.GlobalID("products.category", "1"))
@@ -2707,7 +2927,7 @@ def test_decode_type_strategy_rejects_model_label_id():
 def test_decode_callable_strategy_has_no_decode_path():
     """A payload resolving to a ``callable``-strategy type raises (encode-only)."""
 
-    def encoder(type_cls, model, root):
+    def encoder(type_cls: type[DjangoType], model: type[Model], root: object):
         return model._meta.label_lower
 
     class CategoryNode(DjangoType):
@@ -2734,7 +2954,7 @@ def test_decode_custom_override_type_has_no_decode_path():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_typename(cls, root, info):
+        def resolve_typename(cls, root: object, info: object):
             return "products.category"
 
     finalize_django_types()
@@ -2795,7 +3015,7 @@ def test_decode_malformed_base64_raises_configuration_error():
         b"bytes",
     ],
 )
-def test_decode_non_str_input_raises(bad_input):
+def test_decode_non_str_input_raises(bad_input: object):
     """A non-``str`` / non-``GlobalID`` argument raises from the runtime input-type gate."""
     with pytest.raises(ConfigurationError, match="relay.GlobalID or its base64 string"):
         decode_global_id(bad_input)
@@ -2805,7 +3025,8 @@ def test_decode_hostile_input_type_name_stays_typed():
     """A hostile input metaclass cannot escape the GlobalID type gate."""
 
     class HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__name__":
                 raise RuntimeError("hostile type name")
             return super().__getattribute__(name)
@@ -2821,7 +3042,8 @@ def test_decode_hostile_globalid_slots_stay_typed():
     """A malformed GlobalID subclass cannot escape while its slots are read."""
 
     class HostileGlobalID(relay.GlobalID):
-        def __getattribute__(self, name):
+        @override
+        def __getattribute__(self, name: str):
             if name in {"type_name", "node_id"}:
                 raise RuntimeError(f"hostile {name}")
             return super().__getattribute__(name)
@@ -2847,10 +3069,12 @@ def test_decode_hostile_string_subclass_stays_typed():
     """A malformed string subclass cannot escape while its diagnostic is rendered."""
 
     class HostileString(str):
+        @override
         def __repr__(self):
             raise RuntimeError("hostile id repr")
 
-        def __format__(self, spec):
+        @override
+        def __format__(self, spec: str):
             raise RuntimeError("hostile id format")
 
     with pytest.raises(ConfigurationError, match="not a valid GlobalID"):

@@ -57,15 +57,21 @@ import logging
 import threading
 import warnings
 from collections import deque
+from collections.abc import Generator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+import pytest_django
 import strawberry
 from django.db import connection, connections
+from django.db.backends.base.base import BaseDatabaseWrapper
 from django.test.utils import override_settings
+from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError
 from strawberry.extensions import MaskErrors, SchemaExtension
+from strawberry.types.execution import ExecutionResult
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoSchema
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -77,6 +83,9 @@ from django_strawberry_framework.extensions.debug import (
     _collect_exceptions,
     _ConnectionSnapshot,
     _CursorCaptureCoordinator,
+    _DebugExceptionRow,
+    _DebugPayload,
+    _DebugSQLRow,
     _query_log_entries_since,
     _serialize_exception,
     _serialize_sql_row,
@@ -94,6 +103,13 @@ _EXCEPTION_MESSAGE_CAP = 4096
 _EXCEPTION_STACK_CAP = 16384
 _PAYLOAD_CAP = 262144
 _MARKER = "... [truncated]"
+
+
+def _as_connection(stand_in: object) -> BaseDatabaseWrapper:
+    """Hand a duck-typed connection to a capture seam that takes a database wrapper."""
+    # basedpyright: a stand-in connection carrying only the slots the code under test reads; the
+    # capture seams type the parameter as BaseDatabaseWrapper
+    return stand_in  # pyright: ignore[reportReturnType]
 
 
 @strawberry.type
@@ -115,7 +131,7 @@ class _BoomQuery:
 
 
 @pytest.fixture
-def default_wrapper():
+def default_wrapper() -> Iterator[BaseDatabaseWrapper]:
     """The current thread's concrete ``default`` wrapper, flag restored after the test."""
     wrapper = connections["default"]
     original = wrapper.force_debug_cursor
@@ -206,11 +222,11 @@ def test_exception_serializer_chained_traceback_stack():
     ids=["exactly-ten-is-not-slow", "over-ten-is-slow", "executemany-keeps-placeholder"],
 )
 def test_sql_row_serializer_slow_threshold_and_executemany_form(
-    sql,
-    time,
-    expected_duration,
-    expected_slow,
-    expected_select,
+    sql: str,
+    time: str,
+    expected_duration: float,
+    expected_slow: bool,
+    expected_select: bool,
 ):
     """The 10s slow cut and the executemany log form have no live SQL shape.
 
@@ -323,7 +339,10 @@ def test_hop_policy_long_acyclic_chain_stops_at_the_ceiling():
 
 
 @pytest.mark.parametrize("prior", [False, True], ids=["prior-false", "prior-true"])
-def test_coordinator_saved_value_restore_and_depth(default_wrapper, prior):
+def test_coordinator_saved_value_restore_and_depth(
+    default_wrapper: BaseDatabaseWrapper,
+    prior: bool,
+):
     coordinator = _CursorCaptureCoordinator()
     default_wrapper.force_debug_cursor = prior
 
@@ -345,7 +364,9 @@ def test_coordinator_saved_value_restore_and_depth(default_wrapper, prior):
     assert coordinator._active == {}
 
 
-def test_coordinator_isolates_distinct_wrappers_for_one_alias(default_wrapper):
+def test_coordinator_isolates_distinct_wrappers_for_one_alias(
+    default_wrapper: BaseDatabaseWrapper,
+):
     coordinator = _CursorCaptureCoordinator()
     holder = {}
 
@@ -372,7 +393,10 @@ def test_coordinator_isolates_distinct_wrappers_for_one_alias(default_wrapper):
 
 
 @override_settings(DEBUG=True)
-def test_partial_acquisition_failure_unwinds_earlier_connections(default_wrapper, monkeypatch):
+def test_partial_acquisition_failure_unwinds_earlier_connections(
+    default_wrapper: BaseDatabaseWrapper,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A later-alias acquire failure restores every earlier alias before propagating.
 
     The one sanctioned fake, sitting at the private acquisition boundary
@@ -389,10 +413,10 @@ def test_partial_acquisition_failure_unwinds_earlier_connections(default_wrapper
 
     real_acquire = debug_module._coordinator.acquire
 
-    def _acquire(database_connection):
+    def _acquire(database_connection: BaseDatabaseWrapper | SimpleNamespace):
         if database_connection is exploding_wrapper:
             raise RuntimeError("second alias acquisition failed")
-        return real_acquire(database_connection)
+        return real_acquire(_as_connection(database_connection))
 
     monkeypatch.setattr(
         debug_module,
@@ -402,7 +426,9 @@ def test_partial_acquisition_failure_unwinds_earlier_connections(default_wrapper
     monkeypatch.setattr(debug_module._coordinator, "acquire", _acquire)
 
     extension = DjangoDebugExtension()
-    extension.execution_context = SimpleNamespace(schema=None, result=None)
+    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
+    # extension types the slot as ExecutionContext | None
+    extension.execution_context = SimpleNamespace(schema=None, result=None)  # pyright: ignore[reportAttributeAccessIssue]
     hook = extension.on_operation()
     with pytest.raises(RuntimeError, match="second alias acquisition failed"):
         next(hook)
@@ -416,7 +442,10 @@ def test_query_log_slicing_suffix_clamp_and_rollover():
     log = deque(maxlen=5)
     log.append({"sql": "pre-existing", "time": "0.001"})
     wrapper = SimpleNamespace(queries_log=log)
-    snapshot = _ConnectionSnapshot(database_connection=wrapper, query_log_start=len(log))
+    snapshot = _ConnectionSnapshot(
+        database_connection=_as_connection(wrapper),
+        query_log_start=len(log),
+    )
 
     log.append({"sql": "appended", "time": "0.001"})
     assert [entry["sql"] for entry in _query_log_entries_since(snapshot)] == ["appended"]
@@ -430,7 +459,10 @@ def test_query_log_slicing_suffix_clamp_and_rollover():
     # limitation, pinned without claiming exact rows survive.
     for index in range(5):
         log.append({"sql": f"old {index}", "time": "0.001"})
-    full_snapshot = _ConnectionSnapshot(database_connection=wrapper, query_log_start=len(log))
+    full_snapshot = _ConnectionSnapshot(
+        database_connection=_as_connection(wrapper),
+        query_log_start=len(log),
+    )
     log.append({"sql": "new after rollover", "time": "0.001"})
     assert len(log) == 5  # same length: the new row evicted an old one
     assert _query_log_entries_since(full_snapshot) == []
@@ -447,12 +479,15 @@ def test_get_results_no_stash_shape_and_idempotent_read():
 
     assert extension.get_results() == {}  # no operation at all: never {"debug": None}
 
-    extension.execution_context = SimpleNamespace(schema=None, result=None)
+    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
+    # extension types the slot as ExecutionContext | None
+    extension.execution_context = SimpleNamespace(schema=None, result=None)  # pyright: ignore[reportAttributeAccessIssue]
     state = extension._operation_state()
+    assert state is not None
     assert state.payload is None  # an operation that published nothing
     assert extension.get_results() == {}
 
-    payload = {"sql": [], "exceptions": []}
+    payload: _DebugPayload = {"sql": [], "exceptions": []}
     state.payload = payload
     first = extension.get_results()
     second = extension.get_results()
@@ -477,14 +512,16 @@ def test_validation_failure_with_raising_teardown_calls_get_results_twice():
     a graphql-core ``ExecutionResult``, or the second call would falsely
     publish ``debug``.
     """
-    calls = []
+    calls: list[dict[str, _DebugPayload]] = []
 
     class _CountingDebug(DjangoDebugExtension):
-        def get_results(self):
+        @override
+        def get_results(self) -> dict[str, _DebugPayload]:
             calls.append(super().get_results())
             return calls[-1]
 
     class _RaisingTeardown(SchemaExtension):
+        @override
         def on_operation(self):
             yield
             raise RuntimeError("teardown boom")
@@ -505,6 +542,7 @@ def test_parse_failure_with_raising_teardown_publishes_no_debug_key():
     """Parse early-return + sibling teardown raise must still omit ``debug``."""
 
     class _RaisingTeardown(SchemaExtension):
+        @override
         def on_operation(self):
             yield
             raise RuntimeError("teardown boom")
@@ -528,6 +566,7 @@ async def test_async_validation_failure_with_raising_teardown_publishes_no_debug
     """
 
     class _RaisingTeardown(SchemaExtension):
+        @override
         def on_operation(self):
             yield
             raise RuntimeError("teardown boom")
@@ -548,11 +587,13 @@ def test_generic_recovery_alone_calls_get_results_once():
     calls = []
 
     class _CountingDebug(DjangoDebugExtension):
+        @override
         def get_results(self):
             calls.append(1)
             return super().get_results()
 
     class _RaisingTeardown(SchemaExtension):
+        @override
         def on_operation(self):
             yield
             raise RuntimeError("teardown boom")
@@ -571,13 +612,17 @@ def test_generic_recovery_alone_calls_get_results_once():
 
 @override_settings(DEBUG=True)
 @pytest.mark.parametrize("prior", [False, True], ids=["prior-false", "prior-true"])
-def test_execute_sync_restores_the_prior_flag_value(default_wrapper, prior):
+def test_execute_sync_restores_the_prior_flag_value(
+    default_wrapper: BaseDatabaseWrapper,
+    prior: bool,
+):
     default_wrapper.force_debug_cursor = prior
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
     result = schema.execute_sync("{ ok }")
 
     assert result.errors is None
+    assert result.extensions is not None
     assert result.extensions["debug"]["exceptions"] == []
     # Saved-value restore: the nested-CaptureQueriesContext guarantee.
     assert default_wrapper.force_debug_cursor is prior
@@ -595,7 +640,7 @@ def test_execute_sync_restores_the_prior_flag_value(default_wrapper, prior):
     [True, False],
     ids=["debug-after-masking", "debug-before-masking"],
 )
-def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking):
+def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking: bool):
     if debug_after_masking:
         extension_list = [lambda: MaskErrors(), DjangoDebugExtension]
     else:
@@ -605,7 +650,9 @@ def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking)
     result = schema.execute_sync("{ boom }")
 
     # The GraphQL errors are masked either way.
+    assert result.errors is not None
     assert [error.message for error in result.errors] == ["Unexpected error."]
+    assert result.extensions is not None
     exceptions = result.extensions["debug"]["exceptions"]
     if debug_after_masking:
         # Debug tears down FIRST (LIFO), reading the originals.
@@ -623,24 +670,30 @@ def test_mask_errors_ordering_controls_exception_visibility(debug_after_masking)
 
 
 class _FirstProbe(SchemaExtension):
+    @override
     def get_results(self):
         return {"probe": "first", "only_first": 1}
 
 
 class _SecondProbe(SchemaExtension):
+    @override
     def get_results(self):
         return {"probe": "second"}
 
 
 class _ContextResultsSeeder(SchemaExtension):
+    @override
     def on_operation(self):
         self.execution_context.extensions_results = {"probe": "context"}
         yield
 
 
 class _ResultMapPrepopulator(SchemaExtension):
+    @override
     def on_operation(self):
         yield
+        assert self.execution_context.result is not None
+        assert isinstance(self.execution_context.result, GraphQLExecutionResult)
         self.execution_context.result.extensions = {"sentinel": True}
 
 
@@ -649,6 +702,7 @@ def test_extension_list_order_wins_same_key_collisions_sync():
 
     result = schema.execute_sync("{ ok }")
 
+    assert result.extensions is not None
     assert result.extensions["probe"] == "second"  # later-listed entry wins
     assert result.extensions["only_first"] == 1
 
@@ -658,6 +712,7 @@ async def test_extension_list_order_wins_same_key_collisions_async():
 
     result = await schema.execute("{ ok }")
 
+    assert result.extensions is not None
     assert result.extensions["probe"] == "second"
     assert result.extensions["only_first"] == 1
 
@@ -670,6 +725,7 @@ async def test_async_context_results_overlay_has_final_precedence():
 
     result = await schema.execute("{ ok }")
 
+    assert result.extensions is not None
     assert result.extensions["probe"] == "context"
 
 
@@ -681,6 +737,7 @@ def test_sync_runner_has_no_context_results_overlay():
 
     result = schema.execute_sync("{ ok }")
 
+    assert result.extensions is not None
     assert result.extensions["probe"] == "second"  # the seeded map is never overlaid
 
 
@@ -691,10 +748,12 @@ async def test_prepopulated_result_extensions_map_is_replaced_not_merged():
     )
 
     async_result = await schema.execute("{ ok }")
+    assert async_result.extensions is not None
     assert "sentinel" not in async_result.extensions
     assert async_result.extensions["probe"] == "first"
 
     sync_result = schema.execute_sync("{ ok }")
+    assert sync_result.extensions is not None
     assert "sentinel" not in sync_result.extensions
     assert sync_result.extensions["probe"] == "first"
 
@@ -710,7 +769,9 @@ async def test_prepopulated_result_extensions_map_is_replaced_not_merged():
     [("a", "b"), ("b", "a")],
     ids=["a-then-b", "b-then-a"],
 )
-async def test_async_overlapping_operations_share_the_wrapper_and_restore(completion_order):
+async def test_async_overlapping_operations_share_the_wrapper_and_restore(
+    completion_order: tuple[str, str],
+):
     """Two overlapping async operations refcount one wrapper and restore in any order.
 
     The wrapper is materialized in the parent async context BEFORE either task
@@ -773,7 +834,9 @@ async def test_async_overlapping_operations_share_the_wrapper_and_restore(comple
 
 @override_settings(DEBUG=True)
 @pytest.mark.django_db
-def test_nested_sync_operations_share_the_log_and_cross_attribute(default_wrapper):
+def test_nested_sync_operations_share_the_log_and_cross_attribute(
+    default_wrapper: BaseDatabaseWrapper,
+):
     original_flag = default_wrapper.force_debug_cursor
     inner_holder = {}
 
@@ -802,6 +865,7 @@ def test_nested_sync_operations_share_the_log_and_cross_attribute(default_wrappe
     assert outer_result.errors is None
     inner_result = inner_holder["result"]
     inner_sql = [row["sql"] for row in inner_result.extensions["debug"]["sql"]]
+    assert outer_result.extensions is not None
     outer_sql = [row["sql"] for row in outer_result.extensions["debug"]["sql"]]
 
     # The inner payload owns its interval only.
@@ -852,7 +916,7 @@ def test_concurrent_sync_operations_use_isolated_instances():
     thread_wrappers = {}
     restored_flags = {}
 
-    def _run(marker):
+    def _run(marker: str):
         thread_wrappers[marker] = connections["default"]
         result = schema.execute_sync(f'{{ boom(marker: "{marker}") }}')
         restored_flags[marker] = connections["default"].force_debug_cursor
@@ -865,7 +929,9 @@ def test_concurrent_sync_operations_use_isolated_instances():
         result_b = future_b.result(timeout=30)
 
     assert thread_wrappers["a"] is not thread_wrappers["b"]  # distinct thread-local wrappers
+    assert result_a.extensions is not None
     messages_a = [row["message"] for row in result_a.extensions["debug"]["exceptions"]]
+    assert result_b.extensions is not None
     messages_b = [row["message"] for row in result_b.extensions["debug"]["exceptions"]]
     assert messages_a == ["marker-a"]  # only its OWN marker - fresh instances
     assert messages_b == ["marker-b"]
@@ -880,7 +946,10 @@ def test_concurrent_sync_operations_use_isolated_instances():
 
 
 @override_settings(DEBUG=True)
-def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(default_wrapper, caplog):
+def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(
+    default_wrapper: BaseDatabaseWrapper,
+    caplog: pytest.LogCaptureFixture,
+):
     """A malformed backend log entry costs its own row and never the result."""
 
     @strawberry.type
@@ -904,6 +973,7 @@ def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(defaul
         # The real result is untouched - the diagnostic never replaces it.
         assert result.errors is None
         assert result.data == {"ok": "ok"}
+        assert result.extensions is not None
         payload = result.extensions["debug"]
         assert [row["sql"] for row in payload["sql"]] == ["SELECT 90"]  # the bad row alone is lost
         assert payload["exceptions"] == []
@@ -919,7 +989,9 @@ def test_sql_diagnostic_failure_degrades_payload_and_preserves_the_result(defaul
             log.pop()
 
 
-def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(caplog):
+def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(
+    caplog: pytest.LogCaptureFixture,
+):
     """The other SQL degrade: a log that cannot be DRAINED is not a per-row failure.
 
     The per-row guard covers a bad entry, but reading a connection's query log
@@ -935,13 +1007,18 @@ def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(caplog
             raise RuntimeError("query log read failed")
 
     good = SimpleNamespace(vendor="sqlite", alias="default", queries_log=[])
-    good_snapshot = _ConnectionSnapshot(database_connection=good, query_log_start=0)
+    good_snapshot = _ConnectionSnapshot(
+        database_connection=_as_connection(good),
+        query_log_start=0,
+    )
     good.queries_log.append({"sql": "SELECT 1", "time": "0.001"})
     exploding_snapshot = _ConnectionSnapshot(
-        database_connection=SimpleNamespace(
-            vendor="sqlite",
-            alias="other",
-            queries_log=_ExplodingQueryLog(),
+        database_connection=_as_connection(
+            SimpleNamespace(
+                vendor="sqlite",
+                alias="other",
+                queries_log=_ExplodingQueryLog(),
+            ),
         ),
         query_log_start=0,
     )
@@ -956,7 +1033,7 @@ def test_a_failing_query_log_drain_degrades_to_the_rows_serialized_so_far(caplog
     assert any("SQL diagnostic collection failed" in record.message for record in caplog.records)
 
 
-def test_exception_diagnostic_failure_degrades_to_an_empty_list(caplog):
+def test_exception_diagnostic_failure_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture):
     """A failing errors read degrades ``exceptions`` to [] without raising."""
 
     class _ExplodingResult:
@@ -979,7 +1056,7 @@ def test_exception_diagnostic_failure_degrades_to_an_empty_list(caplog):
 
 
 @pytest.mark.django_db
-def test_cursor_construction_defines_the_capture_interval(default_wrapper):
+def test_cursor_construction_defines_the_capture_interval(default_wrapper: BaseDatabaseWrapper):
     pre_opened_cursor = default_wrapper.cursor()  # a NORMAL cursor, created before acquire
     token = debug_module._coordinator.acquire(default_wrapper)
     try:
@@ -1011,6 +1088,7 @@ def test_cursor_construction_defines_the_capture_interval(default_wrapper):
 class _MarkerSQLExtension(SchemaExtension):
     """A sibling whose ``on_operation`` performs marker SQL around its yield."""
 
+    @override
     def on_operation(self):
         with connection.cursor() as cursor:
             cursor.execute("SELECT 31")  # the setup marker
@@ -1026,7 +1104,7 @@ class _MarkerSQLExtension(SchemaExtension):
     [True, False],
     ids=["debug-listed-first", "debug-listed-second"],
 )
-def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first):
+def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first: bool):
     if debug_listed_first:
         extension_list = [DjangoDebugExtension, _MarkerSQLExtension]
     else:
@@ -1036,6 +1114,7 @@ def test_sibling_hook_sql_capture_is_list_order_dependent(debug_listed_first):
     result = schema.execute_sync("{ ok }")
 
     assert result.errors is None
+    assert result.extensions is not None
     statements = [row["sql"] for row in result.extensions["debug"]["sql"]]
     if debug_listed_first:
         # Debug enters first and tears down last: both sibling markers fall
@@ -1066,7 +1145,8 @@ def test_zero_argument_construction_defaults_to_the_safe_answer():
     assert DjangoDebugExtension(allow_unsafe_production=True).allow_unsafe_production is True
 
     with pytest.raises(TypeError):
-        DjangoDebugExtension(True)  # keyword-only: acknowledging must be SPELLED
+        # basedpyright: deliberately positional; keyword-only acknowledging must be SPELLED
+        DjangoDebugExtension(True)  # pyright: ignore[reportCallIssue]
 
 
 @pytest.mark.parametrize(
@@ -1092,7 +1172,9 @@ def test_zero_argument_construction_defaults_to_the_safe_answer():
         "empty-list",
     ],
 )
-def test_a_non_bool_acknowledgement_is_refused_at_construction(value):
+def test_a_non_bool_acknowledgement_is_refused_at_construction(
+    value: str | int | list[object] | None,
+):
     """The acknowledgement is a bool, not a truthiness test.
 
     ``"false"`` is the case that makes this a security row rather than a typing
@@ -1103,7 +1185,9 @@ def test_a_non_bool_acknowledgement_is_refused_at_construction(value):
     value, on the same rule ``ErrorPolicy.enabled`` follows.
     """
     with pytest.raises(ConfigurationError, match="allow_unsafe_production"):
-        DjangoDebugExtension(allow_unsafe_production=value)
+        # basedpyright: each non-bool acknowledgement is the hostile input under test;
+        # DjangoDebugExtension types the parameter as bool
+        DjangoDebugExtension(allow_unsafe_production=value)  # pyright: ignore[reportArgumentType]
 
 
 @override_settings(DEBUG=False)
@@ -1118,14 +1202,19 @@ def test_a_refused_acknowledgement_never_becomes_an_armed_extension():
     """
     schema = strawberry.Schema(
         query=_OkQuery,
-        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production="false")],
+        # basedpyright: the string acknowledgement is the hostile input under test;
+        # DjangoDebugExtension types the parameter as bool
+        extensions=[lambda: DjangoDebugExtension(allow_unsafe_production="false")],  # pyright: ignore[reportArgumentType]
     )
     with pytest.raises(ConfigurationError, match="allow_unsafe_production"):
         schema.execute_sync("{ ok }")
 
 
 @override_settings(DEBUG=False)
-def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(monkeypatch, caplog):
+def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
     """Refusal is inertness, not payload suppression: no acquire, no snapshot, no flag write.
 
     The connections handler is replaced by one whose ``all()`` raises: the
@@ -1171,8 +1260,8 @@ def test_inert_operation_acquires_no_bracket_and_takes_no_snapshot(monkeypatch, 
 
 @override_settings(DEBUG=False)
 def test_acknowledged_factory_restores_the_cursor_bracket_and_logs_no_warning(
-    default_wrapper,
-    caplog,
+    default_wrapper: BaseDatabaseWrapper,
+    caplog: pytest.LogCaptureFixture,
 ):
     """The acknowledged spelling is silent, and its bracket unwinds like the gated one.
 
@@ -1206,7 +1295,7 @@ def test_acknowledged_factory_restores_the_cursor_bracket_and_logs_no_warning(
 # ---------------------------------------------------------------------------
 
 
-def _sql_row(sql):
+def _sql_row(sql: str) -> _DebugSQLRow:
     """A wire-shaped SQL row whose ONLY string cost is ``sql`` (empty vendor/alias)."""
     return {
         "vendor": "",
@@ -1218,7 +1307,7 @@ def _sql_row(sql):
     }
 
 
-def _exception_row(message, stack=""):
+def _exception_row(message: str, stack: str = "") -> _DebugExceptionRow:
     """A wire-shaped exception row whose string cost is ``message`` plus ``stack``."""
     return {"excType": "", "message": message, "stack": stack}
 
@@ -1255,7 +1344,9 @@ async def test_streaming_seam_publishes_the_payload_the_engine_reads():
 
     assert len(frames) == 1
     frame = frames[0]
+    assert isinstance(frame, ExecutionResult)
     # A bare schema has no masking extension: the raw message stays on the wire.
+    assert frame.errors is not None
     assert [error.message for error in frame.errors] == ["sensitive boom detail"]
     payload = (frame.extensions or {}).get("debug")
     assert payload is not None, "the streaming seam must publish debug like execute does"
@@ -1267,6 +1358,7 @@ async def test_streaming_seam_publishes_the_payload_the_engine_reads():
     # Contrast: the non-streaming async color of the SAME schema publishes.
     direct = await schema.execute("{ boom }")
     assert "debug" in (direct.extensions or {})
+    assert direct.extensions is not None
     assert [row["message"] for row in direct.extensions["debug"]["exceptions"]] == [
         "sensitive boom detail",
     ]
@@ -1281,7 +1373,9 @@ async def test_streaming_clean_operation_carries_both_lists():
     source = await schema.stream("{ __typename }")
     frames = [frame async for frame in source]
 
+    assert isinstance(frames[0], ExecutionResult)
     assert frames[0].errors is None
+    assert frames[0].extensions is not None
     payload = frames[0].extensions["debug"]
     assert payload == {"sql": [], "exceptions": []}
 
@@ -1302,7 +1396,7 @@ async def test_streaming_parse_failure_publishes_no_debug_key():
 
 
 @override_settings(DEBUG=False)
-async def test_streaming_fail_closed_gate_withholds_and_warns(caplog):
+async def test_streaming_fail_closed_gate_withholds_and_warns(caplog: pytest.LogCaptureFixture):
     """The inert gate holds on the streaming seam: no key, one warning, operation intact."""
     schema = strawberry.Schema(query=_OkQuery, extensions=[DjangoDebugExtension])
 
@@ -1310,6 +1404,7 @@ async def test_streaming_fail_closed_gate_withholds_and_warns(caplog):
         frames = [result async for result in await schema.stream("{ ok }")]
 
     assert len(frames) == 1
+    assert isinstance(frames[0], ExecutionResult)
     assert frames[0].data == {"ok": "ok"}
     assert "debug" not in (frames[0].extensions or {})
     warnings = [
@@ -1419,7 +1514,10 @@ def test_build_payload_routes_its_assembled_rows_through_the_caps():
 
 
 @override_settings(DEBUG=False)
-def test_deleted_debug_setting_is_an_inert_refusal(settings, caplog):
+def test_deleted_debug_setting_is_an_inert_refusal(
+    settings: pytest_django.Settings,
+    caplog: pytest.LogCaptureFixture,
+):
     """A DELETED ``settings.DEBUG`` gets the inert refusal, not a crashed request.
 
     ``getattr(settings, "DEBUG", None)`` with a default, not attribute access:
@@ -1468,7 +1566,7 @@ def test_deleted_debug_setting_is_an_inert_refusal(settings, caplog):
         "float-inf",
     ],
 )
-def test_a_non_finite_duration_is_refused_at_the_serializer(time):
+def test_a_non_finite_duration_is_refused_at_the_serializer(time: str | float):
     """A non-finite duration cannot reach a row: it is refused, not rounded.
 
     ``json.dumps`` encodes NaN and Infinity by default, but strict encoders
@@ -1481,13 +1579,15 @@ def test_a_non_finite_duration_is_refused_at_the_serializer(time):
     wrapper = SimpleNamespace(vendor="sqlite", alias="default")
 
     with pytest.raises(ValueError, match="non-finite duration"):
-        _serialize_sql_row(wrapper, {"sql": "SELECT 1", "time": time})
+        # basedpyright: the non-str duration is the hostile input under test; _serialize_sql_row
+        # types the entry as dict[str, str]
+        _serialize_sql_row(_as_connection(wrapper), {"sql": "SELECT 1", "time": time})  # pyright: ignore[reportArgumentType]
 
 
 @override_settings(DEBUG=True)
 def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
-    default_wrapper,
-    caplog,
+    default_wrapper: BaseDatabaseWrapper,
+    caplog: pytest.LogCaptureFixture,
 ):
     """The end-to-end shape of the non-finite refusal: only the NaN row is lost.
 
@@ -1507,7 +1607,9 @@ def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
             # entry, one whose duration is non-finite, then another good one.
             connections["default"].queries_log.append({"sql": "SELECT 92", "time": "0.001"})
             connections["default"].queries_log.append(
-                {"sql": "SELECT 93", "time": float("nan")},
+                # basedpyright: the float NaN duration is the hostile input under test;
+                # django-stubs types queries_log entries as dict[str, str]
+                {"sql": "SELECT 93", "time": float("nan")},  # pyright: ignore[reportArgumentType]
             )
             connections["default"].queries_log.append({"sql": "SELECT 94", "time": "0.002"})
             return "ok"
@@ -1522,6 +1624,7 @@ def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
 
         assert result.errors is None
         assert result.data == {"ok": "ok"}
+        assert result.extensions is not None
         payload = result.extensions["debug"]
         # Both good rows survived, in the order they were logged: the refusal
         # cost its own row and nothing else.
@@ -1536,7 +1639,7 @@ def test_a_nan_duration_costs_only_its_own_row_and_the_rest_keep_their_order(
             log.pop()
 
 
-def test_hostile_exception_str_degrades_to_an_empty_list(caplog):
+def test_hostile_exception_str_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture):
     """An exception whose ``__str__`` itself raises degrades ``exceptions`` to [].
 
     ``_serialize_exception`` reads ``str(exception)`` after graphql-core's
@@ -1546,6 +1649,7 @@ def test_hostile_exception_str_degrades_to_an_empty_list(caplog):
     """
 
     class _HostileStrError(Exception):
+        @override
         def __str__(self):
             raise RuntimeError("__str__ refused")
 
@@ -1560,7 +1664,7 @@ def test_hostile_exception_str_degrades_to_an_empty_list(caplog):
     )
 
 
-def test_non_iterable_errors_scalar_degrades_to_an_empty_list(caplog):
+def test_non_iterable_errors_scalar_degrades_to_an_empty_list(caplog: pytest.LogCaptureFixture):
     """A result whose ``errors`` is a non-iterable scalar degrades ``exceptions`` to [].
 
     graphql-core always carries a list or None, so this shape is synthetic -
@@ -1578,7 +1682,7 @@ def test_non_iterable_errors_scalar_degrades_to_an_empty_list(caplog):
 
 
 @override_settings(DEBUG=True)
-def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper):
+def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper: BaseDatabaseWrapper):
     """A hook generator abandoned mid-operation still restores the captured flag.
 
     ``hook.close()`` raises ``GeneratorExit`` at the yield; the teardown's
@@ -1587,11 +1691,14 @@ def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper):
     """
     original = default_wrapper.force_debug_cursor
     extension = DjangoDebugExtension()
-    extension.execution_context = SimpleNamespace(result=None)
+    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
+    # extension types the slot as ExecutionContext | None
+    extension.execution_context = SimpleNamespace(result=None)  # pyright: ignore[reportAttributeAccessIssue]
     hook = extension.on_operation()
 
     next(hook)  # the bracket is acquired
     assert default_wrapper.force_debug_cursor is True
+    assert isinstance(hook, Generator)
     hook.close()  # abandoned mid-operation: GeneratorExit at the yield
 
     assert default_wrapper.force_debug_cursor is original  # restored, not forced False
@@ -1627,7 +1734,9 @@ def test_one_operations_payload_is_not_the_extensions():
     first = schema.execute_sync("{ ok }")
     second = schema.execute_sync("{ ok }")
 
+    assert first.extensions is not None
     assert first.extensions["debug"] == {"sql": [], "exceptions": []}
+    assert second.extensions is not None
     assert second.extensions["debug"] == {"sql": [], "exceptions": []}
     assert first.extensions["debug"] is not second.extensions["debug"]
     assert shared._operation_state() is None  # nothing is left on the extension
@@ -1662,4 +1771,6 @@ def test_the_acknowledgement_is_read_from_the_construction_not_from_an_attribute
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         control = DjangoSchema(query=_OkQuery, extensions=[lambda: acknowledged])
-    assert control.execute_sync("{ ok }").extensions["debug"] == {"sql": [], "exceptions": []}
+    control_result = control.execute_sync("{ ok }")
+    assert control_result.extensions is not None
+    assert control_result.extensions["debug"] == {"sql": [], "exceptions": []}

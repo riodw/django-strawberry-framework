@@ -41,6 +41,7 @@ classes carried by the schema-module import.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 
 import pytest
@@ -85,8 +86,13 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import LazyRelatedClassMixin
 
 
+def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
+    """``input_cls`` as a constructor: the factory generates its keyword fields at run time."""
+    return input_cls
+
+
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Clear both subsystems' caches around every test.
 
     Mirrors ``tests/orders/test_finalizer.py::_isolate_registry`` extended
@@ -132,7 +138,9 @@ def _make_info() -> SimpleNamespace:
     coupling would entangle two otherwise-independent test files.
     """
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=False)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
+    # AbstractBaseUser | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=False)  # pyright: ignore[reportAttributeAccessIssue]
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 
@@ -174,6 +182,8 @@ def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
             filterset_class = BookFilter
             orderset_class = BookOrder
 
+    assert registry.get(Book) is BookType
+
     finalize_django_types()
 
     # Assertion 1: both per-module inputs modules carry the materialized
@@ -202,7 +212,9 @@ def test_filter_and_order_compose_through_finalizer_and_apply_pipelines():
     # internal contracts, then execute it under
     # ``CaptureQueriesContext`` so the captured SQL string carries
     # ``WHERE`` AND ``ORDER BY`` clauses too.
-    order_input_cls = OrderArgumentsFactory.input_object_types["BookOrderInputType"]
+    order_input_cls = _keyword_constructor(
+        OrderArgumentsFactory.input_object_types["BookOrderInputType"],
+    )
     # Dict-shape input is supported by ``FilterSet._normalize_input`` -- a
     # scalar value for a single-lookup field maps to the form's default
     # ``exact`` lookup. The order side receives a list of Strawberry

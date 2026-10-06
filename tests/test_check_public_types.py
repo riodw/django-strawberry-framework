@@ -19,13 +19,15 @@ checker's report has no ``/graphql/`` wire shape, so there is no live sibling in
 """
 
 import json
+from collections.abc import Iterable, Sequence
+from pathlib import Path
 
 import pytest
 
 from scripts import check_public_types
 
 
-def _report(score, symbols=(), general=()):
+def _report(score: float, symbols: Iterable[object] = (), general: Iterable[object] = ()):
     """A ``--outputjson`` payload carrying ``score``, ``symbols`` and ``general`` diagnostics."""
     return json.dumps(
         {
@@ -41,7 +43,7 @@ def _report(score, symbols=(), general=()):
     )
 
 
-def _symbol(name, *diagnostics):
+def _symbol(name: str, *diagnostics: tuple[str, str]):
     """One ``typeCompleteness.symbols`` entry carrying ``(severity, message)`` diagnostics."""
     return {
         "category": "variable",
@@ -65,13 +67,13 @@ _WIDGET_WARNING = check_public_types.Diagnostic(
 _WIDGET_ENTRY = check_public_types.AllowedDiagnostic(_WIDGET_WARNING, "the fixture's reason.")
 
 
-def _judge(payload, allowlist=()):
+def _judge(payload: str, allowlist: Sequence[check_public_types.AllowedDiagnostic] = ()):
     """Parse ``payload`` and judge it against ``allowlist``; return the verdict and its lines."""
     verdict = check_public_types.verdict_for(check_public_types.parse_report(payload), allowlist)
     return verdict, check_public_types.format_report(verdict)
 
 
-def _widget_symbol(*diagnostics):
+def _widget_symbol(*diagnostics: check_public_types.Diagnostic):
     """The fixture entry's symbol, carrying ``diagnostics`` as ``Diagnostic`` values."""
     return _symbol(
         _WIDGET_WARNING.symbol,
@@ -143,7 +145,7 @@ def test_an_allowlisted_diagnostic_passes_and_is_printed_with_its_reason():
 
 
 @pytest.mark.parametrize("field", ["symbol", "severity", "message"])
-def test_a_diagnostic_differing_from_an_entry_in_one_field_fails(field):
+def test_a_diagnostic_differing_from_an_entry_in_one_field_fails(field: str):
     """Only an exact match is ignored: the same symbol's other diagnostics still count.
 
     The report carries the entry's own diagnostic too, so the entry is not stale
@@ -177,7 +179,7 @@ def test_a_stale_allowlist_entry_fails_a_clean_report():
 
 
 @pytest.mark.parametrize("score", [0.9433962264150944, 0.99999])
-def test_a_score_below_one_fails_with_no_diagnostic_listed(score):
+def test_a_score_below_one_fails_with_no_diagnostic_listed(score: float):
     """The score is its own verdict: short of ``1.0`` fails even when no symbol is listed."""
     verdict, lines = _judge(_report(score, [_CLEAN_SYMBOL]))
 
@@ -218,7 +220,7 @@ def test_a_general_diagnostic_is_reported_ahead_of_the_symbols():
         json.dumps({"typeCompleteness": {"completenessScore": True}}),
     ],
 )
-def test_output_that_is_not_a_scored_report_is_a_measurement_error(payload):
+def test_output_that_is_not_a_scored_report_is_a_measurement_error(payload: str):
     """No report, or one without a numeric score, cannot be judged: it never passes silently."""
     with pytest.raises(check_public_types.MeasurementError):
         check_public_types.completeness_score(check_public_types.parse_report(payload))
@@ -246,8 +248,8 @@ def test_child_environments_drop_every_redirect_and_take_the_temporary_one():
     ids=["no-py-typed", "silent"],
 )
 def test_a_report_listing_no_symbol_is_a_measurement_error_not_a_stale_allowlist(
-    general,
-    reason_lines,
+    general: list[dict[str, str]],
+    reason_lines: list[str],
 ):
     """A run that measured nothing is never judged, so no allowlist entry reads as stale."""
     report = check_public_types.parse_report(_report(0, general=general))
@@ -296,7 +298,10 @@ def test_a_report_listing_no_symbol_is_a_measurement_error_not_a_stale_allowlist
         "non-string",
     ],
 )
-def test_a_report_entry_missing_a_field_is_a_measurement_error(symbols, general):
+def test_a_report_entry_missing_a_field_is_a_measurement_error(
+    symbols: list[dict[str, object]],
+    general: list[dict[str, str]],
+):
     """An entry without its string ``name``, ``severity`` or ``message`` cannot be judged."""
     report = check_public_types.parse_report(_report(1.0, symbols, general=general))
 
@@ -304,13 +309,13 @@ def test_a_report_entry_missing_a_field_is_a_measurement_error(symbols, general)
         check_public_types.verdict_for(report, ())
 
 
-def test_an_environment_without_basedpyright_is_a_measurement_error(tmp_path):
+def test_an_environment_without_basedpyright_is_a_measurement_error(tmp_path: Path):
     """A build that installed no verifier fails as a measurement before any child starts."""
     with pytest.raises(check_public_types.MeasurementError, match="installed no basedpyright"):
         check_public_types.run_verifier(tmp_path / "env", cwd=tmp_path)
 
 
-def test_a_stale_uv_is_a_measurement_error(monkeypatch, tmp_path):
+def test_a_stale_uv_is_a_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """A ``UV`` naming a removed executable fails as a measurement before any child starts."""
     monkeypatch.setenv("UV", str(tmp_path / "uv"))
 
@@ -318,7 +323,7 @@ def test_a_stale_uv_is_a_measurement_error(monkeypatch, tmp_path):
         check_public_types.build_environment(tmp_path / "env")
 
 
-def test_no_uv_at_all_is_a_measurement_error(monkeypatch, tmp_path):
+def test_no_uv_at_all_is_a_measurement_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """No ``UV`` and no ``uv`` on ``PATH`` fails as a measurement before any child starts."""
     monkeypatch.delenv("UV", raising=False)
     monkeypatch.setenv("PATH", str(tmp_path))
@@ -337,17 +342,18 @@ def test_no_uv_at_all_is_a_measurement_error(monkeypatch, tmp_path):
     ids=["missing", "not-executable", "not-utf-8"],
 )
 def test_a_child_that_cannot_start_or_decode_is_a_measurement_error(
-    monkeypatch,
-    tmp_path,
-    error,
-    match,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    error: Exception,
+    match: str,
 ):
     """``subprocess.run``'s start and decode failures surface as a measurement error."""
 
-    def refuse(*args, **kwargs):
+    def refuse(*args: object, **kwargs: object):
         raise error
 
-    monkeypatch.setattr(check_public_types.subprocess, "run", refuse)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(check_public_types.subprocess, "run", refuse)  # pyright: ignore[reportPrivateLocalImportUsage]
 
     with pytest.raises(check_public_types.MeasurementError, match=match):
         check_public_types._run(["/env/bin/basedpyright", "--version"], cwd=tmp_path, env={})

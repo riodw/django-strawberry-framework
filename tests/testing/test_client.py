@@ -34,6 +34,8 @@ import unittest
 import pytest
 from django.http import HttpResponse
 from django.test import AsyncClient, Client, override_settings
+from graphql import GraphQLFormattedError
+from typing_extensions import override
 
 import django_strawberry_framework
 from django_strawberry_framework import testing as testing_root
@@ -57,7 +59,7 @@ from django_strawberry_framework.testing import (
 class _CannedJSONResponse(HttpResponse):
     """A minimal 200 response carrying the ``.json()`` the client's ``_decode`` calls."""
 
-    def __init__(self, payload=None):
+    def __init__(self, payload: dict[str, object] | None = None):
         super().__init__()
         self._payload = payload if payload is not None else {"data": {"ok": True}}
 
@@ -77,7 +79,7 @@ class _RecordingDjangoClient:
     def __init__(self):
         self.posts = []
 
-    def post(self, url, **kwargs):
+    def post(self, url: str, **kwargs: object):
         self.posts.append((url, kwargs))
         return _CannedJSONResponse()
 
@@ -88,7 +90,7 @@ class _RecordingAsyncTransport:
     def __init__(self):
         self.posts = []
 
-    async def post(self, url, **kwargs):
+    async def post(self, url: str, **kwargs: object):
         self.posts.append((url, kwargs))
         return _CannedJSONResponse()
 
@@ -108,16 +110,41 @@ class _LenFalsyAsyncTransport(_RecordingAsyncTransport):
 
 
 class _MixinProbe(GraphQLTestMixin):
-    """A bare mixin composition proving ``query()`` reads only ``self.client``."""
+    """A bare mixin composition proving ``query()`` reads only ``self.client``.
+
+    It declares the host surface the mixin is typed against: the Django client slot and the
+    three unittest assertions the helpers call.
+    """
+
+    client: Client
 
     def __init__(self):
-        self.client = _RecordingDjangoClient()
+        # basedpyright: the recording double stands in for the Django client at the transport
+        # seam; it is not a django.test.Client
+        self.client = _RecordingDjangoClient()  # pyright: ignore[reportAttributeAccessIssue]
+
+    def assertEqual(
+        self,
+        first: object,
+        second: object,
+        msg: object = None,
+    ) -> None:
+        """Fail unless ``first == second``."""
+        assert first == second, msg
+
+    def assertIsNone(self, obj: object, msg: object = None) -> None:
+        """Fail unless ``obj is None``."""
+        assert obj is None, msg
+
+    def assertTrue(self, expr: object, msg: object = None) -> None:
+        """Fail unless ``expr`` is truthy."""
+        assert expr, msg
 
 
 class _AltProbe(_MixinProbe):
     """A mixin probe pinning its endpoint by class attribute (rung 3)."""
 
-    GRAPHQL_URL = "/classattr/"
+    GRAPHQL_URL: str | None = "/classattr/"
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +194,9 @@ def test_per_call_url_outranks_the_constructor_and_never_persists():
     to the constructor path.
     """
     transport = _RecordingDjangoClient()
-    client = TestClient("/constructor/", client=transport)
+    # basedpyright: a stand-in Django test client carrying only the slots the code under test
+    # reads; TestClient types the parameter as django.test.Client | None
+    client = TestClient("/constructor/", client=transport)  # pyright: ignore[reportArgumentType]
 
     res = client.query("{ ok }", url="/percall/")
     assert [url for url, _ in transport.posts] == ["/percall/"]
@@ -186,7 +215,7 @@ def test_per_call_url_outranks_the_constructor_and_never_persists():
 # ---------------------------------------------------------------------------
 
 
-class _FalsyDict(dict):
+class _FalsyDict(dict[str, object]):
     """A ``dict`` subclass that reads falsy however many keys it carries."""
 
     def __bool__(self):
@@ -198,7 +227,9 @@ class _FalsyDict(dict):
     [None, {}, _FalsyDict({"file": None})],
     ids=["none", "empty", "falsy_dict_subclass"],
 )
-def test_files_without_variables_raises_the_placeholder_guard(variables):
+def test_files_without_variables_raises_the_placeholder_guard(
+    variables: dict[str, object] | None,
+):
     """``files=`` with no ``variables`` member in the built envelope raises before any request.
 
     The owned ``_build_body``'s explicit ``AssertionError`` (not the engine
@@ -269,7 +300,10 @@ def test_files_placeholder_missing_nested_key_raises():
         "nested",
     ],
 )
-def test_files_placeholder_cannot_descend_into_a_scalar_raises(variables, key):
+def test_files_placeholder_cannot_descend_into_a_scalar_raises(
+    variables: dict[str, object],
+    key: str,
+):
     """A ``files=`` path that descends through a non-container value raises.
 
     Every non-container mid-path value is rejected alike - a string, a number,
@@ -296,7 +330,7 @@ def test_files_placeholder_cannot_descend_into_a_scalar_raises(variables, key):
         "1" * 5000,
     ],
 )
-def test_files_placeholder_noncanonical_list_index_raises(index):
+def test_files_placeholder_noncanonical_list_index_raises(index: str):
     """Every invalid ``object-path`` list index uses the placeholder guard's error type."""
     with pytest.raises(AssertionError, match="valid index"):
         TestClient().query(
@@ -337,6 +371,7 @@ def test_files_placeholder_hostile_repr_keeps_assertion_error_boundary():
     """A malformed value's broken ``repr`` cannot replace the placeholder guard."""
 
     class _HostileRepr:
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -359,6 +394,7 @@ def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary():
     """
 
     class _HostileKey(str):
+        @override
         def __repr__(self):
             raise RuntimeError("repr exploded")
 
@@ -379,7 +415,10 @@ def test_files_placeholder_hostile_repr_key_keeps_assertion_error_boundary():
         ({"data": {"image": None}}, "data..image"),
     ],
 )
-def test_files_placeholder_empty_segment_raises_instead_of_emitting(variables, key):
+def test_files_placeholder_empty_segment_raises_instead_of_emitting(
+    variables: dict[str, object],
+    key: str,
+):
     """An empty dotted segment raises at the source instead of emitting a spec-invalid map.
 
     A map entry built over an empty segment (the ``""`` key's ``variables.``
@@ -415,6 +454,7 @@ def test_files_placeholder_tuple_arrays_walk_and_map_like_lists():
         {"tags.1": f_top},
         None,
     )
+    assert isinstance(body["map"], str)
     assert json.loads(body["map"]) == {"tags.1": ["variables.tags.1"]}
     assert body["tags.1"] is f_top
 
@@ -424,12 +464,13 @@ def test_files_placeholder_tuple_arrays_walk_and_map_like_lists():
         {"a.0.c": f_mixed},
         None,
     )
+    assert isinstance(body["map"], str)
     assert json.loads(body["map"]) == {"a.0.c": ["variables.a.0.c"]}
     assert body["a.0.c"] is f_mixed
 
 
 @pytest.mark.parametrize("container", [list, tuple])
-def test_files_placeholder_hostile_len_container_fails_closed(container):
+def test_files_placeholder_hostile_len_container_fails_closed(container: type):
     """A container with an unreadable ``len`` raises the uniform guard, not a raw escape.
 
     The walker reads ``len`` for the index range check and the error message, so
@@ -438,7 +479,9 @@ def test_files_placeholder_hostile_len_container_fails_closed(container):
     class the hostile-``repr`` row above pins for the leaf value.
     """
 
-    class _HostileLen(container):
+    # basedpyright: parametrized over list and tuple; a class statement cannot take a
+    # union base, so the base is typed only as ``type`` and the checker cannot type it
+    class _HostileLen(container):  # pyright: ignore[reportUntypedBaseClass]
         def __len__(self):
             raise RuntimeError("hostile __len__ detonated")
 
@@ -461,7 +504,7 @@ def test_files_placeholder_hostile_len_container_fails_closed(container):
     ],
     ids=["operations", "map", "both"],
 )
-def test_files_key_shadowing_a_reserved_envelope_field_raises(reserved):
+def test_files_key_shadowing_a_reserved_envelope_field_raises(reserved: tuple[str, ...]):
     """A ``files=`` key named ``operations`` or ``map`` raises instead of clobbering the envelope.
 
     Each ``files`` key becomes a multipart field name and ``**files`` spreads
@@ -490,7 +533,9 @@ def test_empty_files_dict_is_a_plain_json_post():
     multipart body posted as JSON.
     """
     transport = _RecordingDjangoClient()
-    res = TestClient(client=transport).query("{ ok }", variables={"a": 1}, files={})
+    # basedpyright: a stand-in Django test client carrying only the slots the code under test
+    # reads; TestClient types the parameter as django.test.Client | None
+    res = TestClient(client=transport).query("{ ok }", variables={"a": 1}, files={})  # pyright: ignore[reportArgumentType]
 
     url, kwargs = transport.posts[0]
     assert url == "/graphql/"
@@ -519,9 +564,11 @@ def test_build_body_map_rule_is_uniform_across_path_shapes():
         "Up",
     )
 
+    assert isinstance(body["operations"], str)
     operations = json.loads(body["operations"])
     assert operations["operationName"] == "Up"
     assert operations["variables"] == {"file": None, "data": {"image": None}, "tags": [None, None]}
+    assert isinstance(body["map"], str)
     assert json.loads(body["map"]) == {
         "file": ["variables.file"],
         "data.image": ["variables.data.image"],
@@ -565,14 +612,19 @@ def test_response_extensions_surface_decoded_or_none():
     """
 
     class _ExtensionsTransport(_RecordingDjangoClient):
-        def post(self, url, **kwargs):
+        @override
+        def post(self, url: str, **kwargs: object):
             self.posts.append((url, kwargs))
             return _CannedJSONResponse({"data": {"ok": True}, "extensions": {"traceId": "t-1"}})
 
-    with_extensions = TestClient(client=_ExtensionsTransport()).query("{ ok }")
+    # basedpyright: a stand-in Django test client carrying only the slots the code under test
+    # reads; TestClient types the parameter as django.test.Client | None
+    with_extensions = TestClient(client=_ExtensionsTransport()).query("{ ok }")  # pyright: ignore[reportArgumentType]
     assert with_extensions.extensions == {"traceId": "t-1"}
 
-    without = TestClient(client=_RecordingDjangoClient()).query("{ ok }")
+    # basedpyright: a stand-in Django test client carrying only the slots the code under test
+    # reads; TestClient types the parameter as django.test.Client | None
+    without = TestClient(client=_RecordingDjangoClient()).query("{ ok }")  # pyright: ignore[reportArgumentType]
     assert without.extensions is None
 
 
@@ -593,7 +645,9 @@ def test_clients_carry_the_pytest_collection_guard():
 
 
 @pytest.mark.parametrize("client_class", [TestClient, AsyncTestClient])
-def test_clients_preserve_an_explicit_falsy_transport(client_class):
+def test_clients_preserve_an_explicit_falsy_transport(
+    client_class: type[TestClient] | type[AsyncTestClient],
+):
     """An explicitly supplied client is selected by presence, not truthiness."""
 
     class _FalsyClient:
@@ -601,7 +655,9 @@ def test_clients_preserve_an_explicit_falsy_transport(client_class):
             return False
 
     supplied = _FalsyClient()
-    client = client_class(client=supplied)
+    # basedpyright: a stand-in Django test client carrying only the slots the code under test
+    # reads; each client types the parameter as django.test.Client / AsyncClient | None
+    client = client_class(client=supplied)  # pyright: ignore[reportArgumentType]
     assert client.client is supplied
 
 
@@ -623,7 +679,9 @@ def test_async_client_defaults_to_djangos_async_transport():
     [_BoolFalsyAsyncTransport, _LenFalsyAsyncTransport],
     ids=["bool_falsy", "len_falsy"],
 )
-async def test_async_client_posts_a_real_query_through_a_falsy_transport(transport_class):
+async def test_async_client_posts_a_real_query_through_a_falsy_transport(
+    transport_class: type[_RecordingAsyncTransport],
+):
     """A falsy async transport carries a real awaited operation, whichever way it is falsy.
 
     Presence, not truthiness, pinned behaviourally rather than by identity: the
@@ -633,7 +691,9 @@ async def test_async_client_posts_a_real_query_through_a_falsy_transport(transpo
     (``__bool__`` and an empty ``__len__``) that a presence check ignores alike.
     """
     transport = transport_class()
-    client = AsyncTestClient("/async/", client=transport)
+    # basedpyright: a stand-in Django test client carrying only the slots the code under test
+    # reads; AsyncTestClient types the parameter as django.test.AsyncClient | None
+    client = AsyncTestClient("/async/", client=transport)  # pyright: ignore[reportArgumentType]
 
     res = await client.query("{ ok }")
 
@@ -667,7 +727,10 @@ def test_export_surface_is_the_testing_root_not_the_package_root():
     with pytest.raises(AttributeError):
         getattr(django_strawberry_framework, root_name)
     with pytest.raises(ImportError):
-        from django_strawberry_framework import TestClient  # noqa: F401
+        # basedpyright: the import statement is the probe; it raises, so the name is never bound
+        from django_strawberry_framework import (
+            TestClient,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +749,7 @@ def test_mixin_query_delegates_to_the_test_cases_own_client():
     probe = _MixinProbe()
     res = probe.query("{ ok }")
 
+    assert isinstance(probe.client, _RecordingDjangoClient)
     url, kwargs = probe.client.posts[0]
     assert url == "/graphql/"  # rung 5: the default, GRAPHQL_URL unset
     assert kwargs["content_type"] == "application/json"
@@ -702,6 +766,7 @@ def test_mixin_class_attr_rung_beats_the_settings_key_and_the_default():
     alt = _AltProbe()
     with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/settings/"}):
         alt.query("{ ok }")
+    assert isinstance(alt.client, _RecordingDjangoClient)
     assert alt.client.posts[-1][0] == "/classattr/"
 
 
@@ -709,6 +774,7 @@ def test_mixin_per_call_url_rung_beats_the_class_attr():
     """Rung 1 through the mixin: a per-call ``url=`` outranks ``GRAPHQL_URL``."""
     alt = _AltProbe()
     alt.query("{ ok }", url="/percall/")
+    assert isinstance(alt.client, _RecordingDjangoClient)
     assert alt.client.posts[-1][0] == "/percall/"
 
 
@@ -721,6 +787,7 @@ def test_mixin_settings_rung_applies_when_the_class_attr_is_unset():
     plain = _MixinProbe()
     with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/settings/"}):
         plain.query("{ ok }")
+    assert isinstance(plain.client, _RecordingDjangoClient)
     assert plain.client.posts[-1][0] == "/settings/"
 
 
@@ -737,11 +804,19 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
     typed :class:`Response`, so their FAILURE directions are pinned against
     constructed responses here (spec-043 Decision 11 + the live-first split).
     Composed over ``unittest.TestCase`` (not the DB-backed
-    ``GraphQLTestCase``) so this file stays DB-free.
+    ``GraphQLTestCase``) so this file stays DB-free. The ``client`` slot is declared for the
+    mixin's host type and never read: the helpers under test touch no transport.
     """
 
+    client: Client
+
     @staticmethod
-    def _canned(*, errors, data, status_code=200):
+    def _canned(
+        *,
+        errors: list[GraphQLFormattedError] | None,
+        data: dict[str, object] | None,
+        status_code: int = 200,
+    ):
         raw = _CannedJSONResponse({"data": data})
         raw.status_code = status_code
         return Response(errors=errors, data=data, extensions=None, response=raw)

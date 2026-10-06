@@ -44,8 +44,9 @@ import asyncio
 import copy
 import gc
 import warnings
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from types import SimpleNamespace
+from typing import Any, TypeAlias, TypedDict, TypeVar, get_origin
 
 import pytest
 import strawberry
@@ -54,9 +55,15 @@ from apps.products import services
 from apps.products.models import Category, Item
 from django.db import models
 from django.db.models import F, Q
+from django.db.models.sql import Query
 from django.http import HttpRequest
 from graphql import GraphQLError
 from strawberry import relay
+from strawberry.schema.config import StrawberryConfig
+from strawberry.types import Info
+from strawberry.types.base import get_object_definition
+from strawberry.types.nodes import SelectedField, Selection
+from typing_extensions import override
 
 from django_strawberry_framework import (
     DjangoOptimizerExtension,
@@ -84,9 +91,28 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.types.relay import SyncMisuseError
 
+_M = TypeVar("_M", bound=models.Model)
+
+# basedpyright: ExecutionResult.data is dict[str, Any]; a response node is read by key
+_ResponseNode: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+
+
+def _as_strawberry_info(stand_in: object) -> Info[object, object]:
+    """Hand a duck-typed info to a connection helper that takes a Strawberry info."""
+    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
+    # connection helpers type info as a concrete Strawberry Info
+    return stand_in  # pyright: ignore[reportReturnType]
+
+
+class _DefinitionReads(TypedDict):
+    """The counter a counting metaclass fills: whether it is armed and the names it read."""
+
+    armed: bool
+    names: list[str]
+
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry():
+def _isolate_global_registry() -> Iterator[None]:
     """Clear the global registry and the connection-type cache around each test.
 
     Connection classes are cached on ``target_type`` identity; function-scope
@@ -106,7 +132,7 @@ def _make_node_type(name: str, *, total_count: bool | None) -> type:
     ``total_count`` controls the opt-in: ``True`` / ``False`` declares
     ``Meta.connection = {"total_count": ...}``; ``None`` omits the key.
     """
-    meta_attrs = {
+    meta_attrs: dict[str, object] = {
         "model": Category,
         "fields": ("id", "name"),
         "interfaces": (relay.Node,),
@@ -127,7 +153,8 @@ def _schema_for(node_type: type) -> strawberry.Schema:
     """
     connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
-    def items_resolver() -> Iterable[node_type]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def items_resolver() -> Iterable[node_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         return Category.objects.all().order_by("pk")
 
     query_namespace = {
@@ -152,7 +179,7 @@ def test_django_connection_is_listconnection_subclass():
     # The parametrized form is a generic alias whose origin is ``DjangoConnection``.
     node_type = _make_node_type("GuardNode", total_count=None)
     specialized = DjangoConnection[node_type]
-    assert specialized.__origin__ is DjangoConnection
+    assert get_origin(specialized) is DjangoConnection
 
 
 def test_first_and_last_raises_graphql_error():
@@ -163,16 +190,21 @@ def test_first_and_last_raises_graphql_error():
     sentinel ``info`` (the guard runs before any ``info`` use).
     """
     with pytest.raises(GraphQLError, match="mutually exclusive"):
-        DjangoConnection.resolve_connection([], info=object(), first=1, last=1)
+        # basedpyright: the path under test never reads info; resolve_connection types the
+        # parameter as a required Info
+        DjangoConnection.resolve_connection([], info=object(), first=1, last=1)  # pyright: ignore[reportArgumentType]
 
 
 def test_first_and_last_guard_on_generated_subclass():
     """The generated ``<TypeName>Connection`` shares the ``first`` + ``last`` guard."""
     node_type = _make_node_type("GuardCountNode", total_count=True)
     connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
+    assert issubclass(connection_type, DjangoConnection)
 
     with pytest.raises(GraphQLError, match="mutually exclusive"):
-        connection_type.resolve_connection([], info=object(), first=1, last=1)
+        # basedpyright: the path under test never reads info; resolve_connection types the
+        # parameter as a required Info
+        connection_type.resolve_connection([], info=object(), first=1, last=1)  # pyright: ignore[reportArgumentType]
 
 
 def test_first_and_last_guard_with_unset():
@@ -252,10 +284,12 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     assert item_conn.__name__ == "PublicItemConnection"
     assert cat_conn is not item_conn
 
-    def _categories() -> Iterable[category_node]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def _categories() -> Iterable[category_node]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         return Category.objects.all().order_by("pk")
 
-    def _items() -> Iterable[item_node]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def _items() -> Iterable[item_node]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         return Item.objects.all().order_by("pk")
 
     query_cls = strawberry.type(
@@ -321,15 +355,22 @@ def test_connection_type_for_returns_concrete_subclass_when_total_count_false():
 # =============================================================================
 
 
-def _selection(name: str, selections=()):
-    """A minimal selection double exposing ``.name`` / ``.selections``."""
-    return SimpleNamespace(name=name, selections=list(selections))
+def _selection(name: str, selections: Iterable[Selection] = ()) -> SelectedField:
+    """A minimal selected field carrying ``.name`` / ``.selections``."""
+    return SelectedField(
+        name=name,
+        directives={},
+        arguments={},
+        selections=list(selections),
+    )
 
 
-def _info_with_selection(*field_names: str):
+def _info_with_selection(*field_names: str) -> Info[object, object]:
     """An ``info`` double whose connection selection set carries ``field_names``."""
     inner = [_selection(name) for name in field_names]
-    return SimpleNamespace(selected_fields=[_selection("connectionField", inner)])
+    return _as_strawberry_info(
+        SimpleNamespace(selected_fields=[_selection("connectionField", inner)]),
+    )
 
 
 def test_total_count_requested_true_when_selected():
@@ -364,7 +405,7 @@ def test_total_count_requested_scoped_to_direct_children():
             ),
         ],
     )
-    assert _total_count_requested(nested) is False
+    assert _total_count_requested(_as_strawberry_info(nested)) is False
 
 
 def test_total_count_requested_recurses_through_fragments():
@@ -386,7 +427,7 @@ def test_total_count_requested_recurses_through_fragments():
     info = SimpleNamespace(
         selected_fields=[_selection("connectionField", [_selection("edges"), spread])],
     )
-    assert _total_count_requested(info) is True
+    assert _total_count_requested(_as_strawberry_info(info)) is True
 
     # An InlineFragment WITHOUT totalCount stays False (recursion returns nothing).
     inline = InlineFragment(
@@ -397,7 +438,7 @@ def test_total_count_requested_recurses_through_fragments():
     info_no_count = SimpleNamespace(
         selected_fields=[_selection("connectionField", [inline])],
     )
-    assert _total_count_requested(info_no_count) is False
+    assert _total_count_requested(_as_strawberry_info(info_no_count)) is False
 
 
 # =============================================================================
@@ -423,6 +464,7 @@ async def test_total_count_async_path_counts_via_acount():
         "{ items(first: 1) { edges { node { id } } totalCount } }",
     )
     assert result.errors is None
+    assert result.data is not None
     assert result.data["items"]["totalCount"] == expected
 
 
@@ -449,15 +491,15 @@ def _make_sidecar_node_type(
     total_count: bool = False,
     filterset: type | None = _CategoryFilter,
     orderset: type | None = _CategoryOrder,
-    get_queryset=None,
-) -> type:
+    get_queryset: Callable[..., object] | None = None,
+) -> type[DjangoType]:
     """Build a Relay-Node ``DjangoType`` over ``Category`` with optional sidecars.
 
     ``filterset`` / ``orderset`` default to the module fixtures; pass ``None`` to
     omit a sidecar. ``get_queryset`` (when given) is installed as a method so the
     visibility hook / ``SyncMisuseError`` paths can be exercised.
     """
-    meta_attrs: dict = {
+    meta_attrs: dict[str, object] = {
         "model": Category,
         "fields": ("id", "name"),
         "interfaces": (relay.Node,),
@@ -469,7 +511,7 @@ def _make_sidecar_node_type(
         meta_attrs["orderset_class"] = orderset
     if total_count:
         meta_attrs["connection"] = {"total_count": True}
-    namespace: dict = {"Meta": type("Meta", (), meta_attrs)}
+    namespace: dict[str, object] = {"Meta": type("Meta", (), meta_attrs)}
     if get_queryset is not None:
         namespace["get_queryset"] = classmethod(get_queryset)
     return type(name, (DjangoType,), namespace)
@@ -478,9 +520,9 @@ def _make_sidecar_node_type(
 def _field_schema(
     node_type: type,
     *,
-    resolver=None,
-    optimizer=None,
-    config=None,
+    resolver: Callable[..., object] | None = None,
+    optimizer: DjangoOptimizerExtension | None = None,
+    config: StrawberryConfig | None = None,
 ) -> strawberry.Schema:
     """Build an in-process schema exposing ``items`` via ``DjangoConnectionField``.
 
@@ -517,9 +559,10 @@ def _capture_info(node_type: type):
     ``Info`` it is handed during a throwaway query.
     """
     conn_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
-    captured: dict = {}
+    captured: dict[str, strawberry.Info[object, object]] = {}
 
-    def capture(root, info: strawberry.types.Info) -> Iterable[node_type]:
+    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+    def capture(root: object, info: strawberry.Info[object, object]) -> Iterable[node_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
         captured["info"] = info
         return Category.objects.all()
 
@@ -545,7 +588,9 @@ def _capture_info(node_type: type):
 def test_connection_field_requires_djangotype():
     """A non-class target raises ``ConfigurationError``."""
     with pytest.raises(ConfigurationError, match="requires a DjangoType class"):
-        DjangoConnectionField(42)
+        # basedpyright: the non-class value is the hostile input under test; DjangoConnectionField
+        # types the parameter as type[object]
+        DjangoConnectionField(42)  # pyright: ignore[reportArgumentType]
 
 
 def test_connection_field_requires_djangotype_subclass():
@@ -573,7 +618,9 @@ def test_connection_field_rejects_non_callable_resolver():
     """A non-callable ``resolver=`` raises ``ConfigurationError``."""
     node_type = _make_sidecar_node_type("NonCallableResolverNode")
     with pytest.raises(ConfigurationError, match="resolver must be callable"):
-        DjangoConnectionField(node_type, resolver="not callable")
+        # basedpyright: the non-callable resolver is the hostile input under test;
+        # DjangoConnectionField types the parameter as a callable
+        DjangoConnectionField(node_type, resolver="not callable")  # pyright: ignore[reportArgumentType]
 
 
 def test_connection_field_requires_relay_node():
@@ -692,12 +739,13 @@ def test_consumer_resolver_manager_coerced():
     """A ``Manager`` return is coerced to a ``QuerySet`` and runs the full pipeline."""
     services.seed_data(2)
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> models.Manager[Category]:
         return Category.objects  # a Manager, not a QuerySet
 
     schema = _field_schema(_make_sidecar_node_type("ManagerNode"), resolver=resolver)
     result = schema.execute_sync("{ items { edges { node { id } } } }")
     assert result.errors is None
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == Category.objects.count()
 
 
@@ -712,7 +760,7 @@ def test_consumer_resolver_queryset_full_pipeline():
     """
     services.seed_data(2)
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("QuerySetNode"), resolver=resolver)
@@ -722,6 +770,7 @@ def test_consumer_resolver_queryset_full_pipeline():
         context_value=HttpRequest(),
     )
     assert result.errors is None
+    assert result.data is not None
     names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
     assert names == sorted(names)
 
@@ -732,12 +781,13 @@ def test_consumer_resolver_iterable_without_sidecar_input_paginates():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         return list(rows)  # a plain list
 
     schema = _field_schema(_make_sidecar_node_type("IterableOkNode"), resolver=resolver)
     result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
     assert result.errors is None
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
 
 
@@ -747,7 +797,7 @@ def test_consumer_resolver_iterable_with_sidecar_input_raises():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         return list(rows)
 
     schema = _field_schema(_make_sidecar_node_type("IterableBadNode"), resolver=resolver)
@@ -769,7 +819,7 @@ def test_consumer_resolver_iterable_with_total_count_selected_raises():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         return list(rows)
 
     schema = _field_schema(
@@ -785,7 +835,9 @@ def test_consumer_resolver_iterable_with_total_count_selected_raises():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("make_source", [iter, set, frozenset])
-def test_consumer_resolver_countless_iterable_paginates_without_total_count(make_source):
+def test_consumer_resolver_countless_iterable_paginates_without_total_count(
+    make_source: Callable[[list[Category]], Iterable[object]],
+):
     """A count-less non-queryset source paginates with ``totalCount`` NOT selected.
 
     Regression pin for the eager ``.count`` read in ``_attach_count_sync``: the
@@ -799,7 +851,7 @@ def test_consumer_resolver_countless_iterable_paginates_without_total_count(make
     services.seed_data(3)
     rows = list(Category.objects.all())
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         return make_source(rows)
 
     schema = _field_schema(
@@ -808,6 +860,7 @@ def test_consumer_resolver_countless_iterable_paginates_without_total_count(make
     )
     result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
     assert result.errors is None
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
 
 
@@ -826,7 +879,7 @@ def test_consumer_resolver_generator_paginates_without_total_count():
     services.seed_data(2)
     rows = list(Category.objects.all())
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         yield from rows
 
     schema = _field_schema(
@@ -837,13 +890,14 @@ def test_consumer_resolver_generator_paginates_without_total_count():
         "{ items(first: 1) { pageInfo { hasNextPage } edges { node { id } } } }",
     )
     assert result.errors is None
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
     assert result.data["items"]["pageInfo"] is not None
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("bad_source", [None, 42])
-def test_consumer_resolver_non_iterable_source_raises_graphql_error(bad_source):
+def test_consumer_resolver_non_iterable_source_raises_graphql_error(bad_source: object):
     """A scalar source fails closed with a package error, not a blank AssertionError.
 
     ``None`` / an ``int`` are neither QuerySet nor iterable; Relay's slicer
@@ -854,7 +908,7 @@ def test_consumer_resolver_non_iterable_source_raises_graphql_error(bad_source):
     """
     services.seed_data(1)
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> object:
         return bad_source
 
     schema = _field_schema(_make_sidecar_node_type("ScalarSourceNode"), resolver=resolver)
@@ -876,7 +930,7 @@ def test_guard_non_queryset_iterable_admits_getitem_only_sequence():
     from django_strawberry_framework.connection import _guard_non_queryset_iterable
 
     class LegacySequence:
-        def __getitem__(self, index):
+        def __getitem__(self, index: int) -> object:
             return [][index]
 
     _guard_non_queryset_iterable(LegacySequence())  # does not raise
@@ -898,7 +952,7 @@ async def test_async_consumer_resolver_set_source_paginates_without_total_count(
     await sync_to_async(services.seed_data)(2)
     rows = await sync_to_async(lambda: list(Category.objects.all()))()
 
-    async def resolver(root, info) -> Iterable:
+    async def resolver(root: object, info: object) -> Iterable[object]:
         return set(rows)
 
     schema = await sync_to_async(_field_schema)(
@@ -907,6 +961,7 @@ async def test_async_consumer_resolver_set_source_paginates_without_total_count(
     )
     result = await schema.execute("{ items(first: 1) { edges { node { id } } } }")
     assert result.errors is None
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
 
 
@@ -931,7 +986,9 @@ async def test_attach_count_async_awaits_before_guard_raises():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with pytest.raises(GraphQLError, match="totalCount"):
-            await _attach_count_async(coro, ["not", "a", "queryset"], want_count=True)
+            # basedpyright: a stand-in connection the guard never reads; _attach_count_async types
+            # the parameter as an awaitable DjangoConnection
+            await _attach_count_async(coro, ["not", "a", "queryset"], want_count=True)  # pyright: ignore[reportArgumentType]
         gc.collect()
         leaked = [
             w
@@ -961,7 +1018,7 @@ async def test_async_consumer_resolver_iterable_with_total_count_selected_raises
     await sync_to_async(services.seed_data)(1)
     rows = await sync_to_async(lambda: list(Category.objects.all()))()
 
-    async def resolver(root, info) -> Iterable:
+    async def resolver(root: object, info: object) -> Iterable[object]:
         return list(rows)
 
     schema = await sync_to_async(_field_schema)(
@@ -996,6 +1053,7 @@ def test_default_ordering_applied_when_unordered():
         filter_input=None,
         order_by_input=None,
     )
+    assert isinstance(qs, models.QuerySet)
     assert qs.ordered
     assert qs.query.order_by == (Category._meta.pk.attname,)
 
@@ -1019,6 +1077,7 @@ def test_default_ordering_preserves_supplied_orderby():
         filter_input=None,
         order_by_input=None,
     )
+    assert isinstance(qs, models.QuerySet)
     assert qs.query.order_by == ("name",)
 
 
@@ -1044,6 +1103,7 @@ def test_default_ordering_preserves_meta_ordering():
         filter_input=None,
         order_by_input=None,
     )
+    assert isinstance(qs, models.QuerySet)
     assert qs.query.order_by == ("-name",)
 
 
@@ -1070,7 +1130,7 @@ def test_connection_resolver_composition_order():
     services.seed_data(3)
     calls: list[str] = []
 
-    def get_queryset(cls, qs, info):
+    def get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
         calls.append("visibility")
         return qs
 
@@ -1080,14 +1140,24 @@ def test_connection_resolver_composition_order():
             fields = {"name": ["icontains"]}
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
-        ):
+            input_value: object,
+            queryset: models.QuerySet[_M],
+            info: object,
+            *,
+            run_permissions: bool = True,
+            _depth: int = 0,
+        ) -> models.QuerySet[_M]:
             calls.append("filter")
-            return super().apply_sync(input_value, queryset, info)
+            return super().apply_sync(
+                input_value,
+                queryset,
+                info,
+                run_permissions=run_permissions,
+                _depth=_depth,
+            )
 
     class _OrderedOrder(OrderSet):
         class Meta:
@@ -1095,11 +1165,12 @@ def test_connection_resolver_composition_order():
             fields = ["name"]
 
         @classmethod
+        @override
         def apply_sync(
             cls,
-            input_value,
-            queryset,
-            info,
+            input_value: object,
+            queryset: models.QuerySet[_M],
+            info: object,
         ):
             calls.append("order")
             return super().apply_sync(input_value, queryset, info)
@@ -1120,6 +1191,7 @@ def test_connection_resolver_composition_order():
     )
     assert result.errors is None
     assert calls == ["visibility", "filter", "order"]
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
     # totalCount counts the full post-filter pre-slice set, not the sliced page.
     assert result.data["items"]["totalCount"] == total
@@ -1152,6 +1224,7 @@ def test_relay_max_results_cap():
 
     at_cap = schema.execute_sync("{ items(first: 2) { edges { node { id } } } }")
     assert at_cap.errors is None
+    assert at_cap.data is not None
     assert len(at_cap.data["items"]["edges"]) == 2
 
 
@@ -1171,6 +1244,7 @@ async def test_connection_resolver_async_dispatch():
     )
     result = await schema.execute("{ items(first: 1) { edges { node { id } } totalCount } }")
     assert result.errors is None
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
     assert result.data["items"]["totalCount"] == expected
 
@@ -1181,7 +1255,7 @@ def test_connection_sync_async_generator_resolver_raises_sync_misuse():
     services.seed_data(1)
     rows = list(Category.objects.all())
 
-    async def resolver(root, info):
+    async def resolver(root: object, info: object):
         for row in rows:
             yield row
 
@@ -1207,7 +1281,7 @@ async def test_connection_async_generator_resolver_executes_on_async_path():
     await sync_to_async(services.seed_data)(2)
     rows = await sync_to_async(list)(Category.objects.order_by("pk"))
 
-    async def resolver(root, info):
+    async def resolver(root: object, info: object):
         for row in rows:
             yield row
 
@@ -1217,6 +1291,7 @@ async def test_connection_async_generator_resolver_executes_on_async_path():
     )
     result = await schema.execute("{ items(first: 1) { edges { node { id } } } }")
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert len(result.data["items"]["edges"]) == 1
 
 
@@ -1236,9 +1311,9 @@ def test_connection_partial_async_generator_resolver_raises_sync_misuse():
     class _Resolver:
         async def __call__(
             self,
-            prefix,
-            root,
-            info,
+            prefix: str,
+            root: object,
+            info: object,
         ):
             for row in rows:
                 yield row
@@ -1269,7 +1344,7 @@ def test_connection_sync_resolver_returning_async_iterable_raises_sync_misuse():
     services.seed_data(1)
     rows = list(Category.objects.order_by("pk"))
 
-    def resolver(root, info):
+    def resolver(root: object, info: object):
         async def stream():
             for row in rows:
                 yield row
@@ -1293,7 +1368,7 @@ def test_sync_context_async_get_queryset_raises_sync_misuse():
     """An async ``get_queryset`` invoked from the sync resolver path raises ``SyncMisuseError``."""
     services.seed_data(1)
 
-    async def get_queryset(cls, qs, info):
+    async def get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
         return qs
 
     node_type = _make_sidecar_node_type(
@@ -1322,7 +1397,7 @@ async def test_async_execution_default_connection_async_get_queryset_raises_sync
 
     await sync_to_async(services.seed_data)(1)
 
-    async def get_queryset(cls, qs, info):
+    async def get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
         return qs
 
     node_type = _make_sidecar_node_type(
@@ -1341,10 +1416,10 @@ async def test_connection_sync_resolver_returning_coroutine_raises_sync_misuse()
     """A plain ``def`` returning a coroutine cannot enter connection slicing."""
     node_type = _make_sidecar_node_type("CoroSyncConnNode")
 
-    async def _inner():
+    async def _inner() -> list[object]:
         return []
 
-    def _sync_resolver_returning_coroutine(root, info) -> Iterable:
+    def _sync_resolver_returning_coroutine(root: object, info: object) -> Awaitable[list[object]]:
         return _inner()
 
     schema = _field_schema(
@@ -1374,10 +1449,13 @@ async def test_connection_async_resolver_resolving_to_residual_awaitable_fails_c
     """
     node_type = _make_sidecar_node_type("ResidualAsyncConnNode")
 
-    async def _inner() -> Iterable:
+    async def _inner() -> Iterable[object]:
         return []
 
-    async def _async_resolver_returning_awaitable(root, info) -> Iterable:
+    async def _async_resolver_returning_awaitable(
+        root: object,
+        info: object,
+    ) -> Awaitable[Iterable[object]]:
         return _inner()  # resolves (after one await) to ANOTHER coroutine
 
     schema = _field_schema(node_type, resolver=_async_resolver_returning_awaitable)
@@ -1399,7 +1477,7 @@ def _make_relation_node_type(
     name: str,
     *,
     fields: tuple[str, ...],
-    model=Category,
+    model: type[models.Model] = Category,
     list_relations: tuple[str, ...] = (),
 ) -> type:
     """Build a bare Relay-Node ``DjangoType`` (no sidecars) exposing ``fields``.
@@ -1413,7 +1491,7 @@ def _make_relation_node_type(
     prefetch under a plain ``items { ... }`` selection has to ask for the list
     shape explicitly.
     """
-    meta_attrs = {
+    meta_attrs: dict[str, object] = {
         "model": model,
         "fields": fields,
         "interfaces": (relay.Node,),
@@ -1602,7 +1680,7 @@ def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
     result = _finalize_queryset(
         node,
         Item.objects.order_by("name"),
-        SimpleNamespace(),
+        _as_strawberry_info(SimpleNamespace()),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(result.query.order_by) == ("name", "id")
@@ -1615,7 +1693,7 @@ def test_finalize_queryset_skips_pk_when_terminal_already_unique():
     by_name = _finalize_queryset(
         node,
         Category.objects.order_by("name"),
-        SimpleNamespace(),
+        _as_strawberry_info(SimpleNamespace()),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(by_name.query.order_by) == ("name",)
@@ -1623,7 +1701,7 @@ def test_finalize_queryset_skips_pk_when_terminal_already_unique():
     by_pk = _finalize_queryset(
         node,
         Category.objects.order_by("id"),
-        SimpleNamespace(),
+        _as_strawberry_info(SimpleNamespace()),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(by_pk.query.order_by) == ("id",)
@@ -1646,7 +1724,7 @@ def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
     result = _finalize_queryset(
         node,
         qs,
-        SimpleNamespace(),
+        _as_strawberry_info(SimpleNamespace()),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(result.query.order_by) == ("order", "id")
@@ -1669,7 +1747,7 @@ def test_apply_connection_optimization_short_circuits_without_optimizer():
 
     node = _make_node_type("P3aNode", total_count=None)
     qs = Category.objects.all()
-    assert apply_connection_optimization(node, qs, SimpleNamespace()) is qs
+    assert apply_connection_optimization(node, qs, _as_strawberry_info(SimpleNamespace())) is qs
 
 
 def test_apply_connection_optimization_short_circuits_when_target_has_no_model():
@@ -1684,7 +1762,14 @@ def test_apply_connection_optimization_short_circuits_when_target_has_no_model()
         pass
 
     qs = Category.objects.all()
-    assert apply_connection_optimization(_UnregisteredNode, qs, SimpleNamespace()) is qs
+    result = apply_connection_optimization(
+        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
+        # apply_connection_optimization types the parameter as type[DjangoType]
+        _UnregisteredNode,  # pyright: ignore[reportArgumentType]
+        qs,
+        _as_strawberry_info(SimpleNamespace()),
+    )
+    assert result is qs
 
 
 def test_ends_in_unique_column_false_for_unnameable_terminal():
@@ -1722,6 +1807,7 @@ def test_pipeline_async_coerces_manager_source_and_finalizes():
             order_by_input=None,
         ),
     )
+    assert isinstance(qs, models.QuerySet)
     assert qs.ordered
     assert qs.query.order_by == (Category._meta.pk.attname,)
 
@@ -1737,7 +1823,7 @@ async def test_connection_async_pipeline_applies_filter_and_order():
     """
     from asgiref.sync import sync_to_async
 
-    async def resolver(root, info):
+    async def resolver(root: object, info: object):
         # An async resolver forces the connection through the ASYNC pipeline; the
         # sidecar filter:/orderBy: args are then applied to its result via *_async.
         return Category.objects.all()
@@ -1746,13 +1832,16 @@ async def test_connection_async_pipeline_applies_filter_and_order():
     schema = await sync_to_async(_field_schema)(node_type, resolver=resolver)
     await sync_to_async(services.seed_data)(1)
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
     result = await schema.execute(
         '{ items(filter: { name: { exact: "no-such-name" } }, '
         "orderBy: [{ name: ASC }]) { edges { node { name } } } }",
         context_value=SimpleNamespace(request=request),
     )
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert result.data["items"]["edges"] == []
 
 
@@ -1764,7 +1853,7 @@ _CATEGORY_ORDER_SHAPE_PREFIX = (
 )
 
 
-class _DeferredFilterQuerySet(models.QuerySet):
+class _DeferredFilterQuerySet(models.QuerySet[Category]):
     """A project queryset class, used here to carry a deferred filter Django never writes.
 
     A PENDING predicate is ordinary: Django's related-manager machinery leaves
@@ -1774,51 +1863,64 @@ class _DeferredFilterQuerySet(models.QuerySet):
     """
 
 
-async def _awaitable_queryset(queryset):
+async def _awaitable_queryset(queryset: object):
     return queryset
 
 
 def _order_override_evaluated(
-    cls,
-    order_input,
-    queryset,
-    info,
+    cls: type[_CategoryOrder],
+    order_input: object,
+    queryset: models.QuerySet[Category],
+    info: object,
 ):
     list(queryset)
     return queryset
 
 
 def _order_override_untrusted(
-    cls,
-    order_input,
-    queryset,
-    info,
+    cls: type[_CategoryOrder],
+    order_input: object,
+    queryset: models.QuerySet[Category],
+    info: object,
 ):
     candidate = _DeferredFilterQuerySet(model=Category)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    candidate._deferred_filter = (1, (), {"name": "A"})
+    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
     return candidate
 
 
 def _order_override_in_place_routing(
-    cls,
-    order_input,
-    queryset,
-    info,
+    cls: type[_CategoryOrder],
+    order_input: object,
+    queryset: models.QuerySet[Category],
+    info: object,
 ):
-    queryset._hints = {"tenant": 2}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
     return queryset
 
 
 def _order_override_passthrough(
-    cls,
-    order_input,
-    queryset,
-    info,
+    cls: type[_CategoryOrder],
+    order_input: object,
+    queryset: models.QuerySet[Category],
+    info: object,
 ):
     return super(_CategoryOrder, cls).apply_sync(order_input, queryset, info)
 
+
+_OrderOverride: TypeAlias = Callable[
+    [
+        type[_CategoryOrder],
+        object,
+        models.QuerySet[Category],
+        object,
+    ],
+    object,
+]
+_OrderRow: TypeAlias = tuple[str, _OrderOverride, str, tuple[str, ...]]
 
 #: One row per defect shape the post-``OrderSet`` seal names at the CONNECTION
 #: field; ``materialized-list`` and ``none`` share the ``type`` branch.
@@ -1826,7 +1928,7 @@ def _order_override_passthrough(
 #: connection takes the Relay window on whatever ordering returned, so an
 #: unsealed result is a wrong page or a foreign row rather than a loud error -
 #: each row proves the seal rejects instead.
-_CONNECTION_MALFORMED_ORDER_ROWS = (
+_CONNECTION_MALFORMED_ORDER_ROWS: tuple[_OrderRow, ...] = (
     (
         "evaluated",
         _order_override_evaluated,
@@ -1898,10 +2000,10 @@ _CONNECTION_MALFORMED_ORDER_ROWS = (
     ids=[row[0] for row in _CONNECTION_MALFORMED_ORDER_ROWS],
 )
 def test_connection_seals_a_malformed_apply_sync_result(
-    monkeypatch,
-    override,
-    message_start,
-    substrings,
+    monkeypatch: pytest.MonkeyPatch,
+    override: Callable[..., object],
+    message_start: str,
+    substrings: tuple[str, ...],
 ):
     """Each malformed ``apply_sync`` result is rejected by name at the connection field.
 
@@ -1927,7 +2029,7 @@ def test_connection_seals_a_malformed_apply_sync_result(
 
 
 @pytest.mark.django_db
-def test_connection_healthy_apply_sync_override_still_orders(monkeypatch):
+def test_connection_healthy_apply_sync_override_still_orders(monkeypatch: pytest.MonkeyPatch):
     """A ``super()`` pass-through override is ACCEPTED and yields the ordered page.
 
     The seal's positive control: it rejects malformed results without rejecting
@@ -1943,26 +2045,36 @@ def test_connection_healthy_apply_sync_override_still_orders(monkeypatch):
     )
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
     assert names == sorted(names)
     assert len(names) == Category.objects.count()
 
 
 @pytest.mark.django_db(transaction=True)
-def test_connection_async_seal_rejects_a_non_awaitable_apply_async(monkeypatch):
+def test_connection_async_seal_rejects_a_non_awaitable_apply_async(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``apply_async`` returning a plain value is rejected on the connection's async path."""
-    monkeypatch.setattr(
-        _CategoryOrder,
-        "apply_async",
-        classmethod(lambda cls, order_input, queryset, info: queryset),
-    )
 
-    async def resolver(root, info):
+    def _plain_apply_async(
+        cls: type[_CategoryOrder],
+        order_input: object,
+        queryset: models.QuerySet[Category],
+        info: object,
+    ) -> models.QuerySet[Category]:
+        return queryset
+
+    monkeypatch.setattr(_CategoryOrder, "apply_async", classmethod(_plain_apply_async))
+
+    async def resolver(root: object, info: object):
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("AsyncSealNonAwaitableNode"), resolver=resolver)
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
     result = asyncio.run(
         schema.execute(
             "{ items(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
@@ -1977,25 +2089,29 @@ def test_connection_async_seal_rejects_a_non_awaitable_apply_async(monkeypatch):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_connection_async_seal_rejects_a_sliced_apply_async_result(monkeypatch):
+def test_connection_async_seal_rejects_a_sliced_apply_async_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A sliced ``apply_async`` result is rejected with the shared shape wording."""
 
     async def _sliced(
-        cls,
-        order_input,
-        queryset,
-        info,
+        cls: type[_CategoryOrder],
+        order_input: object,
+        queryset: models.QuerySet[Category],
+        info: object,
     ):
         return queryset.order_by("name")[:1]
 
     monkeypatch.setattr(_CategoryOrder, "apply_async", classmethod(_sliced))
 
-    async def resolver(root, info):
+    async def resolver(root: object, info: object):
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("AsyncSealSlicedNode"), resolver=resolver)
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
     result = asyncio.run(
         schema.execute(
             "{ items(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
@@ -2055,7 +2171,7 @@ def _make_cascading_item_node(name: str) -> type:
     so items whose ``category`` is hidden drop out of the connection.
     """
 
-    def get_queryset(cls, queryset, info):
+    def get_queryset(cls: type[DjangoType], queryset: models.QuerySet[Item], info: object):
         return apply_cascade_permissions(cls, queryset, info)
 
     return type(
@@ -2107,8 +2223,11 @@ def test_connection_over_cascading_type_narrows_edges_and_total_count():
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info):
+        @override
+        def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
             return queryset.filter(is_private=False)
+
+    assert registry.get(Category) is CcCategoryType
 
     item_node = _make_cascading_item_node("CcItemNode")
     schema = _field_schema(item_node)
@@ -2125,6 +2244,7 @@ def test_connection_over_cascading_type_narrows_edges_and_total_count():
         context_value=HttpRequest(),
     )
     assert result.errors is None
+    assert result.data is not None
     conn = result.data["items"]
     # edges: only the two items under the visible category; the hidden-target item
     # is dropped by the cascade.
@@ -2155,7 +2275,7 @@ def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
     """
     services.seed_data(2)
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> Iterable[object]:
         return Category.objects.all()[:5]  # already sliced before the pipeline reorders
 
     schema = _field_schema(_make_sidecar_node_type("PreSlicedNode"), resolver=resolver)
@@ -2180,7 +2300,7 @@ def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
 # =============================================================================
 
 
-class _HostileConnQuerySet(models.QuerySet):
+class _HostileConnQuerySet(models.QuerySet[Category]):
     """A predicate-erasing / synthetic-count ``QuerySet`` subclass.
 
     Every override would widen the result if the framework dispatched through the
@@ -2190,23 +2310,33 @@ class _HostileConnQuerySet(models.QuerySet):
     state, so none of these run.
     """
 
-    def filter(self, *args, **kwargs):
+    @override
+    def filter(self, *args: object, **kwargs: object):
         return Category.objects.all()
 
-    def order_by(self, *args, **kwargs):
+    @override
+    def order_by(self, *args: object, **kwargs: object):
         return Category.objects.all()
 
-    def __getitem__(self, item):
+    @override
+    # basedpyright: deliberately answers a slice with a list, the shape the seal must neutralize
+    def __getitem__(self, item: int | slice):  # pyright: ignore[reportIncompatibleMethodOverride]
         return list(Category.objects.all().order_by("pk"))[item]
 
+    @override
     def count(self):
         return Category.objects.count()
 
+    @override
     async def acount(self):
         return await Category.objects.acount()
 
 
-def _hostile_visibility_hook(cls, qs, info):
+def _hostile_visibility_hook(
+    cls: type[DjangoType],
+    qs: models.QuerySet[Category],
+    info: object,
+) -> models.QuerySet[Category]:
     """Return the hostile subclass carrying a genuine ``is_private=False`` predicate."""
     return models.QuerySet.filter(_HostileConnQuerySet(model=Category), is_private=False)
 
@@ -2236,6 +2366,7 @@ def test_connection_hostile_hook_narrows_edges_and_total_count_sync():
         context_value=HttpRequest(),
     )
     assert result.errors is None
+    assert result.data is not None
     conn = result.data["items"]
     assert [edge["node"]["name"] for edge in conn["edges"]] == public_names
     assert conn["totalCount"] == len(public_names)  # only the visible rows, not the raw 3
@@ -2257,6 +2388,7 @@ async def test_connection_hostile_hook_narrows_edges_and_total_count_async():
     schema = await sync_to_async(_field_schema)(node_type)
     result = await schema.execute("{ items { edges { node { name } } totalCount } }")
     assert result.errors is None
+    assert result.data is not None
     conn = result.data["items"]
     assert [edge["node"]["name"] for edge in conn["edges"]] == public_names
     assert conn["totalCount"] == len(public_names)
@@ -2273,7 +2405,7 @@ def test_connection_instance_shadowed_all_hook_is_sealed():
     """
     public_names = _seed_public_private_categories()
 
-    def _shadowed_all_hook(cls, qs, info):
+    def _shadowed_all_hook(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
         source = Category.objects.filter(is_private=False)
         source.all = lambda: Category.objects.all()  # instance shadow (predicate-dropping)
         return source
@@ -2290,6 +2422,7 @@ def test_connection_instance_shadowed_all_hook_is_sealed():
         context_value=HttpRequest(),
     )
     assert result.errors is None
+    assert result.data is not None
     assert [edge["node"]["name"] for edge in result.data["items"]["edges"]] == public_names
 
 
@@ -2305,10 +2438,14 @@ def test_connection_query_chain_shadow_hook_is_sealed():
     """
     _seed_public_private_categories()
 
-    def _shadowed_chain_hook(cls, qs, info):
+    def _shadowed_chain_hook(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
         source = Category.objects.filter(is_private=False)
         unfiltered = Category.objects.all().query
-        source.query.chain = lambda *args, **kwargs: unfiltered  # instance shadow
+
+        def _unfiltered_chain(*args: object, **kwargs: object) -> Query:
+            return unfiltered
+
+        source.query.chain = _unfiltered_chain  # instance shadow
         return source
 
     node_type = _make_sidecar_node_type(
@@ -2329,14 +2466,16 @@ def test_connection_query_chain_shadow_hook_is_sealed():
 # --- Manager failure propagation at the connection surface -------------------
 
 
-class _ListManager(models.Manager):
+class _ListManager(models.Manager[Category]):
     """A hostile Manager whose ``.all()`` degrades into a plain list (a bypass shape)."""
 
-    def all(self):
+    @override
+    # basedpyright: deliberately degrades ``all()`` into a list, the bypass shape the guard refuses
+    def all(self):  # pyright: ignore[reportIncompatibleMethodOverride]
         return ["secret"]
 
 
-def _degrading_manager() -> models.Manager:
+def _degrading_manager() -> models.Manager[Category]:
     """An unrouted ``_ListManager`` bound to ``Category``."""
     manager = _ListManager()
     manager.model = Category
@@ -2344,14 +2483,15 @@ def _degrading_manager() -> models.Manager:
     return manager
 
 
-class _DriftManager(models.Manager):
+class _DriftManager(models.Manager[Category]):
     """A Manager pinned to one alias whose ``.all()`` silently routes to another."""
 
+    @override
     def get_queryset(self):
         return Category.objects.using("elsewhere")
 
 
-def _alias_drift_manager() -> models.Manager:
+def _alias_drift_manager() -> models.Manager[Category]:
     """A ``_DriftManager`` pinned to ``other`` whose ``.all()`` drifts to ``elsewhere``."""
     manager = _DriftManager()
     manager.model = Category
@@ -2363,7 +2503,7 @@ def _alias_drift_manager() -> models.Manager:
 def test_connection_resolver_manager_degrading_to_list_fails_closed():
     """A consumer resolver returning a Manager that degrades to a list fails closed (sync)."""
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> models.Manager[Category]:
         return _degrading_manager()
 
     schema = _field_schema(
@@ -2379,7 +2519,7 @@ def test_connection_resolver_manager_degrading_to_list_fails_closed():
 def test_connection_resolver_manager_alias_drift_fails_closed():
     """A consumer resolver returning a Manager whose ``.all()`` drifts alias fails closed (sync)."""
 
-    def resolver(root, info) -> Iterable:
+    def resolver(root: object, info: object) -> models.Manager[Category]:
         return _alias_drift_manager()
 
     schema = _field_schema(
@@ -2398,7 +2538,7 @@ async def test_connection_resolver_manager_degrading_to_list_fails_closed_async(
     """Sync/async parity: the Manager-degrade failure propagates on the async path too."""
     from asgiref.sync import sync_to_async
 
-    async def resolver(root, info) -> Iterable:
+    async def resolver(root: object, info: object) -> models.Manager[Category]:
         return _degrading_manager()
 
     schema = await sync_to_async(_field_schema)(
@@ -2438,7 +2578,9 @@ def test_connection_field_directives_hostile_iter_rejected():
 
     node = _make_node_type("DirHostileNode", total_count=None)
     with pytest.raises(ConfigurationError, match="directives could not be read"):
-        DjangoConnectionField(node, directives=Hostile())
+        # basedpyright: the raising directives iterable is the hostile input under test;
+        # DjangoConnectionField types the parameter as Sequence[object]
+        DjangoConnectionField(node, directives=Hostile())  # pyright: ignore[reportArgumentType]
 
 
 def test_connection_field_directives_hostile_attribute_rejected():
@@ -2450,7 +2592,9 @@ def test_connection_field_directives_hostile_attribute_rejected():
 
     node = _make_node_type("DirHostileAttrNode", total_count=None)
     with pytest.raises(ConfigurationError, match="directives could not be read"):
-        DjangoConnectionField(node, directives=Hostile())
+        # basedpyright: the raising directives iterable is the hostile input under test;
+        # DjangoConnectionField types the parameter as Sequence[object]
+        DjangoConnectionField(node, directives=Hostile())  # pyright: ignore[reportArgumentType]
 
 
 def test_guard_source_not_pre_sliced_hostile_query_is_graphql_error():
@@ -2463,7 +2607,9 @@ def test_guard_source_not_pre_sliced_hostile_query_is_graphql_error():
             raise AttributeError("hostile query")
 
     with pytest.raises(GraphQLError, match="sliced state could not be read"):
-        _guard_source_not_pre_sliced(HostileQS())
+        # basedpyright: the queryset whose query read raises is the hostile input under test;
+        # _guard_source_not_pre_sliced types the parameter as QuerySet
+        _guard_source_not_pre_sliced(HostileQS())  # pyright: ignore[reportArgumentType]
 
 
 def test_guard_source_not_pre_sliced_hostile_is_sliced_value_error():
@@ -2480,7 +2626,9 @@ def test_guard_source_not_pre_sliced_hostile_is_sliced_value_error():
     from django_strawberry_framework.connection import _guard_source_not_pre_sliced
 
     with pytest.raises(GraphQLError, match="sliced state could not be read"):
-        _guard_source_not_pre_sliced(HostileQS())
+        # basedpyright: the queryset whose is_sliced read raises is the hostile input under test;
+        # _guard_source_not_pre_sliced types the parameter as QuerySet
+        _guard_source_not_pre_sliced(HostileQS())  # pyright: ignore[reportArgumentType]
 
 
 def test_finalize_queryset_hostile_order_by_is_graphql_error():
@@ -2500,24 +2648,35 @@ def test_finalize_queryset_hostile_order_by_is_graphql_error():
         def order_by(self):
             raise ValueError("hostile order_by")
 
-    class HostileQS(models.QuerySet):
-        def __init__(self, *a, **kw):
+    class HostileQS(models.QuerySet[Category]):
+        # basedpyright: the hostile stand-in skips QuerySet's constructor so the overridden
+        # ``query`` property is the only state the code under test can read
+        def __init__(self, *a: object, **kw: object):  # pyright: ignore[reportMissingSuperCall]
             pass
 
         @property
-        def query(self):
+        @override
+        # basedpyright: the hostile shape under test, a ``query`` property answering a hostile
+        # Query; the checker rejects any property overriding a base class attribute
+        def query(self):  # pyright: ignore[reportIncompatibleVariableOverride]
             return HostileQuery()
 
     qs = HostileQS(model=Category)
     with pytest.raises(GraphQLError, match="ordering could not be read"):
-        _finalize_queryset(node, qs, info, definition=node.__django_strawberry_definition__)
+        _finalize_queryset(
+            node,
+            qs,
+            _as_strawberry_info(info),
+            definition=node.__django_strawberry_definition__,
+        )
 
 
 def test_window_rows_are_annotated_hostile_iter_returns_false():
     """``_window_rows_are_annotated`` with hostile ``__iter__`` returns ``False`` (not ``ValueError``)."""
     from django_strawberry_framework.connection import _window_rows_are_annotated
 
-    class HostileList(list):
+    class HostileList(list[object]):
+        @override
         def __iter__(self):
             raise ValueError("hostile iter")
 
@@ -2527,7 +2686,8 @@ def test_window_rows_are_annotated_hostile_iter_returns_false():
 def test_window_rows_are_annotated_hostile_key_error_returns_false():
     """A ``KeyError`` during iteration is also contained."""
 
-    class HostileList(list):
+    class HostileList(list[object]):
+        @override
         def __iter__(self):
             raise KeyError("hostile key")
 
@@ -2541,14 +2701,16 @@ def test_keyset_order_ref_hostile_entry_returns_none():
     from django_strawberry_framework.connection import _keyset_order_ref
 
     class Hostile:
-        def __getattr__(self, name):
+        def __getattr__(self, name: str):
             raise ValueError("hostile getattr")
 
     assert _keyset_order_ref(Hostile()) is None
     assert _keyset_order_ref(None) is None
 
 
-def test_finalize_queryset_hostile_effective_order_is_graphql_error(monkeypatch):
+def test_finalize_queryset_hostile_effective_order_is_graphql_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``effective_connection_order`` raising is ``GraphQLError``."""
     from django_strawberry_framework.connection import _finalize_queryset
 
@@ -2561,7 +2723,7 @@ def test_finalize_queryset_hostile_effective_order_is_graphql_error(monkeypatch)
     )
     qs = Category.objects.all()
 
-    def _raise(*a, **kw):
+    def _raise(*a: object, **kw: object):
         raise TypeError("hostile effective order")
 
     monkeypatch.setattr(
@@ -2569,7 +2731,12 @@ def test_finalize_queryset_hostile_effective_order_is_graphql_error(monkeypatch)
         _raise,
     )
     with pytest.raises(GraphQLError, match="ordering could not be resolved"):
-        _finalize_queryset(node, qs, info, definition=node.__django_strawberry_definition__)
+        _finalize_queryset(
+            node,
+            qs,
+            _as_strawberry_info(info),
+            definition=node.__django_strawberry_definition__,
+        )
 
 
 def test_finalize_queryset_hostile_meta_ordering_is_graphql_error():
@@ -2603,8 +2770,11 @@ def test_finalize_queryset_hostile_meta_ordering_is_graphql_error():
         _finalize_queryset(
             node,
             qs,
-            info,
-            definition=SimpleNamespace(model=HostileModel, cursor_field=None),
+            _as_strawberry_info(info),
+            # basedpyright: the definition carrying a model whose _meta.ordering read raises is the
+            # hostile input under test; _finalize_queryset types the parameter as
+            # DjangoTypeDefinition
+            definition=SimpleNamespace(model=HostileModel, cursor_field=None),  # pyright: ignore[reportArgumentType]
         )
 
 
@@ -2643,6 +2813,9 @@ def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
     qs = ProdCategory.objects.all()  # explicit empty, cursor_field will be used
 
     class HostileMeta:
+        # The slot the class body plants below; a bare annotation creates no attribute.
+        pk: object
+
         @property
         def ordering(self):
             raise ValueError("hostile effective ordering")
@@ -2660,8 +2833,11 @@ def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
         _finalize_queryset(
             cursor_node,
             qs,
-            info,
-            definition=SimpleNamespace(model=HostileModel, cursor_field=("id",)),
+            _as_strawberry_info(info),
+            # basedpyright: the definition carrying a model whose _meta.ordering read raises is the
+            # hostile input under test; _finalize_queryset types the parameter as
+            # DjangoTypeDefinition
+            definition=SimpleNamespace(model=HostileModel, cursor_field=("id",)),  # pyright: ignore[reportArgumentType]
         )
 
 
@@ -2691,12 +2867,13 @@ def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
         _raw_info=SimpleNamespace(field_nodes=[]),
     )
 
-    class HostileQS(models.QuerySet):
-        def __init__(self, *a, **kw):
+    class HostileQS(models.QuerySet[Item]):
+        def __init__(self, *a: object, **kw: type[Item]):
             model = kw.get("model", Item)
             super().__init__(model=model)
 
-        def order_by(self, *args, **kwargs):
+        @override
+        def order_by(self, *args: object, **kwargs: object):
             raise KeyError("hostile order_by apply")
 
     qs2 = HostileQS(model=Item)
@@ -2705,7 +2882,7 @@ def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
         _finalize_queryset(
             node_item,
             qs2,
-            info,
+            _as_strawberry_info(info),
             definition=node_item.__django_strawberry_definition__,
         )
 
@@ -2717,6 +2894,7 @@ def test_consume_window_hostile_pagination_is_graphql_error():
     node = _make_sidecar_node_type("WindowHostileNode")
     finalize_django_types()
     conn_type = _connection_type_for(node, node.__django_strawberry_definition__)
+    assert issubclass(conn_type, DjangoConnection)
     # Create a window marker with one annotated row
     from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
@@ -2740,7 +2918,10 @@ def test_consume_window_hostile_pagination_is_graphql_error():
         field_nodes=[],
     )
     with pytest.raises(GraphQLError, match="non-negative"):
-        conn_type.resolve_connection(window, info=info, first=-1)
+        # basedpyright: DjangoConnection.resolve_connection types nodes as Strawberry's
+        # NodeIterableType, which omits the package's own _WindowedConnectionRows marker the method
+        # accepts at run time
+        conn_type.resolve_connection(window, info=_as_strawberry_info(info), first=-1)  # pyright: ignore[reportArgumentType]
 
 
 # =============================================================================
@@ -2749,14 +2930,14 @@ def test_consume_window_hostile_pagination_is_graphql_error():
 
 
 def _counting_node_type(
-    name,
+    name: str,
     *,
-    model,
-    decoy_slot,
-    reads,
-    orderset=None,
-    filterset=None,
-    get_queryset=None,
+    model: type[models.Model],
+    decoy_slot: dict[str, object],
+    reads: _DefinitionReads,
+    orderset: type | None = None,
+    filterset: type | None = None,
+    get_queryset: Callable[..., object] | None = None,
 ):
     """Build a Relay-Node ``DjangoType`` whose definition reads are counted and swappable.
 
@@ -2773,7 +2954,8 @@ def _counting_node_type(
     """
 
     class CountingMeta(type(DjangoType)):
-        def __getattribute__(cls, attr):
+        @override
+        def __getattribute__(cls, attr: str):
             if attr == "__django_strawberry_definition__" and reads["armed"]:
                 reads["names"].append(attr)
                 if decoy_slot["decoy"] is not None:
@@ -2791,7 +2973,7 @@ def _counting_node_type(
         meta_attrs["filterset_class"] = filterset
     if orderset is not None:
         meta_attrs["orderset_class"] = orderset
-    namespace = {"Meta": type("Meta", (), meta_attrs)}
+    namespace: dict[str, object] = {"Meta": type("Meta", (), meta_attrs)}
     if get_queryset is not None:
         namespace["get_queryset"] = classmethod(get_queryset)
     return CountingMeta(name, (DjangoType,), namespace)
@@ -2830,8 +3012,8 @@ def test_a_root_connection_reads_the_target_definition_once_on_a_cold_cache():
     move the query to another table rather than merely raise a counter.
     """
     services.seed_data(3)
-    reads = {"armed": False, "names": []}
-    decoy_slot = {"decoy": None}
+    reads: _DefinitionReads = {"armed": False, "names": []}
+    decoy_slot: dict[str, object] = {"decoy": None}
     node = _counting_node_type(
         "ColdCacheCountedNode",
         model=Category,
@@ -2864,6 +3046,7 @@ def test_a_root_connection_reads_the_target_definition_once_on_a_cold_cache():
     )
     assert result.errors is None, result.errors
     assert reads["names"] == ["__django_strawberry_definition__"]
+    assert result.data is not None
     returned = {edge["node"]["name"] for edge in result.data["rows"]["edges"]}
     assert returned
     assert returned <= set(Category.objects.values_list("name", flat=True))
@@ -2876,8 +3059,8 @@ def test_a_root_connection_on_a_warm_cache_reads_the_definition_once_too():
     The generated connection class is cached on target identity, so the warm
     path generates nothing - and must not spend a read discovering that.
     """
-    reads = {"armed": False, "names": []}
-    decoy_slot = {"decoy": None}
+    reads: _DefinitionReads = {"armed": False, "names": []}
+    decoy_slot: dict[str, object] = {"decoy": None}
     node = _counting_node_type(
         "WarmCacheCountedNode",
         model=Category,
@@ -2909,8 +3092,8 @@ def test_a_synthesized_relation_connection_is_built_from_the_registrys_definitio
     composite-pk gate over every Relay type, which is not this field.
     """
     services.seed_data(3)
-    reads = {"armed": False, "names": []}
-    decoy_slot = {"decoy": None}
+    reads: _DefinitionReads = {"armed": False, "names": []}
+    decoy_slot: dict[str, object] = {"decoy": None}
 
     class RelationParentNode(DjangoType):
         class Meta:
@@ -2967,6 +3150,7 @@ def test_a_synthesized_relation_connection_is_built_from_the_registrys_definitio
     )
     assert result.errors is None, result.errors
     assert reads["names"] == []
+    assert result.data is not None
     nested = {
         edge["node"]["name"]
         for parent in result.data["parents"]["edges"]
@@ -2998,7 +3182,11 @@ def test_a_relay_target_with_no_registered_definition_fails_the_synthesized_conn
             relation_shapes = {"items": "connection"}
             primary = False
 
-    registry.register(Item, BareNode, primary=True)
+    assert registry.get(Category) is BareParentNode
+
+    # basedpyright: the Relay node registered without a definition is the hostile input under test;
+    # TypeRegistry.register types the parameter as type[DjangoType]
+    registry.register(Item, BareNode, primary=True)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="carries no registered DjangoTypeDefinition"):
         finalize_django_types()
 
@@ -3012,11 +3200,11 @@ _PLANNED_CONNECTION_DOCUMENT = (
 
 
 def _planned_relation_schema(
-    suffix,
+    suffix: str,
     *,
-    reads,
-    decoy_slot,
-    hook_calls,
+    reads: _DefinitionReads,
+    decoy_slot: dict[str, object],
+    hook_calls: list[type[models.Model]] | None,
 ):
     """Compose the parent/child/decoy trio and return ``(schema, optimizer)``.
 
@@ -3036,7 +3224,8 @@ def _planned_relation_schema(
             relation_shapes = {"items": "both"}
             primary = True
 
-    def _hook(cls, queryset, info):
+    def _hook(cls: type[DjangoType], queryset: models.QuerySet[Item], info: object):
+        assert hook_calls is not None  # installed only when the caller collects hook calls
         hook_calls.append(queryset.model)
         return queryset
 
@@ -3102,9 +3291,9 @@ def _planned_relation_schema(
 )
 @pytest.mark.parametrize("custom_hook", [False, True], ids=["default-hook", "custom-hook"])
 def test_the_optimizer_plans_a_relation_without_reading_the_target_class(
-    vocabulary,
-    document,
-    custom_hook,
+    vocabulary: str,
+    document: str,
+    custom_hook: bool,
 ):
     """Planning a nested relation spends the walker's resolution, not a fresh read.
 
@@ -3133,9 +3322,9 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class(
     pin the rows a mis-answered plan would serve.
     """
     services.seed_data(3)
-    reads = {"armed": False, "names": []}
-    decoy_slot = {"decoy": None}
-    hook_calls = [] if custom_hook else None
+    reads: _DefinitionReads = {"armed": False, "names": []}
+    decoy_slot: dict[str, object] = {"decoy": None}
+    hook_calls: list[type[models.Model]] | None = [] if custom_hook else None
     suffix = f"{vocabulary}{'Hooked' if custom_hook else 'Bare'}"
 
     schema, optimizer = _planned_relation_schema(
@@ -3170,15 +3359,16 @@ def test_the_optimizer_plans_a_relation_without_reading_the_target_class(
 
 
 def _planned_relation_request(
-    schema,
-    optimizer,
-    document,
-    vocabulary,
+    schema: strawberry.Schema,
+    optimizer: DjangoOptimizerExtension,
+    document: str,
+    vocabulary: str,
 ):
     """Run one planned request; report its child names and the plan cache counters after it."""
     result = schema.execute_sync(document, context_value={"request": HttpRequest()})
     assert result.errors is None, result.errors
     info = optimizer.cache_info()
+    assert result.data is not None
     rows = {
         name
         for parent in result.data["parents"]["edges"]
@@ -3187,7 +3377,7 @@ def _planned_relation_request(
     return rows, (info.hits, info.misses, info.size)
 
 
-def _relation_page(node, vocabulary):
+def _relation_page(node: _ResponseNode, vocabulary: str):
     """Read the child names out of whichever relation vocabulary the document selected."""
     if vocabulary == "List":
         return [row["name"] for row in node["items"]]
@@ -3225,7 +3415,7 @@ def test_a_warm_connection_cache_refuses_alternate_metadata_for_its_target():
     warm = _connection_type_for(CacheProvenanceNode, real)
     assert _connection_type_for(CacheProvenanceNode, real) is warm
     assert "total_count" not in {
-        field.python_name for field in warm.__strawberry_definition__.fields
+        field.python_name for field in get_object_definition(warm, strict=True).fields
     }
 
     replacement = copy.copy(real)
@@ -3250,29 +3440,41 @@ _FILTERED_CONNECTION_QUERY = (
 
 
 def _filter_override_in_place_routing(
-    cls,
-    input_value,
-    queryset,
-    info,
+    cls: type[_CategoryFilter],
+    input_value: object,
+    queryset: models.QuerySet[Category],
+    info: object,
 ):
-    queryset._hints = {"tenant": 2}
+    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
+    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
     return queryset
 
 
 def _filter_override_passthrough(
-    cls,
-    input_value,
-    queryset,
-    info,
+    cls: type[_CategoryFilter],
+    input_value: object,
+    queryset: models.QuerySet[Category],
+    info: object,
 ):
     return super(_CategoryFilter, cls).apply_sync(input_value, queryset, info)
 
+
+_FilterOverride: TypeAlias = Callable[
+    [
+        type[_CategoryFilter],
+        object,
+        models.QuerySet[Category],
+        object,
+    ],
+    object,
+]
+_FilterRow: TypeAlias = tuple[str, _FilterOverride, str, tuple[str, ...]]
 
 #: The post-``FilterSet`` seal at the connection field, one row per defect shape.
 #: ``(id, override, expected message start, required substrings)``. The filter
 #: step runs BEFORE ordering and the Relay window, so an unsealed return would
 #: hand every later step a widened, re-routed or already-evaluated queryset.
-_CONNECTION_MALFORMED_FILTER_ROWS = (
+_CONNECTION_MALFORMED_FILTER_ROWS: tuple[_FilterRow, ...] = (
     (
         "evaluated",
         lambda cls, input_value, queryset, info: (list(queryset), queryset)[1],
@@ -3332,10 +3534,10 @@ _CONNECTION_MALFORMED_FILTER_ROWS = (
     ids=[row[0] for row in _CONNECTION_MALFORMED_FILTER_ROWS],
 )
 def test_connection_seals_a_malformed_filter_apply_sync_result(
-    monkeypatch,
-    override,
-    message_start,
-    substrings,
+    monkeypatch: pytest.MonkeyPatch,
+    override: Callable[..., object],
+    message_start: str,
+    substrings: tuple[str, ...],
 ):
     """Each malformed ``FilterSet.apply_sync`` result is rejected by name at the connection.
 
@@ -3358,7 +3560,9 @@ def test_connection_seals_a_malformed_filter_apply_sync_result(
 
 
 @pytest.mark.django_db
-def test_connection_healthy_filter_apply_sync_override_still_filters(monkeypatch):
+def test_connection_healthy_filter_apply_sync_override_still_filters(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A ``super()`` pass-through ``FilterSet`` override is ACCEPTED and the filter applies."""
     services.seed_data(3)
     Category.objects.create(name="zz-needle", is_private=False)
@@ -3371,19 +3575,27 @@ def test_connection_healthy_filter_apply_sync_override_still_filters(monkeypatch
     )
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     assert [edge["node"]["name"] for edge in result.data["items"]["edges"]] == ["zz-needle"]
 
 
 @pytest.mark.django_db(transaction=True)
-def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(monkeypatch):
+def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``FilterSet.apply_async`` returning a plain value is rejected on the async path."""
-    monkeypatch.setattr(
-        _CategoryFilter,
-        "apply_async",
-        classmethod(lambda cls, input_value, queryset, info: queryset),
-    )
 
-    async def resolver(root, info):
+    def _plain_apply_async(
+        cls: type[_CategoryFilter],
+        input_value: object,
+        queryset: models.QuerySet[Category],
+        info: object,
+    ) -> models.QuerySet[Category]:
+        return queryset
+
+    monkeypatch.setattr(_CategoryFilter, "apply_async", classmethod(_plain_apply_async))
+
+    async def resolver(root: object, info: object):
         return Category.objects.all()
 
     schema = _field_schema(
@@ -3391,7 +3603,9 @@ def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(monkey
         resolver=resolver,
     )
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
     result = asyncio.run(
         schema.execute(_FILTERED_CONNECTION_QUERY, context_value=SimpleNamespace(request=request)),
     )
@@ -3403,25 +3617,29 @@ def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(monkey
 
 
 @pytest.mark.django_db(transaction=True)
-def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(monkeypatch):
+def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A sliced ``FilterSet.apply_async`` result is rejected with the shared shape wording."""
 
     async def _sliced(
-        cls,
-        input_value,
-        queryset,
-        info,
+        cls: type[_CategoryFilter],
+        input_value: object,
+        queryset: models.QuerySet[Category],
+        info: object,
     ):
         return queryset.order_by("name")[:1]
 
     monkeypatch.setattr(_CategoryFilter, "apply_async", classmethod(_sliced))
 
-    async def resolver(root, info):
+    async def resolver(root: object, info: object):
         return Category.objects.all()
 
     schema = _field_schema(_make_sidecar_node_type("AsyncFilterSealSlicedNode"), resolver=resolver)
     request = HttpRequest()
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
+    # | AnonymousUser
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
     result = asyncio.run(
         schema.execute(_FILTERED_CONNECTION_QUERY, context_value=SimpleNamespace(request=request)),
     )
@@ -3433,7 +3651,7 @@ def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(monkey
     )
 
 
-def _combined_get_queryset(cls, qs, info):
+def _combined_get_queryset(cls: type[DjangoType], qs: models.QuerySet[Category], info: object):
     return qs.filter(name__startswith="a").union(qs.filter(name__startswith="b"))
 
 
@@ -3468,6 +3686,7 @@ def test_connection_visibility_serves_a_combinator_hook_with_and_without_a_sidec
     ):
         result = schema.execute_sync(query, context_value=HttpRequest())
         assert result.errors is None, (query, result.errors)
+        assert result.data is not None
         names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
         assert sorted(names) == expected, query
     assert names == expected[::-1]
@@ -3486,27 +3705,31 @@ def test_connection_visibility_serves_a_combinator_hook_with_and_without_a_sidec
     ],
 )
 def test_connection_serves_a_combined_sidecar_result_as_its_primary_key_set(
-    monkeypatch,
-    set_class,
-    query,
+    monkeypatch: pytest.MonkeyPatch,
+    set_class: type,
+    query: str,
 ):
     """A sidecar ``apply_sync`` returning a union is windowed as the rows it selects."""
     services.seed_data(2)
-    monkeypatch.setattr(
-        set_class,
-        "apply_sync",
-        classmethod(
-            lambda cls, value, queryset, info: (
-                queryset.filter(name__startswith="a")
-                .union(queryset.filter(name__startswith="b"))
-                .order_by("name")
-            ),
-        ),
-    )
+
+    def _a_or_b_union(
+        cls: type,
+        value: object,
+        queryset: models.QuerySet[Category],
+        info: object,
+    ) -> models.QuerySet[Category]:
+        return (
+            queryset.filter(name__startswith="a")
+            .union(queryset.filter(name__startswith="b"))
+            .order_by("name")
+        )
+
+    monkeypatch.setattr(set_class, "apply_sync", classmethod(_a_or_b_union))
 
     schema = _field_schema(_make_sidecar_node_type("CombinedSidecarNode"))
     result = schema.execute_sync(query, context_value=HttpRequest())
 
     assert result.errors is None, result.errors
+    assert result.data is not None
     names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
     assert names == _a_or_b_category_names()

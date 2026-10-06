@@ -9,6 +9,7 @@ from collections.abc import Mapping
 
 import pytest
 import strawberry
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters.sets import FilterSet
@@ -27,6 +28,7 @@ from django_strawberry_framework.utils.input_values import (
     related_declaration_mapping,
     set_traversal_depth_cap,
 )
+from django_strawberry_framework.utils.inputs import GeneratedInputFieldSpec
 
 # ---------------------------------------------------------------------------
 # iter_input_items -- dict / dataclass / non-walkable
@@ -70,7 +72,7 @@ def test_is_inactive_value_is_identity_based_not_truthiness():
 
 
 class _Spec:
-    def __init__(self, path):
+    def __init__(self, path: str):
         self.django_source_path = path
 
 
@@ -82,7 +84,10 @@ def test_iter_active_fields_classifies_and_skips_inactive():
 
     specs = {(_Set, "title"): _Spec("title"), (_Set, "shelf"): _Spec("shelf")}
     config = SetInputTraversal(
-        field_specs=specs,
+        # basedpyright: a stand-in field-spec map (a plain set class, plain specs) carrying only
+        # the slots the code under test reads; SetInputTraversal types the parameter as
+        # FieldSpecMap
+        field_specs=specs,  # pyright: ignore[reportArgumentType]
         related_attr="related_filters",
         logic_keys=frozenset({"and_"}),
         unset_sentinel=strawberry.UNSET,
@@ -105,10 +110,12 @@ def test_iter_active_fields_classifies_and_skips_inactive():
     assert set(by_attr) == {"title", "shelf", "and_"}
     # Leaf: spec resolved, no related_obj.
     assert by_attr["title"].kind == LEAF
+    assert by_attr["title"].spec is not None
     assert by_attr["title"].spec.django_source_path == "title"
     assert by_attr["title"].related_obj is None
     # Related: spec resolved AND the declared related object carried through.
     assert by_attr["shelf"].kind == RELATED
+    assert by_attr["shelf"].spec is not None
     assert by_attr["shelf"].spec.django_source_path == "shelf"
     assert by_attr["shelf"].related_obj is related_obj
     assert by_attr["shelf"].raw_value == {"code": "y"}
@@ -135,7 +142,11 @@ def test_iter_active_fields_dict_and_dataclass_classify_identically():
     )
     dataclass_view = [
         (f.python_attr, f.kind)
-        for f in iter_active_fields(_Set, _In(title="x", shelf={"code": 1}), config)
+        for f in iter_active_fields(
+            _Set,
+            _In(title="x", shelf=strawberry.scalars.JSON({"code": 1})),
+            config,
+        )
     ]
     dict_view = [
         (f.python_attr, f.kind)
@@ -180,11 +191,13 @@ def test_iter_active_fields_inactive_or_non_walkable_top_level_yields_nothing():
 def test_dict_subclass_overrides_cannot_replace_the_shared_walk():
     """The traversal uses the real dict operations, not consumer overrides."""
 
-    class _HostileDict(dict):
+    class _HostileDict(dict[str, object]):
+        @override
         def items(self):
             raise RuntimeError("hostile items")
 
-        def get(self, key, default=None):
+        @override
+        def get(self, key: str, default: object = None):
             raise RuntimeError("hostile get")
 
     value = _HostileDict(name="x")
@@ -213,7 +226,8 @@ def test_non_string_input_keys_fail_closed_before_permission_dispatch():
 def test_hostile_list_iteration_cannot_escape_the_order_walk():
     """The top-level-list walk reads real list elements, not a subclass iterator."""
 
-    class _HostileList(list):
+    class _HostileList(list[object]):
+        @override
         def __iter__(self):
             raise RuntimeError("hostile list iterator")
 
@@ -248,8 +262,9 @@ def test_nested_order_lists_fail_closed_instead_of_recursing_or_no_oping():
 def test_hostile_field_spec_mapping_fails_closed_with_configuration_error():
     """A field-spec mapping that cannot answer a lookup aborts the walk with a typed error."""
 
-    class _HostileMap(dict):
-        def get(self, key, default=None):
+    class _HostileMap(dict[tuple[type[FilterSet], str], GeneratedInputFieldSpec]):
+        @override
+        def get(self, key: tuple[type[FilterSet], str], default: object = None):
             raise RuntimeError("hostile field-spec lookup")
 
     class _Set:
@@ -270,13 +285,16 @@ def test_dataclass_metadata_must_be_an_enumerable_mapping():
     class _NotAMapping:
         __dataclass_fields__ = ("name",)
 
-    class _UnreadableMapping(Mapping):
-        def __getitem__(self, key):
+    class _UnreadableMapping(Mapping[str, object]):
+        @override
+        def __getitem__(self, key: str):
             raise KeyError(key)
 
+        @override
         def __iter__(self):
             raise RuntimeError("hostile field enumeration")
 
+        @override
         def __len__(self):
             return 1
 
@@ -300,7 +318,8 @@ def test_dataclass_and_object_field_read_failures_are_typed():
             raise RuntimeError("hostile dataclass field")
 
     class _UnreadableObject:
-        def __getattribute__(self, name):
+        @override
+        def __getattribute__(self, name: str):
             if name == "name":
                 raise RuntimeError("hostile object field")
             return super().__getattribute__(name)
@@ -329,7 +348,8 @@ def test_active_field_configuration_and_related_metadata_fail_closed():
         handle_top_level_list = False
 
     class _HostileSetMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "related_orders":
                 raise RuntimeError("hostile related declarations")
             return super().__getattribute__(name)
@@ -338,9 +358,13 @@ def test_active_field_configuration_and_related_metadata_fail_closed():
         pass
 
     with pytest.raises(ConfigurationError, match="configuration could not be read"):
-        list(iter_active_fields(object, {"name": "x"}, _UnreadableConfig()))
+        # basedpyright: each unreadable traversal config is the hostile input under test;
+        # iter_active_fields types the parameter as SetInputTraversal
+        list(iter_active_fields(object, {"name": "x"}, _UnreadableConfig()))  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="configuration could not be read"):
-        list(iter_active_fields(object, {"name": "x"}, _UnreadableSentinelConfig()))
+        # basedpyright: each unreadable traversal config is the hostile input under test;
+        # iter_active_fields types the parameter as SetInputTraversal
+        list(iter_active_fields(object, {"name": "x"}, _UnreadableSentinelConfig()))  # pyright: ignore[reportArgumentType]
 
     config = SetInputTraversal(field_specs={}, related_attr="related_orders")
     with pytest.raises(ConfigurationError, match="related-field declarations could not be read"):
@@ -356,24 +380,30 @@ def test_active_field_configuration_and_related_metadata_fail_closed():
 def test_active_field_related_mapping_operations_fail_closed():
     """Membership and lookup on a related-declaration mapping each fail as typed errors."""
 
-    class _UnreadableContains(Mapping):
-        def __getitem__(self, key):
+    class _UnreadableContains(Mapping[str, object]):
+        @override
+        def __getitem__(self, key: str):
             return object()
 
+        @override
         def __iter__(self):
             return iter(("name",))
 
+        @override
         def __len__(self):
             return 1
 
-        def __contains__(self, key):
+        @override
+        def __contains__(self, key: object) -> bool:
             raise RuntimeError("hostile membership")
 
     class _UnreadableGetitem(_UnreadableContains):
-        def __contains__(self, key):
+        @override
+        def __contains__(self, key: object):
             return True
 
-        def __getitem__(self, key):
+        @override
+        def __getitem__(self, key: str):
             raise RuntimeError("hostile related lookup")
 
     config = SetInputTraversal(field_specs={}, related_attr="related_orders")
@@ -422,6 +452,7 @@ def test_field_name_bypasses_hostile_str_subclass_str_override():
     """``_field_name`` safely normalizes string subclass keys without calling overridden __str__."""
 
     class _HostileStr(str):
+        @override
         def __str__(self):
             raise RuntimeError("hostile __str__ override")
 
@@ -494,7 +525,7 @@ def test_related_declaration_mapping_treats_absent_and_none_as_no_declarations()
         set(),
     ],
 )
-def test_related_declaration_mapping_rejects_non_mappings(bad):
+def test_related_declaration_mapping_rejects_non_mappings(bad: object):
     """A present declaration that is not a Mapping is rejected before any indexing."""
 
     class _Set:
@@ -509,7 +540,8 @@ def test_related_declaration_mapping_wraps_an_unreadable_class_attribute():
     """A class attribute read that raises is wrapped, chaining the original cause."""
 
     class _HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "related_orders":
                 raise RuntimeError("hostile class read")
             return super().__getattribute__(name)
@@ -544,7 +576,9 @@ def test_iter_active_fields_contains_a_hostile_config_related_attr_read():
         ConfigurationError,
         match="related-field declarations could not be read",
     ):
-        list(iter_active_fields(object, {"name": "x"}, _HostileConfig()))
+        # basedpyright: the config whose related_attr raises is the hostile input under test;
+        # iter_active_fields types the parameter as SetInputTraversal
+        list(iter_active_fields(object, {"name": "x"}, _HostileConfig()))  # pyright: ignore[reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -606,7 +640,8 @@ def test_depth_cap_error_label_reads_qualname_defensively():
     """A hostile ``__qualname__`` read falls back to the safe type name without escaping."""
 
     class _HostileMeta(type):
-        def __getattribute__(cls, name):
+        @override
+        def __getattribute__(cls, name: str):
             if name == "__qualname__":
                 raise RuntimeError("hostile qualname")
             return super().__getattribute__(name)

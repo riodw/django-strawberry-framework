@@ -13,11 +13,13 @@ Factory construction and collision guards have no wire shape. Published
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import get_args
 
 import pytest
 import strawberry
 from apps.library import models as library_models
+from strawberry.types.base import get_object_definition
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import (
@@ -33,7 +35,7 @@ from django_strawberry_framework.orders.inputs import (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_state():
+def _isolate_state() -> Iterator[None]:
     """Clear per-test state so cross-test class-level caches don't leak."""
     _materialized_names.clear()
     _field_specs.clear()
@@ -120,8 +122,9 @@ def test_factory_builds_leaf_fields_with_ordering_or_none_annotation():
 
     factory = OrderArgumentsFactory(BookOrderLeaf)
     input_cls = factory.arguments
-    fields = {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
     title_field = fields["title"]
+    assert title_field.type_annotation is not None
     annotation = title_field.type_annotation.annotation
     # ``Ordering | None`` produces a ``Union[Ordering, NoneType]`` shape.
     args = get_args(annotation)
@@ -146,8 +149,9 @@ def test_factory_builds_relatedorder_fields_with_annotated_strawberry_lazy_forwa
 
     factory = OrderArgumentsFactory(BookOrderRel)
     input_cls = factory.arguments
-    fields = {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+    fields = {f.python_name: f for f in get_object_definition(input_cls, strict=True).fields}
     shelf_field = fields["shelf"]
+    assert shelf_field.type_annotation is not None
     annotation = shelf_field.type_annotation.annotation
     non_none = [arg for arg in get_args(annotation) if arg is not type(None)]
     assert non_none, annotation
@@ -233,8 +237,8 @@ def test_factory_input_object_types_shared_across_factory_instances():
 def test_factory_subclass_rejected_at_class_creation_time():
     """Subclassing ``OrderArgumentsFactory`` raises ``TypeError`` immediately."""
     with pytest.raises(TypeError) as excinfo:
-
-        class _SubFactory(OrderArgumentsFactory):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class _SubFactory(OrderArgumentsFactory):  # pyright: ignore[reportUnusedClass]
             pass
 
     assert "does not support subclassing" in str(excinfo.value)

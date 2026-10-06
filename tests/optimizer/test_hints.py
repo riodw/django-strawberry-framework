@@ -7,6 +7,7 @@ SKIP identity, factory classmethods, frozen immutability, and invalid-state
 
 import pytest
 from django.db.models import Prefetch
+from typing_extensions import override
 
 from django_strawberry_framework.optimizer.hints import OptimizerHint
 
@@ -90,7 +91,9 @@ class TestPrefetchFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint.prefetch(None)
+            # basedpyright: the None prefetch is the hostile input under test; OptimizerHint.prefetch
+            # types the parameter as a Prefetch
+            OptimizerHint.prefetch(None)  # pyright: ignore[reportArgumentType]
 
 
 class TestStrategyFactory:
@@ -130,7 +133,9 @@ class TestStrategyFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="strategy name"):
-            OptimizerHint.strategy(None)
+            # basedpyright: the None strategy is the hostile input under test; OptimizerHint.strategy
+            # types the parameter as StrategySelection
+            OptimizerHint.strategy(None)  # pyright: ignore[reportArgumentType]
 
     def test_bad_name_raises_at_construction(self) -> None:
         """A typo'd strategy name fails loud through ``resolve_strategy``."""
@@ -164,7 +169,10 @@ class TestStrategyFactory:
 
         class HostileType(type):
             @property
-            def __name__(cls):
+            @override
+            # basedpyright: the hostile shape under test, a ``__name__`` property whose read
+            # raises; the checker rejects any property overriding a base class attribute
+            def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
                 raise RuntimeError("type name should never run")
 
         class NotStrategy(metaclass=HostileType):
@@ -173,7 +181,9 @@ class TestStrategyFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="nested_connection_strategy"):
-            OptimizerHint.strategy(NotStrategy())
+            # basedpyright: the non-strategy object is the hostile input under test;
+            # OptimizerHint.strategy types the parameter as StrategySelection
+            OptimizerHint.strategy(NotStrategy())  # pyright: ignore[reportArgumentType]
 
     def test_strategy_rejects_class_with_clean_name(self) -> None:
         """Passing a strategy class instead of an instance names the class, not 'type'."""
@@ -183,7 +193,9 @@ class TestStrategyFactory:
         )
 
         with pytest.raises(ConfigurationError, match="WindowedPrefetchStrategy"):
-            OptimizerHint.strategy(WindowedPrefetchStrategy)
+            # basedpyright: the strategy class is the hostile input under test; OptimizerHint.strategy
+            # types the parameter as StrategySelection
+            OptimizerHint.strategy(WindowedPrefetchStrategy)  # pyright: ignore[reportArgumentType]
 
     def test_strategy_hostile_selection_values_stay_typed(self) -> None:
         """A hostile selection value cannot replace the typed strategy rejection.
@@ -203,22 +215,26 @@ class TestStrategyFactory:
         )
 
         class HostileRepr(str):
+            @override
             def __repr__(self):
                 raise RuntimeError("repr should never run")
 
         class HostileEq(str):
-            def __eq__(self, other):
+            @override
+            def __eq__(self, other: object):
                 raise RuntimeError("eq should never run")
 
+            @override
             def __hash__(self):
                 return str.__hash__(self)
 
         class HostileHash(str):
+            @override
             def __hash__(self):
                 raise RuntimeError("hash should never run")
 
         class HostileGetattr:
-            def __getattr__(self, name):
+            def __getattr__(self, name: str):
                 raise RuntimeError("getattr should never run")
 
         # Unknown names raise the unknown-name rejection rendered safely.
@@ -229,12 +245,15 @@ class TestStrategyFactory:
                 OptimizerHint(nested_strategy=hostile)
         # A raising ``__getattr__`` reads as "not a strategy", typed the same way.
         with pytest.raises(ConfigurationError, match="must be a strategy name"):
-            OptimizerHint.strategy(HostileGetattr())
+            # basedpyright: the raising-getattr object is the hostile input under test;
+            # OptimizerHint.strategy types the parameter as StrategySelection
+            OptimizerHint.strategy(HostileGetattr())  # pyright: ignore[reportArgumentType]
         # Content decides through the base ``str`` slot: a hostile ``__eq__``
         # can neither force a false AUTO_STRATEGY match nor break a valid name.
         # (Even the assertion reads through the base slot - ``==`` on the
         # carried instance would dispatch back into the hostile override.)
         carried = OptimizerHint.strategy(HostileEq("windowed")).nested_strategy
+        assert isinstance(carried, str)
         assert str.__eq__(carried, "windowed") is True
         assert resolve_strategy(HostileEq("windowed")) is WINDOWED_STRATEGY
 
@@ -243,6 +262,7 @@ class TestStrategyFactory:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         class HostileHash(str):
+            @override
             def __hash__(self):
                 raise RuntimeError("hash should never run")
 
@@ -284,12 +304,16 @@ class TestFrozenImmutability:
         """Attempting to set an attribute raises ``FrozenInstanceError``."""
         hint = OptimizerHint.select_related()
         with pytest.raises(AttributeError):
-            hint.force_select = False
+            # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+            # checker rejects assignment to a frozen field
+            hint.force_select = False  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_skip_sentinel_cannot_be_mutated(self) -> None:
         """The SKIP sentinel is also frozen."""
         with pytest.raises(AttributeError):
-            OptimizerHint.SKIP.skip = False
+            # basedpyright: the write to the frozen dataclass field is the mutation under test; the
+            # checker rejects assignment to a frozen field
+            OptimizerHint.SKIP.skip = False  # pyright: ignore[reportAttributeAccessIssue]
 
 
 class TestEquality:
@@ -323,7 +347,9 @@ class TestInvalidStatesRejected:
 
         for kwargs in ({"force_select": 1}, {"force_prefetch": ""}, {"skip": "false"}):
             with pytest.raises(ConfigurationError, match="bool values"):
-                OptimizerHint(**kwargs)
+                # basedpyright: each non-bool flag is the hostile input under test; OptimizerHint types
+                # the flags as bool
+                OptimizerHint(**kwargs)  # pyright: ignore[reportArgumentType]
 
     def test_skip_with_force_select_raises(self) -> None:
         from django_strawberry_framework.exceptions import ConfigurationError
@@ -370,16 +396,23 @@ class TestInvalidStatesRejected:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint.prefetch("entries__items")
+            # basedpyright: the lookup string is the hostile input under test; OptimizerHint.prefetch
+            # types the parameter as a Prefetch
+            OptimizerHint.prefetch("entries__items")  # pyright: ignore[reportArgumentType]
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint(prefetch_obj="entries__items")
+            # basedpyright: the lookup string is the hostile input under test; OptimizerHint types
+            # prefetch_obj as a Prefetch
+            OptimizerHint(prefetch_obj="entries__items")  # pyright: ignore[reportArgumentType]
 
     def test_prefetch_obj_rejects_hostile_type_name_safely(self) -> None:
         """A hostile metaclass cannot replace the typed Prefetch rejection."""
 
         class HostileType(type):
             @property
-            def __name__(cls):
+            @override
+            # basedpyright: the hostile shape under test, a ``__name__`` property whose read
+            # raises; the checker rejects any property overriding a base class attribute
+            def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
                 raise RuntimeError("type name should never run")
 
         class NotPrefetch(metaclass=HostileType):
@@ -388,7 +421,9 @@ class TestInvalidStatesRejected:
         from django_strawberry_framework.exceptions import ConfigurationError
 
         with pytest.raises(ConfigurationError, match="Prefetch"):
-            OptimizerHint.prefetch(NotPrefetch())
+            # basedpyright: the non-Prefetch object is the hostile input under test;
+            # OptimizerHint.prefetch types the parameter as a Prefetch
+            OptimizerHint.prefetch(NotPrefetch())  # pyright: ignore[reportArgumentType]
 
 
 class TestSkipPredicate:
@@ -410,5 +445,7 @@ class TestSkipPredicate:
         class HostileValue:
             skip = HostileBoolean()
 
-        assert hint_is_skip(HostileAttribute()) is False
-        assert hint_is_skip(HostileValue()) is False
+        # basedpyright: each raising hint shape is the hostile input under test; hint_is_skip
+        # types the parameter as OptimizerHint | None
+        assert hint_is_skip(HostileAttribute()) is False  # pyright: ignore[reportArgumentType]
+        assert hint_is_skip(HostileValue()) is False  # pyright: ignore[reportArgumentType]

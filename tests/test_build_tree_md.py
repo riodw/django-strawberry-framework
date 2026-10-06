@@ -16,17 +16,17 @@ import json
 import re
 import subprocess
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from scripts import build_tree_md
+from scripts._kanban_lib import REPO_ROOT, cli_exit
 from scripts.build_tree_md import (
     DEFAULT_PACKAGE_DIR,
     DELIMITER,
     PLANNED_PATH_DESCRIPTIONS,
-    REPO_ROOT,
     RULE_ENDS_WITH_PERIOD,
     RULE_NO_EG_IE,
     RULE_NOT_BANG_OR_QUESTION,
@@ -71,25 +71,61 @@ _FAKESHOP_TREE_SOURCE_FILES = (
 _FAKESHOP_APP_LOCAL_TESTS = ("test_signals.py", "test_import_spec_terms.py")
 
 
+@dataclass(frozen=True)
+class _FakeStatus:
+    """The ``Status`` slot ``_planned_paths_from_rows`` reads."""
+
+    key: str
+
+
+@dataclass(frozen=True)
+class _FakeCard:
+    """The ``Card`` slots ``_planned_paths_from_rows`` reads."""
+
+    number: int
+    card_id: str
+    title: str
+    status: _FakeStatus
+
+
+@dataclass(frozen=True)
+class _FakeCards:
+    """A ``TrackedPath.cards`` related manager, reduced to ``all()``."""
+
+    rows: tuple[_FakeCard, ...]
+
+    def all(self) -> list[_FakeCard]:
+        return list(self.rows)
+
+
+@dataclass(frozen=True)
+class _FakeRow:
+    """The ``TrackedPath`` slots ``_planned_paths_from_rows`` reads."""
+
+    path: str
+    is_directory: bool
+    cards: _FakeCards
+
+
 def _card(
     number: int,
     key: str,
     card_id: str,
     title: str,
-) -> SimpleNamespace:
-    return SimpleNamespace(
+) -> _FakeCard:
+    return _FakeCard(
         number=number,
         card_id=card_id,
         title=title,
-        status=SimpleNamespace(key=key),
+        status=_FakeStatus(key=key),
     )
 
 
-def _row(path: str, *, is_directory: bool, cards: list) -> SimpleNamespace:
-    return SimpleNamespace(
+def _row(path: str, *, is_directory: bool, cards: list[_FakeCard]) -> _FakeRow:
+    return _FakeRow(
         path=path,
         is_directory=is_directory,
-        cards=SimpleNamespace(all=lambda cards=cards: list(cards)),
+        cards=_FakeCards(rows=tuple(cards)),
     )
 
 
@@ -208,7 +244,7 @@ def test_target_replacement_removes_superseded_flat_module() -> None:
     assert "permissions.py" not in root.children
 
 
-def test_target_tree_replaces_flat_module_with_planned_package(tmp_path) -> None:
+def test_target_tree_replaces_flat_module_with_planned_package(tmp_path: Path) -> None:
     package_dir = tmp_path / "django_strawberry_framework"
     package_dir.mkdir()
     (package_dir / "__init__.py").write_text('"""Test package root."""\n')
@@ -615,7 +651,7 @@ def test_missing_delimiter_is_a_caller_error(
 def test_missing_tree_file_exits_2_through_cli_exit(tmp_path: Path) -> None:
     """An absent ``--md`` file is an ``OSError``, which the shared CLI wrapper maps to 2."""
     with pytest.raises(SystemExit) as raised:
-        build_tree_md.cli_exit(lambda: main(["--check", "--md", str(tmp_path / "absent.md")]))
+        cli_exit(lambda: main(["--check", "--md", str(tmp_path / "absent.md")]))
     assert raised.value.code == 2
 
 

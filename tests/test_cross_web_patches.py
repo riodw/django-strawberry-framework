@@ -36,16 +36,17 @@ stays in ``tests/test_views.py``.
 from unittest import mock
 
 import pytest
+import pytest_django
 from cross_web import DjangoHTTPRequestAdapter
+from django.http import HttpRequest
+from django.test import RequestFactory
 
 from django_strawberry_framework import _cross_web_patches as patches
 
 
-class _FakeRequest:
-    """Minimal stand-in for Django's ``HttpRequest`` exposing ``.body``."""
-
-    def __init__(self, body: bytes) -> None:
-        self.body = body
+def _request(body: bytes) -> HttpRequest:
+    """A real POST request carrying ``body`` as its raw bytes."""
+    return RequestFactory().generic("POST", "/graphql/", body, content_type="application/json")
 
 
 class _MalformedAdapter:
@@ -66,13 +67,17 @@ def test_apply_reinstalls_when_property_reverted():
 
     saved = DjangoHTTPRequestAdapter.__dict__["body"]
     try:
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         patches.apply()
         assert patches._patch_is_installed() is True
     finally:
-        DjangoHTTPRequestAdapter.body = saved
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_patch_is_installed_on_adapter():
@@ -85,7 +90,7 @@ def test_patch_is_installed_on_adapter():
 def test_body_returns_raw_bytes_for_valid_utf8():
     """Valid UTF-8 is returned as raw bytes (async parity), not decoded ``str``."""
     raw = b'{"a": 1}'
-    adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
+    adapter = DjangoHTTPRequestAdapter(_request(raw))
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
 
@@ -103,7 +108,7 @@ def test_body_returns_raw_bytes_for_invalid_utf8():
     the 500-to-400 delta on Strawberry's own mount is
     ``test_transport_api.py::test_the_cross_web_half_turns_upstreams_own_500_into_a_400``.
     """
-    adapter = DjangoHTTPRequestAdapter(_FakeRequest(b"\xff\xfe\xfa"))
+    adapter = DjangoHTTPRequestAdapter(_request(b"\xff\xfe\xfa"))
     assert adapter.body == b"\xff\xfe\xfa"
 
 
@@ -116,7 +121,7 @@ def test_body_returns_raw_bytes_for_utf8_bom():
     ``test_products_api.py::test_post_utf8_bom_json_body_is_rejected_as_400``.
     """
     raw = b"\xef\xbb\xbf" + b'{"a": 1}'
-    adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
+    adapter = DjangoHTTPRequestAdapter(_request(raw))
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
 
@@ -132,11 +137,13 @@ def test_body_returns_raw_bytes_for_utf16_le_without_bom():
     ``test_products_api.py::test_post_utf16_le_json_body_is_rejected_as_400``.
     """
     raw = '{"query":"{ __typename }"}'.encode("utf-16-le")
+    original_body_fget = patches._original_body_fget
+    assert original_body_fget is not None
     assert isinstance(
-        patches._original_body_fget(DjangoHTTPRequestAdapter(_FakeRequest(raw))),
+        original_body_fget(DjangoHTTPRequestAdapter(_request(raw))),
         str,
     )
-    adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
+    adapter = DjangoHTTPRequestAdapter(_request(raw))
     assert adapter.body == raw
     assert isinstance(adapter.body, bytes)
 
@@ -154,7 +161,7 @@ def test_patch_is_installed_false_when_symbol_missing():
         pytest.param(_MalformedAdapter, id="non-property-body"),
     ],
 )
-def test_capture_returns_none_for_missing_adapter_or_body_property(adapter):
+def test_capture_returns_none_for_missing_adapter_or_body_property(adapter: type | None):
     """Neither a missing adapter nor a non-property ``body`` may capture as a usable getter.
 
     The capture runs at module scope, before ``apply()`` can complain, so both
@@ -179,7 +186,11 @@ def test_apply_fails_loudly_when_symbol_missing():
 
 def test_apply_fails_loudly_when_body_getter_signature_changes():
     """The patch pins the getter arity it replaces."""
-    with mock.patch.object(patches, "_original_body_fget", lambda self, extra: None):
+
+    def _two_argument_getter(self: object, extra: object) -> None:
+        return None
+
+    with mock.patch.object(patches, "_original_body_fget", _two_argument_getter):
         with pytest.raises(RuntimeError, match=r"expected \(self\) getter signature"):
             patches.apply()
 
@@ -195,7 +206,9 @@ def test_apply_fails_loudly_when_original_getter_was_never_captured():
     """
     saved = DjangoHTTPRequestAdapter.__dict__["body"]
     try:
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         with mock.patch.object(patches, "_original_body_fget", None):
@@ -203,14 +216,18 @@ def test_apply_fails_loudly_when_original_getter_was_never_captured():
                 patches.apply()
             assert patches._patch_is_installed() is False
     finally:
-        DjangoHTTPRequestAdapter.body = saved
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_apply_no_ops_when_toggle_disabled(settings):
+def test_apply_no_ops_when_toggle_disabled(settings: pytest_django.Settings):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
     saved = DjangoHTTPRequestAdapter.__dict__["body"]
     try:
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
@@ -221,10 +238,12 @@ def test_apply_no_ops_when_toggle_disabled(settings):
         patches.apply()
         assert patches._patch_is_installed() is True
     finally:
-        DjangoHTTPRequestAdapter.body = saved
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_apply_no_ops_when_cross_web_dependency_opted_out(settings):
+def test_apply_no_ops_when_cross_web_dependency_opted_out(settings: pytest_django.Settings):
     """``{"cross_web": False}`` disables only this module; ``{"django": False}`` does not.
 
     The production half of the per-dependency opt-out contract: opting out of
@@ -233,7 +252,9 @@ def test_apply_no_ops_when_cross_web_dependency_opted_out(settings):
     """
     saved = DjangoHTTPRequestAdapter.__dict__["body"]
     try:
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}
@@ -244,4 +265,6 @@ def test_apply_no_ops_when_cross_web_dependency_opted_out(settings):
         patches.apply()
         assert patches._patch_is_installed() is True
     finally:
-        DjangoHTTPRequestAdapter.body = saved
+        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
+        # the descriptor at run time, but the checker reads it as a write through the property
+        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]

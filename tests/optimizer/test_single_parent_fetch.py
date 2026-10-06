@@ -18,12 +18,22 @@ owner), as is the unhashable/NULL ``_deduplicate_parent_ids`` TypeError arm
 imported here, not re-tested.
 """
 
+from collections.abc import Callable, Iterable
+
 import pytest
 from apps.library.models import Book, Branch, Genre, Shelf
-from django.db.models import QuerySet, Value
-from django.db.models.fields.related_descriptors import _filter_prefetch_queryset
+from django.db.models import Model, Prefetch, QuerySet, Value
 
-from django_strawberry_framework.optimizer.nested_fetch import WindowedPrefetchStrategy
+# basedpyright: django-stubs omits _filter_prefetch_queryset from
+# django.db.models.fields.related_descriptors, where Django defines it
+from django.db.models.fields.related_descriptors import (
+    _filter_prefetch_queryset,  # pyright: ignore[reportAttributeAccessIssue]
+)
+
+from django_strawberry_framework.optimizer.nested_fetch import (
+    NestedConnectionRequest,
+    WindowedPrefetchStrategy,
+)
 from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
@@ -37,7 +47,7 @@ from django_strawberry_framework.optimizer.single_parent_fetch import (
 from tests.optimizer._builders import nested_connection_request as _request
 
 
-def _shelf_books_request(**overrides):
+def _shelf_books_request(**overrides: object):
     """Reverse FK ``Shelf.books``, count-free (the fast-path-eligible shape).
 
     The single-parent fast path only engages count-free (``totalCount`` keeps the
@@ -50,19 +60,31 @@ def _shelf_books_request(**overrides):
     return _request(Shelf, "books", **overrides)
 
 
-def _planned_single_parent_queryset(request):
+def _books(rows: Iterable[Model]) -> list[Book]:
+    """Materialize ``rows``, proving each is a ``Book`` instance."""
+    proven: list[Book] = []
+    for row in rows:
+        assert isinstance(row, Book)
+        proven.append(row)
+    return proven
+
+
+def _planned_single_parent_queryset(request: NestedConnectionRequest):
     """Run the windowed strategy and return the planned ``SingleParentWindowQuerySet``."""
     plan = OptimizationPlan()
     assert WindowedPrefetchStrategy().plan(request, plan) is True
     (entry,) = plan.prefetch_related
+    assert isinstance(entry, Prefetch)
     assert isinstance(entry.queryset, SingleParentWindowQuerySet)
     return entry.queryset
 
 
-def _prefetch_filtered(request, field_name, parents):
+def _prefetch_filtered(request: NestedConnectionRequest, field_name: str, parents: list[Model]):
     """The planned queryset exactly as Django's prefetch hands it to ``_fetch_all``."""
     queryset = _planned_single_parent_queryset(request)
-    return _filter_prefetch_queryset(queryset, field_name, parents)
+    filtered = _filter_prefetch_queryset(queryset, field_name, parents)
+    assert isinstance(filtered, SingleParentWindowQuerySet)
+    return filtered
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +102,7 @@ def _prefetch_filtered(request, field_name, parents):
         ({"limit": 0}, "first: 0 is not a positive bounded page"),
     ],
 )
-def test_spec_rejects_ineligible_windows(overrides, reason):
+def test_spec_rejects_ineligible_windows(overrides: dict[str, object], reason: str):
     """Every window shape but the count-free plain first page keeps the window."""
     assert single_parent_spec(_shelf_books_request(**overrides)) is None, reason
 
@@ -111,7 +133,7 @@ def test_spec_rejects_a_keyset_seek():
 def test_spec_rejects_a_custom_queryset_subclass():
     """A manager/visibility subclass keeps the window (the class rebind would erase it)."""
 
-    class _StatefulQuerySet(QuerySet):
+    class _StatefulQuerySet(QuerySet[Book]):
         marker = None
 
     stateful = _StatefulQuerySet(model=Book).only("id", "title", "shelf_id")
@@ -128,33 +150,40 @@ def test_fetch_returns_none_without_a_spec():
     assert _fetch_single_parent_rows(SingleParentWindowQuerySet(model=Book)) is None
 
 
-@pytest.mark.parametrize(
-    ("mutate", "reason"),
-    [
-        (lambda qs: qs.values_list("id"), "a values() iterable changes row shape"),
-        (lambda qs: qs[:5], "a sliced queryset"),
-        (lambda qs: qs.distinct(), "a DISTINCT queryset"),
-        (lambda qs: qs.extra(select={"marker": "1"}), "an unpredicted extra select"),
-        (lambda qs: qs.extra(tables=["shadow_table"]), "an unexpected extra table"),
-        (lambda qs: qs.select_for_update(), "fetch-time row locking"),
-        (lambda qs: qs.order_by("subtitle", "id"), "fetch-time ordering drift"),
-        (lambda qs: qs.reverse(), "fetch-time ordering reversal"),
-        (lambda qs: qs.annotate(marker=Value(1)), "a non-window annotation"),
-        (lambda qs: qs.only("id"), "fetch-time projection drift from the planned only()"),
-        (lambda qs: qs.select_related("shelf"), "fetch-time select_related drift"),
-        (lambda qs: qs.filter(title="x"), "a second unrecognized qual"),
-        (lambda qs: qs.filter(shelf__in=[2]), "a second parent IN qual"),
-        (
-            lambda qs: qs.filter(**{f"{WINDOW_ROW_NUMBER}__lte": 1}),
-            "a tightened window upper bound (an extra/changed row-number lookup)",
-        ),
-        (
-            lambda qs: qs.filter(**{f"{WINDOW_ROW_NUMBER}__gt": 1}),
-            "an added window lower bound the plan never carried",
-        ),
-    ],
-)
-def test_fetch_returns_none_for_unrecognized_shapes(mutate, reason):
+_SingleParentShape = Callable[[SingleParentWindowQuerySet], SingleParentWindowQuerySet]
+
+# basedpyright: django-stubs types QuerySet.extra / values_list as returning a plain QuerySet;
+# Django's _chain() keeps the SingleParentWindowQuerySet subclass the recognizer reads
+_UNRECOGNIZED_SINGLE_PARENT_SHAPES: list[tuple[_SingleParentShape, str]] = [  # pyright: ignore[reportAssignmentType]
+    (lambda qs: qs.values_list("id"), "a values() iterable changes row shape"),
+    (lambda qs: qs[:5], "a sliced queryset"),
+    (lambda qs: qs.distinct(), "a DISTINCT queryset"),
+    (lambda qs: qs.extra(select={"marker": "1"}), "an unpredicted extra select"),
+    (lambda qs: qs.extra(tables=["shadow_table"]), "an unexpected extra table"),
+    (lambda qs: qs.select_for_update(), "fetch-time row locking"),
+    (lambda qs: qs.order_by("subtitle", "id"), "fetch-time ordering drift"),
+    (lambda qs: qs.reverse(), "fetch-time ordering reversal"),
+    (lambda qs: qs.annotate(marker=Value(1)), "a non-window annotation"),
+    (lambda qs: qs.only("id"), "fetch-time projection drift from the planned only()"),
+    (lambda qs: qs.select_related("shelf"), "fetch-time select_related drift"),
+    (lambda qs: qs.filter(title="x"), "a second unrecognized qual"),
+    (lambda qs: qs.filter(shelf__in=[2]), "a second parent IN qual"),
+    (
+        lambda qs: qs.filter(**{f"{WINDOW_ROW_NUMBER}__lte": 1}),
+        "a tightened window upper bound (an extra/changed row-number lookup)",
+    ),
+    (
+        lambda qs: qs.filter(**{f"{WINDOW_ROW_NUMBER}__gt": 1}),
+        "an added window lower bound the plan never carried",
+    ),
+]
+
+
+@pytest.mark.parametrize(("mutate", "reason"), _UNRECOGNIZED_SINGLE_PARENT_SHAPES)
+def test_fetch_returns_none_for_unrecognized_shapes(
+    mutate: Callable[[SingleParentWindowQuerySet], SingleParentWindowQuerySet],
+    reason: str,
+):
     """Every unrecognized fetch-time mutation falls back to the windowed body.
 
     Includes the shared window-predicate-signature guard: the plain re-query
@@ -182,10 +211,12 @@ def test_fetch_returns_none_for_a_consumer_filter_without_a_parent():
 def test_fetch_returns_none_for_a_mutated_root_node():
     """A negated or OR-connected WHERE root is not the planner's shape."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
-    or_root = queryset._chain()
+    # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
+    or_root = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
     or_root.query.where.connector = "OR"
     assert _fetch_single_parent_rows(or_root) is None
-    negated_root = queryset._chain()
+    # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
+    negated_root = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
     negated_root.query.where.negated = True
     assert _fetch_single_parent_rows(negated_root) is None
 
@@ -211,7 +242,7 @@ def test_fetch_returns_none_for_two_parents():
 # ---------------------------------------------------------------------------
 
 
-def _seed_shelf(titles):
+def _seed_shelf(titles: list[str]):
     """One shelf carrying ``titles`` books in a fresh branch."""
     branch = Branch.objects.create(name="central")
     shelf = Shelf.objects.create(code="a", branch=branch)
@@ -227,7 +258,8 @@ def test_fast_path_synthesizes_forward_row_numbers():
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [shelf])
     rows = _fetch_single_parent_rows(queryset)
     assert rows is not None
-    assert [row.title for row in rows] == ["t1", "t2"]  # order_by title, LIMIT 2.
+    # order_by title, LIMIT 2.
+    assert [row.title for row in _books(rows)] == ["t1", "t2"]
     assert [getattr(row, WINDOW_ROW_NUMBER) for row in rows] == [1, 2]
     assert not any(hasattr(row, WINDOW_TOTAL_COUNT) for row in rows)
 
@@ -243,7 +275,7 @@ def test_fast_path_probe_overfetches_the_sentinel_row():
     )
     rows = _fetch_single_parent_rows(queryset)
     assert rows is not None
-    assert [row.title for row in rows] == ["t1", "t2", "t3"]
+    assert [row.title for row in _books(rows)] == ["t1", "t2", "t3"]
     assert [getattr(row, WINDOW_ROW_NUMBER) for row in rows] == [1, 2, 3]
 
 
@@ -266,7 +298,10 @@ def test_fast_path_populates_a_nested_prefetch():
     request = _shelf_books_request(child_queryset=Book.objects.prefetch_related("genres"))
     queryset = _prefetch_filtered(request, "shelf", [shelf])
     rows = list(queryset)  # drive _fetch_all so the nested prefetch pass runs.
-    assert "genres" in rows[0]._prefetched_objects_cache
+    assert isinstance(rows[0], Book)
+    # basedpyright: django-stubs omits Model._prefetched_objects_cache, reported as an unknown
+    # attribute
+    assert "genres" in rows[0]._prefetched_objects_cache  # pyright: ignore[reportAttributeAccessIssue]
     assert list(rows[0].genres.all()) == [genre]
 
 

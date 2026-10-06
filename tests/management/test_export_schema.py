@@ -12,6 +12,7 @@ is a kwargs pin that Unix SDL text cannot distinguish from the platform default.
 import sys
 import types
 from io import StringIO
+from pathlib import Path
 
 import pytest
 import strawberry
@@ -20,7 +21,7 @@ from django.core.management import CommandError, call_command
 from django_strawberry_framework.management.commands.export_schema import Command
 
 
-def _make_test_module(monkeypatch, **attrs):
+def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object):
     module = types.ModuleType("test_module")
     for key, value in attrs.items():
         setattr(module, key, value)
@@ -53,19 +54,19 @@ def test_export_schema_path_help_documents_destructive_utf8_write():
     assert path_action.help == "Write UTF-8 SDL to this file, overwriting it without prompting"
 
 
-def test_export_schema_file_write_disables_newline_translation(monkeypatch):
+def test_export_schema_file_write_disables_newline_translation(monkeypatch: pytest.MonkeyPatch):
     """File output preserves SDL LF bytes on platforms with different native newlines."""
     schema = _make_schema()
     _make_test_module(monkeypatch, schema=schema)
     captured: dict[str, object] = {}
 
     def write_text(
-        self,
-        data,
+        self: Path,
+        data: str,
         *,
-        encoding=None,
-        errors=None,
-        newline=None,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
     ):
         captured.update(data=data, encoding=encoding, errors=errors, newline=newline)
         return len(data)

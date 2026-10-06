@@ -29,6 +29,7 @@ import contextlib
 import importlib
 import subprocess
 import sys
+from collections.abc import Iterator
 from typing import Any, get_type_hints
 
 import pytest
@@ -42,7 +43,7 @@ _HINT_SUBSTRING = "djangorestframework>=3.17.0"
 
 
 @pytest.fixture
-def _simulate_drf_absent():
+def _simulate_drf_absent() -> Iterator[None]:
     """Simulate DRF absence via the shared ``sys.modules[...] = None`` sentinel; restore on teardown.
 
     Evicts the framework's own ``rest_framework`` subpackage too so the module-body
@@ -95,25 +96,28 @@ else:
 
 
 @pytest.mark.parametrize("name", tuple(django_strawberry_framework._DRF_SOFT_EXPORTS))
-def test_each_root_serializer_surface_lookup_raises_install_hint(_simulate_drf_absent, name):
+def test_each_root_serializer_surface_lookup_raises_install_hint(
+    _simulate_drf_absent: None,
+    name: str,
+):
     """Every root serializer export stays lazy and raises the guarded install hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         getattr(django_strawberry_framework, name)
 
 
-def test_rest_framework_package_import_raises_install_hint(_simulate_drf_absent):
+def test_rest_framework_package_import_raises_install_hint(_simulate_drf_absent: None):
     """``import django_strawberry_framework.rest_framework`` raises the same guarded hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         importlib.import_module("django_strawberry_framework.rest_framework")
 
 
-def test_rest_framework_sets_import_raises_install_hint(_simulate_drf_absent):
+def test_rest_framework_sets_import_raises_install_hint(_simulate_drf_absent: None):
     """``import django_strawberry_framework.rest_framework.sets`` raises the same guarded hint."""
     with pytest.raises(ImportError, match=_HINT_SUBSTRING):
         importlib.import_module("django_strawberry_framework.rest_framework.sets")
 
 
-def test_star_import_stays_drf_free_and_binds_no_serializer_surface(_simulate_drf_absent):
+def test_star_import_stays_drf_free_and_binds_no_serializer_surface(_simulate_drf_absent: None):
     """``from django_strawberry_framework import *`` succeeds and binds no DRF surface."""
     namespace: dict[str, object] = {}
     exec("from django_strawberry_framework import *", namespace)
@@ -129,7 +133,7 @@ def test_other_attribute_miss_raises_attribute_error():
 
 
 @pytest.mark.parametrize("name", tuple(django_strawberry_framework._DRF_SOFT_EXPORTS))
-def test_successful_lookup_does_not_memoize(name):
+def test_successful_lookup_does_not_memoize(name: str):
     """A successful serializer-surface access (DRF present) does not bind into root globals.
 
     Non-memoization (Decision 12): the resolved class is NOT written into the root

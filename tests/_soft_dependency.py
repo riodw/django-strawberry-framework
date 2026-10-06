@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
-from collections.abc import Iterator
+from collections.abc import Generator
 from types import ModuleType
 
 
@@ -38,7 +38,7 @@ def evicted_modules(
     *prefixes: str,
     parent: ModuleType,
     attr: str,
-) -> Iterator[dict[str, ModuleType]]:
+) -> Generator[dict[str, ModuleType], None, None]:
     """Evict ``sys.modules`` entries under ``prefixes``; restore both sides on exit.
 
     Pops every entry whose name equals a prefix or starts with ``prefix + "."``, yielding
@@ -74,7 +74,7 @@ def simulated_absence(
     *prefixes: str,
     parent: ModuleType,
     attr: str,
-) -> Iterator[dict[str, ModuleType]]:
+) -> Generator[dict[str, ModuleType], None, None]:
     """Simulate ``sentinel_name`` uninstalled, via a ``sys.modules[...] = None`` sentinel.
 
     The ``None`` entry makes both a statement ``import`` and ``importlib.import_module``
@@ -87,5 +87,7 @@ def simulated_absence(
     module so its cache / module body re-runs the guard.
     """
     with evicted_modules(sentinel_name, *prefixes, parent=parent, attr=attr) as saved:
-        sys.modules[sentinel_name] = None
+        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
+        # as the blocked-import sentinel
+        sys.modules[sentinel_name] = None  # pyright: ignore[reportArgumentType]
         yield saved

@@ -15,6 +15,8 @@ import pytest
 
 from scripts._kanban_lib import (
     CARD_NESTED_LISTS,
+    CardRow,
+    DashboardData,
     assert_nothing_truncated,
     placeholder_defects,
     truncation_defects,
@@ -43,9 +45,11 @@ def test_version_tuple_stops_at_an_oversized_decimal_segment() -> None:
     assert version_tuple(f"1.{'2' * 5000}.3") == (1,)
 
 
-def _card(text: str, *, orders: tuple[int, ...] = ()) -> dict:
+def _card(text: str, *, orders: tuple[int, ...] = ()) -> CardRow:
     """A minimal card carrying one scope item and the reference orders it may cite."""
-    return {
+    # basedpyright: a stand-in card row carrying only the slots the code under test reads; the
+    # placeholder checks type their cards as CardRow
+    return {  # pyright: ignore[reportReturnType]
         "cardId": "TODO-ALPHA-052-0.0.16",
         "planningNote": "",
         "outgoingReferences": [
@@ -53,6 +57,13 @@ def _card(text: str, *, orders: tuple[int, ...] = ()) -> dict:
         ],
         "items": [{"order": 59, "section": {"key": "scope"}, "text": text}],
     }
+
+
+def _snapshot(cards: list[CardRow]) -> DashboardData:
+    """A board snapshot holding ``cards`` and no board docs."""
+    # basedpyright: a stand-in snapshot carrying only the slots the code under test reads;
+    # assert_placeholders_resolve types the parameter as DashboardData
+    return {"cards": cards, "boardDocs": []}  # pyright: ignore[reportReturnType]
 
 
 def test_a_numeric_card_ref_backed_by_a_reference_row_resolves() -> None:
@@ -92,23 +103,25 @@ def test_a_defect_names_the_row_that_stores_it() -> None:
 
 def test_the_html_build_refuses_a_placeholder_that_resolves_nowhere() -> None:
     """``KANBAN.html`` embeds placeholders verbatim, so an unresolvable one would print."""
-    snapshot = {"cards": [_card("see {{card_ref:N}}")], "boardDocs": []}
+    snapshot = _snapshot([_card("see {{card_ref:N}}")])
     with pytest.raises(RuntimeError, match=r"resolve nowhere"):
         assert_placeholders_resolve(snapshot)
 
-    resolvable = {"cards": [_card("see {{card_ref:0}}", orders=(0,))], "boardDocs": []}
+    resolvable = _snapshot([_card("see {{card_ref:0}}", orders=(0,))])
     assert assert_placeholders_resolve(resolvable) is None
 
 
-def _payload_card(number: int, **lists: int) -> dict:
+def _payload_card(number: int, **lists: int) -> CardRow:
     """A card as the GraphQL payload carries it, with the named lists' lengths."""
-    return {
+    # basedpyright: a stand-in card row carrying only the slots the code under test reads; the
+    # truncation checks type their cards as CardRow
+    return {  # pyright: ignore[reportReturnType]
         "number": number,
         **{key: [{"order": index} for index in range(count)] for key, count in lists.items()},
     }
 
 
-def _expected(number: int, **lists: int) -> dict:
+def _expected(number: int, **lists: int) -> dict[str, dict[int, int]]:
     """Ground truth for one card: every guarded list, defaulting to zero."""
     return {key: {number: lists.get(key, 0)} for key in CARD_NESTED_LISTS}
 

@@ -10,10 +10,15 @@ fixture package under ``tmp_path``.
 import json
 import subprocess
 from pathlib import Path
+from typing import Any, TypeAlias
 
 import pytest
 
 from scripts import review_inspect
+
+# basedpyright: the inspector's --json document is an untyped JSON tree (json.loads returns Any);
+# the rows read its nested values by key
+_JSONDocument: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
 
 PACKAGE = "django_strawberry_framework"
 REL_PATH = f"{PACKAGE}/sample.py"
@@ -104,13 +109,13 @@ def _run(tmp_path: Path, *extra: str, source: str = SAMPLE) -> tuple[Path, Path]
 
 
 @pytest.fixture
-def document(tmp_path: Path) -> dict:
+def document(tmp_path: Path) -> _JSONDocument:
     json_path = tmp_path / "sample.json"
     _run(tmp_path, "--json", str(json_path))
     return json.loads(json_path.read_text(encoding="utf-8"))
 
 
-def _symbol(document: dict, qualname: str) -> dict:
+def _symbol(document: _JSONDocument, qualname: str) -> _JSONDocument:
     matches = [entry for entry in document["symbols"] if entry["qualname"] == qualname]
     assert len(matches) == 1, qualname
     return matches[0]
@@ -135,7 +140,10 @@ def test_text_mode_writes_only_the_overview_and_a_line_preserving_stripped_copy(
     assert "not canonical" not in overview
 
 
-def test_code_digest_moves_with_code_and_never_with_prose(tmp_path: Path, capsys) -> None:
+def test_code_digest_moves_with_code_and_never_with_prose(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """A docstring, comment or layout edit keeps the digest; an executable edit moves it."""
     original = 'def f(x):\n    """Return x."""\n    return x  # plain\n'
     reworded = 'def f(x):\n    """Return ``x``\n\n    unchanged.\n    """\n\n    return x\n'
@@ -205,7 +213,9 @@ def test_every_row_names_its_enclosing_symbol_or_module_line(tmp_path: Path) -> 
     assert f"- line {comment_line} `{REL_PATH}::Loader._load`: `# previously" in overview
 
 
-def test_meta_call_filter_matches_attribute_access_not_substring(document: dict) -> None:
+def test_meta_call_filter_matches_attribute_access_not_substring(
+    document: _JSONDocument,
+) -> None:
     calls = [item["call"] for item in document["calls_of_interest"]["items"]]
 
     assert "model._meta.get_field" in calls
@@ -230,7 +240,7 @@ def test_capped_sections_print_the_total_and_no_cap_lists_every_row(
     assert markers.count("`_meta` in") == (50 if expect_notice else 60)
 
 
-def test_json_header_carries_the_git_blob_id(tmp_path: Path, document: dict) -> None:
+def test_json_header_carries_the_git_blob_id(tmp_path: Path, document: _JSONDocument) -> None:
     target = tmp_path / REL_PATH
     expected = subprocess.run(
         ["git", "hash-object", str(target)],
@@ -255,15 +265,16 @@ def test_json_blob_id_falls_back_to_the_same_sha1_without_git(
     target = _write(tmp_path / REL_PATH, SAMPLE)
     expected = review_inspect._blob_id(target)
 
-    def _no_git(*args, **kwargs):
+    def _no_git(*args: object, **kwargs: object):
         raise OSError("git unavailable")
 
-    monkeypatch.setattr(review_inspect.subprocess, "run", _no_git)
+    # basedpyright: patch the module object the code under test holds, not a fresh import of it
+    monkeypatch.setattr(review_inspect.subprocess, "run", _no_git)  # pyright: ignore[reportPrivateLocalImportUsage]
 
     assert review_inspect._blob_id(target) == (expected[0], "sha1")
 
 
-def test_symbol_table_fields(document: dict) -> None:
+def test_symbol_table_fields(document: _JSONDocument) -> None:
     afetch = _symbol(document, "Loader.afetch")
     assert afetch["kind"] == "async method"
     assert afetch["is_public"] is True
@@ -291,11 +302,13 @@ def test_symbol_table_fields(document: dict) -> None:
     assert build["kind"] == "function"
     assert build["has_docstring"] is False
     assert build["callers_approximate"] is True
-    assert f'{PACKAGE}/other.py #"VALUE = build(None, None)"' in build["callers"]
+    callers = build["callers"]
+    assert isinstance(callers, list)
+    assert f'{PACKAGE}/other.py #"VALUE = build(None, None)"' in callers
     assert _symbol(document, "Loader")["kind"] == "class"
 
 
-def test_per_row_leads_flag_loop_bodies_only(document: dict) -> None:
+def test_per_row_leads_flag_loop_bodies_only(document: _JSONDocument) -> None:
     per_row = {
         (lead["where"], lead["line"]): lead for lead in document["performance_leads"]["per_row"]
     }
@@ -315,7 +328,7 @@ def test_per_row_leads_flag_loop_bodies_only(document: dict) -> None:
     assert len(per_row) == 2
 
 
-def test_hot_path_reachability_follows_self_calls(document: dict) -> None:
+def test_hot_path_reachability_follows_self_calls(document: _JSONDocument) -> None:
     leads = document["performance_leads"]
 
     entries = [entry["where"] for entry in leads["hot_entry_points"]]
@@ -325,7 +338,7 @@ def test_hot_path_reachability_follows_self_calls(document: dict) -> None:
     )
 
 
-def test_import_time_work_lists_module_and_class_body_calls(document: dict) -> None:
+def test_import_time_work_lists_module_and_class_body_calls(document: _JSONDocument) -> None:
     rows = {
         (row["line"], row["kind"], row["text"])
         for row in document["performance_leads"]["import_time"]
@@ -339,7 +352,7 @@ def test_import_time_work_lists_module_and_class_body_calls(document: dict) -> N
     }
 
 
-def test_comments_census_flags(document: dict) -> None:
+def test_comments_census_flags(document: _JSONDocument) -> None:
     census = {(entry["kind"], entry["owner"]): entry for entry in document["comments_census"]}
 
     comment = census[("comment", "Loader._load")]

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
-from django.db.models import Prefetch
+from django.db.models import Model, OrderBy, Prefetch, QuerySet
 
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.plans import (
@@ -94,7 +94,9 @@ class TestLookupPaths:
 
     def test_ignores_unknown_prefetch_like_entries(self):
         # Deliberately impossible for generated plans; covers defensive flattening.
-        plan = OptimizationPlan(prefetch_related=[object()])
+        # basedpyright: the non-lookup prefetch entry is the hostile input under test;
+        # OptimizationPlan types prefetch_related as Sequence[PrefetchLookup]
+        plan = OptimizationPlan(prefetch_related=[object()])  # pyright: ignore[reportArgumentType]
         assert lookup_paths(plan) == set()
 
     def test_uses_finalized_lookup_paths_after_finalize(self):
@@ -130,7 +132,9 @@ class TestOptimizationPlanApply:
         result = plan.apply(qs)
         # An empty plan should not add select_related or prefetch_related.
         assert result.query.select_related is False
-        assert result._prefetch_related_lookups == ()
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert result._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_apply_select_related(self):
         plan = OptimizationPlan(select_related=["category"])
@@ -139,13 +143,16 @@ class TestOptimizationPlanApply:
 
         qs = Item.objects.all()
         result = plan.apply(qs)
+        assert isinstance(result.query.select_related, dict)
         assert "category" in result.query.select_related
 
     def test_apply_prefetch_related(self):
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.all()
         result = plan.apply(qs)
-        assert "items" in result._prefetch_related_lookups
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert "items" in result._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_apply_only_fields(self):
         plan = OptimizationPlan(only_fields=["name"])
@@ -223,7 +230,10 @@ class TestOptimizationPlanMerge:
         with pytest.raises(RuntimeError, match="construction-time"):
             OptimizationPlan().finalize().merge_from(OptimizationPlan())
 
-    def test_merge_inventory_guard_reports_stale_classification(self, monkeypatch):
+    def test_merge_inventory_guard_reports_stale_classification(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         monkeypatch.setattr(
             OptimizationPlan,
             "_FULL_MERGE_FIELDS",
@@ -288,7 +298,9 @@ class TestOptimizationPlanFinalize:
         import pytest
 
         with pytest.raises(AttributeError):
-            plan.prefetch_related.append("new")
+            # basedpyright: the append on the finalized tuple is the mutation under test; the plan
+            # declares the field as a read-only Sequence
+            plan.prefetch_related.append("new")  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_finalize_is_idempotent(self):
         plan = OptimizationPlan(select_related=["a"]).finalize()
@@ -300,6 +312,7 @@ class TestOptimizationPlanFinalize:
         plan = OptimizationPlan(select_related=["category"]).finalize()
         qs = Item.objects.all()
         result = plan.apply(qs)
+        assert isinstance(result.query.select_related, dict)
         assert "category" in result.query.select_related
 
 
@@ -329,7 +342,7 @@ class TestPlanHelperRelocations:
 
         first = Prefetch("items", queryset=Item.objects.all())
         second = Prefetch("items", queryset=Item.objects.filter(pk__gt=0))
-        values: list = []
+        values: list[str | Prefetch[str]] = []
         append_prefetch_unique(values, first)
         append_prefetch_unique(values, second)
         assert values == [first]
@@ -351,7 +364,7 @@ class TestPlanHelperRelocations:
             queryset=Item.objects.filter(pk__gt=0),
             to_attr="_dst_items$a_connection",
         )
-        values: list = []
+        values: list[str | Prefetch[str]] = []
         append_prefetch_unique(values, first)
         append_prefetch_unique(values, second)
         append_prefetch_unique(values, duplicate)
@@ -361,12 +374,12 @@ class TestPlanHelperRelocations:
         from django_strawberry_framework.optimizer.plans import _IndexedList, append_unique
 
         plan = OptimizationPlan()
+        assert isinstance(plan.only_fields, _IndexedList)
 
         append_unique(plan.only_fields, "name")
         append_unique(plan.only_fields, "name")
         append_unique(plan.only_fields, "id")
 
-        assert isinstance(plan.only_fields, _IndexedList)
         assert plan.only_fields == ["name", "id"]
 
     def test_plan_default_prefetch_list_indexes_by_lookup_path(self):
@@ -378,11 +391,11 @@ class TestPlanHelperRelocations:
         first = Prefetch("items", queryset=Item.objects.all())
         second = Prefetch("items", queryset=Item.objects.filter(pk__gt=0))
         plan = OptimizationPlan()
+        assert isinstance(plan.prefetch_related, _IndexedList)
 
         append_prefetch_unique(plan.prefetch_related, first)
         append_prefetch_unique(plan.prefetch_related, second)
 
-        assert isinstance(plan.prefetch_related, _IndexedList)
         assert plan.prefetch_related == [first]
 
 
@@ -398,7 +411,7 @@ class TestIndexedList:
     def test_append_and_extend_keep_index_for_later_append_unique(self):
         from django_strawberry_framework.optimizer.plans import _IndexedList
 
-        indexed = _IndexedList()
+        indexed: _IndexedList[str] = _IndexedList()
         indexed.append("a")
         indexed.extend(["b", "c"])
         assert indexed == ["a", "b", "c"]
@@ -410,7 +423,7 @@ class TestIndexedList:
     def test_append_unique_falls_back_to_membership_for_unhashable_values(self):
         from django_strawberry_framework.optimizer.plans import _IndexedList
 
-        indexed = _IndexedList()
+        indexed: _IndexedList[list[str]] = _IndexedList()
         unhashable = ["nested"]
         # Unhashable key: the ``_seen`` probe raises ``TypeError`` and the
         # helper falls back to an ``in self`` membership scan. First insert
@@ -590,7 +603,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        assert delta_qs._prefetch_related_lookups == ()
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_consumer_exact_plus_descendant_strings_both_absorbed(self):
         # The exact-plus-descendant case: ``prefetch_related("items", "items__entries")``
@@ -605,7 +620,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        assert delta_qs._prefetch_related_lookups == ()
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_optimizer_does_not_strip_consumer_descendants_it_does_not_cover(self):
         # When the optimizer's own subtree does not cover
@@ -618,7 +635,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        assert {getattr(e, "prefetch_to", e) for e in delta_qs._prefetch_related_lookups} == {
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert {getattr(e, "prefetch_to", e) for e in delta_qs._prefetch_related_lookups} == {  # pyright: ignore[reportAttributeAccessIssue]
             "items__entries",
         }
 
@@ -647,7 +666,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        assert delta_qs._prefetch_related_lookups == (consumer_descendant,)
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == (consumer_descendant,)  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_consumer_plain_string_replaced_by_optimizer_nested_prefetch(self):
         # The consumer's ``prefetch_related("items")`` plain
@@ -662,7 +683,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        assert delta_qs._prefetch_related_lookups == ()
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_upgrade_preserves_other_consumer_prefetches(self):
         # When upgrading a single consumer plain string to the
@@ -676,7 +699,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        assert delta_qs._prefetch_related_lookups == (unrelated,)
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == (unrelated,)  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_drops_only_fields_when_consumer_applied_only(self):
         # Django's ``QuerySet.only(...).only(...)`` replaces (not
@@ -744,7 +769,9 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        assert delta_qs._prefetch_related_lookups == (consumer_pf,)
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == (consumer_pf,)  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_consumer_custom_prefetch_survives_redundant_trailing_string(self):
         """A duplicate bare lookup never hides the consumer's custom queryset.
@@ -769,10 +796,12 @@ class TestDiffPlanForQueryset:
 
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        assert delta_qs._prefetch_related_lookups == (consumer_pf, "items")
+        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
+        # unknown attribute
+        assert delta_qs._prefetch_related_lookups == (consumer_pf, "items")  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def _linked_path(*keys):
+def _linked_path(*keys: str | int):
     """Build a graphql-core-style ``key``/``prev`` linked response path."""
     node = None
     for key in keys:
@@ -806,12 +835,24 @@ class TestRuntimePathFromPath:
 class TestApplyWindowPagination:
     """``apply_window_pagination`` annotation + range-filter mechanism (spec-033 Decision 4)."""
 
-    def _windowed(self, **kwargs):
+    def _windowed(
+        self,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        reverse: bool = False,
+        with_total_count: bool = True,
+        next_page_probe: bool = False,
+    ):
         return apply_window_pagination(
             Item.objects.all(),
             partition_by="category_id",
             order_by=["name", "pk"],
-            **kwargs,
+            offset=offset,
+            limit=limit,
+            reverse=reverse,
+            with_total_count=with_total_count,
+            next_page_probe=next_page_probe,
         )
 
     def test_annotates_row_number_and_total_count(self):
@@ -1142,8 +1183,10 @@ class TestDeterministicOrderHoistParity:
 
     def test_ends_in_unique_column_defensive_for_non_model(self):
         """Non-model objects without ``_meta`` safely return False."""
-        assert ends_in_unique_column(("id",), object()) is False
-        assert ends_in_unique_column(("id",), SimpleNamespace()) is False
+        # basedpyright: each non-model is the hostile input under test; ends_in_unique_column
+        # types the parameter as type[Model]
+        assert ends_in_unique_column(("id",), object()) is False  # pyright: ignore[reportArgumentType]
+        assert ends_in_unique_column(("id",), SimpleNamespace()) is False  # pyright: ignore[reportArgumentType]
 
 
 class TestEffectiveConnectionOrder:
@@ -1215,6 +1258,11 @@ class TestEffectiveConnectionOrder:
         assert effective_connection_order(None, query, Status) == ("id",)
 
 
+def _nulls_slots(entry: OrderBy) -> tuple[bool | None, bool | None]:
+    """``(nulls_first, nulls_last)`` as ``OrderBy`` stores them: ``None`` is the backend default."""
+    return entry.nulls_first, entry.nulls_last
+
+
 class TestReverseOrderBy:
     """``_reverse_order_by`` mirrors Django's ``queryset.reverse()`` (spec-033 Decision 4)."""
 
@@ -1228,6 +1276,7 @@ class TestReverseOrderBy:
         from django.db.models import F
 
         reversed_order = _reverse_order_by([F("name").asc()])
+        assert isinstance(reversed_order[0], OrderBy)
         assert reversed_order[0].descending is True
 
     def test_swaps_explicit_nulls_positioning(self):
@@ -1240,19 +1289,26 @@ class TestReverseOrderBy:
         from django.db.models import F
 
         nulls_first = _reverse_order_by([F("name").asc(nulls_first=True)])[0]
+        assert isinstance(nulls_first, OrderBy)
         assert nulls_first.descending is True
-        assert nulls_first.nulls_first is None
-        assert nulls_first.nulls_last is True
+        first_slot, last_slot = _nulls_slots(nulls_first)
+        assert first_slot is None
+        assert last_slot is True
 
         nulls_last = _reverse_order_by([F("name").desc(nulls_last=True)])[0]
+        assert isinstance(nulls_last, OrderBy)
         assert nulls_last.descending is False
-        assert nulls_last.nulls_first is True
-        assert nulls_last.nulls_last is None
+        first_slot, last_slot = _nulls_slots(nulls_last)
+        assert first_slot is True
+        assert last_slot is None
 
     def test_swaps_explicit_nulls_positioning_with_boolean_flags(self):
         """Swaps explicit nulls_first / nulls_last even when values are boolean False."""
         order = SimpleNamespace(descending=False, nulls_first=False, nulls_last=None)
-        reversed_entry = _reverse_order_by([order])[0]
+        # basedpyright: a stand-in order entry carrying only the slots the code under test reads;
+        # _reverse_order_by types the parameter as Sequence[OrderEntry]
+        reversed_entry = _reverse_order_by([order])[0]  # pyright: ignore[reportArgumentType]
+        assert isinstance(reversed_entry, SimpleNamespace)
         assert reversed_entry.descending is True
         assert reversed_entry.nulls_first is None
         assert reversed_entry.nulls_last is False
@@ -1276,10 +1332,12 @@ class TestReverseOrderBy:
         from django.db.models.functions import Lower
 
         reversed_f = _reverse_order_by([F("name")])[0]
+        assert isinstance(reversed_f, OrderBy)
         assert reversed_f.descending is True
         assert reversed_f.expression == F("name")
 
         reversed_expression = _reverse_order_by([Lower("title")])[0]
+        assert isinstance(reversed_expression, OrderBy)
         assert reversed_expression.descending is True
         assert reversed_expression.expression == Lower("title")
 
@@ -1293,7 +1351,9 @@ class TestReverseOrderBy:
         """
         unreversible = SimpleNamespace(name="not-an-expression")
         with pytest.raises(OptimizerError, match="Cannot reverse connection order entry"):
-            _reverse_order_by([unreversible])
+            # basedpyright: the unreversible term is the hostile input under test;
+            # _reverse_order_by types the parameter as Sequence[OrderEntry]
+            _reverse_order_by([unreversible])  # pyright: ignore[reportArgumentType]
 
 
 class TestPruneUnsupportableSelectRelated:
@@ -1309,7 +1369,7 @@ class TestPruneUnsupportableSelectRelated:
     """
 
     @staticmethod
-    def _reconcile(plan, queryset):
+    def _reconcile(plan: OptimizationPlan, queryset: QuerySet[Model]):
         """The extension's full B8 pipeline: prune, then diff, then apply."""
         from django_strawberry_framework.optimizer.plans import (
             prune_unsupportable_select_related,
@@ -1330,12 +1390,14 @@ class TestPruneUnsupportableSelectRelated:
         assert pruned is not plan
         assert pruned.select_related == ()
         assert pruned.planned_resolver_keys == ("unrelated-key",)
+        assert pruned.finalized_planned_resolver_keys is not None
         assert "category-key" not in pruned.finalized_planned_resolver_keys
         # The runtime bar: the applied queryset COMPILES (the old
         # behavior raised FieldError at SQL generation).
         assert 'JOIN "products_category"' not in str(applied.query)
         # The original (cached) plan is untouched.
         assert plan.select_related == ("category",)
+        assert plan.finalized_planned_resolver_keys is not None
         assert "category-key" in plan.finalized_planned_resolver_keys
 
     def test_projection_loading_the_connector_keeps_the_path(self):

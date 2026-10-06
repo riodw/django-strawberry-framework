@@ -5,7 +5,10 @@ via introspection in ``examples/fakeshop/test_query/test_schema_composition_api.
 and filter lookup camelCase in ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
+from collections.abc import Callable
+
 import pytest
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.strings import (
@@ -20,15 +23,19 @@ from django_strawberry_framework.utils.strings import (
 class _HostileString(str):
     """A string subclass whose ordinary operations cannot be trusted."""
 
+    @override
     def __hash__(self):
         raise RuntimeError("hostile hash")
 
-    def split(self, *args, **kwargs):
+    @override
+    def split(self, *args: object, **kwargs: object):
         raise RuntimeError("hostile split")
 
-    def replace(self, *args, **kwargs):
+    @override
+    def replace(self, *args: object, **kwargs: object):
         raise RuntimeError("hostile replace")
 
+    @override
     def __str__(self):
         raise RuntimeError("hostile string")
 
@@ -50,7 +57,7 @@ def test_snake_case_round_trips_camel_case():
         ("trailing_", "trailing_"),
     ],
 )
-def test_snake_case_pins_acronym_digit_and_underscore_edges(camel, snake):
+def test_snake_case_pins_acronym_digit_and_underscore_edges(camel: str, snake: str):
     assert snake_case(camel) == snake
 
 
@@ -81,7 +88,7 @@ def test_snake_case_pins_acronym_digit_and_underscore_edges(camel, snake):
         "a_b__c",
     ],
 )
-def test_graphql_camel_name_round_trips_normalized_snake_case(name):
+def test_graphql_camel_name_round_trips_normalized_snake_case(name: str):
     assert snake_case(graphql_camel_name(name)) == name
 
 
@@ -183,16 +190,19 @@ def test_pascal_case_or_raise_raises_on_empty_and_delegates_on_valid():
         flatten_lookup_path,
     ],
 )
-def test_string_helpers_reject_non_string_inputs(helper):
+def test_string_helpers_reject_non_string_inputs(helper: Callable[[str], object]):
     """Malformed helper inputs fail with the package's typed configuration error."""
     with pytest.raises(ConfigurationError, match="must be a string"):
-        helper(42)
+        # basedpyright: a non-string input is the bad value the helper must reject
+        helper(42)  # pyright: ignore[reportArgumentType]
 
 
 def test_snake_case_preserves_lru_cache_controls():
     """The normalization boundary keeps the historical cache-control surface and public name."""
-    assert snake_case.__name__ == "snake_case"
-    assert snake_case.__qualname__ == "snake_case"
+    # basedpyright: the package's _CachedNameTransform protocol omits the functools.wraps
+    # attributes the wrapper carries at run time
+    assert snake_case.__name__ == "snake_case"  # pyright: ignore[reportAttributeAccessIssue]
+    assert snake_case.__qualname__ == "snake_case"  # pyright: ignore[reportAttributeAccessIssue]
     snake_case.cache_clear()
     assert snake_case.cache_parameters() == {"maxsize": 2048, "typed": False}
     before = snake_case.cache_info()
@@ -204,4 +214,6 @@ def test_snake_case_preserves_lru_cache_controls():
     assert snake_case("isPrivate") == "is_private"
     after_hit = snake_case.cache_info()
     assert after_hit.hits == after_miss.hits + 1
-    assert snake_case.__wrapped__("isPrivate") == "is_private"
+    # basedpyright: the package's _CachedNameTransform protocol omits the functools.wraps
+    # attributes the wrapper carries at run time
+    assert snake_case.__wrapped__("isPrivate") == "is_private"  # pyright: ignore[reportAttributeAccessIssue]

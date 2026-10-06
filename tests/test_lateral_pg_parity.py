@@ -29,31 +29,34 @@ and scripted-cursor execution (``tests/optimizer/test_lateral_fetch.py``).
 Everything here is ``@pytest.mark.pg``.
 """
 
+from operator import itemgetter
+
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, Patron, Shelf
 from django.db import connection as db_connection
+from django.db.models import Model, QuerySet
 from django.test.utils import CaptureQueriesContext
 from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
 
-from django_strawberry_framework import DjangoListField, finalize_django_types
+from django_strawberry_framework import DjangoListField, DjangoType, finalize_django_types
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry(isolate_global_registry):
+def _isolate_global_registry(isolate_global_registry: None) -> None:
     """Every test here declares fresh ``DjangoType`` classes - opt the module
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
 def _make_type(
-    name,
-    model,
-    fields,
+    name: str,
+    model: type[Model],
+    fields: tuple[str, ...],
     *,
-    total_count=False,
+    total_count: bool = False,
 ):
     """Declare a Relay-Node ``DjangoType``; the shared core owns the boilerplate."""
     return make_django_type(
@@ -133,20 +136,23 @@ def _seed_library():
     Loan.objects.create(book=books[1], patron=patrons[0], note="n2")
 
 
-def _canonical(data):
+def _canonical(data: dict[str, object] | None) -> dict[str, list[object]]:
     """Sort every root parent list by ``id`` (the roots are unordered)."""
-    return {
-        root: sorted(parents, key=lambda parent: parent["id"]) for root, parents in data.items()
-    }
+    assert data is not None
+    canonical: dict[str, list[object]] = {}
+    for root, parents in data.items():
+        assert isinstance(parents, list)
+        canonical[root] = sorted(parents, key=itemgetter("id"))
+    return canonical
 
 
 def _assert_parity(
-    query,
+    query: str,
     *,
-    queries=2,
-    expect_lateral=True,
-    count_free=False,
-    schemas=None,
+    queries: int = 2,
+    expect_lateral: bool = True,
+    count_free: bool = False,
+    schemas: tuple[strawberry.Schema, strawberry.Schema] | None = None,
 ):
     """Execute under both strategies; pin identical data and the lateral cost.
 
@@ -165,8 +171,7 @@ def _assert_parity(
         lateral = lateral_schema.execute_sync(query)
     assert lateral.errors is None, lateral.errors
     assert _canonical(lateral.data) == _canonical(windowed.data)
-    if queries is not None:
-        assert len(captured) == queries
+    assert len(captured) == queries
     executed_sql = " ".join(entry["sql"] for entry in captured)
     if expect_lateral:
         assert "CROSS JOIN LATERAL" in executed_sql
@@ -215,13 +220,14 @@ _OVERSHOOT_CURSOR = to_base64("arrayconnection", "49")
         pytest.param("", _FULL_PAGE, False, id="unbounded"),
     ],
 )
-def test_reverse_fk_parity_across_pagination_shapes(arguments, page, count_free):
+def test_reverse_fk_parity_across_pagination_shapes(arguments: str, page: str, count_free: bool):
     """Every reverse-FK pagination shape: identical data, two queries, real lateral."""
     _seed_library()
     data, _ = _assert_parity(
         f"{{ shelves {{ id booksConnection{arguments} {{ {page} }} }} }}",
         count_free=count_free,
     )
+    assert data is not None
     assert len(data["shelves"]) == 3  # including the childless shelf C.
 
 
@@ -239,7 +245,7 @@ def test_reverse_fk_parity_across_pagination_shapes(arguments, page, count_free)
         pytest.param("(last: 2)", id="reverse-constant-false"),
     ],
 )
-def test_count_free_has_next_page_parity_across_shapes(arguments):
+def test_count_free_has_next_page_parity_across_shapes(arguments: str):
     """Count-free ``hasNextPage`` shapes page byte-identically with NO count.
 
     The A1 composed offset probe (bounded offset page) and the A2 constant-False
@@ -270,6 +276,7 @@ def test_next_page_probe_parity_is_count_free():
     query = f"{{ shelves {{ id code booksConnection(first: 2) {{ {_NEXT_PAGE_PROBE} }} }} }}"
     data, captured = _assert_parity(query, count_free=True)
     assert "COUNT(" not in captured[1]["sql"].upper()
+    assert data is not None
     assert len(data["shelves"]) == 3  # including the childless shelf C.
     by_code = {shelf["code"]: shelf["booksConnection"] for shelf in data["shelves"]}
     # Shelf C (no books) resolves as an EMPTY page - empty edges + no next page -
@@ -296,6 +303,7 @@ def test_next_page_probe_parity_childless_no_edges_shape():
     # connection's selection, which stays ``pageInfo``-only).
     query = "{ shelves { id code booksConnection(first: 2) { pageInfo { hasNextPage } } } }"
     data, _ = _assert_parity(query, count_free=True)
+    assert data is not None
     flags = {
         shelf["code"]: shelf["booksConnection"]["pageInfo"]["hasNextPage"]
         for shelf in data["shelves"]
@@ -323,6 +331,7 @@ def test_reverse_m2m_parity_joins_the_through_table_once():
     assert lateral_sql.count('FROM "library_book_genres"') == 1
     # Overlap sanity: every genre relates to four books (5 two-genre shelf-A
     # books + the two-genre loner distribute evenly); each page shows 2 of 4.
+    assert data is not None
     by_name = {genre["id"]: genre for genre in data["genres"]}
     counts = sorted(genre["booksConnection"]["totalCount"] for genre in by_name.values())
     assert counts == [4, 4, 4]
@@ -370,6 +379,7 @@ def test_divergent_alias_parity_one_lateral_per_response_key():
     data, captured = _assert_parity(query, queries=3, count_free=True)
     executed_sql = " ".join(entry["sql"] for entry in captured)
     assert "COUNT(" not in executed_sql.upper()
+    assert data is not None
     by_code = {shelf["code"]: shelf for shelf in data["shelves"]}
     # Shelf A (5 books): each alias serves ITS OWN page bound and probe flag.
     assert len(by_code["A"]["a"]["edges"]) == 2
@@ -405,6 +415,7 @@ def test_divergent_alias_total_count_sibling_keeps_count_on_both_laterals():
     assert len(window_sqls) == 2
     for window_sql in window_sqls:
         assert "_dst_total_count" in window_sql
+    assert data is not None
     by_code = {shelf["code"]: shelf for shelf in data["shelves"]}
     assert by_code["A"]["a"]["pageInfo"]["hasNextPage"] is True
     assert by_code["A"]["b"]["totalCount"] == 5
@@ -440,7 +451,9 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
     from django.db import connections as django_connections
     from django.db.backends.postgresql import base as postgres_base
 
-    registry_list = postgres_base._dst_stray_connection_registry
+    # basedpyright: the root conftest's Postgres wrapper plants the registry on the backend module
+    # at run time; the module declares no such attribute
+    registry_list = postgres_base._dst_stray_connection_registry  # pyright: ignore[reportAttributeAccessIssue]
     before = len(registry_list)
     failures = []
 
@@ -476,7 +489,7 @@ def _visibility_schemas():
     """
 
     @classmethod
-    def _hide_repair(cls, queryset, info):
+    def _hide_repair(cls: type[DjangoType], queryset: QuerySet[Book], info: object):
         return queryset.exclude(circulation_status="repair")
 
     make_django_type(
@@ -546,6 +559,7 @@ def test_visibility_scope_takes_the_lateral_path_with_parity():
     executed_sql = " ".join(entry["sql"] for entry in captured)
     assert "CROSS JOIN LATERAL" in executed_sql
     assert "circulation_status" in executed_sql  # the scope rode into the branch.
+    assert lateral.data is not None
     by_code = {shelf["code"]: shelf["booksConnection"] for shelf in lateral.data["shelves"]}
     # Anonymous sees only the four available books on shelf A (two repair hidden).
     assert by_code["A"]["totalCount"] == 4
@@ -567,6 +581,7 @@ def test_visibility_scope_lateral_applies_the_filter_exactly_once():
     assert result.errors is None, result.errors
     lateral_sql = next(entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"])
     assert lateral_sql.count("circulation_status") == 1
+    assert result.data is not None
     by_code = {shelf["code"]: shelf["booksConnection"] for shelf in result.data["shelves"]}
     titles = [edge["node"]["title"] for edge in by_code["A"]["edges"]]
     assert titles == [
@@ -589,7 +604,7 @@ def test_multi_table_visibility_scope_downgrades_off_the_lateral_path():
     _seed_visibility()
 
     @classmethod
-    def _hide_by_branch(cls, queryset, info):
+    def _hide_by_branch(cls: type[DjangoType], queryset: QuerySet[Book], info: object):
         return queryset.exclude(shelf__branch__city="restricted")
 
     make_django_type(
@@ -620,6 +635,7 @@ def test_multi_table_visibility_scope_downgrades_off_the_lateral_path():
     assert result.errors is None, result.errors
     executed_sql = " ".join(entry["sql"] for entry in captured)
     assert "CROSS JOIN LATERAL" not in executed_sql  # multi-table scope refused.
+    assert result.data is not None
     by_code = {shelf["code"]: shelf["booksConnection"] for shelf in result.data["shelves"]}
     assert by_code["A"]["totalCount"] == 6  # no city is restricted, so all six show.
 
@@ -639,7 +655,7 @@ def _request_varying_visibility_schema():
     from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
 
     @classmethod
-    def _scope_by_staff(cls, queryset, info):
+    def _scope_by_staff(cls: type[DjangoType], queryset: QuerySet[Book], info: object):
         # The real idiom: unwrap info.context -> request -> user -> is_staff.
         context = getattr(info, "context", None)
         request = getattr(context, "request", None) or context
@@ -695,7 +711,7 @@ def test_request_varying_visibility_is_not_cached_across_callers():
         "{ edges { node { title } } totalCount } } }"
     )
 
-    def _context(*, is_staff):
+    def _context(*, is_staff: bool):
         return namespace(request=namespace(user=namespace(is_staff=is_staff)))
 
     with CaptureQueriesContext(db_connection) as anon_captured:
@@ -705,7 +721,9 @@ def test_request_varying_visibility_is_not_cached_across_callers():
         staff = schema.execute_sync(query, context_value=_context(is_staff=True))
     assert staff.errors is None, staff.errors
 
+    assert anon.data is not None
     anon_books = {s["code"]: s["booksConnection"] for s in anon.data["shelves"]}
+    assert staff.data is not None
     staff_books = {s["code"]: s["booksConnection"] for s in staff.data["shelves"]}
     # The two callers see DIFFERENT rows - each request's scope was applied, not
     # replayed from a cached first-caller plan.
@@ -736,7 +754,7 @@ def test_request_varying_visibility_is_not_cached_across_callers():
 # =============================================================================
 
 
-def _keyset_schemas(cursor_field=("-number", "id")):
+def _keyset_schemas(cursor_field: tuple[str, ...] = ("-number", "id")):
     """Periodical -> issuesConnection graph with a KEYSET child type.
 
     ``cursor_field`` parameterizes the seek arm: the mixed-direction default
@@ -762,7 +780,8 @@ def _keyset_schemas(cursor_field=("-number", "id")):
 
     @strawberry.type
     class Query:
-        periodicals: list[periodical_type] = DjangoListField(periodical_type)
+        # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
+        periodicals: list[periodical_type] = DjangoListField(periodical_type)  # pyright: ignore[reportInvalidTypeForm]
 
     finalize_django_types()
     return (build_strategy_schema(Query, "windowed"), build_strategy_schema(Query, "lateral"))
@@ -783,7 +802,7 @@ def _seed_periodicals():
     return issues
 
 
-def _mint_issue_cursor(issue, cursor_field=("-number", "id")):
+def _mint_issue_cursor(issue: object, cursor_field: tuple[str, ...] = ("-number", "id")):
     from apps.library.models import Issue
 
     from django_strawberry_framework.keyset import (
@@ -799,7 +818,12 @@ def _mint_issue_cursor(issue, cursor_field=("-number", "id")):
     )
 
 
-def _assert_keyset_parity(query, *, cursor_field=("-number", "id"), expect_lateral=True):
+def _assert_keyset_parity(
+    query: str,
+    *,
+    cursor_field: tuple[str, ...] = ("-number", "id"),
+    expect_lateral: bool = True,
+):
     """The keyset twin of ``_assert_parity`` (its own type graph per call)."""
     windowed_schema, lateral_schema = _keyset_schemas(cursor_field)
     windowed = windowed_schema.execute_sync(query)
@@ -836,6 +860,7 @@ def test_keyset_count_free_seek_runs_in_branch_on_postgres():
     # in-branch LIMIT - not an outer row-number filter.
     assert "_dst_total_count" not in lateral_sql
     assert "LIMIT" in lateral_sql
+    assert data is not None
     by_name = {parent["id"]: parent["issuesConnection"] for parent in data["periodicals"]}
     pages = {
         tuple(edge["node"]["title"] for edge in connection_data["edges"])
@@ -871,6 +896,7 @@ def test_keyset_counted_seek_downgrades_to_windowed_with_pre_seek_totals():
     )
     executed_sql = " ".join(entry["sql"] for entry in captured)
     assert "FILTER (WHERE" in executed_sql  # the page-relative filtered count
+    assert data is not None
     totals = {parent["issuesConnection"]["totalCount"] for parent in data["periodicals"]}
     assert totals == {5, 3, 0}  # PRE-seek partition counts
 
@@ -881,6 +907,7 @@ def test_keyset_first_page_full_shape_parity():
     data, _ = _assert_keyset_parity(
         f"{{ periodicals {{ id issuesConnection(first: 2) {{ {_KEYSET_FULL_PAGE} }} }} }}",
     )
+    assert data is not None
     for parent in data["periodicals"]:
         connection_data = parent["issuesConnection"]
         for edge in connection_data["edges"]:
@@ -915,10 +942,10 @@ def test_keyset_first_page_full_shape_parity():
     ],
 )
 def test_keyset_json_seek_uses_field_adapter_on_postgres(
-    cursor_field,
-    cursor_rank,
-    expected_labels,
-    sql_fragment,
+    cursor_field: tuple[str, ...],
+    cursor_rank: int,
+    expected_labels: list[str],
+    sql_fragment: str,
 ):
     """Internal JSONB seek values are field-prepared before raw lateral execution.
 
@@ -940,7 +967,7 @@ def test_keyset_json_seek_uses_field_adapter_on_postgres(
     from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
-    def create_specimen(label, payload, *, parent=None):
+    def create_specimen(label: str, payload: object, *, parent: ScalarSpecimen | None = None):
         return ScalarSpecimen.objects.create(
             label=label,
             occurred_on=datetime.date(2026, 1, 1),
@@ -988,8 +1015,10 @@ def test_keyset_json_seek_uses_field_adapter_on_postgres(
         loaded = ScalarSpecimen.objects.prefetch_related(planned_prefetch).get(pk=parent.pk)
     lateral_sql = next(entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"])
     assert sql_fragment in lateral_sql
-    assert [row.label for row in loaded._dst_children_connection] == expected_labels
-    assert all(isinstance(row.payload, dict) for row in loaded._dst_children_connection)
+    # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
+    # class does not declare it
+    assert [row.label for row in loaded._dst_children_connection] == expected_labels  # pyright: ignore[reportAttributeAccessIssue]
+    assert all(isinstance(row.payload, dict) for row in loaded._dst_children_connection)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1084,7 +1113,9 @@ def test_lateral_custom_through_joins_the_foreign_key_target_column():
             entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"]
         )
         assert '"__dst_child"."code" = "__dst_through"."child_code"' in lateral_sql
-        assert [row.code for row in loaded._dst_children_connection] == ["code-0", "code-1"]
+        # basedpyright: Prefetch(to_attr=...) sets the attribute on each row at run time; the model
+        # class does not declare it
+        assert [row.code for row in loaded._dst_children_connection] == ["code-0", "code-1"]  # pyright: ignore[reportAttributeAccessIssue]
     finally:
         with db_connection.schema_editor() as schema_editor:
             schema_editor.delete_model(NaturalMembership)
@@ -1134,10 +1165,21 @@ def test_keyset_lateral_seek_is_an_index_seek():
         lookup="issues",
     )
     plan = OptimizationPlan()
-    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
+    from django.db.models import Prefetch
+
+    from django_strawberry_framework.optimizer.lateral_fetch import (
+        LATERAL_STRATEGY,
+        LateralQuerySet,
+    )
 
     assert LATERAL_STRATEGY.plan(request, plan)
-    spec = plan.prefetch_related[0].queryset._dst_lateral_spec
+    planned_prefetch = plan.prefetch_related[0]
+    assert isinstance(planned_prefetch, Prefetch)
+    assert planned_prefetch.queryset is not None
+    lateral_queryset = planned_prefetch.queryset
+    assert isinstance(lateral_queryset, LateralQuerySet)
+    spec = lateral_queryset._dst_lateral_spec
+    assert spec is not None
     parent_ids = list(Periodical.objects.values_list("pk", flat=True))
     sql, params = build_lateral_sql(
         spec,
@@ -1151,7 +1193,10 @@ def test_keyset_lateral_seek_is_an_index_seek():
         )
         cursor.execute("SET enable_seqscan = off")
         try:
-            cursor.execute(f"EXPLAIN {sql}", params)
+            # basedpyright: django-stubs admits a closed set of Python scalars as ``execute``
+            # params; build_lateral_sql returns the backend-prepared values as ``list[object]``,
+            # which the driver binds
+            cursor.execute(f"EXPLAIN {sql}", params)  # pyright: ignore[reportArgumentType]
             explain_plan = " ".join(row[0] for row in cursor.fetchall())
         finally:
             cursor.execute("SET enable_seqscan = on")
@@ -1190,4 +1235,5 @@ def test_single_parent_fast_path_pages_identically_to_lateral():
     )
     # The single seeded parent is what drives the len==1 IN list the fast path
     # keys on; shelf A carries five books so ``first: 2`` is a real bounded page.
+    assert data is not None
     assert len(data["shelves"]) == 1

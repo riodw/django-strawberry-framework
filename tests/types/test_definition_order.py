@@ -20,6 +20,7 @@ import importlib
 import sys
 import types
 import uuid
+from collections.abc import Iterator
 from typing import Annotated, get_args
 
 import pytest
@@ -28,6 +29,9 @@ from apps.library.models import Book, Genre, MembershipCard, Patron, Shelf
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
 from strawberry import relay
+from strawberry.types import get_object_definition
+from strawberry.types.base import StrawberryObjectDefinition
+from strawberry.types.field import StrawberryField
 from strawberry.types.lazy_type import StrawberryLazyReference
 
 from django_strawberry_framework import DjangoType, auto, finalize_django_types
@@ -42,7 +46,7 @@ from django_strawberry_framework.types.base import _build_annotations
 _LAZY_TARGET_MODULE = "tests.types.fixtures.lazy_relation_target_module"
 
 
-class _FakeUnsupportedField(models.Field):
+class _FakeUnsupportedField(models.Field[object, object]):
     """One-line Django Field subclass with no SCALAR_MAP match.
 
     Pins the unsupported-field-type bypass test for spec-015
@@ -52,14 +56,14 @@ class _FakeUnsupportedField(models.Field):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_registry():
+def _isolate_registry() -> Iterator[None]:
     """Drop registry state on entry/exit so each test starts clean."""
     registry.clear()
     yield
     registry.clear()
 
 
-def _strawberry_field(type_cls: type, field_name: str):
+def _strawberry_field(type_cls: type, field_name: str) -> StrawberryField:
     """Return a finalized Strawberry field by Python name.
 
     Tests intentionally inspect Strawberry internals such as
@@ -90,7 +94,9 @@ def test_reverse_fk_resolves_when_parent_declared_before_child():
     # under the spec-010 collection-phase always-defer contract
     # (spec-010 #"The unconditional deferral at step 7 is the load-bearing part"),
     # regardless of whether the target type happens to already be registered.
+    assert isinstance(CategoryType.__annotations__["items"], type)
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
+    assert isinstance(ItemType.__annotations__["category"], type)
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
 
     finalize_django_types()
@@ -114,7 +120,9 @@ def test_reverse_fk_resolves_when_child_declared_before_parent():
 
     # Pre-finalize: every auto-synthesized relation is the pending sentinel
     # under the spec-010 collection-phase always-defer contract.
+    assert isinstance(ItemType.__annotations__["category"], type)
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
+    assert isinstance(CategoryType.__annotations__["items"], type)
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
 
     finalize_django_types()
@@ -236,6 +244,8 @@ def test_unresolved_target_raises_with_source_field_and_target():
             model = Item
             fields = ("id", "name", "category")
 
+    assert registry.get(Item) is ItemType
+
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
 
@@ -315,7 +325,7 @@ def test_assigned_relation_field_resolver_kwarg_override_keeps_consumer_resolver
             model = Item
             fields = ("id", "name")
 
-    def category_items(root) -> list[ItemType]:
+    def category_items(root: Category) -> list[ItemType]:
         return []
 
     class CategoryType(DjangoType):
@@ -395,7 +405,8 @@ def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_c
         # point of the escape hatch.
         items: list[
             Annotated[
-                "LazyItemType",  # noqa: F821
+                # basedpyright: deliberately unimported; resolves via the strawberry.lazy path
+                "LazyItemType",  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
                 strawberry.lazy("tests.types.fixtures.lazy_relation_target_module"),
             ]
         ]
@@ -436,9 +447,10 @@ def test_cross_module_lazy_relation_override_types_the_field_as_the_referenced_c
             return []
 
     schema = strawberry.Schema(query=Query)
-    assert (
-        schema.get_type_by_name("LazyItemType").origin is lazy_relation_target_module.LazyItemType
-    )
+    lazy_item_type = schema.get_type_by_name("LazyItemType")
+    assert lazy_item_type is not None
+    assert isinstance(lazy_item_type, StrawberryObjectDefinition)
+    assert lazy_item_type.origin is lazy_relation_target_module.LazyItemType
     assert "items: [LazyItemType!]!" in schema.as_str()
 
 
@@ -459,13 +471,16 @@ def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_ty
             fields = ("id", "name")
             primary = True
 
+    assert registry.get(Item) is PrimaryItemType
+
     class CategoryType(DjangoType):
         # ``LazyItemType`` is deliberately not imported into this module: the
         # reference resolves through the lazy module path, which is the whole
         # point of the escape hatch.
         items: list[
             Annotated[
-                "LazyItemType",  # noqa: F821
+                # basedpyright: deliberately unimported; resolves via the strawberry.lazy path
+                "LazyItemType",  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
                 strawberry.lazy("tests.types.fixtures.lazy_relation_target_module"),
             ]
         ]
@@ -501,9 +516,10 @@ def test_cross_module_lazy_relation_override_wins_over_the_registered_primary_ty
             return []
 
     schema = strawberry.Schema(query=Query)
-    assert (
-        schema.get_type_by_name("LazyItemType").origin is lazy_relation_target_module.LazyItemType
-    )
+    lazy_item_type = schema.get_type_by_name("LazyItemType")
+    assert lazy_item_type is not None
+    assert isinstance(lazy_item_type, StrawberryObjectDefinition)
+    assert lazy_item_type.origin is lazy_relation_target_module.LazyItemType
     assert "items: [LazyItemType!]!" in schema.as_str()
     assert "PrimaryItemType" not in schema.as_str()
 
@@ -520,8 +536,8 @@ def test_relation_field_class_attribute_shadowing_raises():
         ConfigurationError,
         match=r"CategoryType\.items shadows a Django relation field",
     ):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             items = None
 
             class Meta:
@@ -592,6 +608,8 @@ def test_camel_case_field_collision_raises():
             model = CamelCollide
             fields = ("foo_bar", "fooBar")
 
+    assert registry.get(CamelCollide) is CamelCollideType
+
     with pytest.raises(ConfigurationError) as exc:
         finalize_django_types()
     message = str(exc.value)
@@ -618,6 +636,8 @@ def test_explicit_graphql_field_name_collision_raises():
         class Meta:
             model = ExplicitNameCollision
             fields = ("foo_bar",)
+
+    assert registry.get(ExplicitNameCollision) is ExplicitNameCollisionType
 
     with pytest.raises(ConfigurationError) as exc:
         finalize_django_types()
@@ -651,7 +671,7 @@ def test_relay_suppressed_pk_does_not_collide_with_real_consumer_field():
 
     field_names = {
         field.graphql_name or field.python_name
-        for field in RenamedPrimaryKeyType.__strawberry_definition__.fields
+        for field in get_object_definition(RenamedPrimaryKeyType, strict=True).fields
     }
     assert field_names == {"id", "legacyId"}
 
@@ -680,6 +700,8 @@ def test_relation_connection_does_not_collide_with_relay_suppressed_pk():
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
+    assert registry.get(Target) is TargetType
+
     class SourceType(DjangoType):
         class Meta:
             model = Source
@@ -690,7 +712,7 @@ def test_relation_connection_does_not_collide_with_relay_suppressed_pk():
 
     field_names = {
         field.graphql_name or field.python_name
-        for field in SourceType.__strawberry_definition__.fields
+        for field in get_object_definition(SourceType, strict=True).fields
     }
     assert field_names == {"id", "items_connection"}
 
@@ -713,7 +735,7 @@ def test_relay_interface_field_prevents_false_empty_surface():
 
     field_names = {
         field.graphql_name or field.python_name
-        for field in RelayOnlyType.__strawberry_definition__.fields
+        for field in get_object_definition(RelayOnlyType, strict=True).fields
     }
     assert field_names == {"id"}
 
@@ -736,6 +758,8 @@ def test_empty_field_surface_raises():
         class Meta:
             model = EmptySurface
             fields = ()
+
+    assert registry.get(EmptySurface) is EmptySurfaceType
 
     with pytest.raises(ConfigurationError) as exc:
         finalize_django_types()
@@ -818,7 +842,8 @@ def test_auto_annotation_synthesizes_model_inferred_scalar_type():
     """``name: auto`` keeps the field selected but infers its type from the model."""
 
     class CategoryType(DjangoType):
-        name: auto
+        # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+        name: auto  # pyright: ignore[reportExplicitAny]
 
         class Meta:
             model = Category
@@ -835,7 +860,8 @@ def test_auto_annotation_is_not_a_consumer_override():
     """An ``auto`` field routes back into synthesis, not the consumer-authored union."""
 
     class CategoryType(DjangoType):
-        name: auto
+        # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+        name: auto  # pyright: ignore[reportExplicitAny]
 
         class Meta:
             model = Category
@@ -850,7 +876,8 @@ def test_auto_annotation_emits_synthesized_annotation():
     """Unlike a real override, an ``auto`` field IS present in the synthesized dict."""
 
     class CategoryType(DjangoType):
-        name: auto
+        # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+        name: auto  # pyright: ignore[reportExplicitAny]
 
         class Meta:
             model = Category
@@ -871,7 +898,8 @@ def test_auto_annotation_on_relation_field_synthesizes_relation():
     """``items: auto`` defers the reverse-FK relation to finalization like bare selection."""
 
     class CategoryType(DjangoType):
-        items: auto
+        # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+        items: auto  # pyright: ignore[reportExplicitAny]
 
         class Meta:
             model = Category
@@ -895,9 +923,10 @@ def test_auto_annotation_on_unselected_field_raises():
     """``auto`` never adds a field: an unselected ``auto`` name is rejected at creation."""
 
     with pytest.raises(ConfigurationError, match=r"annotated `auto` but not selected"):
-
-        class CategoryType(DjangoType):
-            description: auto
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
+            # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+            description: auto  # pyright: ignore[reportExplicitAny]
 
             class Meta:
                 model = Category
@@ -907,10 +936,14 @@ def test_auto_annotation_on_unselected_field_raises():
 def test_auto_annotation_combined_with_assigned_field_raises():
     """``auto`` (infer type) cannot coexist with an assigned resolver/type."""
 
-    with pytest.raises(ConfigurationError, match="cannot combine with an assigned resolver"):
+    def _zero(root: object) -> int:
+        return 0
 
-        class CategoryType(DjangoType):
-            description: auto = strawberry.field(resolver=lambda root: 0)
+    with pytest.raises(ConfigurationError, match="cannot combine with an assigned resolver"):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
+            # basedpyright: strawberry.auto is Annotated[Any, StrawberryAuto()]; DjangoType infers the type
+            description: auto = strawberry.field(resolver=_zero)  # pyright: ignore[reportExplicitAny]
 
             class Meta:
                 model = Category
@@ -933,8 +966,8 @@ def test_annotation_override_of_unsupported_scalar_field_type_is_allowed():
 
     # Baseline: without the override, convert_scalar's MRO walk fails.
     with pytest.raises(ConfigurationError):
-
-        class BaselineType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class BaselineType(DjangoType):  # pyright: ignore[reportUnusedClass]
             class Meta:
                 model = UnsupportedFieldOwner
                 fields = ("myfield",)
@@ -969,6 +1002,8 @@ def test_annotation_override_of_grouped_choices_field_is_allowed():
         class Meta:
             model = GroupedChoiceOwner
             fields = ("status",)
+
+    assert registry.get(GroupedChoiceOwner) is GroupedChoiceOwnerType
 
     finalize_django_types()
     assert registry.get_enum(GroupedChoiceOwner, "status") is None
@@ -1005,11 +1040,15 @@ def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident
     class Query:
         @strawberry.field
         def override(self) -> OverrideType:
-            return CoResidentChoiceOwner(status="a")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return CoResidentChoiceOwner(status="a")  # pyright: ignore[reportReturnType]
 
         @strawberry.field
         def non_override(self) -> NonOverrideType:
-            return CoResidentChoiceOwner(status="a")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return CoResidentChoiceOwner(status="a")  # pyright: ignore[reportReturnType]
 
     schema = strawberry.Schema(query=Query)
     query = (
@@ -1021,6 +1060,7 @@ def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident
     result = schema.execute_sync(query)
     assert result.errors is None, result.errors
 
+    assert result.data is not None
     override_fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
     override_status = override_fields["status"]
     assert override_status["kind"] == "NON_NULL"
@@ -1040,8 +1080,8 @@ def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident
 def test_consumer_id_annotation_on_relay_node_type_raises():
     """``id: int`` on a ``Meta.interfaces = (relay.Node,)`` type raises at class creation."""
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class CategoryNode(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryNode(DjangoType):  # pyright: ignore[reportUnusedClass]
             id: int
 
             class Meta:
@@ -1057,8 +1097,8 @@ def test_consumer_id_annotation_on_relay_node_type_raises():
 def test_consumer_id_annotation_on_direct_relay_node_subclass_raises():
     """``id: int`` on a direct ``relay.Node`` subclass raises (no ``Meta.interfaces``)."""
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class DirectRelayChild(DjangoType, relay.Node):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class DirectRelayChild(DjangoType, relay.Node):  # pyright: ignore[reportUnusedClass]
             id: int
 
             class Meta:
@@ -1072,10 +1112,14 @@ def test_consumer_id_annotation_on_direct_relay_node_subclass_raises():
 
 def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
     """Assigned ``id = strawberry.field(resolver=...)`` raises; message names the workarounds."""
-    with pytest.raises(ConfigurationError) as exc_info:
 
-        class CategoryNode(DjangoType):
-            id = strawberry.field(resolver=lambda root: "x")
+    def _constant_id(root: object) -> str:
+        return "x"
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryNode(DjangoType):  # pyright: ignore[reportUnusedClass]
+            id = strawberry.field(resolver=_constant_id)
 
             class Meta:
                 model = Category
@@ -1091,9 +1135,10 @@ def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
 def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
     """``id: "MissingType"`` (unresolved, non-NodeID) raises: the string-form token regex rejects it."""
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class CategoryNode(DjangoType):
-            id: "MissingType"  # noqa: F821 - deliberately unresolved
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryNode(DjangoType):  # pyright: ignore[reportUnusedClass]
+            # basedpyright: the unresolvable id annotation is the rejected input
+            id: "MissingType"  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 
             class Meta:
                 model = Category
@@ -1108,9 +1153,10 @@ def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
 def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
     """Prefixed-substring lookalikes (e.g. ``"NotNodeID[int]"``) are rejected by the token regex."""
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class CategoryNodeNot(DjangoType):
-            id: "NotNodeID[int]"  # noqa: F821 - token regex rejects this prefix
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryNodeNot(DjangoType):  # pyright: ignore[reportUnusedClass]
+            # basedpyright: the NodeID lookalike is the input the regex rejects
+            id: "NotNodeID[int]"  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 
             class Meta:
                 model = Category
@@ -1122,9 +1168,10 @@ def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
     assert "GlobalID" in msg
 
     with pytest.raises(ConfigurationError) as exc_info:
-
-        class CategoryNodeMy(DjangoType):
-            id: "MyNodeID[int]"  # noqa: F821 - token regex rejects this prefix
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryNodeMy(DjangoType):  # pyright: ignore[reportUnusedClass]
+            # basedpyright: the NodeID lookalike is the input the regex rejects
+            id: "MyNodeID[int]"  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 
             class Meta:
                 model = Category
@@ -1153,7 +1200,9 @@ def test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted():
     class Query:
         @strawberry.field
         def category(self) -> CategoryNode:
-            return Category(id=1, name="x")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category(id=1, name="x")  # pyright: ignore[reportReturnType]
 
     strawberry.Schema(query=Query)
 
@@ -1175,12 +1224,15 @@ def test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_
     class Query:
         @strawberry.field
         def category(self) -> CategoryNode:
-            return Category(id=1, name="x")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category(id=1, name="x")  # pyright: ignore[reportReturnType]
 
     schema = strawberry.Schema(query=Query)
     query = '{ __type(name: "CategoryNode") { fields { name type { kind name ofType { kind name } } } } }'
     result = schema.execute_sync(query)
     assert result.errors is None, result.errors
+    assert result.data is not None
     fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
     id_type = fields["id"]
     assert id_type["kind"] == "NON_NULL"
@@ -1194,7 +1246,7 @@ def test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_g
     assert "relay" not in sys.modules[stub_name].__dict__
     try:
 
-        def _body(ns):
+        def _body(ns: dict[str, object]):
             ns["__module__"] = stub_name
             ns["__annotations__"] = {"id": "relay.NodeID[int]"}
 
@@ -1215,7 +1267,8 @@ def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is
 
     class CategoryNode(DjangoType):
         id: relay.NodeID[int]
-        items: list["AdminItemType"]  # noqa: F821 - deliberately unresolved sibling
+        # basedpyright: an unresolvable sibling must not mask the resolved id
+        items: list["AdminItemType"]  # noqa: F821  # pyright: ignore[reportUndefinedVariable]
 
         class Meta:
             model = Category
@@ -1268,12 +1321,15 @@ def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppres
     class Query:
         @strawberry.field
         def category(self) -> ChildRelayType:
-            return Category(id=1, name="x")
+            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
+            # returns the model rows a DjangoType field resolves from, as the consumer corner does
+            return Category(id=1, name="x")  # pyright: ignore[reportReturnType]
 
     schema = strawberry.Schema(query=Query, types=[ChildRelayType])
     query = '{ __type(name: "ChildRelayType") { fields { name type { kind name ofType { kind name } } } } }'
     result = schema.execute_sync(query)
     assert result.errors is None, result.errors
+    assert result.data is not None
     fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
     id_type = fields["id"]
     assert id_type["kind"] == "NON_NULL"
@@ -1291,8 +1347,8 @@ def test_scalar_field_class_attribute_shadowing_raises():
         ConfigurationError,
         match=r"CategoryType\.name shadows a Django scalar field",
     ):
-
-        class CategoryType(DjangoType):
+        # basedpyright: the class statement is the call under test and raises, so the name is never bound
+        class CategoryType(DjangoType):  # pyright: ignore[reportUnusedClass]
             name = 42
 
             class Meta:
@@ -1345,6 +1401,8 @@ def test_finalize_succeeds_when_model_has_multiple_types_one_primary():
             model = Item
             fields = ("id", "name")
 
+    assert registry.get(Item) is ItemType
+
     class AdminItemType(DjangoType):
         class Meta:
             model = Item
@@ -1386,10 +1444,14 @@ def test_finalize_ambiguity_error_fires_before_unresolved_target_error():
             model = Item
             fields = ("id", "name", "category")
 
+    assert registry.get(Item) is ItemTypeA
+
     class ItemTypeB(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "category")
+
+    assert registry.model_for_type(ItemTypeB) is Item
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()

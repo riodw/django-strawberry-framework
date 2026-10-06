@@ -25,9 +25,11 @@ from __future__ import annotations
 
 import copy
 import pickle
+from collections.abc import Callable
 
 import pytest
 import strawberry
+from typing_extensions import override
 
 from django_strawberry_framework.exceptions import (
     ConfigurationError,
@@ -51,9 +53,11 @@ from django_strawberry_framework.utils.querysets import SyncMisuseError
 class _Unprintable:
     """Hostile message arg whose ``str`` / ``repr`` both raise."""
 
+    @override
     def __str__(self) -> str:
         raise RuntimeError("str failed")
 
+    @override
     def __repr__(self) -> str:
         raise RuntimeError("repr failed")
 
@@ -61,9 +65,11 @@ class _Unprintable:
 class _UnprintableBase:
     """Hostile arg whose dunders raise a ``BaseException`` (not ``Exception``)."""
 
+    @override
     def __str__(self) -> str:
         raise KeyboardInterrupt
 
+    @override
     def __repr__(self) -> str:
         raise KeyboardInterrupt
 
@@ -74,6 +80,7 @@ class _Counting:
     def __init__(self) -> None:
         self.renders = 0
 
+    @override
     def __str__(self) -> str:
         self.renders += 1
         return "counted"
@@ -84,6 +91,7 @@ class _Counting:
 class _HostileTypeNameMeta(type):
     """Metaclass that makes even the fallback class-name lookup fail."""
 
+    @override
     def __getattribute__(cls, name: str):
         if name == "__name__":
             raise RuntimeError("type name failed")
@@ -91,9 +99,11 @@ class _HostileTypeNameMeta(type):
 
 
 class _UnprintableTypeName(metaclass=_HostileTypeNameMeta):
+    @override
     def __str__(self) -> str:
         raise RuntimeError("str failed")
 
+    @override
     def __repr__(self) -> str:
         raise RuntimeError("repr failed")
 
@@ -104,6 +114,7 @@ class _Stateful:
     def __init__(self) -> None:
         self.armed = False
 
+    @override
     def __str__(self) -> str:
         if self.armed:
             raise RuntimeError("now broken")
@@ -115,6 +126,7 @@ class _Stateful:
 class _HostileMetadata:
     """Metadata-bearing input whose label lookup raises during error construction."""
 
+    @override
     def __getattribute__(self, name: str):
         if name in {"_meta", "name"}:
             raise RuntimeError(f"{name} unavailable")
@@ -124,6 +136,7 @@ class _HostileMetadata:
 class _NonStringTypeNameMeta(type):
     """Metaclass exposing malformed, non-string class-name metadata."""
 
+    @override
     def __getattribute__(cls, name: str):
         if name == "__name__":
             return 42
@@ -135,6 +148,7 @@ class _NonStringTypeName(metaclass=_NonStringTypeNameMeta):
 
 
 class _HostileString(str):
+    @override
     def __str__(self) -> str:
         raise RuntimeError("string normalization failed")
 
@@ -151,7 +165,7 @@ class _PicklableDummyTerminal:
     name = "created_at"
 
 
-def _execute_raising(exc_factory):
+def _execute_raising(exc_factory: Callable[[], BaseException]):
     @strawberry.type
     class Query:
         @strawberry.field
@@ -195,6 +209,7 @@ def test_unprintable_configuration_error_keeps_identity_through_graphql():
 
 def test_unprintable_optimizer_error_keeps_identity_through_graphql():
     result = _execute_raising(lambda: OptimizerError(_Unprintable()))
+    assert result.errors is not None
     oe = result.errors[0].original_error
     assert isinstance(oe, OptimizerError)
     assert "<unprintable _Unprintable>" in result.errors[0].message
@@ -202,6 +217,7 @@ def test_unprintable_optimizer_error_keeps_identity_through_graphql():
 
 def test_unprintable_syncmisuse_keeps_identity_through_graphql():
     result = _execute_raising(lambda: SyncMisuseError(_Unprintable()))
+    assert result.errors is not None
     oe = result.errors[0].original_error
     assert isinstance(oe, SyncMisuseError)
     assert isinstance(oe, ConfigurationError)
@@ -312,7 +328,9 @@ def test_path_resolution_error_constructor_survives_hostile_metadata_and_values(
     path = _Unprintable()
     segment = _Unprintable()
 
-    err = PathResolutionError(model, path, segment)
+    # basedpyright: the unprintable path and segment are the hostile input under test;
+    # PathResolutionError types both as str
+    err = PathResolutionError(model, path, segment)  # pyright: ignore[reportArgumentType]
 
     assert err.model is model
     assert err.field_path is path
@@ -327,7 +345,9 @@ def test_lookup_validation_error_constructor_survives_hostile_metadata_and_value
     lookup_expr = _Unprintable()
     part = _Unprintable()
 
-    err = LookupValidationError(terminal, lookup_expr, part)
+    # basedpyright: the unprintable lookup expression and part are the hostile input under test;
+    # LookupValidationError types both as str
+    err = LookupValidationError(terminal, lookup_expr, part)  # pyright: ignore[reportArgumentType]
 
     assert err.terminal is terminal
     assert err.lookup_expr is lookup_expr
@@ -336,7 +356,7 @@ def test_lookup_validation_error_constructor_survives_hostile_metadata_and_value
     assert "terminal _HostileMetadata" in str(err)
 
 
-def _pickle_roundtrip(err):
+def _pickle_roundtrip(err: object) -> object:
     return pickle.loads(pickle.dumps(err))
 
 
@@ -345,10 +365,14 @@ def _pickle_roundtrip(err):
     [_pickle_roundtrip, copy.copy, copy.deepcopy],
     ids=["pickle", "copy", "deepcopy"],
 )
-def test_path_resolution_error_roundtrip_preserves_attributes(roundtrip):
+def test_path_resolution_error_roundtrip_preserves_attributes(
+    roundtrip: Callable[[object], object],
+):
     """PathResolutionError keeps constructor args and extra state across a roundtrip."""
     err = PathResolutionError(_PicklableDummyModel, "groups.permissions", "permissions")
-    err.custom_tag = "custom_value"
+    # basedpyright: the undeclared attribute is the extra instance state the roundtrip must
+    # carry; PathResolutionError declares no such attribute
+    err.custom_tag = "custom_value"  # pyright: ignore[reportAttributeAccessIssue]
 
     restored = roundtrip(err)
 
@@ -366,15 +390,20 @@ def test_path_resolution_error_roundtrip_preserves_attributes(roundtrip):
     [_pickle_roundtrip, copy.copy, copy.deepcopy],
     ids=["pickle", "copy", "deepcopy"],
 )
-def test_lookup_validation_error_roundtrip_preserves_attributes(roundtrip):
+def test_lookup_validation_error_roundtrip_preserves_attributes(
+    roundtrip: Callable[[object], object],
+):
     """LookupValidationError keeps constructor args and extra state across a roundtrip."""
     term = _PicklableDummyTerminal()
     err = LookupValidationError(term, "created_at__year__invalid", "invalid")
-    err.custom_tag = "custom_value"
+    # basedpyright: the undeclared attribute is the extra instance state the roundtrip must
+    # carry; LookupValidationError declares no such attribute
+    err.custom_tag = "custom_value"  # pyright: ignore[reportAttributeAccessIssue]
 
     restored = roundtrip(err)
 
     assert isinstance(restored, LookupValidationError)
+    assert isinstance(restored.terminal, _PicklableDummyTerminal)
     assert restored.terminal.name == "created_at"
     assert restored.lookup_expr == "created_at__year__invalid"
     assert restored.part == "invalid"
@@ -391,13 +420,16 @@ def test_str_subclass_with_hostile_format_is_stripped_by_helpers():
     """Helpers strip str subclasses so hostile __format__ cannot detonate error message formatting."""
 
     class _HostileFormatStr(str):
+        @override
         def __str__(self) -> str:
             return self
 
+        @override
         def __format__(self, format_spec: str) -> str:
             raise RuntimeError("hostile __format__ detonated")
 
     class _HostileFormatRepr:
+        @override
         def __repr__(self) -> str:
             return _HostileFormatStr("<HostileFormatRepr>")
 
@@ -421,7 +453,9 @@ def test_str_subclass_with_hostile_format_is_stripped_by_helpers():
     assert arg_repr == "<HostileFormatRepr>"
 
     # PathResolutionError and LookupValidationError construct without detonating
-    path_err = PathResolutionError(_ModelWithHostileLabel, _HostileFormatRepr(), "segment")
+    # basedpyright: the path whose repr returns a hostile str subclass is the hostile input under
+    # test; PathResolutionError types the parameter as str
+    path_err = PathResolutionError(_ModelWithHostileLabel, _HostileFormatRepr(), "segment")  # pyright: ignore[reportArgumentType]
     assert "app.HostileModel" in str(path_err)
     assert "<HostileFormatRepr>" in str(path_err)
 
@@ -434,7 +468,9 @@ def test_safe_diagnostic_helpers_survive_hostile_class_property():
 
     class _HostileClass:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("hostile __class__")
 
     bad = _HostileClass()
@@ -451,12 +487,15 @@ def test_safe_class_name_survives_hostile_name_metadata():
 
     class _HostileClassAndBool:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise RuntimeError("hostile __class__ on name")
 
         def __bool__(self):
             raise RuntimeError("hostile __bool__ on name")
 
+        @override
         def __repr__(self):
             raise RuntimeError("hostile __repr__ on name")
 
@@ -480,12 +519,17 @@ def test_safe_type_name_survives_isinstance_raising_base_exception():
 
     class _HostileClassDunder:
         @property
-        def __class__(self):
+        @override
+        # basedpyright: deliberately a read-only ``__class__`` that raises: the hostile object is the guard's input
+        def __class__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
             raise KeyboardInterrupt
 
     class _HostileTypeNameMeta(type):
         @property
-        def __name__(cls):
+        @override
+        # basedpyright: the hostile shape under test, a ``__name__`` property answering a hostile
+        # object; the checker rejects any property overriding a base class attribute
+        def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
             return _HostileClassDunder()
 
     class _HostileType(metaclass=_HostileTypeNameMeta):
@@ -495,15 +539,19 @@ def test_safe_type_name_survives_isinstance_raising_base_exception():
     assert _safe_type_name(_HostileType()) == "object"
 
 
-def test_safe_type_name_survives_base_str_slot_raising_base_exception(monkeypatch):
+def test_safe_type_name_survives_base_str_slot_raising_base_exception(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A name that blows up in the base ``str`` slot is skipped, not propagated."""
     import django_strawberry_framework.exceptions as exc_mod
 
     class _MockStrMeta(type):
-        def __instancecheck__(cls, instance):
+        @override
+        def __instancecheck__(cls, instance: object):
             return True
 
     class _MockStr(metaclass=_MockStrMeta):
+        @override
         def __str__(self):
             raise KeyboardInterrupt
 
@@ -520,24 +568,28 @@ def test_safe_arg_repr_falls_back_for_hostile_values_and_type_metadata():
     """
 
     class _HostileNameMeta(type):
+        @override
         def __getattribute__(cls, name: str):
             if name == "__name__":
                 raise RuntimeError("name unavailable")
             return super().__getattribute__(name)
 
     class _HostileValue(metaclass=_HostileNameMeta):
+        @override
         def __repr__(self) -> str:
             raise RuntimeError("repr unavailable")
 
     assert _safe_arg_repr(_HostileValue()) == "<unprintable object>"
 
     class _NonStringNameMeta(type):
+        @override
         def __getattribute__(cls, name: str):
             if name == "__name__":
                 return 42
             return super().__getattribute__(name)
 
     class _NonStringName(metaclass=_NonStringNameMeta):
+        @override
         def __repr__(self) -> str:
             raise RuntimeError("repr unavailable")
 
@@ -548,9 +600,11 @@ def test_framework_error_str_and_repr_strip_str_subclasses():
     """__str__ and __repr__ strip str subclasses so hostile __format__ cannot detonate."""
 
     class _HostileFormatStr(str):
+        @override
         def __str__(self) -> str:
             return self
 
+        @override
         def __format__(self, format_spec: str) -> str:
             raise RuntimeError("hostile __format__ detonated")
 
@@ -597,10 +651,12 @@ def test_safe_text_is_the_shared_str_renderer():
     """The consolidated renderer strips str subclasses, falls back, and degrades."""
 
     class _HostileStrStr(str):
+        @override
         def __str__(self) -> str:
             raise RuntimeError("string normalization failed")
 
     class _RaisingStr:
+        @override
         def __str__(self) -> str:
             raise RuntimeError("str failed")
 
@@ -624,16 +680,20 @@ def test_safe_text_strips_a_str_subclass_returned_by_tp_str():
     """
 
     class _LeakedRender(str):
+        @override
         def __str__(self) -> str:
             raise RuntimeError("leaked-subclass __str__ ran")
 
+        @override
         def __format__(self, format_spec: str) -> str:
             raise RuntimeError("hostile __format__ detonated")
 
+        @override
         def __len__(self) -> int:
             raise RuntimeError("hostile __len__ detonated")
 
     class _LeakyStrFactory:
+        @override
         def __str__(self) -> str:
             return _LeakedRender("from-factory")
 
@@ -656,16 +716,20 @@ def test_write_error_envelope_survives_hostile_str_returning_message_object():
     """
 
     class _HostileRender(str):
+        @override
         def __str__(self) -> str:
             raise RuntimeError("leaked-subclass __str__ ran")
 
+        @override
         def __format__(self, format_spec: str) -> str:
             raise RuntimeError("hostile __format__ detonated")
 
+        @override
         def __len__(self) -> int:
             raise RuntimeError("hostile __len__ detonated")
 
     class _StrFactoryMessage:
+        @override
         def __str__(self) -> str:
             return _HostileRender("hostile message")
 
@@ -677,6 +741,7 @@ def test_write_error_envelope_survives_hostile_str_returning_message_object():
 def test_safe_text_is_single_sourced_across_consumer_modules():
     """utils.errors and types.converters import the ONE renderer, not local twins."""
 
-    assert _errors_module._safe_text is _safe_text
-    assert _errors_module._unprintable.__module__ == ("django_strawberry_framework.exceptions")
-    assert _converters_module._safe_text is _safe_text
+    # basedpyright: the single-source check reads the name through the importing module on purpose
+    assert _errors_module._safe_text is _safe_text  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert _errors_module._unprintable.__module__ == ("django_strawberry_framework.exceptions")  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert _converters_module._safe_text is _safe_text  # pyright: ignore[reportPrivateLocalImportUsage]

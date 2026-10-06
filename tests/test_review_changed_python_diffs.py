@@ -52,7 +52,7 @@ def _commit(repo: Path, message: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path: Path, monkeypatch) -> Path:
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     for key, value in {
@@ -183,7 +183,10 @@ def test_include_flags_admit_init_and_test_paths(repo: Path) -> None:
     assert [change.path for change in included] == ["pkg/__init__.py", "pkg/testing/client.py"]
 
 
-def test_list_json_reports_changes_head_blobs_and_dirty_group(repo: Path, capsys) -> None:
+def test_list_json_reports_changes_head_blobs_and_dirty_group(
+    repo: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     _write(repo, "pkg/mod.py", BASE_MODULE)
     _write(repo, "pkg/gone.py", "GONE = 1\n")
     _commit(repo, "base")

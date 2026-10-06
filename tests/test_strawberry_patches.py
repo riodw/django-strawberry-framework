@@ -67,14 +67,16 @@ consumer mounting Strawberry's own view is entitled to.
 
 import functools
 import json
+from collections.abc import Callable, Mapping
 from unittest import mock
 
 import pytest
-from cross_web import HTTPException
-from cross_web.request import FormData
+import pytest_django
+from cross_web import FormData, HTTPException
 from strawberry.http.async_base_view import AsyncBaseHTTPView
 from strawberry.http.base import BaseView
 from strawberry.http.sync_base_view import SyncBaseHTTPView
+from typing_extensions import Never
 
 from django_strawberry_framework import _strawberry_patches as patches
 
@@ -93,7 +95,9 @@ def test_apply_reinstalls_when_method_reverted():
 
     saved = BaseView.__dict__["parse_json"]
     try:
-        BaseView.parse_json = patches._original_parse_json
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         patches.apply()
@@ -122,7 +126,9 @@ def test_apply_reinstalls_pair_when_parse_query_params_reverted():
 
     saved = BaseView.__dict__["parse_query_params"]
     try:
-        BaseView.parse_query_params = patches._original_parse_query_params
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         patches.apply()
@@ -143,7 +149,9 @@ def test_apply_reinstalls_all_members_when_one_multipart_method_reverted():
     patches.apply()
     saved = AsyncBaseHTTPView.__dict__["parse_multipart"]
     try:
-        AsyncBaseHTTPView.parse_multipart = patches._original_async_parse_multipart
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        AsyncBaseHTTPView.parse_multipart = patches._original_async_parse_multipart  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         patches.apply()
@@ -203,7 +211,7 @@ def test_patched_parse_json_passes_through_valid_json():
         pytest.param("utf-8-sig", id="utf-8-bom"),
     ],
 )
-def test_patched_parse_json_leaves_upstreams_bytes_semantics_alone(encoding):
+def test_patched_parse_json_leaves_upstreams_bytes_semantics_alone(encoding: str):
     """This wrapper does **not** narrow the accepted encodings, and must not start.
 
     The inverse of the view boundary's contract, asserted here so the ownership
@@ -233,7 +241,7 @@ def test_patched_parse_json_passes_a_str_body_through_without_reencoding():
     body = '{"a": 1}'
     seen = []
 
-    def _recorder(view, data):
+    def _recorder(view: object, data: str | bytes):
         seen.append(data)
         return {"recorded": True}
 
@@ -264,7 +272,7 @@ class _MultipartView:
     """
 
     @staticmethod
-    def parse_json(data):
+    def parse_json(data: str | bytes):
         return json.loads(data)
 
 
@@ -273,9 +281,9 @@ class _SyncMultipartRequest:
 
     def __init__(
         self,
-        operations,
-        files_map,
-        files,
+        operations: str,
+        files_map: str,
+        files: Mapping[str, object],
     ):
         self.post_data = {"operations": operations, "map": files_map}
         self.files = files
@@ -293,9 +301,9 @@ class _AsyncMultipartRequest:
 
     def __init__(
         self,
-        operations,
-        files_map,
-        files,
+        operations: str,
+        files_map: str,
+        files: Mapping[str, object],
     ):
         self._form_data = FormData(
             files=files,
@@ -327,12 +335,18 @@ _MULTIPART_LIST_OPERATIONS = '{"query": "{ __typename }", "variables": []}'
         ),
     ],
 )
-def test_patched_sync_parse_multipart_rejects_structurally_invalid_maps(operations, files_map):
+def test_patched_sync_parse_multipart_rejects_structurally_invalid_maps(
+    operations: str,
+    files_map: str,
+):
     """Every malformed map that upstream leaks as a Python error becomes its 400."""
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_sync_parse_multipart(
-            _MultipartView(),
-            _SyncMultipartRequest(operations, files_map, {"0": object()}),
+            # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+            # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
+            # SyncHTTPRequestAdapter
+            _MultipartView(),  # pyright: ignore[reportArgumentType]
+            _SyncMultipartRequest(operations, files_map, {"0": object()}),  # pyright: ignore[reportArgumentType]
         )
 
     assert excinfo.value.status_code == 400
@@ -343,8 +357,11 @@ async def test_patched_async_parse_multipart_rejects_structurally_invalid_maps()
     """The async parser has the same untrusted-map failure boundary as the sync one."""
     with pytest.raises(HTTPException) as excinfo:
         await patches._patched_async_parse_multipart(
-            _MultipartView(),
-            _AsyncMultipartRequest(_MULTIPART_OPERATIONS, "[{}]", {"0": object()}),
+            # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+            # test reads; _patched_async_parse_multipart types them as AsyncBaseHTTPView and
+            # AsyncHTTPRequestAdapter
+            _MultipartView(),  # pyright: ignore[reportArgumentType]
+            _AsyncMultipartRequest(_MULTIPART_OPERATIONS, "[{}]", {"0": object()}),  # pyright: ignore[reportArgumentType]
         )
 
     assert excinfo.value.status_code == 400
@@ -370,8 +387,13 @@ async def test_the_multipart_reason_is_upstreams_own_native_literal():
     native raise - the JSON reason's ``tests/test_views.py`` precedent - catches
     an upstream rewording instead of letting the copy drift silently.
     """
+    original_async_parse_multipart = patches._original_async_parse_multipart
+    assert original_async_parse_multipart is not None
     with pytest.raises(HTTPException) as excinfo:
-        await patches._original_async_parse_multipart(_MultipartView(), _UnformableRequest())
+        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+        # test reads; the captured upstream parser types them as AsyncBaseHTTPView and
+        # AsyncHTTPRequestAdapter
+        await original_async_parse_multipart(_MultipartView(), _UnformableRequest())  # pyright: ignore[reportArgumentType]
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
@@ -382,20 +404,23 @@ def test_patched_sync_parse_multipart_preserves_a_non_structural_parser_exceptio
 
     class _ExplodingView:
         @staticmethod
-        def parse_json(data):
+        def parse_json(data: str | bytes):
             raise RuntimeError("consumer decode hook failed")
 
     request = _SyncMultipartRequest(_MULTIPART_OPERATIONS, "{}", {})
 
     with pytest.raises(RuntimeError, match="consumer decode hook failed"):
-        patches._patched_sync_parse_multipart(_ExplodingView(), request)
+        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+        # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
+        # SyncHTTPRequestAdapter
+        patches._patched_sync_parse_multipart(_ExplodingView(), request)  # pyright: ignore[reportArgumentType]
 
 
 class _StructurallyBuggyView:
     """A view whose JSON hook has a genuine server-side bug of a TRAVERSAL type."""
 
     @staticmethod
-    def parse_json(data):
+    def parse_json(data: str | bytes):
         raise TypeError("server-side bug before the upload traversal")
 
 
@@ -411,7 +436,10 @@ def test_patched_sync_parse_multipart_does_not_downgrade_a_server_bug_to_400():
     request = _SyncMultipartRequest(_MULTIPART_OPERATIONS, "{}", {})
 
     with pytest.raises(TypeError, match="server-side bug before the upload traversal"):
-        patches._patched_sync_parse_multipart(_StructurallyBuggyView(), request)
+        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+        # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
+        # SyncHTTPRequestAdapter
+        patches._patched_sync_parse_multipart(_StructurallyBuggyView(), request)  # pyright: ignore[reportArgumentType]
 
 
 async def test_patched_async_parse_multipart_does_not_downgrade_a_server_bug_to_400():
@@ -419,7 +447,10 @@ async def test_patched_async_parse_multipart_does_not_downgrade_a_server_bug_to_
     request = _AsyncMultipartRequest(_MULTIPART_OPERATIONS, "{}", {})
 
     with pytest.raises(TypeError, match="server-side bug before the upload traversal"):
-        await patches._patched_async_parse_multipart(_StructurallyBuggyView(), request)
+        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+        # test reads; _patched_async_parse_multipart types them as AsyncBaseHTTPView and
+        # AsyncHTTPRequestAdapter
+        await patches._patched_async_parse_multipart(_StructurallyBuggyView(), request)  # pyright: ignore[reportArgumentType]
 
 
 def test_patched_sync_parse_multipart_preserves_valid_batched_operations():
@@ -431,7 +462,10 @@ def test_patched_sync_parse_multipart_preserves_valid_batched_operations():
         {"0": "upload"},
     )
 
-    parsed = patches._patched_sync_parse_multipart(_MultipartView(), request)
+    # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+    # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
+    # SyncHTTPRequestAdapter
+    parsed = patches._patched_sync_parse_multipart(_MultipartView(), request)  # pyright: ignore[reportArgumentType]
 
     assert parsed == [{"query": "{ __typename }", "variables": {"upload": "upload"}}]
 
@@ -462,7 +496,7 @@ def test_apply_fails_loudly_when_symbols_missing():
         pytest.param("AsyncBaseHTTPView", id="async-multipart-view"),
     ],
 )
-def test_apply_fails_loudly_when_a_multipart_view_symbol_moves(name):
+def test_apply_fails_loudly_when_a_multipart_view_symbol_moves(name: str):
     """A moved multipart owner cannot turn the malformed-map fix into an AttributeError."""
     with mock.patch.object(patches, name, None):
         with pytest.raises(RuntimeError, match="parse_multipart"):
@@ -490,15 +524,23 @@ def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
     raise ``AttributeError`` from inside the traversal handler, replacing the
     request's own error.
     """
-    wrapped = functools.partial(patches.replace_placeholders_with_files)
+    # basedpyright: the package's guarded-import sentinel is the value apply() checks, so the test wraps that one
+    utility = patches.replace_placeholders_with_files  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert utility is not None
+    wrapped = functools.partial(utility)
     with mock.patch.object(patches, "replace_placeholders_with_files", wrapped):
         with pytest.raises(RuntimeError, match="replace_placeholders_with_files"):
             patches.apply()
 
 
+def _self_only_method(self: object) -> None:
+    """A delegate whose signature lost every parameter but ``self``."""
+    return None
+
+
 def test_apply_fails_loudly_when_parse_json_signature_changes():
     """The patch pins the method arity it delegates to."""
-    with mock.patch.object(patches, "_original_parse_json", lambda self: None):
+    with mock.patch.object(patches, "_original_parse_json", _self_only_method):
         with pytest.raises(RuntimeError, match=r"expected \(self, data\) signature"):
             patches.apply()
 
@@ -512,7 +554,7 @@ def test_apply_fails_loudly_when_parse_query_params_missing():
 
 def test_apply_fails_loudly_when_parse_query_params_signature_changes():
     """The shield pins the reimplemented method's arity."""
-    with mock.patch.object(patches, "_original_parse_query_params", lambda self: None):
+    with mock.patch.object(patches, "_original_parse_query_params", _self_only_method):
         with pytest.raises(RuntimeError, match=r"expected \(self, params\) signature"):
             patches.apply()
 
@@ -520,19 +562,14 @@ def test_apply_fails_loudly_when_parse_query_params_signature_changes():
 @pytest.mark.parametrize(
     ("name", "method"),
     [
-        pytest.param(
-            "_original_sync_parse_multipart",
-            lambda self: None,
-            id="sync-multipart",
-        ),
-        pytest.param(
-            "_original_async_parse_multipart",
-            lambda self: None,
-            id="async-multipart",
-        ),
+        pytest.param("_original_sync_parse_multipart", _self_only_method, id="sync-multipart"),
+        pytest.param("_original_async_parse_multipart", _self_only_method, id="async-multipart"),
     ],
 )
-def test_apply_fails_loudly_when_parse_multipart_signature_changes(name, method):
+def test_apply_fails_loudly_when_parse_multipart_signature_changes(
+    name: str,
+    method: Callable[..., object],
+):
     """Each delegating multipart wrapper pins the upstream call shape it invokes."""
     with mock.patch.object(patches, name, method):
         with pytest.raises(RuntimeError, match=r"expected \(self, request\) signature"):
@@ -554,11 +591,13 @@ def test_apply_fails_loudly_when_parse_query_params_body_drifts():
     saved_parse_json = BaseView.__dict__["parse_json"]
     saved_parse_query_params = BaseView.__dict__["parse_query_params"]
     try:
-        BaseView.parse_json = patches._original_parse_json
-        BaseView.parse_query_params = patches._original_parse_query_params
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
+        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
-        def _drifted(self, params):
+        def _drifted(self: BaseView[Never], params: Mapping[str, str]):
             """A (self, params)-shaped upstream whose body dropped the falsy skip."""
             params = dict(params)
             if "variables" in params:
@@ -597,11 +636,13 @@ def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
             patches.apply()
 
 
-def test_apply_no_ops_when_toggle_disabled(settings):
+def test_apply_no_ops_when_toggle_disabled(settings: pytest_django.Settings):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
     saved = BaseView.__dict__["parse_json"]
     try:
-        BaseView.parse_json = patches._original_parse_json
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
@@ -614,7 +655,7 @@ def test_apply_no_ops_when_toggle_disabled(settings):
         BaseView.parse_json = saved
 
 
-def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
+def test_apply_no_ops_when_strawberry_dependency_opted_out(settings: pytest_django.Settings):
     """``{"strawberry": False}`` disables only this module; ``{"django": False}`` does not.
 
     The production half of the per-dependency opt-out contract: opting out of
@@ -624,8 +665,10 @@ def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
     saved_parse_json = BaseView.__dict__["parse_json"]
     saved_parse_query_params = BaseView.__dict__["parse_query_params"]
     try:
-        BaseView.parse_json = patches._original_parse_json
-        BaseView.parse_query_params = patches._original_parse_query_params
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
+        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
         assert patches._patch_is_installed() is False
 
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
@@ -640,7 +683,9 @@ def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
         BaseView.parse_query_params = saved_parse_query_params
 
 
-def test_the_gated_workarounds_really_stop_hardening_when_opted_out(settings):
+def test_the_gated_workarounds_really_stop_hardening_when_opted_out(
+    settings: pytest_django.Settings,
+):
     """The opt-out is behavioral, not just an install flag - and stays that way.
 
     The companion to ``tests/test_views.py``'s patch-opted-out rows, and the
@@ -660,8 +705,10 @@ def test_the_gated_workarounds_really_stop_hardening_when_opted_out(settings):
     saved_parse_query_params = BaseView.__dict__["parse_query_params"]
     try:
         settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
-        BaseView.parse_json = patches._original_parse_json
-        BaseView.parse_query_params = patches._original_parse_query_params
+        # basedpyright: restoring the captured upstream original is the reverted state under test;
+        # the package types the capture as optional, not as the method's own signature
+        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
+        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
         patches.apply()
         assert patches._patch_is_installed() is False
 
@@ -689,7 +736,7 @@ def test_capture_returns_none_when_upstream_owner_is_missing():
     assert patches._captured_upstream_method(None, "parse_json") is None
 
 
-def test_patched_parse_json_translates_a_pathologically_nested_body(pathological_json_text):
+def test_patched_parse_json_translates_a_pathologically_nested_body(pathological_json_text: str):
     """A body nested past the parser's C stack -> controlled 400, not a raw escape.
 
     The second half of gap 1: ``json.loads`` answers a pathologically nested
@@ -709,7 +756,10 @@ def test_patched_parse_json_translates_a_pathologically_nested_body(pathological
 
 
 @pytest.mark.parametrize("param", ["variables", "extensions"])
-def test_patched_parse_query_params_translates_a_deep_param(param, pathological_json_text):
+def test_patched_parse_query_params_translates_a_deep_param(
+    param: str,
+    pathological_json_text: str,
+):
     """The GET shield owns gap 1's error channel without owning its guard.
 
     The shield routes the two query-param parses around the envelope guard
@@ -730,7 +780,7 @@ def test_patched_parse_query_params_translates_a_deep_param(param, pathological_
 
 
 def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
-    deepcopy_overflow_operations_text,
+    deepcopy_overflow_operations_text: str,
 ):
     """The upload utility's ``copy.deepcopy`` recursion becomes its own 400.
 
@@ -743,20 +793,26 @@ def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
     request = _SyncMultipartRequest(deepcopy_overflow_operations_text, "{}", {})
 
     with pytest.raises(HTTPException) as excinfo:
-        patches._patched_sync_parse_multipart(_MultipartView(), request)
+        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+        # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
+        # SyncHTTPRequestAdapter
+        patches._patched_sync_parse_multipart(_MultipartView(), request)  # pyright: ignore[reportArgumentType]
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
 
 
 async def test_patched_async_parse_multipart_translates_a_deep_operations_document(
-    deepcopy_overflow_operations_text,
+    deepcopy_overflow_operations_text: str,
 ):
     """The async delegate scopes the deepcopy recursion identically."""
     request = _AsyncMultipartRequest(deepcopy_overflow_operations_text, "{}", {})
 
     with pytest.raises(HTTPException) as excinfo:
-        await patches._patched_async_parse_multipart(_MultipartView(), request)
+        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
+        # test reads; _patched_async_parse_multipart types them as AsyncBaseHTTPView and
+        # AsyncHTTPRequestAdapter
+        await patches._patched_async_parse_multipart(_MultipartView(), request)  # pyright: ignore[reportArgumentType]
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON

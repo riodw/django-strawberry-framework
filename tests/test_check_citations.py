@@ -12,6 +12,7 @@ real repository.
 
 import json
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -49,7 +50,7 @@ def build(count):
 '''
 
 
-def _write(root, relative, text):
+def _write(root: Path, relative: str, text: str):
     path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(textwrap.dedent(text), encoding="utf-8")
@@ -57,7 +58,7 @@ def _write(root, relative, text):
 
 
 @pytest.fixture
-def tree(tmp_path, monkeypatch):
+def tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Build a fake repo with the four source trees, a board, an archived spec and docs."""
     monkeypatch.setattr(check_citations, "REPO_ROOT", tmp_path)
     for name in check_citations.SOURCE_TREES:
@@ -68,7 +69,7 @@ def tree(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _cite(root, text, name="tests/test_citer.py"):
+def _cite(root: Path, text: str, name: str = "tests/test_citer.py"):
     """Write one citing source and return its checked outcomes."""
     source = _write(root, name, text)
     corpus = check_citations.iter_python_sources()
@@ -82,11 +83,11 @@ def _cite(root, text, name="tests/test_citer.py"):
     )
 
 
-def _verdicts(outcomes):
+def _verdicts(outcomes: list[check_citations.Outcome]):
     return [(outcome.citation.text, outcome.resolved) for outcome in outcomes]
 
 
-def test_module_and_class_scope_bindings_resolve(tree):
+def test_module_and_class_scope_bindings_resolve(tree: Path):
     outcomes = _cite(
         tree,
         """\
@@ -98,7 +99,7 @@ def test_module_and_class_scope_bindings_resolve(tree):
     assert len(outcomes) == 6
 
 
-def test_a_function_local_variable_is_not_citable(tree):
+def test_a_function_local_variable_is_not_citable(tree: Path):
     outcomes = _cite(
         tree,
         """\
@@ -114,7 +115,7 @@ def test_a_function_local_variable_is_not_citable(tree):
     ]
 
 
-def test_a_nested_def_inside_a_function_stays_citable(tree):
+def test_a_nested_def_inside_a_function_stays_citable(tree: Path):
     outcomes = _cite(tree, "# widgets.py::inner_factory widgets.py::build.inner_factory\n")
     assert _verdicts(outcomes) == [
         ("widgets.py::inner_factory", True),
@@ -144,7 +145,7 @@ def outer(value):
 """
 
 
-def test_a_name_bound_inside_a_compound_block_is_citable_and_a_local_still_is_not(tree):
+def test_a_name_bound_inside_a_compound_block_is_citable_and_a_local_still_is_not(tree: Path):
     _write(tree, "django_strawberry_framework/blocks.py", BLOCKS_MODULE)
     outcomes = _cite(
         tree,
@@ -162,7 +163,7 @@ def test_a_name_bound_inside_a_compound_block_is_citable_and_a_local_still_is_no
     ]
 
 
-def test_a_dunder_is_resolved_as_one_symbol_not_skipped_as_a_family(tree):
+def test_a_dunder_is_resolved_as_one_symbol_not_skipped_as_a_family(tree: Path):
     outcomes = _cite(
         tree,
         """\
@@ -177,7 +178,7 @@ def test_a_dunder_is_resolved_as_one_symbol_not_skipped_as_a_family(tree):
     ]
 
 
-def test_a_citation_wrapped_after_the_double_colon_is_joined(tree):
+def test_a_citation_wrapped_after_the_double_colon_is_joined(tree: Path):
     outcomes = _cite(
         tree,
         """\
@@ -192,7 +193,7 @@ def test_a_citation_wrapped_after_the_double_colon_is_joined(tree):
     ]
 
 
-def test_a_citation_wrapped_inside_its_path_is_joined_once(tree):
+def test_a_citation_wrapped_inside_its_path_is_joined_once(tree: Path):
     outcomes = _cite(
         tree,
         """\
@@ -206,7 +207,7 @@ def test_a_citation_wrapped_inside_its_path_is_joined_once(tree):
     assert outcomes[0].resolved
 
 
-def test_iter_citations_keeps_its_tuple_shape(tree):
+def test_iter_citations_keeps_its_tuple_shape(tree: Path):
     text = "# widgets.py::build and widgets.py::\n#   LIMIT\n"
     assert list(check_citations.iter_citations(text)) == [
         (1, "widgets.py", "build"),
@@ -214,7 +215,7 @@ def test_iter_citations_keeps_its_tuple_shape(tree):
     ]
 
 
-def test_default_run_gates_the_corpus_and_board(tree, capsys):
+def test_default_run_gates_the_corpus_and_board(tree: Path, capsys: pytest.CaptureFixture[str]):
     _write(tree, "tests/test_citer.py", "# widgets.py::build\n")
     _write(tree, "KANBAN.md", "planned `later.py::Thing`, real `widgets.py::Widget`\n")
     assert check_citations.main([]) == 0
@@ -228,7 +229,7 @@ def test_default_run_gates_the_corpus_and_board(tree, capsys):
     assert "examples/broken.py:1: cites `widgets.py::gone`" in out
 
 
-def test_paths_checks_only_the_named_files(tree, capsys):
+def test_paths_checks_only_the_named_files(tree: Path, capsys: pytest.CaptureFixture[str]):
     _write(tree, "tests/test_good.py", "# widgets.py::build widgets.py::LIMIT\n")
     _write(tree, "tests/test_bad.py", "# widgets.py::gone\n")
     _write(tree, "docs/notes.md", "cites `widgets.py::Widget` and `nowhere.py::X`\n")
@@ -242,12 +243,15 @@ def test_paths_checks_only_the_named_files(tree, capsys):
     assert "nowhere.py::X` -- no such file" in out
 
 
-def test_paths_refuses_a_missing_file(tree):
+def test_paths_refuses_a_missing_file(tree: Path):
     with pytest.raises(check_citations.CitationCheckError, match="no such file"):
         check_citations.main(["--paths", "tests/absent.py"])
 
 
-def test_json_reports_every_citation_with_its_verdict(tree, capsys):
+def test_json_reports_every_citation_with_its_verdict(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     _write(tree, "tests/test_citer.py", "# widgets.py::build widgets.py::Widget.gone\n")
     assert check_citations.main(["--paths", "tests/test_citer.py", "--json"]) == 1
     captured = capsys.readouterr()
@@ -262,7 +266,10 @@ def test_json_reports_every_citation_with_its_verdict(tree, capsys):
     assert bad["now_lives_in"] == []
 
 
-def test_json_hint_names_where_a_moved_symbol_now_lives(tree, capsys):
+def test_json_hint_names_where_a_moved_symbol_now_lives(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     _write(tree, "tests/helpers.py", "def relocated():\n    pass\n")
     _write(tree, "tests/test_citer.py", "# widgets.py::relocated\n")
     check_citations.main(["--paths", "tests/test_citer.py", "--json"])
@@ -270,13 +277,13 @@ def test_json_hint_names_where_a_moved_symbol_now_lives(tree, capsys):
     assert record["now_lives_in"] == ["tests/helpers.py"]
 
 
-def test_substrings_are_off_by_default(tree, capsys):
+def test_substrings_are_off_by_default(tree: Path, capsys: pytest.CaptureFixture[str]):
     _write(tree, "tests/test_citer.py", '# widgets.py::build #"not in the body"\n')
     assert check_citations.main(["--paths", "tests/test_citer.py"]) == 0
     assert capsys.readouterr().out == "OK: 1 citations resolve (1 in 1 named file(s)).\n"
 
 
-def test_substring_pinpoints_resolve_inside_the_symbol_or_the_file(tree):
+def test_substring_pinpoints_resolve_inside_the_symbol_or_the_file(tree: Path):
     _write(tree, "docs/guide.md", "## Coverage rule\nText.\n")
     outcomes = _cite(
         tree,
@@ -305,7 +312,10 @@ def test_substring_pinpoints_resolve_inside_the_symbol_or_the_file(tree):
     assert all(o.warning is None for o in pinpoints[:5])
 
 
-def test_substrings_flag_fails_the_run_and_warns_on_ambiguity(tree, capsys):
+def test_substrings_flag_fails_the_run_and_warns_on_ambiguity(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     _write(
         tree,
         "tests/test_citer.py",
@@ -321,7 +331,7 @@ def test_substrings_flag_fails_the_run_and_warns_on_ambiguity(tree, capsys):
     assert "WARN: 1 ambiguous pinpoint(s):" in out
 
 
-def test_cited_by_marks_gated_and_ungated_citers(tree, capsys):
+def test_cited_by_marks_gated_and_ungated_citers(tree: Path, capsys: pytest.CaptureFixture[str]):
     _write(tree, "tests/test_citer.py", "# widgets.py::Widget.render widgets.py::build\n")
     _write(tree, "KANBAN.md", "board cites `widgets.py::Widget`\n")
     _write(tree, "docs/design.md", "design cites `widgets.py::Widget.size`\n")
@@ -346,7 +356,7 @@ def test_cited_by_marks_gated_and_ungated_citers(tree, capsys):
     )
 
 
-def test_cited_by_json_carries_the_gated_flag(tree, capsys):
+def test_cited_by_json_carries_the_gated_flag(tree: Path, capsys: pytest.CaptureFixture[str]):
     _write(tree, "tests/test_citer.py", "# widgets.py::build\n")
     _write(tree, "docs/design.md", "cites `widgets.py::LIMIT`\n")
     check_citations.main(["--cited-by", "django_strawberry_framework/widgets.py", "--json"])
@@ -359,7 +369,10 @@ def test_cited_by_json_carries_the_gated_flag(tree, capsys):
     assert captured.err.startswith("2 citing site(s)")
 
 
-def test_cited_by_matches_a_deleted_target_by_its_spelled_path(tree, capsys):
+def test_cited_by_matches_a_deleted_target_by_its_spelled_path(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     _write(tree, "tests/test_citer.py", "# django_strawberry_framework/gone.py::Thing\n")
     check_citations.main(["--cited-by", "django_strawberry_framework/gone.py::Thing"])
     out = capsys.readouterr().out
@@ -367,12 +380,15 @@ def test_cited_by_matches_a_deleted_target_by_its_spelled_path(tree, capsys):
     assert "(1 gated, 0 ungated, 1 unresolved)" in out
 
 
-def test_cited_by_refuses_a_malformed_symbol(tree):
+def test_cited_by_refuses_a_malformed_symbol(tree: Path):
     with pytest.raises(check_citations.CitationCheckError, match="dotted symbol"):
         check_citations.main(["--cited-by", "widgets.py::1bad"])
 
 
-def test_a_spec_citing_a_symbol_its_file_no_longer_defines_fails_the_gate(tree, capsys):
+def test_a_spec_citing_a_symbol_its_file_no_longer_defines_fails_the_gate(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     _write(tree, "docs/SPECS/spec-001-x.md", "archive cites `widgets.py::Widget.render`\n")
     _write(
         tree,
@@ -401,7 +417,10 @@ def test_a_spec_citing_a_symbol_its_file_no_longer_defines_fails_the_gate(tree, 
     assert "docs/spec-050-y.md:1: cites `widgets.py::Widget.retired`" in capsys.readouterr().out
 
 
-def test_a_spec_may_cite_a_planned_file_and_next_md_is_not_a_spec(tree, capsys):
+def test_a_spec_may_cite_a_planned_file_and_next_md_is_not_a_spec(
+    tree: Path,
+    capsys: pytest.CaptureFixture[str],
+):
     _write(tree, "docs/SPECS/spec-001-x.md", "planned `extensions/graph.py::GraphExtension`\n")
     _write(tree, "docs/SPECS/NEXT.md", "cite as `widgets.py::Widget.resolve_fields`, e.g.\n")
     assert check_citations.main([]) == 0
@@ -412,13 +431,13 @@ def test_a_spec_may_cite_a_planned_file_and_next_md_is_not_a_spec(tree, capsys):
     capsys.readouterr()
 
 
-def test_the_gate_refuses_an_empty_spec_corpus(tree):
+def test_the_gate_refuses_an_empty_spec_corpus(tree: Path):
     (tree / "docs/SPECS/spec-000-fixture.md").unlink()
     with pytest.raises(check_citations.CitationCheckError, match="No spec sources match"):
         check_citations.main([])
 
 
-def test_a_citation_inside_an_absolute_path_is_skipped(tree):
+def test_a_citation_inside_an_absolute_path_is_skipped(tree: Path):
     outcomes = _cite(
         tree,
         """\

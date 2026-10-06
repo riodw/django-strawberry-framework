@@ -8,8 +8,10 @@ is ``examples/fakeshop/test_query/test_optimizer_auto_api.py``.
 from types import SimpleNamespace
 
 import pytest
+import pytest_django
 from apps.library.models import Genre
 from django.db.models import Prefetch
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoOptimizerExtension
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -21,6 +23,7 @@ from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.optimizer.nested_fetch import (
     AUTO_STRATEGY,
     WINDOWED_STRATEGY,
+    NestedConnectionRequest,
     WindowedPrefetchStrategy,
     _builtin_strategies,
     active_strategy,
@@ -35,7 +38,7 @@ from django_strawberry_framework.optimizer.plans import (
 from tests.optimizer._builders import nested_connection_request
 
 
-def _books_request(**overrides):
+def _books_request(**overrides: object):
     """A minimal valid request for the reverse-M2M ``Genre.books`` relation."""
     return nested_connection_request(Genre, "books", **overrides)
 
@@ -57,6 +60,7 @@ def test_windowed_strategy_attaches_windowed_prefetch():
     assert isinstance(entry, Prefetch)
     assert entry.prefetch_through == "books"
     assert entry.to_attr == "_dst_books_connection"
+    assert entry.queryset is not None
     annotations = entry.queryset.query.annotations
     assert WINDOW_ROW_NUMBER in annotations
     assert WINDOW_TOTAL_COUNT in annotations
@@ -81,7 +85,24 @@ def test_windowed_strategy_honors_conditional_count():
     plan = OptimizationPlan()
     WindowedPrefetchStrategy().plan(_books_request(with_total_count=False), plan)
     (entry,) = plan.prefetch_related
+    assert isinstance(entry, Prefetch)
+    assert entry.queryset is not None
     assert WINDOW_TOTAL_COUNT not in entry.queryset.query.annotations
+
+
+class _ConsumerStrategy:
+    """A consumer-authored strategy whose ``plan`` answers one fixed verdict."""
+
+    def __init__(self, name: str, verdict: bool) -> None:
+        self.name = name
+        self._verdict = verdict
+
+    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
+        return self._verdict
+
+
+def _never_plans(request: object, plan: object) -> bool:
+    return False
 
 
 def test_builtin_strategy_registry_is_cached_and_immutable():
@@ -90,7 +111,9 @@ def test_builtin_strategy_registry_is_cached_and_immutable():
     assert registry is _builtin_strategies()
     assert sorted(registry) == ["lateral", "windowed"]
     with pytest.raises(TypeError):
-        registry["correlated"] = SimpleNamespace(plan=lambda request, plan: False)
+        # basedpyright: the registry is a read-only Mapping; the test proves item assignment raises
+        # TypeError
+        registry["correlated"] = SimpleNamespace(plan=_never_plans)  # pyright: ignore[reportIndexIssue]
 
 
 def test_resolve_strategy_by_name_auto_and_instance():
@@ -98,7 +121,7 @@ def test_resolve_strategy_by_name_auto_and_instance():
 
     assert resolve_strategy("windowed") is WINDOWED_STRATEGY
     assert resolve_strategy("auto") is AUTO_STRATEGY
-    custom = SimpleNamespace(name="custom", plan=lambda request, plan: False)
+    custom = _ConsumerStrategy(name="custom", verdict=False)
     assert resolve_strategy(custom) is custom
 
 
@@ -118,7 +141,10 @@ def test_resolve_strategy_rejects_hostile_type_and_class_name():
 
     class HostileType(type):
         @property
-        def __name__(cls):
+        @override
+        # basedpyright: the hostile shape under test, a ``__name__`` property whose read raises;
+        # the checker rejects any property overriding a base class attribute
+        def __name__(cls):  # pyright: ignore[reportIncompatibleVariableOverride]
             raise RuntimeError("type name should never run")
 
     class NotStrategy(metaclass=HostileType):
@@ -142,9 +168,11 @@ def test_resolve_strategy_hostile_str_dunders_stay_typed():
     """
 
     class HostileEq(str):
-        def __eq__(self, other):
+        @override
+        def __eq__(self, other: object):
             raise RuntimeError("hostile eq")
 
+        @override
         def __hash__(self):
             return str.__hash__(self)
 
@@ -155,6 +183,7 @@ def test_resolve_strategy_hostile_str_dunders_stay_typed():
         resolve_strategy(HostileEq("correlated"))
 
     class HostileHash(str):
+        @override
         def __hash__(self):
             raise RuntimeError("hostile hash")
 
@@ -162,6 +191,7 @@ def test_resolve_strategy_hostile_str_dunders_stay_typed():
         resolve_strategy(HostileHash("correlated"))
 
     class HostileRepr(str):
+        @override
         def __repr__(self):
             raise RuntimeError("hostile repr")
 
@@ -194,7 +224,7 @@ def test_resolve_strategy_lateral_loads_the_lateral_backend():
     assert resolve_strategy("lateral") is LATERAL_STRATEGY  # registry, not re-import
 
 
-def test_resolve_strategy_none_reads_setting(settings):
+def test_resolve_strategy_none_reads_setting(settings: pytest_django.Settings):
     """``None`` defers to ``DJANGO_STRAWBERRY_FRAMEWORK["NESTED_CONNECTION_STRATEGY"]``."""
     assert resolve_strategy(None) is WINDOWED_STRATEGY  # key absent -> default
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"NESTED_CONNECTION_STRATEGY": "windowed"}
@@ -214,7 +244,7 @@ def test_extension_pins_strategy_at_construction():
         DjangoOptimizerExtension(nested_connection_strategy="auto").nested_connection_strategy
         is AUTO_STRATEGY
     )
-    custom = SimpleNamespace(name="custom", plan=lambda request, plan: False)
+    custom = _ConsumerStrategy(name="custom", verdict=False)
     assert (
         DjangoOptimizerExtension(nested_connection_strategy=custom).nested_connection_strategy
         is custom
@@ -232,12 +262,12 @@ def test_optimizer_hint_strategy_accepts_and_drives_a_consumer_instance():
     object through ``resolve_strategy``, and driving it plans one request through
     the consumer's own ``plan()``.
     """
-    planned: list = []
+    planned: list[object] = []
 
     class RecordingStrategy:
         name = "recording"
 
-        def plan(self, request, plan):
+        def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan):
             planned.append(request)
             return True
 
@@ -257,7 +287,7 @@ def test_optimizer_hint_strategy_accepts_and_drives_a_consumer_instance():
 def test_active_strategy_defaults_windowed_and_reads_the_execution_frame():
     """Direct ``plan_optimizations`` callers get windowed; executions get the published one."""
     assert active_strategy() is WINDOWED_STRATEGY
-    custom = SimpleNamespace(name="custom", plan=lambda request, plan: True)
+    custom = _ConsumerStrategy(name="custom", verdict=True)
     frame = begin_execution_frame({}, nested=False, strategy=custom)
     try:
         assert active_strategy() is custom
@@ -275,7 +305,7 @@ def test_active_strategy_preserves_falsey_consumer_strategy():
         def __bool__(self):
             return False
 
-        def plan(self, request, plan):
+        def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan):
             return True
 
     custom = FalseyStrategy()
@@ -288,7 +318,7 @@ def test_active_strategy_preserves_falsey_consumer_strategy():
 
 def test_on_execute_publishes_instance_strategy():
     """``on_execute`` publishes the instance's strategy for the walker's lifetime."""
-    custom = SimpleNamespace(name="custom", plan=lambda request, plan: True)
+    custom = _ConsumerStrategy(name="custom", verdict=True)
     extension = DjangoOptimizerExtension(nested_connection_strategy=custom)
     hook = extension.on_execute()
     next(hook)  # enter the execution window
@@ -328,7 +358,7 @@ def test_unwindowable_child_queryset_reason_matrix():
     assert unwindowable_child_queryset_reason(Book.objects.values("id")) == "values"
 
     # A custom ModelIterable subclass still yields model instances and is windowable.
-    class CustomModelIterable(ModelIterable):
+    class CustomModelIterable(ModelIterable[Book]):
         pass
 
     custom_qs = Book.objects.all()
@@ -337,7 +367,9 @@ def test_unwindowable_child_queryset_reason_matrix():
 
     # A non-type or invalid iterable class is rejected as values.
     invalid_qs = Book.objects.all()
-    invalid_qs._iterable_class = "invalid"
+    # basedpyright: the planted non-type iterable class is the hostile input under test;
+    # django-stubs types the slot as one of Django's BaseIterable classes
+    invalid_qs._iterable_class = "invalid"  # pyright: ignore[reportAttributeAccessIssue]
     assert unwindowable_child_queryset_reason(invalid_qs) == "values"
 
     assert unwindowable_child_queryset_reason(Book.objects.only("id", "title")) is None

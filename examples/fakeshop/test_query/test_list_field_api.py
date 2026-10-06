@@ -2582,7 +2582,8 @@ def _override_untrusted(
     candidate = _DeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
+    # basedpyright: django-stubs omits QuerySet._deferred_filter; the int negate is also
+    # deliberately not the bool Django writes
     candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
     return candidate
 

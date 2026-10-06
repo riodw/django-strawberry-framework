@@ -25,7 +25,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import GenericAlias, MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, cast
 from weakref import WeakKeyDictionary
 
 import strawberry
@@ -655,9 +655,7 @@ def convert_filter_to_input_annotation(
 
 def normalize_input_value(
     filter_instance: Filter,
-    # basedpyright: the list closures iterate a container the raising _require_list_container
-    # proves; object needs it to return the narrowed value, a runtime change
-    raw_value: Any,  # pyright: ignore[reportExplicitAny]
+    raw_value: object,
     field_name: str | None = None,
 ) -> object:
     """Translate a Strawberry-shaped input value into ``django-filter`` form-data.
@@ -699,15 +697,15 @@ def normalize_input_value(
         return None
 
     def _gid_multi(_filter: Filter) -> object:
-        _require_list_container(_filter, raw_value, "GlobalID list")
-        return [_encode_global_id_input(item) for item in raw_value]
+        items = _require_list_container(_filter, raw_value, "GlobalID list")
+        return [_encode_global_id_input(item) for item in items]
 
     def _gid(_filter: Filter) -> object:
         return _encode_global_id_input(raw_value)
 
     def _pk_multi(_filter: Filter) -> object:
-        _require_list_container(_filter, raw_value, "primary-key list")
-        return [_unwrap_enum_member(item) for item in raw_value]
+        items = _require_list_container(_filter, raw_value, "primary-key list")
+        return [_unwrap_enum_member(item) for item in items]
 
     def _pk(_filter: Filter) -> object:
         return _unwrap_enum_member(raw_value)
@@ -716,21 +714,21 @@ def normalize_input_value(
         # The consumer's model-choice form field cleans the raw value(s) itself.
         if not _model_choice_takes_list(matched):
             return _unwrap_enum_member(raw_value)
-        _require_list_container(matched, raw_value, "model-choice list")
-        return [_unwrap_enum_member(item) for item in raw_value]
+        items = _require_list_container(matched, raw_value, "model-choice list")
+        return [_unwrap_enum_member(item) for item in items]
 
     def _csv(_filter: Filter) -> object:
         # ``in`` / ``range`` generated CSV filters consume a list; unwrap
         # any enum members per element (parity with ``ListFilter`` below).
-        _require_list_container(_filter, raw_value, "CSV membership list")
-        return [_unwrap_enum_member(item) for item in raw_value]
+        items = _require_list_container(_filter, raw_value, "CSV membership list")
+        return [_unwrap_enum_member(item) for item in items]
 
     def _range(matched: Filter) -> object:
         return _normalize_range_value(matched, raw_value, field_name=field_name)
 
     def _list(_filter: Filter) -> object:
-        _require_list_container(_filter, raw_value, "list input")
-        return [_unwrap_enum_member(item) for item in raw_value]
+        items = _require_list_container(_filter, raw_value, "list input")
+        return [_unwrap_enum_member(item) for item in items]
 
     def _typed(_filter: Filter) -> object:
         return MRO_CONTINUE
@@ -771,7 +769,11 @@ def normalize_input_value(
     )
 
 
-def _require_list_container(filter_instance: Filter, raw_value: object, shape: str) -> None:
+def _require_list_container(
+    filter_instance: Filter,
+    raw_value: object,
+    shape: str,
+) -> list[object] | tuple[object, ...]:
     """Fail loud when a list-consuming normalize arm receives another container.
 
     ``GlobalIDMultipleChoiceFilter`` / ``BaseCSVFilter`` (``in`` / ``range``)
@@ -784,7 +786,8 @@ def _require_list_container(filter_instance: Filter, raw_value: object, shape: s
     silently dropped the intended predicate and poisoned the form-data dict
     with junk members. The shape is invalid, not merely iterable, so it
     raises the typed ``ConfigurationError`` (fail loud, never a silent
-    keys-for-values swap).
+    keys-for-values swap). Returns ``raw_value``, narrowed to the list or
+    tuple it proved, for the arm to iterate.
     """
     if not isinstance(raw_value, (list, tuple)):
         raise ConfigurationError(
@@ -793,6 +796,7 @@ def _require_list_container(filter_instance: Filter, raw_value: object, shape: s
             f"({_safe_type_name(raw_value)} {_safe_arg_repr(raw_value)}) for the {shape}; "
             "send a list (the GraphQL schema already rejects this shape over the wire).",
         )
+    return raw_value
 
 
 # ---------------------------------------------------------------------------

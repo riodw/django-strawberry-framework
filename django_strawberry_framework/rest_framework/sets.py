@@ -536,7 +536,7 @@ class SerializerMutation(DjangoMutation):
 
     @classmethod
     @override
-    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: object) -> _ValidatedMutationMeta:
         """Validate a serializer-mutation ``Meta`` at class creation (spec-039 Decision 6).
 
         The serializer matrix (raising ``ConfigurationError`` naming the offending
@@ -580,7 +580,7 @@ class SerializerMutation(DjangoMutation):
         ``resolve_optional_fields``).
         """
         name = cls.__name__
-        reject_unknown_meta_keys(
+        meta = reject_unknown_meta_keys(
             f"SerializerMutation {name}",
             meta,
             _ALLOWED_SERIALIZER_META_KEYS,

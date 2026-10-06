@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 import strawberry
 from strawberry.types import Info
@@ -264,8 +264,7 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Expose a ``DjangoMutation`` on the schema's ``Mutation`` type (spec-036 Decision 5).
 
     The write-side sibling of ``DjangoConnectionField``. Validates the target at

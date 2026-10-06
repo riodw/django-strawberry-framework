@@ -112,15 +112,13 @@ if TYPE_CHECKING:
     from ..utils.typing import ConcreteField, ModelField, OptionalWidenable
 
     # DRF's stub generics are invariant in every parameter, so the all-``Any``
-    # parametrization is the stub's universal field / serializer form.
+    # parametrization is the stub's universal field form. The serializer aliases
+    # take ``object``: every serializer reaches them through ``cast`` /
+    # ``isinstance`` / ``require_subclass`` with its instance parameter unsolved.
     # basedpyright: drf-stubs' Field TypeVars are invariant; no other argument takes every field
     DRFField: TypeAlias = serializers.Field[Any, Any, Any, Any]  # pyright: ignore[reportExplicitAny]
-    # basedpyright: drf-stubs' invariant instance TypeVar; no other argument takes every serializer
-    DRFBaseSerializer: TypeAlias = serializers.BaseSerializer[Any]  # pyright: ignore[reportExplicitAny]
-    # basedpyright: drf-stubs' invariant instance TypeVar; no other argument takes every serializer
-    DRFSerializer: TypeAlias = serializers.Serializer[Any]  # pyright: ignore[reportExplicitAny]
-    # basedpyright: invariant model TypeVar: ModelSerializer[Model] rejects ModelSerializer[Item]
-    DRFModelSerializer: TypeAlias = serializers.ModelSerializer[Any]  # pyright: ignore[reportExplicitAny]
+    DRFBaseSerializer: TypeAlias = serializers.BaseSerializer[object]
+    DRFSerializer: TypeAlias = serializers.Serializer[object]
 
 NESTED_SINGLE: str = "nested_single"
 NESTED_MULTI: str = "nested_multi"

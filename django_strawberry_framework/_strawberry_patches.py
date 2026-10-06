@@ -377,12 +377,12 @@ the AppConfig.
 
 import inspect
 import textwrap
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 from .conf import upstream_patches_enabled
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable
     from types import CodeType
     from typing import Protocol, TypeGuard
 
@@ -396,12 +396,10 @@ if TYPE_CHECKING:
 
     # The patched methods serve every parametrization of each generic view, so their
     # ``self`` is the view's universal form: ``Never`` for the contravariant ``Request``,
-    # ``Any`` for the invariant rest (no single type is a supertype of every argument).
+    # ``object`` for the invariant rest.
     _AnyBaseView = _BaseView[Never]
-    # basedpyright: four invariant non-Request type params; only Any spans every sync view
-    _AnySyncView = _SyncBaseHTTPView[Never, Any, Any, Any, Any]  # pyright: ignore[reportExplicitAny]
-    # basedpyright: six invariant non-Request type params; only Any spans every async view
-    _AnyAsyncView = _AsyncBaseHTTPView[Never, Any, Any, Any, Any, Any, Any]  # pyright: ignore[reportExplicitAny]
+    _AnySyncView = _SyncBaseHTTPView[Never, object, object, object, object]
+    _AnyAsyncView = _AsyncBaseHTTPView[Never, object, object, object, object, object, object]
 
     class _UploadUtility(Protocol):
         """The upload utility as the traversal translation reads it: a plain function."""
@@ -751,8 +749,7 @@ def _patched_parse_json(
 
 def _patched_parse_query_params(
     self: "_AnyBaseView",
-    # basedpyright: verbatim upstream body rebinds str values to parsed JSON; only Any admits both
-    params: "Mapping[str, Any]",  # pyright: ignore[reportExplicitAny]
+    params: "QueryParams",
 ) -> "dict[str, object]":
     """Source-pinned reimplementation of ``BaseView.parse_query_params``.
 
@@ -784,21 +781,21 @@ def _patched_parse_query_params(
     :func:`_patched_parse_json`; both live on ``BaseView`` so the sync
     and async views share them.
     """
-    params = dict(params)
+    parsed: dict[str, object] = dict(params)
 
     if "variables" in params:
         variables = params["variables"]
 
         if variables:
-            params["variables"] = _translated_parse_json(self, variables)
+            parsed["variables"] = _translated_parse_json(self, variables)
 
     if "extensions" in params:
         extensions = params["extensions"]
 
         if extensions:
-            params["extensions"] = _translated_parse_json(self, extensions)
+            parsed["extensions"] = _translated_parse_json(self, extensions)
 
-    return params
+    return parsed
 
 
 # The exception types the upstream upload utility raises on malformed client

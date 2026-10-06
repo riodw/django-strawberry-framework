@@ -582,7 +582,8 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         upstream_view: Callable[..., object] = super().as_view(**initkwargs)
         mount = object()
 
-        # basedpyright: the instance's dispatch is sync on one view, a coroutine on the other
+        # basedpyright: the view instance the middleware stored on the request (an untyped
+        # attribute); its dispatch is sync on one view, a coroutine on the other
         def prepared_view(request: HttpRequest) -> Any:  # pyright: ignore[reportExplicitAny]
             prepared = getattr(request, _BOUNDARY_PREPARED_VIEW, None)
             if type(prepared) is not tuple or len(prepared) != 2 or prepared[0] is not mount:

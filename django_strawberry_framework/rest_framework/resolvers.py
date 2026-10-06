@@ -1677,7 +1677,8 @@ class _RelationIntentLedger:
     def record(self, path: str, value: _RelationSnapshot) -> None:
         self.records.setdefault(path, []).append(value)
 
-    # basedpyright: a snapshot or the ``_OMITTED`` object() sentinel, which no checker narrows
+    # basedpyright: the record's shape (one identity or a list) follows spec.kind, which no
+    # checker correlates; the _OMITTED sentinel could be an Enum member
     def consume(self, path: str) -> Any:  # pyright: ignore[reportExplicitAny]
         """Return the next recorded value for ``path``, or ``_OMITTED`` when none is pending."""
         index = self.counters.get(path, 0)

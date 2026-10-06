@@ -123,7 +123,8 @@ per-operation state through.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterable
+import functools
+from collections.abc import Callable, Iterable
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast
 from weakref import ref
@@ -179,8 +180,7 @@ class OperationState:
 
     def __init__(self, execution_context: ExecutionContext) -> None:
         self.execution_context: ExecutionContext = execution_context
-        # basedpyright: ContextVar is invariant and these variables hold different value types
-        self._resumed_bindings: list[tuple[ContextVar[Any], object]] = []  # pyright: ignore[reportExplicitAny]
+        self._resumed_bindings: list[Callable[[], _Binding]] = []
 
     def rebind_on_resume(
         self,
@@ -215,12 +215,14 @@ class OperationState:
         What comes back says whether a resume took the binding over, which is
         the caller's answer to who ends it.
         """
-        self._resumed_bindings.append((variable, value))
+        self._resumed_bindings.append(functools.partial(_bind_resumed, variable, value))
         return _register_resumed_binding(variable, token)
 
-    # basedpyright: ContextVar is invariant and these variables hold different value types
-    def resumed_bindings(self) -> tuple[tuple[ContextVar[Any], object], ...]:  # pyright: ignore[reportExplicitAny]
-        """The variables an extension asked the runner to bind again on resume."""
+    def resumed_bindings(self) -> tuple[Callable[[], _Binding], ...]:
+        """One rebind per variable an extension asked the runner to bind again on resume.
+
+        Calling a rebind sets its variable and returns the binding that undoes it.
+        """
         return tuple(self._resumed_bindings)
 
 
@@ -338,7 +340,7 @@ def _register_resumed_binding(variable: ContextVar[_ValueT], token: Token[_Value
     registrar = _RESUME_REGISTRARS.get()
     if registrar is None:
         return False
-    registrar.append(_Binding(variable, token, None, adopted=True))
+    registrar.append(_binding(variable, token, None, adopted=True))
     return True
 
 
@@ -631,19 +633,32 @@ class _Binding(NamedTuple):
     ``None`` marks a value the scope only re-bound, whose lease belongs to the
     scope that armed it and outlives this one.
 
-    ``adopted`` marks a binding some other scope made inside this one and handed
-    over (:func:`_register_resumed_binding`). Undoing it is the same statement -
-    the token is reset in the task that made it, which is this one - but the
-    scope that armed it may have reset it already, and that is not this scope's
-    bookkeeping gone wrong.
+    ``reset`` undoes the binding. For a binding some other scope made inside
+    this one and handed over (:func:`_register_resumed_binding`, built with
+    ``adopted=True``) it is the same statement - the token is reset in the task
+    that made it, which is this one - but the scope that armed it may have reset
+    it already, and that is not this scope's bookkeeping gone wrong.
     """
 
-    # basedpyright: ContextVar is invariant and bindings hold variables of different value types
-    variable: ContextVar[Any]  # pyright: ignore[reportExplicitAny]
-    # basedpyright: Token is invariant and bindings hold tokens of different value types
-    token: Token[Any]  # pyright: ignore[reportExplicitAny]
+    reset: Callable[[], None]
     lease: OperationLease[object] | None
-    adopted: bool = False
+
+
+def _binding(
+    variable: ContextVar[_ValueT],
+    token: Token[_ValueT],
+    lease: OperationLease[object] | None,
+    *,
+    adopted: bool = False,
+) -> _Binding:
+    """Record one binding with the reset that undoes it."""
+    reset = _reset_adopted_binding if adopted else _reset_binding
+    return _Binding(functools.partial(reset, variable, token), lease)
+
+
+def _bind_resumed(variable: ContextVar[_ValueT], value: _ValueT) -> _Binding:
+    """Bind ``variable`` to ``value`` again for one resume."""
+    return _binding(variable, variable.set(value), None)
 
 
 def _bind(
@@ -672,18 +687,17 @@ def _bind(
     bindings: list[_Binding] = []
     try:
         lease = OperationLease(scope)
-        bindings.append(_Binding(_RUNNER_SCOPES, _RUNNER_SCOPES.set(lease), lease))
+        bindings.append(_binding(_RUNNER_SCOPES, _RUNNER_SCOPES.set(lease), lease))
         if scope.mode is not None:
-            bindings.append(_Binding(*bind_operation_mode(scope.mode)))
+            bindings.append(_binding(*bind_operation_mode(scope.mode)))
         for extension, state in states:
             carrier = _carrier(extension)
             binding = OperationLease(ref(state))
-            bindings.append(_Binding(carrier, carrier.set(binding), binding))
-            for variable, value in state.resumed_bindings():
-                bindings.append(_Binding(variable, variable.set(value), None))
+            bindings.append(_binding(carrier, carrier.set(binding), binding))
+            bindings.extend(rebind() for rebind in state.resumed_bindings())
         if registrar:
             bindings.append(
-                _Binding(_RESUME_REGISTRARS, _RESUME_REGISTRARS.set(bindings), None),
+                _binding(_RESUME_REGISTRARS, _RESUME_REGISTRARS.set(bindings), None),
             )
     except BaseException:
         _unbind(bindings)
@@ -727,10 +741,7 @@ def _unbind(bindings: list[_Binding]) -> None:
     for binding in reversed(bindings):
         if binding.lease is not None:
             binding.lease.close()
-        if binding.adopted:
-            _reset_adopted_binding(binding.variable, binding.token)
-        else:
-            _reset_binding(binding.variable, binding.token)
+        binding.reset()
 
 
 def _reset_adopted_binding(variable: ContextVar[_ValueT], token: Token[_ValueT]) -> None:

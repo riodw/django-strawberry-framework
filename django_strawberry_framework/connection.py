@@ -154,7 +154,7 @@ if TYPE_CHECKING:
     from .types.base import DjangoType
     from .types.definition import DjangoTypeDefinition
     from .utils.querysets import NormalizedSource
-    from .utils.typing import ConcreteField, ModelField
+    from .utils.typing import ConcreteField, ModelField, OptionalWidenable
 
     #: One sidecar step: its kind pairs the set class with that family's apply entry.
     _SidecarStep: TypeAlias = (
@@ -2099,9 +2099,11 @@ def _synthesized_signature(
     ]
     annotations: dict[str, object] = {"info": Info}
     if definition.filterset_class is not None:
-        # basedpyright: ``filter_input_type`` returns ``object``, which declares no ``|``, while
-        # the runtime-built ``Annotated`` alias does
-        filter_ann: object = filter_input_type(definition.filterset_class) | None  # pyright: ignore[reportOperatorIssue]
+        # ``filter_input_type`` returns a runtime-built ``Annotated`` alias, which widens
+        # with ``| None``
+        filter_ann: object = (
+            cast("OptionalWidenable", filter_input_type(definition.filterset_class)) | None
+        )
         params.append(
             inspect.Parameter(
                 CONNECTION_FILTER_KWARG,

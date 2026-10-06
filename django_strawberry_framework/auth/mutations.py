@@ -32,7 +32,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import inspect
-from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 
 import strawberry
 from django.contrib import auth
@@ -728,9 +728,10 @@ def _login_authenticate(
         None
         if unstorable
         else auth.authenticate(
-            # basedpyright: django-stubs types ``authenticate``'s request as an ``HttpRequest``;
-            # Django hands it to each backend untouched, and on Channels HTTP it is the
-            # request-like ``ChannelsRequestAdapter``
+            # basedpyright: the request is ``object`` here (a Django ``HttpRequest`` or, on
+            # Channels HTTP, the request-like ``ChannelsRequestAdapter``); Django's contract
+            # types ``authenticate``'s request as ``HttpRequest | None`` and hands it to each
+            # backend untouched
             request,  # pyright: ignore[reportArgumentType]
             username=username,
             password=password,
@@ -1117,8 +1118,7 @@ def login_mutation(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Return the ``login(username:, password:)`` session mutation field (Decision 5).
 
     Two flat non-null ``String`` arguments (the ``username`` kwarg maps onto the
@@ -1147,8 +1147,7 @@ def logout_mutation(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Return the argument-less ``logout`` session mutation field (Decision 5).
 
     Resolves to the bind-materialized model-less ``LogoutPayload`` (the pinned
@@ -1452,8 +1451,7 @@ def register_mutation(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Return the ``register(data: RegisterInput!)`` mutation field (Decision 6).
 
     Synthesizes (once, cached through the auth declaration ledger) the

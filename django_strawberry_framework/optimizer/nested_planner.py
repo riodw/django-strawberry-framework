@@ -832,8 +832,8 @@ def _connection_node_selections(
     return connection_node_children(sel, runtime_prefixes=runtime_paths, names=names)
 
 
-# basedpyright: EAFP probe of a wire value through int(); a non-int-castable value passes
-# through to window bounds typed int | None, so neither side is narrower without a runtime change
+# basedpyright: EAFP int() probe of a raw AST / variable value; int() is typed
+# ConvertibleToInt and a non-castable value is returned unchanged
 def _coerce_pagination_int(value: Any) -> Any:  # pyright: ignore[reportExplicitAny]
     """Coerce a pagination ``first`` / ``last`` argument to ``int`` when int-like.
 

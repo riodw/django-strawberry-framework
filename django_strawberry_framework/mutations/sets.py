@@ -172,7 +172,7 @@ def require_non_delete_operation(base_label: str, name: str, meta: type[object])
     return operation
 
 
-def reject_unknown_meta_keys(name: str, meta: object, allowed: frozenset[str]) -> None:
+def reject_unknown_meta_keys(name: str, meta: object, allowed: frozenset[str]) -> type[object]:
     """Raise the ``Meta``-typo guard if ``meta`` declares a key outside ``allowed``.
 
     The ``unknown = sorted(declared - allowed)`` typo guard every ``_validate_meta``
@@ -181,7 +181,9 @@ def reject_unknown_meta_keys(name: str, meta: object, allowed: frozenset[str]) -
     own-keys-only (no MRO walk) ``vars(meta)`` scan + the reject. ``declared`` is the
     public own-keys of ``meta`` (skipping dunders); a declared key outside ``allowed``
     raises ``ConfigurationError`` naming the offending key(s). Mirrors
-    ``types/base.py::_validate_meta``'s own-keys-only posture.
+    ``types/base.py::_validate_meta``'s own-keys-only posture. A non-class
+    ``meta`` raises first; otherwise ``meta`` comes back narrowed to the class
+    it proved, which is the value every ``_validate_meta`` goes on to read.
     """
     if not isinstance(meta, type):
         raise ConfigurationError(f"{name}.Meta must be a class; got {_safe_arg_repr(meta)}.")
@@ -197,6 +199,7 @@ def reject_unknown_meta_keys(name: str, meta: object, allowed: frozenset[str]) -
     )
     if unknown:
         raise ConfigurationError(f"{name}.Meta has unknown keys: {unknown}.")
+    return meta
 
 
 def normalize_meta_field_selection(
@@ -713,14 +716,13 @@ def make_meta_validating_metaclass(
             # the ``_mutation_meta`` slot ``__new__`` fills from it.
             _mutation_meta: object
 
-            def _validate_meta(cls, meta: type[object], /) -> object: ...
+            def _validate_meta(cls, meta: object, /) -> object: ...
 
         def __new__(
             cls: type[MetaValidatingMetaclass],
             name: str,
             bases: tuple[type[object], ...],
-            # basedpyright: unvalidated ``Meta`` value; ``_validate_meta`` rejects a non-class
-            attrs: dict[str, Any],  # pyright: ignore[reportExplicitAny]
+            attrs: dict[str, object],
         ) -> MetaValidatingMetaclass:
             """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
             new_class = super().__new__(cls, name, bases, attrs)
@@ -1196,7 +1198,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         return getattr(meta, "model", None)
 
     @classmethod
-    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: object) -> _ValidatedMutationMeta:
         """Validate a concrete mutation's nested ``Meta`` at class creation (spec-036 Decision 5).
 
         The overridable validation seam the metaclass invokes
@@ -1238,7 +1240,11 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         the resolver).
         """
         name = cls.__name__
-        reject_unknown_meta_keys(f"DjangoMutation {name}", meta, _ALLOWED_MUTATION_META_KEYS)
+        meta = reject_unknown_meta_keys(
+            f"DjangoMutation {name}",
+            meta,
+            _ALLOWED_MUTATION_META_KEYS,
+        )
 
         model = cls._resolve_model(meta)
         if model is None:

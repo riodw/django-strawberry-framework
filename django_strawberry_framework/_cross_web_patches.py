@@ -359,6 +359,7 @@ def apply() -> None:
     adapter = _validate_upstream_shape()
     if _patch_is_installed():
         return
-    # basedpyright: the stub's setter-less ``body`` property, which the patch replaces
-    # rather than sets through
+    # basedpyright: cross_web's own setter-less ``body`` property; a class-level write
+    # replaces the descriptor at run time, but the checker reads it as a write through the
+    # property
     adapter.body = property(_patched_body)  # pyright: ignore[reportAttributeAccessIssue]

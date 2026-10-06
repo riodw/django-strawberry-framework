@@ -595,7 +595,7 @@ class DjangoModelFormMutation(DjangoMutation):
 
     @classmethod
     @override
-    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: object) -> _ValidatedMutationMeta:
         """Validate a ``ModelForm``-mutation ``Meta`` at class creation (spec-038 Decision 6).
 
         The ``ModelForm`` matrix (raising ``ConfigurationError`` naming the
@@ -625,7 +625,7 @@ class DjangoModelFormMutation(DjangoMutation):
         ``form_class`` + the resolved ``model``.
         """
         name = cls.__name__
-        reject_unknown_meta_keys(
+        meta = reject_unknown_meta_keys(
             f"DjangoModelFormMutation {name}",
             meta,
             _ALLOWED_MODELFORM_META_KEYS,
@@ -870,7 +870,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     input_module_path: ClassVar[str] = FORMS_INPUTS_MODULE_PATH
 
     @classmethod
-    def _validate_meta(cls, meta: type[object]) -> _ValidatedMutationMeta:
+    def _validate_meta(cls, meta: object) -> _ValidatedMutationMeta:
         """Validate a plain-form-mutation ``Meta`` at class creation (spec-038 Decision 6 / 10).
 
         The plain-form matrix (raising ``ConfigurationError`` naming the offending
@@ -934,7 +934,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
                 "mutation has no model operation (Decision 10). Remove Meta.operation.",
             )
 
-        reject_unknown_meta_keys(
+        meta = reject_unknown_meta_keys(
             f"DjangoFormMutation {name}",
             meta,
             _ALLOWED_PLAIN_FORM_META_KEYS | {"operation"},

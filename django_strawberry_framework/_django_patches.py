@@ -315,8 +315,8 @@ def _disallowed_connection_methods(
         # The class attribute is a list of the same ``(name, operation)`` pairs.
         return cast(
             "list[tuple[str, str]]",
-            # basedpyright: django-stubs omits SimpleTestCase._disallowed_connection_methods
-            # (Django < 6.1), which reads as an unknown attribute
+            # basedpyright: the attribute exists only on Django < 6.1 (this branch); the 6.1
+            # stubs rightly omit it
             cls._disallowed_connection_methods,  # pyright: ignore[reportAttributeAccessIssue]
         )
     if (

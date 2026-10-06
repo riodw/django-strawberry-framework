@@ -374,11 +374,14 @@ unresolvable / malformed deferred filter, or an unsealable prefetch child
 table (`table` defect). Wherever the policy sets `rewrite_combined` (every
 surface except the raw-list row source, which windows a combination as it is), a
 combined (`union()` / `intersection()` / `difference()`) query is rebuilt as
-`Model.filter(pk__in=<combined>.values("pk"))`, its outer column ordering and
-`reverse()` kept, so every surface narrows, projects and prefetches the set of
-primary keys it selects; a shape that rewrite would serve different rows for
-(`union(all=True)`; a branch's annotations, `extra(select=...)`, `.values()` or
-`select_for_update`; an outer `.values()`, non-column ordering or slice) fails
+`Model.filter(pk__in=<combined>.values("pk"))`, its outer column ordering (a
+column name, or an exact `F()` over a column, bare or under `.asc()` / `.desc()`
+with any nulls placement; a forward relation by its key column, as the
+combinator orders it) and `reverse()` kept, so every surface narrows, projects
+and prefetches the set of primary keys it selects; a shape that rewrite would
+serve different rows for (`union(all=True)`; a branch's annotations,
+`extra(select=...)`, `.values()` or `select_for_update`; an outer `.values()`,
+an ordering by a lookup, transform or other expression, or a slice) fails
 closed (`combined` defect). `Query.model` is validated UNCONDITIONALLY via
 `_concrete_or_none` on the outer query and every combined branch — a `None` or
 non-model `Query.model` fails closed as a `table` defect instead of escaping as
@@ -408,6 +411,8 @@ at the floor.
 [`::_concrete_or_none`][querysets];
 [`::_pk_membership_query_or_defect`][querysets] and
 [`::_combined_lost_property`][querysets] (the combinator rewrite and its refusals);
+[`::_is_carried_order_term`][querysets] and [`::_rewrite_order_term`][querysets]
+(which outer ordering the rewrite carries, and its column spelling);
 [`::_seal_or_defect`][querysets] #"is_sliced" (slice / projection rejections);
 [`::_is_django_iterable_class`][querysets] (identity membership);
 [`::_bake_deferred_filter_or_defect`][querysets] and
@@ -603,7 +608,7 @@ in that order and are rendered only by the post-sidecar result seal.
 | `untrusted` | foreign `Query` class, foreign row iterable, unresolved deferred filter, unsealable prefetch child, a prefetch child over an unrelated model, an unreconstructable bound payload | "cannot be sealed into a framework-owned execution queryset" |
 | `sliced` | sliced query on a recomposing read surface | "Django forbids refiltering or reordering a sliced query" |
 | `projection` | non-`ModelIterable` `_iterable_class` on a model-row surface | "composes over `<Model>` model rows, not a `.values()` / `.values_list()` (or custom-iterable) projection" |
-| `combined` | a combinator whose primary-key set cannot represent its rows (duplicates, branch annotations / `extra(select=...)` / `.values()` / `select_for_update`, outer `.values()` / non-column ordering / slice) | "serves a combined queryset as the set of `<Model>` primary keys it selects ... cannot be reduced to that set without changing its rows" |
+| `combined` | a combinator whose primary-key set cannot represent its rows (duplicates, branch annotations / `extra(select=...)` / `.values()` / `select_for_update`, outer `.values()` / ordering by a lookup, transform or other expression / slice) | "serves a combined queryset as the set of `<Model>` primary keys it selects ... cannot be reduced to that set without changing its rows" |
 | `alias` | child routed off an alias that differs from the pinned resolution | "cannot re-route a pinned resolution. Remove the `.using(...)` call." |
 
 ## Test plan

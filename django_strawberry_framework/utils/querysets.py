@@ -92,7 +92,7 @@ from django.db import models, router
 from django.db.models import Prefetch, sql
 from django.db.models import query as django_query
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.expressions import Combinable, Exists, RawSQL
+from django.db.models.expressions import Combinable, Exists, F, OrderBy, RawSQL
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.lookups import Lookup
 from django.db.models.query import (
@@ -3501,6 +3501,49 @@ def _is_model_column(name: str, model: type[models.Model]) -> bool:
     )
 
 
+def _is_carried_order_term(entry: object, model: type[models.Model]) -> bool:
+    """Return whether a combinator's outer ``order_by`` ``entry`` orders by a ``model`` column.
+
+    Carried: a column name (``"title"``, ``"-title"``, ``"pk"``, a forward
+    relation's ``name`` or ``attname``), an exact ``F`` over one, and an exact
+    ``OrderBy`` wrapping such an ``F`` (``F(c).asc()`` / ``.desc()``, any
+    ``nulls_first`` / ``nulls_last``). Not carried: a lookup or relation span
+    (``F("books__title")``), a transform (``Lower(c)``) or any other expression,
+    whose value the rewritten single-table query has no column for or would
+    multiply rows to reach.
+    """
+    if isinstance(entry, str):
+        return _is_model_column(entry.removeprefix("-"), model)
+    if type(entry) is OrderBy:
+        entry = entry.expression
+    if type(entry) is not F:
+        return False
+    # django-stubs does not declare ``F.name``, so it is read and proven a string.
+    name: object = getattr(entry, "name", None)
+    return isinstance(name, str) and _is_model_column(name, model)
+
+
+def _rewrite_order_term(entry: str | Combinable, model: type[models.Model]) -> str | Combinable:
+    """Spell a carried outer ``order_by`` ``entry`` so the rewrite orders exactly as the combinator.
+
+    A combinator orders a string term by the selected column itself, while a
+    plain queryset expands a forward relation's ``name`` (``"shelf"``) into the
+    related model's ``Meta.ordering``; the rewrite therefore spells a string
+    naming a concrete field by that field's ``attname`` (``"-shelf"`` becomes
+    ``"-shelf_id"``). An ``F`` / ``OrderBy`` term already resolves to the column
+    on both, and every other string (an ``attname``, ``"pk"``) is already the
+    column spelling.
+    """
+    if not isinstance(entry, str):
+        return entry
+    sign = "-" if entry.startswith("-") else ""
+    name = entry.removeprefix("-")
+    for field in model._meta.concrete_fields:
+        if field.name == name:
+            return f"{sign}{field.attname}"
+    return entry
+
+
 # The ``sql.Query`` state ``_combined_lost_property`` and
 # ``_pk_membership_query_or_defect`` read, audited over every published Django
 # release 5.2.16 .. 6.1.1 (19 releases): ``combinator``, ``combinator_all``,
@@ -3544,10 +3587,12 @@ def _combined_lost_property(
         return "union(all=True) keeps duplicate rows, which a primary-key set cannot"
     if outer:
         for entry in query.order_by:
-            if not isinstance(entry, str) or not _is_model_column(entry.lstrip("-"), model):
+            if not _is_carried_order_term(entry, model):
                 return (
-                    f"its ordering by {entry!r} names a value that is not a "
-                    f"{model.__name__} column, so the rewritten query cannot carry it"
+                    f"its ordering by {entry!r} is not a {model.__name__} column, so the "
+                    "rewritten query cannot carry it (it carries a column name or an F() "
+                    "over a column, with .asc() / .desc(); never a lookup, transform or "
+                    "other expression)"
                 )
         if query.is_sliced:
             return "it is sliced, and a LIMIT/OFFSET cannot ride inside the primary-key subquery"
@@ -3597,7 +3642,9 @@ def _pk_membership_query_or_defect(
     Returns ``(rewritten, None)``: a fresh single-table ``sql.Query`` over
     ``model`` whose one predicate is membership in the combinator's primary-key
     set, with the outer ordering and its direction re-applied
-    (``_combined_lost_property`` has proven every entry a column). Every surface
+    (``_combined_lost_property`` has proven every entry a column;
+    ``_rewrite_order_term`` spells each so it orders exactly as the combinator
+    does). Every surface
     can then narrow, project and prefetch through it, which Django supports on no
     combinator. Returns
     ``(None, ("combined", "<combinator>: <lost property>"))`` for a shape the
@@ -3611,7 +3658,9 @@ def _pk_membership_query_or_defect(
         pk__in=combined.order_by().values("pk"),
     )
     if query.order_by:
-        rewritten = rewritten.order_by(*query.order_by)
+        rewritten = rewritten.order_by(
+            *(_rewrite_order_term(entry, model) for entry in query.order_by),
+        )
     # ``reverse()`` after a combinator flips only this flag; carried, the rewrite
     # keeps the reversed order (including a reversed ``Meta.ordering``).
     rewritten.query.standard_ordering = query.standard_ordering

@@ -12,9 +12,12 @@ that they equal what the uncombined equivalent hook answers, with the optimizer
 installed (the shipped ``/graphql/``) and without it (the library schema mounted at
 ``/graphql-test/`` with no extension).
 
-A shape that the primary-key set cannot carry (duplicate rows, a branch's selected
+The outer ordering is carried when it names a column: a column name, an exact
+``F()`` over one, or that ``F()`` under ``.asc()`` / ``.desc()``, served in the order
+the combinator itself returns (a forward relation by its key column). A shape that
+the primary-key set cannot carry (duplicate rows, a branch's selected
 annotations, ``extra(select=)`` aliases or ``.values()`` projection, a branch row
-lock, an outer ordering the base table cannot express, an outer ``.values()``
+lock, an outer ordering by a lookup, transform or other expression, an outer ``.values()``
 projection where the surface accepts projections) is refused with the ``combined``
 defect naming the type, the combinator and what would be lost, one row each,
 reached through a real field and rendered as that field's GraphQL error. A model-row
@@ -32,7 +35,7 @@ import strawberry
 from apps.library import models
 from django.conf import settings
 from django.db import connection
-from django.db.models import Model, Prefetch, Q, QuerySet, Value
+from django.db.models import F, Model, OrderBy, Prefetch, Q, QuerySet, Value
 from django.db.models.functions import Lower
 from django.http import HttpRequest
 from django.test import override_settings
@@ -1137,6 +1140,116 @@ def test_reversed_outer_ordering_of_a_combined_hook_is_served_reversed(
     )
 
 
+#: Outer orderings by an ``F()`` over a ``Genre`` column, each with the order the
+#: visible union genres arrive in: by name ascending or descending, or by pk descending.
+_F_ORDERINGS = {
+    "F": (F("name"), "asc"),
+    "F-desc": (F("name").desc(), "desc"),
+    "F-asc-nulls-last": (F("name").asc(nulls_last=True), "asc"),
+    "OrderBy-descending-nulls-first": (
+        OrderBy(F("name"), descending=True, nulls_first=True),
+        "desc",
+    ),
+    "F-pk-desc": (F("pk").desc(), "pk-desc"),
+}
+
+
+@_OPTIMIZER
+@pytest.mark.parametrize("ordering", list(_F_ORDERINGS))
+@pytest.mark.django_db
+def test_outer_f_ordering_of_a_combined_hook_is_served_in_that_order(
+    monkeypatch: pytest.MonkeyPatch,
+    ordering: str,
+    optimizer: bool,
+):
+    """``union(...).order_by(F(c).desc())`` and its ``F`` / ``OrderBy`` kin serve that order.
+
+    The rewrite re-applies an exact ``F`` over a column, bare or wrapped in an
+    ``OrderBy`` with any direction and nulls placement, so the combined genres
+    arrive in the same order the uncombined hook with that ordering serves.
+    """
+    _seed_genres()
+    term, expected_order = _F_ORDERINGS[ordering]
+    results = {}
+    for combined in (True, False):
+        chosen = _SHAPES["union"].combined if combined else _SHAPES["union"].uncombined
+        _install(
+            monkeypatch,
+            "GenreType",
+            lambda queryset, info, chosen=chosen: chosen(queryset, "name").order_by(term),
+        )
+        results[combined] = _data("{ allLibraryGenresViaListField { name } }", optimizer=optimizer)
+
+    assert results[True] == results[False]
+    visible = _visible_genres("union")
+    if expected_order == "pk-desc":
+        expected = [name for name in reversed(_GENRE_NAMES) if name in visible]
+    else:
+        expected = sorted(visible, reverse=expected_order == "desc")
+    assert [row["name"] for row in results[True]["allLibraryGenresViaListField"]] == expected
+
+
+#: Outer orderings by the entry's forward relation to ``ReadingList``, which
+#: carries a title ``Meta.ordering``, and the entry titles each serves.
+_FOREIGN_KEY_ORDERINGS = {
+    "name": ("reading_list", ["Ax", "Bx", "Ay"]),
+    "-name": ("-reading_list", ["Ay", "Bx", "Ax"]),
+    "attname": ("reading_list_id", ["Ax", "Bx", "Ay"]),
+    "F-desc": (F("reading_list").desc(), ["Ay", "Bx", "Ax"]),
+}
+
+
+@_OPTIMIZER
+@pytest.mark.parametrize("ordering", list(_FOREIGN_KEY_ORDERINGS))
+@pytest.mark.django_db
+def test_outer_foreign_key_ordering_of_a_combined_hook_orders_by_the_key_column(
+    monkeypatch: pytest.MonkeyPatch,
+    ordering: str,
+    optimizer: bool,
+):
+    """A combined hook ordered by a forward relation serves the combinator's own key-column order.
+
+    A combinator orders ``"reading_list"`` by the ``reading_list_id`` column, where a
+    plain queryset would expand it into ``ReadingList``'s title ``Meta.ordering``.
+    The lists are created Zeta, Alpha, Mu, so key order, list-title order and entry
+    title order all differ; the served order is the key column's, the order the
+    combinator itself returns.
+    """
+    lists = [models.ReadingList.objects.create(title=title) for title in ("Zeta", "Alpha", "Mu")]
+    for title, reading_list in zip(
+        (
+            "Ax",
+            "Bx",
+            "Ay",
+            "Cz",
+        ),
+        [*lists, lists[0]],
+        strict=True,
+    ):
+        models.ReadingListEntry.objects.create(title=title, reading_list=reading_list)
+    term, expected = _FOREIGN_KEY_ORDERINGS[ordering]
+
+    def _union(queryset: QuerySet[Model]) -> QuerySet[Model]:
+        return queryset.filter(_starts("title", "A")).union(queryset.filter(_starts("title", "B")))
+
+    pk_for = dict(models.ReadingListEntry.objects.values_list("title", "pk"))
+    combinator_rows = _union(models.ReadingListEntry.objects.all()).order_by(term)
+    assert [row.pk for row in combinator_rows] == [pk_for[title] for title in expected]
+    _install(
+        monkeypatch,
+        "ReadingListEntryType",
+        lambda queryset, info: _union(queryset).order_by(term),
+    )
+
+    data = _data(
+        "{ allLibraryReadingListEntriesConnection { edges { node { title } } } }",
+        optimizer=optimizer,
+    )
+
+    edges = data["allLibraryReadingListEntriesConnection"]["edges"]
+    assert [edge["node"]["title"] for edge in edges] == expected
+
+
 # ---------------------------------------------------------------------------
 # Refused shapes
 # ---------------------------------------------------------------------------
@@ -1183,11 +1296,23 @@ _REFUSED = {
             "a compound query",
         ),
     ),
-    "outer-order-by-expression": _Refused(
-        lambda qs: _a(qs).union(_b(qs)).order_by(Lower("name")),
+    "outer-order-by-transform": _Refused(
+        lambda qs: _a(qs).union(_b(qs)).order_by(Lower("name").desc()),
         (
-            "union: its ordering by Lower(F(name)) names a value that is not a Genre column, "
-            "so the rewritten query cannot carry it",
+            "union: its ordering by OrderBy(Lower(F(name)), descending=True) is not a Genre "
+            "column, so the rewritten query cannot carry it (it carries a column name or an "
+            "F() over a column, with .asc() / .desc(); never a lookup, transform or other "
+            "expression)",
+        ),
+    ),
+    "outer-order-by-related-span": _Refused(
+        lambda qs: _a(qs).union(_b(qs)).order_by(F("books__title")),
+        ("union: its ordering by F(books__title) is not a Genre column",),
+    ),
+    "outer-order-by-descending-related-span": _Refused(
+        lambda qs: _a(qs).union(_b(qs)).order_by(F("books__title").desc()),
+        (
+            "union: its ordering by OrderBy(F(books__title), descending=True) is not a Genre column",
         ),
     ),
     "nested-branch-annotation": _Refused(

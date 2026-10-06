@@ -5639,8 +5639,9 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
             "MyOrderSet.apply_sync",
         )
     detail = (
-        "union: its ordering by 'upper_name' names a value that is not a Category column, "
-        "so the rewritten query cannot carry it"
+        "union: its ordering by 'upper_name' is not a Category column, so the rewritten "
+        "query cannot carry it (it carries a column name or an F() over a column, with "
+        ".asc() / .desc(); never a lookup, transform or other expression)"
     )
     assert str(excinfo.value) == (
         "MyOrderSet.apply_sync returned a combined queryset; "
@@ -5653,10 +5654,11 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
 def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through_a_hiding_type():
     """A related order term on a combinator is a lost property, refused like any other.
 
-    The rewrite re-sorts the primary-key set by column names only; an
-    ``OrderSet`` term is an ``OrderBy`` expression (here the visibility-scoped
-    ``CASE`` over a shelf the shelf type can hide), so the combined result fails
-    closed instead of being served in an order the rewrite cannot reproduce.
+    The rewrite re-sorts the primary-key set only by a column name or an ``F()``
+    over a column; this ``OrderSet`` term is an ``OrderBy`` over the
+    visibility-scoped ``CASE`` on a shelf the shelf type can hide, so the combined
+    result fails closed instead of being served in an order the rewrite cannot
+    reproduce.
     """
     from django.http import HttpRequest
 
@@ -5690,7 +5692,7 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
         combined,
         SimpleNamespace(context=SimpleNamespace(request=request)),
     )
-    with pytest.raises(ConfigurationError, match="names a value that is not a Book column"):
+    with pytest.raises(ConfigurationError, match="is not a Book column"):
         _validate_post_orderset_result(
             DummyType,
             _snapshot_routing_intent(source_qs, "UnionBookOrder.apply_sync"),

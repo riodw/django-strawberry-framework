@@ -1512,14 +1512,25 @@ them separately:
   `Meta.extra_kwargs`, and a field a `get_serializer_for_schema()` / `get_fields()` hook
   returns; the message names the serializer, the field, the offending values, the column and
   the remedy (`blank=True` on the column when only `""` is missing and the column type stores
-  it; otherwise remove the values from the field's choices and / or drop `allow_blank`).
+  it; otherwise remove the values from the field's choices and / or drop `allow_blank`). A
+  `MultipleChoiceField` writes a list (DRF's `to_internal_value` returns one), so it is
+  checked against the column each element is stored through
+  (`rest_framework/serializer_converter.py::_multiple_choice_element_column`): an
+  `ArrayField`'s `base_field`, whose choices are the element enum the read side's
+  `list[<enum>]` uses. Over a single-value choice column it is refused outright: the list is
+  stored as its `str` (or fails to coerce) and is never a member of the column's read enum;
+  the message names the serializer, the field and the column, and offers a `ChoiceField` for
+  one value or an `ArrayField` column for many. A `MultipleChoiceField` over a column without
+  `choices` (`JSONField`, plain text) is not checked: its read type has no member set, and the
+  column stores what the serializer's `save()` writes.
 
 Tests pin all three axes ([Test plan](#test-plan)): `required=True, allow_null=True` (the
 annotation is nullable, omission still triggers DRF's required error, explicit `null` is
 accepted), `required=False, default=…` (omittable, DRF applies the default), and
 `allow_blank=True` (a `CharField` stays `String!` and the serializer enforces acceptance; a
 `ChoiceField` enum gains `BLANK`; over a choice column whose read enum lacks a value the
-choice field admits, the field is refused).
+choice field admits, the field is refused, and a `MultipleChoiceField` over a single-value
+choice column is refused).
 
 **Two `Meta` namespaces — the mutation's vs the serializer's.** A
 [`SerializerMutation`][glossary-serializermutation]'s `Meta.fields` / `Meta.exclude`
@@ -2519,6 +2530,12 @@ co-clear block) — `clear_serializer_input_namespace` registers through the
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
   A choice field over a column without `choices` (read as a scalar) and a serializer-only
   choice field keep every declared value and `BLANK`.
+- **A list over a single-value choice column.** DRF accepts a `MultipleChoiceField` bound
+  (by name or `source`) to a model choice column, and `save()` stores the list it validated
+  as one value (`"['a']"` over a text column), which the column's read enum has no member
+  for. The input build refuses the field; over an `ArrayField` whose `base_field` declares
+  the choices, each element value is checked against the `base_field`'s read enum instead
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
 - **Serializer-only RELATION fields.** A write-only `PrimaryKeyRelatedField` (or
   `many=True`) whose `queryset` is **not** a model column — consumed by a custom
   `create()` / `update()` — is both serializer-only and a relation. Its relation **target
@@ -2821,11 +2838,16 @@ same transport, different app.
     declared `("", ...)` choice, or an unknown declared value, over `Book.circulation_status`;
     `""` over a `blank=True` integer column) raises
     [`ConfigurationError`][glossary-configurationerror] with its full message and remedy
-    pinned, declared (`ChoiceField`, `MultipleChoiceField`, `source`-mapped), auto-generated
+    pinned, declared (`ChoiceField`, `source`-mapped, a `MultipleChoiceField` over an
+    `ArrayField` whose `base_field` declares the choices), auto-generated
     via `Meta.extra_kwargs`, flipped by a `get_fields()` hook, and at
     `finalize_django_types()`; over the `blank=True` `Shelf.condition` it is accepted with
     `BLANK` on both the input and the read enum, and a declared `"1"` over an integer column
-    is accepted (it reads back as `1`); **two declared serializer
+    is accepted (it reads back as `1`); a `MultipleChoiceField` over a single-value choice
+    column (declared, `source`-mapped, or every choice field a `ModelSerializer` generates
+    under `serializer_choice_field = MultipleChoiceField`) raises with its full message, while
+    over an `ArrayField` whose `base_field` carries the column's choices, a `JSONField` and a
+    non-choice text column it is accepted; **two declared serializer
     fields colliding on one generated GraphQL input name** (`category` relation → `categoryId`
     clashing with a literal `category_id` → `categoryId`, or `foo_bar` + `fooBar` → `fooBar`)
     raise [`ConfigurationError`][glossary-configurationerror] **before materialization** (the
@@ -2994,7 +3016,7 @@ The completion contract.
    suffix), `source` → backing column, declared name preserved as the DRF write-back
    key; dotted `source` / `source="*"` on a model-column-converting field rejected; a
    choice field admitting a value its choice column's read enum has no member for
-   rejected).
+   rejected; a `MultipleChoiceField` over a single-value choice column rejected).
    [`rest_framework/inputs.py`][rf-inputs] builds both the serializer-derived
    `<Serializer>Input` (create) and `<Serializer>PartialInput` (update) from the
    **schema-time field set** (the overridable `get_serializer_for_schema()` hook, default
@@ -3194,10 +3216,11 @@ contract). A serializer-ONLY `ChoiceField` / `MultipleChoiceField` is upgraded a
 grouped-form rejection, value-based sanitization, and sanitize-collision guard the model enum
 applies), so a serializer-only choice enum cannot drift from a model-choice enum.
 `allow_blank=True` passes `include_blank` to that core, so the enum carries the `BLANK`
-member for the `""` DRF's `ChoiceField.to_internal_value` admits (`[BLANK]` decodes to `{""}`
+member for the `""` DRF's `ChoiceField.to_internal_value` admits (`[BLANK]` decodes to `[""]`
 on a `MultipleChoiceField`). A serializer-only field has no column, so its `BLANK` member
 stands; a choice field bound to a model choice column offers only values the column's read
-enum also carries
+enum also carries (a `MultipleChoiceField`: the read enum of the `ArrayField` `base_field` each
+element is stored through; over a single-value choice column it is refused)
 (`rest_framework/serializer_converter.py::_reject_choice_values_outside_column_enum` refuses
 it otherwise, see [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)). The enum is
 cached by its descriptor-derived name (`<TypeName><Field>Enum`) so two inputs referencing one

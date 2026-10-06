@@ -76,6 +76,7 @@ from ..mutations.inputs import (
 from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import (
+    array_element_field,
     build_enum_from_choices,
     choice_column_enum_values,
     convert_scalar,
@@ -537,7 +538,10 @@ def convert_serializer_field(
     site (``_serializer_choice_enum``), since enum coercion would otherwise reject ``""``
     before the serializer runs (spec-039 Decision 7); over a model choice column whose read
     enum has no member for ``""`` (or for any declared choice value) the build site refuses
-    the field instead (``_reject_choice_values_outside_column_enum``).
+    the field instead (``_reject_choice_values_outside_column_enum``). A
+    ``MultipleChoiceField`` writes a list, so it is checked against an ``ArrayField``'s
+    ``base_field`` and refused over a single-value choice column
+    (``_multiple_choice_element_column``).
     """
     del is_input  # graphene-parity, accepted-and-ignored.
 
@@ -938,6 +942,34 @@ def _reject_choice_values_outside_column_enum(field: DRFField, column: ConcreteF
     )
 
 
+def _multiple_choice_element_column(field: DRFField, column: ConcreteField) -> ConcreteField:
+    """Return the column a ``MultipleChoiceField``'s chosen values are each stored through.
+
+    ``MultipleChoiceField.to_internal_value`` returns a list of choice values, so the column
+    must store a collection. An ``ArrayField`` stores each element through its ``base_field``
+    (``types/converters.py::array_element_field``), which carries any element choices and so
+    the read enum the element values must belong to. A column with ``choices`` that is not an
+    array stores one choice value per row: the list is stored as one value (its ``str``), or
+    fails to coerce, and is never a member of the column's read enum, so the field is refused.
+    A column without ``choices`` (``JSONField``, plain text) is returned unchanged: its read
+    type has no member set to check, and what it stores is whatever the serializer's
+    ``save()`` writes.
+    """
+    element = array_element_field(column)
+    if element is not None:
+        return element
+    if not column.choices:
+        return column
+    serializer_name = _safe_type_name(getattr(field, "parent", None))
+    raise ConfigurationError(
+        f"Serializer {serializer_name} field {field.field_name!r} is a MultipleChoiceField over "
+        f"the single-value choice column {column.model.__name__}.{column.name}: it writes a list, "
+        "which is not one of the column's choices, so the column's GraphQL enum could not read "
+        "the row back. Declare a ChoiceField to write one value, or store many values in an "
+        "ArrayField column whose base_field declares the choices.",
+    )
+
+
 def _model_backed_scalar_annotation(
     field: DRFField,
     column: ConcreteField,
@@ -969,8 +1001,14 @@ def _model_backed_scalar_annotation(
     value (a declared choice, or ``""`` from ``allow_blank``) the backing choice column's read
     enum has no member for is refused first (``_reject_choice_values_outside_column_enum``), so
     a single-value choice field never writes a value the column's read enum cannot serialize.
+    A ``MultipleChoiceField`` is checked against the column each element is stored through
+    (``_multiple_choice_element_column``: an ``ArrayField``'s ``base_field``), and refused over a
+    single-value choice column, whose read enum has no member for a list.
     """
-    _reject_choice_values_outside_column_enum(field, column)
+    choice_column = column
+    if isinstance(field, serializers.MultipleChoiceField):
+        choice_column = _multiple_choice_element_column(field, column)
+    _reject_choice_values_outside_column_enum(field, choice_column)
     if _is_consumer_declared(field) and _is_enumerable_serializer_choice(field):
         return _serializer_choice_annotation(field, type_name)
     model_annotation = convert_scalar(column, type_name, force_nullable=False)
@@ -1027,8 +1065,9 @@ def _serializer_choice_enum(field: serializers.ChoiceField, type_name: str) -> t
     ``.items()`` are the ``(value, label)`` pairs the builder expects. ``allow_blank=True``
     (``ChoiceField.to_internal_value`` returns ``""``) adds the ``BLANK`` member, so the
     blank the serializer admits is reachable over the wire (``MultipleChoiceField`` too:
-    ``[BLANK]`` decodes to ``{""}``). Over a model choice column every member, ``BLANK``
-    included, must also be a member of the column's read enum:
+    ``[BLANK]`` decodes to ``[""]``). Over a model choice column every member, ``BLANK``
+    included, must also be a member of the column's read enum (for a ``MultipleChoiceField``,
+    the read enum of the ``ArrayField`` ``base_field`` each element is stored through):
     ``_reject_choice_values_outside_column_enum`` refuses the field before this enum is built
     otherwise. The enum is cached by
     its descriptor-derived name so two inputs referencing the same serializer-only choice

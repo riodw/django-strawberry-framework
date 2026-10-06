@@ -616,6 +616,42 @@ def test_declared_choice_allow_blank_over_strict_choice_column_fails_finalize():
         finalize_django_types()
 
 
+def test_multiple_choice_over_single_value_choice_column_fails_finalize():
+    """A ``MultipleChoiceField`` over a single-value choice column fails the bind.
+
+    DRF validates a list and ``save()`` stores it as one value (``"['available']"``), which
+    the column's read enum has no member for, so the input build refuses the field.
+    """
+    from apps.library.models import Book
+
+    class BookT(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "circulation_status")
+            primary = True
+
+    class MultiStatusSer(serializers.ModelSerializer):
+        circulation_status = serializers.MultipleChoiceField(
+            choices=Book.CirculationStatus.choices,
+        )
+
+        class Meta:
+            model = Book
+            fields = ("title", "circulation_status")
+
+    class CreateBook(SerializerMutation):
+        class Meta:
+            serializer_class = MultiStatusSer
+            operation = "create"
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"circulation_status: Serializer MultiStatusSer field 'circulation_status' is a "
+        r"MultipleChoiceField over the single-value choice column Book\.circulation_status",
+    ):
+        finalize_django_types()
+
+
 def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard():
     """Overriding ``get_serializer_kwargs`` does NOT waive the create-required guard (hardened).
 

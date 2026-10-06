@@ -341,6 +341,19 @@ def _field_label(field: object) -> str:
     return f"{_safe_text(model_name, '<unbound>')}.{_safe_text(field_name, '<unknown>')}"
 
 
+def array_element_field(field: object) -> "ConcreteField | None":
+    """Return an ``ArrayField``'s ``base_field``, the column each element is stored through.
+
+    ``None`` for any other column, and for every column when ``django.contrib.postgres``
+    is unavailable. An ``ArrayField`` reads as ``list[<base_field's type>]``
+    (``convert_scalar``), so its element choices live on ``base_field``, never on the
+    array column itself.
+    """
+    if _ARRAY_FIELD_CLS is not None and isinstance(field, _ARRAY_FIELD_CLS):
+        return field.base_field
+    return None
+
+
 def _field_has_choices(field: "ConcreteField") -> bool:
     """Read a field's choices flag without leaking hostile metadata errors."""
     try:
@@ -463,8 +476,9 @@ def convert_scalar(
     # recursion is left ``force_nullable``-unset so the inner element
     # nullability follows ``base_field.null`` and is NOT affected by the
     # outer override.
-    if _ARRAY_FIELD_CLS is not None and isinstance(field, _ARRAY_FIELD_CLS):
-        if isinstance(field.base_field, _ARRAY_FIELD_CLS):
+    element = array_element_field(field)
+    if element is not None:
+        if array_element_field(element) is not None:
             raise ConfigurationError(
                 f"Nested ArrayField on {_field_label(field)} is not supported.",
             )
@@ -474,7 +488,7 @@ def convert_scalar(
                 f"field; outer-array choices are ambiguous at the GraphQL boundary. Declare choices "
                 f"on base_field for element-level enum, or use FilterSet.",
             )
-        inner = convert_scalar(field.base_field, type_name)
+        inner = convert_scalar(element, type_name)
         result = GenericAlias(list, (inner,))
         return result | None if effective_null else result
     # Sentinel-guarded ``HStoreField`` dispatch mirrors the ArrayField

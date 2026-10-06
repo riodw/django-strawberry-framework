@@ -49,7 +49,9 @@ from django_strawberry_framework.extensions.operation_state import (
     _RUNNER_SCOPES,
     DjangoExtensionsRunner,
     OperationState,
+    _binding,
     _OperationBoundExtension,
+    _unbind,
     operation_is_nested,
 )
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
@@ -63,6 +65,7 @@ from django_strawberry_framework.utils.execution_mode import (
     OperationMode,
     current_operation_mode,
 )
+from django_strawberry_framework.utils.operation_lease import OperationLease
 
 
 @strawberry.type
@@ -335,6 +338,28 @@ def test_a_hook_that_raises_while_setting_up_still_resets_every_binding():
     assert result.errors is not None
     assert shared.execution_context is None
     assert shared._operation_state() is None
+
+
+def test_a_reset_that_fails_strands_no_lease_and_no_other_binding():
+    """One reset raising still closes every lease and attempts every other reset.
+
+    A token this context cannot reset is a bookkeeping defect, raised as Python's own
+    error, but only once the rest of the scope is unwound: a copied context stops
+    reading through every lease, and this context gets every other variable back.
+    """
+    first: contextvars.ContextVar[str | None] = contextvars.ContextVar("first", default=None)
+    second: contextvars.ContextVar[str | None] = contextvars.ContextVar("second", default=None)
+    lease = OperationLease("first")
+    second_token = second.set("bound")
+    bindings = [_binding(first, first.set("bound"), lease), _binding(second, second_token, None)]
+    # Used up here, so the unwind's own reset of it raises RuntimeError.
+    second.reset(second_token)
+
+    with pytest.raises(RuntimeError):
+        _unbind(bindings)
+
+    assert lease.held() is None
+    assert first.get() is None
 
 
 @pytest.mark.asyncio

@@ -736,12 +736,20 @@ def _unbind(bindings: list[_Binding]) -> None:
     sees the reset, and must stop reading the moment the scope ends rather than
     when the owner is eventually collected. The reset is what gives THIS context
     its enclosing operation back, and each one is attempted independently so a
-    token this context cannot reset does not strand the ones after it.
+    token this context cannot reset does not strand the ones after it; the
+    first reset failure is raised once every reset has been attempted.
     """
     for binding in reversed(bindings):
         if binding.lease is not None:
             binding.lease.close()
-        binding.reset()
+    failure: ValueError | RuntimeError | None = None
+    for binding in reversed(bindings):
+        try:
+            binding.reset()
+        except (ValueError, RuntimeError) as error:  # noqa: PERF203 - one attempt per reset
+            failure = failure or error
+    if failure is not None:
+        raise failure
 
 
 def _reset_adopted_binding(variable: ContextVar[_ValueT], token: Token[_ValueT]) -> None:

@@ -38,10 +38,72 @@ The t3 hunt itself is not closed: Deep dive 3 is blocked and the final test gate
 
 | # | Finding | State | Next step |
 |---|---|---|---|
-| 11 | `FieldError.field` keying (t3 "Package integration" item): model and form flavors key `full_clean` / `form.errors` errors by the Django name (`short_name`) while decode errors and the serializer flavor key by the GraphQL input name; under a `Meta.input_class` rename the key names no input field | Rule-35 defect confirmed at HEAD; fix approved in direction (spec-039's rule) | Brief opens with a design check (`FieldError.path`, nested segments, plain form and auth flavors, graphene-django parity); t3 holds a 5-file fix to read, not port |
+| 11 | `FieldError.field` keying (t3 "Package integration" item): validator-origin errors (`full_clean`, `form.errors`, the serializer's save-time Django `ValidationError`) key by the Django, form or model-column name, while decode errors and DRF `serializer.errors` key by the GraphQL input name; an FK input `categoryId` comes back as `category`, a `Meta.input_class` rename as the old name | Defect re-confirmed at HEAD on model, ModelForm, plain form (stock kanban `setCardStatus`), register and serializer save-time; design researched, see [Item 11 design](#item-11-design-pending-approval) | Maintainer approves the design points, then implement; t3 holds a 5-file fix to read, not port |
 | 12 | Deadline not checked on nested forward-FK / OneToOne / reverse-OneToOne resolvers, sync and async (t3 Deep dive 3, Worker 1-A, Low) | t3 fix exists only as a workspace patch; `types/resolvers.py` has no deadline check at HEAD | Re-verify at HEAD, then root-cause fix |
 | 13 | Consumer `Prefetch` hint over a target type that hides rows served hidden rows (t3 Deep dive 3, Worker 1-B, HIGH, sealed) | Probably fixed on main by `5d4cdb3b` (a hinted `Prefetch` is scoped by the target type's `get_queryset`) | Confirm against the sealed t3 evidence, then purge |
 | 14 | README empty-list rule over-generalized for integer `in: []` (t3 Deep dive 4 docs lead: t3 executed ALL rows against the sentence's NONE) | Unverified at HEAD (README section "Four empty-value rules") | Probe at HEAD; fix doc or code |
+
+### Item 11 design, pending approval
+
+Probe findings at HEAD:
+
+- The split is two key spaces, not casing: the FK suffix (`category` / `categoryId`) and a
+  `Meta.input_class` rename have no casing relation.
+- Model and form flavors never produce nested error paths; only the serializer nests, and it
+  already re-keys at every depth.
+- `__all__` cannot collide with a Django field name.
+- Re-keying must apply only at the three validator sites (`_full_clean_or_field_errors`,
+  `_form_errors_to_field_errors`, the serializer `except DjangoValidationError` branch). A decode
+  error already carries a GraphQL name, and under a swapped rename a blanket re-key would rewrite it
+  wrong.
+- No first-party client reads `FieldError.field`.
+- A trial patch moved every probe row to the GraphQL name. Full suite: 3 failures, all tests that
+  pin today's Django-name key:
+  - `test_update_item_via_form_explicit_null_category_id_is_the_form_required_error` in
+    `examples/fakeshop/test_query/test_products_api.py`
+  - `test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_unchanged` in
+    `tests/forms/test_resolvers.py`
+  - `test_partial_update_validates_scalar_field_named_id_suffix` in
+    `tests/mutations/test_resolvers.py`
+
+Proposed design:
+
+- **Shared mapper.** One mapper in `utils/errors.py`, `build_error_key_map(specs, *, key_of=None)`
+  plus `rekey_error_segment`, promoted from `rest_framework/resolvers.py` `_build_reverse_map` /
+  `_rekey_segment`.
+- **Mapper input.** `validation_error_to_field_errors(exc, key_map=None)`; `None` keeps today's
+  verbatim keying for the kanban service-error caller.
+- **Key per flavor.**
+  - model: the model field name of `spec.input_attr`;
+  - form: `target_name`;
+  - serializer save-time: `source or target_name`.
+- **Register** goes through the model tail.
+- **Required parameters.** Internal helpers take the mutation class as a required parameter, so a
+  forgotten call site fails loudly.
+- **Lazy map.** The map is built on the error path only.
+- **`path` is unchanged** (split of `field`).
+
+t3's fix finds the same three key functions but builds four separate maps, defaults the map to
+`None` at every helper (a forgotten site silently keeps the defect), adds one test and changes no
+docs.
+
+Decisions for the maintainer:
+
+1. The rule covers every flavor, not only the serializer. Rewrite:
+   - spec-036 Decision 7 and Decision 8 step 4;
+   - spec-038 Decision 8 step 4 and its test-plan rows;
+   - spec-039 Decision 8;
+   - spec-040's `USERNAME_FIELD` row.
+2. Wire-value change for model, ModelForm, plain-form and register clients (e.g. `category` becomes
+   `categoryId`); whether it goes in the CHANGELOG is the maintainer's call.
+3. No `CAMELCASE_ERRORS`-style setting: keys are always the input name, and `__all__` stays as is,
+   not graphene's `_All__`.
+4. An error on a field the input does not expose keeps its validator-side name (recommended), or
+   folds into `__all__`.
+5. A rename onto an unexposed field's Django name makes two errors share one key: document it
+   (recommended), or refuse it at build.
+6. Board card `TODO-ALPHA-051-0.0.15`: "casing" becomes "keying"; add `forms/resolvers.py` and
+   `auth/mutations.py` to its likely files.
 
 ## 3. t3 robustness, lint and stale-test rows, open
 

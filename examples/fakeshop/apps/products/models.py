@@ -28,8 +28,6 @@ if TYPE_CHECKING:
 class Category(models.Model):
     """A Faker provider (e.g. ``bank``, ``person``, ``address``)."""
 
-    # Primary-key column Django adds at class creation, declared for the type checker.
-    id: int
     name = models.TextField(unique=True)
     description = models.TextField(
         blank=True,

@@ -2100,21 +2100,14 @@ def _strawberry_patch_opted_out():
     duration. What is left running is exactly what a consumer who opted out would
     be running.
     """
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
     override = override_settings(
         DJANGO_STRAWBERRY_FRAMEWORK={"APPLY_UPSTREAM_PATCHES": {"strawberry": False}},
     )
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(BaseView, "parse_json", patches._original_parse_json)
+        patch.setattr(BaseView, "parse_query_params", patches._original_parse_query_params)
         with override:
             yield
-    finally:
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
 
 
 @pytest.mark.parametrize(("body", "cause"), _WIRE_SHAPES)
@@ -2260,7 +2253,9 @@ def _json_request(raw: bytes):
     return RequestFactory().post("/graphql/", data=raw, content_type="application/json")
 
 
-def test_the_sync_view_hands_parse_json_raw_bytes_in_every_patch_state():
+def test_the_sync_view_hands_parse_json_raw_bytes_in_every_patch_state(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The sync transport's body source is the package view's own.
 
     ``parse_json`` can only enforce the strict decode over bytes it is given, and
@@ -2281,24 +2276,20 @@ def test_the_sync_view_hands_parse_json_raw_bytes_in_every_patch_state():
     adapter members.
     """
     raw = '{"a": 1}'.encode("utf-16")
-    saved = DjangoHTTPRequestAdapter.__dict__["body"]
 
     assert DjangoGraphQLView.request_adapter_class is _RawBodyRequestAdapter
     assert issubclass(_RawBodyRequestAdapter, DjangoHTTPRequestAdapter)
 
-    try:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = property(cross_web_patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
-        assert cross_web_patches._patch_is_installed() is False
+    monkeypatch.setattr(
+        DjangoHTTPRequestAdapter,
+        "body",
+        property(cross_web_patches._original_body_fget),
+    )
+    assert cross_web_patches._patch_is_installed() is False
 
-        body = _RawBodyRequestAdapter(_json_request(raw)).body
-        with pytest.raises(UnicodeDecodeError):
-            DjangoHTTPRequestAdapter(_json_request(raw)).body
-    finally:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
+    body = _RawBodyRequestAdapter(_json_request(raw)).body
+    with pytest.raises(UnicodeDecodeError):
+        DjangoHTTPRequestAdapter(_json_request(raw)).body
 
     assert body == raw
     assert isinstance(body, bytes)

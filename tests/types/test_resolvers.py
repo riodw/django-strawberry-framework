@@ -163,7 +163,6 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
     result = resolver(root, _as_strawberry_info(fake_info))
     assert isinstance(result, Category)
     assert result.pk == 42
-    assert result.id == 42
     assert result._state.adding is False
     assert result._state.db == router.db_for_read(Category)
 
@@ -1628,11 +1627,6 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         assert len(list(many_res_scoped)) == 1
     finally:
         end_execution_frame(frame)
-        registry._finalized = False
-        # basedpyright: the model is not a registered type, so this call is a no-op;
-        # registry.unregister types the parameter as type[DjangoType]
-        registry.unregister(Category)  # pyright: ignore[reportArgumentType]
-        registry.unregister(Item)  # pyright: ignore[reportArgumentType]
 
 
 def test_sync_forward_and_many_resolver_visibility(db: None):
@@ -1748,11 +1742,6 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
             end_execution_frame(warn_frame)
     finally:
         end_execution_frame(frame)
-        registry._finalized = False
-        # basedpyright: the model is not a registered type, so this call is a no-op;
-        # registry.unregister types the parameter as type[DjangoType]
-        registry.unregister(Category)  # pyright: ignore[reportArgumentType]
-        registry.unregister(Item)  # pyright: ignore[reportArgumentType]
 
 
 def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_from():

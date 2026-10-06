@@ -122,7 +122,9 @@ def _all_patches_installed():
     )
 
 
-def test_ready_dispatches_all_four_patch_appliers_and_refires_safely():
+def test_ready_dispatches_all_four_patch_appliers_and_refires_safely(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``ready()`` itself installs all four upstream patches; a re-fire is safe.
 
     The patch-module suites each pin "installed at collection via
@@ -136,60 +138,50 @@ def test_ready_dispatches_all_four_patch_appliers_and_refires_safely():
     ``ready()`` pins dispatch-layer idempotence (some Django test
     runners fire it more than once).
     """
-    saved_django = SimpleTestCase.__dict__["_remove_databases_failures"]
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    saved_body = DjangoHTTPRequestAdapter.__dict__["body"]
-    saved_complete = ExecutionContext.__dict__["complete_list_value"]
-    try:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = (  # pyright: ignore[reportAttributeAccessIssue]
-            _django_patches._original_remove_databases_failures
-        )
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = _strawberry_patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        BaseView.parse_query_params = _strawberry_patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = property(_cross_web_patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        ExecutionContext.complete_list_value = _graphql_core_patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
-        assert _all_patches_installed() == (
-            False,
-            False,
-            False,
-            False,
-        )
+    monkeypatch.setattr(
+        SimpleTestCase,
+        "_remove_databases_failures",
+        _django_patches._original_remove_databases_failures,
+    )
+    monkeypatch.setattr(BaseView, "parse_json", _strawberry_patches._original_parse_json)
+    monkeypatch.setattr(
+        BaseView,
+        "parse_query_params",
+        _strawberry_patches._original_parse_query_params,
+    )
+    monkeypatch.setattr(
+        DjangoHTTPRequestAdapter,
+        "body",
+        property(_cross_web_patches._original_body_fget),
+    )
+    monkeypatch.setattr(
+        ExecutionContext,
+        "complete_list_value",
+        _graphql_core_patches._original_complete_list_value,
+    )
+    assert _all_patches_installed() == (
+        False,
+        False,
+        False,
+        False,
+    )
 
-        config = django.apps.apps.get_app_config("django_strawberry_framework")
-        config.ready()
-        assert _all_patches_installed() == (
-            True,
-            True,
-            True,
-            True,
-        )
+    config = django.apps.apps.get_app_config("django_strawberry_framework")
+    config.ready()
+    assert _all_patches_installed() == (
+        True,
+        True,
+        True,
+        True,
+    )
 
-        config.ready()
-        assert _all_patches_installed() == (
-            True,
-            True,
-            True,
-            True,
-        )
-    finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved_django  # pyright: ignore[reportAttributeAccessIssue]
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = saved_body  # pyright: ignore[reportAttributeAccessIssue]
-        ExecutionContext.complete_list_value = saved_complete
+    config.ready()
+    assert _all_patches_installed() == (
+        True,
+        True,
+        True,
+        True,
+    )
 
 
 @pytest.mark.parametrize(

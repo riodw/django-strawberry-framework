@@ -88,22 +88,16 @@ def test_apply_is_idempotent():
     assert patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_when_method_reverted():
+def test_apply_reinstalls_when_method_reverted(monkeypatch: pytest.MonkeyPatch):
     """``apply()`` re-installs if a third party reverted ``BaseView.parse_json``."""
     patches.apply()
     assert patches._patch_is_installed() is True
 
-    saved = BaseView.__dict__["parse_json"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(BaseView, "parse_json", patches._original_parse_json)
+    assert patches._patch_is_installed() is False
 
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        BaseView.parse_json = saved
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
 def test_patch_is_installed_on_base_view():
@@ -114,7 +108,7 @@ def test_patch_is_installed_on_base_view():
     assert AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
 
 
-def test_apply_reinstalls_pair_when_parse_query_params_reverted():
+def test_apply_reinstalls_pair_when_parse_query_params_reverted(monkeypatch: pytest.MonkeyPatch):
     """A partial revert (only ``parse_query_params``) makes ``apply()`` re-install the pair.
 
     ``_patch_is_installed()`` must report ``False`` when either method was
@@ -124,21 +118,17 @@ def test_apply_reinstalls_pair_when_parse_query_params_reverted():
     patches.apply()
     assert patches._patch_is_installed() is True
 
-    saved = BaseView.__dict__["parse_query_params"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(BaseView, "parse_query_params", patches._original_parse_query_params)
+    assert patches._patch_is_installed() is False
 
-        patches.apply()
-        assert patches._patch_is_installed() is True
-        assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
-    finally:
-        BaseView.parse_query_params = saved
+    patches.apply()
+    assert patches._patch_is_installed() is True
+    assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
 
 
-def test_apply_reinstalls_all_members_when_one_multipart_method_reverted():
+def test_apply_reinstalls_all_members_when_one_multipart_method_reverted(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A partial multipart revert heals with the BaseView pair intact.
 
     The envelope guard's GET shield and the two multipart wrappers form one
@@ -147,26 +137,20 @@ def test_apply_reinstalls_all_members_when_one_multipart_method_reverted():
     than merely the changed method.
     """
     patches.apply()
-    saved = AsyncBaseHTTPView.__dict__["parse_multipart"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        AsyncBaseHTTPView.parse_multipart = patches._original_async_parse_multipart  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(
+        AsyncBaseHTTPView,
+        "parse_multipart",
+        patches._original_async_parse_multipart,
+    )
+    assert patches._patch_is_installed() is False
 
-        patches.apply()
+    patches.apply()
 
-        assert patches._patch_is_installed() is True
-        assert BaseView.__dict__["parse_json"] is patches._patched_parse_json
-        assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
-        assert (
-            SyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_sync_parse_multipart
-        )
-        assert (
-            AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
-        )
-    finally:
-        AsyncBaseHTTPView.parse_multipart = saved
+    assert patches._patch_is_installed() is True
+    assert BaseView.__dict__["parse_json"] is patches._patched_parse_json
+    assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
+    assert SyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_sync_parse_multipart
+    assert AsyncBaseHTTPView.__dict__["parse_multipart"] is patches._patched_async_parse_multipart
 
 
 def test_patched_parse_json_translates_unicode_decode_error():
@@ -576,7 +560,7 @@ def test_apply_fails_loudly_when_parse_multipart_signature_changes(
             patches.apply()
 
 
-def test_apply_fails_loudly_when_parse_query_params_body_drifts():
+def test_apply_fails_loudly_when_parse_query_params_body_drifts(monkeypatch: pytest.MonkeyPatch):
     """A shape-passing but body-drifted upstream must not be silently superseded.
 
     The shield *reimplements* upstream's ``parse_query_params`` body, so
@@ -588,32 +572,24 @@ def test_apply_fails_loudly_when_parse_query_params_body_drifts():
     reimplementation. ``apply()`` must raise the targeted ``RuntimeError``
     before installing anything.
     """
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(BaseView, "parse_json", patches._original_parse_json)
+    monkeypatch.setattr(BaseView, "parse_query_params", patches._original_parse_query_params)
+    assert patches._patch_is_installed() is False
 
-        def _drifted(self: BaseView[Never], params: Mapping[str, str]):
-            """A (self, params)-shaped upstream whose body dropped the falsy skip."""
-            params = dict(params)
-            if "variables" in params:
-                params["variables"] = self.parse_json(params["variables"])
-            if "extensions" in params:
-                params["extensions"] = self.parse_json(params["extensions"])
-            return params
+    def _drifted(self: BaseView[Never], params: Mapping[str, str]):
+        """A (self, params)-shaped upstream whose body dropped the falsy skip."""
+        params = dict(params)
+        if "variables" in params:
+            params["variables"] = self.parse_json(params["variables"])
+        if "extensions" in params:
+            params["extensions"] = self.parse_json(params["extensions"])
+        return params
 
-        with mock.patch.object(patches, "_original_parse_query_params", _drifted):
-            with pytest.raises(RuntimeError, match="upstream body"):
-                patches.apply()
-        # ``apply()`` raised during validation, before the install step.
-        assert patches._patch_is_installed() is False
-    finally:
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
+    with mock.patch.object(patches, "_original_parse_query_params", _drifted):
+        with pytest.raises(RuntimeError, match="upstream body"):
+            patches.apply()
+    # ``apply()`` raised during validation, before the install step.
+    assert patches._patch_is_installed() is False
 
 
 def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
@@ -636,55 +612,48 @@ def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
             patches.apply()
 
 
-def test_apply_no_ops_when_toggle_disabled(settings: pytest_django.Settings):
+def test_apply_no_ops_when_toggle_disabled(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
-    saved = BaseView.__dict__["parse_json"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(BaseView, "parse_json", patches._original_parse_json)
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
-        patches.apply()
-        assert patches._patch_is_installed() is False
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        BaseView.parse_json = saved
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
+    patches.apply()
+    assert patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
-def test_apply_no_ops_when_strawberry_dependency_opted_out(settings: pytest_django.Settings):
+def test_apply_no_ops_when_strawberry_dependency_opted_out(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``{"strawberry": False}`` disables only this module; ``{"django": False}`` does not.
 
     The production half of the per-dependency opt-out contract: opting out of
     the test-only Django patch alone leaves this request hardening
     installing normally (each gate reads its own dependency name).
     """
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(BaseView, "parse_json", patches._original_parse_json)
+    monkeypatch.setattr(BaseView, "parse_query_params", patches._original_parse_query_params)
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
-        patches.apply()
-        assert patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
+    patches.apply()
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
 def test_the_gated_workarounds_really_stop_hardening_when_opted_out(
     settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     """The opt-out is behavioral, not just an install flag - and stays that way.
 
@@ -701,25 +670,17 @@ def test_the_gated_workarounds_really_stop_hardening_when_opted_out(
     this method, that then raises ``AttributeError``), and an undecodable body
     raises the raw ``UnicodeDecodeError`` upstream never catches.
     """
-    saved_parse_json = BaseView.__dict__["parse_json"]
-    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
-    try:
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        BaseView.parse_json = patches._original_parse_json  # pyright: ignore[reportAttributeAccessIssue]
-        BaseView.parse_query_params = patches._original_parse_query_params  # pyright: ignore[reportAttributeAccessIssue]
-        patches.apply()
-        assert patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
+    monkeypatch.setattr(BaseView, "parse_json", patches._original_parse_json)
+    monkeypatch.setattr(BaseView, "parse_query_params", patches._original_parse_query_params)
+    patches.apply()
+    assert patches._patch_is_installed() is False
 
-        view = BaseView()
-        assert view.parse_json("42") == 42
-        assert view.parse_json("[1, 2, 3]") == [1, 2, 3]
-        with pytest.raises(UnicodeDecodeError):
-            view.parse_json(b'{"a":"\xff\xfe"}')
-    finally:
-        BaseView.parse_json = saved_parse_json
-        BaseView.parse_query_params = saved_parse_query_params
+    view = BaseView()
+    assert view.parse_json("42") == 42
+    assert view.parse_json("[1, 2, 3]") == [1, 2, 3]
+    with pytest.raises(UnicodeDecodeError):
+        view.parse_json(b'{"a":"\xff\xfe"}')
 
 
 def test_capture_returns_none_when_upstream_owner_is_missing():

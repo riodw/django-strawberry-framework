@@ -54,17 +54,15 @@ def test_patch_is_installed_at_app_load_and_apply_is_idempotent():
     assert patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_a_reverted_executor_method():
-    saved = ExecutionContext.__dict__["complete_list_value"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        ExecutionContext.complete_list_value = patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        ExecutionContext.complete_list_value = saved
+def test_apply_reinstalls_a_reverted_executor_method(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        ExecutionContext,
+        "complete_list_value",
+        patches._original_complete_list_value,
+    )
+    assert patches._patch_is_installed() is False
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
 def test_captured_upstream_still_returns_a_residual_awaitable():
@@ -128,38 +126,40 @@ def test_apply_fails_loudly_when_required_upstream_symbols_are_missing(name: str
             patches.apply()
 
 
-def test_apply_uses_independent_dependency_gate(settings: pytest_django.Settings):
-    saved = ExecutionContext.__dict__["complete_list_value"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        ExecutionContext.complete_list_value = patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {
-            "APPLY_UPSTREAM_PATCHES": {"graphql_core": False},
-        }
-        patches.apply()
-        assert patches._patch_is_installed() is False
+def test_apply_uses_independent_dependency_gate(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        ExecutionContext,
+        "complete_list_value",
+        patches._original_complete_list_value,
+    )
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "APPLY_UPSTREAM_PATCHES": {"graphql_core": False},
+    }
+    patches.apply()
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {
-            "APPLY_UPSTREAM_PATCHES": {"strawberry": False},
-        }
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        ExecutionContext.complete_list_value = saved
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "APPLY_UPSTREAM_PATCHES": {"strawberry": False},
+    }
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
-def test_apply_obeys_global_disable(settings: pytest_django.Settings):
-    saved = ExecutionContext.__dict__["complete_list_value"]
-    try:
-        # basedpyright: restoring the captured upstream original is the reverted state under test;
-        # the package types the capture as optional, not as the method's own signature
-        ExecutionContext.complete_list_value = patches._original_complete_list_value  # pyright: ignore[reportAttributeAccessIssue]
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
-        patches.apply()
-        assert patches._patch_is_installed() is False
-    finally:
-        ExecutionContext.complete_list_value = saved
+def test_apply_obeys_global_disable(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        ExecutionContext,
+        "complete_list_value",
+        patches._original_complete_list_value,
+    )
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
+    patches.apply()
+    assert patches._patch_is_installed() is False
 
 
 def test_captured_upstream_method_returns_none_without_an_owner():

@@ -78,11 +78,7 @@ from django_strawberry_framework.filters.inputs import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
-
-
-def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
-    """``input_cls`` as a constructor: its keyword fields are generated at run time."""
-    return input_cls
+from tests._generated_inputs import keyword_constructor as _keyword_constructor
 
 
 @runtime_checkable

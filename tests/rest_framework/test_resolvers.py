@@ -94,6 +94,7 @@ from django_strawberry_framework.utils.write_transaction import (
     managed_write_transaction,
     write_pipeline,
 )
+from tests._generated_inputs import keyword_constructor as _keyword_constructor
 
 if TYPE_CHECKING:
     from django_strawberry_framework.mutations.inputs import FieldError
@@ -4324,11 +4325,6 @@ def test_relation_queryset_scope_composes_with_author_queryset():
 # ===========================================================================
 # Nested serializer inputs - decode + agreement internals
 # ===========================================================================
-
-
-def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
-    """``input_cls`` as a constructor: its keyword fields are generated at run time."""
-    return input_cls
 
 
 def _nested_single_input_and_specs():

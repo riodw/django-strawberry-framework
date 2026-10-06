@@ -463,6 +463,7 @@ Source: `tests/`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
+├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
@@ -717,6 +718,7 @@ Source: `tests/ (+ planned card paths)`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
+├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.

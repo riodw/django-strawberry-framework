@@ -41,7 +41,7 @@ classes carried by the schema-module import.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from types import SimpleNamespace
 
 import pytest
@@ -84,11 +84,7 @@ from django_strawberry_framework.orders.inputs import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import LazyRelatedClassMixin
-
-
-def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
-    """``input_cls`` as a constructor: the factory generates its keyword fields at run time."""
-    return input_cls
+from tests._generated_inputs import keyword_constructor as _keyword_constructor
 
 
 @pytest.fixture(autouse=True)

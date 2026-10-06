@@ -28,7 +28,7 @@ reconstruction key absence, decode-helper envelopes, optimizer
 from __future__ import annotations
 
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any
@@ -63,6 +63,7 @@ from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError, visible_related_object
+from tests._generated_inputs import keyword_constructor as _keyword_constructor
 
 
 @pytest.fixture(autouse=True)
@@ -213,11 +214,6 @@ _CREATE = (
 # ---------------------------------------------------------------------------
 # decode split: form-key / choice-enum unwrap (unit tier)
 # ---------------------------------------------------------------------------
-
-
-def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
-    """``input_cls`` as a constructor: its keyword fields are generated at run time."""
-    return input_cls
 
 
 def _relay_global_id(type_cls: type, pk: object) -> relay.GlobalID:

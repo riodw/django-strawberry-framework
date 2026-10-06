@@ -21,7 +21,7 @@ import contextvars
 import gc
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import SupportsIndex, TypeVar, overload
 
@@ -50,13 +50,9 @@ from django_strawberry_framework.orders.sets import (
 )
 from django_strawberry_framework.types.base import DjangoType
 from django_strawberry_framework.utils.querysets import model_for
+from tests._generated_inputs import keyword_constructor as _keyword_constructor
 
 _M = TypeVar("_M", bound=Model)
-
-
-def _keyword_constructor(input_cls: type[object]) -> Callable[..., object]:
-    """``input_cls`` as a constructor: the factory generates its keyword fields at run time."""
-    return input_cls
 
 
 # ---------------------------------------------------------------------------

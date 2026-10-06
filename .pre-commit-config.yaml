@@ -52,14 +52,14 @@ repos:
         require_serial: true
 
       - id: basedpyright
-        name: basedpyright (every Python file outside tests/)
+        name: basedpyright (every Python file)
         entry: uv run basedpyright
         language: system
         # `pass_filenames: false`: `[tool.basedpyright]` owns the scope, and a file
         # list would check only the staged files, missing the callers whose types a
-        # signature change breaks. Fires on any staged `.py` outside tests/, the config or
+        # signature change breaks. Fires on any staged `.py`, the config or
         # the lock (the lock pins the checker and every stub and annotated package it reads).
-        files: ^((?!tests/).*\.py|pyproject\.toml|uv\.lock)$
+        files: ^(.*\.py|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
 
@@ -71,7 +71,7 @@ repos:
         # the `requires-python` floor: catches a 3.11+ stdlib or `typing` name the 3.11
         # pass reads as valid. Fires on the same files as `basedpyright` plus its own
         # config.
-        files: ^((?!tests/).*\.py|pyrightconfig\.floor\.json|pyproject\.toml|uv\.lock)$
+        files: ^(.*\.py|pyrightconfig\.floor\.json|pyproject\.toml|uv\.lock)$
         pass_filenames: false
         require_serial: true
 

@@ -271,15 +271,18 @@ max-line-length = 110
 # ``# pyright: ignore[<rule>]``, always rule-scoped: ``# type: ignore`` is not read at
 # all, and a suppression the run does not need is itself an error.
 [tool.basedpyright]
-# Every Python file in the repository except the package tests under tests/. The other
-# excludes are git-ignored scratch trees: generated source copies (docs/shadow/) and the
-# throwaway files a review, build, DRY or bug-hunt cycle creates and deletes at closeout.
+# Every Python file in the repository. The excludes are git-ignored scratch trees:
+# generated source copies (docs/shadow/) and the throwaway files a review, build, DRY or
+# bug-hunt cycle creates and deletes at closeout. tests/ imports the fakeshop apps the way
+# pytest's `pythonpath` does, through the extra path; it stays in the root environment
+# because an environment rooted at tests/ lets tests/rest_framework and tests/types shadow
+# DRF and the stdlib.
 include = ["."]
+extraPaths = ["examples/fakeshop"]
 exclude = [
     "**/node_modules",
     "**/__pycache__",
     "**/.*",
-    "tests",
     "docs/shadow",
     "docs/*/temp-tests",
     "docs/*/worker-memory",

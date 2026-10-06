@@ -35,12 +35,14 @@ relaxing ``-W error`` or filtering the warning.
 import asyncio
 import contextlib
 import sqlite3
+import sys
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING
 
 import pytest
 from django.apps import apps
 from django.db.backends.sqlite3 import base as sqlite_base
+from django.db.models import Model
 
 if TYPE_CHECKING:
     from django_strawberry_framework import ResourcePolicy
@@ -185,6 +187,12 @@ def _restore_app_registry() -> Iterator[None]:
         ``tests/test_permissions.py``, ``tests/optimizer/test_nested_index_advisory.py``,
         ``tests/filters/test_sets.py::ShelfProxy``) are registered before any test
         runs, so they sit inside every snapshot; import-time leakage is not fixed here.
+        That holds only while every consumer imports such a module at module level. A
+        module first imported inside a test body registers its models DURING the test
+        and stays in ``sys.modules``, so unregistering them would leave every later test
+        holding classes Django no longer knows, stripped of their reverse relations; the
+        restore keeps those registrations and fails the importing test instead
+        (``_restore_app_registry_to``).
     (b) ``apps.clear_cache()`` does not expire the package's own model-keyed caches
         (``django_strawberry_framework/permissions.py::_edge_plan``'s ``lru_cache``,
         ``django_strawberry_framework/utils/relations.py::_classify_path_cached`` and
@@ -198,15 +206,60 @@ def _restore_app_registry() -> Iterator[None]:
     try:
         yield
     finally:
-        added_labels = [label for label in apps.all_models if label not in snapshot]
-        changed = bool(added_labels) or any(
-            apps.all_models[label] != models for label, models in snapshot.items()
+        kept = _restore_app_registry_to(snapshot)
+    if kept:
+        names = ", ".join(f"{model.__module__}.{model.__qualname__}" for model in kept)
+        pytest.fail(
+            f"{names} registered with django.apps during this test from a module that stays "
+            "imported; import that module at module level so its models register before "
+            "any test runs",
+            pytrace=False,
         )
-        if changed:
-            for label, models in snapshot.items():
-                live = apps.all_models[label]
-                live.clear()
-                live.update(models)
-            for label in added_labels:
-                del apps.all_models[label]
-            apps.clear_cache()
+
+
+def _declared_at_module_scope(model: type[Model]) -> bool:
+    """Return whether ``model`` stays reachable by its qualified name from its module.
+
+    A class declared inside a function or fixture carries ``<locals>`` in its
+    qualified name (or, built with ``type()``, is bound nowhere), so nothing
+    outlives the test that holds it. A module-scope class stays bound for as long
+    as ``sys.modules`` keeps its module: the rest of the worker process.
+    """
+    owner = sys.modules.get(model.__module__)
+    for part in model.__qualname__.split("."):
+        owner = getattr(owner, part, None)
+    return owner is model
+
+
+def _restore_app_registry_to(
+    snapshot: dict[str, dict[str, type[Model]]],
+) -> list[type[Model]]:
+    """Restore ``apps.all_models`` to ``snapshot`` and return the module-scope models kept.
+
+    Every model registered since ``snapshot`` is unregistered except one declared at
+    module scope of a still-imported module: that module is never imported again, so
+    the class it holds is the only one any later test can reach, and dropping it from
+    the registry would strip its reverse relations for every later test. Those stay
+    registered and are returned for the caller to report.
+    """
+    kept = {
+        (label, name): model
+        for label, registered in apps.all_models.items()
+        for name, model in registered.items()
+        if snapshot.get(label, {}).get(name) is not model and _declared_at_module_scope(model)
+    }
+    added_labels = [label for label in apps.all_models if label not in snapshot]
+    changed = bool(added_labels) or any(
+        apps.all_models[label] != models for label, models in snapshot.items()
+    )
+    if changed:
+        for label, models in snapshot.items():
+            live = apps.all_models[label]
+            live.clear()
+            live.update(models)
+        for label in added_labels:
+            del apps.all_models[label]
+        for (label, name), model in kept.items():
+            apps.all_models[label][name] = model
+        apps.clear_cache()
+    return list(kept.values())

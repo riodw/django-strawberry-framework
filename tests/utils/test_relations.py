@@ -42,6 +42,13 @@ from django_strawberry_framework.utils.relations import (
     relation_link,
     validate_lookup_expr,
 )
+from tests.optimizer._link_models import (
+    LnkColumnChild,
+    LnkPairChild,
+    LnkParent,
+    LnkSlugChild,
+    LnkTag,
+)
 
 
 def _as_model(stand_in: object) -> type[Model]:
@@ -1411,8 +1418,6 @@ def test_relation_link_reads_the_link_column_pairs(
     onto the source model; a ``GenericForeignKey`` and a non-relation carry no
     pairs.
     """
-    from tests.optimizer._link_models import LnkPairChild, LnkParent, LnkTag
-
     model = {
         "LnkPairChild": LnkPairChild,
         "LnkParent": LnkParent,
@@ -1500,8 +1505,6 @@ def test_relation_link_failure_policy_on_a_raising_read():
 )
 def test_is_single_column_foreign_key(owner: str, field_name: str, expected: bool):
     """Only a forward ``ForeignKey`` / ``OneToOneField`` is a one-column link."""
-    from tests.optimizer._link_models import LnkColumnChild, LnkPairChild, LnkSlugChild
-
     model = {
         "Book": Book,
         "MembershipCard": MembershipCard,

@@ -19,6 +19,9 @@ from django_strawberry_framework.optimizer.join_taxonomy import (
     RelationJoinDescriptor,
     classify_relation_join,
 )
+from tests._relation_fixtures import RpCompositeParent
+
+from ._link_models import LnkParent, LnkSlugChild
 
 if TYPE_CHECKING:
     from django_strawberry_framework.utils.typing import ModelField
@@ -388,10 +391,6 @@ def test_two_column_foreign_object_reverse_is_unwindowable_and_attaches_on_every
     prefetch attaches on both carrier columns, and no correlated-fetch link
     field resolves because the link is not one column.
     """
-    from tests._relation_fixtures import RpCompositeParent
-
-    from ._link_models import LnkParent
-
     model = {"LnkParent": LnkParent, "RpCompositeParent": RpCompositeParent}[owner]
     descriptor = classify_relation_join(model._meta.get_field(field_name))
     assert descriptor.kind == "reverse_many_to_one"
@@ -410,8 +409,6 @@ def test_one_column_foreign_object_reverse_windows_on_its_carrier_without_a_link
     or ``db_type``, so the lateral and single-parent strategies refuse it and
     the windowed body serves it.
     """
-    from ._link_models import LnkParent
-
     descriptor = classify_relation_join(LnkParent._meta.get_field("column_children"))
     assert descriptor.windowable is True
     assert descriptor.partition_expr == "p_id"
@@ -422,8 +419,6 @@ def test_one_column_foreign_object_reverse_windows_on_its_carrier_without_a_link
 
 def test_to_field_foreign_key_reverse_windows_on_its_fk_column_with_the_fk_as_link():
     """A reverse ``to_field`` ``ForeignKey`` partitions by the FK column and keeps the FK link."""
-    from ._link_models import LnkParent, LnkSlugChild
-
     descriptor = classify_relation_join(LnkParent._meta.get_field("slug_children"))
     assert descriptor.windowable is True
     assert descriptor.partition_expr == "parent_id"
@@ -437,8 +432,6 @@ def test_field_meta_classifies_through_its_precomputed_carriers():
     It carries no link field, so ``parent_link_field`` stays ``None``.
     """
     from django_strawberry_framework.optimizer.field_meta import FieldMeta
-
-    from ._link_models import LnkParent
 
     meta = FieldMeta.from_django_field(LnkParent._meta.get_field("pair_children"))
     descriptor = classify_relation_join(meta)

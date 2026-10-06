@@ -36,6 +36,14 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.relations import has_composite_pk
 from tests._relation_fixtures import RpCompositeParent
 
+from ._link_models import (
+    LnkColumnChild,
+    LnkPairChild,
+    LnkParent,
+    LnkSlugChild,
+    LnkTag,
+)
+
 if TYPE_CHECKING:
     from django_strawberry_framework.utils.typing import ModelField
 
@@ -939,10 +947,6 @@ def test_from_django_field_stamps_reverse_link_columns(row: str):
     omitted because every projection loads them; the parent row must carry
     exactly those targets (``source_link_attnames``).
     """
-    from tests._relation_fixtures import RpCompositeParent
-
-    from ._link_models import LnkParent
-
     owner, field_name, carriers, targets = _LINK_COLUMN_ROWS[row]
     model = {
         "LnkParent": LnkParent,
@@ -976,8 +980,6 @@ def test_from_django_field_stamps_forward_link_carriers(
     ``utils/relations.py::relation_link``; a forward relation has no reverse
     targets.
     """
-    from ._link_models import LnkColumnChild, LnkSlugChild
-
     model = {"Item": Item, "LnkColumnChild": LnkColumnChild, "LnkSlugChild": LnkSlugChild}[owner]
     meta = FieldMeta.from_django_field(model._meta.get_field(field_name))
     assert meta.link_carrier_attnames == carriers
@@ -993,8 +995,6 @@ def test_from_django_field_multi_column_forward_foreign_object_has_no_single_tar
     leave ``target_field_name`` / ``target_field_attname`` ``None``, the
     carriers still stamp, and FK-id elision stays off.
     """
-    from ._link_models import LnkPairChild
-
     meta = FieldMeta.from_django_field(LnkPairChild._meta.get_field("parent"))
     assert meta.relation_kind == "forward_single"
     assert meta.target_field_name is None
@@ -1037,8 +1037,6 @@ def test_from_django_field_stamps_m2m_through_source_targets(
     """
     from apps.glossary.models import GlossaryCategory, GlossaryTerm
     from apps.library.models import Book, Genre
-
-    from ._link_models import LnkParent, LnkTag
 
     model = {
         "LnkParent": LnkParent,

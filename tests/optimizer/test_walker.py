@@ -52,6 +52,8 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
 
+from ._link_models import LnkPairChild, LnkParent, LnkSlugChild
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> Iterator[None]:
@@ -445,8 +447,6 @@ def test_unregistered_field_map_stamps_a_multi_column_forward_foreign_object():
     model no ``DjangoType`` registers; the multi-column forward link stamps
     without raising, so planning the model's scalars still succeeds.
     """
-    from ._link_models import LnkPairChild
-
     registry.clear()
     plan = plan_optimizations([_sel("name")], LnkPairChild)
     assert plan.only_fields == ("name",)
@@ -5378,8 +5378,6 @@ def test_connection_parent_link_columns_follow_the_projection_gate(
     from strategy_schemas import make_django_type
 
     from django_strawberry_framework import finalize_django_types
-
-    from ._link_models import LnkParent, LnkSlugChild
 
     registry.clear()
     try:

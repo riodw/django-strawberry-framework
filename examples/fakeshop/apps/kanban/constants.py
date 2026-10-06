@@ -259,6 +259,7 @@ TRACKED_FILE_PATHS = (
     "tests/rest_framework/test_resolvers.py",
     "tests/rest_framework/test_sets.py",
     "tests/rest_framework/test_soft_dependency.py",
+    "tests/test_app_registry_restore.py",
     "tests/test_apps.py",
     "tests/test_bench_common.py",
     "tests/test_bug_hunt.py",

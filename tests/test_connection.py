@@ -199,7 +199,6 @@ def test_first_and_last_guard_on_generated_subclass():
     """The generated ``<TypeName>Connection`` shares the ``first`` + ``last`` guard."""
     node_type = _make_node_type("GuardCountNode", total_count=True)
     connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
-    assert issubclass(connection_type, DjangoConnection)
 
     with pytest.raises(GraphQLError, match="mutually exclusive"):
         # basedpyright: the path under test never reads info; resolve_connection types the
@@ -2894,7 +2893,6 @@ def test_consume_window_hostile_pagination_is_graphql_error():
     node = _make_sidecar_node_type("WindowHostileNode")
     finalize_django_types()
     conn_type = _connection_type_for(node, node.__django_strawberry_definition__)
-    assert issubclass(conn_type, DjangoConnection)
     # Create a window marker with one annotated row
     from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
 
@@ -2918,10 +2916,7 @@ def test_consume_window_hostile_pagination_is_graphql_error():
         field_nodes=[],
     )
     with pytest.raises(GraphQLError, match="non-negative"):
-        # basedpyright: DjangoConnection.resolve_connection types nodes as Strawberry's
-        # NodeIterableType, which omits the package's own _WindowedConnectionRows marker the method
-        # accepts at run time
-        conn_type.resolve_connection(window, info=_as_strawberry_info(info), first=-1)  # pyright: ignore[reportArgumentType]
+        conn_type.resolve_connection(window, info=_as_strawberry_info(info), first=-1)
 
 
 # =============================================================================

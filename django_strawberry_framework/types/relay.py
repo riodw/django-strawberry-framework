@@ -441,7 +441,7 @@ def _validated_globalid_setting() -> GlobalIDStrategy | None:
     rather than once per defaulted type - and an explicitly configured invalid
     value raises even when zero Relay types (or every type overriding) would
     otherwise keep the resolver from ever reading it. Passes ``relay_shaped=True``
-    / ``meta=None`` so the setting framing (naming ``RELAY_GLOBALID_STRATEGY``) is
+    / ``model=None`` so the setting framing (naming ``RELAY_GLOBALID_STRATEGY``) is
     used and the per-type Relay-shape gate - which already ran at type creation -
     is skipped.
     """

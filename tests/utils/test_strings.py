@@ -199,10 +199,8 @@ def test_string_helpers_reject_non_string_inputs(helper: Callable[[str], object]
 
 def test_snake_case_preserves_lru_cache_controls():
     """The normalization boundary keeps the historical cache-control surface and public name."""
-    # basedpyright: the package's _CachedNameTransform protocol omits the functools.wraps
-    # attributes the wrapper carries at run time
-    assert snake_case.__name__ == "snake_case"  # pyright: ignore[reportAttributeAccessIssue]
-    assert snake_case.__qualname__ == "snake_case"  # pyright: ignore[reportAttributeAccessIssue]
+    assert snake_case.__name__ == "snake_case"
+    assert snake_case.__qualname__ == "snake_case"
     snake_case.cache_clear()
     assert snake_case.cache_parameters() == {"maxsize": 2048, "typed": False}
     before = snake_case.cache_info()
@@ -214,6 +212,4 @@ def test_snake_case_preserves_lru_cache_controls():
     assert snake_case("isPrivate") == "is_private"
     after_hit = snake_case.cache_info()
     assert after_hit.hits == after_miss.hits + 1
-    # basedpyright: the package's _CachedNameTransform protocol omits the functools.wraps
-    # attributes the wrapper carries at run time
-    assert snake_case.__wrapped__("isPrivate") == "is_private"  # pyright: ignore[reportAttributeAccessIssue]
+    assert snake_case.__wrapped__("isPrivate") == "is_private"

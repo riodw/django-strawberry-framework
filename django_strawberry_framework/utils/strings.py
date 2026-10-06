@@ -31,6 +31,9 @@ if TYPE_CHECKING:
         cache_clear: Callable[[], None]
         cache_info: Callable[[], functools._CacheInfo]
         cache_parameters: Callable[[], functools._CacheParameters]
+        __wrapped__: Callable[[str], str]
+        __name__: str
+        __qualname__: str
 
         def __call__(self, name: str) -> str:
             """Transform ``name``."""

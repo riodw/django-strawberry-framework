@@ -2364,9 +2364,7 @@ class _UpstreamRunnerSchema(DjangoSchema):
     """
 
     @override
-    # basedpyright: a subclass opting out of the package's runner returns upstream's, which the
-    # base's narrower return does not admit
-    def create_extensions_runner(  # pyright: ignore[reportIncompatibleMethodOverride]
+    def create_extensions_runner(
         self,
         execution_context: StrawberryExecutionContext,
         extensions: list[SchemaExtension],

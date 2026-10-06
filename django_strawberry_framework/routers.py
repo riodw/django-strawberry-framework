@@ -65,6 +65,8 @@ if TYPE_CHECKING:
     from strawberry.channels import GraphQLWSConsumer
     from strawberry.schema import BaseSchema
 
+    from .consumers import RevalidatingGraphQLWSConsumer
+
     class _ApplicationFactory(Protocol):
         """A consumer factory: called with the schema, returns the WebSocket application."""
 
@@ -335,7 +337,7 @@ def _websocket_application(
     candidate: object,
     *,
     schema: BaseSchema,
-    package_consumer_class: type[GraphQLWSConsumer],
+    package_consumer_class: type[RevalidatingGraphQLWSConsumer],
     base_consumer_class: type[GraphQLWSConsumer],
     revalidation_window: float,
 ) -> Callable[..., object]:

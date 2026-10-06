@@ -199,15 +199,11 @@ def test_editable_fields_freezes_one_shot_sequences():
     """One-shot ``fields`` / ``exclude`` iterables survive validation and narrowing."""
     selected = editable_input_fields(
         product_models.Item,
-        # basedpyright: the one-shot iterator is the input under test; editable_input_fields types
-        # the parameter as tuple[str, ...] | None
-        fields=iter(("name", "category")),  # pyright: ignore[reportArgumentType]
+        fields=iter(("name", "category")),
     )
     excluded = editable_input_fields(
         product_models.Item,
-        # basedpyright: the one-shot iterator is the input under test; editable_input_fields types
-        # the parameter as tuple[str, ...] | None
-        exclude=iter(("description", "is_private")),  # pyright: ignore[reportArgumentType]
+        exclude=iter(("description", "is_private")),
     )
     assert [field.name for field in selected] == ["name", "category"]
     assert [field.name for field in excluded] == ["name", "category", "attachment"]
@@ -583,9 +579,7 @@ def test_consumer_override_freezes_one_shot_iterable():
         product_models.Item,
         operation_kind=CREATE,
         primary_type=ItemType,
-        # basedpyright: the one-shot iterator is the input under test; build_mutation_input types
-        # the parameter as frozenset[str] | None
-        overrides=iter(("category_id", "attachment")),  # pyright: ignore[reportArgumentType]
+        overrides=iter(("category_id", "attachment")),
     )
     fields = _field_map(cls)
     assert "category_id" not in fields
@@ -1265,10 +1259,7 @@ def test_editable_fields_reject_naming_a_foreign_object(
         ConfigurationError,
         match=_carrier_backed_link_message(child_name, key, targets, carriers, remedy),
     ):
-        # basedpyright: a dict splat is checked against every keyword of editable_input_fields; the
-        # one-shot iterator is the input under test, and the callee types fields and exclude as
-        # tuple[str, ...] | None
-        editable_input_fields(model, **{key: iter(("name", "parent"))})  # pyright: ignore[reportArgumentType]
+        editable_input_fields(model, **{key: iter(("name", "parent"))})
 
 
 @pytest.mark.parametrize(
@@ -1496,9 +1487,7 @@ def test_editable_input_fields_normalizes_its_declared_sequences():
     the form and serializer flavors.
     """
     with pytest.raises(ConfigurationError, match="not a bare string"):
-        # basedpyright: the bare string is the hostile input under test; editable_input_fields
-        # types the parameter as tuple[str, ...] | None
-        editable_input_fields(product_models.Item, fields="name")  # pyright: ignore[reportArgumentType]
+        editable_input_fields(product_models.Item, fields="name")
     with pytest.raises(ConfigurationError, match="duplicate field name"):
         editable_input_fields(product_models.Item, fields=("name", "name"))
 
@@ -1524,9 +1513,7 @@ def test_build_mutation_input_rejects_bare_string_overrides():
             product_models.Item,
             operation_kind=CREATE,
             primary_type=ItemType,
-            # basedpyright: the bare string is the hostile input under test; build_mutation_input
-            # types the parameter as frozenset[str] | None
-            overrides="category_id",  # pyright: ignore[reportArgumentType]
+            overrides="category_id",
         )
     with pytest.raises(ConfigurationError, match="overrides"):
         build_mutation_input(
@@ -1534,7 +1521,7 @@ def test_build_mutation_input_rejects_bare_string_overrides():
             operation_kind=CREATE,
             primary_type=ItemType,
             # basedpyright: the bare bytes value is the hostile input under test;
-            # build_mutation_input types the parameter as frozenset[str] | None
+            # build_mutation_input types the parameter as Iterable[str] | None
             overrides=b"name",  # pyright: ignore[reportArgumentType]
         )
 

@@ -29,7 +29,6 @@ import itertools
 import sys
 import types
 from collections.abc import Collection, Sequence
-from typing import ClassVar
 
 import pytest
 import pytest_django
@@ -257,23 +256,19 @@ class _HostileMetaSequence(Sequence[object]):
 def test_meta_validator_diagnostics_survive_hostile_values():
     """Malformed Meta values cannot replace ConfigurationError with repr failures."""
 
-    class Meta:
-        model: ClassVar[type[models.Model]] = Category
-
     hostile = _HostileMetaValue()
 
     class InterfaceMeta:
-        model: ClassVar[type[models.Model]] = Category
         interfaces = (hostile,)
 
     validators = (
-        lambda: _validate_filterset_class(Meta, hostile),
-        lambda: _validate_orderset_class(Meta, hostile),
-        lambda: _validate_connection(Meta, hostile, False),
-        lambda: _validate_cursor_field(Meta, hostile, False),
-        lambda: _validate_relation_shapes(Meta, hostile, False),
-        lambda: _validate_globalid_strategy(Meta, hostile, False),
-        lambda: _validate_interfaces(InterfaceMeta),
+        lambda: _validate_filterset_class(Category, hostile),
+        lambda: _validate_orderset_class(Category, hostile),
+        lambda: _validate_connection(Category, hostile, False),
+        lambda: _validate_cursor_field(Category, hostile, False),
+        lambda: _validate_relation_shapes(Category, hostile, False),
+        lambda: _validate_globalid_strategy(Category, hostile, False),
+        lambda: _validate_interfaces(InterfaceMeta, Category),
     )
     for validator in validators:
         with pytest.raises(ConfigurationError, match="unprintable _HostileMetaValue"):
@@ -283,23 +278,17 @@ def test_meta_validator_diagnostics_survive_hostile_values():
 def test_meta_connection_unknown_keys_are_typed_for_mixed_and_hostile_keys():
     """Unknown connection keys cannot leak sorting or repr exceptions."""
 
-    class Meta:
-        model: ClassVar[type[models.Model]] = Category
-
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-        _validate_connection(Meta, {1: True, "bogus": False}, False)
+        _validate_connection(Category, {1: True, "bogus": False}, False)
     with pytest.raises(ConfigurationError, match="unknown sub-keys"):
-        _validate_connection(Meta, {_HostileMetaValue(): True}, False)
+        _validate_connection(Category, {_HostileMetaValue(): True}, False)
 
 
 def test_meta_cursor_field_hostile_sequence_is_typed():
     """A broken sequence descriptor cannot escape as a raw runtime exception."""
 
-    class Meta:
-        model: ClassVar[type[models.Model]] = Category
-
     with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
-        _validate_cursor_field(Meta, _HostileMetaSequence(), True)
+        _validate_cursor_field(Category, _HostileMetaSequence(), True)
 
 
 @pytest.mark.parametrize("key", ["fields", "exclude"])
@@ -381,11 +370,8 @@ def test_meta_globalid_callable_hostile_descriptor_is_typed():
         def __call__(self):
             raise RuntimeError("callable descriptor should not escape")
 
-    class Meta:
-        model: ClassVar[type[models.Model]] = Category
-
     with pytest.raises(ConfigurationError, match="could not be inspected"):
-        _validate_globalid_strategy(Meta, HostileCallable(), True)
+        _validate_globalid_strategy(Category, HostileCallable(), True)
 
 
 @pytest.mark.parametrize(

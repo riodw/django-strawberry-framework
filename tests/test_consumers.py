@@ -45,6 +45,8 @@ from django_strawberry_framework.utils.sessions import (
 if TYPE_CHECKING:
     from strawberry.channels import GraphQLWSConsumer
 
+    from django_strawberry_framework.consumers import RevalidatingGraphQLWSConsumer
+
 
 def _fresh_scope():
     scope: dict[str, object] = {}
@@ -497,7 +499,10 @@ class _RevalidatingAdapter(Protocol):
     async def send_json(self, message: object) -> None: ...
 
 
-def _build_consumer_and_adapter() -> tuple[GraphQLWSConsumer, _RevalidatingAdapter]:
+def _build_consumer_and_adapter() -> tuple[
+    RevalidatingGraphQLWSConsumer,
+    _RevalidatingAdapter,
+]:
     class FakeAdapter:
         async def send_json(self, message: object):
             pass
@@ -529,12 +534,8 @@ def _build_consumer_and_adapter() -> tuple[GraphQLWSConsumer, _RevalidatingAdapt
     # basedpyright: a stand-in scope dict; Channels types the consumer scope as its _ChannelScope
     # TypedDict
     consumer.scope = _fresh_scope()  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer type,
-    # which lacks the generated class's _revocation slot
-    consumer._revocation = cmod._ConnectionRevocation()  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer type,
-    # which lacks the generated class's revalidation_window slot
-    consumer.revalidation_window = 0.0  # pyright: ignore[reportAttributeAccessIssue]
+    consumer._revocation = cmod._ConnectionRevocation()
+    consumer.revalidation_window = 0.0
     adapter_cls = cls.websocket_adapter_class
     # basedpyright: upstream types websocket_adapter_class a Callable factory, not a class
     adapter = adapter_cls.__new__(adapter_cls)  # pyright: ignore[reportCallIssue]
@@ -544,7 +545,7 @@ def _build_consumer_and_adapter() -> tuple[GraphQLWSConsumer, _RevalidatingAdapt
 
 @pytest.mark.asyncio
 async def test_send_json_hostile_message_get_fails_closed():
-    _, adapter = _build_consumer_and_adapter()
+    consumer, adapter = _build_consumer_and_adapter()
     # Make the revalidation fail closed: mock _refreshed_actor to return None (revoked)
     with patch.object(cmod, "_refreshed_actor", return_value=None):
         # Also need to make scope have authenticated provenance so it actually tries DB
@@ -564,9 +565,7 @@ async def test_send_json_hostile_message_get_fails_closed():
         # Should not raise ValueError
         await adapter.send_json(HostileMessage({"type": "next"}))
         # After hostile, it should have revoked
-        # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer
-        # type, which lacks the generated class's _revocation slot
-        assert adapter.ws_consumer._revocation.revoked is True  # pyright: ignore[reportAttributeAccessIssue]
+        assert consumer._revocation.revoked is True
 
 
 @pytest.mark.asyncio
@@ -576,7 +575,7 @@ async def test_send_json_hostile_message_get_fails_closed():
 )
 async def test_send_json_non_dict_message_does_not_escape(message: object):
     """A non-mapping frame is contained and revokes rather than raising."""
-    _, adapter = _build_consumer_and_adapter()
+    consumer, adapter = _build_consumer_and_adapter()
     with patch.object(cmod, "_refreshed_actor", return_value=None):
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
         from django_strawberry_framework.utils.sessions import note_authenticated_actor
@@ -586,9 +585,7 @@ async def test_send_json_non_dict_message_does_not_escape(message: object):
         # types the parameter as MutableMapping[str, object]
         note_authenticated_actor(adapter.ws_consumer.scope)  # pyright: ignore[reportArgumentType]
         await adapter.send_json(message)
-        # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer
-        # type, which lacks the generated class's _revocation slot
-        assert adapter.ws_consumer._revocation.revoked is True  # pyright: ignore[reportAttributeAccessIssue]
+        assert consumer._revocation.revoked is True
 
 
 @pytest.mark.asyncio
@@ -607,10 +604,8 @@ async def test_send_json_control_frame_hostile_scope_suppresses():
 
 @pytest.mark.asyncio
 async def test_send_json_control_frame_respects_revoked():
-    _, adapter = _build_consumer_and_adapter()
-    # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer type,
-    # which lacks the generated class's _revocation slot
-    adapter.ws_consumer._revocation.decide()  # pyright: ignore[reportAttributeAccessIssue]
+    consumer, adapter = _build_consumer_and_adapter()
+    consumer._revocation.decide()
     # control frame should be suppressed when revoked
     with patch.object(
         adapter.__class__.__bases__[0],

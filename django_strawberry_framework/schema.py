@@ -1091,7 +1091,7 @@ class DjangoSchema(strawberry.Schema):
         self,
         execution_context: StrawberryExecutionContext,
         extensions: list[SchemaExtension],
-    ) -> DjangoExtensionsRunner:
+    ) -> SchemaExtensionsRunner:
         """Build the runner that owns every framework extension's operation state.
 
         The one point that sees the resolved extension list and this operation's

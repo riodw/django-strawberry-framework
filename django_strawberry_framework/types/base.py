@@ -50,7 +50,6 @@ from typing import (
     ClassVar,
     Literal,
     NamedTuple,
-    Protocol,
     TypeVar,
     cast,
 )
@@ -159,18 +158,8 @@ STRING_GLOBALID_STRATEGIES: frozenset[str] = frozenset({"model", "type", "type+m
 DEFAULT_GLOBALID_STRATEGY = "model"
 
 
-class _ModelMeta(Protocol):
-    """A consumer ``Meta`` class whose ``model`` ``_validate_meta`` has already checked.
-
-    The ``meta`` every per-key validator below receives: each one runs after the
-    ``Meta.model`` gate, so ``meta.model`` names a Django model in their error text.
-    """
-
-    model: type[models.Model]
-
-
 def _validate_set_sidecar(
-    meta: _ModelMeta,
+    model: type[models.Model],
     sidecar_class: object,
     *,
     expected: type[_SidecarT],
@@ -187,14 +176,14 @@ def _validate_set_sidecar(
     """
     if not (isinstance(sidecar_class, type) and issubclass(sidecar_class, expected)):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.{meta_key} must be {article} {expected.__name__} subclass; "
+            f"{model.__name__}.Meta.{meta_key} must be {article} {expected.__name__} subclass; "
             f"got {_safe_arg_repr(sidecar_class)}",
         )
     return sidecar_class
 
 
 def _validate_filterset_class(
-    meta: _ModelMeta,
+    model: type[models.Model],
     filterset_class: object,
 ) -> "type[FilterSet] | None":
     """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
@@ -215,7 +204,7 @@ def _validate_filterset_class(
     from ..filters.sets import FilterSet
 
     return _validate_set_sidecar(
-        meta,
+        model,
         filterset_class,
         expected=FilterSet,
         meta_key="filterset_class",
@@ -223,7 +212,10 @@ def _validate_filterset_class(
     )
 
 
-def _validate_orderset_class(meta: _ModelMeta, orderset_class: object) -> "type[OrderSet] | None":
+def _validate_orderset_class(
+    model: type[models.Model],
+    orderset_class: object,
+) -> "type[OrderSet] | None":
     """Validate ``Meta.orderset_class`` is a package-``OrderSet`` subclass.
 
     Local import of ``OrderSet`` at function scope keeps ``types/base.py``
@@ -244,7 +236,7 @@ def _validate_orderset_class(meta: _ModelMeta, orderset_class: object) -> "type[
     from ..orders.sets import OrderSet
 
     return _validate_set_sidecar(
-        meta,
+        model,
         orderset_class,
         expected=OrderSet,
         meta_key="orderset_class",
@@ -253,7 +245,7 @@ def _validate_orderset_class(meta: _ModelMeta, orderset_class: object) -> "type[
 
 
 def _validate_connection(
-    meta: _ModelMeta,
+    model: type[models.Model],
     connection: object,
     relay_shaped: bool,
 ) -> dict[str, bool] | None:
@@ -280,25 +272,24 @@ def _validate_connection(
         return None
     if not isinstance(connection, dict):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.connection must be a dict; "
-            f"got {_safe_arg_repr(connection)}",
+            f"{model.__name__}.Meta.connection must be a dict; got {_safe_arg_repr(connection)}",
         )
     unknown = [key for key in connection if key != "total_count"]
     if unknown:
         unknown_labels = sorted(_safe_arg_repr(key) for key in unknown)
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.connection has unknown sub-keys: "
+            f"{model.__name__}.Meta.connection has unknown sub-keys: "
             f"[{', '.join(unknown_labels)}]. "
             "Only 'total_count' is recognized in 0.0.9.",
         )
     if "total_count" in connection and not isinstance(connection["total_count"], bool):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.connection['total_count'] must be a bool; "
+            f"{model.__name__}.Meta.connection['total_count'] must be a bool; "
             f"got {_safe_arg_repr(connection['total_count'])}",
         )
     if not relay_shaped:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.connection {_RELAY_NODE_GATE_LEAD} "
+            f"{model.__name__}.Meta.connection {_RELAY_NODE_GATE_LEAD} "
             f"{_RELAY_NODE_GATE_INHERIT_TAIL}",
         )
     return dict(connection)
@@ -310,7 +301,7 @@ def _is_str_tuple(entries: tuple[object, ...]) -> "TypeIs[tuple[str, ...]]":
 
 
 def _validate_cursor_field(
-    meta: _ModelMeta,
+    model: type[models.Model],
     value: object,
     relay_shaped: bool,
 ) -> tuple[str, ...] | None:
@@ -336,33 +327,33 @@ def _validate_cursor_field(
 
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.cursor_field must be a non-empty non-string "
+            f"{model.__name__}.Meta.cursor_field must be a non-empty non-string "
             f"sequence of order strings; got {_safe_arg_repr(value)}",
         )
     try:
         entries: tuple[object, ...] = tuple(value)
     except BaseException as exc:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.cursor_field must be a non-empty non-string "
+            f"{model.__name__}.Meta.cursor_field must be a non-empty non-string "
             f"sequence of order strings; got {_safe_arg_repr(value)}",
         ) from exc
     if not entries or not _is_str_tuple(entries):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.cursor_field must be a non-empty non-string "
+            f"{model.__name__}.Meta.cursor_field must be a non-empty non-string "
             f"sequence of order strings; got {_safe_arg_repr(value)}",
         )
-    owner = f"{meta.model.__name__}.Meta.cursor_field"
+    owner = f"{model.__name__}.Meta.cursor_field"
     validate_cursor_field_references(entries, owner=owner)
     if not relay_shaped:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.cursor_field {_RELAY_NODE_GATE_LEAD} "
+            f"{model.__name__}.Meta.cursor_field {_RELAY_NODE_GATE_LEAD} "
             f"{_RELAY_NODE_GATE_INHERIT_TAIL}",
         )
     return entries
 
 
 def _validate_relation_shapes(
-    meta: _ModelMeta,
+    model: type[models.Model],
     value: object,
     relay_shaped: bool,
 ) -> dict[str, str] | None:
@@ -391,13 +382,13 @@ def _validate_relation_shapes(
         return None
     if not isinstance(value, dict):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.relation_shapes must be a dict mapping relation "
+            f"{model.__name__}.Meta.relation_shapes must be a dict mapping relation "
             f"field names to shapes; got {_safe_arg_repr(value)}",
         )
     for key, shape in value.items():
         if not isinstance(key, str):
             raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.relation_shapes keys must be relation field "
+                f"{model.__name__}.Meta.relation_shapes keys must be relation field "
                 f"name strings; got {_safe_arg_repr(key)}.",
             )
         # ``isinstance`` first so an unhashable value (e.g. ``{"items":
@@ -405,14 +396,13 @@ def _validate_relation_shapes(
         # leaking ``TypeError: unhashable type`` from the set membership.
         if not isinstance(shape, str) or shape not in RELATION_SHAPE_VALUES:
             raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.relation_shapes[{_safe_arg_repr(key)}] "
+                f"{model.__name__}.Meta.relation_shapes[{_safe_arg_repr(key)}] "
                 f"got unknown shape {_safe_arg_repr(shape)}; valid shapes are "
                 f"{sorted(RELATION_SHAPE_VALUES)}.",
             )
     if not relay_shaped:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.relation_shapes {_RELAY_NODE_GATE_LEAD} "
-            "or remove the key.",
+            f"{model.__name__}.Meta.relation_shapes {_RELAY_NODE_GATE_LEAD} or remove the key.",
         )
     return dict(value)
 
@@ -428,7 +418,7 @@ _GLOBALID_CALLABLE_PARAMS = ("type_cls", "model", "root")
 
 
 def _validate_globalid_strategy(
-    meta: _ModelMeta | None,
+    model: type[models.Model] | None,
     value: object,
     relay_shaped: bool,
     *,
@@ -450,19 +440,20 @@ def _validate_globalid_strategy(
     must NOT be ``async def`` (an opaque ``TypeError`` / coroutine per request is
     promoted to a build-time ``ConfigurationError``); any other type raises.
 
-    ``source`` selects the error framing: ``"meta"`` (the default) names the
-    offending type via ``meta.model.__name__`` and enforces the
-    Relay-Node-shape gate; ``"setting"`` names ``RELAY_GLOBALID_STRATEGY`` and
-    skips the gate (the per-type gate already ran at type creation, so the
-    setting path passes ``relay_shaped=True`` and ``meta=None``).
+    ``model`` selects the error framing: a model names the offending type via
+    ``model.__name__``; ``None`` names ``RELAY_GLOBALID_STRATEGY``. ``source``
+    selects the gate: ``"meta"`` (the default) enforces the Relay-Node-shape
+    gate; ``"setting"`` skips it (the per-type gate already ran at type
+    creation, so the setting path passes ``relay_shaped=True`` and
+    ``model=None``).
     """
     if value is None:
         return None
     is_meta = source == "meta"
-    # Only the setting path (``source="setting"``) passes ``meta=None``.
+    # Only the setting path (``source="setting"``) passes ``model=None``.
     subject = (
-        f"{cast('_ModelMeta', meta).model.__name__}.Meta.globalid_strategy"
-        if is_meta
+        f"{model.__name__}.Meta.globalid_strategy"
+        if model is not None
         else RELAY_GLOBALID_STRATEGY_KEY
     )
     if isinstance(value, str):
@@ -698,10 +689,8 @@ class DjangoType:
                 "after finalization. Call registry.clear() first if this is a test.",
             )
         validated = _validate_meta(cls, meta)
-        # ``_validate_meta`` above rejected a ``Meta`` whose ``model`` is not a Django model.
-        model_meta = cast("_ModelMeta", meta)
-        fields = _select_fields(model_meta.model, validated.fields_spec, validated.exclude_spec)
-        _validate_optimizer_hints(validated.optimizer_hints, fields, model=model_meta.model)
+        fields = _select_fields(validated.model, validated.fields_spec, validated.exclude_spec)
+        _validate_optimizer_hints(validated.optimizer_hints, fields, model=validated.model)
 
         field_map = {f.name: FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
@@ -808,7 +797,7 @@ class DjangoType:
         )
         relay_shaped = _is_relay_shaped(cls, validated.interfaces)
         _validate_nullability_override_targets(
-            model=model_meta.model,
+            model=validated.model,
             selected_fields=fields,
             consumer_authored_fields=consumer_authored_fields,
             relay_shaped=relay_shaped,
@@ -816,13 +805,13 @@ class DjangoType:
             required_overrides=validated.required_overrides,
         )
         _validate_filesystem_path_targets(
-            model=model_meta.model,
+            model=validated.model,
             selected_fields=fields,
             consumer_authored_fields=consumer_authored_fields,
             filesystem_path_fields=validated.filesystem_path_fields,
         )
         _validate_relation_shape_targets(
-            model=model_meta.model,
+            model=validated.model,
             relation_shapes=validated.relation_shapes,
             selected_fields=fields,
             field_map=field_map,
@@ -856,7 +845,7 @@ class DjangoType:
         synthesized, pending = _build_annotations(
             cls,
             fields,
-            source_model=model_meta.model,
+            source_model=validated.model,
             consumer_authored_fields=consumer_authored_fields,
             interfaces=validated.interfaces,
             nullable_overrides=validated.nullable_overrides,
@@ -864,7 +853,7 @@ class DjangoType:
             filesystem_path_fields=validated.filesystem_path_fields,
         )
         # Read in the order the definition lists them: ``model`` before ``description``.
-        model = model_meta.model
+        model = validated.model
         # basedpyright: Meta.description reaches DjangoTypeDefinition.description (str | None)
         # unvalidated; object needs a runtime check
         description: Any = _meta_attr(meta, "description")  # pyright: ignore[reportExplicitAny]
@@ -895,7 +884,7 @@ class DjangoType:
             relation_shapes=validated.relation_shapes,
         )
         registry.register_with_definition(
-            model_meta.model,
+            validated.model,
             cls,
             definition,
             primary=validated.primary,
@@ -1102,7 +1091,7 @@ def _consumer_assigned_fields(
     return frozenset(relation_assigned), frozenset(scalar_assigned)
 
 
-def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, object]:
+def _meta_optimizer_hints(meta: object, model: type[models.Model]) -> dict[str, object]:
     """Return ``meta.optimizer_hints`` as a dict, or ``{}`` when unset.
 
     Centralizes the shape guard used across ``__init_subclass__`` and the
@@ -1114,17 +1103,15 @@ def _meta_optimizer_hints(meta: _ModelMeta) -> dict[str, object]:
         return {}
     if not isinstance(value, Mapping):
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
+            f"{model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
             f"instances, got {type(value).__name__}.",
         )
-    model = _meta_attr(meta, "model")
-    prefix = f"{model.__name__}." if isinstance(model, type) else ""
     # One pass over the consumer mapping: the keys checked are the keys returned.
     plain = dict(value)
     for key in plain:
         if not isinstance(key, str):
             raise ConfigurationError(
-                f"{prefix}Meta.optimizer_hints keys must be field name strings; "
+                f"{model.__name__}.Meta.optimizer_hints keys must be field name strings; "
                 f"got {_safe_arg_repr(key)}.",
             )
     return plain
@@ -1157,14 +1144,14 @@ _INTERFACES_SHAPE_ERROR_LEAD_IN = (
 )
 
 
-def _interfaces_shape_error(meta: _ModelMeta, got_suffix: str) -> str:
+def _interfaces_shape_error(model: type[models.Model], got_suffix: str) -> str:
     """Format the top-level ``Meta.interfaces`` shape-rejection message.
 
     Both raise sites (string-typed raw, other non-sequence raw) share the
     long lead-in defined in ``_INTERFACES_SHAPE_ERROR_LEAD_IN``; this
     helper localizes the wording so the two sites cannot drift.
     """
-    return f"{meta.model.__name__}.{_INTERFACES_SHAPE_ERROR_LEAD_IN}, got {got_suffix}."
+    return f"{model.__name__}.{_INTERFACES_SHAPE_ERROR_LEAD_IN}, got {got_suffix}."
 
 
 # Decision-8 remediation tail shared by all six named rejections: every
@@ -1212,7 +1199,7 @@ _RELAY_NON_INTERFACE_HELPERS: tuple[tuple[object, str, str], ...] = (
 )
 
 
-def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
+def _validate_interfaces(meta: object, model: type[models.Model]) -> tuple[type[object], ...]:
     """Validate and normalize ``Meta.interfaces`` per Decision 4.
 
     Returns a normalized ``tuple[type[object], ...]`` ready to pass through to
@@ -1247,7 +1234,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
     if raw is None:
         return ()
     if isinstance(raw, str):
-        raise ConfigurationError(_interfaces_shape_error(meta, "a string"))
+        raise ConfigurationError(_interfaces_shape_error(model, "a string"))
     if isinstance(raw, type):
         # Consumer-declared entries stay unproven until the loop below checks each one.
         entries: tuple[object, ...] = (raw,)
@@ -1255,7 +1242,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
         raw_entries: Sequence[object] = raw
         entries = tuple(raw_entries)
     else:
-        raise ConfigurationError(_interfaces_shape_error(meta, type(raw).__name__))
+        raise ConfigurationError(_interfaces_shape_error(model, type(raw).__name__))
     if entries == ():
         return ()
     seen_ids: set[int] = set()
@@ -1264,7 +1251,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
     for entry in entries:
         if isinstance(entry, str):
             raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.interfaces must contain interface classes, "
+                f"{model.__name__}.Meta.interfaces must contain interface classes, "
                 f"not strings (got {_safe_arg_repr(entry)}). Lazy/forward-reference interface lookup is "
                 "deferred (no current spec home).",
             )
@@ -1275,24 +1262,24 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
         for helper, label, description in _RELAY_NON_INTERFACE_HELPERS:
             if entry is helper:
                 raise ConfigurationError(
-                    f"{meta.model.__name__}.Meta.interfaces entry {label} is "
+                    f"{model.__name__}.Meta.interfaces entry {label} is "
                     f"{description}. {_RELAY_NON_INTERFACE_REMEDIATION}",
                 )
         if not isinstance(entry, type):
             raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.interfaces must contain interface classes, "
+                f"{model.__name__}.Meta.interfaces must contain interface classes, "
                 f"got {_safe_arg_repr(entry)}.",
             )
         if issubclass(entry, DjangoType):
             raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.interfaces may not contain DjangoType or "
+                f"{model.__name__}.Meta.interfaces may not contain DjangoType or "
                 f"DjangoType subclasses (got {entry.__name__}). DjangoType is not a "
                 "Strawberry interface.",
             )
         definition: object = getattr(entry, "__strawberry_definition__", None)
         if definition is None or not getattr(definition, "is_interface", False):
             raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.interfaces entry {entry.__name__} is not a "
+                f"{model.__name__}.Meta.interfaces entry {entry.__name__} is not a "
                 "Strawberry interface. Use @strawberry.interface or one of the "
                 "strawberry.relay interface classes.",
             )
@@ -1304,7 +1291,7 @@ def _validate_interfaces(meta: _ModelMeta) -> tuple[type[object], ...]:
         interfaces.append(entry)
     if duplicates:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.interfaces contains duplicate entries: {sorted(duplicates)}.",
+            f"{model.__name__}.Meta.interfaces contains duplicate entries: {sorted(duplicates)}.",
         )
     return tuple(interfaces)
 
@@ -1319,6 +1306,7 @@ class _ValidatedMeta(NamedTuple):
     sites in ``__init_subclass__``.
     """
 
+    model: type[models.Model]
     interfaces: tuple[type[object], ...]
     name: str | None
     primary: bool
@@ -1366,9 +1354,9 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
        ``_validate_relation_shape_targets``.
 
     Returns:
-        A ``_ValidatedMeta`` snapshot bundling the validated interfaces
-        tuple, the ``primary`` bool, the normalized ``optimizer_hints``
-        dict, the normalized ``fields``/``exclude`` specs, the validated
+        A ``_ValidatedMeta`` snapshot bundling the checked ``Meta.model``,
+        the validated interfaces tuple, the ``primary`` bool, the normalized
+        ``optimizer_hints`` dict, the normalized ``fields``/``exclude`` specs, the validated
         ``filterset_class``/``orderset_class``/``connection``/
         ``globalid_strategy``/``relation_shapes`` sidecars, and the
         ``nullable_overrides``/``required_overrides`` frozensets - see the
@@ -1385,8 +1373,6 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
         raise ConfigurationError("Meta.model is required")
     if not isinstance(model, type) or not issubclass(model, models.Model):
         raise ConfigurationError("Meta.model must be a Django model class")
-    # ``Meta.model`` is checked from here on: the per-key validators take it as such.
-    model_meta = cast("_ModelMeta", meta)
 
     raw_name = _meta_attr(meta, "name")
     if raw_name is not None:
@@ -1445,24 +1431,24 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
 
     fields_spec = _normalize_fields_spec(_meta_attr(meta, "fields"))
     exclude_spec = _normalize_sequence_spec(_meta_attr(meta, "exclude"), "exclude")
-    optimizer_hints = _meta_optimizer_hints(model_meta)
-    interfaces = _validate_interfaces(model_meta)
+    optimizer_hints = _meta_optimizer_hints(meta, model)
+    interfaces = _validate_interfaces(meta, model)
     relay_shaped = _is_relay_shaped(cls, interfaces)
-    filterset_class = _validate_filterset_class(model_meta, _meta_attr(meta, "filterset_class"))
-    orderset_class = _validate_orderset_class(model_meta, _meta_attr(meta, "orderset_class"))
-    connection = _validate_connection(model_meta, _meta_attr(meta, "connection"), relay_shaped)
+    filterset_class = _validate_filterset_class(model, _meta_attr(meta, "filterset_class"))
+    orderset_class = _validate_orderset_class(model, _meta_attr(meta, "orderset_class"))
+    connection = _validate_connection(model, _meta_attr(meta, "connection"), relay_shaped)
     cursor_field = _validate_cursor_field(
-        model_meta,
+        model,
         _meta_attr(meta, "cursor_field"),
         relay_shaped,
     )
     globalid_strategy = _validate_globalid_strategy(
-        model_meta,
+        model,
         _meta_attr(meta, "globalid_strategy"),
         relay_shaped,
     )
     relation_shapes = _validate_relation_shapes(
-        model_meta,
+        model,
         _meta_attr(meta, "relation_shapes"),
         relay_shaped,
     )
@@ -1485,7 +1471,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     both_sets_collision = sorted(nullable_overrides & required_overrides)
     if both_sets_collision:
         raise ConfigurationError(
-            f"{model_meta.model.__name__}.Meta names {both_sets_collision} in both "
+            f"{model.__name__}.Meta names {both_sets_collision} in both "
             "nullable_overrides and required_overrides; a field cannot be both "
             "forced-nullable and forced-required.",
         )
@@ -1504,6 +1490,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
     )
 
     return _ValidatedMeta(
+        model=model,
         interfaces=interfaces,
         name=name,
         primary=primary,
@@ -1551,8 +1538,8 @@ def _validate_optimizer_hints(
             by ``_select_fields``. Used to derive the selected relation
             field names so excluded or scalar fields with hints raise.
         model: The Django model whose ``_meta.get_fields()`` defines the
-            valid hint key surface. Threaded from ``meta.model`` so the
-            empty-``fields`` shape (e.g. ``Meta.exclude`` covering every
+            valid hint key surface. Threaded from the validated
+            ``Meta.model`` so the empty-``fields`` shape (e.g. ``Meta.exclude`` covering every
             field) is not fatal - earlier shapes inferred the model from
             ``fields[0].model`` and ``IndexError``'d here.
     """

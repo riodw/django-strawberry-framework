@@ -275,8 +275,8 @@ register_subsystem_clear(
 def editable_input_fields(
     model: type[models.Model],
     *,
-    fields: tuple[str, ...] | None = None,
-    exclude: tuple[str, ...] | None = None,
+    fields: Iterable[str] | None = None,
+    exclude: Iterable[str] | None = None,
 ) -> list[ConcreteField]:
     """Return the model's editable, settable input columns (spec-036 Decision 6).
 
@@ -909,7 +909,7 @@ def build_mutation_input(
     primary_type: type[DjangoType],
     fields: tuple[str, ...] | None = None,
     exclude: tuple[str, ...] | None = None,
-    overrides: frozenset[str] | None = None,
+    overrides: Iterable[str] | None = None,
     shape: MutationInputShape | None = None,
 ) -> type[WithStrawberryObjectDefinition]:
     """Build the ``<Model>Input`` / ``<Model>PartialInput`` ``@strawberry.input`` class.

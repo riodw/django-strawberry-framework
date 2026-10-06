@@ -651,6 +651,29 @@ def resolved_revalidation_window(value: object) -> float:
     return window
 
 
+if TYPE_CHECKING:
+
+    class RevalidatingGraphQLWSConsumer(GraphQLWSConsumer):
+        """The class ``build_revalidating_consumer_class`` returns, as checkers see it.
+
+        The runtime class is function-local to the factory, so this declaration
+        names what it adds to upstream's consumer: the ``revalidation_window``
+        initkwarg and the per-connection revocation state.
+        """
+
+        revalidation_window: float
+        _revocation: _ConnectionRevocation
+
+        # basedpyright: a checker-only declaration whose body never runs; the factory's
+        # function-local ``GraphQLWebSocketConsumer.__init__`` is the one that calls the base
+        def __init__(  # pyright: ignore[reportMissingSuperCall]
+            self,
+            *args: object,
+            revalidation_window: float = _DEFAULT_REVALIDATION_WINDOW,
+            **kwargs: object,
+        ) -> None: ...
+
+
 class _ConnectionRevocation:
     """One connection's revocation decision and the state of its ``4403`` close.
 
@@ -1681,7 +1704,7 @@ async def _refreshed_actor(scope: Mapping[str, object]) -> object:
 
 def build_revalidating_consumer_class(
     base_consumer_cls: type[GraphQLWSConsumer],
-) -> type[GraphQLWSConsumer]:
+) -> type[RevalidatingGraphQLWSConsumer]:
     """Return a ``base_consumer_cls`` subclass that revalidates at both checkpoints.
 
     A pure factory: no cache, no soft-dependency guard, and no import of

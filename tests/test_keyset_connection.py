@@ -101,11 +101,9 @@ def _make_issue_type(name: str = "KeysetIssueNode", **meta_extra: object):
     )
 
 
-def _issue_connection_of(node_type: type[DjangoType]) -> type[DjangoConnection[Issue]]:
+def _issue_connection_of(node_type: type[DjangoType]) -> type[DjangoConnection[DjangoType]]:
     """The generated connection class over ``node_type``, an ``Issue`` node."""
-    connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
-    assert issubclass(connection_type, DjangoConnection)
-    return connection_type
+    return _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
 
 def _issue_state(issue_type: type):
@@ -201,15 +199,17 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
         _raw_info=SimpleNamespace(field_nodes=[]),
         schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
     )
-    # basedpyright: a stand-in info carrying only the slots the code under test reads, and the
-    # package's own _WindowedConnectionRows marker; DjangoConnection.resolve_connection types info
-    # as a concrete Strawberry Info and nodes as Strawberry's NodeIterableType
+    # basedpyright: a stand-in info carrying only the slots the code under test reads;
+    # DjangoConnection.resolve_connection types info as a concrete Strawberry Info
     connection_payload = connection_type.resolve_connection(wrapper, info=info, last=2)  # pyright: ignore[reportArgumentType]
     # ``last`` over a window wrapper cannot be served by the (forward-only)
     # keyset window - the wrapper's fallback queryset routes through the
     # keyset slicer instead, backward semantics intact.
     assert isinstance(connection_payload, DjangoConnection)
-    assert [edge.node.title for edge in connection_payload.edges] == ["i2", "i1"]
+    # The connection is typed over its DjangoType; the rows it pages are Issue rows.
+    nodes = [edge.node for edge in connection_payload.edges]
+    assert [node.title for node in nodes if isinstance(node, Issue)] == ["i2", "i1"]
+    assert len(nodes) == 2
     assert connection_payload.page_info.has_previous_page is True
 
 

@@ -2642,7 +2642,10 @@ def test_consumer_assigned_relation_with_hint_is_planned_and_silent():
     assert titles == ["a", "b"]
 
 
-def _windowed_book_connection_class(*, total_count: bool = False) -> type[DjangoConnection[Book]]:
+def _windowed_book_connection_class(
+    *,
+    total_count: bool = False,
+) -> type[DjangoConnection[DjangoType]]:
     """A real generated ``<TypeName>Connection`` class for direct-call pins."""
     book_type = make_django_type(
         "BookType",
@@ -2651,9 +2654,7 @@ def _windowed_book_connection_class(*, total_count: bool = False) -> type[Django
         meta_extra={"connection": {"total_count": True}} if total_count else None,
     )
     finalize_django_types()
-    connection_type = _connection_type_for(book_type, book_type.__django_strawberry_definition__)
-    assert issubclass(connection_type, DjangoConnection)
-    return connection_type
+    return _connection_type_for(book_type, book_type.__django_strawberry_definition__)
 
 
 #: A count-free plain ``first: 2`` window row: with ``totalCount`` observed and no

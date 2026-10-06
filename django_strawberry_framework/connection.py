@@ -1320,7 +1320,7 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # py
     @override
     def resolve_connection(
         cls,
-        nodes: NodeIterableType[NodeType],
+        nodes: NodeIterableType[NodeType] | _WindowedConnectionRows,
         *,
         info: Info[object, object],
         before: str | None = None,
@@ -1416,7 +1416,7 @@ class _CachedConnectionType(NamedTuple):
     """
 
     definition: DjangoTypeDefinition
-    connection_type: type[object]
+    connection_type: type[DjangoConnection[DjangoType]]
 
 
 _connection_type_cache: dict[type[DjangoType], _CachedConnectionType] = {}
@@ -1601,7 +1601,7 @@ async def _attach_count_async(
 def _connection_type_for(
     target_type: type[DjangoType],
     definition: DjangoTypeDefinition,
-) -> type[object]:
+) -> type[DjangoConnection[DjangoType]]:
     """Return (and cache) the connection class for a node ``DjangoType``.
 
     Always returns a generated concrete ``<TypeName>Connection`` subclass of
@@ -1637,7 +1637,7 @@ def _connection_type_for(
 
     connection_options = definition.connection
     if connection_options and connection_options.get("total_count"):
-        connection_type: type[object] = _build_total_count_connection(target_type, definition)
+        connection_type = _build_total_count_connection(target_type, definition)
     else:
         # WHY concrete and not the ``DjangoConnection[target_type]`` alias:
         # handing the schema a generic ALIAS loses the package's

@@ -28,7 +28,6 @@ from django_strawberry_framework.types import base as types_base
 from django_strawberry_framework.types import finalizer as types_finalizer
 from django_strawberry_framework.types.base import (
     _build_annotations,
-    _ModelMeta,
     _validate_interfaces,
 )
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
@@ -52,12 +51,10 @@ def _isolate_registry(isolate_global_registry: None) -> None:
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
-def _meta(**attrs: object) -> _ModelMeta:
+def _meta(**attrs: object) -> type:
     """Build a throw-away ``Meta`` class with ``model=Category`` plus extras."""
     attrs.setdefault("model", Category)
-    # basedpyright: the class type() builds carries model=Category in a namespace the checker
-    # cannot read; the Meta validators type the parameter as _ModelMeta
-    return type("Meta", (), attrs)  # pyright: ignore[reportReturnType]
+    return type("Meta", (), attrs)
 
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
@@ -98,7 +95,7 @@ def test_safe_class_name_renders_non_string_metaclass_name_metadata():
 def test_meta_interfaces_accepted():
     """``interfaces = (relay.Node,)`` is normalized to ``(relay.Node,)``."""
     meta = _meta(interfaces=(relay.Node,))
-    assert _validate_interfaces(meta) == (relay.Node,)
+    assert _validate_interfaces(meta, Category) == (relay.Node,)
 
 
 @pytest.mark.parametrize(
@@ -115,7 +112,7 @@ def test_meta_interfaces_accepted():
 def test_meta_interfaces_accepts_single_interface_class(raw: object):
     """A single class, a one-tuple, and the missing-comma spelling all normalize."""
     meta = _meta(interfaces=raw)
-    assert _validate_interfaces(meta) == (relay.Node,)
+    assert _validate_interfaces(meta, Category) == (relay.Node,)
 
 
 @pytest.mark.parametrize(
@@ -130,17 +127,17 @@ def test_meta_interfaces_accepts_single_interface_class(raw: object):
 def test_meta_interfaces_rejects_non_sequence(raw: object):
     meta = _meta(interfaces=raw)
     with pytest.raises(ConfigurationError, match="must be a tuple/list"):
-        _validate_interfaces(meta)
+        _validate_interfaces(meta, Category)
 
 
 def test_meta_interfaces_rejects_string_entries():
     """Both top-level strings and tuple-of-string entries are rejected."""
     meta_top = _meta(interfaces="Node")
     with pytest.raises(ConfigurationError, match="must be a tuple/list"):
-        _validate_interfaces(meta_top)
+        _validate_interfaces(meta_top, Category)
     meta_entry = _meta(interfaces=("Node",))
     with pytest.raises(ConfigurationError, match="must contain interface classes"):
-        _validate_interfaces(meta_entry)
+        _validate_interfaces(meta_entry, Category)
 
 
 def test_meta_interfaces_rejects_non_interface_classes():
@@ -153,7 +150,7 @@ def test_meta_interfaces_rejects_non_interface_classes():
     for entry in (object, int, NotAnInterface):
         meta = _meta(interfaces=(entry,))
         with pytest.raises(ConfigurationError, match="not a Strawberry interface"):
-            _validate_interfaces(meta)
+            _validate_interfaces(meta, Category)
 
 
 @pytest.mark.parametrize(
@@ -164,39 +161,39 @@ def test_meta_interfaces_rejects_non_class_entries(entry: object):
     """Non-class non-string entries (instances, ints) raise the must-contain-interface-classes error."""
     meta = _meta(interfaces=(entry,))
     with pytest.raises(ConfigurationError, match="must contain interface classes"):
-        _validate_interfaces(meta)
+        _validate_interfaces(meta, Category)
 
 
 def test_meta_interfaces_rejects_djangotype_self_reference():
     """``DjangoType`` itself and any subclass are rejected as interface entries."""
     meta_self = _meta(interfaces=(DjangoType,))
     with pytest.raises(ConfigurationError, match="may not contain DjangoType"):
-        _validate_interfaces(meta_self)
+        _validate_interfaces(meta_self, Category)
 
     class SomeType(DjangoType):
         pass
 
     meta_sub = _meta(interfaces=(SomeType,))
     with pytest.raises(ConfigurationError, match="may not contain DjangoType"):
-        _validate_interfaces(meta_sub)
+        _validate_interfaces(meta_sub, Category)
 
 
 def test_meta_interfaces_rejects_duplicates():
     meta = _meta(interfaces=(relay.Node, relay.Node))
     with pytest.raises(ConfigurationError, match="duplicate entries"):
-        _validate_interfaces(meta)
+        _validate_interfaces(meta, Category)
 
 
 def test_meta_interfaces_empty_tuple_treated_as_unset():
     """An empty tuple and an absent key both produce ``()`` (bit-for-bit identical)."""
-    assert _validate_interfaces(_meta(interfaces=())) == ()
-    assert _validate_interfaces(_meta()) == ()
+    assert _validate_interfaces(_meta(interfaces=()), Category) == ()
+    assert _validate_interfaces(_meta(), Category) == ()
 
 
 def test_meta_interfaces_stored_on_definition():
     """The normalized tuple flows through to ``DjangoTypeDefinition.interfaces``."""
     meta = _meta(interfaces=(relay.Node,))
-    normalized = _validate_interfaces(meta)
+    normalized = _validate_interfaces(meta, Category)
     definition = DjangoTypeDefinition(
         origin=_as_django_type(object),
         model=Category,
@@ -245,7 +242,7 @@ def test_class_already_inherits_relay_node_directly():
         pass
 
     meta = _meta(interfaces=(relay.Node,))
-    assert _validate_interfaces(meta) == (relay.Node,)
+    assert _validate_interfaces(meta, Category) == (relay.Node,)
     # Reference _Host so ruff does not flag the host class as unused; the
     # class existing in the test module IS the assertion shape.
     assert relay.Node in _Host.__mro__

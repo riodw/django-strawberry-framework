@@ -1839,6 +1839,7 @@ def test_unregister_evicts_connection_type_cache_entry(fresh_registry: TypeRegis
     LIFO order, retry, or ImportError guards. No live sibling.
     """
     from django_strawberry_framework.connection import (
+        DjangoConnection,
         _CachedConnectionType,
         _connection_type_cache,
     )
@@ -1852,10 +1853,13 @@ def test_unregister_evicts_connection_type_cache_entry(fresh_registry: TypeRegis
         pass
 
     fresh_registry.register(Item, ItemType)
-    _connection_type_cache[ItemType] = _CachedConnectionType(_as_definition(object()), object)
+    _connection_type_cache[ItemType] = _CachedConnectionType(
+        _as_definition(object()),
+        DjangoConnection[DjangoType],
+    )
     _connection_type_cache[CategoryType] = sentinel_kept = _CachedConnectionType(
         _as_definition(object()),
-        object,
+        DjangoConnection[DjangoType],
     )
     try:
         fresh_registry.unregister(ItemType)

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 26 done, 46 to do.
+Progress: 27 done, 46 to do.
 
 ## Done
 
@@ -35,6 +35,8 @@ Progress: 26 done, 46 to do.
   a set now declares each relation once, and refuses a longer declaration that takes over a branch's paths (`ddf8ef8b`)
 - [x] 60. One `OrderSet` on two types of the same model kept the first type's visibility; a second owner is now refused when
   either hides rows, as on the filter side, and a subclass binds its own owner (`8ab6c921`)
+- [x] 72. A set bound to a type over a proxy model read the concrete model's primary type on a path re-entering its table; re-entry
+  now matches by table, and a set shared by an MTI parent and child type is refused (`9d5e2a04`)
 
 ## To do: t3 hunt findings
 
@@ -86,8 +88,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
-- [ ] 72. A set bound to a type over a proxy model reads the concrete model's primary type on a path re-entering its model (filters
-  and orders reveal rows the bound type hides); an MTI parent and child type sharing one set still diverge by binding order
 
 ## Waiting on you
 
@@ -100,6 +100,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 69. CHANGELOG entry for item 1: `Meta.exclude=["parent"]` on a mutation over a `ForeignObject` model now raises
 - [ ] 71. CHANGELOG entry for item 59: two `RelatedFilter`s or `RelatedOrder`s naming one relation now raise at class creation, and a
   longer one (`shelf__branch` beside `shelf`) raises at expansion when the shorter branch's target set reaches `branch`
+- [ ] 75. CHANGELOG entry for item 72: a `FilterSet` or `OrderSet` shared by an MTI parent and child type now raises at finalize, and
+  a concrete type's path through an FK declared to a proxy (`BranchNote.branch`) reads the bound type, not the proxy's type
 - [ ] 73. A set subclass used only as a `RelatedFilter` / `RelatedOrder` target, never wired to a type, inherits its base's owner and
   that owner's visibility. Keep, or fall back to the target model's registered type?
 

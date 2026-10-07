@@ -36,8 +36,6 @@ Progress: 26 done, 46 to do.
 - [x] 60. One `OrderSet` on two types of the same model kept the first type's visibility; a second owner is now refused when
   either hides rows, as on the filter side, and a subclass binds its own owner (`8ab6c921`)
 
-Still owed in t3 for items 7-10: delete their records (cleanup only, no code).
-
 ## To do: t3 hunt findings
 
 - [ ] 12. Nested forward-FK / OneToOne resolvers never check the request deadline

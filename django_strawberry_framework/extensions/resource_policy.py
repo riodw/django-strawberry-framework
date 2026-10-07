@@ -17,17 +17,20 @@ Three passes, in the order a request meets them:
    fragment-expanding walk over the parsed AST charges expanded selections,
    aliases, and the multiplicative collection cost. Fragment spreads are charged
    at every spread site and cycle-guarded by the spread path, so neither a
-   fragment nor a directive can hide a selection from accounting.
+   fragment nor a directive can hide a selection from accounting; every spread
+   and inline fragment the walk enters is counted against ``max_selections`` on
+   a count of its own.
 3. **Value budget** (the same walk). Every value validation converts is
    charged before validation runs, because graphql-core's
    ``ValuesOfCorrectTypeRule`` parses each literal through the scalar it is
    typed as: every field and directive argument in every definition, and every
    variable-definition default. The selected operation is charged per
-   reference with its variables resolved; other operations and unspread
-   fragments are charged for values only, and a default no use site charged is
-   charged once at its definition. Every value is typed by the GraphQL input
-   type of its position and, for a package-generated write input, by the
-   bind-time field specs the owning mutation stashed. The specs are what classify a RELATION list: a
+   reference with its variables resolved; other operations and the fragments
+   the selected operation's walk did not expand are charged for values only,
+   and a default no use site charged is charged once at its definition. Every
+   value is typed by the GraphQL input type of its position and, for a
+   package-generated write input, by the bind-time field specs the owning
+   mutation stashed. The specs are what classify a RELATION list: a
    multi-relation write input is charged against the relation-id bounds
    whether its ids render as Relay ``GlobalID``s or as raw pks, which a
    scalar-name rule cannot see (a raw-pk relation list is ``[Int!]`` on the
@@ -920,6 +923,7 @@ class _DocumentBudget:
     def __init__(self, policy: ResourcePolicy) -> None:
         self.policy = policy
         self.selections = 0
+        self.fragments = 0
         self.aliases = 0
         self.cost = 0
 
@@ -942,6 +946,24 @@ class _DocumentBudget:
                 self.policy.max_aliases,
                 self.aliases,
                 "the document carries more aliases after fragment expansion than the policy allows",
+            )
+
+    def charge_fragment(self) -> None:
+        """Charge one fragment spread or inline fragment the shape walk enters.
+
+        A fragment that selects no field is still walked once per spread, so
+        without this charge a chain of fragments that each spread the next twice
+        costs ``2 ** depth`` steps and charges nothing. It shares the selection
+        ceiling but keeps its own count, so a document's field count is
+        unchanged.
+        """
+        self.fragments += 1
+        if self.fragments > self.policy.max_selections:
+            raise ResourceLimitExceeded(
+                "max_selections",
+                self.policy.max_selections,
+                self.fragments,
+                "the document enters more fragments after fragment expansion than the policy allows",
             )
 
     def charge_collection(self, rows: int) -> None:
@@ -1130,7 +1152,7 @@ _NO_SPREAD_PATH: frozenset[str] = frozenset()
 class _DocumentWalk:
     """One request's walk over its document: both budgets, and the fragments it expanded.
 
-    Each root - an operation, or a fragment definition no spread expanded - is
+    Each root - an operation, or a fragment definition no shape walk expanded - is
     walked with its own variable map and mutation-ness. ``variables`` is
     ``None`` where graphql-core coerces no variable (every definition but the
     selected operations), and a reference there is charged as ``None``: one
@@ -1151,6 +1173,7 @@ class _DocumentWalk:
         self.budget = _DocumentBudget(policy)
         self.values = _ValueBudget(policy)
         self.expanded: set[str] = set()
+        self.unshaped: set[int] = set()
         self.variables: dict[str, object] | None = None
         self.read: set[str] | None = None
         self.in_mutation = False
@@ -1232,7 +1255,7 @@ class _DocumentWalk:
             )
 
     def fragment(self, fragment: FragmentDefinitionNode) -> None:
-        """Walk a fragment definition no spread expanded, as a root of its own."""
+        """Walk a fragment definition no shape walk expanded, as a root of its own."""
         condition = self.graphql_schema.get_type(fragment.type_condition.name.value)
         self.variables = None
         self.read = None
@@ -1243,7 +1266,6 @@ class _DocumentWalk:
             condition,
             condition,
             shape=False,
-            path=frozenset({fragment.name.value}),
         )
 
     def walk(
@@ -1274,10 +1296,15 @@ class _DocumentWalk:
             # resolves: validation converts them whether or not the fragment
             # exists or is already expanding on this path.
             self.charge_directives(node.directives)
+            if shape and not isinstance(node, FieldNode):
+                self.budget.charge_fragment()
             if isinstance(node, FragmentSpreadNode):
                 name = node.name.value
                 fragment = self.fragments.get(name)
-                if fragment is None or name in path:
+                # Only a shape walk expands: validation parses a fragment's
+                # literals once, so a value-only reference charges the spread
+                # and leaves the definition to be charged as a root of its own.
+                if not shape or fragment is None or name in path:
                     continue
                 self.expanded.add(name)
                 self.charge_directives(fragment.directives)
@@ -1339,7 +1366,13 @@ class _DocumentWalk:
             if node.selection_set is None:
                 continue
             # Below a field the parent does not have nothing is typed and no
-            # shape is charged, but values still are: validation parses them.
+            # shape is charged, but values still are: validation parses them,
+            # once per field node however often its fragment expands, so the
+            # walk enters that subtree once too.
+            if field_def is None:
+                if id(node) in self.unshaped:
+                    continue
+                self.unshaped.add(id(node))
             child_parent = None if field_def is None else get_named_type(field_def.type)
             stack.extend(
                 (
@@ -1365,21 +1398,26 @@ def charge_document(
     ONE walk over every operation in the document. The selected operation
     (every operation, when the request names none) is charged for shape -
     expanded selections, aliases, collection cost - and for values; every other
-    operation, the subtree of a field the parent does not have, and each
-    fragment definition no spread expanded are charged for values only,
-    because validation parses their literals too. Fragments expand at every
-    spread site (spreading one ten times costs ten times) and the spread path
-    makes a cyclic fragment set terminate.
+    operation, the subtree of a field the parent does not have (once per field
+    node, however often its fragment expands), and each fragment definition
+    the shape walk did not expand are charged for values only, because
+    validation parses their literals too. Only the shape walk expands
+    fragments: at every spread site (spreading one ten times costs ten times),
+    charging each spread and inline fragment it enters against
+    ``max_selections``, and the spread path makes a cyclic fragment set
+    terminate. A value-only walk charges a spread's own directives and expands
+    nothing, so a fragment it reaches is charged once, as a root of its own -
+    validation parses a definition once however often it is spread.
 
     Values are charged per reference: every field and directive argument - on
     the operation, a variable definition, a field, a spread (before its
     fragment resolves), an inline fragment, and a fragment definition once per
-    expansion - typed by the argument's declared input type, untyped where
-    nothing declares one. In a selected operation a variable resolves to the
-    supplied value or, failing that, to its default; anywhere else it is
-    charged as ``None``, since graphql-core coerces no variable there. A default
-    no use site charged - unused, shadowed by a supplied value, or in an
-    unselected operation - is charged once at its definition.
+    shape-walk expansion - typed by the argument's declared input type,
+    untyped where nothing declares one. In a selected operation a variable
+    resolves to the supplied value or, failing that, to its default; anywhere
+    else it is charged as ``None``, since graphql-core coerces no variable
+    there. A default no use site charged - unused, shadowed by a supplied
+    value, or in an unselected operation - is charged once at its definition.
 
     Every shape validation would have rejected is a shape this walk meets,
     because it runs BEFORE validation: a cyclic fragment set, an unknown field,

@@ -1479,6 +1479,34 @@ def test_selections_are_charged_after_fragment_expansion():
     assert extensions["bound"] in {"max_selections", "max_aliases"}
 
 
+def _doubling_fragments(depth: int, leaf: str):
+    """``F0`` spreads ``F1`` twice, ``F1`` spreads ``F2`` twice, ..., so ``F0`` reaches ``leaf`` ``2 ** depth`` times."""
+    chain = [
+        f"fragment F{index} on Query {{ ...F{index + 1} ...F{index + 1} }}"
+        for index in range(depth)
+    ]
+    return " ".join([*chain, f"fragment F{depth} on Query {{ {leaf} }}"])
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    ["...Missing", "...F0", "... { ...Missing }"],
+    ids=["unknown-fragment", "fragment-cycle", "inline-fragment"],
+)
+def test_a_fragment_chain_selecting_no_field_is_charged_per_fragment_entered(leaf: str):
+    """A fragment that selects no field still costs a walk step at every spread.
+
+    Each ``F{n}`` doubles the spreads below it, so with no field to charge the
+    walk would take ``2 ** depth`` steps for a document a few hundred bytes
+    long. Every spread and inline fragment entered is charged against
+    ``max_selections`` on its own count.
+    """
+    query = "{ ...F0 } " + _doubling_fragments(5, leaf)
+    extensions = _rejection(_post("/rp-shape/", query))
+    assert extensions["bound"] == "max_selections"
+    assert extensions["charged"] == MAX_SELECTIONS + 1
+
+
 def test_a_directive_does_not_hide_a_selection_from_accounting():
     """``@skip`` changes what is RETURNED, never what is charged.
 
@@ -2238,6 +2266,50 @@ def test_fragment_definition_directive_values_are_charged_per_expansion():
     spreads = " ".join("...F" for _ in range(MAX_INPUT_NODES + 1))
     query = "{ %s } fragment F on Query @include(if: true) { __typename }" % spreads
     _assert_over_nodes(_post("/rp-values/", query))
+
+
+def test_a_fragment_spread_only_from_an_unselected_operation_is_charged_once():
+    """Validation parses a fragment's literals once, however many spreads reach it.
+
+    ``Big`` reaches ``F5``'s ``@include`` value ``2 ** 5`` times, past
+    ``MAX_INPUT_NODES``. Only the selected operation's walk expands fragments,
+    so ``F5`` is charged once as a root of its own and ``Small`` executes. A
+    walk that expanded ``Big`` would spend ``2 ** depth`` steps on an operation
+    nobody runs.
+    """
+    query = "query Small { __typename } query Big { ...F0 } " + _doubling_fragments(
+        5,
+        "__typename @include(if: true)",
+    )
+    payload = _post_named("/rp-values/", query, "Small")
+    _no_rejection(payload)
+    assert payload["data"] == {"__typename": "Query"}
+
+
+def test_a_fragment_spread_below_an_unknown_field_is_charged_once():
+    """Below a field the parent does not have, the walk charges values and expands nothing."""
+    query = "{ __typename nope { ...F0 } } " + _doubling_fragments(
+        5,
+        "__typename @include(if: true)",
+    )
+    payload = _post("/rp-values/", query)
+    _no_rejection(payload)
+    assert "nope" in payload["errors"][0]["message"]
+
+
+def test_an_unknown_field_subtree_in_a_fragment_is_walked_once_however_often_it_expands():
+    """Validation parses the literals below an unknown field once per field node.
+
+    ``F`` is spread three times; the ten arguments under ``nope`` are ten input
+    nodes once and thirty if the subtree were walked per expansion, past
+    ``MAX_INPUT_NODES``. A subtree walked per expansion is the
+    ``max_selections`` x document-size product the walk exists to bound.
+    """
+    arguments = " ".join(f"a{index}(x: 1)" for index in range(10))
+    query = "{ ...F ...F ...F } fragment F on Query { nope { %s } }" % arguments
+    payload = _post("/rp-values/", query)
+    _no_rejection(payload)
+    assert "nope" in payload["errors"][0]["message"]
 
 
 def test_a_directive_value_on_a_spread_of_an_unknown_fragment_is_charged():

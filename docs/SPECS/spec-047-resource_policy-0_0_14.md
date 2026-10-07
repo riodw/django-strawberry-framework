@@ -224,7 +224,7 @@ package defaults. Both override sources are *trusted declarations* and may widen
 |---|---|---|
 | `max_document_tokens` | `4_000` | Lexical tokens in the raw document, before the parse. |
 | `max_depth` | `20` | Structural nesting (`{`, `(`, `[`), before the parse. |
-| `max_selections` | `500` | Field selections after fragment expansion. |
+| `max_selections` | `500` | Field selections after fragment expansion; fragment spreads and inline fragments entered are counted against it on a count of their own. |
 | `max_aliases` | `100` | Aliased selections after fragment expansion. |
 | `max_collection_cost` | `1_000_000_000` | Multiplicative row cost of the document. |
 | `max_page_size` | `100` | Ceiling over a connection's effective `relay_max_results`. |
@@ -558,7 +558,11 @@ before anything validates it.
   the evasion of "move the selection set into a fragment" is closed by construction. The
   spread path also makes a cyclic fragment set terminate, which matters because validation
   normally rejects cycles but a schema that disabled validation would hand one straight to
-  this walk.
+  this walk. Only the selected operation's walk expands, and every spread and inline fragment
+  it enters is charged against `max_selections` on a count of its own, so a document's field
+  count is unchanged. A fragment that selects no field still costs a step at every spread: a
+  chain of fragments that each spread the next twice would otherwise take `2 ** depth` steps
+  for a document a few hundred bytes long and charge nothing.
 - **Before VALIDATION, not merely before execution.** Validation is already work the
   request asked for: graphql-core's `ValuesOfCorrectTypeRule` parses every literal argument
   and every variable-definition default through the scalar it is typed as, which for an
@@ -596,17 +600,21 @@ before anything validates it.
   states.
 - **Every value validation converts is charged at least once.** Validation parses the
   literals of every definition in the document, not only the selected operation's, so the one
-  walk visits every operation and every fragment definition no spread expanded. Values are
-  charged per reference everywhere: field arguments, and directive arguments on the
-  operation, on a variable definition, on every field, on every spread node before its
-  fragment resolves (so a spread of an unknown fragment or one closing a cycle still charges),
-  on every inline fragment, and on a fragment definition once per expansion; an argument
-  nothing declares is charged untyped. Shape bounds are charged only for the selected
-  operation: an unselected operation, the subtree of a field the parent type lacks, and an
-  unexpanded fragment are walked for values alone. A variable resolves to its supplied value
-  or default only in the selected operation (elsewhere graphql-core coerces none, so a
-  reference is charged as `None`), and a default no use site charged - unused, shadowed by a
-  supplied variable, or in an unselected operation - is charged once at its definition.
+  walk visits every operation and every fragment definition the selected operation's walk did
+  not expand. Values are charged per reference everywhere: field arguments, and directive
+  arguments on the operation, on a variable definition, on every field, on every spread node
+  before its fragment resolves (so a spread of an unknown fragment or one closing a cycle
+  still charges), on every inline fragment, and on a fragment definition once per expansion in
+  the selected operation; an argument nothing declares is charged untyped. Shape bounds are
+  charged only for the selected operation: an unselected operation, the subtree of a field the
+  parent type lacks, and an unexpanded fragment are walked for values alone and expand no
+  fragment. Validation parses a definition once however many spreads reach it, so a fragment
+  only they reach is charged once, as a root of its own, and the subtree of a field the parent
+  type lacks is walked once per field node however often its fragment expands. A variable
+  resolves to its supplied value or default only in the selected operation (elsewhere
+  graphql-core coerces none, so a reference is charged as `None`), and a default no use site
+  charged - unused, shadowed by a supplied variable, or in an unselected operation - is
+  charged once at its definition.
 
 **Why before validation.** Validating a document parses every literal argument and every
 variable-definition default through the scalar it is typed as, so a walk that ran after
@@ -1287,7 +1295,10 @@ rejected on the bound it is about.
   resource rejection, and a malformed document already over the token bound before its
   garbage rejected on size. Both are live rows because a malformed document IS expressible
   over the wire, which is what decides the tier.
-- **Expanded document**: a fragment charged at every spread site; `@skip(if: true)` not
+- **Expanded document**: a fragment charged at every spread site; a fragment chain selecting
+  no field charged per fragment entered; a fragment spread only from an unselected operation
+  charged once; the subtree of an unknown field walked once however often its fragment
+  expands; `@skip(if: true)` not
   evading accounting; the same field under many aliases charged per alias; nested
   collections charged multiplicatively; an explicit small `first:` narrowing the charge.
 - **Values, tiny document / large variable payload**: node ids at and over the bound, with
@@ -1303,8 +1314,8 @@ rejected on the bound it is about.
   proving a supplied variable is what its use site charges, the default charged once at its
   definition; and every value validation converts outside the selected operation's field
   arguments — directive arguments at each location, unused, shadowed and directive-only
-  defaults, untyped argument values, and literals in an unselected operation or an unspread
-  fragment.
+  defaults, untyped argument values, and literals in an unselected operation or a fragment
+  the selected operation's walk did not expand.
 - **The relation-list classification, from the bind spec's side**: a raw-pk (`[Int!]`)
   relation list over the bound on each of the model, form and serializer flavors; a nested
   serializer row's own relation list charged against the enclosing field; a `GlobalID`

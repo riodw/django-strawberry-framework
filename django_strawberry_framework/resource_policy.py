@@ -286,7 +286,9 @@ class ResourcePolicy:
     ``max_selections``
         Field selections after fragment expansion, summed across the operation.
         A fragment spread is charged wherever it is spread, so spreading one
-        fragment ten times costs ten times.
+        fragment ten times costs ten times. The fragment spreads and inline
+        fragments the expansion enters are counted against the same ceiling on
+        a count of their own, so a fragment that selects no field is not free.
     ``max_aliases``
         Aliased field selections after fragment expansion. The same expensive
         field under many aliases is charged once per alias.

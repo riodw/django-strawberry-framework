@@ -4,13 +4,17 @@
 Traversal on the wire is ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
+import sys
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 from apps.kanban.models import Decision
 from apps.library.models import Book, Branch, Genre, Loan, MembershipCard, Patron, TaggedItem
+from django.apps import AppConfig
+from django.apps.registry import Apps
 from django.core.exceptions import FieldDoesNotExist
+from django.db import models
 from django.db.models import Model
 from typing_extensions import override
 
@@ -454,6 +458,103 @@ def test_classify_path_named_reverse_fk_behind_to_one_prefix():
     assert plan.relation_chain == ("book", "loans", "patron")
 
 
+_unique_reverse_apps = Apps([AppConfig("test_relations_unique_reverse", sys.modules[__name__])])
+
+
+class _UrParent(models.Model):
+    """A parent reached in reverse by one unique and one ordinary ``ForeignKey``.
+
+    Fakeshop declares no ``ForeignKey(unique=True)``, so these models stand in for
+    the unique-reverse hop. They live in the private ``_unique_reverse_apps``
+    registry, whose one app config (this module) lets Django wire the reverse
+    relations: no installed model gains a reverse relation, ``migrate`` and the
+    system checks never see them, and no test creates their tables (only model
+    metadata is read).
+    """
+
+    name = models.TextField()
+
+    class Meta:
+        app_label = "test_relations_unique_reverse"
+        apps = _unique_reverse_apps
+
+
+class _UrUniqueChild(models.Model):
+    """A child whose ``ForeignKey(unique=True)`` gives ``_UrParent`` a single-valued reverse."""
+
+    note = models.TextField()
+    parent = models.ForeignKey(
+        _UrParent,
+        on_delete=models.CASCADE,
+        unique=True,
+        related_name="unique_children",
+    )
+
+    class Meta:
+        app_label = "test_relations_unique_reverse"
+        apps = _unique_reverse_apps
+
+
+class _UrPlainChild(models.Model):
+    """A child whose ordinary ``ForeignKey`` gives ``_UrParent`` a many-side reverse."""
+
+    note = models.TextField()
+    parent = models.ForeignKey(
+        _UrParent,
+        on_delete=models.CASCADE,
+        related_name="plain_children",
+    )
+
+    class Meta:
+        app_label = "test_relations_unique_reverse"
+        apps = _unique_reverse_apps
+
+
+def test_classify_path_unique_reverse_fk_is_row_preserving():
+    """The reverse hop of a ``ForeignKey(unique=True)`` is single-valued.
+
+    ``classify_path`` reads many-ness from ``PathInfo.m2m`` (``not
+    field.unique``), so ``_UrParent.unique_children`` keeps its
+    ``reverse_many_to_one`` kind yet reports ``many_side`` ``False`` and no many
+    boundary, and ``path_traverses_to_many`` answers ``False``: the
+    deliberate divergence from a ``relation_kind`` walk documented on
+    ``django_strawberry_framework/utils/relations.py::path_traverses_to_many``.
+    """
+    plan = classify_path(_UrParent, "unique_children__note")
+
+    (hop,) = plan.hops
+    assert hop.segment == "unique_children"
+    assert hop.kind == "reverse_many_to_one"
+    assert hop.target_model is _UrUniqueChild
+    assert hop.many_side is False
+    assert plan.first_many_index is None
+    assert plan.terminal is _UrUniqueChild._meta.get_field("note")
+    assert path_traverses_to_many(_UrParent, "unique_children__note") is False
+    assert path_traverses_to_many(_UrParent, "unique_children") is False
+    assert _legacy_traverses_to_many(_UrParent, "unique_children__note") is True
+
+
+def test_classify_path_plain_reverse_fk_beside_unique_is_first_many():
+    """An ordinary reverse FK on the same parent stays the first many-side boundary.
+
+    The contrast row for the unique reverse hop: ``_UrParent.plain_children``
+    has ``PathInfo.m2m`` ``True``, so ``classify_path`` reports ``many_side``
+    ``True`` at index 0 and
+    ``django_strawberry_framework/utils/relations.py::path_traverses_to_many``
+    answers ``True``; uniqueness of the link alone flips the answer.
+    """
+    plan = classify_path(_UrParent, "plain_children__note")
+
+    (hop,) = plan.hops
+    assert hop.segment == "plain_children"
+    assert hop.kind == "reverse_many_to_one"
+    assert hop.target_model is _UrPlainChild
+    assert hop.many_side is True
+    assert plan.first_many_index == 0
+    assert path_traverses_to_many(_UrParent, "plain_children__note") is True
+    assert path_traverses_to_many(_UrParent, "plain_children") is True
+
+
 def test_classify_path_relation_terminal_is_hop_and_terminal():
     """A relation reached at the final segment is both the last hop and the terminal."""
     plan = classify_path(Book, "genres")
@@ -627,6 +728,8 @@ def test_relation_path_hop_and_classified_path_are_frozen():
         (Loan, "book__loans__patron__email"),
         (Decision, "supersedes__supersedes__question"),
         (Decision, "superseded_by_set__question"),
+        (_UrParent, "unique_children__note"),
+        (_UrParent, "plain_children__note"),
     ],
 )
 def test_classify_path_first_many_matches_django_oracle(model: type[Model], path: str):

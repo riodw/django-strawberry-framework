@@ -467,6 +467,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
+├── test_app_registry_restore.py  # The suite-wide app-registry restore keeps a module-scope model registered.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
 ├── test_bench_common.py          # Script tests for the measurement plumbing the bench scripts share.
 ├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.
@@ -723,6 +724,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
+├── test_app_registry_restore.py  # The suite-wide app-registry restore keeps a module-scope model registered.
 ├── test_apps.py                  # AppConfig tests for package registration and upstream patch dispatch.
 ├── test_bench_common.py          # Script tests for the measurement plumbing the bench scripts share.
 ├── test_bug_hunt.py              # Repo-tooling tests for the bug-hunt progress generator and its snapshot helper.

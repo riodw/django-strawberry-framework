@@ -64,6 +64,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError, visible_related_object
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._info import make_info, unread_info
 
 
 @pytest.fixture(autouse=True)
@@ -79,13 +80,6 @@ _name_counter = itertools.count(1)
 
 def _uniq(prefix: str) -> str:
     return f"{prefix}-{next(_name_counter)}"
-
-
-def _unread_info() -> strawberry.Info[object, object]:
-    """The info a resolver path under test never reads."""
-    # basedpyright: the path under test never reads info; the form resolver internals type the
-    # parameter as a required Info
-    return None  # pyright: ignore[reportReturnType]
 
 
 class _AllowAll:
@@ -253,10 +247,8 @@ def test_decode_split_relation_lands_under_form_key_not_id_attr():
         name="X",
         category_id=_relay_global_id(CategoryT, cat.pk),
     )
-    info = SimpleNamespace(context=SimpleNamespace())
-    # basedpyright: a stand-in info carrying only the slots the code under test reads;
-    # _decode_form_data types info as a concrete Strawberry Info
-    provided_data, provided_files, error = form_resolvers._decode_form_data(CreateItem, data, info)  # pyright: ignore[reportArgumentType]
+    info = make_info(context=SimpleNamespace())
+    provided_data, provided_files, error = form_resolvers._decode_form_data(CreateItem, data, info)
     assert error is None
     # The form key is "category" (the form field name), NOT "category_id".
     assert provided_data["category"] == cat.pk
@@ -298,13 +290,11 @@ def test_decode_split_upload_lands_in_files_never_data():
     input_cls = CreateMedia._input_class
     assert input_cls is not None
     data = _keyword_constructor(input_cls)(label="L", attachment=upload, image=image)
-    info = SimpleNamespace(context=SimpleNamespace())
+    info = make_info(context=SimpleNamespace())
     provided_data, provided_files, error = form_resolvers._decode_form_data(
         CreateMedia,
         data,
-        # basedpyright: a stand-in info carrying only the slots the code under test reads;
-        # _decode_form_data types info as a concrete Strawberry Info
-        info,  # pyright: ignore[reportArgumentType]
+        info,
     )
     assert error is None
     assert set(provided_files) == {"attachment", "image"}
@@ -370,10 +360,8 @@ def test_decode_unwraps_choice_enum_to_raw_value():
     assert issubclass(enum_cls, Enum)
     member = next(m for m in enum_cls if m.value == "available")
     data = input_cls(**{status_attr: member, "title": "T", "shelf_id": strawberry.UNSET})
-    info = SimpleNamespace(context=SimpleNamespace())
-    # basedpyright: a stand-in info carrying only the slots the code under test reads;
-    # _decode_form_data types info as a concrete Strawberry Info
-    provided_data, _files, error = form_resolvers._decode_form_data(CreateBook, data, info)  # pyright: ignore[reportArgumentType]
+    info = make_info(context=SimpleNamespace())
+    provided_data, _files, error = form_resolvers._decode_form_data(CreateBook, data, info)
     assert error is None
     assert provided_data["circulation_status"] == "available"
 
@@ -1030,7 +1018,7 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
         # basedpyright: a stand-in mutation class carrying only the slots the code under test
         # reads; _run_form_pipeline_sync types the parameter as _FormMutationClass
         mock.Mock(_primary_type=None),  # pyright: ignore[reportArgumentType]
-        info=_unread_info(),
+        info=unread_info(),
         data="data",
         id="unset-id",
     )
@@ -1380,7 +1368,7 @@ def test_decode_relation_single_empty_value_passes_through():
         graphql_name="categoryId",
         related_model=field.queryset.model,
         form_field=field,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert decoded is None
@@ -1397,7 +1385,7 @@ def test_decode_relation_multi_empty_values_return_empty_list():
             graphql_name="genres",
             related_model=field.queryset.model,
             form_field=field,
-            info=_unread_info(),
+            info=unread_info(),
         )
         assert error is None
         assert decoded == []
@@ -1439,7 +1427,7 @@ def test_decode_form_relation_single_uncoercible_raw_pk_is_field_error():
         graphql_name="genre",
         related_model=field.queryset.model,
         form_field=field,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert value is None
     assert error is not None
@@ -1458,7 +1446,7 @@ def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
         graphql_name="genres",
         related_model=field.queryset.model,
         form_field=field,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert keys == [genre.pk]
@@ -1468,7 +1456,7 @@ def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
         graphql_name="genres",
         related_model=field.queryset.model,
         form_field=field,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert keys is None
     assert error is not None
@@ -1526,7 +1514,7 @@ def test_decode_form_relation_multi_non_iterable_returns_field_error():
         graphql_name="genres",
         related_model=library_models.Genre,
         form_field=field,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert keys is None
     assert error is not None
@@ -1678,7 +1666,7 @@ def test_decode_form_relation_multi_rejects_non_collection_sequences():
             # model; _decode_form_relation_multi types the parameter as type[Model]
             related_model=None,  # pyright: ignore[reportArgumentType]
             form_field=forms.ModelMultipleChoiceField(queryset=None),
-            info=_unread_info(),
+            info=unread_info(),
         )
         assert val is None
         assert err is not None
@@ -1701,7 +1689,7 @@ def test_decode_form_relation_multi_one_shot_generator_fully_decoded():
         graphql_name="genres",
         related_model=library_models.Genre,
         form_field=field,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert keys == [first.pk, second.pk]
@@ -1734,7 +1722,7 @@ def test_decode_form_relation_multi_iteration_failures_stay_in_envelope():
             graphql_name="genres",
             related_model=library_models.Genre,
             form_field=field,
-            info=_unread_info(),
+            info=unread_info(),
         )
         assert keys is None
         assert error is not None
@@ -1763,7 +1751,7 @@ def test_decode_form_relation_multi_materializes_before_any_visibility_query():
             graphql_name="genres",
             related_model=library_models.Genre,
             form_field=field,
-            info=_unread_info(),
+            info=unread_info(),
         )
     assert keys is None
     assert error is not None

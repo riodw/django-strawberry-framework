@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 import strawberry
 from strawberry.relay.utils import SliceMetadata, to_base64
+from strawberry.schema.config import StrawberryConfig
 
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.resource_policy import ResourcePolicy
@@ -36,6 +37,7 @@ from django_strawberry_framework.utils.connections import (
     split_window_rows,
     window_range_plan,
 )
+from tests._info import make_info, unread_info
 
 # ``max_results`` is always passed explicitly below, so ``from_arguments`` never
 # dereferences ``info`` (the ``info.schema.config.relay_max_results`` default is
@@ -63,9 +65,7 @@ def test_last_only_window_limit_is_literal_last_not_expected():
     row filter and the window would over-fetch every child row. The shared helper
     must return ``limit == last`` instead.
     """
-    # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types the
-    # parameter as a required Info
-    slice_meta = SliceMetadata.from_arguments(None, last=2, max_results=_MAX)  # pyright: ignore[reportArgumentType]
+    slice_meta = SliceMetadata.from_arguments(unread_info(), last=2, max_results=_MAX)
     assert slice_meta.expected is None  # the trap the helper must not fall into
 
     bounds = derive_connection_window_bounds(
@@ -98,16 +98,10 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(
     """The optimizer window cannot fetch past the request's page-size policy."""
     context = {}
     arm_resource_budget(context, ResourcePolicy(max_page_size=5))
-    info = SimpleNamespace(
-        context=context,
-        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
-    )
+    info = make_info(context=context, config=StrawberryConfig(relay_max_results=100))
 
     bounds = derive_connection_window_bounds(
-        # basedpyright: a stand-in info carrying only the slots the code under test reads;
-        # derive_connection_window_bounds types info as EitherInfo (a concrete Strawberry Info or
-        # graphql-core's GraphQLResolveInfo)
-        info,  # pyright: ignore[reportArgumentType]
+        info,
         before=None,
         after=to_base64("arrayconnection", "3"),
         first=None,
@@ -120,9 +114,7 @@ def test_offset_window_applies_request_page_ceiling_to_plan_cap(
 
 def test_before_with_last_is_a_forward_window_not_reverse():
     """``before`` + ``last`` resolves to a forward offset window (reverse stays False)."""
-    # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types the
-    # parameter as a required Info
-    after = SliceMetadata.from_arguments(None, first=5, max_results=_MAX)  # pyright: ignore[reportArgumentType]
+    after = SliceMetadata.from_arguments(unread_info(), first=5, max_results=_MAX)
     # Build a real ``before`` cursor from the forward window's end so the helper
     # takes the ``before is not None`` path that keeps ``reverse`` False.
     from strawberry.relay.utils import to_base64
@@ -154,9 +146,7 @@ def test_after_with_last_is_unwindowable_not_reverse_with_offset():
     """
     after_cursor = to_base64("arrayconnection", "3")
     slice_meta = SliceMetadata.from_arguments(
-        # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types
-        # the parameter as a required Info
-        None,  # pyright: ignore[reportArgumentType]
+        unread_info(),
         before=None,
         after=after_cursor,
         first=None,
@@ -210,9 +200,7 @@ def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
     after_cursor = to_base64("arrayconnection", "3")
     before_cursor = to_base64("arrayconnection", "2")
     slice_meta = SliceMetadata.from_arguments(
-        # basedpyright: the path under test never reads info; SliceMetadata.from_arguments types
-        # the parameter as a required Info
-        None,  # pyright: ignore[reportArgumentType]
+        unread_info(),
         before=before_cursor,
         after=after_cursor,
         max_results=_MAX,

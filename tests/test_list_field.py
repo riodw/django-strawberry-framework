@@ -110,13 +110,19 @@ from django_strawberry_framework.utils._queryset_private import (
     set_queryset_hints,
 )
 from django_strawberry_framework.utils.querysets import require_orderset_class
+from tests._info import make_info
 
 _M = TypeVar("_M", bound=models.Model)
 
 
 def _as_strawberry_info(stand_in: object) -> Info[object, object]:
-    """Hand a duck-typed info to a list-field helper that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
+    """Hand a list-field helper an info shape no execution builds.
+
+    Every caller passes a direct-call stub (no ``schema`` / no ``_raw_info``), a hostile or
+    hand-built argument-metadata reader, or a spy on the name converter: the shape itself
+    is the input under test, so ``tests/_info.py::make_info`` cannot stand in for it.
+    """
+    # basedpyright: a deliberately partial or hostile info shape is the input under test; the
     # list-field helpers type info as a concrete Strawberry Info
     return stand_in  # pyright: ignore[reportReturnType]
 
@@ -615,13 +621,13 @@ def test_normalize_list_arguments_rejects_int_subclasses_before_their_hooks_can_
             fired.append("__format__")
             raise RuntimeError("hostile format ran")
 
-    info = SimpleNamespace(context={})
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments(
             "items",
-            _as_strawberry_info(info),
+            info,
             None,
             False,
             **{argument: HostileInt(5)},
@@ -642,13 +648,13 @@ def test_normalize_list_arguments_renders_an_unprintable_large_int_without_raisi
     oversized value would detonate an f-string built at the raise site. The
     over-ceiling arm renders through the guarded helper instead.
     """
-    info = SimpleNamespace(context={})
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments(
             "items",
-            _as_strawberry_info(info),
+            info,
             None,
             False,
             offset=10**10000,
@@ -692,13 +698,13 @@ def test_normalize_list_arguments_rejects_values_graphql_int_never_supplies(
     Those shapes are a direct-call contract: the helper must still reject them as
     ``non_integer`` rather than reaching the range comparisons.
     """
-    info = SimpleNamespace(context={})
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments(
             "items",
-            _as_strawberry_info(info),
+            info,
             None,
             False,
             **{argument: value},
@@ -712,13 +718,13 @@ def test_normalize_list_arguments_names_offset_before_limit_on_direct_call_non_i
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """A direct call that GraphQL ``Int`` cannot assemble still names ``offset`` first."""
-    info = SimpleNamespace(context={})
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=100))
 
     with pytest.raises(ListArgumentError) as exc:
         _normalize_list_arguments(
             "items",
-            _as_strawberry_info(info),
+            info,
             None,
             False,
             offset="bad",
@@ -1331,13 +1337,13 @@ def test_list_field_direct_call_safe_non_integer_rendering(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """Safe rendering of non-integer values in ListArgumentError message."""
-    info = SimpleNamespace(context={}, schema=None)
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     with pytest.raises(ListArgumentError) as exc_info:
         _normalize_list_arguments(
             "test_field",
-            _as_strawberry_info(info),
+            info,
             None,
             False,
             offset="<script>alert(1)</script>",
@@ -1489,18 +1495,18 @@ def test_list_field_record_independence(
     arm_resource_budget: Callable[[object, ResourcePolicy], None],
 ):
     """_ListArguments fields operate independently without proxy conflation."""
-    info = SimpleNamespace(context={}, schema=None)
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     # Omitted arguments
-    rec_empty = _normalize_list_arguments("f", _as_strawberry_info(info), None, False)
+    rec_empty = _normalize_list_arguments("f", info, None, False)
     assert rec_empty.any_argument_supplied is False
     assert rec_empty.offset is None
     assert rec_empty.limit is None
     assert rec_empty.order_by_supplied is False
 
     # offset=0 with no limit produces omission-identical window
-    rec_zero = _normalize_list_arguments("f", _as_strawberry_info(info), None, False, offset=0)
+    rec_zero = _normalize_list_arguments("f", info, None, False, offset=0)
     assert rec_zero.any_argument_supplied is True
     assert rec_zero.offset == 0
     assert rec_zero.limit is None
@@ -1508,7 +1514,7 @@ def test_list_field_record_independence(
     # order_by_supplied drives queryset_required even when order_by=[]
     rec_order_empty = _normalize_list_arguments(
         "f",
-        _as_strawberry_info(info),
+        info,
         None,
         False,
         order_by=[],
@@ -1518,7 +1524,7 @@ def test_list_field_record_independence(
 
     from django_strawberry_framework.list_field import _build_non_queryset_rejection_error
 
-    rejection = _build_non_queryset_rejection_error(rec_order_empty, _as_strawberry_info(info))
+    rejection = _build_non_queryset_rejection_error(rec_order_empty, info)
     assert isinstance(rejection, ListArgumentError)
     assert rejection.reason == "queryset_required"
 
@@ -1536,7 +1542,7 @@ def test_omitted_list_arguments_do_not_resolve_policy(monkeypatch: pytest.Monkey
 
     record = _normalize_list_arguments(
         "items",
-        _as_strawberry_info(SimpleNamespace()),
+        make_info(),
         None,
         False,
     )
@@ -1579,7 +1585,7 @@ def test_field_and_orderset_metadata_reads_fail_closed():
     # basedpyright: the info whose field_name read raises is the hostile input under test;
     # _field_label types info as a concrete Strawberry Info
     assert _field_label(HostileInfo()) == "DjangoListField"  # pyright: ignore[reportArgumentType]
-    assert _field_label(_as_strawberry_info(SimpleNamespace(field_name="items"))) == "items"
+    assert _field_label(make_info(field_name="items")) == "items"
     # The sidecar read fails LOUDLY rather than answering None: publishing a
     # schema without ``orderBy`` for a target that declares one would be a
     # silent SDL change at the line that wrote the field.
@@ -1632,7 +1638,7 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
             if self.fail_close:
                 raise RuntimeError("aclose error")
 
-    info = SimpleNamespace(context={}, schema=None)
+    info = make_info(context={})
     args_record = _ListArguments(
         offset=None,
         limit=None,
@@ -1647,7 +1653,7 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
         await _handle_non_queryset_rejections_async(
             src_clean,
             args_record,
-            _as_strawberry_info(info),
+            info,
         )
     assert exc_clean.value.reason == "queryset_required"
     assert src_clean.anext_calls == 0
@@ -1659,7 +1665,7 @@ async def test_list_field_rejected_async_iterator_cleanup_and_notes():
         await _handle_non_queryset_rejections_async(
             src_fail,
             args_record,
-            _as_strawberry_info(info),
+            info,
         )
     assert exc_fail.value.reason == "queryset_required"
     assert src_fail.anext_calls == 0
@@ -1730,7 +1736,7 @@ def test_list_field_deadline_check_position(
 
     monkeypatch.setattr(rp, "check_deadline", spy_check)
 
-    info = SimpleNamespace(context={}, schema=None)
+    info = make_info(context={})
     arm_resource_budget(info.context, ResourcePolicy(max_list_rows=10))
 
     args_record = _ListArguments(
@@ -1753,7 +1759,7 @@ def test_list_field_deadline_check_position(
     res = _execute_queryset_pipeline_sync(
         ItemDeadType,
         Item.objects.all(),
-        _as_strawberry_info(info),
+        info,
         args_record,
         max_rows=10,
         trusted_max_rows=False,

@@ -59,6 +59,7 @@ from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.errors import validation_error_to_field_errors
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.write_transaction import managed_write_transaction
+from tests._info import make_info, unread_info
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
@@ -74,13 +75,6 @@ def _isolate_registry() -> Iterator[None]:
 
 
 _category_name_counter = itertools.count(1)
-
-
-def _unread_info() -> strawberry.Info[object, object]:
-    """The info a write path under test never reads."""
-    # basedpyright: the path under test never reads info; the write resolver internals type the
-    # parameter as a required Info
-    return None  # pyright: ignore[reportReturnType]
 
 
 def _category_name() -> str:
@@ -545,7 +539,7 @@ def test_sync_misuse_async_get_queryset_from_sync_path():
     ):
         resolvers.resolve_mutation_sync(
             UpdateItem,
-            info=_unread_info(),
+            info=make_info(),
             data=strawberry.UNSET,
             id=str(global_id_for(ItemT, item.pk)),
         )
@@ -902,7 +896,7 @@ def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
         [9223372036854775808],
         graphql_name="genres",
         related_model=related_model,
-        info=_unread_info(),
+        info=unread_info(),
         relation_field=m2m_field,
     )
     assert error is not None
@@ -935,7 +929,7 @@ def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
             None,
             graphql_name="categoryId",
             related_model=related_model,
-            info=_unread_info(),
+            info=unread_info(),
             relation_field=fk_field,
         )
     assert error is None
@@ -1331,7 +1325,7 @@ def test_locate_instance_locks_through_base_manager_subquery_by_default():
         located = mutation_resolvers.locate_instance(
             ItemT,
             item.pk,
-            _unread_info(),
+            unread_info(),
             alias="default",
         )
     assert located is not None
@@ -1343,7 +1337,7 @@ def test_locate_instance_locks_through_base_manager_subquery_by_default():
             mutation_resolvers.locate_instance(
                 ItemT,
                 item.pk + 999,
-                _unread_info(),
+                unread_info(),
                 alias="default",
             )
             is None
@@ -1405,7 +1399,7 @@ def test_locate_instance_opt_out_skips_the_lock(monkeypatch: pytest.MonkeyPatch)
         # parameter as type[DjangoType]
         object(),  # pyright: ignore[reportArgumentType]
         7,
-        _unread_info(),
+        unread_info(),
         alias="default",
         select_for_update=False,
     )
@@ -1474,7 +1468,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
             # basedpyright: a MagicMock stand-in mutation carrying only the slots the code under
             # test reads; run_write_pipeline_sync types the parameter as WriteMutationClass
             mutation_cls,  # pyright: ignore[reportArgumentType]
-            info=_unread_info(),
+            info=make_info(),
             data=None,
             id=None,
             decode_step=lambda _instance: ("decoded",),
@@ -1745,7 +1739,7 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
     mutation_cls._primary_type = object()
     # basedpyright: a MagicMock stand-in mutation carrying only the slots the code under test
     # reads; _run_delete types the parameter as type[DjangoMutation]
-    result = mutation_resolvers._run_delete(mutation_cls, info=_unread_info(), id="gid")  # pyright: ignore[reportArgumentType]
+    result = mutation_resolvers._run_delete(mutation_cls, info=unread_info(), id="gid")  # pyright: ignore[reportArgumentType]
     assert result == "ridden"
     assert seen["data"] is None
     assert seen["id"] == "gid"

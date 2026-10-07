@@ -63,7 +63,6 @@ from strawberry import relay
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info
 from strawberry.types.base import get_object_definition
-from strawberry.types.nodes import SelectedField, Selection
 from typing_extensions import override
 
 from django_strawberry_framework import (
@@ -95,18 +94,12 @@ from django_strawberry_framework.utils._queryset_private import (
     set_queryset_deferred_filter,
     set_queryset_hints,
 )
+from tests._info import make_info
 
 _M = TypeVar("_M", bound=models.Model)
 
 # basedpyright: ExecutionResult.data is dict[str, Any]; a response node is read by key
 _ResponseNode: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
-
-
-def _as_strawberry_info(stand_in: object) -> Info[object, object]:
-    """Hand a duck-typed info to a connection helper that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
-    # connection helpers type info as a concrete Strawberry Info
-    return stand_in  # pyright: ignore[reportReturnType]
 
 
 class _DefinitionReads(TypedDict):
@@ -190,13 +183,11 @@ def test_first_and_last_raises_graphql_error():
     """``resolve_connection`` with both ``first`` and ``last`` raises ``GraphQLError``.
 
     The package's own guard - Strawberry's ``SliceMetadata.from_arguments`` does
-    not reject the combination. Driven at the classmethod directly with a
-    sentinel ``info`` (the guard runs before any ``info`` use).
+    not reject the combination. Driven at the classmethod directly with a bare
+    ``info``: only the schema's ``relay_max_results`` is read ahead of the guard.
     """
     with pytest.raises(GraphQLError, match="mutually exclusive"):
-        # basedpyright: the path under test never reads info; resolve_connection types the
-        # parameter as a required Info
-        DjangoConnection.resolve_connection([], info=object(), first=1, last=1)  # pyright: ignore[reportArgumentType]
+        DjangoConnection.resolve_connection([], info=make_info(), first=1, last=1)
 
 
 def test_first_and_last_guard_on_generated_subclass():
@@ -205,9 +196,7 @@ def test_first_and_last_guard_on_generated_subclass():
     connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
     with pytest.raises(GraphQLError, match="mutually exclusive"):
-        # basedpyright: the path under test never reads info; resolve_connection types the
-        # parameter as a required Info
-        connection_type.resolve_connection([], info=object(), first=1, last=1)  # pyright: ignore[reportArgumentType]
+        connection_type.resolve_connection([], info=make_info(), first=1, last=1)
 
 
 def test_first_and_last_guard_with_unset():
@@ -356,22 +345,9 @@ def test_connection_type_for_returns_concrete_subclass_when_total_count_false():
 # =============================================================================
 
 
-def _selection(name: str, selections: Iterable[Selection] = ()) -> SelectedField:
-    """A minimal selected field carrying ``.name`` / ``.selections``."""
-    return SelectedField(
-        name=name,
-        directives={},
-        arguments={},
-        selections=list(selections),
-    )
-
-
 def _info_with_selection(*field_names: str) -> Info[object, object]:
-    """An ``info`` double whose connection selection set carries ``field_names``."""
-    inner = [_selection(name) for name in field_names]
-    return _as_strawberry_info(
-        SimpleNamespace(selected_fields=[_selection("connectionField", inner)]),
-    )
+    """An ``info`` whose connection selection set carries ``field_names``."""
+    return make_info(field_name="connectionField", selections=f"{{ {' '.join(field_names)} }}")
 
 
 def test_total_count_requested_true_when_selected():
@@ -395,18 +371,11 @@ def test_total_count_requested_scoped_to_direct_children():
     assert _total_count_requested(_info_with_selection("edges", "totalCount")) is True
     # ``totalCount`` ONLY nested inside ``edges { node { ... } }`` must NOT count:
     # the predicate does not descend into a regular field's selections.
-    nested = SimpleNamespace(
-        selected_fields=[
-            _selection(
-                "connectionField",
-                [
-                    _selection("edges", [_selection("node", [_selection("totalCount")])]),
-                    _selection("pageInfo"),
-                ],
-            ),
-        ],
+    nested = make_info(
+        field_name="connectionField",
+        selections="{ edges { node { totalCount } } pageInfo }",
     )
-    assert _total_count_requested(_as_strawberry_info(nested)) is False
+    assert _total_count_requested(nested) is False
 
 
 def test_total_count_requested_recurses_through_fragments():
@@ -416,30 +385,20 @@ def test_total_count_requested_recurses_through_fragments():
     the connection's direct selection set still counts -- the predicate descends
     into fragment ``.selections`` (but not into regular fields).
     """
-    from strawberry.types.nodes import FragmentSpread, InlineFragment
-
     # ``totalCount`` reached only via a FragmentSpread on the connection's selections.
-    spread = FragmentSpread(
-        name="ConnFields",
-        type_condition="XConnection",
-        directives={},
-        selections=[_selection("totalCount")],
+    info = make_info(
+        field_name="connectionField",
+        selections="{ edges ...ConnFields }",
+        fragments="fragment ConnFields on XConnection { totalCount }",
     )
-    info = SimpleNamespace(
-        selected_fields=[_selection("connectionField", [_selection("edges"), spread])],
-    )
-    assert _total_count_requested(_as_strawberry_info(info)) is True
+    assert _total_count_requested(info) is True
 
     # An InlineFragment WITHOUT totalCount stays False (recursion returns nothing).
-    inline = InlineFragment(
-        type_condition="XConnection",
-        selections=[_selection("pageInfo")],
-        directives={},
+    info_no_count = make_info(
+        field_name="connectionField",
+        selections="{ ... on XConnection { pageInfo } }",
     )
-    info_no_count = SimpleNamespace(
-        selected_fields=[_selection("connectionField", [inline])],
-    )
-    assert _total_count_requested(_as_strawberry_info(info_no_count)) is False
+    assert _total_count_requested(info_no_count) is False
 
 
 # =============================================================================
@@ -1680,7 +1639,7 @@ def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
     result = _finalize_queryset(
         node,
         Item.objects.order_by("name"),
-        _as_strawberry_info(SimpleNamespace()),
+        make_info(),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(result.query.order_by) == ("name", "id")
@@ -1693,7 +1652,7 @@ def test_finalize_queryset_skips_pk_when_terminal_already_unique():
     by_name = _finalize_queryset(
         node,
         Category.objects.order_by("name"),
-        _as_strawberry_info(SimpleNamespace()),
+        make_info(),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(by_name.query.order_by) == ("name",)
@@ -1701,7 +1660,7 @@ def test_finalize_queryset_skips_pk_when_terminal_already_unique():
     by_pk = _finalize_queryset(
         node,
         Category.objects.order_by("id"),
-        _as_strawberry_info(SimpleNamespace()),
+        make_info(),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(by_pk.query.order_by) == ("id",)
@@ -1724,7 +1683,7 @@ def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
     result = _finalize_queryset(
         node,
         qs,
-        _as_strawberry_info(SimpleNamespace()),
+        make_info(),
         definition=node.__django_strawberry_definition__,
     )
     assert tuple(result.query.order_by) == ("order", "id")
@@ -1747,7 +1706,7 @@ def test_apply_connection_optimization_short_circuits_without_optimizer():
 
     node = _make_node_type("P3aNode", total_count=None)
     qs = Category.objects.all()
-    assert apply_connection_optimization(node, qs, _as_strawberry_info(SimpleNamespace())) is qs
+    assert apply_connection_optimization(node, qs, make_info()) is qs
 
 
 def test_apply_connection_optimization_short_circuits_when_target_has_no_model():
@@ -1767,7 +1726,7 @@ def test_apply_connection_optimization_short_circuits_when_target_has_no_model()
         # apply_connection_optimization types the parameter as type[DjangoType]
         _UnregisteredNode,  # pyright: ignore[reportArgumentType]
         qs,
-        _as_strawberry_info(SimpleNamespace()),
+        make_info(),
     )
     assert result is qs
 
@@ -2630,11 +2589,7 @@ def test_finalize_queryset_hostile_order_by_is_graphql_error():
 
     node = _make_sidecar_node_type("FinalizeHostileNode")
     finalize_django_types()
-    info = SimpleNamespace(
-        context={},
-        schema=SimpleNamespace(config=strawberry_config()),
-        _raw_info=SimpleNamespace(field_nodes=[]),
-    )
+    info = make_info(context={}, config=strawberry_config())
 
     class HostileQuery:
         @property
@@ -2659,7 +2614,7 @@ def test_finalize_queryset_hostile_order_by_is_graphql_error():
         _finalize_queryset(
             node,
             qs,
-            _as_strawberry_info(info),
+            info,
             definition=node.__django_strawberry_definition__,
         )
 
@@ -2709,11 +2664,7 @@ def test_finalize_queryset_hostile_effective_order_is_graphql_error(
 
     node = _make_sidecar_node_type("FinalizeEffHostileNode")
     finalize_django_types()
-    info = SimpleNamespace(
-        context={},
-        schema=SimpleNamespace(config=strawberry_config()),
-        _raw_info=SimpleNamespace(field_nodes=[]),
-    )
+    info = make_info(context={}, config=strawberry_config())
     qs = Category.objects.all()
 
     def _raise(*a: object, **kw: object):
@@ -2727,7 +2678,7 @@ def test_finalize_queryset_hostile_effective_order_is_graphql_error(
         _finalize_queryset(
             node,
             qs,
-            _as_strawberry_info(info),
+            info,
             definition=node.__django_strawberry_definition__,
         )
 
@@ -2743,11 +2694,7 @@ def test_finalize_queryset_hostile_meta_ordering_is_graphql_error():
 
     node = _make_sidecar_node_type("FinalizeMetaHostileNode")
     finalize_django_types()
-    info = SimpleNamespace(
-        context={},
-        schema=SimpleNamespace(config=strawberry_config()),
-        _raw_info=SimpleNamespace(field_nodes=[]),
-    )
+    info = make_info(context={}, config=strawberry_config())
     qs = Category.objects.all()
 
     # Hostile model with _meta.ordering raising
@@ -2763,7 +2710,7 @@ def test_finalize_queryset_hostile_meta_ordering_is_graphql_error():
         _finalize_queryset(
             node,
             qs,
-            _as_strawberry_info(info),
+            info,
             # basedpyright: the definition carrying a model whose _meta.ordering read raises is the
             # hostile input under test; _finalize_queryset types the parameter as
             # DjangoTypeDefinition
@@ -2798,11 +2745,7 @@ def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
     registry.clear()
     _connection_type_cache.clear()
     finalize_django_types()
-    info = SimpleNamespace(
-        context={},
-        schema=SimpleNamespace(config=strawberry_config()),
-        _raw_info=SimpleNamespace(field_nodes=[]),
-    )
+    info = make_info(context={}, config=strawberry_config())
     qs = ProdCategory.objects.all()  # explicit empty, cursor_field will be used
 
     class HostileMeta:
@@ -2826,7 +2769,7 @@ def test_finalize_queryset_hostile_effective_ordering_is_graphql_error():
         _finalize_queryset(
             cursor_node,
             qs,
-            _as_strawberry_info(info),
+            info,
             # basedpyright: the definition carrying a model whose _meta.ordering read raises is the
             # hostile input under test; _finalize_queryset types the parameter as
             # DjangoTypeDefinition
@@ -2854,11 +2797,7 @@ def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
     registry.clear()
     _connection_type_cache.clear()
     finalize_django_types()
-    info = SimpleNamespace(
-        context={},
-        schema=SimpleNamespace(config=strawberry_config()),
-        _raw_info=SimpleNamespace(field_nodes=[]),
-    )
+    info = make_info(context={}, config=strawberry_config())
 
     class HostileQS(models.QuerySet[Item]):
         def __init__(self, *a: object, **kw: type[Item]):
@@ -2875,7 +2814,7 @@ def test_finalize_queryset_hostile_order_by_apply_is_graphql_error():
         _finalize_queryset(
             node_item,
             qs2,
-            _as_strawberry_info(info),
+            info,
             definition=node_item.__django_strawberry_definition__,
         )
 
@@ -2893,24 +2832,14 @@ def test_consume_window_hostile_pagination_is_graphql_error():
     row = Category(id=1, name="a")
     setattr(row, WINDOW_ROW_NUMBER, 1)
     window = _WindowedConnectionRows(rows=[row], fallback=lambda: Category.objects.all())
-    info = SimpleNamespace(
-        selected_fields=[
-            SimpleNamespace(
-                name="items",
-                selections=[SimpleNamespace(name="edges", selections=[])],
-            ),
-        ],
+    info = make_info(
         context={},
-        schema=SimpleNamespace(config=strawberry_config()),
-        _raw_info=SimpleNamespace(field_nodes=[]),
-        path=SimpleNamespace(prev=None, key="items"),
-        variable_values={},
-        fragments={},
-        operation=None,
-        field_nodes=[],
+        field_name="items",
+        selections="{ edges }",
+        config=strawberry_config(),
     )
     with pytest.raises(GraphQLError, match="non-negative"):
-        conn_type.resolve_connection(window, info=_as_strawberry_info(info), first=-1)
+        conn_type.resolve_connection(window, info=info, first=-1)
 
 
 # =============================================================================

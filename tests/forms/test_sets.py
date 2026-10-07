@@ -86,6 +86,7 @@ from django_strawberry_framework.mutations.permissions import DenyAll
 from django_strawberry_framework.mutations.sets import iter_mutations
 from django_strawberry_framework.registry import registry
 from tests._idioms import definition_raises
+from tests._info import unread_info
 
 
 @pytest.fixture(autouse=True)
@@ -921,9 +922,7 @@ def test_default_get_form_fields_uses_frozen_form_class_snapshot():
         field.python_name
         for field in get_object_definition(Submit._input_class, strict=True).fields
     } == {"alpha"}
-    # basedpyright: the path under test never reads info; get_form types the parameter as a
-    # required Info
-    bound = Submit().get_form(None, data={"alpha": "ok"}, files={})  # pyright: ignore[reportArgumentType]
+    bound = Submit().get_form(unread_info(), data={"alpha": "ok"}, files={})
     assert isinstance(bound, FormA)
 
 
@@ -1293,9 +1292,7 @@ def test_plain_form_default_perform_mutate_calls_form_save():
             form_class = SavingForm
             permission_classes = []
 
-    # basedpyright: the path under test never reads info; perform_mutate types the parameter as a
-    # required Info
-    Submit().perform_mutate(SavingForm(data={"message": "x"}), info=None)  # pyright: ignore[reportArgumentType]
+    Submit().perform_mutate(SavingForm(data={"message": "x"}), info=unread_info())
     assert called["saved"] is True
 
 
@@ -1397,18 +1394,14 @@ def test_plain_form_check_permission_seam():
             form_class = _contact_form()
             permission_classes = []
 
-    # basedpyright: the path under test never reads info; check_permission types the parameter
-    # as a required Info
-    assert AllowMutation().check_permission(None, operation="form", data={}) is True  # pyright: ignore[reportArgumentType]
+    assert AllowMutation().check_permission(unread_info(), operation="form", data={}) is True
 
     class DenyMutation(DjangoFormMutation):
         class Meta:
             form_class = _contact_form()
             permission_classes = [DenyAll]
 
-    # basedpyright: the path under test never reads info; check_permission types the parameter
-    # as a required Info
-    assert DenyMutation().check_permission(None, operation="form", data={}) is False  # pyright: ignore[reportArgumentType]
+    assert DenyMutation().check_permission(unread_info(), operation="form", data={}) is False
 
 
 def test_cached_build_form_input_partial_column_less_guard():

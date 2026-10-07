@@ -43,6 +43,7 @@ from django_strawberry_framework.utils.write_values import (
     unencodable_text_error,
 )
 from tests._idioms import module_binding
+from tests._info import make_info, unread_info
 
 
 @strawberry.input
@@ -68,13 +69,6 @@ _TRI_STATE_SPECS = [
 ]
 
 
-def _unread_info() -> strawberry.Info[object, object]:
-    """The info a decode path under test never reads."""
-    # basedpyright: the path under test never reads info; the write-value decoders type the
-    # parameter as a required Info
-    return None  # pyright: ignore[reportReturnType]
-
-
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> Iterator[None]:
     registry.clear()
@@ -94,7 +88,7 @@ def test_decode_layers_preserve_omitted_null_and_provided_values():
             value,
             graphql_name=spec.graphql_name,
             related_model=related_model,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse="Use a synchronous visibility hook.",
             skip=lambda candidate: candidate is None,
             project=lambda obj: obj.pk,
@@ -152,7 +146,7 @@ def test_decode_visible_relation_ids_rejects_uncoercible_member_without_a_visibi
             [first.pk, "bad"],
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse=recourse,
         )
     assert pks is None
@@ -173,7 +167,7 @@ def test_decode_visible_relation_ids_maps_malformed_containers_to_relation_error
             values,
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse="Use a synchronous visibility hook.",
         )
         assert pks is None
@@ -411,13 +405,12 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         graphql="categoryId",
     )
     spec_multi = _spec(attr="tag_ids", kind=RELATION_MULTI, target="tags", graphql="tagIds")
+    info = make_info()
     handler = relation_into(
         dest,
         single=single,
         multi=multi,
-        # basedpyright: a stand-in info the fake decoders only record; relation_into types info as
-        # a concrete Strawberry Info
-        info="info",  # pyright: ignore[reportArgumentType]
+        info=info,
         extra=lambda spec: {"form_field": spec.target_name},
     )
     assert handler(spec_single, 7) is None
@@ -426,7 +419,7 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         "single",
         7,
         "categoryId",
-        "info",
+        info,
         {"form_field": "category"},
     )
     assert handler(spec_multi, [1, 2]) is None
@@ -435,7 +428,7 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
         "multi",
         [1, 2],
         "tagIds",
-        "info",
+        info,
         {"form_field": "tags"},
     )
 
@@ -451,7 +444,7 @@ def test_relation_into_dispatches_single_and_multi_then_stores():
     ):
         return None, field_error(graphql_name, "hidden", codes="invalid")
 
-    error_handler = relation_into(dest, single=failing, multi=failing, info=_unread_info())
+    error_handler = relation_into(dest, single=failing, multi=failing, info=unread_info())
     error = error_handler(spec_single, 7)
     assert error is not None
     assert error.field == "categoryId"
@@ -500,7 +493,7 @@ def test_decode_field_handlers_split_files_from_data():
 
     handlers, scalar_handler = decode_field_handlers(
         data,
-        info=_unread_info(),
+        info=unread_info(),
         single=single,
         multi=multi,
         file_dest=files,
@@ -549,7 +542,7 @@ def test_decode_visible_relation_ids_rejects_non_collection_types():
             bad_container,
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse=recourse,
         )
         assert pks is None
@@ -650,7 +643,7 @@ def test_decode_visible_relation_handles_invalid_id_and_missing_object():
         "not_an_int",
         graphql_name="categoryId",
         related_model=Category,
-        info=_unread_info(),
+        info=unread_info(),
         async_recourse=recourse,
         skip=lambda x: x is None,
         project=lambda obj: obj.pk,
@@ -664,7 +657,7 @@ def test_decode_visible_relation_handles_invalid_id_and_missing_object():
         999999,
         graphql_name="categoryId",
         related_model=Category,
-        info=_unread_info(),
+        info=unread_info(),
         async_recourse=recourse,
         skip=lambda x: x is None,
         project=lambda obj: obj.pk,
@@ -742,7 +735,7 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
             [relay.GlobalID("products.category", str(row.pk)), row.pk],
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse=recourse,
         )
     assert error is None
@@ -757,7 +750,7 @@ def test_decode_visible_relation_ids_accepts_global_id_members_with_one_query():
             [bad_gid],
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse=recourse,
         )
         assert pks is None
@@ -784,7 +777,7 @@ def test_decode_visible_relation_ids_accepts_duplicate_pks_with_one_query():
             [first.pk, second.pk, first.pk],
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse="Use a synchronous visibility hook.",
         )
     assert error is None
@@ -816,7 +809,7 @@ def test_decode_visible_relation_ids_materializes_generators_once_and_clears_emp
         _one_shot(),
         graphql_name="categoryIds",
         related_model=Category,
-        info=_unread_info(),
+        info=unread_info(),
         async_recourse="Use a synchronous visibility hook.",
     )
     assert error is None
@@ -831,7 +824,7 @@ def test_decode_visible_relation_ids_materializes_generators_once_and_clears_emp
             _empty(),
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse="Use a synchronous visibility hook.",
         )
     assert error is None
@@ -858,7 +851,7 @@ def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained
             bad_container,
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse=recourse,
         )
         assert pks is None
@@ -877,7 +870,7 @@ def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained
             [member],
             graphql_name="categoryIds",
             related_model=Category,
-            info=_unread_info(),
+            info=unread_info(),
             async_recourse=recourse,
         )
         assert (pks is None) == (error is not None), f"ambiguous decode for {member!r}"
@@ -890,7 +883,7 @@ def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained
         [str(category.pk)],
         graphql_name="categoryIds",
         related_model=Category,
-        info=_unread_info(),
+        info=unread_info(),
         async_recourse=recourse,
     )
     assert error is None
@@ -918,7 +911,7 @@ def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
 
     handlers, _ = decode_field_handlers(
         dest,
-        info=_unread_info(),
+        info=unread_info(),
         # basedpyright: the path under test never calls the relation decoders;
         # decode_field_handlers types the parameter as a required _RelationDecoder
         single=None,  # pyright: ignore[reportArgumentType]

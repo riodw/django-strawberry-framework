@@ -74,6 +74,7 @@ from django_strawberry_framework.utils.write_transaction import (
     write_pipeline,
 )
 from tests._idioms import definition_raises
+from tests._info import make_info
 
 if TYPE_CHECKING:
     from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
@@ -1710,11 +1711,10 @@ def test_has_perm_returning_non_bool_is_a_configuration_error():
             return product_models.Item
 
     request = SimpleNamespace(user=_WeirdUser())
-    info = SimpleNamespace(context=SimpleNamespace(request=request))
+    info = make_info(context=SimpleNamespace(request=request))
     with pytest.raises(ConfigurationError, match="has_perm must return a bool"):
-        # basedpyright: a stand-in info and mutation carrying only the slots the code under test
-        # reads; has_permission types them as a concrete Strawberry Info and
-        # type[_ModelResolvingMutation]
+        # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
+        # has_permission types it as type[_ModelResolvingMutation]
         DjangoModelPermission().has_permission(info, _Mutation, "update", None)  # pyright: ignore[reportArgumentType]
 
 

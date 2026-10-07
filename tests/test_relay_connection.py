@@ -35,7 +35,7 @@ from django.db import models as djmodels
 from django.db.models import ForeignObjectRel
 from django.http import HttpRequest
 from strategy_schemas import make_django_type
-from strawberry import Info, relay
+from strawberry import relay
 from strawberry.types.field import StrawberryField
 from typing_extensions import override
 
@@ -57,6 +57,7 @@ from django_strawberry_framework.filters import FilterSet, filter_input_type
 from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
+from tests._info import make_info
 
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
@@ -64,13 +65,6 @@ def _as_django_type(cls: type[object]) -> type[DjangoType]:
     # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
     # registry, teardown and N+1 seams type the parameter as type[DjangoType]
     return cls  # pyright: ignore[reportReturnType]
-
-
-def _as_strawberry_info(stand_in: object) -> Info[object, object]:
-    """Hand a duck-typed info to a window seam that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the window
-    # seams type info as a concrete Strawberry Info
-    return stand_in  # pyright: ignore[reportReturnType]
 
 
 def _as_window_rows(*rows: object) -> list[djmodels.Model]:
@@ -2470,7 +2464,7 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
         _WindowedConnectionRows,
     )
 
-    inert_info = _as_strawberry_info(SimpleNamespace(selected_fields=[]))
+    inert_info = make_info()
 
     # Plain forward page, ``totalCount`` requested, count annotation absent: the
     # count cannot be fabricated, so fall back per-parent.
@@ -2683,7 +2677,7 @@ def test_consume_window_unservable_window_runs_the_sync_fallback():
         window,
         # The shipped pipeline probes ``info.selected_fields`` for the
         # edges-resolution shortcut; an empty selection list is enough.
-        info=_as_strawberry_info(SimpleNamespace(selected_fields=[])),
+        info=make_info(),
         before=None,
         after=None,
         first=2,
@@ -2712,7 +2706,7 @@ async def test_consume_window_unservable_window_runs_the_async_fallback():
     pending = _consume_window(
         connection_cls,
         window,
-        info=_as_strawberry_info(SimpleNamespace(selected_fields=[])),
+        info=make_info(),
         before=None,
         after=None,
         first=2,
@@ -2736,7 +2730,6 @@ def test_consume_window_offset_unwindowable_shape_propagates():
     refused window is real pagination drift and must surface, not silently
     degrade to the fallback and serve a differently-paginated page.
     """
-    from types import SimpleNamespace
 
     from strawberry.relay.utils import to_base64
 
@@ -2752,7 +2745,7 @@ def test_consume_window_offset_unwindowable_shape_propagates():
         _consume_window(
             connection_cls,
             window,
-            info=_as_strawberry_info(SimpleNamespace(selected_fields=[])),
+            info=make_info(),
             before=None,
             # ``after`` + ``last`` with no ``first`` / ``before`` is the
             # offset-bearing backward window the derivation refuses.

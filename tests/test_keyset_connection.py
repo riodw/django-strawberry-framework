@@ -50,6 +50,7 @@ from django.db.models import Count, F, Model, QuerySet
 from django.http import HttpRequest
 from graphql import GraphQLError, GraphQLResolveInfo
 from strategy_schemas import make_django_type
+from strawberry.schema.config import StrawberryConfig
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.connection import (
@@ -79,6 +80,7 @@ from django_strawberry_framework.optimizer.plans import (
 )
 from django_strawberry_framework.orders import Ordering, OrderSet, RelatedOrder
 from django_strawberry_framework.utils.connections import UnwindowableConnection
+from tests._info import make_info
 
 ISSUE_ORDER = ("-number", "id")
 
@@ -188,21 +190,14 @@ def test_backward_args_over_a_window_wrapper_fall_back_to_the_keyset_slicer():
     for number in (1, 2, 3):
         Issue.objects.create(periodical=periodical, number=number, title=f"i{number}")
     wrapper = _WindowedConnectionRows(rows=[], fallback=lambda: Issue.objects.all())
-    info = SimpleNamespace(
-        # ``edges`` selected so the slicer's edge-resolution gate
-        # (``should_resolve_list_connection_edges``) actually slices.
-        selected_fields=[
-            SimpleNamespace(
-                name="issues",
-                selections=[SimpleNamespace(name="edges", selections=[])],
-            ),
-        ],
-        _raw_info=SimpleNamespace(field_nodes=[]),
-        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=100)),
+    # ``edges`` selected so the slicer's edge-resolution gate
+    # (``should_resolve_list_connection_edges``) actually slices.
+    info = make_info(
+        field_name="issues",
+        selections="{ edges }",
+        config=StrawberryConfig(relay_max_results=100),
     )
-    # basedpyright: a stand-in info carrying only the slots the code under test reads;
-    # DjangoConnection.resolve_connection types info as a concrete Strawberry Info
-    connection_payload = connection_type.resolve_connection(wrapper, info=info, last=2)  # pyright: ignore[reportArgumentType]
+    connection_payload = connection_type.resolve_connection(wrapper, info=info, last=2)
     # ``last`` over a window wrapper cannot be served by the (forward-only)
     # keyset window - the wrapper's fallback queryset routes through the
     # keyset slicer instead, backward semantics intact.
@@ -224,19 +219,7 @@ def test_counted_keyset_window_without_seek_count_falls_back():
         number=1,
         **{WINDOW_ROW_NUMBER: 1, WINDOW_TOTAL_COUNT: 3},
     )
-    info = SimpleNamespace(
-        selected_fields=[
-            SimpleNamespace(
-                name="issues",
-                selections=[
-                    SimpleNamespace(
-                        name="pageInfo",
-                        selections=[SimpleNamespace(name="hasNextPage", selections=[])],
-                    ),
-                ],
-            ),
-        ],
-    )
+    info = make_info(field_name="issues", selections="{ pageInfo { hasNextPage } }")
     # basedpyright: a stand-in row carrying only the window columns the code under test reads;
     # _WindowedConnectionRows types rows as list[Model]
     window = _WindowedConnectionRows(rows=[row], fallback=lambda: Issue.objects.all())  # pyright: ignore[reportArgumentType]
@@ -244,9 +227,7 @@ def test_counted_keyset_window_without_seek_count_falls_back():
         _resolve_from_window(
             connection_type,
             window,
-            # basedpyright: a stand-in info carrying only the slots the code under test reads;
-            # _resolve_from_window types info as a concrete Strawberry Info
-            info=info,  # pyright: ignore[reportArgumentType]
+            info=info,
             offset=0,
             limit=2,
             want_count=False,

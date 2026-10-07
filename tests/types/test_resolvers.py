@@ -25,7 +25,6 @@ from apps.products.models import Category, Item
 from django.db import connection as db_connection
 from django.db.models import Model, QuerySet
 from django.utils import timezone
-from strawberry import Info
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -44,16 +43,10 @@ from django_strawberry_framework.optimizer._context import (
 from django_strawberry_framework.optimizer.plans import resolver_key
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.resolvers import _make_relation_resolver
+from tests._info import make_info, response_path, unread_info
 
 if TYPE_CHECKING:
     from django_strawberry_framework.utils.typing import ModelField
-
-
-def _as_strawberry_info(stand_in: object) -> Info[object, object]:
-    """Hand a duck-typed info to a generated resolver that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
-    # generated relation resolvers type info as a concrete Strawberry Info
-    return stand_in  # pyright: ignore[reportReturnType]
 
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
@@ -68,14 +61,6 @@ def _as_field(stand_in: object) -> "ModelField":
     # basedpyright: a stand-in field carrying only the slots the code under test reads; the
     # relation resolver builders type the parameter as a Django field
     return stand_in  # pyright: ignore[reportReturnType]
-
-
-def _path(*keys: str | int):
-    """Build a graphql-core-style linked response path."""
-    path = None
-    for key in keys:
-        path = type("Path", (), {"key": key, "prev": path})()
-    return path
 
 
 @pytest.fixture(autouse=True)
@@ -104,12 +89,8 @@ def test_make_relation_resolver_many_side_is_named_resolve_field():
         def all(self):
             return [1, 2, 3]
 
-    fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(SimpleNamespace(items=FakeManager()), _as_strawberry_info(fake_info)) == [
-        1,
-        2,
-        3,
-    ]
+    fake_info = make_info()
+    assert resolver(SimpleNamespace(items=FakeManager()), fake_info) == [1, 2, 3]
 
 
 def test_make_relation_resolver_forward_is_named_resolve_field():
@@ -128,8 +109,8 @@ def test_make_relation_resolver_forward_is_named_resolve_field():
     assert resolver.__name__ == "resolve_category"
 
     sentinel = object()
-    fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(SimpleNamespace(category=sentinel), _as_strawberry_info(fake_info)) is sentinel
+    fake_info = make_info()
+    assert resolver(SimpleNamespace(category=sentinel), fake_info) is sentinel
 
 
 def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
@@ -153,14 +134,14 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
     field = Item._meta.get_field("category")
     resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
     key = resolver_key(ItemType, "category", ("allItems", "category"))
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context=SimpleNamespace(dst_optimizer_fk_id_elisions={key}),
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
     root = Root()
-    result = resolver(root, _as_strawberry_info(fake_info))
+    result = resolver(root, fake_info)
     assert isinstance(result, Category)
     assert result.pk == 42
     assert result._state.adding is False
@@ -215,15 +196,15 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
     field = Item._meta.get_field("category")
     resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context=SimpleNamespace(dst_optimizer_fk_id_elisions={key}),
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
     # No optimizer published this relation as planned, so the stub is rescoped -
     # and this target's hook hides every row.
-    assert resolver(Root(), _as_strawberry_info(fake_info)) is None
+    assert resolver(Root(), fake_info) is None
 
     # Published as planned: the stub is served as-is, no visibility re-read. The
     # execution that planned it published its elisions to its own frame, which is
@@ -234,7 +215,7 @@ def test_fk_id_elision_stub_is_scoped_when_the_relation_was_not_planned():
     )
     try:
         _publish_scoped_relations({key})
-        scoped = resolver(Root(), _as_strawberry_info(fake_info))
+        scoped = resolver(Root(), fake_info)
     finally:
         _end_execution_frame(frame)
     assert isinstance(scoped, Category)
@@ -277,10 +258,10 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
     )
     resolver = _make_relation_resolver(_as_field(field), parent_type=_as_django_type(ItemType))
     key = resolver_key(ItemType, "category", ("allItems", "category"))
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={"dst_optimizer_fk_id_elisions": {key}},
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
     class Root:
@@ -290,7 +271,7 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
         def category(self):
             raise AssertionError("the relation resolver must not lazy-load the relation")
 
-    result = resolver(Root(), _as_strawberry_info(fake_info))
+    result = resolver(Root(), fake_info)
 
     assert isinstance(result, Category)
     assert result.pk == 42
@@ -309,13 +290,13 @@ def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
     resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_root = SimpleNamespace(category_id=None)
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={"dst_optimizer_fk_id_elisions": {key}},
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
-    assert resolver(fake_root, _as_strawberry_info(fake_info)) is None
+    assert resolver(fake_root, fake_info) is None
 
 
 def test_b2_fk_id_stub_returns_none_without_related_model():
@@ -352,13 +333,13 @@ def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
     resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
     wrong_key = resolver_key(OtherType, "category", ("allItems", "category"))
     fake_root = SimpleNamespace(category_id=42, category=sentinel)
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={"dst_optimizer_fk_id_elisions": {wrong_key}},
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
-    assert resolver(fake_root, _as_strawberry_info(fake_info)) is sentinel
+    assert resolver(fake_root, fake_info) is sentinel
 
 
 def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
@@ -374,13 +355,13 @@ def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
     field = Item._meta.get_field("category")
     resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
     fake_root = SimpleNamespace(category_id=42, category=sentinel)
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={"dst_optimizer_fk_id_elisions": {"category"}},
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
-    assert resolver(fake_root, _as_strawberry_info(fake_info)) is sentinel
+    assert resolver(fake_root, fake_info) is sentinel
 
 
 def test_check_n1_ignores_bare_field_name_key():
@@ -396,7 +377,7 @@ def test_check_n1_ignores_bare_field_name_key():
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": {"category"}, "dst_optimizer_strictness": "raise"},
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
     with pytest.raises(OptimizerError, match="Unplanned N\\+1"):
@@ -414,7 +395,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
     _check_n1(
@@ -437,7 +418,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "warn"},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
 
     caplog.set_level("WARNING", logger="django_strawberry_framework")
@@ -455,7 +436,7 @@ def test_check_n1_planned_absent_is_silent():
     class ItemType:
         pass
 
-    fake_info = SimpleNamespace(context={}, path=_path("allItems", 0, "category"))
+    fake_info = SimpleNamespace(context={}, path=response_path("allItems", 0, "category"))
     # No exception, no log, no side effect - strictness is irrelevant when the
     # optimizer never set DST_OPTIMIZER_PLANNED.
     _check_n1(
@@ -479,7 +460,7 @@ def test_check_n1_planned_hit_is_silent():
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": {key}, "dst_optimizer_strictness": "raise"},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     _check_n1(
         fake_info,
@@ -501,7 +482,7 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set()},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     _check_n1(
         fake_info,
@@ -524,7 +505,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
         _check_n1(
@@ -556,7 +537,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
-        path=_path("allCategories", 0, "items"),
+        path=response_path("allCategories", 0, "items"),
     )
     # ``items`` is set directly on the root - that would short-circuit the
     # single-valued cache check via ``__dict__`` membership but must NOT
@@ -577,7 +558,7 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
-        path=_path("allCategories", 0, "items"),
+        path=response_path("allCategories", 0, "items"),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"items": []})
     # No raise - the relation is prefetched, so the strictness branch is skipped.
@@ -605,7 +586,7 @@ def test_check_n1_probes_prefetch_cache_under_cache_name():
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
-        path=_path("authors", 0, "plainbook"),
+        path=response_path("authors", 0, "plainbook"),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"plainbook_set": []})
     # No raise: the cache-name-keyed probe finds the prefetched rows.
@@ -640,7 +621,7 @@ def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
 
     from django_strawberry_framework.optimizer.plans import runtime_path_from_info
 
-    info = SimpleNamespace(path=_path("allItems", 0, "cat"))
+    info = SimpleNamespace(path=response_path("allItems", 0, "cat"))
     assert runtime_path_from_info(info) == ("allItems", "cat")
 
 
@@ -681,9 +662,9 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
     class RootWithProfile:
         profile = "the-profile"
 
-    fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(RootMissingProfile(), _as_strawberry_info(fake_info)) is None
-    assert resolver(RootWithProfile(), _as_strawberry_info(fake_info)) == "the-profile"
+    fake_info = make_info()
+    assert resolver(RootMissingProfile(), fake_info) is None
+    assert resolver(RootWithProfile(), fake_info) == "the-profile"
     assert resolver.__name__ == "resolve_profile"
 
 
@@ -716,8 +697,8 @@ def test_forward_resolver_contains_unsaved_instance_does_not_exist():
     resolver = _forward_category_resolver()
     root = Item(name="unsaved")
     assert root.category_id is None
-    fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(root, _as_strawberry_info(fake_info)) is None
+    fake_info = make_info()
+    assert resolver(root, fake_info) is None
 
 
 @pytest.mark.asyncio
@@ -730,8 +711,8 @@ async def test_forward_resolver_async_contains_unsaved_instance_does_not_exist()
     """
     resolver = _forward_category_resolver()
     root = Item(name="unsaved-async")
-    fake_info = SimpleNamespace(context=None, path=None)
-    pending = resolver(root, _as_strawberry_info(fake_info))
+    fake_info = make_info()
+    pending = resolver(root, fake_info)
     assert inspect.isawaitable(pending)
     assert await pending is None
 
@@ -747,12 +728,12 @@ def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist(
 
     resolver = _forward_category_resolver()
     armed = {resolver_key(Item, "category", ("elsewhere", "category"))}
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={DST_OPTIMIZER_FK_ID_ELISIONS: armed},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     root = Item(name="unsaved-planned")
-    assert resolver(root, _as_strawberry_info(fake_info)) is None
+    assert resolver(root, fake_info) is None
 
 
 @pytest.mark.asyncio
@@ -762,12 +743,12 @@ async def test_forward_resolver_async_planned_path_contains_unsaved_instance():
 
     resolver = _forward_category_resolver()
     armed = {resolver_key(Item, "category", ("elsewhere", "category"))}
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={DST_OPTIMIZER_FK_ID_ELISIONS: armed},
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     root = Item(name="unsaved-async-planned")
-    pending = resolver(root, _as_strawberry_info(fake_info))
+    pending = resolver(root, fake_info)
     assert inspect.isawaitable(pending)
     assert await pending is None
 
@@ -805,9 +786,9 @@ def test_o1_reverse_one_to_one_propagates_plain_attribute_error():
         def profile(self):
             raise AttributeError("hostile reverse descriptor")
 
-    fake_info = SimpleNamespace(context=None, path=None)
+    fake_info = make_info()
     with pytest.raises(AttributeError, match="hostile reverse descriptor"):
-        resolver(RootHostileProfile(), _as_strawberry_info(fake_info))
+        resolver(RootHostileProfile(), fake_info)
 
 
 def test_reverse_one_to_one_real_model_missing_row_contained():
@@ -825,8 +806,8 @@ def test_reverse_one_to_one_real_model_missing_row_contained():
         Patron._meta.get_field("card"),
         parent_type=_as_django_type(Patron),
     )
-    fake_info = SimpleNamespace(context=None, path=None)
-    assert resolver(Patron(name="No Card"), _as_strawberry_info(fake_info)) is None
+    fake_info = make_info()
+    assert resolver(Patron(name="No Card"), fake_info) is None
 
 
 @pytest.mark.asyncio
@@ -840,8 +821,8 @@ async def test_reverse_one_to_one_async_contains_missing_row():
         Patron._meta.get_field("card"),
         parent_type=_as_django_type(Patron),
     )
-    fake_info = SimpleNamespace(context=None, path=None)
-    pending = resolver(Patron(name="No Card Async"), _as_strawberry_info(fake_info))
+    fake_info = make_info()
+    pending = resolver(Patron(name="No Card Async"), fake_info)
     assert inspect.isawaitable(pending)
     assert await pending is None
 
@@ -877,7 +858,7 @@ def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
         ScalarSpecimen._meta.get_field("parent"),
         parent_type=_as_django_type(ScalarSpecimen),
     )
-    fake_info = SimpleNamespace(context=None, path=None)
+    fake_info = make_info()
     disabled = db_connection.disable_constraint_checking()
     try:
         with db_connection.cursor() as cursor:
@@ -887,7 +868,7 @@ def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
         # in ``_state.fields_cache`` and would answer from it without a query.
         dangling = ScalarSpecimen.objects.get(pk=child.pk)
         assert dangling.parent_id == parent.pk
-        assert resolver(dangling, _as_strawberry_info(fake_info)) is None
+        assert resolver(dangling, fake_info) is None
     finally:
         # Clear the dangling column BEFORE re-enabling constraint checks so
         # the fixture teardown's ``PRAGMA foreign_key_check`` sees a
@@ -915,9 +896,9 @@ def test_forward_resolver_propagates_consumer_attribute_error():
         def category(self):
             raise AttributeError("consumer descriptor bug")
 
-    fake_info = SimpleNamespace(context=None, path=None)
+    fake_info = make_info()
     with pytest.raises(AttributeError, match="consumer descriptor bug"):
-        resolver(HostileItem(), _as_strawberry_info(fake_info))
+        resolver(HostileItem(), fake_info)
 
 
 # ---------------------------------------------------------------------------
@@ -1132,7 +1113,6 @@ def test_fk_id_elision_enabled_under_mutation():
     consumer-``.only()``-that-includes-the-FK case), which is exactly why the
     Decision 5 guard is operation-independent.
     """
-    from types import SimpleNamespace
 
     from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
@@ -1151,12 +1131,12 @@ def test_fk_id_elision_enabled_under_mutation():
         def category(self):
             raise AssertionError("loaded FK column must elide, never lazy-load the relation")
 
-    fake_info = SimpleNamespace(
+    fake_info = make_info(
         context={DST_OPTIMIZER_FK_ID_ELISIONS: {key}},
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
-    result = resolver(Root(), _as_strawberry_info(fake_info))
+    result = resolver(Root(), fake_info)
     assert isinstance(result, Category)
     assert result.pk == 42
 
@@ -1226,23 +1206,23 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
     # "raise": the fallback is loud - OptimizerError, not a silent planned-relation
     # lazy load, and never a read of the deferred FK column.
     Root = make_root()
-    info = SimpleNamespace(
+    info = make_info(
         context=context("raise"),
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
-        resolver(Root(), _as_strawberry_info(info))
+        resolver(Root(), info)
 
     # "warn": logs and returns the related object via the normal resolve.
     Root = make_root()
-    info = SimpleNamespace(
+    info = make_info(
         context=context("warn"),
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     caplog.set_level("WARNING", logger="django_strawberry_framework")
-    result = resolver(Root(), _as_strawberry_info(info))
+    result = resolver(Root(), info)
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
     assert Root.accessed_relation is True
     assert isinstance(result, SimpleNamespace)
@@ -1298,7 +1278,6 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.
     logged + normal resolve), never a silent per-row read of the deferred FK
     column.
     """
-    from types import SimpleNamespace
 
     from apps.products import services
 
@@ -1333,23 +1312,23 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.
         }
 
     # "raise": the deferred FK column is never read silently; the fallback is loud.
-    info = SimpleNamespace(
+    info = make_info(
         context=context("raise"),
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
-        resolver(root, _as_strawberry_info(info))
+        resolver(root, info)
 
     # "warn": logs the access and resolves the real related object normally.
     root = Item.objects.only("name").get(pk=pk)
-    info = SimpleNamespace(
+    info = make_info(
         context=context("warn"),
         field_name="category",
-        path=_path("allItems", 0, "category"),
+        path=response_path("allItems", 0, "category"),
     )
     caplog.set_level("WARNING", logger="django_strawberry_framework")
-    result = resolver(root, _as_strawberry_info(info))
+    result = resolver(root, info)
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
     assert isinstance(result, Category)
 
@@ -1380,9 +1359,9 @@ def test_fk_attname_is_deferred_and_stub_exceptions():
     assert not _fk_attname_is_deferred(BrokenDeferredIn(), "category_id")
 
     # _visible_related_object(None, ...) -> None
-    # basedpyright: the path under test returns before reading the target type or info;
-    # _visible_related_object types them as type[DjangoType] and a required Info
-    assert _visible_related_object(None, Category, None) is None  # pyright: ignore[reportArgumentType]
+    # basedpyright: the path under test returns before reading the target type;
+    # _visible_related_object types it as type[DjangoType]
+    assert _visible_related_object(None, Category, unread_info()) is None  # pyright: ignore[reportArgumentType]
 
     # _build_fk_id_stub with unreadable attname / uninstantiable related_model
     class BrokenRoot:
@@ -1478,17 +1457,17 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             def profile(self):
                 return cat
 
-        fake_info = SimpleNamespace(path=_path("item", "profile"), context={})
+        fake_info = make_info(path=response_path("item", "profile"), context={})
         fake_root = FakeRevRoot()
 
-        res = rev_resolver(fake_root, _as_strawberry_info(fake_info))
+        res = rev_resolver(fake_root, fake_info)
 
         if inspect.isawaitable(res):
             res = await res
         assert res == cat
 
-        unscoped_info = SimpleNamespace(path=_path("other", "profile"), context={})
-        res_unscoped = rev_resolver(fake_root, _as_strawberry_info(unscoped_info))
+        unscoped_info = make_info(path=response_path("other", "profile"), context={})
+        res_unscoped = rev_resolver(fake_root, unscoped_info)
         if inspect.isawaitable(res_unscoped):
             res_unscoped = await res_unscoped
         assert isinstance(res_unscoped, Category)
@@ -1499,21 +1478,21 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         fwd_resolver = _make_relation_resolver(fwd_field, parent_type=_as_django_type(Item))
         fwd_key = resolver_key(Item, "category", ("item", "category"))
         publish_scoped_relations({fwd_key})
-        fwd_info = SimpleNamespace(path=_path("item", "category"), context={})
+        fwd_info = make_info(path=response_path("item", "category"), context={})
 
         res_fwd = fwd_resolver(
             Item(name="Test Item 1", category_id=cat.pk),
-            _as_strawberry_info(fwd_info),
+            fwd_info,
         )
         if inspect.isawaitable(res_fwd):
             res_fwd = await res_fwd
         assert isinstance(res_fwd, Category)
         assert res_fwd.pk == cat.pk
 
-        fwd_unscoped_info = SimpleNamespace(path=_path("other", "category"), context={})
+        fwd_unscoped_info = make_info(path=response_path("other", "category"), context={})
         res_fwd_unscoped = fwd_resolver(
             Item(name="Test Item 2", category_id=cat.pk),
-            _as_strawberry_info(fwd_unscoped_info),
+            fwd_unscoped_info,
         )
         if inspect.isawaitable(res_fwd_unscoped):
             res_fwd_unscoped = await res_fwd_unscoped
@@ -1530,7 +1509,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             # Scoped
             res_strict_scoped = fwd_resolver(
                 Item(name="Test Item 3", category_id=cat.pk),
-                _as_strawberry_info(fwd_info),
+                fwd_info,
             )
             if inspect.isawaitable(res_strict_scoped):
                 res_strict_scoped = await res_strict_scoped
@@ -1540,7 +1519,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             # Unscoped
             res_strict_unscoped = fwd_resolver(
                 Item(name="Test Item 4", category_id=cat.pk),
-                _as_strawberry_info(fwd_unscoped_info),
+                fwd_unscoped_info,
             )
             if inspect.isawaitable(res_strict_unscoped):
                 res_strict_unscoped = await res_strict_unscoped
@@ -1550,7 +1529,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             # Sync / loaded path under strictness
             loaded_item = Item(name="Test Item Loaded", category_id=cat.pk)
             loaded_item._state.fields_cache["category"] = cat
-            res_sync_scoped = fwd_resolver(loaded_item, _as_strawberry_info(fwd_info))
+            res_sync_scoped = fwd_resolver(loaded_item, fwd_info)
             assert isinstance(res_sync_scoped, Category)
             assert res_sync_scoped.pk == cat.pk
         finally:
@@ -1561,7 +1540,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         try:
             resolvers_mod._visible_related_object = lambda rel, vt, inf: rel
 
-            res_rev_sync = rev_resolver(FakeRevRoot(), _as_strawberry_info(unscoped_info))
+            res_rev_sync = rev_resolver(FakeRevRoot(), unscoped_info)
             if inspect.isawaitable(res_rev_sync):
                 res_rev_sync = await res_rev_sync
             assert isinstance(res_rev_sync, Category)
@@ -1569,7 +1548,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
             res_fwd_sync = fwd_resolver(
                 Item(name="Test Item 5", category_id=cat.pk),
-                _as_strawberry_info(fwd_unscoped_info),
+                fwd_unscoped_info,
             )
             if inspect.isawaitable(res_fwd_sync):
                 res_fwd_sync = await res_fwd_sync
@@ -1580,7 +1559,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             try:
                 res_strict_sync = fwd_resolver(
                     Item(name="Test Item 6", category_id=cat.pk),
-                    _as_strawberry_info(fwd_unscoped_info),
+                    fwd_unscoped_info,
                 )
                 if inspect.isawaitable(res_strict_sync):
                     res_strict_sync = await res_strict_sync
@@ -1593,7 +1572,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
                 res_strict_null = fwd_resolver(
                     FakeItemNull(),
-                    _as_strawberry_info(fwd_unscoped_info),
+                    fwd_unscoped_info,
                 )
                 if inspect.isawaitable(res_strict_null):
                     res_strict_null = await res_strict_null
@@ -1613,7 +1592,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
             _prefetched_objects_cache={"items": [item_obj]},
             items=Item.objects.filter(category=cat),
         )
-        many_res_unscoped = many_resolver(cat_with_cache, _as_strawberry_info(unscoped_info))
+        many_res_unscoped = many_resolver(cat_with_cache, unscoped_info)
         if inspect.isawaitable(many_res_unscoped):
             many_res_unscoped = await many_res_unscoped
         assert isinstance(many_res_unscoped, Sized)
@@ -1621,8 +1600,8 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
         many_scoped_key = resolver_key(Category, "items", ("category", "items"))
         publish_scoped_relations({many_scoped_key})
-        many_scoped_info = SimpleNamespace(path=_path("category", "items"), context={})
-        many_res_scoped = many_resolver(cat_with_cache, _as_strawberry_info(many_scoped_info))
+        many_scoped_info = make_info(path=response_path("category", "items"), context={})
+        many_res_scoped = many_resolver(cat_with_cache, many_scoped_info)
         assert isinstance(many_res_scoped, Iterable)
         assert len(list(many_res_scoped)) == 1
     finally:
@@ -1676,13 +1655,13 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
 
         fwd_key = resolver_key(Item, "category", ("item", "category"))
         publish_scoped_relations({fwd_key})
-        fwd_scoped_info = SimpleNamespace(path=_path("item", "category"), context={})
-        res_scoped = fwd_resolver(item, _as_strawberry_info(fwd_scoped_info))
+        fwd_scoped_info = make_info(path=response_path("item", "category"), context={})
+        res_scoped = fwd_resolver(item, fwd_scoped_info)
         assert isinstance(res_scoped, Category)
         assert res_scoped.pk == cat.pk
 
-        fwd_unscoped_info = SimpleNamespace(path=_path("other", "category"), context={})
-        res_unscoped = fwd_resolver(item, _as_strawberry_info(fwd_unscoped_info))
+        fwd_unscoped_info = make_info(path=response_path("other", "category"), context={})
+        res_unscoped = fwd_resolver(item, fwd_unscoped_info)
         assert isinstance(res_unscoped, Category)
         assert res_unscoped.pk == cat.pk
 
@@ -1692,15 +1671,15 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
             _prefetched_objects_cache={"items": [item]},
             items=Item.objects.filter(category=cat),
         )
-        many_unscoped_info = SimpleNamespace(path=_path("other", "items"), context={})
-        res_many_unscoped = many_resolver(cat_with_cache, _as_strawberry_info(many_unscoped_info))
+        many_unscoped_info = make_info(path=response_path("other", "items"), context={})
+        res_many_unscoped = many_resolver(cat_with_cache, many_unscoped_info)
         assert isinstance(res_many_unscoped, Sized)
         assert len(res_many_unscoped) == 1
 
         many_key = resolver_key(Category, "items", ("category", "items"))
         publish_scoped_relations({many_key})
-        many_scoped_info = SimpleNamespace(path=_path("category", "items"), context={})
-        res_many_scoped = many_resolver(cat_with_cache, _as_strawberry_info(many_scoped_info))
+        many_scoped_info = make_info(path=response_path("category", "items"), context={})
+        res_many_scoped = many_resolver(cat_with_cache, many_scoped_info)
         assert isinstance(res_many_scoped, Iterable)
         assert len(list(res_many_scoped)) == 1
 
@@ -1733,9 +1712,9 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
                 def profile(self):
                     return cat
 
-            rev_info = SimpleNamespace(path=_path("item", "profile"), context={})
-            assert rev_resolver(FakeRevRoot(), _as_strawberry_info(rev_info)) == cat
-            related = fwd_resolver(item, _as_strawberry_info(fwd_scoped_info))
+            rev_info = make_info(path=response_path("item", "profile"), context={})
+            assert rev_resolver(FakeRevRoot(), rev_info) == cat
+            related = fwd_resolver(item, fwd_scoped_info)
             assert isinstance(related, Category)
             assert related.pk == cat.pk
         finally:
@@ -1766,9 +1745,9 @@ def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_
         parent_type=_as_django_type(Category),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"items": cached})
-    info = SimpleNamespace(path=_path("category", "items"), context={})
+    info = make_info(path=response_path("category", "items"), context={})
     with pytest.raises(ConfigurationError) as excinfo:
-        resolver(root, _as_strawberry_info(info))
+        resolver(root, info)
     message = str(excinfo.value)
     assert message.startswith("The prefetch cache for 'items' held a _ProjectQuerySet ")
     assert "cannot be sealed into a framework-owned execution queryset" in message

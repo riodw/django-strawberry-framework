@@ -1349,9 +1349,10 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # py
         The count-selection inspection sits in the ``_consume_window`` argument
         list, so it runs only AFTER the guard and AFTER the selected-fields
         prime below - a malformed pagination request answers with the guard's
-        ``GraphQLError`` without ``info`` ever being read
-        (``test_first_and_last_guard_on_generated_subclass`` passes a minimal
-        ``info``), and the bare shape short-circuits it away entirely. The
+        ``GraphQLError`` having read only the schema config off ``info`` (the
+        ``relay_max_results`` clamp runs first;
+        ``test_first_and_last_guard_on_generated_subclass``), and the bare shape
+        short-circuits it away entirely. The
         window branch then runs BEFORE the count work, so the
         ``_WindowedConnectionRows`` marker - which is NOT a queryset - is treated
         as an annotated optimized source: ``totalCount`` is read from
@@ -1384,7 +1385,7 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):  # py
         # crashing ``convert_selections`` via the cached property; priming the
         # cache once here routes every later read through the package's safe
         # adapter. Runs AFTER the guard so a ``first`` + ``last`` error still
-        # short-circuits before ``info`` is touched
+        # short-circuits before ``info``'s selections are touched
         # (``test_first_and_last_guard_on_generated_subclass``).
         prime_selected_fields(info)
         return _consume_window(

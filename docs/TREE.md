@@ -467,6 +467,7 @@ Source: `tests/`
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
 ├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _idioms.py                    # Shared test idioms written so the type checker can follow them.
+├── _info.py                      # Real Strawberry ``Info`` objects for tests that call a resolver-side entry point directly.
 ├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
@@ -490,6 +491,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Repo-tooling tests for the DRY review plan, audit, and check CLI.
 ├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
+├── test_info.py                  # Smoke tests proving the shared ``tests/_info.py`` builders hand out what they promise.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
 ├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
@@ -726,6 +728,7 @@ Source: `tests/ (+ planned card paths)`
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
 ├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _idioms.py                    # Shared test idioms written so the type checker can follow them.
+├── _info.py                      # Real Strawberry ``Info`` objects for tests that call a resolver-side entry point directly.
 ├── _relation_fixtures.py         # Shared TEST-ONLY composite-primary-key relation fixture models.
 ├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
@@ -749,6 +752,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Repo-tooling tests for the DRY review plan, audit, and check CLI.
 ├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
+├── test_info.py                  # Smoke tests proving the shared ``tests/_info.py`` builders hand out what they promise.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
 ├── test_keyset_connection.py     # Package-side keyset connection tests for class-cached cursor state, defensive window fallbacks, order-state derivation, and nested-planner helpers.
 ├── test_lateral_pg_parity.py     # Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.

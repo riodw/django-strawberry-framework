@@ -99,6 +99,7 @@ from django_strawberry_framework.registry import (
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 from django_strawberry_framework.utils.sessions import connection_actor_state
+from tests._info import make_info, unread_info
 from tests.auth._helpers import _drain_until, _session_request
 
 if TYPE_CHECKING:
@@ -143,13 +144,6 @@ _app_label_counter = itertools.count(1)
 def _unique_app_label() -> str:
     """Return a unique ``app_label`` per call to avoid Django's re-register warning."""
     return f"test_auth_mutations__{next(_app_label_counter)}"
-
-
-def _unread_info() -> strawberry.Info[object, object]:
-    """The info a decode path under test never reads."""
-    # basedpyright: the path under test never reads info; the model and register decode steps
-    # type the parameter as a required Info
-    return None  # pyright: ignore[reportReturnType]
 
 
 def _declared_holder(surface: str) -> auth_mutations._SealedAuthHolderMeta:
@@ -1363,7 +1357,7 @@ def test_exclusion_seam_captures_password_and_preserves_the_provided_marker():
     decoded = _model_decode_step(
         User,
         data,
-        info=_unread_info(),
+        info=unread_info(),
         instance=None,
         specs=specs,
         model_fields=model_fields,
@@ -1399,7 +1393,7 @@ def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple():
     decoded = _model_decode_step(
         User,
         ProbeInput(username="plain"),
-        info=_unread_info(),
+        info=unread_info(),
         instance=None,
         specs=specs,
         model_fields=model_fields,
@@ -1444,7 +1438,7 @@ def test_register_with_explicit_none_password_returns_null_field_error():
     data = _RegisterInput(username="testuser", password=None)
     # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
     # _register_decode_step types the parameter as type[DjangoMutation]
-    errors = _register_decode_step(fake_mutation, data, info=_unread_info(), instance=None)  # pyright: ignore[reportArgumentType]
+    errors = _register_decode_step(fake_mutation, data, info=unread_info(), instance=None)  # pyright: ignore[reportArgumentType]
     assert isinstance(errors, list)
     assert len(errors) == 1
     assert errors[0].field == "password"
@@ -1509,7 +1503,7 @@ def test_register_decode_step_with_unset_password_returns_none_password():
         # _register_decode_step types the parameter as type[DjangoMutation]
         fake_mutation,  # pyright: ignore[reportArgumentType]
         data,
-        info=_unread_info(),
+        info=unread_info(),
         instance=None,
     )
     assert isinstance(user, User)
@@ -1890,18 +1884,6 @@ class _StubContext:
         self.request = request
 
 
-class _StubInfo:
-    def __init__(self, request: object):
-        self.context = _StubContext(request)
-
-
-def _stub_info(request: object) -> strawberry.Info[object, object]:
-    """Hand a duck-typed info carrying ``request`` to an auth body that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the auth
-    # resolve bodies type info as a concrete Strawberry Info
-    return _StubInfo(request)  # pyright: ignore[reportReturnType]
-
-
 @override_settings(AUTHENTICATION_BACKENDS=[f"{_BACKEND_MODULE}._CountingModelBackend"])
 @pytest.mark.django_db
 def test_websocket_login_is_rejected_before_authenticate_is_called():
@@ -1914,7 +1896,7 @@ def test_websocket_login_is_rejected_before_authenticate_is_called():
     with pytest.raises(ConfigurationError, match="WebSocket"):
         auth_mutations._login_resolve_body(
             holder,
-            _stub_info(adapter),
+            make_info(context=_StubContext(adapter)),
             username="staff_1",
             password=TEST_USER_PASSWORD,
         )
@@ -2167,7 +2149,7 @@ def test_sync_channels_http_bridge_establishes_and_persists_the_session():
     adapter = _channels_adapter()
     payload = auth_mutations._login_resolve_body(
         holder,
-        _stub_info(adapter),
+        make_info(context=_StubContext(adapter)),
         username="staff_1",
         password=TEST_USER_PASSWORD,
     )
@@ -2300,7 +2282,7 @@ async def test_async_channels_http_wrong_password_is_failed_login_envelope_sessi
     adapter = _channels_adapter()
     payload = await auth_mutations._login_resolve_body_async(
         holder,
-        _stub_info(adapter),
+        make_info(context=_StubContext(adapter)),
         username="staff_1",
         password="not-the-password",
     )
@@ -2610,7 +2592,7 @@ def test_websocket_signed_cookie_logout_rejected_before_any_mutation():
     store = _FlushRecordingStore()
     adapter = _channels_adapter("websocket", store=store, user=user)
     with pytest.raises(ConfigurationError, match="signed-cookie WebSocket"):
-        auth_mutations._logout_resolve_body(holder, _stub_info(adapter))
+        auth_mutations._logout_resolve_body(holder, make_info(context=_StubContext(adapter)))
     assert store.flush_calls == 0  # no mutation reached
     assert adapter.scope["user"] is user  # actor unchanged
 
@@ -2637,7 +2619,7 @@ def test_sync_channels_http_logout_bridge_tears_down_the_session():
     store.save()
     key = store.session_key
     adapter = _channels_adapter(store=store, user=user)
-    payload = auth_mutations._logout_resolve_body(holder, _stub_info(adapter))
+    payload = auth_mutations._logout_resolve_body(holder, make_info(context=_StubContext(adapter)))
     assert isinstance(payload, _LogoutPayload)
     assert payload.ok is True
     assert payload.errors == []
@@ -2914,7 +2896,7 @@ async def test_logout_racing_a_websocket_login_on_one_scope_cannot_revive_it():
     login_task = asyncio.create_task(
         auth_mutations._login_resolve_body_async(
             login_holder,
-            _stub_info(adapter),
+            make_info(context=_StubContext(adapter)),
             username="staff_1",
             password=TEST_USER_PASSWORD,
         ),

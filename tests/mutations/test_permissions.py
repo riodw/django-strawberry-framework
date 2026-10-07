@@ -52,6 +52,7 @@ from django_strawberry_framework.mutations.permissions import (
 from django_strawberry_framework.mutations.sets import _ValidatedMutationMeta
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
+from tests._info import make_info
 
 
 @pytest.fixture(autouse=True)
@@ -62,22 +63,13 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
 
 
-def _as_strawberry_info(stand_in: object) -> strawberry.Info[object, object]:
-    """Hand a duck-typed info to a permission entry point that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
-    # permission entry points type info as a concrete Strawberry Info
-    return stand_in  # pyright: ignore[reportReturnType]
-
-
 def _info_for(user: object) -> strawberry.Info[object, object]:
     """Build a stub ``info`` whose ``context.request.user`` is ``user``.
 
     Matches the ``info.context.request`` shape ``request_from_info`` resolves -
     the canonical Strawberry-Django context the read-side permission pipeline uses.
     """
-    return _as_strawberry_info(
-        SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace(user=user))),
-    )
+    return make_info(context=SimpleNamespace(request=SimpleNamespace(user=user)))
 
 
 def _create_item_mutation() -> type:
@@ -502,7 +494,7 @@ def test_request_without_user_attribute_is_denied():
     branch is unreachable from a live ``/graphql/`` request and is earned here.
     """
     mutation = _create_item_mutation()
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=SimpleNamespace())))
+    info = make_info(context=SimpleNamespace(request=SimpleNamespace()))
     assert DjangoModelPermission().has_permission(info, mutation, "create", data=None) is False
 
 
@@ -569,7 +561,7 @@ def test_run_permission_classes_short_circuits_on_first_denial():
         # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
         # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
         FakeMutation(),  # pyright: ignore[reportArgumentType]
-        info=_as_strawberry_info(SimpleNamespace()),
+        info=make_info(),
         operation="create",
         data=None,
         instance=None,
@@ -661,7 +653,7 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
             # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
             # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
             ListSubstrateMutation(),  # pyright: ignore[reportArgumentType]
-            info=_as_strawberry_info(SimpleNamespace()),
+            info=make_info(),
             operation="create",
             data=None,
             instance=None,
@@ -685,7 +677,7 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
             # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
             # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
             TupleSubstrateMutation(),  # pyright: ignore[reportArgumentType]
-            info=_as_strawberry_info(SimpleNamespace()),
+            info=make_info(),
             operation="create",
             data=None,
             instance=None,

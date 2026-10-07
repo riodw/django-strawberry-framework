@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 12 done, 15 to do. Ignore comments: 1374 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 13 done, 14 to do. Ignore comments: 1339 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -24,22 +24,22 @@ Progress: 12 done, 15 to do. Ignore comments: 1374 lines (1897 at the start of 0
 
 ## Done
 
-- [x] 1. `reportExplicitAny` on for the package, the example project and scripts (`d7e5c094`, `58e1edc4`, `b2fedab4`)
-- [x] 2. tests/ passes `all` mode in both passes; scope is every Python file (`3ce87d47`, `1932d541`)
-- [x] 3. Package annotations state their run-time contract (`e4efc93e`..`e19049cc`)
-- [x] 4. Resolvers declare `graphql_type=` and return honest model rows (94 ignores, `3f86c665`)
-- [x] 5. `definition_raises`, `module_binding`, direct module patching, `blocked_modules` (239 ignores, `3f86c665`)
+- [x] 1. `reportExplicitAny` on for the package, the example project and scripts
+- [x] 2. tests/ passes `all` mode in both passes; scope is every Python file
+- [x] 3. Package annotations state their run-time contract
+- [x] 4. Resolvers declare `graphql_type=` and return honest model rows (94 ignores)
+- [x] 5. `definition_raises`, `module_binding`, direct module patching, `blocked_modules` (239 ignores)
 - [x] 6. Walker hands `get_queryset` a real `strawberry.Info` on the prefetch path; bare `Info` in place of
-  `Info[Any, Any]` (4 ignores, `d322f477`)
-- [x] 18. `FilterSet.__init__` overrides spell out their parameters instead of `*args, **kwargs` (10 ignores,
-  `612423f8`)
-- [x] 25. `_CrLampKiosk` renamed `CrLampKiosk`, clearing its `reportUnusedClass` (1 ignore, `612423f8`)
-- [x] 22. The queryset-state check accepts only a tuple `_fields`, as Django stores it (`f2f18ba6`)
+  `Info[Any, Any]` (4 ignores)
+- [x] 18. `FilterSet.__init__` overrides spell out their parameters instead of `*args, **kwargs` (10 ignores)
+- [x] 25. `_CrLampKiosk` renamed `CrLampKiosk`, clearing its `reportUnusedClass` (1 ignore)
+- [x] 22. The queryset-state check accepts only a tuple `_fields`, as Django stores it
 - [x] 14. `utils/_queryset_private.py` reads and writes Django's private QuerySet attributes; 156 lines to 35
-  (`f2f18ba6`)
-- [x] 15. Real `User` / `AnonymousUser` objects instead of stand-in users (39 ignores, `d7a0e8d8`)
+- [x] 15. Real `User` / `AnonymousUser` objects instead of stand-in users (39 ignores)
 - [x] 16. `tests/_idioms.py::relay_hooks` / `async_relay_hooks` read the Relay methods the finalizer installs (26
   ignores; one kept, below)
+- [x] 17. `tests/_info.py` builds real Strawberry `Info` objects (`make_info`, `response_path`) and `unread_info()`,
+  a real `Info` that fails on any read (35 ignores: the 22 `Info` stand-ins and 13 other stand-ins)
 
 ## To do: rules still off
 
@@ -62,13 +62,12 @@ Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessa
 
 ## To do: ignore refactors (from the 2026-10-06 survey)
 
-- [ ] 17. `tests/_info.py` that builds real Strawberry `Info` objects: 22
 - [ ] 19. Precise return types on `DjangoListField` / `DjangoConnectionField` / `DjangoNodeField` /
   `DjangoNodesField`: 4. Run the public-types check first
 - [ ] 20. Real `ExecutionContext` / `DjangoTypeDefinition` objects instead of stand-ins: 36, case by case
-- [ ] 21. Not yet surveyed: other stand-ins (181) and the uncategorized rest (420, of which 153 are in the package)
-- [ ] 26. With item 17 landed, drop "test stubs" from `utils/typing.py::schema_config_from_info`'s docstring and its
-  fallback for them
+- [ ] 21. Not yet surveyed: other stand-ins (168) and the uncategorized rest (420, of which 153 are in the package)
+- [ ] 26. Drop "and test stubs" from `utils/typing.py::schema_config_from_info`'s docstring. Keep the
+  `info.schema.config` fallback: a real Strawberry `Info` takes it (its `schema` is the Strawberry `Schema`)
 - [ ] 27. Old resolver spelling in two archived specs: `docs/SPECS/spec-020-list_field-0_0_7.md`
   (`all_library_branches`) and `docs/SPECS/spec-023-multi_db-0_0_7.md` (`books_on_shard_b`, `all_books`)
 
@@ -96,7 +95,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1374 (1403 rule hits) in 176 files: tests 1132, package 184, examples 56,
+Lines carrying `# pyright: ignore[...]`: 1339 (1368 rule hits) in 175 files: tests 1097, package 184, examples 56,
 scripts 2.
 
 ### By cause
@@ -104,12 +103,11 @@ scripts 2.
 | Cause | Lines | Plan |
 | --- | --- | --- |
 | Deliberately ill-typed test input (hostile values, forged classes, rejected writes) | 482 | keep |
-| Other stand-in objects in tests | 181 | item 21 |
+| Other stand-in objects in tests | 168 | item 21 |
 | Django private QuerySet attributes (seam 14, `super()._clone()` 2, hostile writes 7, planted shapes 12) | 35 | keep |
 | DRF stubs declare `ModelSerializer.Meta` | 136 | item 23 |
 | Stand-in execution contexts / definitions | 36 | item 20 |
 | Verbatim `__init__` forwards (schema, consumers, ModelForm, ModelSerializer) | 34 | keep |
-| Stand-in `Info` objects | 22 | item 17 |
 | Framework `Meta` read from the class body only | 13 | item 21 |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
 | Field factories assigned in a class body return `Any` | 4 | item 19 |
@@ -119,12 +117,12 @@ scripts 2.
 
 | Rule | Hits | Package | Tests | Examples | Scripts |
 | --- | --- | --- | --- | --- | --- |
-| `reportArgumentType` | 475 | 25 | 445 | 5 | 0 |
+| `reportArgumentType` | 451 | 25 | 421 | 5 | 0 |
 | `reportAttributeAccessIssue` | 291 | 26 | 264 | 1 | 0 |
 | `reportIncompatibleVariableOverride` | 194 | 2 | 169 | 23 | 0 |
 | `reportExplicitAny` | 116 | 76 | 25 | 13 | 2 |
 | `reportIncompatibleMethodOverride` | 76 | 5 | 66 | 5 | 0 |
-| `reportReturnType` | 57 | 0 | 56 | 1 | 0 |
+| `reportReturnType` | 46 | 0 | 45 | 1 | 0 |
 | `reportFunctionMemberAccess` | 25 | 4 | 19 | 2 | 0 |
 | `reportAssignmentType` | 23 | 0 | 20 | 3 | 0 |
 | `reportUnnecessaryIsInstance` | 20 | 20 | 0 | 0 | 0 |
@@ -156,9 +154,9 @@ scripts 2.
 
 | File | Lines |
 | --- | --- |
-| `tests/rest_framework/test_resolvers.py` | 75 |
+| `tests/rest_framework/test_resolvers.py` | 73 |
 | `tests/utils/test_querysets.py` | 71 |
-| `tests/rest_framework/test_sets.py` | 58 |
+| `tests/rest_framework/test_sets.py` | 55 |
 | `tests/rest_framework/test_converter.py` | 48 |
 | `tests/test_resource_policy.py` | 38 |
 | `tests/test_views.py` | 38 |

@@ -100,6 +100,7 @@ from django_strawberry_framework.utils.write_transaction import (
     write_pipeline,
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._info import make_info, unread_info
 
 if TYPE_CHECKING:
     from django_strawberry_framework.mutations.inputs import FieldError
@@ -118,20 +119,6 @@ def _hook_ctx(operation: str = "create", alias: str = "default", instance_pk: ob
         write_alias=alias,
         instance_pk=instance_pk,
     )
-
-
-def _as_strawberry_info(stand_in: object) -> strawberry.Info[object, object]:
-    """Hand a duck-typed info to a resolver internal that takes a Strawberry info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
-    # serializer resolver internals type info as a concrete Strawberry Info
-    return stand_in  # pyright: ignore[reportReturnType]
-
-
-def _unread_info() -> strawberry.Info[object, object]:
-    """The info a resolver path under test never reads."""
-    # basedpyright: the path under test never reads info; the serializer resolver internals type
-    # the parameter as a required Info
-    return None  # pyright: ignore[reportReturnType]
 
 
 def _as_serializer_mutation(stand_in: object) -> type[SerializerMutation]:
@@ -331,7 +318,7 @@ def test_decode_relation_single_raw_pk_hidden_target_is_field_error():
         genre.pk,
         graphql_name="genreId",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert pk is None
     assert error is not None
@@ -347,7 +334,7 @@ def test_decode_relation_single_raw_pk_visible_reduces_to_pk():
         genre.pk,
         graphql_name="genreId",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert pk == genre.pk
@@ -361,7 +348,7 @@ def test_decode_relation_single_uncoercible_raw_pk_is_field_error():
         "not-a-pk",
         graphql_name="genreId",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert pk is None
     assert error is not None
@@ -390,7 +377,7 @@ def test_decode_relation_single_wrong_model_global_id_is_field_error():
         wrong_gid,
         graphql_name="genreId",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert pk is None
     assert error is not None
@@ -412,7 +399,7 @@ def test_decode_relation_multi_collects_visible_then_short_circuits():
         [g1.pk, g2.pk],
         graphql_name="genreIds",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert pks == [g1.pk, g2.pk]
@@ -422,7 +409,7 @@ def test_decode_relation_multi_collects_visible_then_short_circuits():
         [g1.pk, "bad"],
         graphql_name="genreIds",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert pks is None
     assert error is not None
@@ -437,7 +424,7 @@ def test_decode_relation_single_explicit_none_passes_through():
         None,
         graphql_name="genreId",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert pk is None
@@ -451,7 +438,7 @@ def test_decode_relation_multi_explicit_none_passes_through():
         None,
         graphql_name="genreIds",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert pks is None
@@ -465,7 +452,7 @@ def test_decode_relation_multi_empty_list_passes_through_without_query():
         [],
         graphql_name="genreIds",
         related_model=library_models.Genre,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert pks == []
@@ -552,7 +539,7 @@ def test_serializer_save_is_called_exactly_once_and_refetch_uses_returned_object
     mutation_cls = _bind_item_serializer_mutation(SpyItemSerializer)
     request = HttpRequest()
     request.user = User(username="spy")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     provided: dict[str, object] = {"name": "SpyItem", "category": category.pk}
     # The write-pipeline context stands in for the shared skeleton the direct call bypasses.
@@ -582,7 +569,7 @@ def test_save_time_drf_validation_error_uses_recursive_flattener_not_flat_mapper
     mutation_cls = _bind_item_serializer_mutation(DRFRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -613,7 +600,7 @@ def test_save_time_django_validation_error_uses_flat_mapper_not_detail():
     mutation_cls = _bind_item_serializer_mutation(DjangoRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -655,7 +642,7 @@ def test_save_time_django_validation_error_keys_a_source_rename_to_its_input_nam
     mutation_cls = _bind_item_serializer_mutation(RenamedRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -696,7 +683,7 @@ def test_save_time_django_validation_error_keys_a_serializer_only_field_to_its_i
     mutation_cls = _bind_item_serializer_mutation(NoteRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -742,7 +729,7 @@ def test_save_time_django_validation_error_keeps_each_fields_own_column_name():
     mutation_cls = _bind_item_serializer_mutation(ColumnRefRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -776,7 +763,7 @@ def test_save_time_integrity_error_maps_to_all_sentinel_envelope():
     mutation_cls = _bind_item_serializer_mutation(IntegrityRaisingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -821,7 +808,7 @@ def test_save_time_validation_after_partial_write_is_rolled_back():
     mutation_cls = _bind_item_serializer_mutation(PartialWriteSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
     input_cls = mutation_cls._input_class
     assert input_cls is not None
     data = _keyword_constructor(input_cls)(name="NewCat")
@@ -864,7 +851,7 @@ def test_merged_kwargs_injects_partial_true_on_update_never_create():
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     create_kwargs = serializer_resolvers._merged_serializer_kwargs(
         mutation_cls,
@@ -896,7 +883,7 @@ def test_merged_kwargs_sets_framework_request_unconditionally():
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     kwargs = serializer_resolvers._merged_serializer_kwargs(
         mutation_cls,
@@ -959,7 +946,7 @@ def test_merged_kwargs_merges_override_context_keys_keeping_framework_request():
 
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
     kwargs = serializer_resolvers._merged_serializer_kwargs(
         OverridingMutation,
         info,
@@ -1021,7 +1008,7 @@ def test_merged_kwargs_override_returning_partial_is_configuration_error():
 
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
     with pytest.raises(ConfigurationError, match="partial"):
         serializer_resolvers._merged_serializer_kwargs(
             PartialReturningMutation,
@@ -1084,7 +1071,7 @@ def test_merged_kwargs_override_different_request_object_is_configuration_error(
 
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
     with pytest.raises(ConfigurationError, match="request"):
         serializer_resolvers._merged_serializer_kwargs(
             WrongRequestMutation,
@@ -1151,7 +1138,7 @@ def test_merged_kwargs_override_echoing_the_same_request_object_is_tolerated():
 
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
     kwargs = serializer_resolvers._merged_serializer_kwargs(
         EchoingRequestMutation,
         info,
@@ -1170,7 +1157,7 @@ def test_merged_kwargs_bare_httprequest_info_context_fallback():
     bare_request = HttpRequest()
     bare_request.user = User(username="u")
     # `info.context` IS the HttpRequest (no `.request` attribute layer).
-    info = _as_strawberry_info(SimpleNamespace(context=bare_request))
+    info = make_info(context=bare_request)
     kwargs = serializer_resolvers._merged_serializer_kwargs(
         mutation_cls,
         info,
@@ -1236,7 +1223,7 @@ def test_relation_decode_consumes_recorded_strategy_after_strategy_resolver_fail
         gid,
         graphql_name="categoryId",
         related_model=product_models.Category,
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert error is None
     assert pk == category.pk
@@ -1274,7 +1261,7 @@ def test_relation_decode_async_get_queryset_from_sync_raises_sync_misuse():
             genre.pk,
             graphql_name="genreId",
             related_model=library_models.Genre,
-            info=_unread_info(),
+            info=unread_info(),
         )
 
 
@@ -1358,7 +1345,7 @@ async def test_async_entry_rejects_data_rewriting_hook_too():
 
     request = HttpRequest()
     request.user = User(username="async-u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
     # basedpyright: the decoded GlobalID is the relay relation value under test; the _Data input
     # types category_id as strawberry.ID
     data = _Data(name="AsyncRewriteItem", category_id=gid)  # pyright: ignore[reportArgumentType]
@@ -2127,7 +2114,7 @@ def test_injected_data_hook_missing_declared_key_raises():
     with pytest.raises(ConfigurationError, match="EXACTLY the declared injected fields"):
         serializer_resolvers._injected_serializer_data(
             _as_serializer_mutation(fake),
-            info=_unread_info(),
+            info=unread_info(),
             frozen_provided=serializer_resolvers._frozen_hook_view({"code": "X"}),
             hook_context=_hook_ctx(),
         )
@@ -2139,7 +2126,7 @@ def test_injected_data_hook_undeclared_extra_key_raises():
     with pytest.raises(ConfigurationError, match="EXACTLY the declared injected fields"):
         serializer_resolvers._injected_serializer_data(
             _as_serializer_mutation(fake),
-            info=_unread_info(),
+            info=unread_info(),
             frozen_provided=serializer_resolvers._frozen_hook_view({"code": "X"}),
             hook_context=_hook_ctx(),
         )
@@ -2151,7 +2138,7 @@ def test_injected_data_hook_non_mapping_return_is_configuration_error():
     with pytest.raises(ConfigurationError, match="must return a mapping"):
         serializer_resolvers._injected_serializer_data(
             _as_serializer_mutation(fake),
-            info=_unread_info(),
+            info=unread_info(),
             frozen_provided=serializer_resolvers._frozen_hook_view({"code": "X"}),
             hook_context=_hook_ctx(),
         )
@@ -2163,7 +2150,7 @@ def test_injected_data_hook_exact_match_returns_and_cannot_mutate_client_data():
     provided: dict[str, object] = {"code": "X"}
     injected = serializer_resolvers._injected_serializer_data(
         _as_serializer_mutation(fake),
-        info=_unread_info(),
+        info=unread_info(),
         frozen_provided=serializer_resolvers._frozen_hook_view(provided),
         hook_context=_hook_ctx(),
     )
@@ -2201,7 +2188,7 @@ def test_injected_data_hook_cannot_mutate_nested_client_containers():
     provided: dict[str, object] = {"genre_ids": [1, 2], "detail": {"code": "ok"}}
     injected = serializer_resolvers._injected_serializer_data(
         _as_serializer_mutation(NestedMutatingMut),
-        info=_unread_info(),
+        info=unread_info(),
         frozen_provided=serializer_resolvers._frozen_hook_view(provided),
         hook_context=_hook_ctx(),
     )
@@ -2249,7 +2236,7 @@ def test_relation_queryset_scope_pins_unregistered_raw_pk_relation_without_visib
         serializer_resolvers._scope_relation_querysets_to_visibility(
             _as_serializer_mutation(fake),
             serializer,
-            info=_unread_info(),
+            info=unread_info(),
         )
     # Pinned to the write alias; no visibility constraint added (no primary type registered).
     pinned = _related_queryset(field)
@@ -2286,7 +2273,7 @@ def test_relation_queryset_scope_locks_when_pipeline_locks():
         serializer_resolvers._scope_relation_querysets_to_visibility(
             _as_serializer_mutation(fake),
             serializer,
-            info=_unread_info(),
+            info=unread_info(),
         )
     scoped = _related_queryset(serializer.fields["branch"])
     assert scoped.query.select_for_update is True
@@ -2346,7 +2333,7 @@ def test_relation_queryset_scope_covers_injected_relation_specs():
         serializer_resolvers._scope_relation_querysets_to_visibility(
             _as_serializer_mutation(_fake()),
             locked,
-            info=_unread_info(),
+            info=unread_info(),
         )
     scoped = _related_queryset(locked.fields["branch"])
     assert queryset_db(scoped) == "default"
@@ -2357,7 +2344,7 @@ def test_relation_queryset_scope_covers_injected_relation_specs():
         serializer_resolvers._scope_relation_querysets_to_visibility(
             _as_serializer_mutation(_fake()),
             unlocked,
-            info=_unread_info(),
+            info=unread_info(),
         )
     visible_scoped = _related_queryset(unlocked.fields["branch"])
     assert visible in visible_scoped  # visibility-allowed row admitted
@@ -2397,7 +2384,7 @@ def test_relation_queryset_scope_cross_alias_author_queryset_fails_closed():
         serializer_resolvers._scope_relation_querysets_to_visibility(
             _as_serializer_mutation(fake),
             serializer,
-            info=_unread_info(),
+            info=unread_info(),
         )
 
 
@@ -2445,7 +2432,7 @@ def test_relation_queryset_scope_handles_many_related_field():
         serializer_resolvers._scope_relation_querysets_to_visibility(
             _as_serializer_mutation(fake),
             serializer,
-            info=_unread_info(),
+            info=unread_info(),
         )
     assert _related_queryset(_child_relation(field)).query.where
 
@@ -2521,7 +2508,7 @@ def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_insta
         # basedpyright: the test hangs the visibility probe on the request the get_queryset hook
         # reads; HttpRequest declares no such attribute
         request.visibility_city = visibility_city  # pyright: ignore[reportAttributeAccessIssue]
-        info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+        info = make_info(context=SimpleNamespace(request=request))
         serializer = BranchSer()
         # The pipeline context is a ContextVar - set it INSIDE this worker thread.
         with write_pipeline("default", lock=False):
@@ -2692,7 +2679,7 @@ def test_save_kwargs_hook_cannot_mutate_validated_data_by_identity():
     category = product_models.Category.objects.create(name="BlobCat")
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     provided: dict[str, object] = {
         "name": "BlobItem",
@@ -2735,7 +2722,7 @@ def test_save_kwargs_hook_validation_error_maps_to_field_error_envelope():
     category = product_models.Category.objects.create(name="HookErrCat")
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         result = serializer_resolvers._serializer_write_step(
@@ -2837,7 +2824,7 @@ def _reserved_kwarg_mutation(hook: Callable[..., object]):
 def _info_with_request() -> strawberry.Info[object, object]:
     request = HttpRequest()
     request.user = User(username="u")
-    return _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    return make_info(context=SimpleNamespace(request=request))
 
 
 @pytest.mark.django_db
@@ -3612,7 +3599,7 @@ def test_write_step_update_repointing_instance_pk_is_configuration_error():
     mutation_cls = _bind_item_serializer_mutation(RepointingSerializer, operation="update")
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         with pytest.raises(ConfigurationError, match="must write the row that was authorized"):
@@ -3651,7 +3638,7 @@ def test_write_step_create_pk_mutated_after_insert_is_configuration_error():
     mutation_cls = _bind_item_serializer_mutation(PkSwapSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         with pytest.raises(ConfigurationError, match="never observed being INSERTED"):
@@ -3689,7 +3676,7 @@ def test_write_step_create_returning_existing_row_is_configuration_error():
     mutation_cls = _bind_item_serializer_mutation(LaunderingSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         with pytest.raises(ConfigurationError, match="never observed being INSERTED"):
@@ -4135,7 +4122,7 @@ def test_validator_pinning_leaves_a_read_only_base_serializer_field_alone():
     mutation_cls = _bind_item_serializer_mutation(SummarizedItemSerializer)
     request = HttpRequest()
     request.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    info = make_info(context=SimpleNamespace(request=request))
 
     with write_pipeline("default", lock=False):
         assert category is not None
@@ -4375,7 +4362,7 @@ def test_relation_queryset_scope_composes_with_author_queryset():
                 ),
             ),
             single,
-            info=_unread_info(),
+            info=unread_info(),
         )
     single_qs = _related_queryset(single.fields["branch"])
     assert allowed in single_qs  # visible AND author-allowed
@@ -4403,7 +4390,7 @@ def test_relation_queryset_scope_composes_with_author_queryset():
                 ),
             ),
             many,
-            info=_unread_info(),
+            info=unread_info(),
         )
     many_qs = _related_queryset(_child_relation(many.fields["branches"]))
     assert allowed in many_qs
@@ -4447,7 +4434,7 @@ def test_decode_nested_single_recurses_into_child():
     top_cls, specs = _nested_single_input_and_specs()
     child_cls = _nested_child_input_cls(top_cls)
     data = _keyword_constructor(top_cls)(detail=child_cls(code="X"))
-    provided, error = serializer_resolvers._decode_input_object(specs, data, info=_unread_info())
+    provided, error = serializer_resolvers._decode_input_object(specs, data, info=unread_info())
     assert error is None
     assert provided == {"detail": {"code": "X"}}
 
@@ -4456,7 +4443,7 @@ def test_decode_nested_explicit_none_passes_through():
     """An explicit ``null`` nested value passes through unchanged (the serializer's validation decides)."""
     top_cls, specs = _nested_single_input_and_specs()
     data = _keyword_constructor(top_cls)(detail=None)
-    provided, error = serializer_resolvers._decode_input_object(specs, data, info=_unread_info())
+    provided, error = serializer_resolvers._decode_input_object(specs, data, info=unread_info())
     assert error is None
     assert provided == {"detail": None}
 
@@ -4593,7 +4580,7 @@ def test_decode_nested_single_error_short_circuits():
     # A lone surrogate in the nested scalar trips the invalid-Unicode preflight inside the
     # nested decode, so the single-nested branch returns the error (keyed to the full path).
     data = _keyword_constructor(top_cls)(detail=child_cls(code="\ud800"))
-    provided, error = serializer_resolvers._decode_input_object(specs, data, info=_unread_info())
+    provided, error = serializer_resolvers._decode_input_object(specs, data, info=unread_info())
     assert provided == {}
     assert error is not None
     assert error.field == "detail.code"
@@ -4659,7 +4646,7 @@ def _bind_book_genres_mutation(serializer_cls: type[DRFSerializer], *, operation
 def _info() -> strawberry.Info[object, object]:
     request = HttpRequest()
     request.user = User(username="u")
-    return _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+    return make_info(context=SimpleNamespace(request=request))
 
 
 def _genres_serializer(**extra: object):
@@ -5479,7 +5466,7 @@ def test_decode_nested_multi_non_iterable_returns_field_error():
         # _decode_nested types the parameter as InputFieldSpec
         spec,  # pyright: ignore[reportArgumentType]
         12345,
-        info=_unread_info(),
+        info=unread_info(),
         path_prefix="shelves",
     )
     assert result is None
@@ -5537,7 +5524,7 @@ def test_merged_serializer_kwargs_rejects_non_mapping_context(bad_context: objec
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     req = HttpRequest()
     req.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
+    info = make_info(context=SimpleNamespace(request=req))
     hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
 
     class BadContextMutation(mutation_cls):
@@ -5567,7 +5554,7 @@ def test_merged_serializer_kwargs_rejects_unmaterializable_context_mapping():
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     req = HttpRequest()
     req.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
+    info = make_info(context=SimpleNamespace(request=req))
     hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
 
     class ExplodingMapping(Mapping[str, object]):
@@ -5627,7 +5614,7 @@ def test_merged_serializer_kwargs_preserves_custom_context_keys():
 
     req = HttpRequest()
     req.user = User(username="u")
-    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
+    info = make_info(context=SimpleNamespace(request=req))
     hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
 
     kwargs = serializer_resolvers._merged_serializer_kwargs(
@@ -5678,14 +5665,14 @@ def test_serializer_errors_to_field_errors_formats_scalar_integers_and_booleans(
 
 def test_decode_input_object_handles_none_and_invalid_dataclass():
     """_decode_input_object safely handles None and non-dataclass values."""
-    data_none, err_none = serializer_resolvers._decode_input_object([], None, info=_unread_info())
+    data_none, err_none = serializer_resolvers._decode_input_object([], None, info=unread_info())
     assert data_none == {}
     assert err_none is None
 
     data_bad, err_bad = serializer_resolvers._decode_input_object(
         [],
         "invalid_object",
-        info=_unread_info(),
+        info=unread_info(),
     )
     assert data_bad == {}
     assert err_bad is not None
@@ -5766,7 +5753,7 @@ def test_decode_nested_multi_tolerates_none_item_in_list():
 
         req = HttpRequest()
         req.user = User(username="u")
-        info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
+        info = make_info(context=SimpleNamespace(request=req))
 
         input_cls = CreateBook._input_class
         assert input_cls is not None
@@ -5869,7 +5856,7 @@ def test_decode_nested_multi_decodes_items_and_handles_item_error():
     decoded, err = serializer_resolvers._decode_nested(
         spec,
         val,
-        _unread_info(),
+        unread_info(),
         path_prefix="items",
     )
     assert err is None
@@ -5879,7 +5866,7 @@ def test_decode_nested_multi_decodes_items_and_handles_item_error():
     decoded_bad, err_bad = serializer_resolvers._decode_nested(
         spec,
         val_bad,
-        _unread_info(),
+        unread_info(),
         path_prefix="items",
     )
     assert decoded_bad is None
@@ -5914,7 +5901,7 @@ def test_serializer_decode_step_returns_field_errors_on_decode_failure():
     res = serializer_resolvers._serializer_decode_step(
         _as_serializer_mutation(DummyMutation),
         "not_a_dataclass",
-        _unread_info(),
+        unread_info(),
     )
     assert isinstance(res, list)
     assert len(res) == 1

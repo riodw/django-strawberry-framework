@@ -78,6 +78,7 @@ from django_strawberry_framework.rest_framework.sets import (
     _validate_serializer_nested_fields,
 )
 from tests._idioms import definition_raises
+from tests._info import unread_info
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
@@ -2404,12 +2405,9 @@ def test_default_serializer_mutation_instance_hook_methods():
     context = SerializerHookContext(operation="create", write_alias="default", instance_pk=None)
     data = {"name": "test"}
 
-    # basedpyright: the path under test never reads info; the default serializer hooks type the
-    # parameter as a required Info
-    assert instance.get_serializer_kwargs(info=None, data=data, hook_context=context) == {  # pyright: ignore[reportArgumentType]
+    info = unread_info()
+    assert instance.get_serializer_kwargs(info=info, data=data, hook_context=context) == {
         "data": data,
     }
-    # basedpyright: the path under test never reads info; the default serializer hooks type the
-    # parameter as a required Info
-    assert instance.get_serializer_injected_data(info=None, data=data, hook_context=context) == {}  # pyright: ignore[reportArgumentType]
-    assert instance.get_serializer_save_kwargs(info=None, data=data, hook_context=context) == {}  # pyright: ignore[reportArgumentType]
+    assert instance.get_serializer_injected_data(info=info, data=data, hook_context=context) == {}
+    assert instance.get_serializer_save_kwargs(info=info, data=data, hook_context=context) == {}

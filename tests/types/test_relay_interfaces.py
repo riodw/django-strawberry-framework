@@ -43,6 +43,7 @@ from django_strawberry_framework.types.relay import (
 )
 from django_strawberry_framework.utils.querysets import model_for
 from tests._idioms import async_relay_hooks, relay_hooks
+from tests._info import unread_info
 
 
 @pytest.fixture(autouse=True)
@@ -1443,15 +1444,13 @@ def test_resolve_id_default_unit_dict_cache_and_getattr_branches():
     # Dict-cache hit: explicitly seed ``__dict__``.
     inst = Category(id=7, name="x")
     vars(inst)["id"] = 7
-    # basedpyright: the path under test never reads info; _resolve_id_default types the parameter
-    # as a required Info
-    assert _resolve_id_default(CategoryNode, inst, info=None) == "7"  # pyright: ignore[reportArgumentType]
+    assert _resolve_id_default(CategoryNode, inst, info=unread_info()) == "7"
     # Cache-miss fallback to ``getattr``: synthetic root whose ``__dict__``
     # is empty but whose class-level ``id`` attribute resolves the value.
     fake = _build_fake_root(12)
-    # basedpyright: the path under test never reads info, and the synthetic root is the stand-in
-    # row the getattr fallback reads; _resolve_id_default types them as a required Info and a Model
-    assert _resolve_id_default(CategoryNode, fake, info=None) == "12"  # pyright: ignore[reportArgumentType]
+    # basedpyright: the synthetic root is the stand-in row the getattr fallback reads;
+    # _resolve_id_default types it as a Model
+    assert _resolve_id_default(CategoryNode, fake, info=unread_info()) == "12"  # pyright: ignore[reportArgumentType]
 
 
 @pytest.mark.django_db
@@ -1469,9 +1468,7 @@ def test_resolve_node_default_invoked_via_helper():
     assert implements_relay_node(CategoryNode)
     target = Category.objects.first()
     assert target is not None
-    # basedpyright: the path under test never reads info; _resolve_node_default types the parameter
-    # as a required Info
-    result = _resolve_node_default(CategoryNode, info=None, node_id=target.pk)  # pyright: ignore[reportArgumentType]
+    result = _resolve_node_default(CategoryNode, info=unread_info(), node_id=target.pk)
     assert result is not None
     assert isinstance(result, Category)
     assert result.pk == target.pk
@@ -1495,9 +1492,7 @@ def test_resolve_nodes_default_invoked_via_helper():
     global_id = relay.GlobalID(type_name="CategoryNode", node_id=str(target.pk))
     result = _resolve_nodes_default(
         CategoryNode,
-        # basedpyright: the path under test never reads info; _resolve_nodes_default types the
-        # parameter as a required Info
-        info=None,  # pyright: ignore[reportArgumentType]
+        info=unread_info(),
         node_ids=[global_id],
         required=False,
     )
@@ -1609,9 +1604,7 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
     # Sanity: the injected defaults actually fetch by pk through ``get_queryset``.
     target = Category.objects.first()
     assert target is not None
-    # basedpyright: the path under test never reads info; relay.Node.resolve_node types the
-    # parameter as a required Info
-    resolved = CategoryNode.resolve_node(str(target.pk), info=None)  # pyright: ignore[reportArgumentType]
+    resolved = CategoryNode.resolve_node(str(target.pk), info=unread_info())
     assert resolved is not None
     assert isinstance(resolved, Category)
     assert resolved.pk == target.pk

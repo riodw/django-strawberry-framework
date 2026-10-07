@@ -68,8 +68,8 @@ def _isolate_registry() -> Iterator[None]:
     target model. In serial collection that happened to be true, but under ``pytest -n
     auto --dist loadscope`` a sibling module on the same worker can leave the real
     ``apps.products.schema`` types registered, whose ``get_queryset`` reads
-    ``info.context`` - so ``plan_optimizations([_sel("category")], Item)`` would invoke
-    ``CategoryType.get_queryset(qs, None)`` and raise. Clearing before each test makes
+    ``info.context`` - so ``plan_optimizations([_sel("category")], Item)`` would plan a
+    relation to that hook with no resolve info and raise. Clearing before each test makes
     every case deterministic regardless of order (and co-clears the node-field ledger).
     """
     registry.clear()
@@ -104,6 +104,28 @@ def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
     # basedpyright: a stand-in info carrying only the slots the code under test reads; the
     # planner entry points type info as graphql-core's GraphQLResolveInfo
     return stand_in  # pyright: ignore[reportReturnType]
+
+
+def _operation_resolve_info() -> GraphQLResolveInfo:
+    """Return the graphql-core resolve info of a real executing Strawberry operation.
+
+    A relation whose target declares ``get_queryset`` hands that hook the
+    resolver's ``strawberry.Info``, rebuilt from this raw info's schema and field
+    (``walker.py::_hook_info``), so a walk reaching such a hook needs the real
+    object rather than a stand-in.
+    """
+    captured: list[GraphQLResolveInfo] = []
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def probe(self, info: strawberry.Info) -> int:
+            captured.append(info._raw_info)
+            return 0
+
+    assert strawberry.Schema(query=Query).execute_sync("{ probe }").errors is None
+    (info,) = captured
+    return info
 
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
@@ -1188,6 +1210,7 @@ def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("id")])],
             Item,
+            info=_operation_resolve_info(),
         )
     finally:
         registry.clear()
@@ -1405,7 +1428,7 @@ def test_has_custom_id_resolver_fallback_matches_definition_path():
 def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     """O6: a custom target ``get_queryset`` downgrades forward FK joins to ``Prefetch``."""
     registry.clear()
-    info = _as_resolve_info(SimpleNamespace(field_name="allItems"))
+    info = _operation_resolve_info()
     calls = {}
 
     @_as_django_type
@@ -1442,7 +1465,10 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     assert prefetch.queryset is not None
     assert prefetch.queryset.model is Category
     assert calls["queryset"].model is Category
-    assert calls["info"] is info
+    hook_info = calls["info"]
+    assert isinstance(hook_info, strawberry.Info)
+    assert hook_info._raw_info is info
+    assert hook_info.field_name == "probe"
 
 
 def test_plan_keeps_select_related_when_target_uses_default_get_queryset():
@@ -1490,7 +1516,11 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
 
     registry.register(Item, FilteredItemType)
     try:
-        plan = plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+        plan = plan_optimizations(
+            [_sel("items", selections=[_sel("name")])],
+            Category,
+            info=_operation_resolve_info(),
+        )
     finally:
         registry.clear()
 
@@ -1532,7 +1562,11 @@ def test_plan_refuses_sliced_hook_result_for_plain_list_relation():
     registry.register(Item, SlicedItemType)
     try:
         with pytest.raises(ConfigurationError) as excinfo:
-            plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+            plan_optimizations(
+                [_sel("items", selections=[_sel("name")])],
+                Category,
+                info=_operation_resolve_info(),
+            )
     finally:
         registry.clear()
 
@@ -1563,18 +1597,47 @@ def test_connection_child_seam_still_admits_a_sliced_hook_result():
             return queryset.order_by("pk")[:1]
 
     field = FieldMeta.from_django_field(Category._meta.get_field("items"))
+    info = _operation_resolve_info()
     admitted = _build_connection_child_queryset(
         field,
         SlicedItemType,
-        None,
+        info,
         True,
         target_model=Item,
     )
     assert admitted.query.is_sliced
     assert unwindowable_child_queryset_reason(admitted) is not None
     with pytest.raises(ConfigurationError) as excinfo:
-        _build_child_queryset(field, SlicedItemType, None, True, target_model=Item)
+        _build_child_queryset(field, SlicedItemType, info, True, target_model=Item)
     assert "returned a sliced queryset (rows 0:1)" in str(excinfo.value)
+
+
+def test_child_hook_without_resolve_info_fails_loudly():
+    """A walk with no resolve info never calls a target ``get_queryset`` with ``None``.
+
+    The hook is called with ``strawberry.Info`` on every surface; a direct caller
+    planning outside any operation has none to hand it, so the child builder
+    names the hook instead of calling it.
+    """
+    calls: list[object] = []
+
+    @_as_django_type
+    class HookedItemType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset: QuerySet[Item], info: object):
+            calls.append(info)
+            return queryset
+
+    field = FieldMeta.from_django_field(Category._meta.get_field("items"))
+    with pytest.raises(OptimizerError, match=r"^HookedItemType\.get_queryset runs under an"):
+        _build_child_queryset(field, HookedItemType, None, True, target_model=Item)
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -1686,6 +1749,7 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
             Category,
+            info=_operation_resolve_info(),
         )
     finally:
         registry.clear()
@@ -1958,15 +2022,17 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
         ItemType,
         optimizer_hints={"category": OptimizerHint.select_related()},
     )
+    info = _operation_resolve_info()
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
             Item,
+            info=info,
         )
     finally:
         registry.clear()
 
-    assert calls == [None]
+    assert [hook_info._raw_info for hook_info in calls] == [info]
     assert plan.select_related == ()
     assert plan.cacheable is False
     assert plan.only_fields == ("category_id",)
@@ -4857,7 +4923,7 @@ def test_visibility_target_window_flips_cacheable_false():
                 ),
             ],
             Genre,
-            info=_fake_info(),
+            info=_operation_resolve_info(),
             source_type=GenreType,
         )
         assert plan.cacheable is False
@@ -4908,7 +4974,7 @@ def test_distinct_child_queryset_left_unplanned_for_correct_total_count():
                 ),
             ],
             Genre,
-            info=_fake_info(),
+            info=_operation_resolve_info(),
             source_type=GenreType,
         )
         # Distinct target -> per-parent fallback: no window prefetch, no resolver key.
@@ -4982,7 +5048,7 @@ def test_distinct_fallback_does_not_leak_child_resolver_keys_into_parent():
                 ),
             ],
             genre_model,
-            info=_fake_info(),
+            info=_operation_resolve_info(),
             source_type=genre_type,
         )
         # Falls back per-parent: no window prefetch and NO child metadata absorbed.
@@ -5875,7 +5941,7 @@ def test_connection_custom_get_queryset_builds_base_child_queryset_once():
                 ),
             ],
             Genre,
-            info=_fake_info(),
+            info=_operation_resolve_info(),
             source_type=GenreType,
         )
         assert calls == 1
@@ -6080,7 +6146,7 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(
                 ),
             ],
             Genre,
-            info=_fake_info(),
+            info=_operation_resolve_info(),
             source_type=GenreType,
         )
         assert not any(
@@ -6144,7 +6210,7 @@ def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name
                 ),
             ],
             Genre,
-            info=_fake_info(),
+            info=_operation_resolve_info(),
             source_type=GenreType,
         )
         windows = [

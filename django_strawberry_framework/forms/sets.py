@@ -1138,13 +1138,11 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     if TYPE_CHECKING:
 
         @classmethod
-        # basedpyright: invariant Info: only Any admits an override typing its own context
-        def resolve_sync(cls, info: Info[Any, Any], *, data: object) -> object:  # pyright: ignore[reportExplicitAny]
+        def resolve_sync(cls, info: Info, *, data: object) -> object:
             """Dispatch the mutation synchronously."""
 
         @classmethod
-        # basedpyright: invariant Info: only Any admits an override typing its own context
-        def resolve_async(cls, info: Info[Any, Any], *, data: object) -> object:  # pyright: ignore[reportExplicitAny]
+        def resolve_async(cls, info: Info, *, data: object) -> object:
             """Dispatch the mutation asynchronously."""
 
     else:

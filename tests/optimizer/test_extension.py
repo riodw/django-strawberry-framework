@@ -5261,8 +5261,8 @@ def test_cascading_target_downgrades_join_to_prefetch():
 
     LOAD-BEARING (spec-034 Decision 12 dependency to protect): the assertion that
     the prefetch CHILD queryset narrows by the LIVE request user, not merely that
-    a ``Prefetch`` is planned. ``walker.py::_build_child_queryset`` threads the
-    SAME ``info`` from the root walk into the target hook; a future refactor that
+    a ``Prefetch`` is planned. ``walker.py::_build_child_queryset`` hands the
+    target hook an ``Info`` over the root walk's own resolve info; a future refactor that
     dropped ``info`` would still plan a ``Prefetch`` while silently breaking
     cascade transitivity (the nested hook would lose ``info.context.user``). The
     cascading hook here both (a) cascades via ``apply_cascade_permissions`` AND
@@ -6073,3 +6073,86 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
     assert isinstance(published, dict)
     assert published[DST_OPTIMIZER_PLAN] is not None
     assert seen["after"] is None
+
+
+# =============================================================================
+# The ``info`` a consumer ``get_queryset`` receives on every optimizer path.
+# =============================================================================
+
+
+class _ConsumerInfo(strawberry.Info):
+    """A schema ``info_class``: Strawberry hands every resolver this subclass."""
+
+
+#: ``shape -> (query, root field the hook's Info describes)``. The root list hook
+#: runs in the list field's resolver; the two nested hooks run in the plan walk,
+#: which the root field's resolver owns.
+_HOOK_INFO_QUERIES = {
+    "root_list": ("{ items { name } }", "items"),
+    "nested_list_prefetch": ("{ categories { items { name } } }", "categories"),
+    "nested_connection_prefetch": (
+        "{ categories { itemsConnection(first: 1) { edges { node { name } } } } }",
+        "categories",
+    ),
+}
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("shape", sorted(_HOOK_INFO_QUERIES))
+@pytest.mark.parametrize("execution", ["sync", "async"])
+def test_get_queryset_receives_strawberry_info_on_every_optimizer_path(shape: str, execution: str):
+    """A consumer hook gets the schema's ``info_class`` instance on the root and plan-walk paths.
+
+    The plan walk reads graphql-core's raw resolve info; the hook is typed and
+    documented against ``strawberry.Info``, so the walk hands it the ``Info`` of
+    the resolver that owns the plan: the schema's ``info_class`` over the same raw
+    info, describing that one field.
+    """
+    services.seed_data(1)
+    seen: list[object] = []
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        @override
+        def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info) -> QuerySet[Item]:
+            seen.append(info)
+            return queryset
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+            relation_shapes = {"items": "both"}
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        items: list[ItemType] = DjangoListField(ItemType)
+        categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    optimizer = DjangoOptimizerExtension()
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(info_class=_ConsumerInfo),
+        extensions=[lambda: optimizer],
+    )
+    query, root_field = _HOOK_INFO_QUERIES[shape]
+    context = SimpleNamespace()
+    if execution == "sync":
+        result = schema.execute_sync(query, context_value=context)
+    else:
+        result = asyncio.run(schema.execute(query, context_value=context))
+    assert result.errors is None, result.errors
+    assert len(seen) == 1
+    (info,) = seen
+    assert type(info) is _ConsumerInfo
+    assert info.context is context
+    assert info.field_name == root_field
+    assert info.python_name == root_field

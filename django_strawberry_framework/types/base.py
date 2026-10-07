@@ -901,8 +901,8 @@ class DjangoType:
         # basedpyright: consumer-overridden hook; an override narrows the queryset's model,
         # which a parameter typed narrower than Any rejects (reportIncompatibleMethodOverride)
         queryset: models.QuerySet[Any, Any],  # pyright: ignore[reportExplicitAny]
-        # basedpyright: an override annotates ``info: Info[...]``; object rejects that narrowing
-        # and Strawberry's Info is invariant, so no parametrization admits every override
+        # basedpyright: an override annotates ``info: strawberry.Info``, which object rejects; the
+        # shared visibility runners also serve public helpers taking any info, which Info rejects
         info: Any,  # pyright: ignore[reportExplicitAny]  # noqa: ARG003
         # basedpyright: an override returns ``super().get_queryset(...)`` as its own model's
         # queryset, which a concrete return rejects and a TypeVar return forbids non-generically
@@ -915,6 +915,9 @@ class DjangoType:
         ``Prefetch`` so visibility filters apply across joins. The package
         calls it as ``get_queryset(queryset, info)`` and passes nothing
         else, so an override declares exactly those two parameters.
+        ``info`` is the schema's ``strawberry.Info`` for the resolver that
+        runs the hook; on the optimizer's ``Prefetch`` path that is the
+        resolver whose plan reaches this type.
         """
         return queryset
 

@@ -417,4 +417,8 @@ class OptimizerError(DjangoStrawberryFrameworkError):
           model, inner and outer resolve to different database aliases, or the
           outer queryset carries a combinator (union / intersection /
           difference) that a reserved existence alias cannot attach to.
+        - Hooked relation without resolve info
+          (``optimizer/walker.py::_hook_info``): a direct walk planned with no
+          operation's resolve info reaches a relation whose target declares
+          ``get_queryset``, which receives ``strawberry.Info`` and never ``None``.
     """

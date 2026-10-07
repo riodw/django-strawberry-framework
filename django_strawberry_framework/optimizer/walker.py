@@ -9,9 +9,10 @@ from django.db import models
 from django.db.models import Prefetch
 from graphql import OperationType
 from strawberry import relay
+from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.utils.str_converters import to_camel_case
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, OptimizerError
 from ..registry import register_subsystem_clear, registry
 from ..utils.connections import relay_max_results_from_info
 from ..utils.querysets import (
@@ -62,7 +63,9 @@ if TYPE_CHECKING:
 
     from django.db.models import QuerySet
     from graphql.type.definition import GraphQLResolveInfo
+    from strawberry.schema.config import StrawberryConfig
     from strawberry.schema.name_converter import NameConverter
+    from strawberry.types import Info
     from strawberry.types.field import StrawberryField
     from strawberry.types.nodes import Arguments
 
@@ -545,6 +548,42 @@ def _resolve_optimizer_hints(definition: DjangoTypeDefinition | None) -> dict[st
     return definition.optimizer_hints or {}
 
 
+def _hook_info(info: GraphQLResolveInfo | None, target_type: type[DjangoType]) -> Info:
+    """Return the Strawberry ``Info`` the resolver that owns ``info`` was handed.
+
+    The plan walk reads graphql-core's ``GraphQLResolveInfo`` (the schema
+    middleware hands the extension nothing else, and the connection and mutation
+    entries unwrap to it), but a consumer ``get_queryset`` is called with
+    ``strawberry.Info`` on every resolver surface. This rebuilds the object
+    Strawberry built for the resolver whose plan is being walked, the way
+    Strawberry's own resolver wrapper does: the schema's ``info_class`` over the
+    raw info and the ``StrawberryField`` the executable schema filed under its
+    definition backref for that field. The hook therefore reads one coherent
+    field (``field_name``, ``python_name``, ``return_type``,
+    ``selected_fields``) and the same ``context`` / ``schema`` it reads on the
+    root path.
+
+    A walk with no resolve info is a direct caller planning outside any
+    operation; the hook has no ``Info`` to receive there, so a relation whose
+    target declares one fails loudly instead of handing it ``None``.
+    """
+    if info is None:
+        raise OptimizerError(
+            f"{target_type.__name__}.get_queryset runs under an executing operation; a "
+            f"relation to it cannot be planned without that operation's resolve info.",
+        )
+    strawberry_field = cast(
+        "StrawberryField",
+        info.parent_type.fields[info.field_name].extensions[
+            GraphQLCoreConverter.DEFINITION_BACKREF
+        ],
+    )
+    # A field carrying Strawberry's definition backref belongs to a schema
+    # Strawberry built, and that schema files itself on the graphql-core schema.
+    config = cast("StrawberryConfig", schema_config_from_info(info))
+    return config.info_class(_raw_info=info, _field=strawberry_field)
+
+
 def _build_child_queryset(
     field: FieldMeta,
     target_type: type[DjangoType] | None,
@@ -575,7 +614,9 @@ def _build_child_queryset(
     see; with it, both seals of this visibility call validate against the
     model the relation was resolved through.
 
-    The custom ``get_queryset`` visibility hook runs through the shared
+    The custom ``get_queryset`` visibility hook receives the Strawberry ``Info``
+    of the resolver whose plan is walked (``_hook_info``), never the walk's raw
+    graphql-core info, and runs through the shared
     ``utils/querysets.py::apply_type_visibility_sync`` so
     plan-time prefetch visibility uses the SAME sync routing the resolver
     surfaces do: an async-only related ``get_queryset`` surfaces a clean
@@ -637,11 +678,12 @@ def _build_child_queryset(
         # same rule in ``utils/querysets.py::_sealed_prefetch_related_lookups``, which
         # the generated one never passes through: the plan applies it after the
         # parent's own seal has run.
+        # ``has_custom_qs`` is True only for a resolved target type.
+        hook_type = cast("type[DjangoType]", target_type)
         queryset = apply_type_visibility_sync(
-            # ``has_custom_qs`` is True only for a resolved target type.
-            cast("type[DjangoType]", target_type),
+            hook_type,
             queryset,
-            info,
+            _hook_info(info, hook_type),
             model=target_model,
             policy=policy,
         )

@@ -408,7 +408,7 @@ class ItemType(DjangoType):
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 ```
 
-The framework calls the hook as `get_queryset(queryset, info)` and passes nothing else, so the override declares exactly those two parameters; `apply_cascade_permissions` returns a queryset of the same model and row type it was given.
+The framework calls the hook as `get_queryset(queryset, info)` and passes nothing else, so the override declares exactly those two parameters; `apply_cascade_permissions` returns a queryset of the same model and row type it was given. `info` is always the schema's `strawberry.Info` (its configured `info_class`) for the resolver running the hook. When the optimizer bakes a nested relation's hook into a `Prefetch`, that resolver is the field whose plan reaches the relation, so `info.field_name` and `info.selected_fields` describe that field, not the nested one.
 
 `apply_cascade_permissions(cls, queryset, info)` (async twin `aapply_cascade_permissions`) cascades this type's visibility across its single-column concrete forward FK and OneToOne edges, dropping parent rows whose targets the target type's own `get_queryset` hides. That is what stops a nested non-null `category { ... }` selection from reaching a row the viewer cannot see, and it adds no round-trips: the `__in` subqueries compile into the caller's single `SELECT`. It fails closed on every boundary that SQL depends on — a recursive graph raises a path-rich `ConfigurationError` (`fields=[]` is the one permitted re-entrant shape), MTI parent links cascade, `GenericForeignKey` and forward `ForeignObject` relations that are not a `ForeignKey` preflight closed. See [`GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 

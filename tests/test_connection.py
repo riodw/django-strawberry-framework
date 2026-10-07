@@ -90,6 +90,10 @@ from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.schema import DjangoSchema
 from django_strawberry_framework.types.relay import SyncMisuseError
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_deferred_filter,
+    set_queryset_hints,
+)
 
 _M = TypeVar("_M", bound=models.Model)
 
@@ -1881,8 +1885,8 @@ def _order_override_untrusted(
     candidate = _DeferredFilterQuerySet(model=Category)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-``bool`` negate, a deferred-filter shape Django never writes
+    set_queryset_deferred_filter(candidate, (1, (), {"name": "A"}))  # pyright: ignore[reportArgumentType]
     return candidate
 
 
@@ -1892,8 +1896,7 @@ def _order_override_in_place_routing(
     queryset: models.QuerySet[Category],
     info: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 
@@ -3436,8 +3439,7 @@ def _filter_override_in_place_routing(
     queryset: models.QuerySet[Category],
     info: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 

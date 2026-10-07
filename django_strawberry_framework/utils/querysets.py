@@ -105,6 +105,13 @@ from django.db.models.query import (
 from django.db.models.sql.where import ExtraWhere, WhereNode
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ._queryset_private import (
+    queryset_db,
+    set_queryset_fields,
+    set_queryset_for_write,
+    set_queryset_prefetch_lookups,
+    set_queryset_sticky_filter,
+)
 from .write_transaction import (
     current_write_pipeline,
     pin_write_queryset,
@@ -2920,7 +2927,7 @@ def _queryset_state_defect(state: Mapping[str, object], cls_name: str) -> tuple[
 
     - ``_db``: ``None`` or an exact ``str`` alias;
     - ``_hints``: ``None`` or an exact ``dict`` with exact-``str`` keys;
-    - ``_fields``: ``None`` or an exact ``tuple`` / ``list`` of exact ``str`` names;
+    - ``_fields``: ``None`` or an exact ``tuple`` of exact ``str`` names;
     - ``_sticky_filter`` / ``_for_write``: ``None`` or an exact ``bool``.
     """
     db = state.get("_db")
@@ -2935,7 +2942,7 @@ def _queryset_state_defect(state: Mapping[str, object], cls_name: str) -> tuple[
                 return ("untrusted", f"{cls_name}._hints has a non-string key")
     fields = state.get("_fields")
     if fields is not None:
-        if not _is_exact_tuple_or_list(fields):
+        if not _is_exact_tuple(fields):
             return ("untrusted", f"{cls_name}._fields is a {_safe_type_name(fields)}")
         for name in fields:
             if type(name) is not str:
@@ -3966,7 +3973,9 @@ def _seal_or_defect(
         return None, ("sliced", f"rows {rebuilt_query.low_mark}:{rebuilt_query.high_mark}")
     if policy.require_model_rows and iterable is not ModelIterable:
         return None, ("projection", _safe_class_name(iterable))
-    fields = state.get("_fields")
+    # ``_fields`` is proven ``None`` or an exact ``tuple`` of exact ``str`` names by
+    # ``_queryset_state_defect``.
+    fields = cast("tuple[str, ...] | None", state.get("_fields"))
     # ``combinator`` is a plain ``str | None`` slot on the proven-genuine
     # ``sql.Query``, read off the reconstructed clone -- no consumer dispatch. A
     # combined result is served as the set of primary keys it selects: the
@@ -4013,15 +4022,14 @@ def _seal_or_defect(
     # a fresh fetch is always correct, whereas copying an untrusted cache could pre-seed
     # synthetic related instances that bypass the related type's own visibility hook).
     sealed._iterable_class = iterable
-    # basedpyright: django-stubs omits QuerySet._fields, reported as an unknown attribute
-    sealed._fields = fields  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    sealed._prefetch_related_lookups = sealed_prefetch  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._sticky_filter, reported as an unknown attribute
-    sealed._sticky_filter = state.get("_sticky_filter") is True  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._for_write, reported as an unknown attribute
-    sealed._for_write = state.get("_for_write") is True  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_fields(sealed, fields)
+    # The prefetch seal returns lookups exactly when it returns no defect.
+    set_queryset_prefetch_lookups(
+        sealed,
+        cast("tuple[str | _SealedPrefetch, ...]", sealed_prefetch),
+    )
+    set_queryset_sticky_filter(sealed, state.get("_sticky_filter") is True)
+    set_queryset_for_write(sealed, state.get("_for_write") is True)
     if policy.carry_result_cache:
         # The rows the source already fetched travel onto the rebuild, so a surface
         # that only windows them re-queries nothing. The list object is taken as it
@@ -4271,12 +4279,11 @@ def _coerced_manager_queryset(
             f"or other non-queryset cannot enter the visibility boundary and must not "
             f"be treated as the deliberate plain-iterable bypass.",
         )
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    if queryset._db != explicit:  # pyright: ignore[reportAttributeAccessIssue]
+    routed = queryset_db(queryset)
+    if routed != explicit:
         raise ConfigurationError(
             f"A {_safe_type_name(manager)} pinned to alias {explicit!r} produced a "
-            # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-            f"queryset routed to {queryset._db!r} on .all(); a Manager coercion must "  # pyright: ignore[reportAttributeAccessIssue]
+            f"queryset routed to {routed!r} on .all(); a Manager coercion must "
             f"preserve the manager's explicit routing exactly (an unrouted manager "
             f"must stay unrouted until the resolution's required alias pins it), so a "
             f"visibility source or hook cannot silently change databases.",
@@ -4534,8 +4541,7 @@ def _prepared_visibility_source(
         )
         required_alias = pipeline.alias
     else:
-        # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-        required_alias = sealed._db  # pyright: ignore[reportAttributeAccessIssue]
+        required_alias = queryset_db(sealed)
     return sealed, required_alias
 
 

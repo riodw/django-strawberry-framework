@@ -47,6 +47,9 @@ from django_strawberry_framework import (
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.testing import AsyncTestClient, TestClient
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_hints,
+)
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 #: Settings that open the spec-048 error policy's pass-through gate for ONE live
@@ -5537,8 +5540,7 @@ def _genre_filter_in_place_routing(
     queryset: QuerySet[models.Genre],
     info: object,
 ) -> QuerySet[models.Genre]:
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 

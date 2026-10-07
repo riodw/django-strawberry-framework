@@ -57,6 +57,9 @@ from django_strawberry_framework import (
 from django_strawberry_framework import schema as schema_module
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+)
 from django_strawberry_framework.utils.write_transaction import (
     _enforce_read_only_barrier,
     check_instance_write_alias,
@@ -1319,11 +1322,9 @@ def test_visibility_hook_switching_aliases_fails_closed():
 
 def test_pin_write_queryset_passes_unrouted_and_matching_querysets():
     queryset = product_models.Item.objects.all()
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert pin_write_queryset(queryset, "default")._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(pin_write_queryset(queryset, "default")) == "default"
     routed = product_models.Item.objects.using("default")
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert pin_write_queryset(routed, "default")._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(pin_write_queryset(routed, "default")) == "default"
 
 
 def test_pin_write_queryset_derives_the_owner_from_the_model():
@@ -1362,8 +1363,7 @@ def test_pipeline_scoped_queryset_pins_without_locking():
             product_models.Item.objects.all(),
             product_models.Item,
         )
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert scoped._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(scoped) == "default"
     assert scoped.query.select_for_update is False
 
 
@@ -1373,8 +1373,7 @@ def test_pipeline_scoped_queryset_locks_through_the_base_manager():
             product_models.Item.objects.all(),
             product_models.Item,
         )
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert scoped._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(scoped) == "default"
     assert scoped.query.select_for_update is True
     # The lock rides the base manager with visibility reduced to a pk subquery.
     assert "In(Col(" in str(scoped.query.where)

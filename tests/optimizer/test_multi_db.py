@@ -42,6 +42,10 @@ from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.walker import plan_optimizations
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+    queryset_prefetch_lookups,
+)
 
 
 def _sel(name: str, selections: list[SimpleNamespace] | None = None):
@@ -129,7 +133,10 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
     # builds a fresh one with ``queryset=prefetch.queryset`` - same
     # queryset object reference either way, so ``_db`` survives by
     # reference. Verified at ``django_strawberry_framework/optimizer/walker.py::_prefetch_hint_for_path``.
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    prefetch = next(p for p in result._prefetch_related_lookups if p.prefetch_through == "items")  # pyright: ignore[reportAttributeAccessIssue]
-    assert prefetch.queryset._db == "shard_b"
+    prefetch = next(
+        p
+        for p in queryset_prefetch_lookups(result)
+        if isinstance(p, Prefetch) and p.prefetch_through == "items"
+    )
+    assert prefetch.queryset is not None
+    assert queryset_db(prefetch.queryset) == "shard_b"

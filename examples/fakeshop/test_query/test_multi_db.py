@@ -108,6 +108,10 @@ from django_strawberry_framework.extensions import DjangoDebugExtension
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_db,
+    set_queryset_hints,
+)
 
 _UPDATE_BOOK_TITLE_VALIDATOR_MUTATION = """
 mutation($id: ID!, $d: AliasValidatedBookSerializerPartialInput!) {
@@ -310,8 +314,7 @@ def _build_list_field_hints_mismatch_schema(
         # carrying hints={'tenant': 2}. Both sides have ``_db is None``, so the hints
         # are the only thing that could route them apart.
         ordered = queryset.order_by("name")
-        # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-        ordered._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+        set_queryset_hints(ordered, {"tenant": 2})
         return ordered
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_malicious_hints_apply_sync))
@@ -387,10 +390,8 @@ def _build_list_field_in_place_routing_mutation_schema(
     ) -> QuerySet[models.Branch]:
         # Mutates the very object it was handed and returns it unchanged otherwise:
         # a post-call read of that object would see the rewritten routing as the baseline.
-        # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-        queryset._db = "default"  # pyright: ignore[reportAttributeAccessIssue]
-        # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-        queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+        set_queryset_db(queryset, "default")
+        set_queryset_hints(queryset, {"tenant": 2})
         return queryset
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_in_place_apply_sync))
@@ -511,8 +512,7 @@ def _build_list_field_identity_token_schema(
     ) -> QuerySet[models.Branch]:
         ordered = queryset.order_by("name")
         if swap["active"]:
-            # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-            ordered._hints = {"tenant": _EQUAL_DISTINCT_TOKEN}  # pyright: ignore[reportAttributeAccessIssue]
+            set_queryset_hints(ordered, {"tenant": _EQUAL_DISTINCT_TOKEN})
         return ordered
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_token_swapping_apply_sync))

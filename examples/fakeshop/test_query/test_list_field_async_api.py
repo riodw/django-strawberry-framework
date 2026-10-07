@@ -60,6 +60,10 @@ from django_strawberry_framework.resource_policy import (
     policy_from_info,
 )
 from django_strawberry_framework.schema import DjangoSchema
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_deferred_filter,
+    set_queryset_hints,
+)
 from django_strawberry_framework.utils.context import get_context_value, stash_on_context
 from django_strawberry_framework.views import AsyncDjangoGraphQLView
 
@@ -1899,8 +1903,7 @@ async def _async_in_place_routing(
     info: object,
     **kwargs: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 
@@ -1914,9 +1917,8 @@ async def _async_untrusted(
     candidate = _AsyncDeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    # basedpyright: django-stubs omits QuerySet._deferred_filter; the int negate is also
-    # deliberately not the bool Django writes
-    candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-``bool`` negate, a deferred-filter shape Django never writes
+    set_queryset_deferred_filter(candidate, (1, (), {"name": "A"}))  # pyright: ignore[reportArgumentType]
     return candidate
 
 

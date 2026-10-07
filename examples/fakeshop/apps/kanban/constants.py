@@ -98,6 +98,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/types/relay.py",
     "django_strawberry_framework/types/resolvers.py",
     "django_strawberry_framework/utils/__init__.py",
+    "django_strawberry_framework/utils/_queryset_private.py",
     "django_strawberry_framework/utils/canonical.py",
     "django_strawberry_framework/utils/connections.py",
     "django_strawberry_framework/utils/context.py",

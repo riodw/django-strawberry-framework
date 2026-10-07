@@ -113,6 +113,9 @@ from django_strawberry_framework.resource_policy import (
     bounded_rows,
 )
 from django_strawberry_framework.testing import AsyncTestClient, Response, TestClient
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+)
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 if TYPE_CHECKING:
@@ -233,8 +236,7 @@ def _hostile_relation_manager():
         return _EscapingQuerySet(
             model=library_models.Loan,
             query=source.query,
-            # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-            using=source._db,  # pyright: ignore[reportAttributeAccessIssue]
+            using=queryset_db(source),
         )
 
     manager_cls.all = escaping_all

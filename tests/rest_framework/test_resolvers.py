@@ -83,6 +83,9 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     SCALAR,
 )
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+)
 from django_strawberry_framework.utils.errors import build_error_key_map
 from django_strawberry_framework.utils.inputs import (
     FILE,
@@ -2283,8 +2286,7 @@ def test_relation_queryset_scope_pins_unregistered_raw_pk_relation_without_visib
         )
     # Pinned to the write alias; no visibility constraint added (no primary type registered).
     pinned = _related_queryset(field)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert pinned._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(pinned) == "default"
     assert not pinned.query.where
     assert pinned.query.select_for_update is False
 
@@ -2321,8 +2323,7 @@ def test_relation_queryset_scope_locks_when_pipeline_locks():
         )
     scoped = _related_queryset(serializer.fields["branch"])
     assert scoped.query.select_for_update is True
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert scoped._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(scoped) == "default"
 
 
 @pytest.mark.django_db
@@ -2381,8 +2382,7 @@ def test_relation_queryset_scope_covers_injected_relation_specs():
             info=_unread_info(),
         )
     scoped = _related_queryset(locked.fields["branch"])
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert scoped._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(scoped) == "default"
     assert scoped.query.select_for_update is True
 
     unlocked = BranchSer()
@@ -4144,15 +4144,13 @@ def test_validator_querysets_are_recursively_pinned_to_write_alias():
     together_validator = serializer.validators[0]
     assert isinstance(name_validator, UniqueValidator)
     assert isinstance(together_validator, UniqueTogetherValidator)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert name_validator.queryset._db == "shard_b"  # pyright: ignore[reportAttributeAccessIssue]
-    assert together_validator.queryset._db == "shard_b"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(name_validator.queryset) == "shard_b"
+    assert queryset_db(together_validator.queryset) == "shard_b"
     child = serializer.fields["child"]
     assert isinstance(child, serializers.Serializer)
     child_validator = child.fields["name"].validators[0]
     assert isinstance(child_validator, UniqueValidator)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert child_validator.queryset._db == "shard_b"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(child_validator.queryset) == "shard_b"
 
 
 @pytest.mark.django_db
@@ -4220,10 +4218,9 @@ def test_validator_queryset_pinning_replaces_shared_validator_per_serializer_ins
     assert shard_validator is not default_validator
     assert isinstance(shard_validator, UniqueValidator)
     assert isinstance(default_validator, UniqueValidator)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert shard_validator.queryset._db == "shard_b"  # pyright: ignore[reportAttributeAccessIssue]
-    assert default_validator.queryset._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
-    assert shared.queryset._db is None  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(shard_validator.queryset) == "shard_b"
+    assert queryset_db(default_validator.queryset) == "default"
+    assert queryset_db(shared.queryset) is None
 
 
 def test_list_field_child_validator_querysets_are_pinned_and_isolated():
@@ -4249,10 +4246,9 @@ def test_list_field_child_validator_querysets_are_pinned_and_isolated():
     assert shard_validator is not default_validator
     assert isinstance(shard_validator, UniqueValidator)
     assert isinstance(default_validator, UniqueValidator)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert shard_validator.queryset._db == "shard_b"  # pyright: ignore[reportAttributeAccessIssue]
-    assert default_validator.queryset._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
-    assert shared.queryset._db is None  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(shard_validator.queryset) == "shard_b"
+    assert queryset_db(default_validator.queryset) == "default"
+    assert queryset_db(shared.queryset) is None
 
 
 def test_runtime_context_field_source_collision_fails_before_validation():

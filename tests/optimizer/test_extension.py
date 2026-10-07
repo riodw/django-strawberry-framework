@@ -66,6 +66,9 @@ from django_strawberry_framework.optimizer.extension import (
 )
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import iter_subsystem_clears, registry
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_prefetch_lookups,
+)
 from django_strawberry_framework.utils.querysets import _AsyncQuerySetRows
 from tests._idioms import definition_raises
 
@@ -4583,9 +4586,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
     # consumer's ``Prefetch`` - the optimizer entry was diffed away.
     optimized_qs = captured[0]
     assert isinstance(optimized_qs, QuerySet)
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    lookups = optimized_qs._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+    lookups = queryset_prefetch_lookups(optimized_qs)
     assert lookups == (consumer_pf,)
 
 
@@ -4650,9 +4651,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     assert result.errors is None
     optimized_qs = captured[0]
     assert isinstance(optimized_qs, QuerySet)
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    lookups = optimized_qs._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+    lookups = queryset_prefetch_lookups(optimized_qs)
     # Exactly one ``items`` lookup - the optimizer's ``Prefetch`` -
     # carrying the nested ``entries`` chain. The consumer's plain
     # ``"items"`` string was stripped.
@@ -4661,9 +4660,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     assert isinstance(items_pf, Prefetch)
     assert items_pf.prefetch_to == "items"
     assert items_pf.queryset is not None
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    nested = items_pf.queryset._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+    nested = queryset_prefetch_lookups(items_pf.queryset)
     assert any(getattr(entry, "prefetch_to", entry) == "entries" for entry in nested)
 
 

@@ -44,6 +44,9 @@ from django_strawberry_framework.optimizer.single_parent_fetch import (
     _fetch_single_parent_rows,
     single_parent_spec,
 )
+from django_strawberry_framework.utils._queryset_private import (
+    chain_queryset,
+)
 from tests.optimizer._builders import nested_connection_request as _request
 
 
@@ -211,12 +214,10 @@ def test_fetch_returns_none_for_a_consumer_filter_without_a_parent():
 def test_fetch_returns_none_for_a_mutated_root_node():
     """A negated or OR-connected WHERE root is not the planner's shape."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
-    # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
-    or_root = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
+    or_root = chain_queryset(queryset)
     or_root.query.where.connector = "OR"
     assert _fetch_single_parent_rows(or_root) is None
-    # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
-    negated_root = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
+    negated_root = chain_queryset(queryset)
     negated_root.query.where.negated = True
     assert _fetch_single_parent_rows(negated_root) is None
 

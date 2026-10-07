@@ -83,6 +83,7 @@ from django.db.models.query import ModelIterable
 from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from ..utils._queryset_private import chain_queryset
 from ..utils.connections import assert_window_fetch_mode_for
 from ._context import active_nested_strategy
 from .join_taxonomy import RelationJoinDescriptor
@@ -202,13 +203,13 @@ class RecognizedFetchQuerySet(QuerySet[models.Model, models.Model]):
         # break the same way.
         from .lateral_fetch import window_predicate_signature
 
-        # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
-        clone = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
+        clone = chain_queryset(queryset)
         clone.__class__ = cls
-        setattr(clone, cls._dst_spec_attr, spec)
-        clone._dst_window_signature = window_predicate_signature(queryset.query)
         # The class swap above made the clone an instance of ``cls``.
-        return cast("RecognizedFetchQuerySet", clone)
+        rebound = cast("RecognizedFetchQuerySet", clone)
+        setattr(rebound, cls._dst_spec_attr, spec)
+        rebound._dst_window_signature = window_predicate_signature(queryset.query)
+        return rebound
 
     def _fetch_recognized_rows(self) -> list[models.Model] | None:
         """Return the strategy's rows, or ``None`` for every unrecognized shape."""

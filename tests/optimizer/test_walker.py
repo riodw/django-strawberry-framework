@@ -51,6 +51,10 @@ from django_strawberry_framework.optimizer.walker import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+    queryset_prefetch_lookups,
+)
 from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
 
 from ._link_models import LnkPairChild, LnkParent, LnkSlugChild
@@ -1655,9 +1659,7 @@ def test_plan_emits_nested_prefetch_chain_depth_2():
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
     assert outer.queryset is not None
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
+    inner = queryset_prefetch_lookups(outer.queryset)[0]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
     assert inner.queryset is not None
@@ -1687,9 +1689,7 @@ def test_plan_emits_nested_prefetch_chain_depth_3_with_inner_select():
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
     assert outer.queryset is not None
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
+    inner = queryset_prefetch_lookups(outer.queryset)[0]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
     assert inner.queryset is not None
@@ -1757,9 +1757,7 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
     assert plan.cacheable is False
     outer = _prefetch_entry(plan)
     assert outer.queryset is not None
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
+    inner = queryset_prefetch_lookups(outer.queryset)[0]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
 
@@ -1853,11 +1851,8 @@ def test_plan_rewrites_a_combined_prefetch_obj_hint_to_its_primary_key_set():
     assert planned.prefetch_to == "items"
     assert planned.queryset is not None
     assert planned.queryset.query.combinator is None
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert planned.queryset._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    assert planned.queryset._prefetch_related_lookups == ("entries",)  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(planned.queryset) == "default"
+    assert queryset_prefetch_lookups(planned.queryset) == ("entries",)
     served = {
         category.pk: sorted(item.pk for item in category.items.all())
         for category in Category.objects.prefetch_related(planned)
@@ -2146,9 +2141,7 @@ def test_plan_nested_prefetch_respects_fragment_alias_and_directive_shapes():
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
     assert outer.queryset is not None
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    inner = outer.queryset._prefetch_related_lookups[0]  # pyright: ignore[reportAttributeAccessIssue]
+    inner = queryset_prefetch_lookups(outer.queryset)[0]
     assert isinstance(inner, Prefetch)
     assert inner.prefetch_to == "entries"
     select_related = outer.queryset.query.select_related
@@ -3818,9 +3811,7 @@ def test_nested_connection_two_level_recursion():
         assert outer.to_attr == "_dst_books_connection"
         # The outer window's child queryset carries the inner window prefetch.
         assert outer.queryset is not None
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        inner_prefetches = list(outer.queryset._prefetch_related_lookups)  # pyright: ignore[reportAttributeAccessIssue]
+        inner_prefetches = list(queryset_prefetch_lookups(outer.queryset))
         inner_to_attrs = [getattr(pf, "to_attr", None) for pf in inner_prefetches]
         assert "_dst_genres_connection" in inner_to_attrs
     finally:
@@ -4552,9 +4543,7 @@ def test_nested_same_key_conflict_leaves_only_the_nested_level_unplanned():
             assert prefetch.queryset is not None
             nested_attrs = [
                 getattr(nested, "to_attr", None)
-                # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as
-                # an unknown attribute
-                for nested in prefetch.queryset._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+                for nested in queryset_prefetch_lookups(prefetch.queryset)
             ]
             assert not any("_dst_genres" in str(attr) for attr in nested_attrs)
         # Outer keys planned; the conflicted nested relation recorded nothing

@@ -51,6 +51,9 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
+from django_strawberry_framework.utils._queryset_private import (
+    chain_queryset,
+)
 from tests.optimizer._builders import nested_connection_request as _request
 
 if TYPE_CHECKING:
@@ -1032,12 +1035,10 @@ def test_extract_returns_none_for_a_mutated_root_node():
     """A negated or OR-connected root is not the planner's shape - fall back."""
     queryset = _prefetch_filtered(_shelf_books_request(), "shelf", [Shelf(pk=1)])
     spec = _lateral_spec(queryset)
-    # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
-    or_root = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
+    or_root = chain_queryset(queryset)
     or_root.query.where.connector = "OR"
     assert _recognize_lateral_fetch(or_root, spec) is None
-    # basedpyright: django-stubs omits QuerySet._chain, reported as an unknown attribute
-    negated_root = queryset._chain()  # pyright: ignore[reportAttributeAccessIssue]
+    negated_root = chain_queryset(queryset)
     negated_root.query.where.negated = True
     assert _recognize_lateral_fetch(negated_root, spec) is None
 

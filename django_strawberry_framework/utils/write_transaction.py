@@ -79,6 +79,7 @@ from typing_extensions import override
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
 from ..utils.errors import FIELD_ERROR_CODE_CONFLICT, field_error
+from ._queryset_private import queryset_db
 from .canonical import base_container_values, canonical_sort_key
 
 if TYPE_CHECKING:
@@ -732,8 +733,7 @@ def pin_write_queryset(
     both. Fail closed instead of writing.
     """
     # ``None`` unless the hook called ``.using(...)``.
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    hook_alias: object = queryset._db  # pyright: ignore[reportAttributeAccessIssue]
+    hook_alias: object = queryset_db(queryset)
     if hook_alias is not None and hook_alias != alias:
         if owner is None:
             owner = f"{queryset.model.__name__} get_queryset"

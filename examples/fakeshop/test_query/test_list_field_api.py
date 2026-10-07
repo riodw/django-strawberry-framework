@@ -55,6 +55,11 @@ from django_strawberry_framework.resource_policy import (
     policy_from_info,
 )
 from django_strawberry_framework.schema import DjangoSchema
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+    set_queryset_deferred_filter,
+    set_queryset_hints,
+)
 from django_strawberry_framework.utils.context import get_context_value
 from django_strawberry_framework.utils.querysets import apply_type_visibility_sync
 from django_strawberry_framework.views import DjangoGraphQLView
@@ -2558,8 +2563,7 @@ def _override_in_place_routing(
     queryset: models.QuerySet[library_models.Branch],
     info: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 
@@ -2582,9 +2586,8 @@ def _override_untrusted(
     candidate = _DeferredFilterQuerySet(model=library_models.Branch)
     # ``negate`` decides whether the predicate is inverted and is truth-tested to
     # do it, so Django's exact ``bool`` is the only shape the bake accepts there.
-    # basedpyright: django-stubs omits QuerySet._deferred_filter; the int negate is also
-    # deliberately not the bool Django writes
-    candidate._deferred_filter = (1, (), {"name": "A"})  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-``bool`` negate, a deferred-filter shape Django never writes
+    set_queryset_deferred_filter(candidate, (1, (), {"name": "A"}))  # pyright: ignore[reportArgumentType]
     return candidate
 
 
@@ -3556,8 +3559,7 @@ def test_holder_orderset_override_returning_queryset_subclass(monkeypatch: pytes
         return _CustomBranchQuerySet(
             model=ordered.model,
             query=ordered.query.clone(),
-            # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-            using=ordered._db,  # pyright: ignore[reportAttributeAccessIssue]
+            using=queryset_db(ordered),
         )
 
     monkeypatch.setattr(BranchOrder, "apply_sync", classmethod(_subclass_apply_sync))

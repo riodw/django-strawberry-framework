@@ -292,6 +292,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
+    ├── _queryset_private.py      # Typed reads and writes of the ``QuerySet`` state Django keeps in private attributes.
     ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.
@@ -426,6 +427,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 └── utils/    # Cross-cutting infrastructure shared across django-strawberry-framework subsystems.
+    ├── _queryset_private.py      # Typed reads and writes of the ``QuerySet`` state Django keeps in private attributes.
     ├── canonical.py              # Hostile-safe primitives for canonically reading consumer-controlled containers.
     ├── connections.py            # Shared connection contracts for sidecars, fetch modes, offset cursors, windows, and page bounds.
     ├── context.py                # Shape-agnostic read / write / delete helpers for Strawberry's ``info.context``.

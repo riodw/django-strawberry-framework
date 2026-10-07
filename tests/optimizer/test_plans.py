@@ -33,6 +33,9 @@ from django_strawberry_framework.optimizer.plans import (
     resolver_key,
     runtime_path_from_path,
 )
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_prefetch_lookups,
+)
 
 
 class TestOptimizationPlanIsEmpty:
@@ -132,9 +135,7 @@ class TestOptimizationPlanApply:
         result = plan.apply(qs)
         # An empty plan should not add select_related or prefetch_related.
         assert result.query.select_related is False
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert result._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(result) == ()
 
     def test_apply_select_related(self):
         plan = OptimizationPlan(select_related=["category"])
@@ -150,9 +151,7 @@ class TestOptimizationPlanApply:
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.all()
         result = plan.apply(qs)
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert "items" in result._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+        assert "items" in queryset_prefetch_lookups(result)
 
     def test_apply_only_fields(self):
         plan = OptimizationPlan(only_fields=["name"])
@@ -603,9 +602,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == ()
 
     def test_consumer_exact_plus_descendant_strings_both_absorbed(self):
         # The exact-plus-descendant case: ``prefetch_related("items", "items__entries")``
@@ -620,9 +617,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == ()
 
     def test_optimizer_does_not_strip_consumer_descendants_it_does_not_cover(self):
         # When the optimizer's own subtree does not cover
@@ -635,9 +630,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert {getattr(e, "prefetch_to", e) for e in delta_qs._prefetch_related_lookups} == {  # pyright: ignore[reportAttributeAccessIssue]
+        assert {getattr(e, "prefetch_to", e) for e in queryset_prefetch_lookups(delta_qs)} == {
             "items__entries",
         }
 
@@ -666,9 +659,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == (consumer_descendant,)  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == (consumer_descendant,)
 
     def test_consumer_plain_string_replaced_by_optimizer_nested_prefetch(self):
         # The consumer's ``prefetch_related("items")`` plain
@@ -683,9 +674,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == ()
 
     def test_upgrade_preserves_other_consumer_prefetches(self):
         # When upgrading a single consumer plain string to the
@@ -699,9 +688,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == (unrelated,)  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == (unrelated,)
 
     def test_drops_only_fields_when_consumer_applied_only(self):
         # Django's ``QuerySet.only(...).only(...)`` replaces (not
@@ -769,9 +756,7 @@ class TestDiffPlanForQueryset:
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == (consumer_pf,)  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == (consumer_pf,)
 
     def test_consumer_custom_prefetch_survives_redundant_trailing_string(self):
         """A duplicate bare lookup never hides the consumer's custom queryset.
@@ -796,9 +781,7 @@ class TestDiffPlanForQueryset:
 
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-        assert delta_qs._prefetch_related_lookups == (consumer_pf, "items")  # pyright: ignore[reportAttributeAccessIssue]
+        assert queryset_prefetch_lookups(delta_qs) == (consumer_pf, "items")
 
 
 def _linked_path(*keys: str | int):

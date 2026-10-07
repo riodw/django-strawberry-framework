@@ -111,6 +111,9 @@ from strawberry import relay
 
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
 from django_strawberry_framework.testing import AsyncTestClient
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_hints,
+)
 from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 _ApplySyncOverride: TypeAlias = Callable[
@@ -530,8 +533,7 @@ def _override_in_place_routing(
     queryset: models.QuerySet[library_models.Genre],
     info: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     return queryset
 
 
@@ -885,8 +887,7 @@ async def _override_async_in_place_routing(
     queryset: models.QuerySet[library_models.Genre],
     info: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     _ASYNC_APPLY_CALLS.append("routing-rewritten-in-place")
     return queryset
 
@@ -1227,8 +1228,7 @@ async def _filter_override_async_in_place_routing(
     queryset: models.QuerySet[library_models.Genre],
     info: object,
 ):
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    queryset._hints = {"tenant": 2}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(queryset, {"tenant": 2})
     _ASYNC_APPLY_CALLS.append("filter-routing-rewritten-in-place")
     return queryset
 

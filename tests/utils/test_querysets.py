@@ -57,6 +57,19 @@ from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils._queryset_private import (
+    queryset_db,
+    queryset_fields,
+    queryset_hints,
+    queryset_prefetch_lookups,
+    set_queryset_db,
+    set_queryset_defer_next_filter,
+    set_queryset_deferred_filter,
+    set_queryset_for_write,
+    set_queryset_hints,
+    set_queryset_prefetch_lookups,
+    set_queryset_query,
+)
 from django_strawberry_framework.utils.querysets import (
     _BOUND_VALUE_NORMALIZERS,
     _CASCADE_SEAL_POLICY,
@@ -431,8 +444,7 @@ def test_active_write_pipeline_pins_source_and_repins_result():
     hook = _stub_type(Category, lambda cls, qs, info: Category.objects.filter(name="x"))
     with write_pipeline("default", lock=False):
         result = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert result._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(result) == "default"
 
 
 def test_active_write_pipeline_rejects_divergent_source_alias():
@@ -647,8 +659,7 @@ def test_unpinned_result_is_repinned_to_explicit_source_alias():
     """
     hook = _stub_type(Category, lambda cls, qs, info: Category.objects.filter(name="x"))
     result = apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(result) == "other"
 
 
 def test_matching_explicit_result_alias_is_accepted():
@@ -658,8 +669,7 @@ def test_matching_explicit_result_alias_is_accepted():
         Category.objects.using("other").all(),
         info=None,
     )
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(result) == "other"
 
 
 def test_divergent_explicit_result_alias_fails_closed():
@@ -676,8 +686,7 @@ def test_unpinned_read_hook_keeps_documented_alias_routing():
     """With no required alias, an unpinned read hook may still choose ``.using(alias)`` itself."""
     hook = _stub_type(Category, lambda cls, qs, info: qs.using("other"))
     result = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(result) == "other"
 
 
 @pytest.mark.django_db
@@ -760,8 +769,7 @@ def test_hostile_result_using_override_repin_is_neutralized_by_sealing():
     result = apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
     assert type(result) is models.QuerySet
     # Pinned at construction, not via the override.
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert result._db == "other"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(result) == "other"
 
 
 def test_predicate_dropping_all_override_source_is_neutralized_by_sealing():
@@ -798,8 +806,7 @@ def test_foreign_query_class_result_fails_closed():
         pass
 
     result = Category.objects.filter(name="visible")
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    result._query = _ForeignQuery(Category)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(result, _ForeignQuery(Category))
     hook = _sync_hook_type(result)
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(hook, Category.objects.all(), info=None)
@@ -832,8 +839,7 @@ def test_a_subclass_result_with_a_pending_deferred_filter_seals_with_it_baked():
         pass
 
     result = _DeferredSub(model=Category)
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     hook = _sync_hook_type(result)
     sealed = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
     assert type(sealed) is models.QuerySet
@@ -855,8 +861,7 @@ def test_exact_queryset_pending_deferred_filter_is_resolved():
     a concurrent caller reusing the same source queryset sees no mutation).
     """
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     sealed, defect = _seal_or_defect(result, Category, None)
     assert defect is None
     # The candidate is never mutated -- the pending flag is left exactly as it was.
@@ -927,10 +932,8 @@ def test_pending_deferred_filter_over_foreign_query_never_dispatches():
             return super().add_q(q_object, reuse_all)
 
     result = models.QuerySet(model=Category)
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    result._query = _AddQSpy(Category)  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(result, _AddQSpy(Category))
+    set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     _, defect = _seal_or_defect(result, Category, None)
     assert defect == ("untrusted", "QuerySet.query is _AddQSpy")
     assert dispatched == []
@@ -953,8 +956,7 @@ def test_deferred_filter_never_dispatches_instance_shadowed_inplace():
         dispatched.append((negate, args, kwargs))
 
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     vars(result)["_filter_or_exclude_inplace"] = _spy_inplace
     sealed, defect = _seal_or_defect(result, Category, None)
     assert dispatched == []
@@ -984,10 +986,8 @@ def test_deferred_filter_never_dispatches_instance_shadowed_add_q():
     query = sql.Query(Category)
     query.__dict__["add_q"] = _spy_add_q
     result = models.QuerySet(model=Category)
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    result._query = query  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(result, query)
+    set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     _, defect = _seal_or_defect(result, Category, None)
     assert defect == ("untrusted", "query instance shadows the 'add_q' method")
     assert dispatched == []
@@ -1004,8 +1004,7 @@ def test_malformed_deferred_filter_fails_closed_instead_of_leaking():
     leaking past the boundary's typed defect contract.
     """
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"nonexistent_field": 1})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"nonexistent_field": 1}))
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet carries malformed deferred-filter state")
@@ -1048,8 +1047,8 @@ def test_a_subclass_deferred_filter_state_django_never_writes_fails_closed(
     with the typed defect rather than resolved.
     """
     candidate = _PendingFilterQuerySet(model=Category)
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    candidate._deferred_filter = deferred  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants deferred-filter shapes Django never writes
+    set_queryset_deferred_filter(candidate, deferred)  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(candidate, Category, None)
     assert sealed is None
     assert defect == ("untrusted", detail)
@@ -1063,8 +1062,8 @@ def test_a_deferred_filter_negate_that_is_not_a_bool_fails_closed_on_an_exact_qu
     that slot, so every other shape is refused before the predicate is built.
     """
     candidate = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    candidate._deferred_filter = (1, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-``bool`` negate, a deferred-filter shape Django never writes
+    set_queryset_deferred_filter(candidate, (1, (), {"name": "later"}))  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(candidate, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter negate is a int")
@@ -1085,8 +1084,8 @@ def test_a_deferred_filter_negate_is_refused_without_reaching_its_own_bool():
             return True
 
     candidate = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    candidate._deferred_filter = (_NegateSpy(), (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-``bool`` negate, a deferred-filter shape Django never writes
+    set_queryset_deferred_filter(candidate, (_NegateSpy(), (), {"name": "later"}))  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(candidate, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter negate is a _NegateSpy")
@@ -1101,9 +1100,7 @@ def _pending_exclude(queryset_cls: type[models.QuerySet[Category]], name: str):
     ``QuerySet._filter_or_exclude`` write the ``(True, (), {...})`` tuple.
     """
     queryset = queryset_cls(model=Category)
-    # basedpyright: django-stubs omits QuerySet._defer_next_filter, reported as an unknown
-    # attribute
-    queryset._defer_next_filter = True  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_defer_next_filter(queryset, True)
     return queryset.exclude(name=name)
 
 
@@ -1338,8 +1335,7 @@ def test_hostile_foreign_query_type_name_cannot_escape_typed_defect():
         pass
 
     source = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    source._query = _HostileQuery(Category)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(source, _HostileQuery(Category))
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet.query is object")
@@ -1572,9 +1568,7 @@ def test_hostile_prefetch_queryset_is_neutralized_to_plain():
     hostile = _HostileItemQS(model=Item).filter(name="real")
     source = Category.objects.all().prefetch_related(Prefetch("items", queryset=hostile))
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    (entry,) = sealed._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+    (entry,) = queryset_prefetch_lookups(sealed)
     assert type(entry) is Prefetch  # rebuilt wrapper, subclass identity dropped
     assert type(entry.queryset) is models.QuerySet  # plain child - hostile subclass dropped
     assert "real" in str(entry.queryset.query)  # the genuine predicate survives
@@ -1622,9 +1616,7 @@ def test_string_and_default_prefetch_lookups_pass_through():
 
     source = Category.objects.all().prefetch_related("items", Prefetch("items"))
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    string_lookup, default_prefetch = sealed._prefetch_related_lookups  # pyright: ignore[reportAttributeAccessIssue]
+    string_lookup, default_prefetch = queryset_prefetch_lookups(sealed)
     assert string_lookup == "items"
     assert isinstance(default_prefetch, Prefetch)
     assert default_prefetch.queryset is None
@@ -1660,8 +1652,7 @@ def test_prefetch_with_foreign_inner_query_fails_closed():
 
     inner = Item.objects.filter(name="x")
     prefetch = Prefetch("items", queryset=inner)
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    inner._query = _ForeignQuery(Item)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(inner, _ForeignQuery(Item))
     source = Category.objects.all().prefetch_related(prefetch)
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
         apply_type_visibility_sync(_SyncType, source, info=None)
@@ -1714,12 +1705,10 @@ def test_seal_copies_hints_into_a_fresh_dict():
     """
     source = Category.objects.all()
     hints = {"instance": object()}
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source._hints = hints  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source, hints)
     sealed = apply_type_visibility_sync(_identity_hook_type(), source, info=None)
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    assert sealed._hints == hints  # pyright: ignore[reportAttributeAccessIssue]
-    assert sealed._hints is not hints  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_hints(sealed) == hints
+    assert queryset_hints(sealed) is not hints
 
 
 @pytest.mark.django_db
@@ -1922,8 +1911,7 @@ def test_prefetch_unrouted_child_inherits_outer_alias():
     assert sealed is not None
     assert isinstance(sealed[0], Prefetch)
     assert sealed[0].queryset is not None
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert sealed[0].queryset._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(sealed[0].queryset) == "default"
 
 
 def test_prefetch_cross_alias_child_fails_closed():
@@ -1981,8 +1969,7 @@ def test_prefetch_child_defect_detail_appears_in_message():
         pass
 
     inner = Item.objects.all()
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    inner._query = _ForeignInnerQuery(Item)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(inner, _ForeignInnerQuery(Item))
     _, defect = _sealed_prefetch_related_lookups(
         (Prefetch("items", queryset=inner),),
         "X",
@@ -2678,8 +2665,7 @@ def test_deferred_filter_hostile_resolve_expression_never_dispatches():
             return Value(1)
 
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": _HostileValue()})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"name": _HostileValue()}))
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter 'name' carries a _HostileValue node")
@@ -2694,8 +2680,7 @@ def test_deferred_filter_bake_leaves_candidate_unmutated_and_is_repeatable():
     the SAME source twice yields identical SQL with no duplicated predicate.
     """
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": "later"})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"name": "later"}))
     sealed_one, defect_one = _seal_or_defect(result, Category, None)
     sealed_two, defect_two = _seal_or_defect(result, Category, None)
     assert defect_one is None and defect_two is None
@@ -2763,9 +2748,7 @@ def test_unrouted_parent_rejects_cross_routed_prefetch_child():
     str(child.query)
     parent = Category.objects.all()
     str(parent.query)
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    parent._prefetch_related_lookups = (models.Prefetch("items", queryset=child),)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_prefetch_lookups(parent, (models.Prefetch("items", queryset=child),))
     sealed, defect = _seal_or_defect(parent, Category, None)
     assert sealed is None
     assert defect == (
@@ -2882,8 +2865,7 @@ def test_deferred_str_subclass_expression_never_dispatches():
             return Value(1)
 
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"name": _EvilStr("later")})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"name": _EvilStr("later")}))
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect is not None
@@ -2909,8 +2891,7 @@ def test_deferred_model_instance_with_instance_resolve_expression_fails_closed()
     # the model class declares no such attribute
     inst.resolve_expression = _value_one  # pyright: ignore[reportAttributeAccessIssue]
     result = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"parent": inst})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"parent": inst}))
     sealed, defect = _seal_or_defect(result, Category, None)
     assert sealed is None
     assert defect == (
@@ -2929,8 +2910,7 @@ def test_deferred_plain_model_instance_still_seals():
     ``category`` FK and seals cleanly.
     """
     result = Item.objects.all()
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    result._deferred_filter = (False, (), {"category": Category(name="p", pk=7)})  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_deferred_filter(result, (False, (), {"category": Category(name="p", pk=7)}))
     sealed, defect = _seal_or_defect(result, Item, None)
     assert defect is None
     assert sealed is not None
@@ -3429,6 +3409,7 @@ def test_provenance_of_type_with_raising_module_descriptor_fails_closed():
         ("_db", object(), "QuerySet._db is a object"),
         ("_hints", object(), "QuerySet._hints is a object"),
         ("_fields", object(), "QuerySet._fields is a object"),
+        ("_fields", ["name"], "QuerySet._fields is a list"),
         ("_fields", (1,), "QuerySet._fields carries a int"),
         ("_sticky_filter", object(), "QuerySet._sticky_filter is a object"),
         ("_for_write", object(), "QuerySet._for_write is a object"),
@@ -3460,8 +3441,7 @@ def test_hostile_hints_bool_and_iter_never_dispatch():
 
     source = Category.objects.all()
     str(source.query)
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source._hints = _EvilHints()  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source, _EvilHints())
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet._hints is a _EvilHints")
@@ -3472,8 +3452,8 @@ def test_hints_non_string_key_fails_closed():
     """A ``_hints`` dict with a non-string key fails closed before it is copied."""
     source = Category.objects.all()
     str(source.query)
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source._hints = {object(): 1}  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-``str`` hint key, which Django never writes
+    set_queryset_hints(source, {object(): 1})  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet._hints has a non-string key")
@@ -3483,13 +3463,12 @@ def test_none_hints_seals_to_fresh_dict():
     """A ``None`` ``_hints`` seals to a fresh empty dict rather than erroring."""
     source = Category.objects.all()
     str(source.query)
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source._hints = None  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a ``None`` ``_hints``, which Django never stores (it writes ``{}``)
+    set_queryset_hints(source, None)  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     assert sealed is not None
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    assert sealed._hints == {}  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_hints(sealed) == {}
 
 
 def test_prefetch_lookups_wrong_shape_fails_closed():
@@ -3501,9 +3480,8 @@ def test_prefetch_lookups_wrong_shape_fails_closed():
 
     source = Category.objects.all()
     str(source.query)
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    source._prefetch_related_lookups = _EvilLookups()  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-tuple lookups object, which Django never stores
+    set_queryset_prefetch_lookups(source, _EvilLookups())  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet prefetch lookups is a _EvilLookups")
@@ -3517,9 +3495,7 @@ def test_missing_prefetch_lookups_key_seals():
     sealed, defect = _seal_or_defect(source, Category, None)
     assert defect is None
     assert sealed is not None
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    assert sealed._prefetch_related_lookups == ()  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_prefetch_lookups(sealed) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -3544,8 +3520,8 @@ def test_deferred_filter_slot_never_truth_tested():
 
     source = Category.objects.all()
     str(source.query)
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    source._deferred_filter = _EvilDeferred()  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a non-tuple deferred filter, which Django never stores
+    set_queryset_deferred_filter(source, _EvilDeferred())  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter is malformed")
@@ -3555,8 +3531,8 @@ def test_deferred_filter_wrong_arity_tuple_fails_closed():
     """A non-3-tuple deferred filter is rejected before any unpack."""
     source = Category.objects.all()
     str(source.query)
-    # basedpyright: django-stubs omits QuerySet._deferred_filter, reported as an unknown attribute
-    source._deferred_filter = (False, ())  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a two-item deferred filter; Django always stores three
+    set_queryset_deferred_filter(source, (False, ()))  # pyright: ignore[reportArgumentType]
     sealed, defect = _seal_or_defect(source, Category, None)
     assert sealed is None
     assert defect == ("untrusted", "QuerySet deferred filter is malformed")
@@ -5317,9 +5293,7 @@ def test_prefetch_child_non_str_path_fails_closed():
     pf = Prefetch("items", queryset=Item.objects.all())
     pf.__dict__["prefetch_through"] = object()
     qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an unknown
-    # attribute
-    qs._prefetch_related_lookups = (pf,)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_prefetch_lookups(qs, (pf,))
     defect = _seal_or_defect(qs, Category, None)[1]
     assert defect is not None
     code, detail = defect
@@ -5568,8 +5542,7 @@ def test_seal_serves_a_combinator_as_a_single_table_primary_key_membership_query
     assert sealed is not None
     assert sealed.db == "default"
     assert sealed.query.combinator is None
-    # basedpyright: django-stubs omits QuerySet._fields, reported as an unknown attribute
-    assert sealed._fields is None  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_fields(sealed) is None
     (membership,) = sealed.query.where.children
     assert isinstance(membership, In)
     assert membership.lhs.target is Category._meta.pk
@@ -6232,8 +6205,7 @@ def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
 
     source_qs = Category.objects.all()
     diff_hints_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    diff_hints_qs._hints = {"instance": 123}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(diff_hints_qs, {"instance": 123})
     with pytest.raises(
         ConfigurationError,
         match="changed database routing intent",
@@ -6324,13 +6296,11 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     val_b = HostileValue()
 
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tag": val_a}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tag": val_a})
 
     cand_same = Category.objects.all()
     # Same instance (identity).
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    cand_same._hints = {"tag": val_a}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(cand_same, {"tag": val_a})
 
     # Comparing identical non-primitive hints must not invoke __eq__
     sealed = _validate_post_orderset_result(
@@ -6343,8 +6313,7 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
 
     cand_diff = Category.objects.all()
     # Different instance.
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    cand_diff._hints = {"tag": val_b}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(cand_diff, {"tag": val_b})
 
     # Rejection formatting must not invoke HostileValue.__repr__
     with pytest.raises(
@@ -6368,12 +6337,11 @@ def test_validate_post_orderset_result_routing_hints_none_vs_empty():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = None  # pyright: ignore[reportAttributeAccessIssue]
+    # basedpyright: plants a ``None`` ``_hints``, which Django never stores (it writes ``{}``)
+    set_queryset_hints(source_qs, None)  # pyright: ignore[reportArgumentType]
 
     cand_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    cand_qs._hints = {}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(cand_qs, {})
 
     with pytest.raises(
         ConfigurationError,
@@ -6428,12 +6396,10 @@ def test_routing_hints_equal_rejects_a_renamed_key_at_equal_length():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tenant": "a"}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tenant": "a"})
 
     cand_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    cand_qs._hints = {"other": "a"}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(cand_qs, {"other": "a"})
 
     with pytest.raises(
         ConfigurationError,
@@ -6462,26 +6428,22 @@ def test_routing_hints_equal_rejects_equal_primitives_that_are_not_identical():
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tenant": "shard-a"}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tenant": "shard-a"})
     expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
 
     cand_qs = Category.objects.all()
     # A runtime-built (uninterned) equal string: equal by value, a different object.
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    cand_qs._hints = {"tenant": "shard-a!"[:-1]}  # pyright: ignore[reportAttributeAccessIssue]
-    assert cand_qs._hints["tenant"] == source_qs._hints["tenant"]  # pyright: ignore[reportAttributeAccessIssue]
-    assert cand_qs._hints["tenant"] is not source_qs._hints["tenant"]  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(cand_qs, {"tenant": "shard-a!"[:-1]})
+    assert queryset_hints(cand_qs)["tenant"] == queryset_hints(source_qs)["tenant"]
+    assert queryset_hints(cand_qs)["tenant"] is not queryset_hints(source_qs)["tenant"]
 
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    assert _routing_hints_equal(cand_qs._hints, expected.hints) is False  # pyright: ignore[reportAttributeAccessIssue]
+    assert _routing_hints_equal(queryset_hints(cand_qs), expected.hints) is False
     with pytest.raises(ConfigurationError, match="changed database routing intent"):
         _validate_post_orderset_result(DummyType, expected, cand_qs, "MyOrderSet.apply_sync")
 
     # The same object under the same key is the same intent.
     same_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    same_qs._hints = {"tenant": source_qs._hints["tenant"]}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(same_qs, {"tenant": queryset_hints(source_qs)["tenant"]})
     assert (
         _validate_post_orderset_result(DummyType, expected, same_qs, "MyOrderSet.apply_sync")
         is not None
@@ -6503,31 +6465,25 @@ def test_snapshot_routing_intent_is_frozen_before_consumer_code_can_mutate_the_s
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tenant": 1}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tenant": 1})
     expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
     assert (expected.db, expected.hints) == (None, {"tenant": 1})
     assert expected.effective_alias == "default"
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    assert expected.hints is not source_qs._hints  # pyright: ignore[reportAttributeAccessIssue]
+    assert expected.hints is not queryset_hints(source_qs)
 
     # An in-place hints edit on the source leaves the snapshot untouched and is rejected.
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints["tenant"] = 2  # pyright: ignore[reportAttributeAccessIssue]
+    queryset_hints(source_qs)["tenant"] = 2
     assert expected.hints == {"tenant": 1}
     with pytest.raises(ConfigurationError, match=r"expected db=None, hints=\{'tenant': 1\}"):
         _validate_post_orderset_result(DummyType, expected, source_qs, "MyOrderSet.apply_sync")
 
     # An in-place alias rewrite on the same object is rejected the same way.
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tenant": 1}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tenant": 1})
     assert expected.hints is not None
     tenant = expected.hints["tenant"]
     assert isinstance(tenant, int)
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints["tenant"] = tenant  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    source_qs._db = "other"  # pyright: ignore[reportAttributeAccessIssue]
+    queryset_hints(source_qs)["tenant"] = tenant
+    set_queryset_db(source_qs, "other")
     with pytest.raises(ConfigurationError, match="expected db=None, .* got db='other'"):
         _validate_post_orderset_result(DummyType, expected, source_qs, "MyOrderSet.apply_sync")
 
@@ -6572,8 +6528,7 @@ def test_routing_intent_pins_the_alias_resolved_before_a_hint_could_be_mutated()
 
     token = {"alias": "default"}
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tenant": token}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tenant": token})
 
     _NestedAliasRouter.calls.clear()
     intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
@@ -6587,19 +6542,16 @@ def test_routing_intent_pins_the_alias_resolved_before_a_hint_could_be_mutated()
     # queryset carrying that very object, so every identity check still holds.
     token["alias"] = "other"
     candidate = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    candidate._hints = {"tenant": token}  # pyright: ignore[reportAttributeAccessIssue]
-    assert candidate._hints["tenant"] is source_qs._hints["tenant"]  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(candidate, {"tenant": token})
+    assert queryset_hints(candidate)["tenant"] is queryset_hints(source_qs)["tenant"]
 
     sealed = _validate_post_orderset_result(DummyType, intent, candidate, "MyOrderSet.apply_sync")
     # Validation asks the router nothing; the pin is the frozen answer.
     assert _NestedAliasRouter.calls == ["read"]
-    # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-    assert sealed._db == "default"  # pyright: ignore[reportAttributeAccessIssue]
+    assert queryset_db(sealed) == "default"
     assert sealed.db == "default"
     # Without the pin, the mutated token routes the read somewhere else.
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    assert router.db_for_read(Category, **candidate._hints) == "other"  # pyright: ignore[reportAttributeAccessIssue]
+    assert router.db_for_read(Category, **queryset_hints(candidate)) == "other"
 
 
 @override_settings(DATABASE_ROUTERS=[_NestedAliasRouter()])
@@ -6610,10 +6562,8 @@ def test_routing_intent_resolves_a_write_marked_source_through_the_write_router(
     for a source Django would route as a write would pin the wrong connection.
     """
     source_qs = Category.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = {"tenant": {"alias": "default"}}  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: django-stubs omits QuerySet._for_write, reported as an unknown attribute
-    source_qs._for_write = True  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, {"tenant": {"alias": "default"}})
+    set_queryset_for_write(source_qs, True)
 
     _NestedAliasRouter.calls.clear()
     intent = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
@@ -6694,8 +6644,7 @@ def test_snapshot_routing_intent_keeps_a_non_dict_hints_slot_by_reference():
 
     source_qs = Category.objects.all()
     hostile = HintsSubclass()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    source_qs._hints = hostile  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(source_qs, hostile)
     expected = _snapshot_routing_intent(source_qs, "MyOrderSet.apply_sync")
     assert expected.hints is hostile
     assert _routing_hints_equal({}, expected.hints) is False

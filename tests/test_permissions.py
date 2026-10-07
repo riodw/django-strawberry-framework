@@ -107,6 +107,9 @@ from django_strawberry_framework.permissions import (
     apply_cascade_permissions,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_query,
+)
 from tests.optimizer import _link_models
 
 #: A ``get_queryset`` hook as ``_make_type`` installs it (``classmethod``-wrapped).
@@ -1317,8 +1320,7 @@ def test_unsealable_hook_query_class_fails_closed_with_cascade_prose():
 
     def _hostile_hook(cls: type[DjangoType], qs: models.QuerySet[models.Model], info: object):
         target = _CtTarget.objects.filter(name="visible").using(qs.db)
-        # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-        target._query = _ForeignQuery(_CtTarget)  # pyright: ignore[reportAttributeAccessIssue]
+        set_queryset_query(target, _ForeignQuery(_CtTarget))
         return target
 
     registry.clear()
@@ -1551,8 +1553,7 @@ def test_unsealable_root_query_class_fails_closed_with_cascade_prose():
 
     parent_type = _register_ct_pair(None)
     hostile_root = _CtParent.objects.all()
-    # basedpyright: django-stubs omits QuerySet._query, reported as an unknown attribute
-    hostile_root._query = _ForeignRootQuery(_CtParent)  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_query(hostile_root, _ForeignRootQuery(_CtParent))
 
     with pytest.raises(
         ConfigurationError,

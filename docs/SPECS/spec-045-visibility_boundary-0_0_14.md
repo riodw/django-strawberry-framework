@@ -150,7 +150,7 @@ every `QuerySet.__dict__` field the seal carries forward — `_db`, `_hints`,
 `_fields`, `_sticky_filter`, `_for_write` — is pinned to the exact shape Django
 stores before any truthiness test, comparison, or `dict` copy runs on it: `_db`
 `None` or an exact `str`, `_hints` `None` or an exact `dict` with exact-`str`
-keys, `_fields` `None` or an exact `tuple` / `list` of exact-`str` names,
+keys, `_fields` `None` or an exact `tuple` of exact-`str` names,
 `_sticky_filter` / `_for_write` `None` or an exact `bool`. `_hints` is copied
 into a fresh dict rather than shared, so the untrusted object retains no
 routing-control surface on the sealed queryset.

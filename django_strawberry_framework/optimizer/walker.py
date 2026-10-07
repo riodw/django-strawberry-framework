@@ -14,6 +14,7 @@ from strawberry.utils.str_converters import to_camel_case
 
 from ..exceptions import ConfigurationError, OptimizerError
 from ..registry import register_subsystem_clear, registry
+from ..utils._queryset_private import queryset_db, queryset_hints, queryset_prefetch_lookups
 from ..utils.connections import relay_max_results_from_info
 from ..utils.querysets import (
     _COMBINED_WHAT,
@@ -1529,13 +1530,11 @@ def _hint_prefetch_over_pk_set(
     queryset: models.QuerySet[models.Model] = models.QuerySet(
         model=inner.model,
         query=rewritten,
-        # basedpyright: django-stubs omits QuerySet._db, reported as an unknown attribute
-        using=inner._db,  # pyright: ignore[reportAttributeAccessIssue]
-        # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-        hints=dict(inner._hints),  # pyright: ignore[reportAttributeAccessIssue]
-        # basedpyright: django-stubs omits QuerySet._prefetch_related_lookups, reported as an
-        # unknown attribute
-    ).prefetch_related(*inner._prefetch_related_lookups)  # pyright: ignore[reportAttributeAccessIssue]
+        using=queryset_db(inner),
+        # django-stubs types hint values as model instances (the ``instance`` hint Django
+        # itself writes); a router hint can carry any value.
+        hints=cast("dict[str, models.Model]", dict(queryset_hints(inner))),
+    ).prefetch_related(*queryset_prefetch_lookups(inner))
     return Prefetch(prefetch.prefetch_through, queryset=queryset, to_attr=prefetch.to_attr)
 
 

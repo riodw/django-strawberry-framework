@@ -106,6 +106,9 @@ from django_strawberry_framework.resource_policy import (
     ResourcePolicy,
 )
 from django_strawberry_framework.types.relay import SyncMisuseError
+from django_strawberry_framework.utils._queryset_private import (
+    set_queryset_hints,
+)
 from django_strawberry_framework.utils.querysets import require_orderset_class
 
 _M = TypeVar("_M", bound=models.Model)
@@ -1796,11 +1799,9 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
 
     # 2. Routing intent: _db is None accepted when _hints match, rejected when _hints differ
     qs_match = Item.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    qs_match._hints = {"shard": "a"}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(qs_match, {"shard": "a"})
     base_with_hints = Item.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    base_with_hints._hints = {"shard": "a"}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(base_with_hints, {"shard": "a"})
     sealed_hints = _validate_post_orderset_result(
         ItemSealType,
         _snapshot_routing_intent(base_with_hints, "Custom.apply"),
@@ -1810,8 +1811,7 @@ def test_list_field_seal_axis_subclass_and_routing_intent():
     assert type(sealed_hints) is models.QuerySet
 
     qs_mismatch = Item.objects.all()
-    # basedpyright: django-stubs omits QuerySet._hints, reported as an unknown attribute
-    qs_mismatch._hints = {"shard": "b"}  # pyright: ignore[reportAttributeAccessIssue]
+    set_queryset_hints(qs_mismatch, {"shard": "b"})
     with pytest.raises(ConfigurationError, match="changed database routing intent"):
         _validate_post_orderset_result(
             ItemSealType,

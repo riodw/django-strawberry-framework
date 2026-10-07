@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 27 done, 46 to do.
+Progress: 28 done, 46 to do.
 
 ## Done
 
@@ -18,6 +18,7 @@ Progress: 27 done, 46 to do.
 - [x] 9. Cursor presence checked by truthiness: already fixed on main
 - [x] 10. Mutation window under interruption: already fixed on main
 - [x] 11. Mutation errors name the Django field instead of the input field (`7517eab2`)
+- [x] 13. Consumer `Prefetch` hint over a type that hides rows: already fixed on main (`5d4cdb3b`, `00563dd0`)
 - [x] 30. Flat `RelatedFilter` leaf returned hidden rows (`90fc7118`)
 - [x] 31. Relations without a `RelatedFilter` returned hidden rows (`37dcbf70`, `eddfeab1`, `c7d0ca02`)
 - [x] 32. Ordering by a hidden related row (`70118090`)
@@ -41,7 +42,6 @@ Progress: 27 done, 46 to do.
 ## To do: t3 hunt findings
 
 - [ ] 12. Nested forward-FK / OneToOne resolvers never check the request deadline
-- [ ] 13. Consumer `Prefetch` hint over a type that hides rows (HIGH): probably fixed by `5d4cdb3b`, confirm and delete from t3
 - [ ] 14. README says integer `in: []` matches nothing; t3 saw it match everything. Check which is right
 
 ## To do: t3 robustness rows

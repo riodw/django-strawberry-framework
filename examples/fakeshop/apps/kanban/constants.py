@@ -346,6 +346,7 @@ TRACKED_FILE_PATHS = (
     "tests/utils/test_permissions.py",
     "tests/utils/test_policies.py",
     "tests/utils/test_querysets.py",
+    "tests/utils/test_relation_reentry.py",
     "tests/utils/test_relations.py",
     "tests/utils/test_sessions.py",
     "tests/utils/test_strings.py",

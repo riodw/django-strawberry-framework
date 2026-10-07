@@ -391,7 +391,7 @@ of the first foundation card.
     rows, `filters/sets.py::FilterSet._via_rows`; undeclared hops with the
     rows the type registered for their model shows,
     `filters/sets.py::FilterSet._scoped_rows`, a path re-entering the set's
-    own model reading the type the set is bound to, or every row when no
+    table reading the type the set is bound to, or every row when no
     type scopes them); the planned search arms are specified onto it
     too ([search spec][spec-060] Decision 12).
   - **`OrderSet` value helpers** sit beside them:
@@ -768,11 +768,13 @@ each pinned because the naive alternative is silently wrong:
   branch path is classified into its `GraphPathPlan` (Slice 2). The hop's
   type is `utils/querysets.py::relation_target_type(<hop model>, root=<owner>)`,
   the filter walk's own resolution
-  (`utils/permissions.py::_walk_undeclared_hops`), so a re-entered model
+  (`utils/permissions.py::_walk_undeclared_hops`), so a re-entered table
   answers with the exact owner (Decision 6); it scopes only when
   `utils/querysets.py::relation_visibility_type` names it. A hop whose
   type declares its own `get_queryset` reads that hook's rows: the
-  compiler seeds `base_queryset(<hop model>, using=queryset.db)` and runs
+  compiler seeds `base_queryset(<hop type's model>, using=queryset.db)`
+  (`utils/querysets.py::model_for`, so a proxy-typed owner answering a
+  re-entered hop reads its own default manager) and runs
   the hook through `utils/querysets.py::apply_type_visibility_sync`
   (`utils/querysets.py::apply_type_visibility_async` under
   `graph.apply_async`) with the `info` passed to `graph.apply`, once per
@@ -920,21 +922,30 @@ the secondary Loan type compiles at
 type, outside any target hook, and a plan path re-entering `Loan`
 (`book__loans`) reads the secondary type's hook on the re-entered hop. The
 filter side applies the same rule to its own surface (an undeclared hop
-re-entering a set's model reads the type the set is bound to,
+re-entering a set's table reads the type the set is bound to,
 `utils/permissions.py::_walk_undeclared_hops`), and the planned search arms
 inherit it ([search spec][spec-060]); those are parity, not this plan's
 proof. The identity carrier is the **`DjangoTypeDefinition`** (matching the
 [search spec][spec-060]'s rule — never a bare `(type_name, model)` pair);
 a `DjangoType` class passed as `owner=` resolves through its definition
 handle. Structural identities key on that definition, and two types over one
-model never compare equal as owners.
+model never compare equal as owners. Re-entry is by table: a hop re-enters
+when its model and the owner's model share one `_meta.concrete_model`
+(`utils/querysets.py::relation_target_type`). A proxy reads its concrete
+model's table, so an owner typed over a proxy re-entering the concrete
+model, and an owner reaching a relation declared to a proxy of its table,
+answer with the exact owner; a multi-table-inheritance parent and child are
+different tables, so a child-typed owner reaching parent rows reads the
+parent's type.
 [`apply_cascade_permissions`][glossary-apply_cascade_permissions] resolves
 its edge targets through the registry primary lookup by documented design
 and is **exempt**: a forward FK/one-to-one edge cannot re-enter a
 secondary-typed root the way a to-many path can, so primary-lookup is sound
 in cascade's position. **Rejected:** model-keyed identity (leaks
 primary-type visibility into secondary-type roots — a security failure,
-reproduction R9).
+reproduction R9); matching the owner by model class rather than by table
+(a proxy-typed owner re-entering its concrete model would read the
+primary's hook, the same leak).
 
 **Re-entry inside the owner's own hook is refused.** A branch hop
 re-entering the owner's model reads the owner's hook; compiled inside that
@@ -1357,7 +1368,7 @@ is optional and non-gating; R12 is consumer-repository work.
 | R6 | Computed dependency batching | A computed field over related rows runs no per-parent, per-child, or deferred-column query; count is constant across parent counts; omitting the field omits its queries | this card |
 | R7 | Ordered nested connection batching | Parent count does not change child query count; per-parent windows and `totalCount`; cursors replay; argument-divergent aliases batch separately; strictness reports no planned edge | sibling |
 | R8 | Row-identity window gate | The classifier misses a multiplying join (the baseline); strict targets raise a targeted unproven-row-identity error and non-strict fall back; no automatic `DISTINCT`; correlated `EXISTS` restores a proven window plan | sibling (baseline here, Slice 2) |
-| R9 | Exact-owner root-model re-entry | An `EdgeScope` plan on a parent edge targeting a secondary type, compiled outside any target hook, applies *that* type's visibility to the hop re-entering its model; registry primary lookup is not substituted; structural identities differ by exact owner type; the same re-entering plan inside the secondary type's own hook is refused; the filter side's bound-type re-entry is the parity row | this card |
+| R9 | Exact-owner root-model re-entry | An `EdgeScope` plan on a parent edge targeting a secondary type, compiled outside any target hook, applies *that* type's visibility to the hop re-entering its model; re-entry is by table (`_meta.concrete_model`), so an owner typed over a proxy answers for a hop reaching the concrete model; registry primary lookup is not substituted; structural identities differ by exact owner type; the same re-entering plan inside the secondary type's own hook is refused; the filter side's bound-type re-entry is the parity row | this card |
 | R10 | Operation explain completeness | Every root appears regardless of completion order; no response carries only the last plan; shared dependencies appear once; fallback reasons attach to the right response key; scope values are redacted | sibling |
 | R11 | Repeatable-read snapshot | PostgreSQL-only optional policy: opt-in keeps multiple roots coherent inside a read-only transaction that closes on success, GraphQL error, cancellation, and resolver exception | optional, non-gating |
 | R12 | Consumer permission value gate | The originating consumer repository's own permission matrix must be proven before operation memoization — a fast shared wrong answer is worse than a repeated wrong one | consumer repository |
@@ -1434,9 +1445,10 @@ raise paths, and interleavings a real query cannot produce.
   outside any target hook, and the selected edge shows the rows the
   secondary type's visibility admits on the re-entered hop, never the
   primary's. Parity row (already shipped, not this plan's proof):
-  `tests/filters/test_sets.py::test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook`
-  and
-  `tests/orders/test_sets.py::test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to`.
+  `tests/filters/test_sets.py::test_undeclared_path_reentering_the_root_model_reads_the_bound_types_hook`,
+  `tests/orders/test_sets.py::test_scoped_hops_reentering_the_sets_model_read_the_type_the_set_is_bound_to`
+  and, for re-entry by table,
+  `tests/utils/test_relation_reentry.py::test_a_proxy_root_reads_its_own_visibility_on_a_path_re_entering_its_table`.
 - **Hop visibility and color (package, Slice 3):** every hop hook receives
   the `info` object passed to `graph.apply` (identity-asserted); each
   `(hop type, alias)` hook runs once per compile and again on a second

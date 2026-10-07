@@ -4785,13 +4785,24 @@ def relation_target_type(
     declares: a relation-key leaf over such a relation, a flat path crossing one,
     and each intermediate model of a declaration whose ``field_name`` spans
     several relations. ``root`` is the exact type the walking set is bound to: a
-    path re-entering its model answers with ``root`` itself, never the model's
+    path re-entering its table answers with ``root`` itself, never the model's
     primary type, so a set bound to a secondary type reads the secondary's hook.
-    Any other model answers with ``registry.get``'s type; ``None`` when it has none.
+
+    Re-entry is by table: ``related_model`` and ``root``'s model share one
+    ``_meta.concrete_model``. A proxy reads its concrete model's table, so a
+    proxy-typed root re-entering the concrete model, a concrete root reaching a
+    relation declared to one of its proxies, and a sibling proxy all answer with
+    ``root``. Multi-table-inheritance parent and child are different tables: a
+    path from a child-typed root reaching parent rows answers with the parent's
+    type, and one reaching the child model answers with ``root``. Any other
+    model answers with ``registry.get``'s type; ``None`` when it has none.
     """
     from ..registry import registry
 
-    if root is not None and model_for(root) is related_model:
+    if (
+        root is not None
+        and model_for(root)._meta.concrete_model is related_model._meta.concrete_model
+    ):
         return root
     return registry.get(related_model)
 
@@ -4804,7 +4815,9 @@ def relation_visibility_type(
     """Return the type whose ``get_queryset`` scopes ``related_model`` rows a path reaches, or ``None``.
 
     ``relation_target_type``'s type when it declares a ``get_queryset`` of its
-    own. ``None`` for a model with no registered type and for a type keeping the
+    own: ``root`` for a path re-entering its table (the same
+    ``_meta.concrete_model``, proxies included), the registered type otherwise.
+    ``None`` for a model with no registered type and for a type keeping the
     identity default hook (scoping would change no row): such a hop reads the
     raw relation, as Django's join does.
     """

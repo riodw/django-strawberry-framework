@@ -626,6 +626,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
     ├── test_policies.py          # ``utils/policies.py::resolve_policy`` - the shared schema-construction resolver.
     ├── test_querysets.py         # Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
+    ├── test_relation_reentry.py  # A relation path re-entering the bound set's table reads the bound type (``relation_target_type``).
     ├── test_relations.py         # Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
     ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
     ├── test_strings.py           # String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.
@@ -897,6 +898,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
     ├── test_permissions.py       # Tests for input permissions, relation-path gates, and Django/Channels request decoding.
     ├── test_policies.py          # ``utils/policies.py::resolve_policy`` - the shared schema-construction resolver.
     ├── test_querysets.py         # Tests for the shared query-source / visibility substrate (``utils/querysets.py``).
+    ├── test_relation_reentry.py  # A relation path re-entering the bound set's table reads the bound type (``relation_target_type``).
     ├── test_relations.py         # Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports.
     ├── test_sessions.py          # Behavioral tests for the session-engine resolver and connection actor lease.
     ├── test_strings.py           # String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening.

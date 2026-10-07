@@ -780,10 +780,12 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
         target set is bound to, any other relation, the intermediate models of a
         declaration whose ``field_name`` spans several relations included, for
         ``utils/querysets.py::relation_target_type``'s type, a path re-entering
-        the model of the set it walks from reading the type that set is bound
-        to. A relation whose type keeps the identity ``get_queryset``, or whose
-        model no type registers, hides nothing and is left out, so a path
-        crossing only such relations orders by its plain column.
+        the table of the set it walks from (the same ``_meta.concrete_model``: a
+        proxy shares its concrete model's table, a multi-table-inheritance parent
+        and child do not) reading the type that set is bound to. A relation
+        whose type keeps the identity ``get_queryset``, or whose model no type
+        registers, hides nothing and is left out, so a path crossing only such
+        relations orders by its plain column.
         """
         joins = leading_relation_hops(model, field_path)
         if not joins:

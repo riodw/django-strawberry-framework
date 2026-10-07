@@ -3901,8 +3901,8 @@ class FilterSet(
         (``target_version__milestone``) passes through the rows of each model
         before the last; each answers for its type
         (``utils/querysets.py::relation_path_visibility_types``, re-entry into
-        this set's own model reading the type this set is bound to). Empty for a
-        single relation.
+        this set's table, the same ``_meta.concrete_model``, reading the type
+        this set is bound to). Empty for a single relation.
         """
         relation = _bound_field_name(related_filter)
         if LOOKUP_SEP not in relation:

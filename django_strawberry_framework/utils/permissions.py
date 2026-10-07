@@ -658,10 +658,12 @@ def walk_declared_relation_path(
     ``undeclared=True`` is the visibility reading: past the last declared hop the
     walk goes on through every relation segment of the model reached, one
     undeclared hop each (``RelationHop``), until a segment that is not a relation.
-    A relation reaching the model of the set the undeclared hops start from
+    A relation reaching the table of the set the undeclared hops start from
     answers for the type that set is bound to
-    (``utils/querysets.py::relation_target_type``). The gates read the declared
-    walk alone: an undeclared hop has no branch gate.
+    (``utils/querysets.py::relation_target_type``): same table is the same
+    ``_meta.concrete_model``, so a proxy and its concrete model share one, while
+    a multi-table-inheritance parent and child do not. The gates read the
+    declared walk alone: an undeclared hop has no branch gate.
     """
     segments = tuple(source_path.split(LOOKUP_SEP))
     hops: list[RelationHop] = []
@@ -722,9 +724,12 @@ def _walk_undeclared_hops(
 
     The hops are ``utils/relations.py::leading_relation_hops``'s over the rest of
     the path from ``set_cls``'s model, so each reaches the model Django's join
-    reaches. A ``pk`` segment names the primary key, a relation on a model keyed
-    by one (a one-to-one primary key, a multi-table-inheritance child), and is
-    recorded under that field's name.
+    reaches, and answers for ``utils/querysets.py::relation_target_type``'s type
+    with ``root`` the type ``set_cls`` is bound to: a hop re-entering that type's
+    table (the same ``_meta.concrete_model``) answers for it. A ``pk`` segment
+    names the primary key, a relation on a model keyed by one (a one-to-one
+    primary key, a multi-table-inheritance child), and is recorded under that
+    field's name.
     """
     model = _set_model(set_cls)
     if model is None:

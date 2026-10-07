@@ -7,7 +7,9 @@ Covers:
   ``get_filters()`` runs across the whole registry).
 - Strict multi-owner reuse: divergent
   ``graphql_type_name`` rejected; identical target accepted; idempotent
-  re-bind of the same ``(filterset, definition)`` pair accepted.
+  re-bind of the same ``(filterset, definition)`` pair accepted; owners over
+  different tables (a multi-table-inheritance parent and child) rejected and
+  owners over one model or its proxies accepted, in both declaration orders.
 - Materialization idempotency under the ``(name, cls)`` contract.
 - Orphan ``filter_input_type`` references rejected with the spec-pinned
   actionable message.
@@ -33,7 +35,7 @@ from pathlib import Path
 
 import pytest
 import strawberry
-from apps.library.models import Book, Branch, Genre, Shelf
+from apps.library.models import Book, Branch, Genre, LendingDesk, ProxyBranch, Shelf, Venue
 from django.db.models import Model, QuerySet
 from strawberry import relay
 from typing_extensions import override
@@ -337,6 +339,85 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
     assert "BookFilter" in msg
     assert "PrimaryBookType" in msg
     assert "SecondaryBookType" in msg
+
+
+@pytest.mark.parametrize("parent_first", [True, False], ids=["parent-first", "child-first"])
+def test_phase_2_5_rejects_multi_owner_reading_different_tables(parent_first: bool):
+    """A ``Venue`` owner and a ``LendingDesk`` owner of one ``FilterSet`` are refused in both orders.
+
+    A path re-entering the set's table reads the type it is bound to, and
+    multi-table-inheritance parent and child are different tables: bound to the
+    parent owner a re-entered ``Venue`` row reads that owner, bound to the child
+    it reads ``Venue``'s primary. Both owners are plain (non-Relay) and keep the
+    identity hook, so only the table axis refuses them.
+    """
+
+    class VenueFilter(FilterSet):
+        class Meta:
+            model = Venue
+            fields = {"name": ["exact"]}
+
+    def parent() -> type[DjangoType]:
+        class VenueOwnerType(DjangoType):
+            class Meta:
+                model = Venue
+                fields = ("id", "name")
+                filterset_class = VenueFilter
+
+        return VenueOwnerType
+
+    def child() -> type[DjangoType]:
+        class DeskOwnerType(DjangoType):
+            class Meta:
+                model = LendingDesk
+                fields = ("name",)
+                filterset_class = VenueFilter
+
+        return DeskOwnerType
+
+    for declare in (parent, child) if parent_first else (child, parent):
+        declare()
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert msg.startswith("FilterSet ")
+    assert "cannot bind to multiple owners over different tables" in msg
+    assert "VenueOwnerType (model Venue)" in msg
+    assert "DeskOwnerType (model LendingDesk)" in msg
+    assert "Declare separate FilterSet subclasses per owner." in msg
+
+
+@pytest.mark.parametrize("proxy_first", [True, False], ids=["proxy-first", "concrete-first"])
+def test_phase_2_5_accepts_multi_owner_reading_one_table(proxy_first: bool):
+    """A plain ``Branch`` owner and a plain ``ProxyBranch`` owner read one table, so they share a set."""
+
+    class BranchFilter(FilterSet):
+        class Meta:
+            model = Branch
+            fields = {"name": ["exact"]}
+
+    def concrete() -> type[DjangoType]:
+        class BranchOwnerType(DjangoType):
+            class Meta:
+                model = Branch
+                fields = ("id", "name")
+                filterset_class = BranchFilter
+
+        return BranchOwnerType
+
+    def proxy() -> type[DjangoType]:
+        class ProxyOwnerType(DjangoType):
+            class Meta:
+                model = ProxyBranch
+                fields = ("id", "name")
+                filterset_class = BranchFilter
+
+        return ProxyOwnerType
+
+    owners = [declare() for declare in ((proxy, concrete) if proxy_first else (concrete, proxy))]
+    finalize_django_types()
+    assert BranchFilter._owner_definition is owners[0].__django_strawberry_definition__
+    assert owners[1].__django_strawberry_definition__.filterset_class is BranchFilter
 
 
 _SUBCLASS_OWNER_CASES = [

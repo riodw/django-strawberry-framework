@@ -11,8 +11,9 @@ Covers:
   wired to unrelated owner model; message names all four entities).
 - Multi-owner reuse: identical-target accepted; diverging-target rejected;
   idempotent re-bind of the same ``(orderset, definition)`` pair accepted;
-  a second owner refused when either owner has a custom ``get_queryset``, in
-  both declaration orders.
+  a second owner refused when either owner has a custom ``get_queryset``, or
+  when the two owners read different tables (a multi-table-inheritance parent
+  and child), in both declaration orders.
 - Per Decision 6 the order side does NOT enforce the filter side's own-PK
   Relay-identity check.
 - Unresolved ``RelatedOrder`` propagates as ``ConfigurationError`` with the
@@ -35,7 +36,7 @@ from collections.abc import Iterator
 
 import pytest
 import strawberry
-from apps.library.models import Book, Branch, Genre, Shelf
+from apps.library.models import Book, Branch, Genre, LendingDesk, ProxyBranch, Shelf, Venue
 from django.db import models
 from django.db.models import QuerySet
 from strawberry import relay
@@ -893,6 +894,85 @@ def test_phase_2_5_accepts_shared_orderset_whose_owners_keep_the_identity_get_qu
     finalize_django_types()
     assert ShelfOrder._owner_definition is PrimaryShelfType.__django_strawberry_definition__
     assert SecondaryShelfType.__django_strawberry_definition__.orderset_class is ShelfOrder
+
+
+@pytest.mark.parametrize("parent_first", [True, False], ids=["parent-first", "child-first"])
+def test_phase_2_5_rejects_shared_orderset_whose_owners_read_different_tables(parent_first: bool):
+    """A ``Venue`` owner and a ``LendingDesk`` owner of one ``OrderSet`` are refused in both orders.
+
+    A path re-entering the set's table reads the type it is bound to, and
+    multi-table-inheritance parent and child are different tables: bound to the
+    parent owner a re-entered ``Venue`` row reads that owner, bound to the child
+    it reads ``Venue``'s primary. Both owners keep the identity hook, so only the
+    table axis refuses them.
+    """
+
+    class VenueOrder(OrderSet):
+        class Meta:
+            model = Venue
+            fields = ["name"]
+
+    def parent() -> type[DjangoType]:
+        class VenueOwnerType(DjangoType):
+            class Meta:
+                model = Venue
+                fields = ("id", "name")
+                orderset_class = VenueOrder
+
+        return VenueOwnerType
+
+    def child() -> type[DjangoType]:
+        class DeskOwnerType(DjangoType):
+            class Meta:
+                model = LendingDesk
+                fields = ("name",)
+                orderset_class = VenueOrder
+
+        return DeskOwnerType
+
+    for declare in (parent, child) if parent_first else (child, parent):
+        declare()
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert msg.startswith("OrderSet ")
+    assert "cannot bind to multiple owners over different tables" in msg
+    assert "VenueOwnerType (model Venue)" in msg
+    assert "DeskOwnerType (model LendingDesk)" in msg
+    assert "Declare separate OrderSet subclasses per owner." in msg
+
+
+@pytest.mark.parametrize("proxy_first", [True, False], ids=["proxy-first", "concrete-first"])
+def test_phase_2_5_accepts_shared_orderset_whose_owners_read_one_table(proxy_first: bool):
+    """A plain ``Branch`` owner and a plain ``ProxyBranch`` owner read one table, so they share a set."""
+
+    class BranchOrder(OrderSet):
+        class Meta:
+            model = Branch
+            fields = ["name"]
+
+    def concrete() -> type[DjangoType]:
+        class BranchOwnerType(DjangoType):
+            class Meta:
+                model = Branch
+                fields = ("id", "name")
+                orderset_class = BranchOrder
+
+        return BranchOwnerType
+
+    def proxy() -> type[DjangoType]:
+        class ProxyOwnerType(DjangoType):
+            class Meta:
+                model = ProxyBranch
+                fields = ("id", "name")
+                orderset_class = BranchOrder
+
+        return ProxyOwnerType
+
+    owners = [declare() for declare in ((proxy, concrete) if proxy_first else (concrete, proxy))]
+    finalize_django_types()
+    assert BranchOrder._owner_definition is owners[0].__django_strawberry_definition__
+    assert owners[1].__django_strawberry_definition__.orderset_class is BranchOrder
 
 
 _SUBCLASS_OWNER_CASES = [

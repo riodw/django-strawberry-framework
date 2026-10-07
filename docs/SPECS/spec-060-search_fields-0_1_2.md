@@ -1039,8 +1039,8 @@ each hop's target type lets the request see:
      join reaches. With a FilterSet the walk records them itself
      (`RelationHop.target_type`); without one, the plan calls
      `relation_target_type` per `leading_relation_hops` hop with
-     `root=` the declaring type, so a hop re-entering the root model
-     answers for the exact owner. A hop scopes only when that type
+     `root=` the declaring type, so a hop re-entering the root's table
+     (the same `_meta.concrete_model`) answers for the exact owner. A hop scopes only when that type
      declares a `get_queryset` of its own (`RelationHop.scope`,
      `utils/querysets.py::relation_visibility_type`): a model with no
      registered type, or a type keeping the identity default hook, reads
@@ -1048,8 +1048,9 @@ each hop's target type lets the request see:
      that one resolution rather than carrying its own.
 
   The terminal is the one concrete field left (Decision 2 validates
-  `icontains` on it). **A hop whose target model is the plan's root model
-  (path re-entry), declared or not, also records the exact owning
+  `icontains` on it). **A hop whose target is the plan's root table (path
+  re-entry: the same `_meta.concrete_model`, so a proxy root re-entering its
+  concrete model counts), declared or not, also records the exact owning
   `DjangoTypeDefinition` passed into `build_search_path_plan`** when it
   differs from the hop's resolved type, and its visible rows are the rows
   BOTH hooks show. The two differ when the re-entry is a declared hop
@@ -1131,8 +1132,8 @@ each hop's target type lets the request see:
   included; cascade narrowing reaches only the root rows. A live
   forward-FK search test on a type that does **not** call cascade proves
   the claim holds beyond the staged fakeshop types.
-- The per-hop rule **recurses onto the root model itself**: when a
-  declared path re-enters the root model (the Decision 7 reverse-FK
+- The per-hop rule **recurses onto the root table itself**: when a
+  declared path re-enters the root table (the Decision 7 reverse-FK
   fixture does — `book__loans` from a `Loan` root makes the second hop's
   target `Loan` again), the inner `Loan` rows are scoped like any other
   hop's (above: the hop's resolved type, plus the exact owner when it
@@ -1417,7 +1418,7 @@ implement the original per-action policy.
   declares no `RelatedFilter` for, or any hop on a type with no
   `filterset_class`, reads the rows of its model's type
   (`utils/querysets.py::relation_target_type`: the registry's
-  primary-first type, the exact owner on re-entry into the root model
+  primary-first type, the exact owner on re-entry into the root's table
   from a filterset-less type), the same resolution the filter side
   applies to an undeclared hop (Decision 12).
 - **Unscoped hop** — an undeclared hop to a model with no registered
@@ -1449,7 +1450,7 @@ implement the original per-action policy.
   keyed to the exact type definition; a connection serving the secondary
   type uses the secondary's plan, visibility hook, and SDL argument, and
   plan caching never collapses them by model identity. A search path that
-  re-enters the root model composes the exact owning type's visibility —
+  re-enters the root's table composes the exact owning type's visibility —
   primary or secondary — and, when the hop's resolved type (the declared
   branch's bound owner, or the type `relation_target_type` answers for an
   undeclared hop past a declared one) differs from it, the inner rows

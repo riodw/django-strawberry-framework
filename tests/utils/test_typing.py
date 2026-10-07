@@ -10,6 +10,7 @@ import typing
 from typing import Any
 
 import pytest
+import strawberry
 from typing_extensions import override
 
 import django_strawberry_framework.utils.typing as typing_module
@@ -283,6 +284,26 @@ def test_strawberry_schema_from_info_and_schema():
     assert strawberry_schema_from_info(wrapped) is inner
     assert strawberry_schema_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
     assert strawberry_schema_from_info(SimpleNamespace()) is None
+
+
+def test_strawberry_schema_from_info_reads_both_info_flavors():
+    """Both resolver ``info`` flavors over one schema resolve to that Strawberry ``Schema``.
+
+    A Strawberry ``Info`` names the Strawberry ``Schema`` as ``info.schema``; the
+    graphql-core ``GraphQLResolveInfo`` under it names the graphql-core schema, which
+    carries the Strawberry one as ``_strawberry_schema``. An info with no schema reads
+    as ``None``.
+    """
+    from types import SimpleNamespace
+
+    from tests._info import make_info
+
+    info = make_info()
+    schema = info.schema
+    assert isinstance(schema, strawberry.Schema)
+    assert strawberry_schema_from_info(info) is schema
+    assert strawberry_schema_from_info(info._raw_info) is schema
+    assert strawberry_schema_from_info(SimpleNamespace(schema=None)) is None
 
 
 def test_schema_config_from_info_prefers_wrapped_then_direct():

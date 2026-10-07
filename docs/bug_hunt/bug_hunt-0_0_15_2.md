@@ -76,6 +76,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
 - [ ] 52. Connection resolvers send raw exception text to the client (unverified)
 - [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
+- [ ] 74. A consumer `select_related` on a forward FK the query never selects, combined with the optimizer's `.only()`, raises
+  Django's "cannot be both deferred and traversed" (`Entry.objects.select_related("property")` with `{ entries { value item { name } } }`)
 
 ## To do: holes found re-checking the fixes
 

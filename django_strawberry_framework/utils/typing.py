@@ -119,18 +119,21 @@ def strawberry_schema_from_schema(schema: object) -> object:
 
 
 def strawberry_schema_from_info(info: object) -> "Schema | None":
-    """Walk ``info.schema._strawberry_schema``; return ``None`` if any step is missing.
+    """Return the Strawberry ``Schema`` behind either info flavor; ``None`` if it has none.
 
     Centralizes the brittle Strawberry-private ``_strawberry_schema`` contract for
     the resolver-info path. Caller treats ``None`` as "no schema available,
     nothing to look up."
     """
-    # Strawberry's ``Schema.__init__`` files itself on the graphql-core schema it
-    # builds, which is the object ``info.schema`` names on both info flavors.
-    return cast(
-        "Schema | None",
-        getattr(getattr(info, "schema", None), "_strawberry_schema", None),
-    )
+    from strawberry.schema import Schema
+
+    schema = getattr(info, "schema", None)
+    # A Strawberry ``Info`` already names the Strawberry ``Schema``.
+    if isinstance(schema, Schema):
+        return schema
+    # A graphql-core ``GraphQLResolveInfo`` names the graphql-core schema, on which
+    # Strawberry's ``Schema.__init__`` files itself as ``_strawberry_schema``.
+    return cast("Schema | None", getattr(schema, "_strawberry_schema", None))
 
 
 def schema_config_from_info(info: object) -> "StrawberryConfig | None":

@@ -442,7 +442,7 @@ The rejected alternatives (a single `DjangoField` symbol with a `connection=True
 Two constraints on the surrounding resolvers:
 
 - The hand-written `all_library_*` resolvers carry `order_by("id")` for deterministic test ordering.
-- The `all_library_prefetched_books` resolver uses `Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")` - a consumer-shaped queryset. That resolver MUST stay a hand-rolled `@strawberry.field` so it keeps exercising the optimizer's [queryset diffing][glossary-queryset-diffing] path.
+- The `all_library_prefetched_books` resolver uses `Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")` - a consumer-shaped queryset. That resolver MUST stay a hand-rolled `@strawberry.field` so it keeps exercising the optimizer's [queryset diffing][glossary-queryset-diffing] path: the consumer's `prefetch_related("genres")` suppresses the plan's own, and when `shelf` is selected the consumer JOIN is released because `ShelfType` declares a custom `get_queryset`, so the plan's `shelf` `Prefetch`, scoped by that hook, is the only source of shelf rows.
 
 The replacement postures considered and rejected are in [the rationale companion][spec-020-rationale].
 

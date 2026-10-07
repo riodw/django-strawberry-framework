@@ -1736,34 +1736,38 @@ def _validate_relation_override_types(
     whose decode is **type-checked against the relation target** AND
     **visibility-checked through the related type's ``get_queryset``** (spec-036
     Decision 10) - so a permitted writer cannot attach a row they could
-    not *see*. Both guarantees ride the EXACT generated shape:
-    ``utils/write_values.py::decode_visible_relation_ids`` type-checks a
-    ``relay.GlobalID`` against the relation target (the FK path unwraps a
-    one-element list, the M2M path iterates a flat list) and coerces anything else
-    as a raw pk.
+    not *see*. The visibility check holds for any input shape:
+    ``utils/write_values.py::decode_visible_relation_ids`` confirms every decoded
+    pk, raw or from a ``GlobalID``, through the related primary type's
+    ``get_queryset``. The type-check rides the EXACT generated shape: the same
+    decoder decodes a ``relay.GlobalID`` against the relation target (the FK path
+    unwraps a one-element list, the M2M path iterates a flat list) and coerces
+    anything else as a raw pk through the target's pk field.
 
     The naming half (``_validate_input_class``) lets a consumer override a
     relation field's *representation* under its generated ``<field>_id`` / ``list``
     name, but it name-checks only - so a consumer could declare a divergent TYPE or
     CONTAINER SHAPE and the merge would honor it, defeating the decode:
 
-    - ``category_id: int`` (raw pk core) - the value is seen as a non-``GlobalID`` raw
-      pk and passed through, bypassing both the type-check and the visibility
-      contract (attach-by-raw-pk to an unseeable row);
-    - ``genres: relay.GlobalID`` (M2M overridden as a SCALAR) - the resolver wraps the
-      scalar in a one-element list and decodes it as a single membership, or the
-      generated M2M list contract is violated, a top-level resolver / ORM error;
-    - ``genres: list[list[relay.GlobalID]]`` (NESTED list) - the inner lists are not
-      ``relay.GlobalID`` instances, so each is passed through as a raw pk into the M2M
-      ``.set(...)``, a top-level ORM error;
-    - ``category_id: list[relay.GlobalID]`` (FK overridden as a LIST) - the resolver
-      stores the list as the ``<field>_id`` attr and Django raises against the scalar
-      FK column under the MODEL field name, not the ``categoryId`` input field.
+    - ``category_id: int`` (raw pk core) - the value is coerced as a raw pk and
+      still confirmed through the related primary type's ``get_queryset``, but the
+      ``GlobalID`` decode never runs (target-model match, node-id coercion through
+      the type's id field, mapping to the real pk), so the input takes raw pks
+      where the generated schema takes ``GlobalID``s;
+    - ``genres: relay.GlobalID`` (M2M overridden as a SCALAR) - the M2M decoder
+      materializes the value as a container, a ``GlobalID`` is not iterable, so every
+      request is the field-keyed invalid-relation ``FieldError``;
+    - ``genres: list[list[relay.GlobalID]]`` (NESTED list) - each inner list is not a
+      ``relay.GlobalID``, so it is coerced as a raw pk through the target's pk field,
+      fails, and every request is the field-keyed invalid-relation ``FieldError``;
+    - ``category_id: list[relay.GlobalID]`` (FK overridden as a LIST) - the FK decoder
+      wraps the value in a one-element list, the inner list fails the same raw-pk
+      coercion, and every request is the field-keyed invalid-relation ``FieldError``.
 
     So a relation override MUST keep BOTH the generated ``relay.GlobalID`` core AND its
     container shape (scalar for FK / OneToOne, one-level ``list`` for M2M); any
     divergence in core type or list depth is a fail-loud ``ConfigurationError``,
-    caught at the bind rather than crashing a request.
+    caught at the bind rather than as a relation error on every request.
 
     Enforced at the phase-2.5 bind, NOT at class creation: whether the related model
     has a primary Relay-Node type is a ``registry.get`` lookup only reliably populated
@@ -1773,8 +1777,9 @@ def _validate_relation_override_types(
     reading ``relation_input_annotation``'s emitted annotation (core via
     ``_annotation_core_is_global_id``, list depth via ``get_origin(...) is list``), so
     "GlobalID iff Relay-Node primary" and "list iff M2M" cannot drift from what
-    ``build_mutation_input`` produces. A raw-pk relation (a non-Relay target) carries
-    no visibility contract to defeat, so an override there is left alone.
+    ``build_mutation_input`` produces. A raw-pk relation (a non-Relay target)
+    generates a raw pk input already, so there is no ``GlobalID`` decode to defeat
+    and an override there is left alone.
     """
     consumer_fields = {
         field.python_name: field for field in consumer_input.__strawberry_definition__.fields
@@ -1788,7 +1793,7 @@ def _validate_relation_override_types(
             related_primary_type=registry.get(cast("type[models.Model]", field.related_model)),
         )
         if not _annotation_core_is_global_id(annotation):
-            continue  # raw-pk relation (non-Relay target): no visibility contract to bypass.
+            continue  # raw-pk relation (non-Relay target): no GlobalID decode to bypass.
         consumer_field = consumer_fields.get(python_attr)
         if consumer_field is None:
             continue  # not overridden; the generated GlobalID remainder is used.
@@ -1802,9 +1807,11 @@ def _validate_relation_override_types(
                 f"{python_attr!r} with an id type/shape that diverges from the generated input. "
                 f"{_safe_class_name(field.related_model)} has a primary Relay-Node type, so the {kind} "
                 f"relation input is {expected} - type- and visibility-checked at decode (spec-036 "
-                "Decision 10). A divergent core type or container shape would be passed "
-                "through unchecked (bypassing the relation visibility contract) or crash the "
-                f"resolver / ORM. Declare {python_attr!r} as {expected}.",
+                "Decision 10). A divergent core type would skip the GlobalID decode (the "
+                "input would take raw pks where the schema takes GlobalIDs; visibility is "
+                "still confirmed through the related primary type's get_queryset), and a "
+                "divergent container shape would reject every id as an invalid relation. "
+                f"Declare {python_attr!r} as {expected}.",
             )
 
 

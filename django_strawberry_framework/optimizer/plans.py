@@ -326,7 +326,13 @@ class OptimizationPlan:
         ``select_related`` may narrow ``only()`` column lists and
         ``prefetch_related`` may carry nested ``Prefetch`` objects whose
         inner querysets already have their own ``only()`` applied.
+
+        A ``select_related`` the queryset already carries on a path this plan
+        prefetches is released first (``_release_select_related_to_prefetches``),
+        so each planned ``Prefetch`` is the only source of its rows.
         """
+        if self.prefetch_related:
+            queryset = _release_select_related_to_prefetches(queryset, self.prefetch_related)
         if self.only_fields:
             queryset = queryset.only(*self.only_fields)
         if self.select_related:
@@ -480,6 +486,43 @@ def runtime_path_from_path(path: object) -> tuple[str, ...]:
         f"runtime_path_from_path: GraphQL path exceeded {_MAX_PATH_DEPTH} levels; "
         "the `prev` chain is likely cyclic or corrupt.",
     )
+
+
+def _release_select_related_to_prefetches(
+    queryset: QuerySet[_M],
+    prefetches: Sequence[PrefetchLookup],
+) -> QuerySet[_M]:
+    """Drop the queryset's ``select_related`` entries at or below a planned prefetch path.
+
+    Django's ``prefetch_related_objects`` skips every instance whose relation is
+    already cached, and a ``select_related`` JOIN caches it. A JOIN left on a path
+    the plan prefetches therefore wins over the ``Prefetch``, and that JOIN never
+    passed through the queryset the ``Prefetch`` carries - for a target whose
+    ``get_queryset`` the walker downgraded to a ``Prefetch``, the row the hook
+    excludes - while the relation's resolver trusts the plan and serves it. The
+    JOIN on the planned path and every JOIN extending through it are released;
+    JOINs elsewhere (including the hops above a multi-hop prefetch path) stay.
+    The wildcard ``select_related()`` cannot be narrowed path by path and follows
+    every non-null forward key, so it is released whole; the plan's own
+    ``select_related`` entries, applied after this, still JOIN what the selection
+    reads.
+    """
+    existing: object = queryset.query.select_related
+    if existing is False:
+        return queryset
+    if existing is True:
+        return queryset.select_related(None)
+    prefetch_paths = {_lookup_path(entry) for entry in prefetches}
+    joined = _flatten_select_related(existing)
+    kept = [
+        path
+        for path in sorted(joined)
+        if not any(path == pf or path.startswith(f"{pf}__") for pf in prefetch_paths)
+    ]
+    if len(kept) == len(joined):
+        return queryset
+    released = queryset.select_related(None)
+    return released.select_related(*kept) if kept else released
 
 
 def _flatten_select_related(sr: object) -> set[str]:

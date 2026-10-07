@@ -157,6 +157,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/test_extension_isolation_api.py",
     "examples/fakeshop/test_query/test_glossary_api.py",
     "examples/fakeshop/test_query/test_input_shapes_api.py",
+    "examples/fakeshop/test_query/test_joined_relation_visibility_api.py",
     "examples/fakeshop/test_query/test_kanban_api.py",
     "examples/fakeshop/test_query/test_kanban_mutations_api.py",
     "examples/fakeshop/test_query/test_keyset_api.py",

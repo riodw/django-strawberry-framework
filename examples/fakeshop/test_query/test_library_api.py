@@ -654,13 +654,16 @@ def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_htt
             ],
         },
     }
-    assert len(captured) == 2
-    root_sql = captured[0]["sql"]
-    prefetch_sql = captured[1]["sql"]
-    assert "JOIN" in root_sql
-    assert "library_shelf" in root_sql
-    assert "library_book_genres" in prefetch_sql
-    assert "library_genre" in prefetch_sql
+    # ``ShelfType`` declares a visibility hook, so the planned ``shelf`` Prefetch,
+    # scoped by that hook, replaces the consumer's ``select_related("shelf")``
+    # JOIN instead of being skipped over the row the JOIN cached.
+    assert len(captured) == 3
+    root_sql, shelf_sql, genre_sql = (entry["sql"] for entry in captured)
+    assert "library_shelf" not in root_sql
+    assert 'FROM "library_shelf"' in shelf_sql
+    assert "\"topic\" = 'secret'" in shelf_sql
+    assert "library_book_genres" in genre_sql
+    assert "library_genre" in genre_sql
 
 
 @pytest.mark.django_db

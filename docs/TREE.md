@@ -698,6 +698,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_extension_isolation_api.py  # Live GraphQL HTTP tests for what one operation's extensions may be answered from.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_input_shapes_api.py      # Live GraphQL HTTP tests for the relation-id and payload-slot shapes of generated write inputs.
+├── test_joined_relation_visibility_api.py  # Live GraphQL proof that a consumer JOIN never outranks a planned visibility ``Prefetch``.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
 ├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface.
 ├── test_keyset_api.py            # Live GraphQL HTTP tests for keyset (``Meta.cursor_field``) cursor pagination.

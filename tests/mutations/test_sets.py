@@ -1466,7 +1466,7 @@ def test_bind_skips_relation_lock_for_non_relay_target():
     The relation-type-lock only guards a Relay-Node relation's ``GlobalID`` core
     and container shape against a consumer ``input_class`` override. When the FK
     target's ``DjangoType`` is a plain (non-Node) type, the generated ``<field>_id`` is
-    a raw pk with no GlobalID visibility contract to defeat, so the lock skips it and
+    a raw pk with no ``GlobalID`` decode to defeat, so the lock skips it and
     the consumer ``input_class`` merges with the raw-pk remainder. Products' relation
     targets are all Relay-Node, so this skip branch is earned with a non-Node pair here.
     """

@@ -910,9 +910,11 @@ class DjangoType:
         """Default identity hook.
 
         Subclasses override this to scope visibility (permissions,
-        multi-tenancy, soft-delete). The optimizer detects overrides via
-        ``has_custom_get_queryset`` and downgrades ``select_related`` to
-        ``Prefetch`` so visibility filters apply across joins. The package
+        multi-tenancy, soft-delete). An override makes
+        ``has_custom_get_queryset`` report the hook as other than the identity,
+        and the readers that cross a relation into this type then apply it: the
+        optimizer downgrades ``select_related`` to ``Prefetch`` so the hook
+        filters the related rows instead of a raw join reading them. The package
         calls it as ``get_queryset(queryset, info)`` and passes nothing
         else, so an override declares exactly those two parameters.
         ``info`` is the schema's ``strawberry.Info`` for the resolver that
@@ -923,10 +925,23 @@ class DjangoType:
 
     @classmethod
     def has_custom_get_queryset(cls) -> bool:
-        """Return ``True`` if this subclass (or any intermediate base) overrides ``get_queryset``.
+        """Report whether the type's visibility hook is anything other than the identity.
 
-        Used by ``DjangoOptimizerExtension`` to decide whether a related-
-        field traversal should be downgraded to a ``Prefetch``.
+        ``True`` means the type's rows are scoped, so a reader crossing a
+        relation into this type applies the hook rather than reading the raw
+        relation. An override of ``get_queryset`` anywhere in the MRO below
+        ``DjangoType``, an inherited intermediate base included, is what makes
+        it ``True``.
+
+        Readers: the optimizer walker (downgrades a join to a ``Prefetch``,
+        disables FK-id elision, marks the plan uncacheable); the generated
+        relation resolver (applies the hook to a relation the optimizer did not
+        plan); relation-visibility resolution in ``utils/querysets.py`` and
+        ``RelationHop.scope`` in ``utils/permissions.py`` (the hops a
+        ``FilterSet`` relation path crosses); ``OrderSet`` (an order term across
+        the relation reads ``NULL`` for a hidden row); the finalizer (refuses a
+        ``FilterSet`` / ``OrderSet`` bound to two owners when either owner's hook
+        is not the identity).
 
         Implementation: ``__init_subclass__`` stamps
         ``_is_default_get_queryset`` on every subclass at class-creation

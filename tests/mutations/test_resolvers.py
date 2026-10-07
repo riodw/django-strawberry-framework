@@ -447,15 +447,13 @@ def test_globalid_relation_override_flows_through_visibility_contract():
     """A ``GlobalID`` relation override is still relation-visibility-checked (Decision 10).
 
     The bind-time type-lock (``sets.py::_validate_relation_override_types``) forces a
-    relation override to keep the generated ``relay.GlobalID`` id type precisely so the
-    override CANNOT bypass the id type-check / Decision-10 visibility contract a
-    raw-pk override would have skipped. This pins the end-to-end guarantee: a
+    relation override to keep the generated ``relay.GlobalID`` id type, so the override
+    decodes through the same ``GlobalID`` type-check and Decision-10 visibility check
+    as the generated input. This pins the end-to-end guarantee: a
     ``createItem`` whose ``categoryId`` names a ``Category`` hidden by
     ``Category.get_queryset`` is a ``FieldError`` on ``categoryId`` (hidden
     indistinguishable from missing, no existence leak) - even though ``categoryId``
-    came from a consumer ``input_class`` override, not the generated input. A raw-pk
-    override would have been passed through unchecked and silently attached the
-    unseeable row; the type-lock is what guarantees this path is reached.
+    came from a consumer ``input_class`` override, not the generated input.
 
     No shipped override declares a relation field, so the composite is package-only.
     """

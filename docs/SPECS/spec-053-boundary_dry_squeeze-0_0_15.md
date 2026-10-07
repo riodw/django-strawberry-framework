@@ -189,7 +189,20 @@ independently verifiable; the weight is breadth, not depth.
         delegation, keyed `resolve_unvisited_fragment`,
         `_graphql_surface_names`, `_relay_node_gate`, `_validate_set_sidecar`,
         `_attach_generated_resolvers`, relay node-default routing,
-        `require_subclass`).
+        `require_subclass`, one `scopes_rows(type, definition)` predicate).
+        The predicate is the single answer to "does this type filter its
+        rows under the executing schema" and replaces every direct
+        `has_custom_get_queryset` read outside the type-definition owner,
+        today spelled two ways: the `DjangoTypeDefinition` field
+        (`types/resolvers.py::_custom_visibility_type`), the
+        `DjangoType.has_custom_get_queryset` classmethod (`orders/sets.py`,
+        `utils/permissions.py`, `utils/querysets.py`), and both
+        (`optimizer/walker.py::_target_has_custom_get_queryset`, which
+        `optimizer/nested_planner.py` reaches through its injected
+        `target_has_custom_get_queryset` callable). Its contract is
+        defined by effect, not by whether a class body defines
+        `get_queryset`: it is true exactly when the type's visibility hook
+        is not the identity.
 - [ ] **Slice 3 — Structural DRY batch (WP-C, ~500–600 lines)**
   - [ ] C1 `_run_delete` folded onto the write skeleton (`tail_step` seam).
   - [ ] C2 the plain-form pipeline folded onto the skeleton

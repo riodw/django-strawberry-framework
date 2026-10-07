@@ -37,16 +37,28 @@ apps/astronomy/
 
 ### `models.py`
 
-Standard Django — no GraphQL coupling. `CelestialBody.body_type` is a `TextChoices`-backed `CharField`; the package turns it into a Strawberry enum automatically.
+Standard Django — no GraphQL coupling. Row visibility is declared here, beside the column it reads: the abstract `Privatable` mixin owns `is_private` and carries the `Public` rule every inheriting model gets, and `StaffBypass` reads only the actor, so the schema holds it. `CelestialBody.body_type` is a `TextChoices`-backed `CharField`; the package turns it into a Strawberry enum automatically.
 
 ```python
 from django.db import models
 
+from django_strawberry_framework.rules import Actor, Field, Rule
 
-class Galaxy(models.Model):
+Public = Rule("public", Field("is_private").is_false())
+StaffBypass = Rule("staff_bypass", Actor("is_staff").is_true())
+
+
+class Privatable(models.Model):
+    is_private = models.BooleanField(default=False)
+    visibility = (Public,)
+
+    class Meta:
+        abstract = True
+
+
+class Galaxy(Privatable):
     name = models.TextField()
     description = models.TextField(blank=True, default="")
-    is_private = models.BooleanField(default=False)
     created_date = models.DateTimeField(auto_now_add=True, editable=False)
     updated_date = models.DateTimeField(auto_now=True, editable=False)
 
@@ -55,7 +67,7 @@ class Galaxy(models.Model):
         verbose_name_plural = "Galaxies"
 
 
-class CelestialBody(models.Model):
+class CelestialBody(Privatable):
     class BodyType(models.TextChoices):
         STAR = "STAR", "Star"
         PLANET = "PLANET", "Planet"
@@ -74,7 +86,6 @@ class CelestialBody(models.Model):
         related_name="celestial_bodies",
         on_delete=models.CASCADE,
     )
-    is_private = models.BooleanField(default=False)
     created_date = models.DateTimeField(auto_now_add=True, editable=False)
     updated_date = models.DateTimeField(auto_now=True, editable=False)
 
@@ -85,7 +96,7 @@ class CelestialBody(models.Model):
 
 ### `schema.py`
 
-One `DjangoType` per model, each with the full `class Meta` sidecar declaration pointing at the sibling files below. `get_queryset` is the DRF-style visibility hook, composed with `apply_cascade_permissions` so one row-level rule covers direct lookups, connection pagination, nested relation traversal, and the mutation locate.
+One `DjangoType` per model, each with the full `class Meta` sidecar declaration pointing at the sibling files below. Row visibility is declared; `get_queryset` is the escape hatch. `StaffBypass` on the schema grants staff every row; everyone else is held to the `Public` rule both models inherit from `Privatable`, and because both types bear a rule the forward-FK cascade runs by default, so a visible body never points at a galaxy the viewer cannot see (and a nested `galaxy { ... }` selection never raises `RelatedObjectDoesNotExist`). One declaration covers direct lookups, connection pagination, nested relation traversal, and the mutation locate.
 
 ```python
 import strawberry
@@ -98,7 +109,6 @@ from django_strawberry_framework import (
     DjangoOptimizerExtension,
     DjangoSchema,
     DjangoType,
-    apply_cascade_permissions,
     finalize_django_types,
     strawberry_config,
 )
@@ -119,14 +129,6 @@ class GalaxyNode(DjangoType):
         fields_class = fieldsets.GalaxyFieldSet
         search_fields = ("name", "description")
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        """Staff see everything; everyone else sees public rows behind the cascade."""
-        user = getattr(getattr(info.context, "request", None), "user", None)
-        if user and user.is_staff:
-            return queryset
-        return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
-
 
 class CelestialBodyNode(DjangoType):
     class Meta:
@@ -138,19 +140,6 @@ class CelestialBodyNode(DjangoType):
         aggregate_class = aggregates.CelestialBodyAggregate
         fields_class = fieldsets.CelestialBodyFieldSet
         search_fields = ("name", "description", "galaxy__name", "galaxy__description")
-
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        """Staff see everything; everyone else sees public rows behind the cascade.
-
-        The cascade narrows through the non-null ``galaxy`` FK, so a visible
-        body can never point at a galaxy the viewer cannot see (and a nested
-        ``galaxy { ... }`` selection can never raise ``RelatedObjectDoesNotExist``).
-        """
-        user = getattr(getattr(info.context, "request", None), "user", None)
-        if user and user.is_staff:
-            return queryset
-        return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 @strawberry.type
@@ -169,6 +158,7 @@ schema = DjangoSchema(
     mutation=Mutation,
     config=strawberry_config(),
     extensions=[lambda: _optimizer],
+    visibility=[models.StaffBypass],
 )
 ```
 
@@ -551,7 +541,7 @@ The project misses the goal if users must routinely hand-build the same schema m
 
 ## Trust boundary
 
-The package sits on Django, Strawberry and graphql-core and is no more secure than they are. The wire is untrusted: every bound in the production security profile exists for the document, variables, headers and uploads a request carries. Configuration is validated at construction, then trusted. Application Python - resolvers, `get_queryset` hooks, sidecar overrides, project `QuerySet` classes, extension factories - is trusted: the package validates what it can establish mechanically about their results and states the contract each must keep, and does not promise to contain code running inside its own process. Django's security policy is the model: a defect must be reachable through code that could feasibly exist in a project using supported public API. What this package guarantees beyond upstream - a bounded raw list, per-operation isolation of its own extensions, an error masked for the right operation - the docs state as its own.
+The package sits on Django, Strawberry and graphql-core and is no more secure than they are. The wire is untrusted: every bound in the production security profile exists for the document, variables, headers and uploads a request carries. Configuration is validated at construction, then trusted. Declared visibility rules are configuration, validated term by term at construction; the predicate compiled from them is package code, so a row set that disagrees with the declaration is a package defect. The actor those rules read is the user Django's authentication attached to the request. Application Python - resolvers, `get_queryset` hooks, sidecar overrides, project `QuerySet` classes, extension factories - is trusted: the package validates what it can establish mechanically about their results and states the contract each must keep, and does not promise to contain code running inside its own process. Django's security policy is the model: a defect must be reachable through code that could feasibly exist in a project using supported public API. What this package guarantees beyond upstream - a bounded raw list, per-operation isolation of its own extensions, an error masked for the right operation - the docs state as its own.
 
 ## Non-goals
 
@@ -561,7 +551,7 @@ This package should not become:
 - a direct port of Graphene internals
 - a Graphene compatibility runtime
 - a decorator-first framework
-- an ORM abstraction layer that hides Django querysets
+- an ORM abstraction layer that hides Django querysets (a restricted rule language that compiles to `Q`, with `get_queryset` kept as the escape hatch, is not such a layer)
 - a system that silently weakens rich relations into generic placeholders
 
 The destination is a Django-native, Strawberry-powered framework that makes rich GraphQL schemas easy to build and efficient to execute.

@@ -112,8 +112,14 @@ its glossary entries fold in with that card's shipping slice.
   `optimizer/templates.py`; the normalized root-subtree fingerprint builder
   (exact owning type identity, root field/return type identity, normalized
   subtree selection, only the directive/pagination slots referenced inside
-  the subtree, strategy/static schema configuration); the binding pipeline
-  producing today's `OptimizationPlan` from a template plus request inputs;
+  the subtree, strategy/static schema configuration, including each
+  relation's visibility-slot verdict read through the one type-definition
+  predicate); the binding pipeline producing today's `OptimizationPlan` from
+  a template plus request inputs, handing each binding slot's hook the
+  resolver's Strawberry `Info` and taking each slot's bound
+  `RowIdentityProof` grade as a proof-recipe input
+  ([Decision 4](#decision-4--visibility-becomes-a-binding-slot),
+  [Decision 2](#decision-2--structuralbound-split-no-request-value-in-any-structural-object));
   package tests proving a bound plan is directive-for-directive equivalent
   to a directly-walked plan across the existing optimizer test corpus
   shapes. No behavior change ships in this slice.
@@ -122,7 +128,9 @@ its glossary entries fold in with that card's shipping slice.
   to the subtree fingerprint; templates store relative paths and binding
   rebases them to absolute response paths (aliases and re-embedding hit the
   same template); `_publish_plan_to_context` publishes the operation plan
-  map keyed by root execution identity while the legacy
+  map keyed by root execution identity, each entry carrying its visibility
+  bindings read from the operation-scoped visibility sink that root
+  resolvers, binding slots, and the cascade all report to, while the legacy
   `DST_OPTIMIZER_PLAN` last-wins key is retained for the explain card to
   retire ([Decision 6](#decision-6--operation-plan-map-replaces-last-wins-introspection)).
 - [ ] **Slice 3 — nested sidecar batching.** The eight-step sidecar
@@ -137,7 +145,9 @@ its glossary entries fold in with that card's shipping slice.
   per-alias batching.
 - [ ] **Slice 4 — row-identity enforcement + live activation.**
   `optimizer/nested_fetch.py::unwindowable_child_queryset_reason` composes
-  with the `RowIdentityProof` grades
+  with the `RowIdentityProof` grades, each binding slot contributing the
+  grade its bound result carries and `graph.apply`-compiled hook output
+  grading as a proven framework shape
   ([Decision 8](#decision-8--row-identity-proof-enforcement-never-an-automatic-distinct));
   strict targets raise a targeted unproven-row-identity error, non-strict
   targets fall back visibly, no automatic `DISTINCT`; the live fakeshop
@@ -294,6 +304,14 @@ slots hold factories and slot descriptors, not values) and tested
 adversarially (attempting to construct a template around a bound queryset
 raises).
 
+The row-identity proof recipe is a function of bind-time inputs, never a
+stored grade. Each visibility binding slot (Decision 4) contributes the
+`RowIdentityProof` its bound result carries, and the recipe composes those
+grades with the framework shapes the template records. The grade can differ
+per request for one template: a slot's bound result may be the unfiltered
+base queryset, a filtered queryset, or `none()`, so the window decision
+(Decision 8) is taken at bind time and never cached in the template.
+
 **Rejected:** keeping `cacheable = False` and adding a second cache tier
 keyed by viewer — it multiplies entries by viewer cardinality and still
 replans per viewer; the binding slot costs one bind per request against a
@@ -309,7 +327,8 @@ A template is keyed by exactly:
 - normalized root-subtree selection fingerprint;
 - only the directive and nested-pagination slots referenced *inside* that
   subtree;
-- strategy/static schema configuration.
+- strategy/static schema configuration, including each relation's
+  visibility-slot verdict (Decision 4).
 
 Explicitly excluded from the key: unrelated operation text, unrelated
 variables, the root response alias, request-bound visibility, the database
@@ -321,11 +340,22 @@ question below).
 ### Decision 4 — Visibility becomes a binding slot
 
 `_plan_prefetch_relation`'s walk-time queryset construction moves to bind
-time. The structural relation template records the relation lookup, exact
-target type, child structural template, projection, and subtree-relative
-strictness identities; the binding stage calls the target's `get_queryset`
-factory with the live `info`, applies the contextual edge scope
-(`EdgeScope`, from card `058`), and materializes the concrete `Prefetch`.
+time. A relation carries a visibility binding slot whenever its target type
+can filter rows under the executing schema, whether through a consumer
+`get_queryset` override, a declared rule on the target, or a schema-level
+restriction that reaches it. That verdict is read through one predicate on
+the type definition, never by inspecting whether a class body defines
+`get_queryset`, and it is part of the template key's static schema
+configuration (Decision 3), so two schemas that disagree on whether a
+target filters rows never share a relation template. The structural
+relation template records the relation lookup, exact target type, child
+structural template, projection, subtree-relative strictness identities,
+and the slot; the binding stage calls the target's `get_queryset` factory
+with the live `info`, applies the contextual edge scope (`EdgeScope`, from
+card `058`), and materializes the concrete `Prefetch`. The `info` handed to
+the hook at bind time is the resolver's Strawberry `Info`, so `info.schema`
+is the executing `DjangoSchema`; the binding stage never hands the hook a
+raw graphql-core `GraphQLResolveInfo`.
 A visibility-bearing relation template is therefore cross-request cacheable.
 One request-bound child recipe is reused across identical
 relation/argument/scope keys within the request (the operation memo is the
@@ -348,10 +378,19 @@ field/type/model; structural template fingerprint; structural hit/miss;
 request-binding identity without secret values; select/prefetch/computed
 dependencies; direct and correlated predicate branches; contextual edge
 scopes; nested strategy and sidecar plan; row-identity proof; fallback
-reasons; estimated query families; strictness keys; database alias; and
-whether count and page share a statement. Shared operation dependencies
-appear once with redacted keys and hit/miss counts. The map is complete and
-deterministic under any async completion order.
+reasons; estimated query families; strictness keys; database alias;
+whether count and page share a statement; and visibility bindings. Shared
+operation dependencies appear once with redacted keys and hit/miss counts.
+The map is complete and deterministic under any async completion order.
+
+Visibility bindings are recorded per binding slot and per root base
+queryset: the outcome the visibility hook reported to an operation-scoped
+sink, naming which declared rule or hook bound, at which site, whether a
+bypass or a restriction decided the verdict, and which cascade edges ran,
+with hit counts and actor values redacted. Hook calls made by root
+resolvers and inside the cascade report to the same sink as binding slots
+do, so the map records them even though they run outside the optimizer
+walk.
 
 The legacy `DST_OPTIMIZER_PLAN` last-wins key is **retained unchanged**
 through this card — its readers are the package and live test suites — and
@@ -404,8 +443,11 @@ window an unproven shape with a targeted unproven-row-identity error;
 non-strict mode uses the existing per-parent fallback with the reason
 reported through strictness and the plan map. The framework never injects
 `DISTINCT` to launder an unproven shape — that would silently change a
-consumer multiset. Consumer querysets that bypass framework shaping remain
-unproven; reverse-engineering Django alias maps to certify them is
+consumer multiset. A binding slot contributes the grade its bound result
+carries (Decision 2), and a hook whose output is compiled through
+`graph.apply` (card `058`) is a proven framework shape, graded by the
+compile that produced it. Consumer querysets that bypass framework shaping
+remain unproven; reverse-engineering Django alias maps to certify them is
 explicitly rejected.
 
 ### Decision 9 — Pluggable nested-fetch strategies must consume the pipeline
@@ -452,10 +494,13 @@ interleavings a real query cannot produce.
 | # | Reproduction | Core assertion |
 | --- | --- | --- |
 | R1 | Five-root structural cache isolation | Each root produces one plan-map entry; a selection or argument change invalidates only its own subtree; aliasing a root needs no new template; a repeat request hits every template; rebased paths are correct under aliases |
+| R1 (visibility slot) | Binding-slot presence and hook `Info` | A target with no `get_queryset` override that a declared rule or schema restriction filters carries a binding slot and binds per request; two schemas that disagree on whether a target filters rows key distinct templates; the hook receives the resolver's Strawberry `Info`, whose `schema` is the executing `DjangoSchema` |
 | R3 (filtered arm) | Filtered nested connection batching | The per-parent fallback counts pinned as *characterized* by card `058` become asserted equalities: query count identical for 1 and 100 parents with a `filter:` argument |
 | R7 | Ordered nested connection batching | Parent count does not change child query count; per-parent windows and `totalCount`; cursors replay; argument-divergent aliases batch separately; strictness reports no planned edge on fallback; the plan map reports the sidecar normalization and strategy |
 | R8 | Row-identity window gate | Strict targets raise a targeted unproven-row-identity error on the multiplying-join shape; non-strict targets fall back visibly; no automatic `DISTINCT`; correlated `EXISTS` restores a proven window plan; duplicate child identities never enter row numbering or partition counts |
+| R8 (bound proof) | Proof carried through the binding slot | One template binds a base queryset, a `graph.apply`-filtered queryset, and `none()` across three requests, and the proof each bound result carries reaches the window decision; `graph.apply`-compiled hook output windows in strict mode; a hook queryset that bypasses framework shaping grades unproven |
 | R10 | Operation plan-map completeness | Every root appears exactly once regardless of async completion order; shared dependencies appear once with one compute and N-1 hits; fallback reasons attach to the right response key; scope values are redacted |
+| R10 (visibility bindings) | Visibility bindings in the plan map | Each binding slot and each root base queryset reports which declared rule or hook bound, at which site, whether a bypass or a restriction decided the verdict, and which cascade edges ran, with hit counts; hook calls from root resolvers and the cascade appear although they run outside the walk; actor values are redacted |
 
 Fixtures are the existing fakeshop surfaces: the five-root dashboard
 operation (categories/items/properties/entries/periodicals) for R1/R10,
@@ -530,15 +575,23 @@ unchanged.
 - [ ] The plan cache keys by root-subtree fingerprint; the R1 matrix is
   green live (isolation, aliasing, re-embedding, full-hit repeat).
 - [ ] Visibility-bearing relation templates are cross-request cacheable;
-  `get_queryset` binds per request; one bound child recipe per
-  relation/argument/scope key per request.
+  a relation carries a binding slot whenever its target can filter rows
+  under the executing schema, read through the one type-definition
+  predicate and keyed as static schema configuration; `get_queryset` binds
+  per request with the resolver's Strawberry `Info`; one bound child recipe
+  per relation/argument/scope key per request.
 - [ ] Filtered/ordered/search-bearing nested connections batch with query
   counts independent of parent count; per-alias batching proven; the R3
   filtered arm asserts equalities.
 - [ ] Strict mode refuses unproven window shapes with a targeted error;
-  non-strict falls back visibly; no code path injects `DISTINCT`.
+  non-strict falls back visibly; no code path injects `DISTINCT`; each
+  binding slot's bound proof grade feeds the bind-time window decision and
+  `graph.apply`-compiled hook output grades proven.
 - [ ] The operation plan map is complete and deterministic under reversed
-  async completion order; the legacy key still serves existing readers.
+  async completion order and carries visibility bindings for every binding
+  slot and root base queryset, including hook calls from root resolvers and
+  the cascade, with actor values redacted; the legacy key still serves
+  existing readers.
 - [ ] Sync and async agree across every arm; the no-extension and SKIP arms
   are unchanged.
 - [ ] Slice 5 docs land; release-state artifacts are untouched and owned by

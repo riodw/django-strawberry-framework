@@ -103,7 +103,8 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
 - [ ] **Slice 1 — `fieldset/` package core.** `django_strawberry_framework/fieldset/`
   (package, mirroring the `filters/` shape) with `base.py` (`FieldSet` +
   `FieldSetMetaclass`: discovery of `check_<field>_permission` /
-  `resolve_<field>` / computed-field annotations, [`Meta.model`][glossary-metamodel] +
+  `resolve_<field>` / computed-field annotations into field-name →
+  callable mappings, [`Meta.model`][glossary-metamodel] +
   `Meta.depends_on` validation). Unit tests under `tests/fieldset/`
   mirroring the source one-to-one.
 - [ ] **Slice 2 — phase-2.5 binding + resolver wiring.** `factories.py`
@@ -111,7 +112,7 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   phase 2.5, `DjangoTypeDefinition.fields_class` slot population,
   `Meta.fields_class` promotion from `DEFERRED_META_KEYS` to
   `ALLOWED_META_KEYS`, wrapper cascade (gate → override → original
-  resolver), `skip_field_names` extension so FieldSet resolvers win over
+  resolver) built from the field-name → callable mappings, `skip_field_names` extension so FieldSet resolvers win over
   auto-generated scalar resolvers.
 - [ ] **Slice 3 — computed fields + optimizer cooperation.** Class-level
   annotation transplant onto the owning type (fail-closed validation),
@@ -395,9 +396,17 @@ distinct concern from the consumer-facing class. `fieldset/` has no
    with the same inheritance-aware walk as methods so mixin-declared
    computed fields work.
 
-The metaclass stores the discovered sets (`_field_permissions`,
-`_field_resolvers`, `_computed_fields`, and their union `_managed_fields`)
-as class attributes — the binding factory's entire input. `Meta.model` is
+The metaclass stores the discovered declarations as class attributes:
+`_field_permissions` maps each gated field name to its gate callable,
+`_field_resolvers` maps each overridden field name to its override
+callable, `_computed_fields` holds the computed-field annotations, and
+`_managed_fields` is the union of their keys. These mappings are the
+binding factory's entire input; the `check_<field>_permission` /
+`resolve_<field>` method convention is one producer of them, so a later
+declarative producer of gates feeds the same wrapper path. The binding
+factory and the wrapper cascade
+([Decision 11](#decision-11--wrapper-preserves-the-generated-resolver-and-composes-syncasync-components))
+read the mappings and never re-discover methods by name. `Meta.model` is
 required on concrete consumer subclasses (the abstract `FieldSet` base
 itself carries none); a missing/non-model `Meta.model` raises
 [`ConfigurationError`][glossary-configurationerror] at class-creation time,
@@ -626,7 +635,12 @@ The resolver wrapper captures the original (generated or transplanted)
 resolver and delegates to it as cascade step 3, exactly like upstream's
 `make_wrapper` — so FK/relation resolvers, converter output
 (`types/converters.py::convert_field_output`), and optimizer-planned
-resolution all keep working under a gate-only declaration. When the wrapped
+resolution all keep working under a gate-only declaration. The gate and
+override for a field are the callables the binding factory reads from the
+FieldSet's field-name mappings
+([Decision 2](#decision-2--the-three-declaration-contract)); the wrapper
+never looks a method up by its `check_<field>_permission` /
+`resolve_<field>` name at wrap time. When the wrapped
 resolver, gate, or override is async
 (`utils/typing.py::is_async_callable`), the wrapper is async and awaits every
 awaitable component result before continuing the gate → override → default
@@ -640,8 +654,8 @@ coroutine and bypassed.
 
 | Slice | Files touched | Delta |
 |---|---|---|
-| 1 | `django_strawberry_framework/fieldset/__init__.py`, `fieldset/base.py`, `tests/fieldset/test_base.py` | `FieldSet` + `FieldSetMetaclass`: declaration discovery (gates / overrides / computed annotations, inheritance-aware), `Meta.model` + `Meta.depends_on` validation, `ConfigurationError` paths; unit tests one-to-one |
-| 2 | `fieldset/factories.py`, `types/finalizer.py` (`_bind_fieldsets`, phase-2.5 call), `types/base.py` (key promotion + `fields_class` value validation), `types/definition.py` (slot populator docs), `tests/fieldset/test_factories.py`, `tests/types/…` | Owner binding via `_bind_set_owner_common`, wrapper cascade construction, `skip_field_names` extension, promotion out of `DEFERRED_META_KEYS`, idempotent rerun marking |
+| 1 | `django_strawberry_framework/fieldset/__init__.py`, `fieldset/base.py`, `tests/fieldset/test_base.py` | `FieldSet` + `FieldSetMetaclass`: declaration discovery (gates / overrides / computed annotations, inheritance-aware) into field-name → gate and field-name → override mappings, `Meta.model` + `Meta.depends_on` validation, `ConfigurationError` paths; unit tests one-to-one |
+| 2 | `fieldset/factories.py`, `types/finalizer.py` (`_bind_fieldsets`, phase-2.5 call), `types/base.py` (key promotion + `fields_class` value validation), `types/definition.py` (slot populator docs), `tests/fieldset/test_factories.py`, `tests/types/…` | Owner binding via `_bind_set_owner_common`, wrapper cascade construction from the field-name → callable mappings (no method-name lookup at wrap time), `skip_field_names` extension, promotion out of `DEFERRED_META_KEYS`, idempotent rerun marking |
 | 3 | `fieldset/factories.py`, `types/finalizer.py`, `optimizer/plans.py` (or the plan-construction seam that merges per-type extra columns), `tests/fieldset/test_depends_on.py`, `tests/optimizer/…` | Computed-field transplant + fail-closed audits (Decision 5), selection-sensitive `depends_on` map → `only_fields` merge (Decision 7) |
 | 4 | `examples/fakeshop/apps/products/fields.py` (activate the already-staged FieldSet classes — repoint the `AdvancedFieldSet` base to `FieldSet`; not a new file), fakeshop schema wiring, `examples/fakeshop/test_query/test_fieldset*.py`, `tests/fieldset/test_composability.py` | Live HTTP: tiered visibility / redaction / denial / computed field across the four user tiers; composability with `FilterSet` / `OrderSet` / cascade |
 | 5 | `docs/GLOSSARY.md` (DB + regen), `docs/README.md`, `docs/TREE.md` (regen), `README.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py` | Status flips, new `Meta.depends_on` glossary entry, `0.1.1` entry + version triplet, card wrap |
@@ -732,11 +746,15 @@ Unit (`tests/fieldset/`, mirroring source one-to-one per the card DoD):
    sync/async combination across original, gate, and override (including an
    async gate denial); denial propagation shape (nullable → `null` +
    `errors`; non-null → bubble).
-4. Binding: phase-2.5 idempotence (double `finalize_django_types`), owner
+4. Mapping-fed gate: a gate supplied through the field-name → gate
+   mapping with no matching `check_<field>_permission` method on the
+   FieldSet is wrapped identically to a method-discovered gate (same
+   cascade order, same denial shape).
+5. Binding: phase-2.5 idempotence (double `finalize_django_types`), owner
    mismatch raise, warning for unsurfaced targets, promotion (declaring
    `fields_class` no longer raises deferred-surface; `aggregate_class` /
    `search_fields` still do).
-5. Optimizer: two managed fields with disjoint `depends_on` declarations
+6. Optimizer: two managed fields with disjoint `depends_on` declarations
    contribute only their own columns when selected independently and the
    union when selected together; dependencies are absent when neither is
    selected; deferred-fetch count assertion for the undeclared case
@@ -745,17 +763,17 @@ Unit (`tests/fieldset/`, mirroring source one-to-one per the card DoD):
 Live (`examples/fakeshop/test_query/`, per the
 [live-first coverage mandate][glossary-live-first-coverage-mandate]):
 
-6. Tiered visibility across four user tiers (staff / perm-holder /
+7. Tiered visibility across four user tiers (staff / perm-holder /
    authenticated / anonymous) on a datetime field — full / day / month /
    year precision on the wire.
-7. Redaction: non-staff reads `isPrivate` as `false` with **no** `errors`
+8. Redaction: non-staff reads `isPrivate` as `false` with **no** `errors`
    entry; staff reads the real value.
-8. Denial: anonymous query selecting `updatedDate` gets `null` + an
+9. Denial: anonymous query selecting `updatedDate` gets `null` + an
    `errors` entry with the gate's message; authenticated gets data.
-9. Computed field: `displayName` resolves for authenticated, `null` for
+10. Computed field: `displayName` resolves for authenticated, `null` for
    anonymous; query-count assertion proving `depends_on` kept it
    deferred-fetch-free under the optimizer.
-10. Composability: gated field still filterable (FieldSet + `FilterSet`)
+11. Composability: gated field still filterable (FieldSet + `FilterSet`)
     and orderable (FieldSet + `OrderSet`) by authorized users; cascade
     narrows first (FieldSet + `apply_cascade_permissions`) — a
     cascade-hidden row yields no node and no field-level error, proving the
@@ -842,7 +860,10 @@ cannot reach.
   `django_strawberry_framework.fieldset.FieldSet`.
 - [ ] `FieldSet` accepts `class Meta: model = Foo` (+ optional
   `depends_on`); declarations are method-based plus class-level
-  computed-field annotations; unknown gate/override targets fail closed;
+  computed-field annotations, stored as field-name → gate and field-name →
+  override mappings that the binding factory and wrapper consume (the
+  method convention is one producer of them); unknown gate/override
+  targets fail closed;
   no `Meta.fields` on the FieldSet itself.
 - [ ] `Meta.fields_class = FooFieldSet` binds at phase 2.5
   (`_bind_fieldsets`), populates `DjangoTypeDefinition.fields_class`, and

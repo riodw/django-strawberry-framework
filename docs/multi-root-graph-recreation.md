@@ -131,6 +131,12 @@ returned parent rows.
 2. An unrelated sibling selection, alias, directive, or pagination variable
    does not invalidate another root's structural template.
 3. Request-bound visibility is attached **after** a structural cache hit.
+   A declared visibility rule's canonical form, footprint, and owning scope
+   are the structural half; its actor-folded predicate is the request-bound
+   half, memoized under the viewer identity re-read at each lookup, since a
+   login or logout mutation can change `request.user` inside one operation.
+   The fold never enters a structural entry; the normative contract is
+   [`spec-058`][spec-058] Decision 3.
 4. Explain data records every root plan; it is not last-wins.
 
 ## Recreating it in fakeshop

@@ -362,6 +362,7 @@ class ItemType(DjangoType):
 - Explicit `Meta.soft_delete = True` flag only. **No manager auto-detection** — custom managers make detection fragile and silent misdetection is worse than one line of declaration.
 - The visibility filter applies to the root queryset **and inside every `Prefetch(queryset=...)` the optimizer builds**. The related-side Prefetch is the actual leak site today; filtering only the root queryset is the bug, not the fix.
 - Cooperates with `get_queryset` and (when it lands) `cascade_permission_prefetch_enforcement` via the same visibility-combinator seam.
+- `Meta.soft_delete = True` is sugar for one declared visibility rule on the model and enforces through the same seam, never a second row-rule vocabulary or output shape.
 - Joins (`select_related` across a soft-deleting relation) document the contract: the row appears with the relation nulled vs. excluded, configurable per type.
 
 **Composes with**: `cascade_permission_prefetch_enforcement`.
@@ -1349,27 +1350,44 @@ class ItemType(DjangoType):
 
 **Impact**: 7/10 — Removes the `get_queryset` boilerplate every team writes; near-parity positioning is honest.
 
-**Difficulty**: 4/10 — Meta key + composition order + three permission value kinds.
+**Difficulty**: 4/10 — Meta key + schema scopes + composition order + one restricted rule language.
 
 **Source**: item 1, row + field halves.
 
-**What we'd do**: one `Meta.permissions` key combining row and field permissions declaratively.
+**What we'd do**: declare row and field permissions as rules at the scope that owns them (schema, model mixin, type, field) instead of in hand-written queryset hooks.
 
 **Spec**:
 
 ```python path=null start=null
+from django_strawberry_framework.rules import Actor, Field, Rule
+
+Public = Rule("public", Field("is_private").is_false())
+StaffBypass = Rule("staff_bypass", Actor("is_staff").is_true())
+ActiveOnly = Rule("active_only", Actor("is_active").is_true())
+
+
+class Privatable(models.Model):
+    is_private = models.BooleanField(default=False)
+    visibility = (Public,)
+
+    class Meta:
+        abstract = True
+
+
 class ItemType(DjangoType):
     class Meta:
         model = Item
-        permissions = {
-            "row": "items.view_item",
-            "fields": {"price": "items.view_price"},
-        }
+        visibility = (Rule("in_stock", Field("stock").gt(0)),)
+
+
+schema = DjangoSchema(query=Query, visibility=[StaffBypass], restrictions=[ActiveOnly])
 ```
 
 - Row permissions compose with (not replace) `get_queryset`: declaration is sugar over the queryset hook, applied before consumer hooks run.
-- Field permissions gate at resolution per the decision in `permission_redaction_nullability_spec`.
-- Permission values: Django permission strings, callables `(user, info) -> bool`, or permission-class instances — matching the surrounding ecosystem's expectations.
+- Field permissions are a scope below the model and gate at resolution per the decision in `permission_redaction_nullability_spec`.
+- Row visibility is declared as rules: `Meta.visibility` is a tuple of `Rule` objects written in a restricted rule language whose terms are row fields and actor attributes, and the same tuple is declarable as `visibility` on an abstract model mixin, reaching every model that inherits it.
+- `DjangoSchema(visibility=[...], restrictions=[...])` holds the actor-only rules: `visibility` the grants (bypasses, ORed), `restrictions` the universal conjuncts; restrictions are evaluated first on every type, then bypasses, then the type's model and edge rules, ANDed.
+- Opaque callables and permission strings are not rule values; a hand-written `get_queryset` is the escape hatch, and an audit reports it as such.
 - Honest positioning note carried in the docs: row + field permissions are near-parity with `strawberry-graphql-django`'s `permission_classes`; the differentiation lives in the cascade card.
 
 **Composes with**: `permission_redaction_nullability_spec` (prerequisite), `cascade_permission_prefetch_enforcement`, `role_scoped_schema_variants`.

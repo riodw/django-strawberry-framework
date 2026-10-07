@@ -320,6 +320,14 @@ never collapses duplicates already present because of the consumer's
 ordering and any explicit consumer-authored `.distinct()` are preserved
 untouched.
 
+A predicate the framework compiles from a declaration, including the
+default `get_queryset` body once it is framework-owned, is a
+framework-generated predicate under this contract: a selection, never a
+join. Its relation terms compile through
+`django_strawberry_framework/optimizer/predicates.py::related_rows_exist`
+over each hop's visible rows, exactly as filter and search arms do. Only a
+hand-written `get_queryset` body is consumer input.
+
 This contract is not merely the least expensive answer to finding 5 — it
 follows from the package's public queryset-composition promise:
 [`GOAL.md`][goal] requires automatic planning to "cooperate with
@@ -359,7 +367,9 @@ endpoint's set-like response behavior.
 ## Architecture: three layers, filter semantics live in the adapter
 
 Per first-review finding 8, the reusable machinery stays neutral and the
-django-filter semantics live in one adapter:
+django-filter semantics live in one adapter. The three layers serve every
+framework-compiled predicate, visibility included, not `FilterSet` and
+search alone:
 
 1. **`utils/relations.py`** — immutable model-path classification
    (Slice A). No lookup execution, no queryset knowledge.

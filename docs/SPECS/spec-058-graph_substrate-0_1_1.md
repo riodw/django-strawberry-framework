@@ -720,7 +720,8 @@ Contract lines, each pinned and tested:
   [`request_from_info`][glossary-request_from_info] — the example's
   `info.context` shapes vary across Django HTTP, bare-`HttpRequest` test
   client, and Channels contexts, and `request_from_info` is the only
-  supported resolver) and the database alias.
+  supported resolver) and the database alias, re-reading the viewer at
+  every call rather than once per operation.
 - **Immutable values only** — frozen dataclasses and primitive ID sets,
   never evaluated querysets or model instances (request-, transaction-,
   router-, and snapshot-sensitive).
@@ -728,6 +729,16 @@ Contract lines, each pinned and tested:
   reads or writes `info.context` as a store
   (`utils/context.py::stash_on_context` is silently lossy on frozen
   contexts); `info` feeds error messages and `scope_key`.
+
+A declared visibility rule splits on the structural/request-bound line. Its
+canonical form, footprint, and owning scope are structural: frozen at
+finalize, hashable, and safe in any cross-request structural object. Its
+actor-folded predicate is request-bound: memoized here under
+`graph.scope_key`'s viewer identity, which is re-read at each lookup
+because a mutation (the shipped login and logout mutations among them) can
+change `request.user` inside one operation, so a fold computed before the
+change is never served after it. The fold is attached after any structural
+cache hit and is never stored in a structural object.
 
 **Rejected:** a cross-request TTL cache — that is `BACKLOG.md`'s
 `request_lifecycle_cancellation_and_reuse` escalation tier, which must share

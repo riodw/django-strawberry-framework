@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 13 done, 14 to do. Ignore comments: 1339 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 15 done, 12 to do. Ignore comments: 1339 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -40,6 +40,9 @@ Progress: 13 done, 14 to do. Ignore comments: 1339 lines (1897 at the start of 0
   ignores; one kept, below)
 - [x] 17. `tests/_info.py` builds real Strawberry `Info` objects (`make_info`, `response_path`) and `unread_info()`,
   a real `Info` that fails on any read (35 ignores: the 22 `Info` stand-ins and 13 other stand-ins)
+- [x] 26. `schema_config_from_info`'s docstring names the real Strawberry `Info` as the fallback's caller; the
+  `info.schema.config` fallback stays (a real `Info`'s `schema` is the Strawberry `Schema`)
+- [x] 27. spec-020 and spec-023 show resolvers in the item-4 spelling (`graphql_type=`, model-row return)
 
 ## To do: rules still off
 
@@ -66,10 +69,6 @@ Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessa
   `DjangoNodesField`: 4. Run the public-types check first
 - [ ] 20. Real `ExecutionContext` / `DjangoTypeDefinition` objects instead of stand-ins: 36, case by case
 - [ ] 21. Not yet surveyed: other stand-ins (168) and the uncategorized rest (420, of which 153 are in the package)
-- [ ] 26. Drop "and test stubs" from `utils/typing.py::schema_config_from_info`'s docstring. Keep the
-  `info.schema.config` fallback: a real Strawberry `Info` takes it (its `schema` is the Strawberry `Schema`)
-- [ ] 27. Old resolver spelling in two archived specs: `docs/SPECS/spec-020-list_field-0_0_7.md`
-  (`all_library_branches`) and `docs/SPECS/spec-023-multi_db-0_0_7.md` (`books_on_shard_b`, `all_books`)
 
 Survey verdicts recorded so nothing is re-tried blind:
 

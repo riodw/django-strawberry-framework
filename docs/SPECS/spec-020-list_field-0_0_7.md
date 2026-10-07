@@ -70,8 +70,8 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 Without a list primitive, every model-backed root `list[T]` field of a `DjangoType` is a hand-rolled resolver of one mechanical shape:
 
 ```python
-@strawberry.field
-def all_library_branches(self) -> list[BranchType]:
+@strawberry.field(graphql_type=list[BranchType])
+def all_library_branches(self) -> QuerySet[models.Branch]:
     return models.Branch.objects.order_by("id")
 ```
 

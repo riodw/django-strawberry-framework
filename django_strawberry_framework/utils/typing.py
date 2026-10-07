@@ -138,7 +138,8 @@ def schema_config_from_info(info: object) -> "StrawberryConfig | None":
 
     Prefers ``info.schema._strawberry_schema.config`` (optimizer middleware /
     nested planner shape, where ``info.schema`` is a bare ``GraphQLSchema``) and
-    falls back to ``info.schema.config`` (Strawberry ``Info`` and test stubs).
+    falls back to ``info.schema.config`` (Strawberry ``Info``, whose ``schema`` is the
+    Strawberry ``Schema`` itself).
     Returns ``None`` when neither shape carries a config; callers decide whether
     that means "engine default" (``None`` into ``SliceMetadata``) or a terminal
     numeric default (``resolve_relay_max_results``).

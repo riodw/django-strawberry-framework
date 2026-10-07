@@ -140,8 +140,8 @@ class BookType(DjangoType):
 
 @strawberry.type
 class Query:
-    @strawberry.field
-    def books_on_shard_b(self, info) -> list[BookType]:
+    @strawberry.field(graphql_type=list[BookType])
+    def books_on_shard_b(self, info) -> QuerySet[models.Book]:
         return models.Book.objects.using("shard_b").select_related("shelf")
 ```
 
@@ -161,8 +161,8 @@ DATABASE_ROUTERS = ["myapp.routers.ShardRouter"]
 # Consumer schema — no explicit .using() needed
 @strawberry.type
 class Query:
-    @strawberry.field
-    def all_books(self, info) -> list[BookType]:
+    @strawberry.field(graphql_type=list[BookType])
+    def all_books(self, info) -> QuerySet[models.Book]:
         return models.Book.objects.all()  # router picks the connection at evaluation time
 ```
 

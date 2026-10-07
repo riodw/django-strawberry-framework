@@ -53,7 +53,7 @@ import copy
 import inspect
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, TypeVar, cast, overload
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -79,6 +79,7 @@ if TYPE_CHECKING:
     from collections.abc import Sized
 
     from django.db import models
+    from strawberry import relay
     from typing_extensions import TypeIs
 
     from .types.base import DjangoType
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
 
 
 _NodeT = TypeVar("_NodeT")
+_TargetT = TypeVar("_TargetT")
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -472,15 +474,29 @@ async def _await_and_stamp(
     return _stamp_node_type(resolved_type, await awaitable)
 
 
+@overload
+def DjangoNodeField(
+    target_type: None = None,
+    *,
+    description: str | None = None,
+    deprecation_reason: str | None = None,
+    directives: Sequence[object] = (),
+) -> relay.Node | None: ...
+@overload
+def DjangoNodeField(
+    target_type: type[_TargetT],
+    *,
+    description: str | None = None,
+    deprecation_reason: str | None = None,
+    directives: Sequence[object] = (),
+) -> _TargetT | None: ...
 def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoNodeField(GenreType)`
     target_type: type[object] | None = None,
     *,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: a public field factory assigned in a class body returns Any, as
-    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Factory for the root ``node(id: ID!)`` Relay refetch field.
 
     Bare form (``target_type=None``) resolves any registered Relay-Node-shaped
@@ -488,6 +504,12 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     with a ``GraphQLError``. See the module docstring for the full contract
     (nullable-by-contract dispatch, the ``GLOBALID_INVALID`` boundary, and the
     bare-field ``strawberry.Schema(types=[...])`` engine note).
+
+    The declared return type is the value the field resolves to, not the object
+    returned: at run time this returns a ``StrawberryField``. The overloads state
+    the resolved value, as ``strawberry.field``'s own overloads do, so a
+    consumer's class-body ``node: T | None = DjangoNodeField(T)`` or
+    ``node: relay.Node | None = DjangoNodeField()`` type-checks.
     """
     if target_type is not None:
         _validate_node_target(target_type, field="DjangoNodeField")
@@ -550,16 +572,36 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
     )
 
 
+@overload
+def DjangoNodesField(
+    target_type: None = None,
+    *,
+    description: str | None = None,
+    deprecation_reason: str | None = None,
+    directives: Sequence[object] = (),
+) -> list[relay.Node | None]: ...
+@overload
+def DjangoNodesField(
+    target_type: type[_TargetT],
+    *,
+    description: str | None = None,
+    deprecation_reason: str | None = None,
+    directives: Sequence[object] = (),
+) -> list[_TargetT | None]: ...
 def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoNodesField(GenreType)`
     target_type: type[object] | None = None,
     *,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: a public field factory assigned in a class body returns Any, as
-    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Factory for the root ``nodes(ids: [ID!]!)`` batch Relay refetch field.
+
+    The declared return type is the value the field resolves to, not the object
+    returned: at run time this returns a ``StrawberryField``. The overloads state
+    the resolved value, as ``strawberry.field``'s own overloads do, so a
+    consumer's class-body ``nodes: list[T | None] = DjangoNodesField(T)`` or
+    ``nodes: list[relay.Node | None] = DjangoNodesField()`` type-checks.
 
     Input order is preserved; positional ``null`` is reserved for
     well-formed-but-invisible/missing/uncoercible ids; a malformed id (or a

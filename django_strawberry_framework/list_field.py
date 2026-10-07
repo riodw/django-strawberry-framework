@@ -12,7 +12,7 @@ import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import GenericAlias
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, get_args
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
@@ -123,6 +123,8 @@ if TYPE_CHECKING:
     from .utils.typing import ModelField
 
 __all__ = ("DjangoListField", "ListArgumentError")
+
+_TargetT = TypeVar("_TargetT")
 
 _ListArgumentReason = Literal[
     "negative",
@@ -1563,7 +1565,7 @@ async def _execute_queryset_pipeline_async(
 
 
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
-    target_type: type[object],
+    target_type: type[_TargetT],
     *,
     resolver: Callable[..., object] | None = None,
     description: str | None = None,
@@ -1571,10 +1573,14 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     directives: Sequence[object] = (),
     max_rows: int | None = None,
     trusted_max_rows: bool = False,
-    # basedpyright: a public field factory assigned in a class body returns Any, as
-    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> list[_TargetT]:
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
+
+    The declared return type is the value the field resolves to, not the object
+    returned: at run time this returns a ``StrawberryField``. The annotation states
+    the resolved value, as ``strawberry.field``'s own overloads do, so a consumer's
+    class-body ``rows: list[T] = DjangoListField(T)`` (or ``list[T] | None``)
+    type-checks.
 
     Outer nullability comes from the class-attribute annotation: ``list[T]`` renders
     ``[T!]!`` and ``list[T] | None`` renders ``[T!]``. The default resolver pulls
@@ -1854,9 +1860,13 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     wrapped.__signature__ = signature
     wrapped.__annotations__ = annotations
 
-    return strawberry.field(
-        resolver=wrapped,
-        description=description,
-        deprecation_reason=deprecation_reason,
-        directives=directives,
+    # The field object stands in for the value it resolves to (see the docstring).
+    return cast(
+        "list[_TargetT]",
+        strawberry.field(
+            resolver=wrapped,
+            description=description,
+            deprecation_reason=deprecation_reason,
+            directives=directives,
+        ),
     )

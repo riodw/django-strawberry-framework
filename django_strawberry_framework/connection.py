@@ -2427,16 +2427,19 @@ def _build_relation_connection_resolver(
 
 
 def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`
-    target_type: type[object],
+    target_type: type[NodeType],
     *,
     resolver: Callable[..., object] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: a public field factory assigned in a class body returns Any, as
-    # strawberry.field does, so a consumer's ``x: T = factory(...)`` type-checks
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> DjangoConnection[NodeType]:
     """Factory for a Relay connection field over a Relay-Node-shaped ``DjangoType``.
+
+    The declared return type is the value the field resolves to, not the object
+    returned: at run time this returns a ``StrawberryField``. The annotation states
+    the resolved value, as ``strawberry.field``'s own overloads do, so a consumer's
+    class-body ``items: DjangoConnection[T] = DjangoConnectionField(T)`` type-checks.
 
     Meta-only derivation (spec-030 Decision 5): the ``filter:`` / ``orderBy:`` arguments
     come from the type's ``Meta.filterset_class`` / ``Meta.orderset_class``, the
@@ -2475,13 +2478,17 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     # The validator proved ``definition.origin is target_type``; the origin is the
     # typed spelling of the same class.
     node_type = definition.origin
-    return relay.connection(
-        _connection_type_for(node_type, definition),
-        resolver=_build_connection_resolver(node_type, resolver, definition),
-        description=description,
-        deprecation_reason=deprecation_reason,
-        # One shared gate for every field factory (list, mutation, node, auth,
-        # connection): a bare string would iterate char-wise into Strawberry and
-        # a hostile sequence would escape raw; see ``utils/directives.py``.
-        directives=validated_field_directives("DjangoConnectionField", directives),
+    # The field object stands in for the value it resolves to (see the docstring).
+    return cast(
+        "DjangoConnection[NodeType]",
+        relay.connection(
+            _connection_type_for(node_type, definition),
+            resolver=_build_connection_resolver(node_type, resolver, definition),
+            description=description,
+            deprecation_reason=deprecation_reason,
+            # One shared gate for every field factory (list, mutation, node, auth,
+            # connection): a bare string would iterate char-wise into Strawberry and
+            # a hostile sequence would escape raw; see ``utils/directives.py``.
+            directives=validated_field_directives("DjangoConnectionField", directives),
+        ),
     )

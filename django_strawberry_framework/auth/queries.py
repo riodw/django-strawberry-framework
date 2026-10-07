@@ -21,7 +21,7 @@ the distinct-class collision guard.
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from ..mutations.fields import _lazy_ref
 from ..registry import register_subsystem_clear
@@ -114,8 +114,7 @@ def current_user(
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-    # basedpyright: public field factory: a class-body ``x: T = ...`` needs strawberry.field's Any
-) -> Any:  # pyright: ignore[reportExplicitAny]
+) -> object:
     """Return the nullable session-actor query field (spec-040 Decision 7).
 
     The read-side member of the auth surface: a query FIELD (not a mutation)

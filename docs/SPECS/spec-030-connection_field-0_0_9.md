@@ -320,14 +320,16 @@ Rationale companion — this Decision's justification and its three rejected alt
 
 ```python
 def DjangoConnectionField(  # noqa: N802
-    target_type: type[object],
+    target_type: type[NodeType],
     *,
     resolver: Callable[..., object] | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
     directives: Sequence[object] = (),
-) -> Any: ...
+) -> DjangoConnection[NodeType]: ...
 ```
+
+The declared return is the value the field resolves to, as `strawberry.field`'s own overloads declare it, so a consumer's class-body `items: DjangoConnection[T] = DjangoConnectionField(T)` type-checks; the object returned at run time is the `StrawberryField` Strawberry's class-body walk picks up.
 
 It runs the [`DjangoListField`][glossary-djangolistfield] guard sequence (`inspect.isclass` → `issubclass(DjangoType)` → own-class `definition.origin is target_type` → callable `resolver`) plus a Relay-Node-shaped guard — single-sited in [`list_field.py::_validate_relay_djangotype_target`][list-field] — then returns `relay.connection(_connection_type_for(target_type, definition), resolver=<synthesized>, …)`. The `definition` the guard returns is the field's one construction-time read: the connection class, the published sidecar arguments, and the pipeline's model all come from it.
 

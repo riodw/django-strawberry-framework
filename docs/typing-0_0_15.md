@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 15 done, 12 to do. Ignore comments: 1339 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 16 done, 11 to do. Ignore comments: 1334 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -43,6 +43,9 @@ Progress: 15 done, 12 to do. Ignore comments: 1339 lines (1897 at the start of 0
 - [x] 26. `schema_config_from_info`'s docstring names the real Strawberry `Info` as the fallback's caller; the
   `info.schema.config` fallback stays (a real `Info`'s `schema` is the Strawberry `Schema`)
 - [x] 27. spec-020 and spec-023 show resolvers in the item-4 spelling (`graphql_type=`, model-row return)
+- [x] 19. The field factories declare the value they resolve to: `DjangoListField(T)` is `list[T]`,
+  `DjangoConnectionField(T)` is `DjangoConnection[T]`, `DjangoNodeField(T)` is `T | None`, `DjangoNodesField(T)` is
+  `list[T | None]`, and `current_user()` is `object` (5 ignores)
 
 ## To do: rules still off
 
@@ -65,10 +68,8 @@ Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessa
 
 ## To do: ignore refactors (from the 2026-10-06 survey)
 
-- [ ] 19. Precise return types on `DjangoListField` / `DjangoConnectionField` / `DjangoNodeField` /
-  `DjangoNodesField`: 4. Run the public-types check first
 - [ ] 20. Real `ExecutionContext` / `DjangoTypeDefinition` objects instead of stand-ins: 36, case by case
-- [ ] 21. Not yet surveyed: other stand-ins (168) and the uncategorized rest (420, of which 153 are in the package)
+- [ ] 21. Not yet surveyed: other stand-ins (168) and the uncategorized rest (419, of which 152 are in the package)
 
 Survey verdicts recorded so nothing is re-tried blind:
 
@@ -94,7 +95,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1339 (1368 rule hits) in 175 files: tests 1097, package 184, examples 56,
+Lines carrying `# pyright: ignore[...]`: 1334 (1363 rule hits) in 174 files: tests 1097, package 179, examples 56,
 scripts 2.
 
 ### By cause
@@ -109,8 +110,7 @@ scripts 2.
 | Verbatim `__init__` forwards (schema, consumers, ModelForm, ModelSerializer) | 34 | keep |
 | Framework `Meta` read from the class body only | 13 | item 21 |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
-| Field factories assigned in a class body return `Any` | 4 | item 19 |
-| Uncategorized | 420 | item 21 |
+| Uncategorized | 419 | item 21 |
 
 ### By rule
 
@@ -119,7 +119,7 @@ scripts 2.
 | `reportArgumentType` | 451 | 25 | 421 | 5 | 0 |
 | `reportAttributeAccessIssue` | 291 | 26 | 264 | 1 | 0 |
 | `reportIncompatibleVariableOverride` | 194 | 2 | 169 | 23 | 0 |
-| `reportExplicitAny` | 116 | 76 | 25 | 13 | 2 |
+| `reportExplicitAny` | 111 | 71 | 25 | 13 | 2 |
 | `reportIncompatibleMethodOverride` | 76 | 5 | 66 | 5 | 0 |
 | `reportReturnType` | 46 | 0 | 45 | 1 | 0 |
 | `reportFunctionMemberAccess` | 25 | 4 | 19 | 2 | 0 |

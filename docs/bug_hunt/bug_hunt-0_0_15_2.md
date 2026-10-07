@@ -1,176 +1,107 @@
-# Bug hunt: 0.0.15 (2), master list
+# Bug hunt 0.0.15 (2): to-do list
 
-Status: in-progress
-Scope: every finding of the 0.0.15 hunt held in the t3 worktree
-(`~/.t3/worktrees/django-strawberry-framework/t3code-1cc21548`, branch `t3code/1cc21548`, never
-merged), plus every defect or lead found while migrating those findings to main.
-Method, per finding: verify at main HEAD under AGENTS.md rule 35 (contract row, feasible project
-shape, wire or configuration input); fix the root cause on main; an independent agent verifies;
-land; purge every trace of the finding from t3 (backup first); next.
+Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
+Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-## Where we are
+Progress: 23 done, 45 to do.
 
-| Bucket | Done | Open |
-|---|---|---|
-| t3 defects (sections 1, 2) | 11 | 3 |
-| t3 robustness, lint and stale-test rows (section 3) | 0 | 40 rows + 1 blocked naming decision |
-| t3 hunt items never finished (section 4) | n/a | 2 |
-| Found along the way (sections 5, 6) | 10 fixed, 5 closed as not a defect | 16 |
+## Done
 
-The t3 hunt itself is not closed: Deep dive 3 is blocked and the final test gate never ran.
+- [x] 1. Multi-column `ForeignObject` links (`fe6a6df0`, `337b3317`)
+- [x] 2. Negative offset cursor, and the page-cap bypass behind it (`a57bd826`)
+- [x] 3. M2M composite-index advisory names the wrong column (`269b80c0`)
+- [x] 4. Filter lookups binding to the wrong field on overlapping names (`754ed263`, `9f7ea5dd`)
+- [x] 5. Serializer list nulls and blank choice (`a5dc6ea3`)
+- [x] 6. `reject_combined` on list-relation children: replaced by a better design (`5c5e32c5`)
+- [x] 7. Directive and default-value cost charging: already fixed on main
+- [x] 8. Fragment-spread cost charging: already fixed on main
+- [x] 9. Cursor presence checked by truthiness: already fixed on main
+- [x] 10. Mutation window under interruption: already fixed on main
+- [x] 11. Mutation errors name the Django field instead of the input field (`7517eab2`)
+- [x] 30. Flat `RelatedFilter` leaf returned hidden rows (`90fc7118`)
+- [x] 31. Relations without a `RelatedFilter` returned hidden rows (`37dcbf70`, `eddfeab1`, `c7d0ca02`)
+- [x] 32. Ordering by a hidden related row (`70118090`)
+- [x] 33. spec-058 builders and `graph.apply` re-entrancy (`d58420d8`, `adacb26c`)
+- [x] 34. `RelatedFilter` pointing at a model its relation does not reach (`9131486f`)
+- [x] 35. Serializer choice field accepting values the column's enum can't show (`a6ace786`)
+- [x] 36. `MultipleChoiceField` over a single-value choice column (`f218d7ee`)
+- [x] 37. Combined hook queryset rejecting `F()` / `OrderBy` ordering (`22900492`)
+- [x] 38. `Choices.__empty__` produced a `_None` enum member (`3ed5ee48`)
+- [x] 39. Offset page-cap bypass (`a57bd826`)
+- [x] 40. Five leads closed as not bugs (Django's own behavior in each case)
+- [x] 41. `test_relations` tests failing when run alone (`cab934a0`, other session)
 
-## 1. t3 defects, done
+Still owed in t3 for items 7-10: delete their records (cleanup only, no code).
 
-| # | Finding (t3 item) | Outcome on main | Commits | t3 purged |
-|---|---|---|---|---|
-| 1 | Multi-column `ForeignObject` link columns (join_taxonomy) | Fixed: one link-column reader; forward `ForeignObject` exposed, left out of mutation inputs | `fe6a6df0`, `337b3317` | yes |
-| 2 | Negative offset cursor (`connection.py`) | Fixed: one offset-cursor decoder; the real defect was a page-cap bypass t3 never saw | `a57bd826` | yes |
-| 3 | M2M composite-index advisory (`optimizer/nested_planner.py`) | Fixed: the advisory resolves the window's own partition column | `269b80c0` | yes |
-| 4 | Overlap-head lookup binding (`filters/sets.py`, B21 + 5d) | Fixed: form keys decided once; owner-bound flat `RelatedFilter` children run in their filter set | `754ed263`, `9f7ea5dd` | yes |
-| 5 | Serializer list element nullability + blank choice (`rest_framework/serializer_converter.py`, D1, D2) | Fixed: list element follows the child's `allow_null`; choice enums carry `BLANK`; D3-D6 judged robustness | `a5dc6ea3` | yes |
-| 6 | `reject_combined` on list-relation children (`utils/querysets.py`) | Superseded: main serves a combined hook queryset as its primary-key set | `5c5e32c5` | yes |
-| 7 | Directive and default-value charging (`extensions/resource_policy.py`) | Already on main before this effort | not traced | no (record cleanup owed) |
-| 8 | Fragment-spread charging (`extensions/resource_policy.py`, stale re-pass) | Already on main before this effort | not traced | no (record cleanup owed) |
-| 9 | Cursor presence by `bool()` (`utils/connections.py`) | Already on main before this effort | not traced | no (record cleanup owed) |
-| 10 | Mutation window transition under interruption (`schema.py`, scenario) | Already on main before this effort | not traced | no (record cleanup owed) |
-| 11 | `FieldError.field` keying (Package integration): validator-origin errors (`full_clean`, `form.errors`, a serializer save-time Django `ValidationError`) keyed by the Django name or column, decode errors by the GraphQL input name | Fixed: one shared key map in `utils/errors.py` re-keys the three validator sites on every flavor; `__all__` kept, unexposed fields verbatim, a forward relation's column name maps to its input; specs 036/038/039/040, README, glossary, cards 51 and 71 | `7517eab2` | yes |
+## To do: t3 hunt findings
 
-## 2. t3 defects, open
+- [ ] 12. Nested forward-FK / OneToOne resolvers never check the request deadline
+- [ ] 13. Consumer `Prefetch` hint over a type that hides rows (HIGH): probably fixed by `5d4cdb3b`, confirm and delete from t3
+- [ ] 14. README says integer `in: []` matches nothing; t3 saw it match everything. Check which is right
 
-| # | Finding | State | Next step |
-|---|---|---|---|
-| 12 | Deadline not checked on nested forward-FK / OneToOne / reverse-OneToOne resolvers, sync and async (t3 Deep dive 3, Worker 1-A, Low) | t3 fix exists only as a workspace patch; `types/resolvers.py` has no deadline check at HEAD | Re-verify at HEAD, then root-cause fix |
-| 13 | Consumer `Prefetch` hint over a target type that hides rows served hidden rows (t3 Deep dive 3, Worker 1-B, HIGH, sealed) | Probably fixed on main by `5d4cdb3b` (a hinted `Prefetch` is scoped by the target type's `get_queryset`) | Confirm against the sealed t3 evidence, then purge |
-| 14 | README empty-list rule over-generalized for integer `in: []` (t3 Deep dive 4 docs lead: t3 executed ALL rows against the sentence's NONE) | Unverified at HEAD (README section "Four empty-value rules") | Probe at HEAD; fix doc or code |
+## To do: t3 robustness rows
 
-### Item 11 design (approved by the maintainer, landed `7517eab2`)
+40 low-priority rows, mostly guards against classes with broken `__name__` / `__eq__` / metaclasses. Expected outcome: most are
+not real bugs and just get deleted from t3. One checkbox per area:
 
-Probe findings at HEAD:
+- [ ] 15. `filters/inputs.py` (1 row)
+- [ ] 16. `forms/` (2 rows)
+- [ ] 17. `mutations/` and `auth/mutations.py` (4 rows)
+- [ ] 18. `optimizer/` (2 rows)
+- [ ] 19. `rest_framework/` (2 rows)
+- [ ] 20. Filter and order sets (8 rows)
+- [ ] 21. `routers.py`, `list_field.py` (2 rows)
+- [ ] 22. `types/` (7 rows)
+- [ ] 23. `utils/` (9 rows)
+- [ ] 24. Trailing-comma lint in two test files (2 rows)
+- [ ] 25. Stale test-fixture row in `tests/utils/test_querysets.py`: likely already covered by item 41
+- [ ] 27. Unfiled leads from the same family (triage with the rows above)
 
-- The split is two key spaces, not casing: the FK suffix (`category` / `categoryId`) and a
-  `Meta.input_class` rename have no casing relation.
-- Model and form flavors never produce nested error paths; only the serializer nests, and it
-  already re-keys at every depth.
-- `__all__` cannot collide with a Django field name.
-- Re-keying must apply only at the three validator sites (`_full_clean_or_field_errors`,
-  `_form_errors_to_field_errors`, the serializer `except DjangoValidationError` branch). A decode
-  error already carries a GraphQL name, and under a swapped rename a blanket re-key would rewrite it
-  wrong.
-- No first-party client reads `FieldError.field`.
-- A trial patch moved every probe row to the GraphQL name. Full suite: 3 failures, all tests that
-  pin today's Django-name key:
-  - `test_update_item_via_form_explicit_null_category_id_is_the_form_required_error` in
-    `examples/fakeshop/test_query/test_products_api.py`
-  - `test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_unchanged` in
-    `tests/forms/test_resolvers.py`
-  - `test_partial_update_validates_scalar_field_named_id_suffix` in
-    `tests/mutations/test_resolvers.py`
+## To do: found along the way
 
-Proposed design:
+- [ ] 42. `auto_camel_case=False` still produces camelCase mutation inputs (unverified)
+- [ ] 43. `ListField(child=ChoiceField(...))` shows up as `String`, not an enum
+- [ ] 44. `IntegerField(choices, blank=True, null=False)` in a ModelForm mutation: optional startup check
+- [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails
+- [ ] 46. Postgres: `ListField(child=ChoiceField)` over an `ArrayField` is refused
+- [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable
+- [ ] 48. `BLANK_CHOICE` marker breaks under copy / pickle
+- [ ] 49. `serializer_field_description` re-raises `KeyboardInterrupt`
+- [ ] 50. SKIP hint drops relation columns from `.only()`, so every row is fetched again (unverified)
+- [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
+- [ ] 52. Connection resolvers send raw exception text to the client (unverified)
+- [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
 
-- **Shared mapper.** One mapper in `utils/errors.py`, `build_error_key_map(specs, *, key_of=None)`
-  plus `rekey_error_segment`, promoted from `rest_framework/resolvers.py` `_build_reverse_map` /
-  `_rekey_segment`.
-- **Mapper input.** `validation_error_to_field_errors(exc, key_map=None)`; `None` keeps today's
-  verbatim keying for the kanban service-error caller.
-- **Key per flavor.**
-  - model: the model field name of `spec.input_attr`;
-  - form: `target_name`;
-  - serializer save-time: `source or target_name`.
-- **Register** goes through the model tail.
-- **Required parameters.** Internal helpers take the mutation class as a required parameter, so a
-  forgotten call site fails loudly.
-- **Lazy map.** The map is built on the error path only.
-- **`path` is unchanged** (split of `field`).
+## To do: holes found re-checking the fixes
 
-t3's fix finds the same three key functions but builds four separate maps, defaults the map to
-`None` at every helper (a forgotten site silently keeps the defect), adds one test and changes no
-docs.
+- [ ] 58. HIGH. Fragment spreads are expanded but never charged: a 857-byte two-operation document costs 1.9 s of CPU and doubles per
+  level (unselected operation; also a selected one whose leaf adds no field). Widened by item 7's fix
+- [ ] 59. Two `RelatedFilter` / `RelatedOrder` declarations on one relation: the flat leaf and the order term use the wrong one (hidden
+  rows, `queryset=` ignored, gate bypassed). Nested filters are right
+- [ ] 60. One `OrderSet` on two types of the same model keeps the first type's visibility; the `FilterSet` twin is refused at startup
+- [ ] 61. Three `FilterSet`s in a `RelatedFilter` cycle: the flat filters exposed depend on type declaration order
+- [ ] 62. A declared flat `ChoiceField` over a grouped-choices column is refused since item 35 (worked before); the refusal's message is
+  also wrong for a column no type exposes
+- [ ] 63. `after` cursor at `sys.maxsize - 1 - page` with `first: 0` / `last: 0` raises Strawberry's assert instead of an empty page
+- [ ] 64. Two cursor-decoder guards no test pins (`isascii`, the nested-window decode)
+- [ ] 65. `iExact: BLANK` on a choice column matches every row
+- [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
+- [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 
-Decisions (all six approved as recommended):
+## Waiting on you
 
-1. The rule covers every flavor, not only the serializer. Rewrite:
-   - spec-036 Decision 7 and Decision 8 step 4;
-   - spec-038 Decision 8 step 4 and its test-plan rows;
-   - spec-039 Decision 8;
-   - spec-040's `USERNAME_FIELD` row.
-2. Wire-value change for model, ModelForm, plain-form and register clients (e.g. `category` becomes
-   `categoryId`); whether it goes in the CHANGELOG is the maintainer's call.
-3. No `CAMELCASE_ERRORS`-style setting: keys are always the input name, and `__all__` stays as is,
-   not graphene's `_All__`.
-4. An error on a field the input does not expose keeps its validator-side name (recommended), or
-   folds into `__all__`.
-5. A rename onto an unexposed field's Django name makes two errors share one key: document it
-   (recommended), or refuse it at build.
-6. Board card `TODO-ALPHA-051-0.0.15`: "casing" becomes "keying"; add `forms/resolvers.py` and
-   `auth/mutations.py` to its likely files.
+- [ ] 26. A mutation whose `__name__` raises publishes a `<MetaclassName>Payload` type instead of failing. Fail, or keep?
+- [ ] 53. Docs (parked): README async section, a hand-written `@strawberry.field` returning a QuerySet runs synchronously
+- [ ] 54. Docs (parked): glossary, a sliced combinator branch on SQLite raises Django's own `DatabaseError`
+- [ ] 57. CHANGELOG entry for item 11: model, ModelForm, plain-form and register errors now use the input name (`categoryId`, not `category`)
+- [ ] 68. A model's default manager hides rows from declared filter hops but not from undeclared filter hops or ordering. Make them
+  agree, or keep?
+- [ ] 69. CHANGELOG entry for item 1: `Meta.exclude=["parent"]` on a mutation over a `ForeignObject` model now raises
 
-## 3. t3 robustness, lint and stale-test rows, open
+## Hunt not finished in t3
 
-Ledger at t3: 4 defect / 37 robustness / 2 lint / 1 stale-test rows. Robustness rows are mostly
-hostile-`__name__` / `__mro__` / `__eq__` / metaclass guards and safe-label swaps; each is expected
-to fail rule 35 (no feasible shape under supported public API) and be purged from t3 with nothing
-ported, but each still needs that verdict.
-
-| # | Area (t3 files) | Rows |
-|---|---|---|
-| 15 | `filters/inputs.py` range-shape fail-loud guard | 1 |
-| 16 | `forms/inputs.py`, `forms/sets.py` | 2 |
-| 17 | `mutations/fields.py`, `mutations/resolvers.py`, `mutations/sets.py`, `auth/mutations.py` | 4 |
-| 18 | `optimizer/hints.py`, `optimizer/nested_fetch.py` | 2 |
-| 19 | `rest_framework/resolvers.py`, `rest_framework/sets.py` | 2 |
-| 20 | `sets_mixins.py` (2 passes), `filters/base.py`, `orders/base.py`, `orders/inputs.py`, `orders/sets.py`, `filters/sets.py` (2 passes) | 8 |
-| 21 | `routers.py`, `list_field.py` | 2 |
-| 22 | `types/base.py` (3 passes incl. an arm-deletion pass), `types/converters.py`, `types/definition.py`, `types/finalizer.py` (2 passes) | 7 |
-| 23 | `utils/directives.py`, `utils/errors.py`, `utils/input_values.py`, `utils/inputs.py`, `utils/policies.py`, `utils/querysets.py`, `utils/strings.py`, `utils/sessions.py`, `utils/write_transaction.py` | 9 |
-| 24 | Lint: trailing-comma layout in `tests/rest_framework/test_sets.py`, `tests/types/test_base.py` | 2 |
-| 25 | Stale test: collection-time model fixture isolation (`tests/utils/test_querysets.py` proxy-target fixtures) | 1 (check against item 41) |
-| 26 | Blocked for the maintainer: a mutation whose `__name__` raises publishes a `<MetaclassName>Payload` type instead of failing (`mutations/fields.py`, `mutations/sets.py`, review 5d); the degraded name can collide with a real type | Decision |
-| 27 | Robustness leads the ledger forwarded, never filed: hostile-`__str__` dict key and hostile-`__repr__` `save()` return in `rest_framework/resolvers.py`; non-string hostile annotation key and keyset cursor evil-str in `types/base.py`; N1-N5 adjacent-gate liars; lying non-raising `__mro__`; Node-shaped hostile `__mro__` at relay seams; `resolve_lazy_class` hostile `__module__`; `Meta.fields` raising liar end to end; order-dependent cross-model FilterSet-inheritance silent bind; filters-loud / orders-silent posture divergence (Deep dive 4) | Triage with the rows above |
-
-## 4. t3 hunt items never finished
-
-| # | Item | State |
-|---|---|---|
-| 28 | Deep dive 3: authorization on the deferred paths | Blocked; its two findings are items 12 and 13 |
-| 29 | Final test gate | Pending; never run |
-
-## 5. Found along the way, done
-
-| # | Finding | Commits |
-|---|---|---|
-| 30 | Flat `RelatedFilter` leaf served hidden rows (flat `shelfHomeBranch` skipped its own queryset) | `90fc7118` (pk-IN attempt `616bb8e1` reverted by `162da650`) |
-| 31 | Relations no `RelatedFilter` declares served hidden rows | `37dcbf70`, `eddfeab1`, `c7d0ca02` |
-| 32 | Ordering by a related row the target type hides | `70118090` |
-| 33 | spec-058 builders and `graph.apply` re-entrancy | `d58420d8`, `adacb26c` |
-| 34 | `RelatedFilter` whose target model its relation does not correlate | `9131486f` |
-| 35 | Serializer choice field admitting a value its column's read enum cannot represent | `a6ace786` |
-| 36 | `MultipleChoiceField` over a single-value choice column | `f218d7ee` |
-| 37 | Combined hook queryset refused an `F()` / `OrderBy` ordering with a false message; a foreign-key name ordered wrongly | `22900492` |
-| 38 | `Choices.__empty__` published a `_None` member (filter `exact: _None` applied no constraint; writes skipped the null guard) | `3ed5ee48` |
-| 39 | Offset page-cap bypass (found inside item 2) | `a57bd826` |
-| 40 | Closed as not a defect: async `SynchronousOnlyOperation` (fakeshop sync root resolvers); sliced combinator branch on SQLite (Django's own refusal); INNER JOIN row drop on a dangling `null=False` link (Django `select_related`); `IntegerField(choices, blank=True, null=False)` through a ModelForm raising `ValueError` (Django's ModelForm fails identically); stored non-member choice values written by app code | n/a |
-
-## 6. Found along the way, open
-
-| # | Finding | Class |
-|---|---|---|
-| 41 | `tests/utils/test_relations.py` reverse-link cases fail standalone: the test imports its link models in the body and the conftest registry restore unregisters them | Test bug; fix running in a separate session |
-| 42 | With `auto_camel_case=False`, generated mutation input fields stay camelCase | Defect candidate, unverified |
-| 43 | `ListField(child=ChoiceField(...))` publishes `String`, never the enum | Gap |
-| 44 | `IntegerField(choices, blank=True, null=False)` through a ModelForm mutation: optional refuse-at-build hardening | Robustness |
-| 45 | Postgres only: a plain `ChoiceField` over an `ArrayField` builds, then the save fails | Robustness |
-| 46 | Postgres only: `ListField(child=ChoiceField)` over an `ArrayField` refused as unsupported | Robustness |
-| 47 | Postgres only: `serializer_choice_field=MultipleChoiceField` on a ModelSerializer over an `ArrayField` is unusable | Robustness |
-| 48 | `BLANK_CHOICE` marker loses identity through copy or pickle | Robustness |
-| 49 | `serializer_field_description` re-raises `KeyboardInterrupt` | Robustness |
-| 50 | SKIP hint drops the relation carrier columns from `.only()`, so each row is re-fetched | Defect candidate, unverified |
-| 51 | `OrderSet` `"__all__"` leaves out `ForeignObject` fields | Defect candidate, unverified |
-| 52 | Connection resolvers' broad `except` sends raw exception text to the client (`connection.py` fallback, window and keyset paths) | Defect candidate, unverified |
-| 53 | Docs: README async section should say a hand-written `@strawberry.field` returning a QuerySet completes synchronously (use `DjangoListField(resolver=...)` or an async resolver) | Parked by the maintainer |
-| 54 | Docs: glossary should say a sliced combinator branch on SQLite surfaces Django's own `DatabaseError` | Parked by the maintainer |
-| 55 | t3 record housekeeping: hunt record counts, `:NNN` citations and DRY prose for items 7-10 and 13 | Owed with each purge |
-| 56 | Serializer write-source ownership guard compares source strings, so a `ModelSerializer` FK `category` plus `category_ref = PrimaryKeyRelatedField(source="category_id", ...)` binds two writable fields onto one FK column (`rest_framework/resolvers.py::_assert_runtime_write_source_ownership`) | Defect candidate, unverified |
+- [ ] 28. Deep dive 3 (authorization on deferred paths) is blocked; its findings are items 12 and 13
+- [ ] 29. The hunt's final test gate was never run
 
 
 <!-- LINK DEFINITIONS -->

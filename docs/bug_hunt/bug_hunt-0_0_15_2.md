@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 23 done, 45 to do.
+Progress: 24 done, 45 to do.
 
 ## Done
 
@@ -30,6 +30,7 @@ Progress: 23 done, 45 to do.
 - [x] 39. Offset page-cap bypass (`a57bd826`)
 - [x] 40. Five leads closed as not bugs (Django's own behavior in each case)
 - [x] 41. `test_relations` tests failing when run alone (`cab934a0`, other session)
+- [x] 58. HIGH. Fragment spreads expanded but never charged: an 857-byte request cost 1.9 s of CPU, doubling per level (`3cc1b249`)
 
 Still owed in t3 for items 7-10: delete their records (cleanup only, no code).
 
@@ -74,8 +75,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 58. HIGH. Fragment spreads are expanded but never charged: a 857-byte two-operation document costs 1.9 s of CPU and doubles per
-  level (unselected operation; also a selected one whose leaf adds no field). Widened by item 7's fix
 - [ ] 59. Two `RelatedFilter` / `RelatedOrder` declarations on one relation: the flat leaf and the order term use the wrong one (hidden
   rows, `queryset=` ignored, gate bypassed). Nested filters are right
 - [ ] 60. One `OrderSet` on two types of the same model keeps the first type's visibility; the `FilterSet` twin is refused at startup
@@ -87,6 +86,7 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 65. `iExact: BLANK` on a choice column matches every row
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
+- [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
 
 ## Waiting on you
 

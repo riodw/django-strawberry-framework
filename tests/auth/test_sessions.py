@@ -665,7 +665,6 @@ def test_require_mutable_scope_isinstance_raising_is_contained(monkeypatch: pyte
 
 
 async def test_scope_lock_isinstance_lock_raising_is_contained(monkeypatch: pytest.MonkeyPatch):
-    import django_strawberry_framework.auth.sessions as sessions_mod
 
     class ExplodingLock(asyncio.Lock):
         pass
@@ -678,8 +677,7 @@ async def test_scope_lock_isinstance_lock_raising_is_contained(monkeypatch: pyte
     class BadLockType(metaclass=BadLockMeta):
         pass
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(sessions_mod.asyncio, "Lock", BadLockType)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(asyncio, "Lock", BadLockType)
     scope = {"type": "websocket", _SCOPE_LOCK_KEY: ExplodingLock()}
     adapter = _adapter(scope)
     with pytest.raises(ConfigurationError, match="could not be inspected"):

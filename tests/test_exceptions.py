@@ -48,6 +48,7 @@ from django_strawberry_framework.exceptions import (
 from django_strawberry_framework.types import converters as _converters_module
 from django_strawberry_framework.utils import errors as _errors_module
 from django_strawberry_framework.utils.querysets import SyncMisuseError
+from tests._idioms import module_binding
 
 
 class _Unprintable:
@@ -741,7 +742,8 @@ def test_write_error_envelope_survives_hostile_str_returning_message_object():
 def test_safe_text_is_single_sourced_across_consumer_modules():
     """utils.errors and types.converters import the ONE renderer, not local twins."""
 
-    # basedpyright: the single-source check reads the name through the importing module on purpose
-    assert _errors_module._safe_text is _safe_text  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert _errors_module._unprintable.__module__ == ("django_strawberry_framework.exceptions")  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert _converters_module._safe_text is _safe_text  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(_errors_module, "_safe_text") is _safe_text
+    assert module_binding(_errors_module, "_unprintable").__module__ == (
+        "django_strawberry_framework.exceptions"
+    )
+    assert module_binding(_converters_module, "_safe_text") is _safe_text

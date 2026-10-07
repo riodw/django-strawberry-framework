@@ -184,6 +184,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/tests/test_urls.py",
     "tests/__init__.py",
     "tests/_generated_inputs.py",
+    "tests/_idioms.py",
     "tests/_relation_fixtures.py",
     "tests/_soft_dependency.py",
     "tests/auth/__init__.py",

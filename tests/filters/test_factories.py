@@ -31,6 +31,7 @@ from django_strawberry_framework.filters.factories import FilterArgumentsFactory
 from django_strawberry_framework.filters.inputs import _field_specs
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
+from tests._idioms import definition_raises
 
 
 @pytest.fixture(autouse=True)
@@ -398,8 +399,9 @@ def test_filter_arguments_factory_rejects_subclassing():
     ``__init_subclass__`` raises ``TypeError`` to enforce it.
     """
     with pytest.raises(TypeError) as excinfo:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _SubFactory(FilterArgumentsFactory):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _SubFactory(FilterArgumentsFactory):
             pass
 
     assert "does not support subclassing" in str(excinfo.value)

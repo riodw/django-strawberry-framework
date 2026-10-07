@@ -36,6 +36,7 @@ from django.db import (
     IntegrityError,
     close_old_connections,
     connections,
+    router,
     transaction,
 )
 from django.db.backends.signals import connection_created
@@ -56,7 +57,6 @@ from django_strawberry_framework import (
 from django_strawberry_framework import schema as schema_module
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.utils import write_transaction
 from django_strawberry_framework.utils.write_transaction import (
     _enforce_read_only_barrier,
     check_instance_write_alias,
@@ -70,6 +70,7 @@ from django_strawberry_framework.utils.write_transaction import (
     resolve_write_alias,
     write_pipeline,
 )
+from tests._idioms import definition_raises
 
 if TYPE_CHECKING:
     from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter
@@ -1339,16 +1340,14 @@ def test_check_instance_write_alias_fails_closed_on_divergence(monkeypatch: pyte
         return "default"
 
     monkeypatch.setattr(
-        # basedpyright: patch the module object the code under test holds, not a fresh import of it
-        write_transaction.router,  # pyright: ignore[reportPrivateLocalImportUsage]
+        router,
         "db_for_write",
         _instance_sensitive,
     )
     with pytest.raises(ConfigurationError, match="instance-sensitive"):
         check_instance_write_alias(product_models.Item, "default", product_models.Item())
     # A matching answer passes.
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(write_transaction.router, "db_for_write", _always_default)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(router, "db_for_write", _always_default)
     check_instance_write_alias(product_models.Item, "default", product_models.Item())
 
 
@@ -1592,8 +1591,9 @@ def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool(
     assert DefaultLocked._mutation_meta.select_for_update is True
 
     with pytest.raises(ConfigurationError, match="select_for_update must be a bool"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadLock(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadLock(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "update"

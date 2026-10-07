@@ -85,6 +85,7 @@ from django_strawberry_framework.mutations.inputs import (
 from django_strawberry_framework.mutations.permissions import DenyAll
 from django_strawberry_framework.mutations.sets import iter_mutations
 from django_strawberry_framework.registry import registry
+from tests._idioms import definition_raises
 
 
 @pytest.fixture(autouse=True)
@@ -170,8 +171,9 @@ def test_bases_exported_from_package_root():
 def test_modelform_missing_form_class_raises():
     """A ``DjangoModelFormMutation`` with no ``Meta.form_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no form_class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoModelFormMutation):
             class Meta:
                 operation = "create"
 
@@ -179,8 +181,9 @@ def test_modelform_missing_form_class_raises():
 def test_plain_form_missing_form_class_raises():
     """A ``DjangoFormMutation`` with no ``Meta.form_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no form_class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 pass
 
@@ -189,8 +192,9 @@ def test_modelform_with_plain_form_raises():
     """A plain ``forms.Form`` on ``DjangoModelFormMutation`` raises (must be a ModelForm)."""
     form_cls = _contact_form()
     with pytest.raises(ConfigurationError, match="must be a forms.ModelForm subclass"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateThing(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateThing(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -205,8 +209,9 @@ def test_plain_base_with_modelform_raises_naming_modelform_base():
     """
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="use DjangoModelFormMutation"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = form_cls
 
@@ -218,8 +223,9 @@ def test_plain_base_form_class_not_a_form_raises():
         pass
 
     with pytest.raises(ConfigurationError, match="must be a forms.Form subclass"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = NotAForm
 
@@ -236,8 +242,9 @@ def test_modelform_with_no_resolvable_model_raises():
         name = forms.CharField()
 
     with pytest.raises(ConfigurationError, match="resolves no model"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateThing(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateThing(DjangoModelFormMutation):
             class Meta:
                 form_class = NoModelForm
                 operation = "create"
@@ -254,8 +261,9 @@ def test_modelform_non_model_meta_model_raises_at_class_creation():
     # test; django-stubs types the slot as the model class
     form_cls._meta.model = "Item"  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateThing(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateThing(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -282,8 +290,9 @@ def test_modelform_delete_operation_rejected():
     """``operation = "delete"`` on ``DjangoModelFormMutation`` is rejected (no form delete)."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DeleteItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DeleteItem(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = "delete"
@@ -293,8 +302,9 @@ def test_modelform_missing_operation_rejected():
     """A missing ``operation`` on the ``ModelForm`` base is rejected (``None`` invalid)."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
 
@@ -317,8 +327,9 @@ def test_plain_base_rejects_any_operation(operation: str | None):
     form_cls = _contact_form()
     declared_operation = operation  # bind to a local: a class body cannot read the param name.
     with pytest.raises(ConfigurationError, match="operation is not supported"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = declared_operation
@@ -350,8 +361,9 @@ def test_plain_base_rejects_inherited_meta_operation(operation: str | None):
         operation = declared_operation
 
     with pytest.raises(ConfigurationError, match="operation is not supported"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta(SharedMeta):
                 pass
 
@@ -436,8 +448,9 @@ def test_modelform_unknown_meta_key_raises():
     """A stray ``Meta`` key on the ``ModelForm`` base raises the typo guard."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -448,8 +461,9 @@ def test_plain_form_model_key_is_unknown():
     """``model`` is NOT an allowed plain-form key (it dropped from the form allowed set)."""
     form_cls = _contact_form()
     with pytest.raises(ConfigurationError, match="unknown keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = form_cls
                 model = product_models.Item
@@ -459,8 +473,9 @@ def test_modelform_fields_and_exclude_both_raises():
     """Declaring both ``fields`` and ``exclude`` on the ``ModelForm`` base raises."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -476,8 +491,9 @@ def test_plain_form_fields_and_exclude_both_raises():
         b = forms.CharField()
 
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = MultiForm
                 fields = ("a",)
@@ -529,8 +545,9 @@ def test_plain_form_hostile_permission_iterable_maps_to_configuration_error(
             raise escape("permission iterator exploded")
 
     with pytest.raises(ConfigurationError, match="permission_classes must be a sequence"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = _contact_form()
                 permission_classes = BrokenPermissions()
@@ -545,8 +562,9 @@ def test_plain_form_hostile_form_repr_maps_to_configuration_error():
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = HostileRepr()
 
@@ -555,8 +573,9 @@ def test_modelform_unknown_field_name_routes_through_slice1_narrowing():
     """An unknown ``Meta.fields`` name routes through the narrowing fail-loud."""
     form_cls = _item_model_form()
     with pytest.raises(ConfigurationError, match="unknown form field"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = "create"
@@ -710,8 +729,9 @@ def test_plain_form_rejects_model_permission_at_class_creation():
 
     for offending in (DjangoModelPermission, CustomModelPermission):
         with pytest.raises(ConfigurationError, match="requires a model"):
-            # basedpyright: the class statement is the call under test and raises, so the name is never bound
-            class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+            @definition_raises
+            class Submit(DjangoFormMutation):
                 class Meta:
                     form_class = form_cls
                     permission_classes = [offending]
@@ -780,8 +800,9 @@ def test_plain_form_late_declaration_after_finalize_raises():
 
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="DjangoFormMutation .* after finalization"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class Submit(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class Submit(DjangoFormMutation):
             class Meta:
                 form_class = _contact_form()
 
@@ -1291,8 +1312,9 @@ def test_plain_form_default_perform_mutate_calls_form_save():
 def test_plain_form_mutation_rejects_non_class_meta(invalid_meta: object):
     """A non-class Meta on DjangoFormMutation raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match=r"BadMeta\.Meta must be a class; got "):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadMeta(DjangoFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadMeta(DjangoFormMutation):
             Meta = invalid_meta
 
 
@@ -1309,8 +1331,9 @@ def test_plain_form_mutation_rejects_non_class_meta(invalid_meta: object):
 def test_modelform_mutation_rejects_non_class_meta(invalid_meta: object):
     """A non-class Meta on DjangoModelFormMutation raises ConfigurationError."""
     with pytest.raises(ConfigurationError, match=r"BadModelMeta\.Meta must be a class; got "):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadModelMeta(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadModelMeta(DjangoModelFormMutation):
             Meta = invalid_meta
 
 
@@ -1334,8 +1357,9 @@ def test_modelform_mutation_rejects_unhashable_and_non_string_operation(invalid_
         ConfigurationError,
         match=r"Meta\.operation must be one of \['create', 'update'\]; got ",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadOp(DjangoModelFormMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadOp(DjangoModelFormMutation):
             class Meta:
                 form_class = form_cls
                 operation = invalid_op

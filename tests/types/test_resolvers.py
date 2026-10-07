@@ -1958,21 +1958,17 @@ def _mti_tag_schema(
 
     @strawberry.type(name="Query")
     class AsyncQuery:
-        @strawberry.field
-        async def shops(self) -> list[MtiShopType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return await sync_to_async(_shops_reached_through_prefetched_places)(  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[MtiShopType])
+        async def shops(self) -> list[Model]:
+            return await sync_to_async(_shops_reached_through_prefetched_places)(
                 place_model,
             )
 
     @strawberry.type(name="Query")
     class SyncQuery:
-        @strawberry.field
-        def shops(self) -> list[MtiShopType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return _shops_reached_through_prefetched_places(place_model)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[MtiShopType])
+        def shops(self) -> list[Model]:
+            return _shops_reached_through_prefetched_places(place_model)
 
     return DjangoSchema(query=AsyncQuery if run_async else SyncQuery, config=strawberry_config())
 

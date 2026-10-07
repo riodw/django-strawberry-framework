@@ -102,6 +102,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 from django_strawberry_framework.utils.relations import classify_path
+from tests._idioms import definition_raises
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
@@ -607,8 +608,9 @@ def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation():
     finalization time. Mirrors the order family's ``_expand_meta_fields`` gate.
     """
     with pytest.raises(ConfigurationError) as excinfo:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ShelfFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ShelfFilter(FilterSet):
             class Meta:
                 model = library_models.Shelf
                 fields = (f for f in ["code"])
@@ -626,8 +628,9 @@ def test_filterset_get_fields_rejects_one_shot_iterator_at_class_creation():
 
 def test_filterset_get_fields_rejects_builtin_iterator_too():
     with pytest.raises(ConfigurationError):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ShelfFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ShelfFilter(FilterSet):
             class Meta:
                 model = library_models.Shelf
                 fields = iter(["code"])
@@ -637,8 +640,9 @@ def test_filterset_fields_alias_carried_generator_hits_the_gate():
     """``filter_fields`` promotes onto ``Meta.fields`` at the metaclass, so an
     alias-carried one-shot iterator must hit the same re-readability gate."""
     with pytest.raises(ConfigurationError):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ShelfFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ShelfFilter(FilterSet):
             class Meta:
                 model = library_models.Shelf
                 filter_fields = (f for f in ["code"])
@@ -653,8 +657,9 @@ def test_filterset_rejects_an_abstract_model_at_class_build(declared_fields: obj
     would otherwise die in ``resolve_field`` with an ``AttributeError`` on ``None``.
     """
     with pytest.raises(ConfigurationError, match=r"Meta.model TitledEntry is an abstract model"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class TitledEntryFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class TitledEntryFilter(FilterSet):
             class Meta:
                 model = library_models.TitledEntry
                 fields = declared_fields
@@ -781,8 +786,9 @@ def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_fiel
     assert AttachmentProbe.filter_for_field(attachment_field, "attachment", "exact") is None
 
     with pytest.raises(AssertionError):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class RaiseProbe(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class RaiseProbe(FilterSet):
             class Meta:
                 model = Item
                 fields = ["name", "attachment"]
@@ -1385,8 +1391,9 @@ def test_framework_relay_forward_fk_unsupported_lookup_raises_at_build():
 
     for lookup in ("gt", "lt"):
         with pytest.raises(ConfigurationError) as exc_info:
-            # basedpyright: the class statement is the call under test and raises, so the name is never bound
-            class BookFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+            @definition_raises
+            class BookFilter(FilterSet):
                 class Meta:
                     model = library_models.Book
                     fields = {"shelf": [lookup]}
@@ -1402,8 +1409,9 @@ def test_framework_relay_m2m_unsupported_lookup_raises_at_build():
     _register_relay_target(library_models.Genre)
 
     with pytest.raises(ConfigurationError) as exc_info:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BookFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BookFilter(FilterSet):
             class Meta:
                 model = library_models.Book
                 fields = {"genres": ["icontains"]}
@@ -1419,8 +1427,9 @@ def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
     _register_relay_target(library_models.Loan)
 
     with pytest.raises(ConfigurationError) as exc_info:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BookFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BookFilter(FilterSet):
             class Meta:
                 model = library_models.Book
                 fields = {"loans": ["gt"]}
@@ -1434,8 +1443,9 @@ def test_framework_relay_reverse_relation_unsupported_lookup_raises_at_build():
 def test_framework_raw_pk_relation_unsupported_lookup_raises_at_build():
     """An ordering lookup on a non-Relay relation key fails at build and points at RelatedFilter."""
     with pytest.raises(ConfigurationError) as exc_info:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BookFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BookFilter(FilterSet):
             class Meta:
                 model = library_models.Book
                 fields = {"shelf": ["gt"]}
@@ -1473,8 +1483,9 @@ def test_related_filter_target_relay_relation_unsupported_lookup_raises_at_build
     assert BookParentFilter._expansion_snapshot() is None
 
     with pytest.raises(ConfigurationError) as exc_info:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class LoanTargetFilter(FilterSet):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class LoanTargetFilter(FilterSet):
             class Meta:
                 model = library_models.Loan
                 fields = {"patron": ["gt"]}

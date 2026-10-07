@@ -114,6 +114,7 @@ from django_strawberry_framework.utils.querysets import (
     visible_related_objects,
 )
 from django_strawberry_framework.utils.write_transaction import write_pipeline
+from tests._idioms import module_binding
 
 
 def test_safe_class_name_falls_back_for_non_string_metaclass_name_metadata():
@@ -352,8 +353,9 @@ def test_run_in_one_sync_boundary_is_single_sourced_from_utils():
     permissions / auth share one boundary. Pin the re-export identity so a
     future split cannot silently fork a second definition.
     """
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert mutation_resolvers.run_in_one_sync_boundary is run_in_one_sync_boundary  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert (
+        module_binding(mutation_resolvers, "run_in_one_sync_boundary") is run_in_one_sync_boundary
+    )
 
 
 async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():

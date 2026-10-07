@@ -508,8 +508,7 @@ def test_apply_fails_loudly_when_the_upload_utility_is_not_a_plain_function():
     raise ``AttributeError`` from inside the traversal handler, replacing the
     request's own error.
     """
-    # basedpyright: the package's guarded-import sentinel is the value apply() checks, so the test wraps that one
-    utility = patches.replace_placeholders_with_files  # pyright: ignore[reportPrivateLocalImportUsage]
+    utility = patches.replace_placeholders_with_files
     assert utility is not None
     wrapped = functools.partial(utility)
     with mock.patch.object(patches, "replace_placeholders_with_files", wrapped):

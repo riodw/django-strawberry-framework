@@ -13,11 +13,13 @@ the relative import that reaches the guard - which is why it replaces the older
 ``builtins.__import__`` block and its ``level == 0`` discrimination.
 
 Pure absence uses ``simulated_absence``. Broken-install cases (top-level present, one
-submodule unimportable) compose inline on ``evicted_modules`` with a submodule sentinel -
-see the degraded-partial-install row in ``tests/test_routers.py`` and the
+submodule unimportable) compose ``evicted_modules`` with ``blocked_modules`` for the submodule
+sentinel - see the degraded-partial-install row in ``tests/test_routers.py`` and the
 broken-install row in ``tests/middleware/test_debug_toolbar.py``.
-Third-party absence only: framework-own-module eviction (registry co-clear
-tolerance) is a different concern and stays in its own tests.
+``blocked_modules`` is the one writer of the ``None`` sentinel, so it also serves the
+framework-own-module tolerance tests (an unimportable ``django_strawberry_framework.*``
+submodule during a registry or input-namespace clear), which block a name without evicting
+anything around it.
 """
 
 from __future__ import annotations
@@ -69,6 +71,31 @@ def evicted_modules(
 
 
 @contextlib.contextmanager
+def blocked_modules(*names: str) -> Generator[None, None, None]:
+    """Install the ``None`` blocked-import sentinel under each of ``names``; restore on exit.
+
+    A ``None`` entry in ``sys.modules`` makes both a statement ``import`` and
+    ``importlib.import_module`` raise ``ImportError`` for that name. On exit, normal or by
+    exception, each name that held a module before the block gets that module back and every
+    other name is removed, so no sentinel outlives the block (under ``--dist loadscope`` a
+    stranded one poisons every later import of that name in the worker).
+    """
+    saved = {name: sys.modules.get(name) for name in names}
+    try:
+        for name in names:
+            # basedpyright: typeshed types sys.modules values as ModuleType, but the import
+            # system reads a None value as "blocked" and raises ImportError for that name
+            sys.modules[name] = None  # pyright: ignore[reportArgumentType]
+        yield
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+@contextlib.contextmanager
 def simulated_absence(
     sentinel_name: str,
     *prefixes: str,
@@ -86,8 +113,8 @@ def simulated_absence(
     have it cleaned up. ``prefixes`` additionally evict the framework's own guard-owning
     module so its cache / module body re-runs the guard.
     """
-    with evicted_modules(sentinel_name, *prefixes, parent=parent, attr=attr) as saved:
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[sentinel_name] = None  # pyright: ignore[reportArgumentType]
+    with (
+        evicted_modules(sentinel_name, *prefixes, parent=parent, attr=attr) as saved,
+        blocked_modules(sentinel_name),
+    ):
         yield saved

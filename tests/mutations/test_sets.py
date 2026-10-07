@@ -64,6 +64,7 @@ from django_strawberry_framework.mutations.sets import (
     iter_mutations,
 )
 from django_strawberry_framework.registry import registry
+from tests._idioms import definition_raises
 from tests.optimizer import _link_models
 
 
@@ -95,8 +96,9 @@ def _isolate_registry() -> Iterator[None]:
 def test_meta_without_model_raises():
     """A ``Meta`` with no resolvable model raises naming ``Meta.model``."""
     with pytest.raises(ConfigurationError, match="no resolvable model"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 operation = "create"
 
@@ -110,8 +112,9 @@ def test_meta_model_string_raises_at_class_creation():
     class`` posture so a typo'd / lazy string never reaches finalize.
     """
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = "Item"
                 operation = "create"
@@ -120,8 +123,9 @@ def test_meta_model_string_raises_at_class_creation():
 def test_meta_model_instance_raises_at_class_creation():
     """A model *instance* ``Meta.model`` raises at class creation (not finalize)."""
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item()
                 operation = "create"
@@ -130,8 +134,9 @@ def test_meta_model_instance_raises_at_class_creation():
 def test_meta_bad_operation_raises():
     """An ``operation`` outside the valid set raises naming the bad value + valid set."""
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "upsert"
@@ -140,8 +145,9 @@ def test_meta_bad_operation_raises():
 def test_meta_missing_operation_raises():
     """A missing ``operation`` raises the same operation error (``None`` is not valid)."""
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
 
@@ -149,8 +155,9 @@ def test_meta_missing_operation_raises():
 def test_meta_unknown_key_raises():
     """A stray ``Meta`` key raises the typo guard (mutation-local allowed set)."""
     with pytest.raises(ConfigurationError, match="unknown keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -160,8 +167,9 @@ def test_meta_unknown_key_raises():
 def test_meta_fields_and_exclude_both_raises():
     """Declaring both ``fields`` and ``exclude`` raises (mutual exclusion at creation)."""
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -178,8 +186,9 @@ def test_meta_duplicate_fields_raises():
     naming the repeated field.
     """
     with pytest.raises(ConfigurationError, match="duplicate field name"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -189,8 +198,9 @@ def test_meta_duplicate_fields_raises():
 def test_meta_duplicate_exclude_raises():
     """A repeated name in ``Meta.exclude`` is rejected the same way, naming ``exclude``."""
     with pytest.raises(ConfigurationError, match="Meta.exclude declares duplicate"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -206,8 +216,9 @@ def test_meta_unknown_fields_raises_at_class_creation():
     that walk at class creation (form-flavor parity).
     """
     with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -230,8 +241,9 @@ def test_meta_fields_naming_a_foreign_object_raises_at_class_creation():
             "mutation input. Name its carrier field(s) (p_tenant, p_code) in `fields` instead.",
         ),
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreatePairChild(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreatePairChild(DjangoMutation):
             class Meta:
                 model = _link_models.LnkPairChild
                 operation = "create"
@@ -241,8 +253,9 @@ def test_meta_fields_naming_a_foreign_object_raises_at_class_creation():
 def test_meta_empty_fields_raises_at_class_creation():
     """``Meta.fields = ()`` on create/update raises at class creation (empty input)."""
     with pytest.raises(ConfigurationError, match="narrowed the editable column set to empty"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -252,8 +265,9 @@ def test_meta_empty_fields_raises_at_class_creation():
 def test_meta_fields_non_string_entry_raises():
     """A non-string entry in ``Meta.fields`` raises at class creation."""
     with pytest.raises(ConfigurationError, match="non-string entry"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -270,8 +284,9 @@ def test_meta_delete_with_fields_raises():
     outright regardless of whether the names are valid.
     """
     with pytest.raises(ConfigurationError, match="id-only and takes no input"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DeleteItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DeleteItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "delete"
@@ -281,8 +296,9 @@ def test_meta_delete_with_fields_raises():
 def test_meta_delete_with_exclude_raises():
     """The same rejection applies to ``Meta.exclude`` on a delete operation."""
     with pytest.raises(ConfigurationError, match="id-only and takes no input"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DeleteItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DeleteItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "delete"
@@ -296,8 +312,9 @@ def test_meta_input_class_not_strawberry_input_raises():
         pass
 
     with pytest.raises(ConfigurationError, match="@strawberry.input"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -318,8 +335,9 @@ def test_meta_input_class_diverging_field_names_raises():
         category: int  # should be ``category_id`` per the generated scheme
 
     with pytest.raises(ConfigurationError, match="diverge from the generated naming scheme"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -373,8 +391,9 @@ def test_meta_inapplicable_input_override_raises(
         ConfigurationError,
         match=rf"Meta\.{override_name} applies only to operation='{applies_to}'",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class MisconfiguredItemMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class MisconfiguredItemMutation(DjangoMutation):
             Meta = mutation_meta
 
 
@@ -492,8 +511,9 @@ def test_permission_classes_bare_class_raises():
             return True
 
     with pytest.raises(ConfigurationError, match="must be a sequence of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -503,8 +523,9 @@ def test_permission_classes_bare_class_raises():
 def test_permission_classes_bare_string_raises():
     """A bare string ``permission_classes`` raises (would iterate as characters)."""
     with pytest.raises(ConfigurationError, match="must be a sequence of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -531,8 +552,9 @@ def test_permission_classes_instance_entry_raises():
             return True
 
     with pytest.raises(ConfigurationError, match="not a permission class exposing has_permission"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -546,8 +568,9 @@ def test_permission_classes_entry_without_has_permission_raises():
         pass
 
     with pytest.raises(ConfigurationError, match="not a permission class exposing has_permission"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -622,8 +645,9 @@ def test_late_declaration_after_finalize_raises():
 
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="after finalization"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -1314,8 +1338,9 @@ def test_mutation_meta_key_rejected_on_django_type_meta():
     confirming this slice added no key to ``ALLOWED_META_KEYS`` (Decision 12).
     """
     with pytest.raises(ConfigurationError, match="Unknown Meta keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ItemTypeBad(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ItemTypeBad(DjangoType):
             class Meta:
                 model = product_models.Item
                 fields = ("id", "name")
@@ -1409,8 +1434,9 @@ def test_django_mutation_and_permission_are_public_exports():
 def test_meta_fields_bare_string_raises():
     """A bare-string ``Meta.fields`` (would iterate as characters) raises at class creation."""
     with pytest.raises(ConfigurationError, match="not a bare string"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -1425,8 +1451,9 @@ def test_meta_permission_classes_non_iterable_raises():
     branch instead, surfacing the same fail-loud ``ConfigurationError`` at class creation.
     """
     with pytest.raises(ConfigurationError, match="must be a sequence of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -2045,8 +2072,9 @@ def test_django_mutation_validate_meta_rejects_unhashable_and_non_string_operati
         ConfigurationError,
         match=r"DjangoMutation BadOpMutation\.Meta\.operation must be one of \['create', 'delete', 'update'\]; got ",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadOpMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadOpMutation(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = invalid_op
@@ -2150,8 +2178,9 @@ def test_django_mutation_validate_meta_hostile_values_containment():
         ConfigurationError,
         match=r"DjangoMutation BadModelMutation resolved model must be a Django model class",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadModelMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadModelMutation(DjangoMutation):
             class Meta:
                 model = hostile
                 operation = "create"
@@ -2160,8 +2189,9 @@ def test_django_mutation_validate_meta_hostile_values_containment():
         ConfigurationError,
         match=r"DjangoMutation BadLockMutation\.Meta\.select_for_update must be a bool",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadLockMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadLockMutation(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -2171,8 +2201,9 @@ def test_django_mutation_validate_meta_hostile_values_containment():
         ConfigurationError,
         match=r"DjangoMutation BadInputMutation\.Meta\.input_class must be a @strawberry\.input-decorated type",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadInputMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadInputMutation(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = "create"
@@ -2231,8 +2262,9 @@ def test_django_mutation_validate_meta_hostile_hash_operation_safe_containment()
         ConfigurationError,
         match=r"DjangoMutation BadOpMutation\.Meta\.operation must be one of",
     ):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadOpMutation(DjangoMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadOpMutation(DjangoMutation):
             class Meta:
                 model = product_models.Item
                 operation = _HostileHashStr("create")

@@ -333,8 +333,8 @@ def test_cache_hit_on_repeated_query(django_assert_num_queries):
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
             return Item.objects.all()
 
     finalize_django_types()
@@ -489,13 +489,14 @@ def _nested_connection_item_queries(parent_count: int) -> list[str]:
     parent_pks = list(
         Category.objects.order_by("pk").values_list("pk", flat=True)[:parent_count],
     )
+    assert len(parent_pks) == parent_count
 
     from apps.products.schema import CategoryType
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> list[Category]:
             return list(Category.objects.filter(pk__in=parent_pks).order_by("pk"))
 
     with CaptureQueriesContext(connection) as captured:

@@ -46,8 +46,12 @@ mutates a real file or spawns a real pytest.
 
 import dataclasses
 import difflib
+import filecmp
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import types
 from collections.abc import Iterable
 from pathlib import Path
@@ -371,8 +375,7 @@ def test_a_failed_restore_raises_writes_a_marker_and_stops_the_run(
     monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch)
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(filecmp, "cmp", _never_identical)
 
     with pytest.raises(prove_failability.RestoreProofError):
         prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
@@ -400,8 +403,7 @@ def test_an_unwritable_target_is_a_restore_proof_error_not_a_bare_oserror(
     ):
         # Break the restore only AFTER the pristine copy was taken, so the
         # failure lands where a real read-only tree would put it.
-        # basedpyright: patch the module object the code under test holds, not a fresh import of it
-        monkeypatch.setattr(prove_failability.shutil, "copyfile", refuse)  # pyright: ignore[reportPrivateLocalImportUsage]
+        monkeypatch.setattr(shutil, "copyfile", refuse)
         return prove_failability.RunOutcome((), (), "stubbed", 1)
 
     monkeypatch.setattr(prove_failability, "_run_scope", fake_run_scope)
@@ -421,8 +423,7 @@ def test_a_pristine_copy_that_cannot_be_taken_stops_before_mutating(
     def refuse(*args: object, **kwargs: object):
         raise PermissionError("no space left on device")
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.shutil, "copy2", refuse)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(shutil, "copy2", refuse)
 
     result = prove_failability.execute_entry(_single_entry(tmp_path), scratch_root)
 
@@ -593,8 +594,7 @@ def test_without_a_scratch_root_every_run_gets_a_fresh_directory_named_in_header
 ):
     system_tmp = tmp_path / "system-tmp"
     system_tmp.mkdir()
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.tempfile, "tempdir", str(system_tmp))  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(tempfile, "tempdir", str(system_tmp))
     documents = []
     for run in range(2):
         _four_failing_rows(monkeypatch)
@@ -1604,8 +1604,7 @@ def test_main_aborts_with_a_dedicated_code_when_a_restore_cannot_be_proved(
     capsys: pytest.CaptureFixture[str],
 ):
     _stub_run(monkeypatch)
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(filecmp, "cmp", _never_identical)
 
     code = prove_failability.main(
         [str(_manifest(tmp_path)), "--scratch-root", str(tmp_path / "outside-scratch")],
@@ -1624,8 +1623,7 @@ def test_a_failed_restore_still_writes_the_partial_report_to_the_output_path(
     # A partial record of a run that stopped with a possibly-live mutation is exactly
     # what the next reader needs; stdout-only would lose it.
     _stub_run(monkeypatch)
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(filecmp, "cmp", _never_identical)
     output = tmp_path / "proofs.md"
 
     code = prove_failability.main(
@@ -1813,8 +1811,7 @@ def test_an_aborted_narrowed_run_keeps_the_partial_record_notice(
     # and the selection that shrank it. The reader needs both, so neither replaces
     # the other.
     _stub_run(monkeypatch)
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(filecmp, "cmp", _never_identical)
     output = tmp_path / "proofs.md"
 
     code = prove_failability.main(
@@ -2651,8 +2648,7 @@ def test_a_scope_run_loads_the_probe_and_keeps_its_raw_output(
             returncode=1,
         )
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.subprocess, "run", fake_subprocess_run)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
 
     outcome = prove_failability._run_scope(entry, capture)
 
@@ -2803,8 +2799,7 @@ def test_the_json_record_is_written_for_an_aborted_run_too(
     monkeypatch: pytest.MonkeyPatch,
 ):
     _stub_run(monkeypatch)
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(prove_failability.filecmp, "cmp", _never_identical)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(filecmp, "cmp", _never_identical)
     output = tmp_path / "proofs.json"
 
     code = prove_failability.main(

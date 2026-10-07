@@ -42,6 +42,8 @@ from django_strawberry_framework.utils.inputs import (
     resolve_set_meta_fields,
     set_input_type_name,
 )
+from tests._idioms import module_binding
+from tests._soft_dependency import blocked_modules
 
 # ---------------------------------------------------------------------------
 # build_strawberry_input_class
@@ -270,17 +272,8 @@ def test_safe_import_returns_none_for_unimportable_module():
     from django_strawberry_framework.utils.inputs import _safe_import
 
     fake_name = "django_strawberry_framework._nonexistent_substrate_probe"
-    saved = sys.modules.get(fake_name)
-    try:
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[fake_name] = None  # pyright: ignore[reportArgumentType]
+    with blocked_modules(fake_name):
         assert _safe_import(fake_name, "anything") is None
-    finally:
-        if saved is None:
-            sys.modules.pop(fake_name, None)
-        else:
-            sys.modules[fake_name] = saved
 
 
 def test_safe_import_returns_none_for_missing_attribute_on_importable_module():
@@ -566,11 +559,10 @@ def test_set_metaclasses_share_the_fields_alias_owner():
     from django_strawberry_framework.filters import sets as filter_sets
     from django_strawberry_framework.orders import sets as order_sets
 
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert filter_sets.FILTERSET_FIELDS_ALIAS is FILTERSET_FIELDS_ALIAS  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert filter_sets.promote_set_meta_fields is promote_set_meta_fields  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert order_sets.promote_set_meta_fields is promote_set_meta_fields  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert order_sets.read_set_meta_fields is read_set_meta_fields  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(filter_sets, "FILTERSET_FIELDS_ALIAS") is FILTERSET_FIELDS_ALIAS
+    assert module_binding(filter_sets, "promote_set_meta_fields") is promote_set_meta_fields
+    assert module_binding(order_sets, "promote_set_meta_fields") is promote_set_meta_fields
+    assert module_binding(order_sets, "read_set_meta_fields") is read_set_meta_fields
     assert "promote_set_meta_fields" in filter_sets.FilterSetMetaclass.__new__.__code__.co_names
     assert "promote_set_meta_fields" in order_sets.OrderSetMetaclass.__new__.__code__.co_names
     assert "read_set_meta_fields" in order_sets.OrderSet._expand_meta_fields.__code__.co_names
@@ -638,9 +630,8 @@ def test_write_flavor_shape_caches_share_get_or_store_owner():
     from django_strawberry_framework.mutations import sets as mutation_sets
     from django_strawberry_framework.rest_framework import inputs as ser_inputs
 
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert mutation_sets.get_or_store_shape_build is get_or_store_shape_build  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert ser_inputs.get_or_store_shape_build is get_or_store_shape_build  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(mutation_sets, "get_or_store_shape_build") is get_or_store_shape_build
+    assert module_binding(ser_inputs, "get_or_store_shape_build") is get_or_store_shape_build
 
 
 def test_pascalize_token_is_injective_across_legal_field_name_boundaries():

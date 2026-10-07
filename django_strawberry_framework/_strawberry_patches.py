@@ -418,7 +418,9 @@ SyncBaseHTTPView: "type[_AnySyncView] | None"
 replace_placeholders_with_files: "Callable[..., object] | None"
 try:
     from cross_web import HTTPException
-    from strawberry.file_uploads.utils import replace_placeholders_with_files
+    from strawberry.file_uploads.utils import (
+        replace_placeholders_with_files as _imported_replace_placeholders_with_files,
+    )
     from strawberry.http.async_base_view import AsyncBaseHTTPView
     from strawberry.http.base import BaseView
     from strawberry.http.sync_base_view import SyncBaseHTTPView
@@ -430,6 +432,8 @@ except ImportError:  # pragma: no cover - every supported release imports; tests
     AsyncBaseHTTPView = None
     SyncBaseHTTPView = None
     replace_placeholders_with_files = None
+else:
+    replace_placeholders_with_files = _imported_replace_placeholders_with_files
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"

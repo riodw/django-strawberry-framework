@@ -32,6 +32,7 @@ from django_strawberry_framework.orders.inputs import (
     _field_specs,
     _materialized_names,
 )
+from tests._idioms import definition_raises
 
 
 @pytest.fixture(autouse=True)
@@ -237,8 +238,9 @@ def test_factory_input_object_types_shared_across_factory_instances():
 def test_factory_subclass_rejected_at_class_creation_time():
     """Subclassing ``OrderArgumentsFactory`` raises ``TypeError`` immediately."""
     with pytest.raises(TypeError) as excinfo:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _SubFactory(OrderArgumentsFactory):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _SubFactory(OrderArgumentsFactory):
             pass
 
     assert "does not support subclassing" in str(excinfo.value)

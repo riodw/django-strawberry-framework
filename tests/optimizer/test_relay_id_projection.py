@@ -16,6 +16,7 @@ import pytest
 import pytest_django
 import strawberry
 from apps.library.models import Patron, PatronProfile
+from django.db.models import QuerySet
 from strawberry import relay
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
@@ -59,11 +60,9 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_profiles(self) -> list[PatronProfileNode]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return PatronProfile.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[PatronProfileNode])
+        def all_profiles(self) -> QuerySet[PatronProfile]:
+            return PatronProfile.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()

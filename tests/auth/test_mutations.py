@@ -38,6 +38,7 @@ from channels.db import database_sync_to_async
 from channels.routing import ProtocolTypeRouter
 from channels.testing import HttpCommunicator, WebsocketCommunicator
 from django.conf import settings
+from django.contrib import auth
 from django.contrib.auth import (
     BACKEND_SESSION_KEY,
     SESSION_KEY,
@@ -1750,8 +1751,7 @@ def test_login_backend_selection_failure_compensates(monkeypatch: pytest.MonkeyP
     compensating flush deletes it and the actor stays anonymous.
     """
     create_users(1)
-    # basedpyright: read the original through the module path the patch below targets
-    real_authenticate = auth_mutations.auth.authenticate  # pyright: ignore[reportPrivateLocalImportUsage]
+    real_authenticate = auth.authenticate
 
     def _strip_backend(request: HttpRequest | None, **kwargs: object):
         user = real_authenticate(request, **kwargs)
@@ -1759,8 +1759,7 @@ def test_login_backend_selection_failure_compensates(monkeypatch: pytest.MonkeyP
             del user.backend
         return user
 
-    # basedpyright: patch the auth module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(auth_mutations.auth, "authenticate", _strip_backend)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(auth, "authenticate", _strip_backend)
     schema = _login_logout_schema()
     request = _request_with_store(DBSessionStore())
     res = _login_exec(schema, request)

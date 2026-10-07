@@ -68,6 +68,7 @@ from django.contrib.postgres.indexes import (
     SpGistIndex,
 )
 from django.db import models
+from django.db.models import QuerySet
 from django.db.models.expressions import Col
 from django.db.models.functions import Lower
 from django.db.models.options import Options
@@ -1458,11 +1459,9 @@ class TestAdvisoryDeferredUntilWindowAccepted:
 
         @strawberry.type
         class Query:
-            @strawberry.field
-            def shelves(self) -> list[ShelfNode]:
-                # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-                # returns the model rows a DjangoType field resolves from, as the consumer corner does
-                return Shelf.objects.order_by("id")  # pyright: ignore[reportReturnType]
+            @strawberry.field(graphql_type=list[ShelfNode])
+            def shelves(self) -> QuerySet[Shelf]:
+                return Shelf.objects.order_by("id")
 
         finalize_django_types()
         ext = DjangoOptimizerExtension(nested_connection_strategy=strategy)

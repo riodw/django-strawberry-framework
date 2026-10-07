@@ -1467,8 +1467,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
     monkeypatch.setattr(mutation_resolvers, "build_payload", _returning("ok"))
 
     with (
-        # basedpyright: patch the module object the code under test holds, not a fresh import of it
-        patch.object(mutation_resolvers.transaction, "atomic", side_effect=_Atomic),  # pyright: ignore[reportPrivateLocalImportUsage]
+        patch.object(transaction, "atomic", side_effect=_Atomic),
         managed_write_transaction("shard_b"),
     ):
         result = mutation_resolvers.run_write_pipeline_sync(

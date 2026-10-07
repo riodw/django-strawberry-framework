@@ -115,8 +115,7 @@ def _schema_with_root(declaring_type: type, *, field_name: str = "objs"):
     finalize_django_types()
     model = declaring_type.__django_strawberry_definition__.model
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def _resolver() -> list[declaring_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def _resolver() -> list[djmodels.Model]:
         return list(model._default_manager.all().order_by("pk"))
 
     query_cls = strawberry.type(
@@ -987,8 +986,7 @@ def test_divergent_alias_per_key_window_preferred_over_shared():
     finalize_django_types()
     model = genre_type.__django_strawberry_definition__.model
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def _resolver() -> list[genre_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def _resolver() -> list[djmodels.Model]:
         objs = list(model._default_manager.all().order_by("pk"))
         for obj in objs:
             books = list(obj.books.all().order_by("pk"))
@@ -1958,8 +1956,7 @@ def test_fallback_when_annotations_missing():
     finalize_django_types()
     model = genre_type.__django_strawberry_definition__.model
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def _resolver() -> list[genre_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def _resolver() -> list[djmodels.Model]:
         objs = list(model._default_manager.all().order_by("pk"))
         # Plant an UNANNOTATED list at the package-reserved to_attr (a consumer
         # prefetch shape); the resolver must NOT consume it as a window.
@@ -2556,10 +2553,8 @@ def _shelves_with_consumer_books_schema(
             model = Book
             fields = ("id", "title", "loans")
 
-    def _curated_books(root: Shelf) -> list[BookType]:
-        # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-        # returns the model rows a DjangoType field resolves from, as the consumer corner does
-        return list(root.books.order_by("title")[:2])  # pyright: ignore[reportReturnType]
+    def _curated_books(root: Shelf) -> list[Book]:
+        return list(root.books.order_by("title")[:2])
 
     meta_ns: dict[str, object] = {"model": Shelf, "fields": ("id", "code", "books")}
     if books_hint is not None:
@@ -2569,7 +2564,7 @@ def _shelves_with_consumer_books_schema(
         (DjangoType,),
         {
             "__annotations__": {},
-            "books": strawberry.field(resolver=_curated_books),
+            "books": strawberry.field(resolver=_curated_books, graphql_type=list[BookType]),
             "Meta": type("Meta", (), meta_ns),
         },
     )

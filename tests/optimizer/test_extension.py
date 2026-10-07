@@ -32,7 +32,7 @@ import pytest_django
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
-from django.db.models import Model, QuerySet
+from django.db.models import Manager, Model, QuerySet
 from graphql import (
     DefinitionNode,
     DocumentNode,
@@ -67,6 +67,7 @@ from django_strawberry_framework.optimizer.extension import (
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import iter_subsystem_clears, registry
 from django_strawberry_framework.utils.querysets import _AsyncQuerySetRows
+from tests._idioms import definition_raises
 
 if TYPE_CHECKING:
     from django_strawberry_framework.optimizer.selections import FragmentVisitKey
@@ -164,12 +165,10 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> Manager[Item]:
             # Return the Manager itself, not ``Manager.all()``.
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects  # pyright: ignore[reportReturnType]
+            return Item.objects
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -207,11 +206,9 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -256,11 +253,9 @@ def test_optimizer_elides_forward_fk_id_only_selection_plan_shape():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -308,11 +303,9 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -365,11 +358,9 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_sha
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -428,11 +419,9 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -463,11 +452,9 @@ def test_optimizer_passes_through_unregistered_return_type(caplog: pytest.LogCap
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -526,13 +513,11 @@ def test_evaluated_root_queryset_does_not_record_a_plan_cache_miss():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
             qs = Item.objects.select_related("category").all()
             len(qs)
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return qs  # pyright: ignore[reportReturnType]
+            return qs
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -809,11 +794,9 @@ def test_optimize_handles_empty_field_nodes(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -850,11 +833,9 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch: pytest.M
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -921,11 +902,9 @@ def test_cache_differentiates_queries(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -957,11 +936,9 @@ def test_cache_differentiates_reachable_named_fragment_bodies():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1010,17 +987,13 @@ def test_cache_differentiates_same_model_root_fields(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
-        @strawberry.field
-        def featured_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.filter(is_private=False)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def featured_categories(self) -> QuerySet[Category]:
+            return Category.objects.filter(is_private=False)
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1150,19 +1123,15 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     @strawberry.type
     class Mutation:
-        @strawberry.mutation
-        def touch_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.mutation(graphql_type=list[ItemType])
+        def touch_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -1286,11 +1255,9 @@ def test_cache_clear_makes_the_next_request_build_its_plan_again():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1423,11 +1390,9 @@ def test_filter_vars_do_not_affect_cache():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self, limit: int = 10) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()[:limit]  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self, limit: int = 10) -> QuerySet[Item]:
+            return Item.objects.all()[:limit]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -1461,11 +1426,9 @@ def test_cache_separates_operation_names_in_same_document():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -2215,11 +2178,9 @@ def test_root_pagination_variable_one_plan_through_schema():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self, first: int = 10) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()[:first]  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self, first: int = 10) -> QuerySet[Category]:
+            return Category.objects.all()[:first]
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -2525,11 +2486,9 @@ def test_strictness_warn_logs_unplanned_relation(caplog: pytest.LogCaptureFixtur
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return list(Item.objects.all()[:1])  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> list[Item]:
+            return list(Item.objects.all()[:1])
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
@@ -2559,11 +2518,9 @@ def test_strictness_off_does_not_stash_sentinel():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="off")
     finalize_django_types()
@@ -2594,11 +2551,9 @@ def test_strictness_warn_stashes_sentinel():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
@@ -2641,11 +2596,9 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     ext = DjangoOptimizerExtension(strictness=mode)
     finalize_django_types()
@@ -2685,11 +2638,9 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog: pytest.LogCa
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
@@ -2791,11 +2742,9 @@ def test_strictness_raise_accepts_unplanned_cached_forward_fk():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return list(Item.objects.select_related("category").all()[:1])  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> list[Item]:
+            return list(Item.objects.select_related("category").all()[:1])
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
@@ -2835,11 +2784,9 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_patrons(self) -> list[PatronType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return list(Patron.objects.select_related("card").all())  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[PatronType])
+        def all_patrons(self) -> list[Patron]:
+            return list(Patron.objects.select_related("card").all())
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
@@ -2879,11 +2826,9 @@ def test_strictness_warn_planned_alias_no_warning(caplog: pytest.LogCaptureFixtu
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
@@ -2928,11 +2873,9 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="raise")
     finalize_django_types()
@@ -2981,11 +2924,9 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -3314,8 +3255,9 @@ def test_optimizer_hints_unknown_field_raises():
     from django_strawberry_framework.exceptions import ConfigurationError
 
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ItemType(DjangoType):
             class Meta:
                 model = Item
                 fields = ("id", "name")
@@ -3327,8 +3269,9 @@ def test_optimizer_hints_non_hint_value_raises():
     from django_strawberry_framework.exceptions import ConfigurationError
 
     with pytest.raises(ConfigurationError, match="OptimizerHint instances"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ItemType(DjangoType):
             class Meta:
                 model = Item
                 fields = ("id", "name", "category")
@@ -3371,11 +3314,9 @@ def test_plan_stashed_with_select_related(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -3419,11 +3360,9 @@ def test_plan_stashed_with_prefetch_related(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4086,11 +4025,9 @@ def test_a_nested_operation_does_not_take_the_outer_operations_optimizer_state()
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
         @strawberry.field
         def nest(self, info: strawberry.Info) -> str:
@@ -4182,11 +4119,9 @@ def test_an_operation_started_from_a_consumer_teardown_leaves_the_request_its_pl
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     seen = {}
 
@@ -4256,11 +4191,9 @@ def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4304,11 +4237,9 @@ def test_on_execute_clears_reused_context_planned_keys_across_executions():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension(strictness="raise")
@@ -4343,11 +4274,9 @@ def test_empty_plan_still_stashed():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4384,11 +4313,9 @@ def test_optimizer_applies_only_for_selected_scalars():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     ext = DjangoOptimizerExtension()
@@ -4446,11 +4373,9 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4501,11 +4426,9 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4569,11 +4492,9 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.select_related("category")  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.select_related("category")
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -4640,11 +4561,9 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.prefetch_related(consumer_pf)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.prefetch_related(consumer_pf)
 
     finalize_django_types()
     capture_ext = _CaptureExt()
@@ -4718,11 +4637,9 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.prefetch_related("items")  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def all_categories(self) -> QuerySet[Category]:
+            return Category.objects.prefetch_related("items")
 
     finalize_django_types()
     capture_ext = _CaptureExt()
@@ -4854,17 +4771,13 @@ def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_mode
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
-        @strawberry.field
-        def all_admin_items(self) -> list[AdminItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[AdminItemType])
+        def all_admin_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -5109,11 +5022,9 @@ def test_optimizer_helper_extraction_no_regression():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -5164,8 +5075,8 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self, info: strawberry.Info[object, object]) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self, info: strawberry.Info[object, object]) -> QuerySet[Item]:
             # Inside a resolver the ``on_execute`` lifecycle has published the
             # active extension; the helper must discover it (not build a
             # throwaway). Apply twice so the second call is a cache hit on the
@@ -5173,9 +5084,7 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
             qs = Item.objects.all()
             apply_connection_optimization(ItemType, qs, info)
             captured["active"] = _active_optimizer()
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return qs  # pyright: ignore[reportReturnType]
+            return qs
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
@@ -5398,11 +5307,9 @@ def test_cascading_target_downgrades_join_to_prefetch():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     # One public category whose name matches the request user, one item under it.
@@ -5485,11 +5392,9 @@ def test_plan_with_cascading_hook_uncacheable():
 
     @strawberry.type
     class CascadingQuery:
-        @strawberry.field
-        def all_items(self) -> list[CascadingItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CascadingItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     cascading_schema = strawberry.Schema(
@@ -5526,11 +5431,9 @@ def test_plan_with_cascading_hook_uncacheable():
 
     @strawberry.type
     class PlainQuery:
-        @strawberry.field
-        def all_items(self) -> list[PlainItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[PlainItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     finalize_django_types()
     plain_schema = strawberry.Schema(query=PlainQuery, extensions=[lambda: plain_ext])
@@ -5583,17 +5486,13 @@ def test_b8_pruned_select_related_stays_strictness_visible():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def projected_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.order_by("id").only("name")  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def projected_items(self) -> QuerySet[Item]:
+            return Item.objects.order_by("id").only("name")
 
-        @strawberry.field
-        def planned_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.order_by("id")  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def planned_items(self) -> QuerySet[Item]:
+            return Item.objects.order_by("id")
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5652,19 +5551,15 @@ def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def objs(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all().prefetch_related(  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def objs(self) -> QuerySet[Category]:
+            return Category.objects.all().prefetch_related(
                 Prefetch("items", queryset=Item.objects.filter(is_private=False)),
             )
 
-        @strawberry.field
-        def planned_objs(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def planned_objs(self) -> QuerySet[Category]:
+            return Category.objects.all()
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5717,11 +5612,9 @@ def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def objs(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Category.objects.all().prefetch_related(  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def objs(self) -> QuerySet[Category]:
+            return Category.objects.all().prefetch_related(
                 Prefetch("items", queryset=Item.objects.filter(is_private=False)),
             )
 
@@ -5773,11 +5666,9 @@ def test_strictness_reaches_an_execution_with_no_stashable_context():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def projected_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.order_by("id").only("name")  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def projected_items(self) -> QuerySet[Item]:
+            return Item.objects.order_by("id").only("name")
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -5826,11 +5717,9 @@ def test_strictness_flags_a_relation_under_an_unplannable_root():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return list(Category.objects.order_by("id"))  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        def categories(self) -> list[Category]:
+            return list(Category.objects.order_by("id"))
 
     finalize_django_types()
     query = "{ categories { name items { name } } }"
@@ -5883,11 +5772,9 @@ async def test_strictness_flags_an_unplanned_relation_before_the_async_sync_gate
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        async def categories(self) -> list[CategoryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return [obj async for obj in Category.objects.order_by("id")]  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[CategoryType])
+        async def categories(self) -> list[Category]:
+            return [obj async for obj in Category.objects.order_by("id")]
 
     finalize_django_types()
     optimizer = DjangoOptimizerExtension(strictness="raise")
@@ -6152,13 +6039,11 @@ def test_an_operation_in_a_context_that_outlived_a_request_publishes_as_its_own(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self, info: strawberry.Info) -> list[ItemType]:
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self, info: strawberry.Info) -> QuerySet[Item]:
             """Copy this operation's context, as a resolver starting a task does."""
             seen.setdefault("copied", contextvars.copy_context())
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+            return Item.objects.all()
 
     def _second_operation() -> None:
         """Run a whole operation from the copied context, after the first has ended."""

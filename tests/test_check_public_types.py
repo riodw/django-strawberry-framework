@@ -19,6 +19,7 @@ checker's report has no ``/graphql/`` wire shape, so there is no live sibling in
 """
 
 import json
+import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -352,8 +353,7 @@ def test_a_child_that_cannot_start_or_decode_is_a_measurement_error(
     def refuse(*args: object, **kwargs: object):
         raise error
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(check_public_types.subprocess, "run", refuse)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(subprocess, "run", refuse)
 
     with pytest.raises(check_public_types.MeasurementError, match=match):
         check_public_types._run(["/env/bin/basedpyright", "--version"], cwd=tmp_path, env={})

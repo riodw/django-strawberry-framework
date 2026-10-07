@@ -32,7 +32,7 @@ from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
 from django.test import RequestFactory, modify_settings
 
 import django_strawberry_framework
-from tests._soft_dependency import evicted_modules, simulated_absence
+from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
 
 if TYPE_CHECKING:
     from django_strawberry_framework.middleware.debug_toolbar import DebugToolbarMiddleware
@@ -177,14 +177,11 @@ def test_broken_toolbar_install_propagates_raw_import_error(toolbar_leaf: Module
         attr="middleware",
     ) as saved:
         sys.modules["debug_toolbar"] = saved["debug_toolbar"]  # top-level: present + real
-        # its submodule: broken
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules["debug_toolbar.middleware"] = None  # pyright: ignore[reportArgumentType]
-        with pytest.raises(ImportError, match="debug_toolbar.middleware") as excinfo:
-            importlib.import_module(_LEAF)
-        assert _HINT_SUBSTRING not in str(excinfo.value)
-        assert excinfo.value.__cause__ is None
+        with blocked_modules("debug_toolbar.middleware"):  # its submodule: broken
+            with pytest.raises(ImportError, match="debug_toolbar.middleware") as excinfo:
+                importlib.import_module(_LEAF)
+            assert _HINT_SUBSTRING not in str(excinfo.value)
+            assert excinfo.value.__cause__ is None
 
 
 def test_leaf_import_requires_debug_toolbar_in_installed_apps():

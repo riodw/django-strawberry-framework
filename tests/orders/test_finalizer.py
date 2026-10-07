@@ -54,6 +54,7 @@ from django_strawberry_framework.orders.inputs import (
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.finalizer import _bind_orderset_owner
+from tests._idioms import definition_raises
 
 
 def _as_definition(stand_in: object) -> DjangoTypeDefinition:
@@ -109,8 +110,9 @@ def test_meta_orderset_class_rejects_non_order_set():
         pass
 
     with pytest.raises(ConfigurationError) as exc_info:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BookType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BookType(DjangoType):
             class Meta:
                 model = Book
                 fields = ("id", "title")

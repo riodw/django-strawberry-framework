@@ -96,6 +96,7 @@ from django_strawberry_framework.mutations.inputs import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import Upload
+from tests._idioms import module_binding
 from tests.optimizer import _link_models
 
 if TYPE_CHECKING:
@@ -412,9 +413,10 @@ def test_form_and_serializer_column_less_relation_share_queryset_annotation():
         serializer_converter as ser_converter,
     )
 
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert form_inputs.annotate_queryset_relation is annotate_queryset_relation  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert ser_converter.annotate_queryset_relation is annotate_queryset_relation  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(form_inputs, "annotate_queryset_relation") is annotate_queryset_relation
+    assert (
+        module_binding(ser_converter, "annotate_queryset_relation") is annotate_queryset_relation
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -490,10 +492,12 @@ def test_form_and_serializer_column_kind_share_model_column_owner():
         serializer_converter as ser_converter,
     )
 
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert form_inputs.model_column_write_kind is model_column_write_kind  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert ser_converter.model_column_write_kind is model_column_write_kind  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert ser_converter.model_column_write_annotation is model_column_write_annotation  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(form_inputs, "model_column_write_kind") is model_column_write_kind
+    assert module_binding(ser_converter, "model_column_write_kind") is model_column_write_kind
+    assert (
+        module_binding(ser_converter, "model_column_write_annotation")
+        is model_column_write_annotation
+    )
 
 
 # ---------------------------------------------------------------------------

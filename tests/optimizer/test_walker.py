@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from types import SimpleNamespace
 
 import pytest
+import strawberry
 from apps.products.models import Category, Entry, Item
 from apps.products.services import seed_data
 from django.db.models import Field, Model, Prefetch, QuerySet
@@ -3057,7 +3058,6 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
     from apps.library.models import Book, Genre
     from strawberry import relay
 
-    import django_strawberry_framework.types.finalizer as finalizer_module
     from django_strawberry_framework import DjangoType, finalize_django_types
 
     registry.clear()
@@ -3077,8 +3077,7 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
                 fields = ("id", "name", "books")
                 interfaces = (relay.Node,)
 
-        # basedpyright: read the original through the module path the patch targets
-        real_strawberry_type = finalizer_module.strawberry.type  # pyright: ignore[reportPrivateLocalImportUsage]
+        real_strawberry_type = strawberry.type
 
         def boom(cls: object = None, *args: object, **kwargs: object) -> object:
             # Only the Phase-3 decoration of GenreType raises; synthesis
@@ -3091,8 +3090,7 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
 
         # Synthesis (Phase 2.5) runs before Phase 3; make Phase 3 raise so the
         # marker is set but ``finalized`` stays False.
-        # basedpyright: patch the module object the code under test holds, not a fresh import of it
-        monkeypatch.setattr(finalizer_module.strawberry, "type", boom)  # pyright: ignore[reportPrivateLocalImportUsage]
+        monkeypatch.setattr(strawberry, "type", boom)
         with pytest.raises(RuntimeError, match="forced Phase 3 failure"):
             finalize_django_types()
         genre_def = registry.get_definition(GenreType)
@@ -3102,8 +3100,7 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(
         # Wipe it and re-run with Phase 3 restored: the marker-``continue`` branch
         # must re-record the slot rather than skip it.
         genre_def.relation_connections = None
-        # basedpyright: patch the module object the code under test holds, not a fresh import of it
-        monkeypatch.setattr(finalizer_module.strawberry, "type", real_strawberry_type)  # pyright: ignore[reportPrivateLocalImportUsage]
+        monkeypatch.setattr(strawberry, "type", real_strawberry_type)
         finalize_django_types()
         assert genre_def.relation_connections == {"books_connection": "books"}
     finally:
@@ -5541,14 +5538,12 @@ def _shelf_types_with_consumer_books(
             model = Book
             fields = ("id", "title", "shelf")
 
-    def _curated_books(root: Shelf) -> list[BookType]:
-        # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-        # returns the model rows a DjangoType field resolves from, as the consumer corner does
-        return list(root.books.order_by("title")[:2])  # pyright: ignore[reportReturnType]
+    def _curated_books(root: Shelf) -> list[Book]:
+        return list(root.books.order_by("title")[:2])
 
     namespace = {
         "__annotations__": {},
-        "books": strawberry.field(resolver=_curated_books),
+        "books": strawberry.field(resolver=_curated_books, graphql_type=list[BookType]),
         **(namespace_extra or {}),
     }
     meta_ns = {"model": Shelf, "fields": ("id", "code", "books"), **(meta_extra or {})}

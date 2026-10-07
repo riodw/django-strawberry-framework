@@ -18,6 +18,7 @@ from strawberry.types import get_object_definition
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from tests._idioms import definition_raises
 
 
 @pytest.fixture(autouse=True)
@@ -30,8 +31,9 @@ def _isolate_registry() -> Iterator[None]:
 
 def test_generic_foreign_key_raises_configuration_error():
     with pytest.raises(ConfigurationError, match="cannot be auto-mapped to a single GraphQL type"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class TaggedItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class TaggedItemType(DjangoType):
             class Meta:
                 model = TaggedItem
                 fields = "__all__"

@@ -153,8 +153,7 @@ def _schema_for(node_type: type) -> strawberry.Schema:
     """
     connection_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def items_resolver() -> Iterable[node_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def items_resolver() -> Iterable[Category]:
         return Category.objects.all().order_by("pk")
 
     query_namespace = {
@@ -283,12 +282,10 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     assert item_conn.__name__ == "PublicItemConnection"
     assert cat_conn is not item_conn
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def _categories() -> Iterable[category_node]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def _categories() -> Iterable[Category]:
         return Category.objects.all().order_by("pk")
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def _items() -> Iterable[item_node]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def _items() -> Iterable[Item]:
         return Item.objects.all().order_by("pk")
 
     query_cls = strawberry.type(
@@ -560,8 +557,7 @@ def _capture_info(node_type: type):
     conn_type = _connection_type_for(node_type, node_type.__django_strawberry_definition__)
     captured: dict[str, strawberry.Info[object, object]] = {}
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def capture(root: object, info: strawberry.Info[object, object]) -> Iterable[node_type]:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def capture(root: object, info: strawberry.Info[object, object]) -> Iterable[Category]:
         captured["info"] = info
         return Category.objects.all()
 

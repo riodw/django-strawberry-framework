@@ -33,7 +33,6 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import relay as testing_relay
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
-from django_strawberry_framework.types import finalizer as types_finalizer
 from django_strawberry_framework.types import relay as types_relay
 
 if TYPE_CHECKING:
@@ -70,11 +69,12 @@ def _make_node_type(
 def _schema_with_row(node_type: type, model: type[models.Model]) -> strawberry.Schema:
     """Finalize, then build a schema exposing ``row`` -> the lowest-pk instance."""
 
-    # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-    def row() -> node_type:  # pyright: ignore[reportInvalidTypeForm, reportUnknownParameterType]
+    def row() -> models.Model | None:
         return model._default_manager.order_by("pk").first()
 
-    query_cls = strawberry.type(type("Query", (), {"row": strawberry.field(resolver=row)}))
+    query_cls = strawberry.type(
+        type("Query", (), {"row": strawberry.field(resolver=row, graphql_type=node_type)}),
+    )
     finalize_django_types()
     return strawberry.Schema(query=query_cls, config=strawberry_config())
 
@@ -243,8 +243,7 @@ def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch: pyte
     def _boom(*args: object, **kwargs: object):
         raise RuntimeError("phase-3 boom")
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(strawberry, "type", _boom)
     with pytest.raises(RuntimeError, match="phase-3 boom"):
         finalize_django_types()
 

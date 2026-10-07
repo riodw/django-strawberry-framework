@@ -131,11 +131,13 @@ if TYPE_CHECKING:
 # is the drift sentinel for a release that renames or removes it.
 _DatabaseFailure: "type[_DatabaseFailureClass] | None"
 try:
-    from django.test.testcases import _DatabaseFailure
+    from django.test.testcases import _DatabaseFailure as _imported_database_failure
 except ImportError:  # pragma: no cover - every supported release imports; tests patch the sentinel
     # Preserve module import long enough for ``apply()`` to report the precise
     # unsupported upstream shape and the explicit opt-out.
     _DatabaseFailure = None
+else:
+    _DatabaseFailure = _imported_database_failure
 
 
 _PATCH_OWNER_ATTRIBUTE = "_django_strawberry_framework_patch_owner"

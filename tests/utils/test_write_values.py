@@ -42,6 +42,7 @@ from django_strawberry_framework.utils.write_values import (
     store_decoded,
     unencodable_text_error,
 )
+from tests._idioms import module_binding
 
 
 @strawberry.input
@@ -517,19 +518,17 @@ def test_form_and_serializer_decode_walks_share_field_handlers():
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
     from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
 
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert form_resolvers.decode_field_handlers is decode_field_handlers  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert serializer_resolvers.decode_field_handlers is decode_field_handlers  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert serializer_resolvers.decoded_into is decoded_into  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert form_resolvers.decode_provided_fields is decode_provided_fields  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert serializer_resolvers.decode_provided_fields is decode_provided_fields  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(form_resolvers, "decode_field_handlers") is decode_field_handlers
+    assert module_binding(serializer_resolvers, "decode_field_handlers") is decode_field_handlers
+    assert module_binding(serializer_resolvers, "decoded_into") is decoded_into
+    assert module_binding(form_resolvers, "decode_provided_fields") is decode_provided_fields
+    assert module_binding(serializer_resolvers, "decode_provided_fields") is decode_provided_fields
     # The model rider composes its handler map from the ``*_into`` primitives
     # directly (it replaces every ``decode_field_handlers`` default but
     # ``RELATION_SINGLE``), so it shares the spine + primitives, not the factory.
-    # basedpyright: the identity check reads the name through the importing module on purpose
-    assert mutation_resolvers.decode_provided_fields is decode_provided_fields  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert mutation_resolvers.decoded_into is decoded_into  # pyright: ignore[reportPrivateLocalImportUsage]
-    assert mutation_resolvers.relation_into is relation_into  # pyright: ignore[reportPrivateLocalImportUsage]
+    assert module_binding(mutation_resolvers, "decode_provided_fields") is decode_provided_fields
+    assert module_binding(mutation_resolvers, "decoded_into") is decoded_into
+    assert module_binding(mutation_resolvers, "relation_into") is relation_into
 
 
 @pytest.mark.django_db

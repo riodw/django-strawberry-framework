@@ -1174,11 +1174,9 @@ def test_an_abstract_model_type_serves_concrete_rows_and_its_default_seed_names_
     class Query:
         entries: list[TitledEntryType] = DjangoListField(TitledEntryType)
 
-        @strawberry.field
-        def reading_lists(self) -> list[TitledEntryType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return list(library_models.ReadingList.objects.all())  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[TitledEntryType])
+        def reading_lists(self) -> list[library_models.TitledEntry]:
+            return list(library_models.ReadingList.objects.all())
 
     schema = strawberry.Schema(query=Query)
     context = {"request": RequestFactory().get("/")}

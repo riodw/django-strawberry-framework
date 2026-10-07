@@ -27,6 +27,7 @@ from apps.library.models import (
 )
 from apps.products import services
 from apps.products.models import Category, Item
+from django.db.models import QuerySet
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -734,11 +735,9 @@ def test_walker_produces_same_plan_with_cached_map(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Item.objects.all()  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[ItemType])
+        def all_items(self) -> QuerySet[Item]:
+            return Item.objects.all()
 
     from types import SimpleNamespace
 

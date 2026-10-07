@@ -77,6 +77,7 @@ from django_strawberry_framework.rest_framework.sets import (
     _validate_schema_field_map,
     _validate_serializer_nested_fields,
 )
+from tests._idioms import definition_raises
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.hook_context import SerializerHookContext
@@ -159,8 +160,9 @@ def test_serializer_mutation_not_in_all():
 def test_missing_serializer_class_raises():
     """A ``SerializerMutation`` with no ``Meta.serializer_class`` raises naming the key."""
     with pytest.raises(ConfigurationError, match="declares no serializer_class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 operation = "create"
 
@@ -172,8 +174,9 @@ def test_non_serializer_value_rejected():
         pass
 
     with pytest.raises(ConfigurationError, match="must be a DRF .*Serializer"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = NotASerializer
                 operation = "create"
@@ -188,8 +191,9 @@ def test_serializer_hostile_class_repr_maps_to_configuration_error():
             raise RuntimeError("repr exploded")
 
     with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = HostileRepr()
                 operation = "create"
@@ -202,8 +206,9 @@ def test_plain_serializer_with_no_model_rejected():
         name = serializers.CharField()
 
     with pytest.raises(ConfigurationError, match="must be a serializers.ModelSerializer"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateThing(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateThing(SerializerMutation):
             class Meta:
                 serializer_class = PlainSerializer
                 operation = "create"
@@ -220,8 +225,9 @@ def test_modelserializer_with_no_meta_model_rejected():
             fields = ("name",)
 
     with pytest.raises(ConfigurationError, match="resolves no model"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateThing(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateThing(SerializerMutation):
             class Meta:
                 serializer_class = NoModelSerializer
                 operation = "create"
@@ -237,8 +243,9 @@ def test_modelserializer_non_model_meta_model_raises_at_class_creation():
     # checker reads model as the declared model class
     serializer_cls.Meta.model = "Item"  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(ConfigurationError, match="must be a Django model class"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateThing(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateThing(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -248,8 +255,9 @@ def test_delete_operation_rejected():
     """``operation = "delete"`` is rejected via the shared non-delete message (DRF serializers do not delete)."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DeleteItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DeleteItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "delete"
@@ -259,8 +267,9 @@ def test_missing_operation_rejected():
     """A missing ``operation`` is rejected (``None`` invalid)."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="operation must be one of"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
 
@@ -309,8 +318,9 @@ def test_fields_and_exclude_both_raises():
     """Declaring both ``fields`` and ``exclude`` raises."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -328,8 +338,9 @@ def test_optional_fields_bare_string_rejected_at_class_creation():
     """
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="bare string|optional_fields"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -340,8 +351,9 @@ def test_unknown_meta_key_raises():
     """A stray ``Meta`` key raises the promoted typo guard."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="unknown keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -352,8 +364,9 @@ def test_model_key_is_unknown():
     """``model`` is NOT an allowed serializer key (it dropped from the serializer allowed set)."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="unknown keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -397,8 +410,9 @@ def test_late_declaration_after_finalize_raises():
 
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="after finalization"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = _item_serializer()
                 operation = "create"
@@ -785,8 +799,9 @@ def test_meta_injected_field_still_in_input_raises_at_class_creation():
     is rejected at class creation.
     """
     with pytest.raises(ConfigurationError, match="still in the generated GraphQL input"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class OverlapInject(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class OverlapInject(SerializerMutation):
             class Meta:
                 serializer_class = _item_serializer()
                 operation = "create"
@@ -812,8 +827,9 @@ def test_meta_injected_field_must_be_writable_at_class_creation(
             fields = ("name", "category", "server_value")
 
     with pytest.raises(ConfigurationError, match="unknown or non-writable at schema time"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class NonWritableInjectedMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class NonWritableInjectedMutation(SerializerMutation):
             class Meta:
                 serializer_class = NonWritableInjectedSerializer
                 operation = "create"
@@ -834,8 +850,9 @@ def test_hidden_field_source_collision_with_client_input_raises_at_class_creatio
             fields = ("name", "category", "hidden_name")
 
     with pytest.raises(ConfigurationError, match="HiddenField"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class HiddenCollisionMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class HiddenCollisionMutation(SerializerMutation):
             class Meta:
                 serializer_class = HiddenCollisionSerializer
                 operation = "create"
@@ -854,8 +871,9 @@ def test_narrowed_default_field_source_collision_raises_at_class_creation():
             fields = ("name", "category", "server_name")
 
     with pytest.raises(ConfigurationError, match="narrowed-out field defaults"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DefaultCollisionMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DefaultCollisionMutation(SerializerMutation):
             class Meta:
                 serializer_class = DefaultCollisionSerializer
                 operation = "create"
@@ -891,8 +909,9 @@ def test_duplicate_source_across_input_and_injected_raises_at_class_creation():
     value. Rejected at class creation.
     """
     with pytest.raises(ConfigurationError, match="bind one serializer source"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DupBoundaryMut(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DupBoundaryMut(SerializerMutation):
             class Meta:
                 serializer_class = _dup_source_serializer()
                 operation = "create"
@@ -920,8 +939,9 @@ def test_writable_star_source_field_is_rejected_at_class_creation():
             fields = ("name", "category", "alpha")
 
     with pytest.raises(ConfigurationError, match="source='\\*'"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class StarMut(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class StarMut(SerializerMutation):
             class Meta:
                 serializer_class = StarSer
                 operation = "create"
@@ -931,8 +951,9 @@ def test_writable_star_source_field_is_rejected_at_class_creation():
 def test_duplicate_source_between_two_input_fields_raises_at_class_creation():
     """Two CLIENT input fields sharing one source are rejected too (same last-write-wins hazard)."""
     with pytest.raises(ConfigurationError, match="bind one serializer source"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class DupInputMut(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class DupInputMut(SerializerMutation):
             class Meta:
                 serializer_class = _dup_source_serializer()
                 operation = "create"
@@ -982,8 +1003,9 @@ def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
     """A mutation ``Meta.optional_fields`` naming a field not in the effective set raises."""
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="optional_fields"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -1055,8 +1077,9 @@ def test_schema_hook_rejects_invalid_field_map_at_class_creation(
     field_map = map_factory(fields)
 
     with pytest.raises(ConfigurationError, match=message):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class InvalidSchemaMapMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class InvalidSchemaMapMutation(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -1079,8 +1102,9 @@ def test_schema_hook_rejects_mapping_that_cannot_be_materialized():
 
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="could not be materialized"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class InvalidSchemaMapMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class InvalidSchemaMapMutation(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -1188,8 +1212,9 @@ def test_schema_hook_invalid_value_with_hostile_repr_is_typed():
 
     serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="unprintable HostileRepr"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class InvalidSchemaMapMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class InvalidSchemaMapMutation(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"
@@ -1416,8 +1441,9 @@ def test_narrowing_dropping_required_without_injected_still_raises():
 def test_unknown_injected_fields_meta_key_still_rejected():
     """A typo'd ``Meta`` key adjacent to ``injected_fields`` is still rejected by the typo guard."""
     with pytest.raises(ConfigurationError, match="unknown keys"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class TypoMut(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class TypoMut(SerializerMutation):
             class Meta:
                 serializer_class = _item_serializer()
                 operation = "create"
@@ -1476,8 +1502,9 @@ def test_meta_select_for_update_explicit_false_opts_out():
 def test_meta_select_for_update_non_bool_raises():
     """A non-bool ``Meta.select_for_update`` fails loud at class creation."""
     with pytest.raises(ConfigurationError, match="select_for_update must be a bool"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadMut(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadMut(SerializerMutation):
             class Meta:
                 serializer_class = _item_serializer()
                 operation = "update"
@@ -1488,8 +1515,9 @@ def test_meta_select_for_update_non_bool_raises():
 def test_meta_injected_fields_unknown_name_raises_at_class_creation():
     """``Meta.injected_fields`` naming a field not in the schema map fails loud at class creation."""
     with pytest.raises(ConfigurationError, match="unknown or non-writable at schema time"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class BadInject(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class BadInject(SerializerMutation):
             class Meta:
                 serializer_class = _item_serializer()
                 operation = "create"
@@ -1910,8 +1938,9 @@ def test_nested_hidden_field_source_collision_raises_at_class_creation():
             return None
 
     with pytest.raises(ConfigurationError, match="nested serializer path 'items'"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateCategoryWithCollision(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateCategoryWithCollision(SerializerMutation):
             class Meta:
                 serializer_class = CategoryWithItems
                 operation = "create"
@@ -1944,8 +1973,9 @@ def test_nested_star_source_field_raises_at_class_creation():
             return None
 
     with pytest.raises(ConfigurationError, match="nested serializer path 'items'.*source='\\*'"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateCategoryWithStar(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateCategoryWithStar(SerializerMutation):
             class Meta:
                 serializer_class = CategoryWithItems
                 operation = "create"
@@ -2175,8 +2205,9 @@ def test_deeper_nested_fields_unknown_field_raises_configuration_error():
     category_cls = _nested_category_serializer()
 
     with pytest.raises(ConfigurationError, match="declares nested_fields for 'nonexistent'"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _BadDeepMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _BadDeepMutation(SerializerMutation):
             class Meta:
                 serializer_class = category_cls
                 operation = "create"
@@ -2192,8 +2223,9 @@ def test_deeper_nested_fields_non_nested_field_raises_configuration_error():
     category_cls = _nested_category_serializer()
 
     with pytest.raises(ConfigurationError, match="it is a CharField, not a nested serializer"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _BadDeepScalarMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _BadDeepScalarMutation(SerializerMutation):
             class Meta:
                 serializer_class = category_cls
                 operation = "create"
@@ -2228,8 +2260,9 @@ def test_nested_fields_cycle_raises_configuration_error_at_class_creation():
             return product_models.Category.objects.create(**validated_data)
 
     with pytest.raises(ConfigurationError, match="re-enters RecursiveCategorySerializer"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _CyclicMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _CyclicMutation(SerializerMutation):
             class Meta:
                 serializer_class = RecursiveCategorySerializer
                 operation = "create"
@@ -2269,8 +2302,9 @@ def test_mutual_nested_fields_cycle_raises_configuration_error_at_class_creation
     cycle_cat["category"] = config_cat
 
     with pytest.raises(ConfigurationError, match="re-enters MutItemSerializer"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _MutualCyclicMutation(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _MutualCyclicMutation(SerializerMutation):
             class Meta:
                 serializer_class = MutItemSerializer
                 operation = "create"
@@ -2321,8 +2355,9 @@ def test_validate_nested_fields_child_serializer_errors():
             pass
 
     with pytest.raises(ConfigurationError) as config_exc:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _Mut1(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _Mut1(SerializerMutation):
             class Meta:
                 serializer_class = Parent1
                 operation = "create"
@@ -2334,8 +2369,9 @@ def test_validate_nested_fields_child_serializer_errors():
     assert str(config_exc.value) == "Explicit config error in child fields"
 
     with pytest.raises(ConfigurationError) as exc:
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class _Mut2(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class _Mut2(SerializerMutation):
             class Meta:
                 serializer_class = Parent2
                 operation = "create"

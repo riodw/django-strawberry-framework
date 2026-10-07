@@ -163,7 +163,7 @@ from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import request_from_info
-from tests._soft_dependency import evicted_modules, simulated_absence
+from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
 
 if TYPE_CHECKING:
     from channels.consumer import _ChannelScope
@@ -3579,14 +3579,14 @@ def test_degraded_partial_install_raises_the_split_actionable_errors(
     Absence / import-guard proof; a request cannot show what is not imported. Live
     HTTP sibling: ``examples/fakeshop/test_query/test_transport_api.py``.
     """
-    with evicted_modules(
-        *_CHANNELS_PREFIXES,
-        parent=django_strawberry_framework,
-        attr="routers",
+    with (
+        evicted_modules(
+            *_CHANNELS_PREFIXES,
+            parent=django_strawberry_framework,
+            attr="routers",
+        ),
+        blocked_modules(broken_submodule),
     ):
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[broken_submodule] = None  # pyright: ignore[reportArgumentType]
         with pytest.raises(ImportError) as exc_info:
             exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
         message = str(exc_info.value)

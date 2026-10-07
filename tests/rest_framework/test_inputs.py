@@ -74,6 +74,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 )
 from django_strawberry_framework.scalars import Upload
 from django_strawberry_framework.utils.inputs import normalize_field_name_sequence
+from tests._idioms import definition_raises
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import (
@@ -2104,8 +2105,9 @@ def test_set_valued_meta_fields_fail_loud_at_class_creation():
     serializer_cls = _item_serializer()
 
     with pytest.raises(ConfigurationError, match="ordered sequence of field name strings"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class CreateItem(SerializerMutation):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class CreateItem(SerializerMutation):
             class Meta:
                 serializer_class = serializer_cls
                 operation = "create"

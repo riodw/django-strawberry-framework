@@ -778,10 +778,16 @@ def _keyset_schemas(cursor_field: tuple[str, ...] = ("-number", "id")):
 
     import strawberry
 
-    @strawberry.type
-    class Query:
-        # basedpyright: Strawberry reads this annotation at runtime; the type is built per test, so it is a variable
-        periodicals: list[periodical_type] = DjangoListField(periodical_type)  # pyright: ignore[reportInvalidTypeForm]
+    Query = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"periodicals": list[periodical_type]},
+                "periodicals": DjangoListField(periodical_type),
+            },
+        ),
+    )
 
     finalize_django_types()
     return (build_strategy_schema(Query, "windowed"), build_strategy_schema(Query, "lateral"))

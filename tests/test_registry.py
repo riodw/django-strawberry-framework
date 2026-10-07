@@ -49,6 +49,8 @@ from django_strawberry_framework.registry import (
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
+from tests._idioms import definition_raises
+from tests._soft_dependency import blocked_modules
 
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
@@ -607,16 +609,14 @@ def test_finalize_is_idempotent(monkeypatch: pytest.MonkeyPatch):
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
     calls = []
-    # basedpyright: read the original through the module path the patch targets
-    original_type = finalizer_module.strawberry.type  # pyright: ignore[reportPrivateLocalImportUsage]
+    original_type = strawberry.type
 
     # basedpyright: verbatim forward to strawberry.type; object fails its typed params
     def counting_type(type_cls: type, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
         calls.append(type_cls)
         return original_type(type_cls, **kwargs)
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(finalizer_module.strawberry, "type", counting_type)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(strawberry, "type", counting_type)
 
     class CategoryType(DjangoType):
         class Meta:
@@ -695,8 +695,7 @@ def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalize
         type_calls.append((type_cls, kwargs))
 
     monkeypatch.setattr(finalizer_module, "_attach_relation_resolvers", counting_attach)
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(finalizer_module.strawberry, "type", counting_type)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(strawberry, "type", counting_type)
 
     class CategoryType(DjangoType):
         class Meta:
@@ -732,8 +731,9 @@ def test_registering_concrete_type_after_finalization_raises():
     finalize_django_types()
 
     with pytest.raises(ConfigurationError, match=r"finalize_django_types\(\) already ran"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ItemType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ItemType(DjangoType):
             class Meta:
                 model = Item
                 fields = ("id", "name")
@@ -923,15 +923,13 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     A live request never sees a half-finalized registry. Live sibling for a successful compose:
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
-    # basedpyright: read the original through the module path the patch targets
-    original_type = finalizer_module.strawberry.type  # pyright: ignore[reportPrivateLocalImportUsage]
+    original_type = strawberry.type
 
     def failing_type(type_cls: type, **kwargs: object):
         type_cls.__partial_strawberry_mutation__ = True
         raise TypeError("simulated Strawberry failure")
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(finalizer_module.strawberry, "type", failing_type)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(strawberry, "type", failing_type)
 
     class BrokenCategoryType(DjangoType):
         class Meta:
@@ -950,8 +948,7 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     assert BrokenCategoryType.__partial_strawberry_mutation__ is True  # pyright: ignore[reportAttributeAccessIssue]
 
     registry.clear()
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(finalizer_module.strawberry, "type", original_type)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(strawberry, "type", original_type)
 
     class FreshCategoryType(DjangoType):
         class Meta:
@@ -1880,28 +1877,17 @@ def test_unregister_tolerates_unimportable_connection_submodule(fresh_registry: 
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
     """
-    import sys
-
     connection_name = "django_strawberry_framework.connection"
-    saved = sys.modules.get(connection_name)
 
     @_as_django_type
     class ItemType:
         pass
 
     fresh_registry.register(Item, ItemType)
-    try:
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[connection_name] = None  # pyright: ignore[reportArgumentType]
+    with blocked_modules(connection_name):
         # Must not raise even though connection.py cannot be imported.
         fresh_registry.unregister(ItemType)
         assert fresh_registry.model_for_type(ItemType) is None
-    finally:
-        if saved is None:
-            sys.modules.pop(connection_name, None)
-        else:
-            sys.modules[connection_name] = saved
 
 
 def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry: TypeRegistry):
@@ -2086,36 +2072,23 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry: TypeRegi
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
     """
-    import sys
-
     inputs_name = "django_strawberry_framework.filters.inputs"
     filters_name = "django_strawberry_framework.filters"
-    saved = {name: sys.modules.get(name) for name in (inputs_name, filters_name)}
 
     @_as_django_type
     class CategoryType:
         pass
 
-    try:
-        # ``None`` in ``sys.modules`` is the shape that makes an import of
-        # either module raise ImportError. ``clear()`` itself runs no import,
-        # and the replayed callbacks look up neither poisoned name directly.
-        # The two submodule lookups they do make are best-effort, so nothing
-        # on the teardown path can raise OUT of ``clear()``.
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[inputs_name] = None  # pyright: ignore[reportArgumentType]
-        sys.modules[filters_name] = None  # pyright: ignore[reportArgumentType]
+    # ``None`` in ``sys.modules`` is the shape that makes an import of
+    # either module raise ImportError. ``clear()`` itself runs no import,
+    # and the replayed callbacks look up neither poisoned name directly.
+    # The two submodule lookups they do make are best-effort, so nothing
+    # on the teardown path can raise OUT of ``clear()``.
+    with blocked_modules(inputs_name, filters_name):
         fresh_registry.register(Category, CategoryType)
         # Must not raise even though neither submodule can be imported.
         fresh_registry.clear()
         assert fresh_registry.get(Category) is None
-    finally:
-        for name, module in saved.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
 
 
 def test_clear_tolerates_unimportable_order_submodules(fresh_registry: TypeRegistry):
@@ -2133,36 +2106,23 @@ def test_clear_tolerates_unimportable_order_submodules(fresh_registry: TypeRegis
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
     """
-    import sys
-
     inputs_name = "django_strawberry_framework.orders.inputs"
     orders_name = "django_strawberry_framework.orders"
-    saved = {name: sys.modules.get(name) for name in (inputs_name, orders_name)}
 
     @_as_django_type
     class CategoryType:
         pass
 
-    try:
-        # ``None`` in ``sys.modules`` is the shape that makes an import of
-        # either module raise ImportError. ``clear()`` itself runs no import,
-        # and the replayed callbacks look up neither poisoned name directly.
-        # The two submodule lookups they do make are best-effort, so nothing
-        # on the teardown path can raise OUT of ``clear()``.
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[inputs_name] = None  # pyright: ignore[reportArgumentType]
-        sys.modules[orders_name] = None  # pyright: ignore[reportArgumentType]
+    # ``None`` in ``sys.modules`` is the shape that makes an import of
+    # either module raise ImportError. ``clear()`` itself runs no import,
+    # and the replayed callbacks look up neither poisoned name directly.
+    # The two submodule lookups they do make are best-effort, so nothing
+    # on the teardown path can raise OUT of ``clear()``.
+    with blocked_modules(inputs_name, orders_name):
         fresh_registry.register(Category, CategoryType)
         # Must not raise even though neither order submodule can be imported.
         fresh_registry.clear()
         assert fresh_registry.get(Category) is None
-    finally:
-        for name, module in saved.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
 
 
 def test_clear_tolerates_unimportable_connection_submodule(fresh_registry: TypeRegistry):
@@ -2178,31 +2138,19 @@ def test_clear_tolerates_unimportable_connection_submodule(fresh_registry: TypeR
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
     """
-    import sys
-
     connection_name = "django_strawberry_framework.connection"
-    saved = {connection_name: sys.modules.get(connection_name)}
 
     @_as_django_type
     class CategoryType:
         pass
 
-    try:
-        # ``None`` in ``sys.modules`` makes an import of ``connection.py`` raise
-        # ImportError; ``clear()`` runs no import, so its teardown path never reaches it.
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[connection_name] = None  # pyright: ignore[reportArgumentType]
+    # ``None`` in ``sys.modules`` makes an import of ``connection.py`` raise
+    # ImportError; ``clear()`` runs no import, so its teardown path never reaches it.
+    with blocked_modules(connection_name):
         fresh_registry.register(Category, CategoryType)
         # Must not raise even though connection.py cannot be imported.
         fresh_registry.clear()
         assert fresh_registry.get(Category) is None
-    finally:
-        for name, module in saved.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
 
 
 def test_clear_tolerates_unimportable_relay_module(fresh_registry: TypeRegistry):
@@ -2219,28 +2167,16 @@ def test_clear_tolerates_unimportable_relay_module(fresh_registry: TypeRegistry)
     Registry lifecycle: ``clear`` / ``unregister`` / teardown callbacks. A live request cannot show
     LIFO order, retry, or ImportError guards. No live sibling.
     """
-    import sys
-
     relay_name = "django_strawberry_framework.relay"
-    saved = {relay_name: sys.modules.get(relay_name)}
 
     @_as_django_type
     class CategoryType:
         pass
 
-    try:
-        # ``None`` in ``sys.modules`` makes an import of ``relay.py`` raise
-        # ImportError; ``clear()`` runs no import, so its teardown path never reaches it.
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[relay_name] = None  # pyright: ignore[reportArgumentType]
+    # ``None`` in ``sys.modules`` makes an import of ``relay.py`` raise
+    # ImportError; ``clear()`` runs no import, so its teardown path never reaches it.
+    with blocked_modules(relay_name):
         fresh_registry.register(Category, CategoryType)
         # Must not raise even though relay.py cannot be imported.
         fresh_registry.clear()
         assert fresh_registry.get(Category) is None
-    finally:
-        for name, module in saved.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module

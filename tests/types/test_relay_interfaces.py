@@ -25,7 +25,6 @@ from django_strawberry_framework import DjangoType, conf, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError, _safe_class_name
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import base as types_base
-from django_strawberry_framework.types import finalizer as types_finalizer
 from django_strawberry_framework.types.base import (
     _build_annotations,
     _validate_interfaces,
@@ -2731,8 +2730,7 @@ def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(
     def _boom(*args: object, **kwargs: object):
         raise RuntimeError("phase-3 boom")
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(strawberry, "type", _boom)
     with pytest.raises(RuntimeError, match="phase-3 boom"):
         finalize_django_types()
     # The type was stamped under the snapshot in Phase 2.5, before Phase 3 failed.

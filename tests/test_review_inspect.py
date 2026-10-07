@@ -268,8 +268,7 @@ def test_json_blob_id_falls_back_to_the_same_sha1_without_git(
     def _no_git(*args: object, **kwargs: object):
         raise OSError("git unavailable")
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(review_inspect.subprocess, "run", _no_git)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(subprocess, "run", _no_git)
 
     assert review_inspect._blob_id(target) == (expected[0], "sha1")
 

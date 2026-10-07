@@ -79,6 +79,7 @@ from django_strawberry_framework.filters.inputs import (
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import apply_interfaces
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._soft_dependency import blocked_modules
 
 
 @runtime_checkable
@@ -1984,26 +1985,13 @@ def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
     yields ``None`` and only its dependent reset is skipped; the reachable
     ledger reset still completes (spec-027 Decision 9).
     """
-    import sys
-
     factories_name = "django_strawberry_framework.filters.factories"
     sets_name = "django_strawberry_framework.filters.sets"
-    saved = {name: sys.modules.get(name) for name in (factories_name, sets_name)}
-    try:
-        # Setting the module entry to ``None`` makes the best-effort lookup of
-        # each module raise ImportError internally, exercising both skips.
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[factories_name] = None  # pyright: ignore[reportArgumentType]
-        sys.modules[sets_name] = None  # pyright: ignore[reportArgumentType]
+    # Setting the module entry to ``None`` makes the best-effort lookup of
+    # each module raise ImportError internally, exercising both skips.
+    with blocked_modules(factories_name, sets_name):
         # Must not raise even though neither submodule can be imported.
         clear_filter_input_namespace()
-    finally:
-        for name, module in saved.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
 
 
 # ---------------------------------------------------------------------------

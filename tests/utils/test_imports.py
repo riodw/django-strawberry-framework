@@ -17,7 +17,6 @@ import types
 import pytest
 from typing_extensions import override
 
-from django_strawberry_framework.utils import imports as imports_module
 from django_strawberry_framework.utils.imports import (
     import_attr,
     import_attr_if_importable,
@@ -70,8 +69,7 @@ def test_require_optional_module_does_not_memoize(monkeypatch: pytest.MonkeyPatc
         calls.append(name)
         return real_import_module(name, package)
 
-    # basedpyright: patch the module object the code under test holds, not a fresh import of it
-    monkeypatch.setattr(imports_module.importlib, "import_module", recording_import_module)  # pyright: ignore[reportPrivateLocalImportUsage]
+    monkeypatch.setattr(importlib, "import_module", recording_import_module)
     require_optional_module("sys", install_hint=_HINT)
     require_optional_module("sys", install_hint=_HINT)
     assert calls == ["sys", "sys"]

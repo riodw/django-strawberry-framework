@@ -55,11 +55,9 @@ from django_strawberry_framework import _django_patches
 
 
 def _database_failure(wrapped: object):
-    # basedpyright: the package's drift sentinel (None when Django drops the class) is the value read
-    if _django_patches._DatabaseFailure is None:  # pyright: ignore[reportPrivateLocalImportUsage]
+    if _django_patches._DatabaseFailure is None:
         pytest.skip("Django private _DatabaseFailure symbol is unavailable.")
-    # basedpyright: the package's drift sentinel (None when Django drops the class) is the value read
-    return _django_patches._DatabaseFailure(wrapped, "test message")  # pyright: ignore[reportPrivateLocalImportUsage]
+    return _django_patches._DatabaseFailure(wrapped, "test message")
 
 
 def test_apply_is_idempotent():

@@ -78,6 +78,7 @@ from django_strawberry_framework.types.converters import (
     convert_scalar,
     scalar_for_field,
 )
+from tests._idioms import definition_raises
 
 if TYPE_CHECKING:
     from django_strawberry_framework.utils.typing import ConcreteField
@@ -751,11 +752,9 @@ def test_nullable_empty_label_choice_column_reads_null_without_a_none_member():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owners(self) -> list[EmptyLabelOwnerType]:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return [owner_model(status=None), owner_model(status="good")]  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=list[EmptyLabelOwnerType])
+        def owners(self) -> list[models.Model]:
+            return [owner_model(status=None), owner_model(status="good")]
 
     result = strawberry.Schema(query=Query).execute_sync("{ owners { status } }")
     assert result.errors is None
@@ -1422,11 +1421,9 @@ def test_big_auto_field_still_maps_to_int():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> PeriodicalType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return Periodical(id=1)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=PeriodicalType)
+        def owner(self) -> Periodical:
+            return Periodical(id=1)
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "PeriodicalType", "id")
@@ -1521,11 +1518,9 @@ def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch: pyte
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> ArrayIntOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return ArrayIntOwner(  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=ArrayIntOwnerType)
+        def owner(self) -> ArrayIntOwner:
+            return ArrayIntOwner(
                 arr=[1, 2, 3],
             )
 
@@ -1567,11 +1562,9 @@ def test_array_field_of_char_maps_to_list_str_via_fake_sentinel(monkeypatch: pyt
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> ArrayCharOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return ArrayCharOwner(arr=["a", "b"])  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=ArrayCharOwnerType)
+        def owner(self) -> ArrayCharOwner:
+            return ArrayCharOwner(arr=["a", "b"])
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "ArrayCharOwnerType", "arr")
@@ -1613,11 +1606,9 @@ def test_array_field_nullable_inner_via_fake_sentinel(monkeypatch: pytest.Monkey
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> ArrayNullableInnerOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return ArrayNullableInnerOwner(  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=ArrayNullableInnerOwnerType)
+        def owner(self) -> ArrayNullableInnerOwner:
+            return ArrayNullableInnerOwner(
                 arr=[1, None, 2],
             )
 
@@ -1660,11 +1651,9 @@ def test_array_field_outer_nullable_via_fake_sentinel(monkeypatch: pytest.Monkey
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> ArrayOuterNullableOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return ArrayOuterNullableOwner(arr=None)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=ArrayOuterNullableOwnerType)
+        def owner(self) -> ArrayOuterNullableOwner:
+            return ArrayOuterNullableOwner(arr=None)
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "ArrayOuterNullableOwnerType", "arr")
@@ -1695,8 +1684,9 @@ def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch: pytest.Mon
             app_label = "test_arrayfield"
 
     with pytest.raises(ConfigurationError, match="Nested ArrayField on"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ArrayMultidimOwnerType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ArrayMultidimOwnerType(DjangoType):
             class Meta:
                 model = ArrayMultidimOwner
                 fields = ("arr",)
@@ -1762,11 +1752,9 @@ def test_array_field_choices_inner_via_fake_sentinel(monkeypatch: pytest.MonkeyP
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> ArrayChoicesInnerOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return ArrayChoicesInnerOwner(arr=["A", "B"])  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=ArrayChoicesInnerOwnerType)
+        def owner(self) -> ArrayChoicesInnerOwner:
+            return ArrayChoicesInnerOwner(arr=["A", "B"])
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "ArrayChoicesInnerOwnerType", "arr")
@@ -1827,8 +1815,9 @@ def test_array_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pytes
             app_label = "test_arrayfield"
 
     with pytest.raises(ConfigurationError, match="declares choices on the outer"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ArrayOuterChoicesOwnerType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ArrayOuterChoicesOwnerType(DjangoType):
             class Meta:
                 model = ArrayOuterChoicesOwner
                 fields = ("arr",)
@@ -1856,8 +1845,9 @@ def test_array_field_base_field_unsupported_type_raises(monkeypatch: pytest.Monk
             app_label = "test_arrayfield"
 
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ArrayUnsupportedBaseOwnerType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ArrayUnsupportedBaseOwnerType(DjangoType):
             class Meta:
                 model = ArrayUnsupportedBaseOwner
                 fields = ("arr",)
@@ -1885,8 +1875,9 @@ def test_array_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch):
             app_label = "test_arrayfield"
 
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class ArraySentinelNoneOwnerType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class ArraySentinelNoneOwnerType(DjangoType):
             class Meta:
                 model = ArraySentinelNoneOwner
                 fields = ("arr",)
@@ -1919,11 +1910,9 @@ def test_real_array_field_compatible_with_strawberry():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> RealArrayIntOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return RealArrayIntOwner(  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=RealArrayIntOwnerType)
+        def owner(self) -> RealArrayIntOwner:
+            return RealArrayIntOwner(
                 arr=[1, 2, 3],
             )
 
@@ -1983,11 +1972,9 @@ def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(monkeypatch: pytest.
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> HStoreOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return HStoreOwner(data={"k": "v"})  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=HStoreOwnerType)
+        def owner(self) -> HStoreOwner:
+            return HStoreOwner(data={"k": "v"})
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "HStoreOwnerType", "data")
@@ -2023,11 +2010,9 @@ def test_hstore_field_nullable_via_fake_sentinel(monkeypatch: pytest.MonkeyPatch
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> HStoreNullableOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return HStoreNullableOwner(data=None)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=HStoreNullableOwnerType)
+        def owner(self) -> HStoreNullableOwner:
+            return HStoreNullableOwner(data=None)
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "HStoreNullableOwnerType", "data")
@@ -2068,11 +2053,9 @@ def test_hstore_field_resolver_dict_serializes_via_schema_execution(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> HStoreSerializeOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return HStoreSerializeOwner(data=payload)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=HStoreSerializeOwnerType)
+        def owner(self) -> HStoreSerializeOwner:
+            return HStoreSerializeOwner(data=payload)
 
     schema = strawberry.Schema(query=Query)
     result = schema.execute_sync("{ owner { data } }")
@@ -2111,11 +2094,9 @@ def test_hstore_field_resolver_dict_with_none_value_via_schema_execution(
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> HStoreNoneValueOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return HStoreNoneValueOwner(data=payload)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=HStoreNoneValueOwnerType)
+        def owner(self) -> HStoreNoneValueOwner:
+            return HStoreNoneValueOwner(data=payload)
 
     schema = strawberry.Schema(query=Query)
     result = schema.execute_sync("{ owner { data } }")
@@ -2144,8 +2125,9 @@ def test_hstore_field_outer_choices_rejected_via_fake_sentinel(monkeypatch: pyte
             app_label = "test_hstorefield"
 
     with pytest.raises(ConfigurationError, match="declares choices"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class HStoreOuterChoicesOwnerType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class HStoreOuterChoicesOwnerType(DjangoType):
             class Meta:
                 model = HStoreOuterChoicesOwner
                 fields = ("data",)
@@ -2173,8 +2155,9 @@ def test_hstore_field_sentinel_none_path(monkeypatch: pytest.MonkeyPatch):
             app_label = "test_hstorefield"
 
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
-        # basedpyright: the class statement is the call under test and raises, so the name is never bound
-        class HStoreSentinelNoneOwnerType(DjangoType):  # pyright: ignore[reportUnusedClass]
+
+        @definition_raises
+        class HStoreSentinelNoneOwnerType(DjangoType):
             class Meta:
                 model = HStoreSentinelNoneOwner
                 fields = ("data",)
@@ -2212,11 +2195,9 @@ def test_real_hstore_field_compatible_with_strawberry():
 
     @strawberry.type
     class Query:
-        @strawberry.field
-        def owner(self) -> RealHStoreOwnerType:
-            # basedpyright: Strawberry reads this annotation as the field's GraphQL type; the resolver
-            # returns the model rows a DjangoType field resolves from, as the consumer corner does
-            return RealHStoreOwner(data=payload)  # pyright: ignore[reportReturnType]
+        @strawberry.field(graphql_type=RealHStoreOwnerType)
+        def owner(self) -> RealHStoreOwner:
+            return RealHStoreOwner(data=payload)
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "RealHStoreOwnerType", "data")

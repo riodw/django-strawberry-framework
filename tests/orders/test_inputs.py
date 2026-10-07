@@ -32,6 +32,7 @@ from django_strawberry_framework.orders.inputs import (
     materialize_input_class,
 )
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
+from tests._soft_dependency import blocked_modules
 
 
 @pytest.fixture(autouse=True)
@@ -1170,22 +1171,11 @@ def test_clear_order_input_namespace_tolerates_unimportable_submodules():
 
     factories_name = "django_strawberry_framework.orders.factories"
     sets_name = "django_strawberry_framework.orders.sets"
-    saved = {name: sys.modules.get(name) for name in (factories_name, sets_name)}
-    try:
-        # A ``None`` entry makes the ``_safe_import`` lookup return ``None``,
-        # so both ``is not None`` blocks are skipped.
-        # basedpyright: typeshed types sys.modules values as ModuleType; the runtime accepts None
-        # as the blocked-import sentinel
-        sys.modules[factories_name] = None  # pyright: ignore[reportArgumentType]
-        sys.modules[sets_name] = None  # pyright: ignore[reportArgumentType]
+    # A ``None`` entry makes the ``_safe_import`` lookup return ``None``,
+    # so both ``is not None`` blocks are skipped.
+    with blocked_modules(factories_name, sets_name):
         # Must not raise even though neither submodule can be imported.
         clear_order_input_namespace()
-    finally:
-        for name, module in saved.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
 
 
 def test_get_concrete_field_names_for_order_direct():

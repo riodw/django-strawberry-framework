@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import itertools
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from typing import TYPE_CHECKING
 
 import pytest
@@ -585,6 +585,56 @@ def test_consumer_override_freezes_one_shot_iterable():
     assert "category_id" not in fields
     assert "attachment" not in fields
     assert "name" in fields
+
+
+def _input_signature(input_cls: type) -> tuple[str, list[tuple[str, str | None, object]]]:
+    """Return a built input class's name and ordered ``(attr, graphql name, type)`` rows."""
+    return (
+        input_cls.__name__,
+        [(f.python_name, f.graphql_name, f.type) for f in _field_map(input_cls).values()],
+    )
+
+
+def _one_shot(names: tuple[str, ...]) -> Iterator[str]:
+    """Return a one-shot generator over ``names``."""
+    yield from names
+
+
+def _build_item_input(key: str, names: Iterable[str] | None) -> type:
+    """Build the Item create input narrowed by ``fields`` or ``exclude``."""
+    if key == "fields":
+        return build_mutation_input(
+            product_models.Item,
+            operation_kind=CREATE,
+            primary_type=ItemType,
+            fields=names,
+        )
+    return build_mutation_input(
+        product_models.Item,
+        operation_kind=CREATE,
+        primary_type=ItemType,
+        exclude=names,
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "names"),
+    [("fields", ("name", "category")), ("exclude", ("description", "is_private"))],
+)
+@pytest.mark.parametrize(
+    "wrap",
+    [list, _one_shot],
+    ids=["list", "generator"],
+)
+def test_build_input_narrowing_accepts_any_iterable(
+    key: str,
+    names: tuple[str, ...],
+    wrap: Callable[[tuple[str, ...]], Iterable[str]],
+):
+    """A list or one-shot generator narrows the input exactly as the equivalent tuple."""
+    expected = _input_signature(_build_item_input(key, names))
+    assert expected != _input_signature(_build_item_input(key, None))
+    assert _input_signature(_build_item_input(key, wrap(names))) == expected
 
 
 # ---------------------------------------------------------------------------

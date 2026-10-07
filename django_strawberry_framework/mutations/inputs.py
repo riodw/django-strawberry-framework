@@ -838,8 +838,8 @@ def mutation_input_shape(
     model: type[models.Model],
     operation_kind: str,
     *,
-    fields: tuple[str, ...] | None = None,
-    exclude: tuple[str, ...] | None = None,
+    fields: Iterable[str] | None = None,
+    exclude: Iterable[str] | None = None,
 ) -> MutationInputShape:
     """Compute the one shape descriptor the generator + bind + merge all consume.
 
@@ -851,6 +851,11 @@ def mutation_input_shape(
     and the merged-input name; ``DjangoMutation.input_type_name`` returns
     ``.type_name`` for the field's lazy ``data:`` ref - so the name, the key, the
     seam, and the spec identity tuple can never drift apart.
+
+    ``fields`` / ``exclude`` are read exactly once, by the narrowed
+    ``editable_input_fields`` walk, which normalizes any iterable to a tuple;
+    every later value derives from that walk's result, so a one-shot iterator
+    narrows the shape the same way as the equivalent tuple.
     """
     selected = tuple(editable_input_fields(model, fields=fields, exclude=exclude))
     full_field_names = tuple(field.name for field in editable_input_fields(model))
@@ -907,8 +912,8 @@ def build_mutation_input(
     *,
     operation_kind: str,
     primary_type: type[DjangoType],
-    fields: tuple[str, ...] | None = None,
-    exclude: tuple[str, ...] | None = None,
+    fields: Iterable[str] | None = None,
+    exclude: Iterable[str] | None = None,
     overrides: Iterable[str] | None = None,
     shape: MutationInputShape | None = None,
 ) -> type[WithStrawberryObjectDefinition]:

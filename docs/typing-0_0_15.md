@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 11 done, 16 to do. Ignore comments: 1400 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 12 done, 15 to do. Ignore comments: 1374 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -37,7 +37,9 @@ Progress: 11 done, 16 to do. Ignore comments: 1400 lines (1897 at the start of 0
 - [x] 22. The queryset-state check accepts only a tuple `_fields`, as Django stores it (`f2f18ba6`)
 - [x] 14. `utils/_queryset_private.py` reads and writes Django's private QuerySet attributes; 156 lines to 35
   (`f2f18ba6`)
-- [x] 15. Real `User` / `AnonymousUser` objects instead of stand-in users (39 ignores)
+- [x] 15. Real `User` / `AnonymousUser` objects instead of stand-in users (39 ignores, `d7a0e8d8`)
+- [x] 16. `tests/_idioms.py::relay_hooks` / `async_relay_hooks` read the Relay methods the finalizer installs (26
+  ignores; one kept, below)
 
 ## To do: rules still off
 
@@ -60,7 +62,6 @@ Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessa
 
 ## To do: ignore refactors (from the 2026-10-06 survey)
 
-- [ ] 16. Relay methods the finalizer installs, read through one typed accessor: 26 to 3. Three asserts get rewritten
 - [ ] 17. `tests/_info.py` that builds real Strawberry `Info` objects: 22
 - [ ] 19. Precise return types on `DjangoListField` / `DjangoConnectionField` / `DjangoNodeField` /
   `DjangoNodesField`: 4. Run the public-types check first
@@ -95,7 +96,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1400 (1429 rule hits) in 176 files: tests 1158, package 184, examples 56,
+Lines carrying `# pyright: ignore[...]`: 1374 (1403 rule hits) in 176 files: tests 1132, package 184, examples 56,
 scripts 2.
 
 ### By cause
@@ -108,7 +109,6 @@ scripts 2.
 | DRF stubs declare `ModelSerializer.Meta` | 136 | item 23 |
 | Stand-in execution contexts / definitions | 36 | item 20 |
 | Verbatim `__init__` forwards (schema, consumers, ModelForm, ModelSerializer) | 34 | keep |
-| Relay methods installed by the finalizer | 26 | item 16 |
 | Stand-in `Info` objects | 22 | item 17 |
 | Framework `Meta` read from the class body only | 13 | item 21 |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
@@ -120,7 +120,7 @@ scripts 2.
 | Rule | Hits | Package | Tests | Examples | Scripts |
 | --- | --- | --- | --- | --- | --- |
 | `reportArgumentType` | 475 | 25 | 445 | 5 | 0 |
-| `reportAttributeAccessIssue` | 317 | 26 | 290 | 1 | 0 |
+| `reportAttributeAccessIssue` | 291 | 26 | 264 | 1 | 0 |
 | `reportIncompatibleVariableOverride` | 194 | 2 | 169 | 23 | 0 |
 | `reportExplicitAny` | 116 | 76 | 25 | 13 | 2 |
 | `reportIncompatibleMethodOverride` | 76 | 5 | 66 | 5 | 0 |
@@ -160,12 +160,12 @@ scripts 2.
 | `tests/utils/test_querysets.py` | 71 |
 | `tests/rest_framework/test_sets.py` | 58 |
 | `tests/rest_framework/test_converter.py` | 48 |
-| `tests/types/test_relay_interfaces.py` | 48 |
 | `tests/test_resource_policy.py` | 38 |
 | `tests/test_views.py` | 38 |
 | `tests/test_django_patches.py` | 36 |
 | `tests/test_routers.py` | 33 |
 | `tests/test_list_field.py` | 29 |
+| `examples/fakeshop/apps/library/serializers.py` | 26 |
 
 
 <!-- LINK DEFINITIONS -->

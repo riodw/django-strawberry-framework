@@ -42,6 +42,7 @@ from django_strawberry_framework.types.relay import (
     install_relay_node_resolvers,
 )
 from django_strawberry_framework.utils.querysets import model_for
+from tests._idioms import async_relay_hooks, relay_hooks
 
 
 @pytest.fixture(autouse=True)
@@ -558,10 +559,7 @@ def test_resolve_id_uses_dict_cache():
     assert row is not None
     # Force a known pk into ``__dict__`` so the cache branch fires.
     vars(row)["id"] = 9999
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    assert CategoryNode.resolve_id(row, info=None) == "9999"  # pyright: ignore[reportAttributeAccessIssue]
+    assert relay_hooks(CategoryNode, Category).resolve_id(row, info=None) == "9999"
 
 
 def test_resolve_id_falls_back_to_getattr():
@@ -583,10 +581,7 @@ def test_resolve_id_falls_back_to_getattr():
     finalize_django_types()
     fake = _build_fake_root(42)
     assert "id" not in fake.__dict__
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    assert CategoryNode.resolve_id(fake, info=None) == "42"  # pyright: ignore[reportAttributeAccessIssue]
+    assert relay_hooks(CategoryNode, Category).resolve_id(fake, info=None) == "42"
 
 
 @pytest.mark.django_db
@@ -609,11 +604,10 @@ def test_resolve_node_applies_get_queryset():
     public_row = Category.objects.filter(is_private=False).first()
     private_row = Category.objects.filter(is_private=True).first()
     assert public_row is not None and private_row is not None
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    assert CategoryNode.resolve_node(info=None, node_id=public_row.pk).pk == public_row.pk  # pyright: ignore[reportAttributeAccessIssue]
-    assert CategoryNode.resolve_node(info=None, node_id=private_row.pk) is None  # pyright: ignore[reportAttributeAccessIssue]
+    hooks = relay_hooks(CategoryNode, Category)
+    public_result = hooks.resolve_node(info=None, node_id=public_row.pk)
+    assert public_result is not None and public_result.pk == public_row.pk
+    assert hooks.resolve_node(info=None, node_id=private_row.pk) is None
 
 
 @pytest.mark.django_db
@@ -638,17 +632,12 @@ def test_resolve_node_accepts_strawberry_positional_call_shape():
     finalize_django_types()
     target = Category.objects.first()
     assert target is not None
+    hooks = relay_hooks(CategoryNode, Category)
     # Positional node_id matches Strawberry's bound call site exactly.
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    result = CategoryNode.resolve_node(str(target.pk), info=None)  # pyright: ignore[reportAttributeAccessIssue]
+    result = hooks.resolve_node(str(target.pk), info=None)
     assert result is not None and result.pk == target.pk
     # required=True via positional node_id keeps the same shape.
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    required_result = CategoryNode.resolve_node(str(target.pk), info=None, required=True)  # pyright: ignore[reportAttributeAccessIssue]
+    required_result = hooks.resolve_node(str(target.pk), info=None, required=True)
     assert required_result.pk == target.pk
 
 
@@ -664,11 +653,9 @@ def test_resolve_node_required_raises_for_missing():
             interfaces = (relay.Node,)
 
     finalize_django_types()
+    hooks = relay_hooks(CategoryNode, Category)
     with pytest.raises(Category.DoesNotExist):
-        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
-        # run time; relay.Node's own signature types its rows as the node class, not the model rows
-        # the installed default reads and returns
-        CategoryNode.resolve_node(info=None, node_id=99999, required=True)  # pyright: ignore[reportAttributeAccessIssue]
+        hooks.resolve_node(info=None, node_id=99999, required=True)
 
 
 @pytest.mark.django_db
@@ -690,10 +677,7 @@ def test_resolve_nodes_accepts_generator_node_ids():
         for node_id in (a.pk, 999999, b.pk)
     )
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    results = CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
+    results = relay_hooks(CategoryNode, Category).resolve_nodes(
         info=None,
         node_ids=node_ids,
         required=False,
@@ -724,11 +708,9 @@ def test_resolve_nodes_required_raises_for_missing():
     finalize_django_types()
     a = Category.objects.first()
     assert a is not None
+    hooks = relay_hooks(CategoryNode, Category)
     with pytest.raises(Category.DoesNotExist):
-        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
-        # run time; relay.Node's own signature types its rows as the node class, not the model rows
-        # the installed default reads and returns
-        CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
+        hooks.resolve_nodes(
             info=None,
             node_ids=[a.pk, 999999],
             required=True,
@@ -747,10 +729,7 @@ def test_resolve_nodes_without_ids_returns_full_queryset():
             interfaces = (relay.Node,)
 
     finalize_django_types()
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    qs = CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
+    qs = relay_hooks(CategoryNode, Category).resolve_nodes(info=None)
     assert qs.model is Category
     assert qs.count() == Category.objects.count()
 
@@ -783,10 +762,10 @@ async def test_resolve_node_async_context():
     target = await Category.objects.afirst()
     assert target is not None
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    result = await CategoryNode.resolve_node(info=None, node_id=target.pk)  # pyright: ignore[reportAttributeAccessIssue]
+    result = await async_relay_hooks(CategoryNode, Category).resolve_node(
+        info=None,
+        node_id=target.pk,
+    )
     assert result is not None
     assert result.pk == target.pk
 
@@ -798,10 +777,11 @@ async def test_resolve_node_async_context_required():
     target = await Category.objects.afirst()
     assert target is not None
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    result = await CategoryNode.resolve_node(info=None, node_id=target.pk, required=True)  # pyright: ignore[reportAttributeAccessIssue]
+    result = await async_relay_hooks(CategoryNode, Category).resolve_node(
+        info=None,
+        node_id=target.pk,
+        required=True,
+    )
     assert result is not None
     assert result.pk == target.pk
 
@@ -813,10 +793,7 @@ async def test_resolve_nodes_async_context():
     rows = [row async for row in Category.objects.order_by("id")[:2]]
     a, b = rows[0], rows[1]
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    result = await CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
+    result = await async_relay_hooks(CategoryNode, Category).resolve_nodes(
         info=None,
         node_ids=[a.pk, 999999, b.pk],
         required=False,
@@ -837,10 +814,7 @@ async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     ``spec-015-relay_interfaces-0_0_5``.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node)()
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    qs = await CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
+    qs = await async_relay_hooks(CategoryNode, Category).resolve_nodes(info=None)
     assert qs.model is Category
     rows = [row async for row in qs]
     assert len(rows) == await Category.objects.acount()
@@ -886,16 +860,11 @@ async def test_resolve_node_async_awaits_async_get_queryset():
     private_row = await Category.objects.filter(is_private=True).afirst()
     assert public_row is not None and private_row is not None
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    public_result = await CategoryNode.resolve_node(public_row.pk, info=None)  # pyright: ignore[reportAttributeAccessIssue]
+    hooks = async_relay_hooks(CategoryNode, Category)
+    public_result = await hooks.resolve_node(public_row.pk, info=None)
     assert public_result is not None and public_result.pk == public_row.pk
     # Rows the async hook filters out are invisible to the node lookup.
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    assert await CategoryNode.resolve_node(private_row.pk, info=None) is None  # pyright: ignore[reportAttributeAccessIssue]
+    assert await hooks.resolve_node(private_row.pk, info=None) is None
 
 
 @pytest.mark.django_db(transaction=True)
@@ -915,10 +884,7 @@ async def test_resolve_nodes_async_awaits_async_get_queryset():
     assert len(public_rows) == 2 and private_row is not None
     a, b = public_rows
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    result = await CategoryNode.resolve_nodes(  # pyright: ignore[reportAttributeAccessIssue]
+    result = await async_relay_hooks(CategoryNode, Category).resolve_nodes(
         info=None,
         node_ids=[a.pk, private_row.pk, b.pk],
         required=False,
@@ -937,10 +903,7 @@ async def test_resolve_nodes_async_no_ids_awaits_async_get_queryset():
     the hook's predicate.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    qs = await CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
+    qs = await async_relay_hooks(CategoryNode, Category).resolve_nodes(info=None)
     rows = [row async for row in qs]
     # Every returned row must satisfy the async hook's predicate.
     assert rows
@@ -970,11 +933,9 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
             return queryset
 
     finalize_django_types()
+    hooks = relay_hooks(CategoryNode, Category)
     with pytest.raises(ConfigurationError, match="returned a coroutine"):
-        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
-        # run time; relay.Node's own signature types its rows as the node class, not the model rows
-        # the installed default reads and returns
-        CategoryNode.resolve_node(1, info=None)  # pyright: ignore[reportAttributeAccessIssue]
+        hooks.resolve_node(1, info=None)
 
 
 def test_sync_misuse_raises_sync_misuse_error_subclass():
@@ -1007,11 +968,9 @@ def test_sync_misuse_raises_sync_misuse_error_subclass():
             return queryset
 
     finalize_django_types()
+    hooks = relay_hooks(CategoryNode, Category)
     with pytest.raises(SyncMisuseError, match="returned a coroutine"):
-        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
-        # run time; relay.Node's own signature types its rows as the node class, not the model rows
-        # the installed default reads and returns
-        CategoryNode.resolve_node(1, info=None)  # pyright: ignore[reportAttributeAccessIssue]
+        hooks.resolve_node(1, info=None)
 
 
 def test_resolve_nodes_sync_with_async_get_queryset_raises():
@@ -1036,11 +995,9 @@ def test_resolve_nodes_sync_with_async_get_queryset_raises():
             return queryset
 
     finalize_django_types()
+    hooks = relay_hooks(CategoryNode, Category)
     with pytest.raises(ConfigurationError, match="returned a coroutine"):
-        # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at
-        # run time; relay.Node's own signature types its rows as the node class, not the model rows
-        # the installed default reads and returns
-        CategoryNode.resolve_nodes(info=None)  # pyright: ignore[reportAttributeAccessIssue]
+        hooks.resolve_nodes(info=None)
 
 
 async def test_consumer_async_resolve_node_wins():
@@ -1210,21 +1167,16 @@ def test_relay_chain_child_resolvers_do_not_recurse():
     assert "resolve_id_attr" not in ChildNode.__dict__
     assert implements_relay_node(ParentNode)
     assert ParentNode.resolve_id_attr() == "pk"
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    assert ChildNode.resolve_id_attr() == "pk"  # pyright: ignore[reportAttributeAccessIssue]
+    child_hooks = relay_hooks(ChildNode, Item)
+    assert child_hooks.resolve_id_attr() == "pk"
 
     row = Item.objects.first()
     assert row is not None
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    assert ChildNode.resolve_id(row, info=None) == str(row.pk)  # pyright: ignore[reportAttributeAccessIssue]
-    assert ChildNode.resolve_node(str(row.pk), info=None).pk == row.pk  # pyright: ignore[reportAttributeAccessIssue]
-    assert [obj.pk for obj in ChildNode.resolve_nodes(info=None, node_ids=[str(row.pk)])] == [  # pyright: ignore[reportAttributeAccessIssue]
-        row.pk,
-    ]
+    assert child_hooks.resolve_id(row, info=None) == str(row.pk)
+    child_result = child_hooks.resolve_node(str(row.pk), info=None)
+    assert child_result is not None and child_result.pk == row.pk
+    child_results = child_hooks.resolve_nodes(info=None, node_ids=[str(row.pk)])
+    assert [obj.pk if obj is not None else None for obj in child_results] == [row.pk]
 
 
 def test_relay_chain_child_node_id_annotation_wins():
@@ -1795,10 +1747,7 @@ def _emitted_typename(type_cls: type[DjangoType], *, node_id: str = "1") -> str:
         _meta = type_cls.__django_strawberry_definition__.model._meta
         id = node_id
 
-    # basedpyright: finalize_django_types() injects relay.Node and installs this resolver at run
-    # time; relay.Node's own signature types its rows as the node class, not the model rows the
-    # installed default reads and returns
-    return type_cls.resolve_typename(_FakeRoot(), None)  # pyright: ignore[reportAttributeAccessIssue]
+    return relay_hooks(type_cls, model_for(type_cls)).resolve_typename(_FakeRoot(), None)
 
 
 def _definition_of(type_cls: type[DjangoType]):

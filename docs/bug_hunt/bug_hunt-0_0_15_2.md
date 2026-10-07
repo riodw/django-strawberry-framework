@@ -12,10 +12,10 @@ land; purge every trace of the finding from t3 (backup first); next.
 
 | Bucket | Done | Open |
 |---|---|---|
-| t3 defects (sections 1, 2) | 10 | 4 |
+| t3 defects (sections 1, 2) | 11 | 3 |
 | t3 robustness, lint and stale-test rows (section 3) | 0 | 40 rows + 1 blocked naming decision |
 | t3 hunt items never finished (section 4) | n/a | 2 |
-| Found along the way (sections 5, 6) | 10 fixed, 5 closed as not a defect | 15 |
+| Found along the way (sections 5, 6) | 10 fixed, 5 closed as not a defect | 16 |
 
 The t3 hunt itself is not closed: Deep dive 3 is blocked and the final test gate never ran.
 
@@ -33,17 +33,17 @@ The t3 hunt itself is not closed: Deep dive 3 is blocked and the final test gate
 | 8 | Fragment-spread charging (`extensions/resource_policy.py`, stale re-pass) | Already on main before this effort | not traced | no (record cleanup owed) |
 | 9 | Cursor presence by `bool()` (`utils/connections.py`) | Already on main before this effort | not traced | no (record cleanup owed) |
 | 10 | Mutation window transition under interruption (`schema.py`, scenario) | Already on main before this effort | not traced | no (record cleanup owed) |
+| 11 | `FieldError.field` keying (Package integration): validator-origin errors (`full_clean`, `form.errors`, a serializer save-time Django `ValidationError`) keyed by the Django name or column, decode errors by the GraphQL input name | Fixed: one shared key map in `utils/errors.py` re-keys the three validator sites on every flavor; `__all__` kept, unexposed fields verbatim, a forward relation's column name maps to its input; specs 036/038/039/040, README, glossary, cards 51 and 71 | `7517eab2` | yes |
 
 ## 2. t3 defects, open
 
 | # | Finding | State | Next step |
 |---|---|---|---|
-| 11 | `FieldError.field` keying (t3 "Package integration" item): validator-origin errors (`full_clean`, `form.errors`, the serializer's save-time Django `ValidationError`) key by the Django, form or model-column name, while decode errors and DRF `serializer.errors` key by the GraphQL input name; an FK input `categoryId` comes back as `category`, a `Meta.input_class` rename as the old name | Defect re-confirmed at HEAD on model, ModelForm, plain form (stock kanban `setCardStatus`), register and serializer save-time; design researched, see [Item 11 design](#item-11-design-pending-approval) | Maintainer approves the design points, then implement; t3 holds a 5-file fix to read, not port |
 | 12 | Deadline not checked on nested forward-FK / OneToOne / reverse-OneToOne resolvers, sync and async (t3 Deep dive 3, Worker 1-A, Low) | t3 fix exists only as a workspace patch; `types/resolvers.py` has no deadline check at HEAD | Re-verify at HEAD, then root-cause fix |
 | 13 | Consumer `Prefetch` hint over a target type that hides rows served hidden rows (t3 Deep dive 3, Worker 1-B, HIGH, sealed) | Probably fixed on main by `5d4cdb3b` (a hinted `Prefetch` is scoped by the target type's `get_queryset`) | Confirm against the sealed t3 evidence, then purge |
 | 14 | README empty-list rule over-generalized for integer `in: []` (t3 Deep dive 4 docs lead: t3 executed ALL rows against the sentence's NONE) | Unverified at HEAD (README section "Four empty-value rules") | Probe at HEAD; fix doc or code |
 
-### Item 11 design, pending approval
+### Item 11 design (approved by the maintainer, landed `7517eab2`)
 
 Probe findings at HEAD:
 
@@ -87,7 +87,7 @@ t3's fix finds the same three key functions but builds four separate maps, defau
 `None` at every helper (a forgotten site silently keeps the defect), adds one test and changes no
 docs.
 
-Decisions for the maintainer:
+Decisions (all six approved as recommended):
 
 1. The rule covers every flavor, not only the serializer. Rewrite:
    - spec-036 Decision 7 and Decision 8 step 4;
@@ -170,6 +170,7 @@ ported, but each still needs that verdict.
 | 53 | Docs: README async section should say a hand-written `@strawberry.field` returning a QuerySet completes synchronously (use `DjangoListField(resolver=...)` or an async resolver) | Parked by the maintainer |
 | 54 | Docs: glossary should say a sliced combinator branch on SQLite surfaces Django's own `DatabaseError` | Parked by the maintainer |
 | 55 | t3 record housekeeping: hunt record counts, `:NNN` citations and DRY prose for items 7-10 and 13 | Owed with each purge |
+| 56 | Serializer write-source ownership guard compares source strings, so a `ModelSerializer` FK `category` plus `category_ref = PrimaryKeyRelatedField(source="category_id", ...)` binds two writable fields onto one FK column (`rest_framework/resolvers.py::_assert_runtime_write_source_ownership`) | Defect candidate, unverified |
 
 
 <!-- LINK DEFINITIONS -->

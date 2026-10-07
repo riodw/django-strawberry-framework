@@ -28,6 +28,7 @@ from typing import SupportsIndex, TypeVar, overload
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
+from django.contrib.auth.models import AnonymousUser, User
 from django.db.models import F, Model, QuerySet
 from django.http import HttpRequest
 from graphql import GraphQLError
@@ -395,9 +396,7 @@ def _every_row(scope: type[DjangoType]) -> QuerySet[Model]:
 def _make_info(user_is_anonymous: bool = False) -> SimpleNamespace:
     """Build a minimal ``info``-shaped stub with a Django ``HttpRequest`` on it."""
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=user_is_anonymous)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser() if user_is_anonymous else User(username="u")
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 

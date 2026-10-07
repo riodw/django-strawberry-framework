@@ -45,6 +45,7 @@ from types import SimpleNamespace
 import pytest
 from apps.library.models import Book, Issue, LendingDesk, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
+from django.contrib.auth.models import AnonymousUser
 from django.db.models import Count, F, Model, QuerySet
 from django.http import HttpRequest
 from graphql import GraphQLError, GraphQLResolveInfo
@@ -392,9 +393,7 @@ def test_keyset_order_state_rejects_a_related_value_read_through_a_hiding_type(
     )
 
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser()
     ordered = IssuePeriodicalOrder.apply_sync(
         [periodical_term, {"number": Ordering.DESC}],
         Issue.objects.all(),

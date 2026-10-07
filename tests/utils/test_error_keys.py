@@ -138,9 +138,7 @@ def _execute(
     finalize_django_types()
     schema = DjangoSchema(query=_Query, mutation=Mutation, error_policy={"enabled": False})
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     result = schema.execute_sync(
         f"mutation {{ write(data: {{ {data_literal()} }}) {{ errors {{ field path }} }} }}",
         context_value=SimpleNamespace(request=request),

@@ -51,6 +51,7 @@ import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.products.services import seed_data
+from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db.models import QuerySet
@@ -550,9 +551,7 @@ def test_serializer_save_is_called_exactly_once_and_refetch_uses_returned_object
     # Drive the write step directly with a constructed mutation + a faked info.
     mutation_cls = _bind_item_serializer_mutation(SpyItemSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="spy", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="spy")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     provided: dict[str, object] = {"name": "SpyItem", "category": category.pk}
@@ -582,9 +581,7 @@ def test_save_time_drf_validation_error_uses_recursive_flattener_not_flat_mapper
     category = product_models.Category.objects.create(name="DRFRaiseCat")
     mutation_cls = _bind_item_serializer_mutation(DRFRaisingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -615,9 +612,7 @@ def test_save_time_django_validation_error_uses_flat_mapper_not_detail():
     category = product_models.Category.objects.create(name="DjRaiseCat")
     mutation_cls = _bind_item_serializer_mutation(DjangoRaisingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -659,9 +654,7 @@ def test_save_time_django_validation_error_keys_a_source_rename_to_its_input_nam
     category = product_models.Category.objects.create(name="DjRenameCat")
     mutation_cls = _bind_item_serializer_mutation(RenamedRaisingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -702,9 +695,7 @@ def test_save_time_django_validation_error_keys_a_serializer_only_field_to_its_i
     category = product_models.Category.objects.create(name="DjNoteCat")
     mutation_cls = _bind_item_serializer_mutation(NoteRaisingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -750,9 +741,7 @@ def test_save_time_django_validation_error_keeps_each_fields_own_column_name():
     category = product_models.Category.objects.create(name="DjColumnRefCat")
     mutation_cls = _bind_item_serializer_mutation(ColumnRefRaisingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -786,9 +775,7 @@ def test_save_time_integrity_error_maps_to_all_sentinel_envelope():
     category = product_models.Category.objects.create(name="IntRaiseCat")
     mutation_cls = _bind_item_serializer_mutation(IntegrityRaisingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -833,9 +820,7 @@ def test_save_time_validation_after_partial_write_is_rolled_back():
 
     mutation_cls = _bind_item_serializer_mutation(PartialWriteSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
     input_cls = mutation_cls._input_class
     assert input_cls is not None
@@ -878,9 +863,7 @@ def test_merged_kwargs_injects_partial_true_on_update_never_create():
     """The framework injects `partial=True` for update (instance present), never for create."""
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     create_kwargs = serializer_resolvers._merged_serializer_kwargs(
@@ -912,9 +895,7 @@ def test_merged_kwargs_sets_framework_request_unconditionally():
     """`context["request"]` is set to the framework request, defaulting `data` to `provided_data`."""
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     kwargs = serializer_resolvers._merged_serializer_kwargs(
@@ -977,9 +958,7 @@ def test_merged_kwargs_merges_override_context_keys_keeping_framework_request():
     del CategoryT, ItemT
 
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
     kwargs = serializer_resolvers._merged_serializer_kwargs(
         OverridingMutation,
@@ -1041,9 +1020,7 @@ def test_merged_kwargs_override_returning_partial_is_configuration_error():
     del CategoryT, ItemT
 
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
     with pytest.raises(ConfigurationError, match="partial"):
         serializer_resolvers._merged_serializer_kwargs(
@@ -1106,9 +1083,7 @@ def test_merged_kwargs_override_different_request_object_is_configuration_error(
     del CategoryT, ItemT
 
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
     with pytest.raises(ConfigurationError, match="request"):
         serializer_resolvers._merged_serializer_kwargs(
@@ -1175,9 +1150,7 @@ def test_merged_kwargs_override_echoing_the_same_request_object_is_tolerated():
     del CategoryT, ItemT
 
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
     kwargs = serializer_resolvers._merged_serializer_kwargs(
         EchoingRequestMutation,
@@ -1195,9 +1168,7 @@ def test_merged_kwargs_bare_httprequest_info_context_fallback():
     """`request_from_info` resolves a bare `HttpRequest` `info.context` (the no-`.request` fallback)."""
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     bare_request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    bare_request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    bare_request.user = User(username="u")
     # `info.context` IS the HttpRequest (no `.request` attribute layer).
     info = _as_strawberry_info(SimpleNamespace(context=bare_request))
     kwargs = serializer_resolvers._merged_serializer_kwargs(
@@ -1386,9 +1357,7 @@ async def test_async_entry_rejects_data_rewriting_hook_too():
         category_id: strawberry.ID = strawberry.field(name="categoryId")
 
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="async-u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="async-u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
     # basedpyright: the decoded GlobalID is the relay relation value under test; the _Data input
     # types category_id as strawberry.ID
@@ -1911,9 +1880,7 @@ def test_serializer_refetch_keeps_select_related_suppresses_only():
     schema, CategoryT = _build_serializer_g2_schema()
     category = product_models.Category.objects.create(name="G2Cat")
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     ctx = SimpleNamespace(request=request)
 
     result = schema.execute_sync(
@@ -2724,9 +2691,7 @@ def test_save_kwargs_hook_cannot_mutate_validated_data_by_identity():
     mutation_cls.get_serializer_save_kwargs = mutating_save_kwargs
     category = product_models.Category.objects.create(name="BlobCat")
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     provided: dict[str, object] = {
@@ -2769,9 +2734,7 @@ def test_save_kwargs_hook_validation_error_maps_to_field_error_envelope():
     mutation_cls.get_serializer_save_kwargs = raising_save_kwargs
     category = product_models.Category.objects.create(name="HookErrCat")
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -2873,9 +2836,7 @@ def _reserved_kwarg_mutation(hook: Callable[..., object]):
 
 def _info_with_request() -> strawberry.Info[object, object]:
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     return _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
 
@@ -3650,9 +3611,7 @@ def test_write_step_update_repointing_instance_pk_is_configuration_error():
     hidden_holder["pk"] = hidden.pk
     mutation_cls = _bind_item_serializer_mutation(RepointingSerializer, operation="update")
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -3691,9 +3650,7 @@ def test_write_step_create_pk_mutated_after_insert_is_configuration_error():
     hidden_holder["pk"] = hidden.pk
     mutation_cls = _bind_item_serializer_mutation(PkSwapSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -3731,9 +3688,7 @@ def test_write_step_create_returning_existing_row_is_configuration_error():
     product_models.Item.objects.create(name="PreyRow", category=category)
     mutation_cls = _bind_item_serializer_mutation(LaunderingSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -4179,9 +4134,7 @@ def test_validator_pinning_leaves_a_read_only_base_serializer_field_alone():
     category = product_models.Category.objects.first()
     mutation_cls = _bind_item_serializer_mutation(SummarizedItemSerializer)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
     with write_pipeline("default", lock=False):
@@ -4705,9 +4658,7 @@ def _bind_book_genres_mutation(serializer_cls: type[DRFSerializer], *, operation
 
 def _info() -> strawberry.Info[object, object]:
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     return _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
 
 
@@ -5585,9 +5536,7 @@ def test_merged_serializer_kwargs_rejects_non_mapping_context(bad_context: objec
     """`get_serializer_kwargs` returning a non-mapping `context` raises `ConfigurationError`."""
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     req = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    req.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    req.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
     hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
 
@@ -5617,9 +5566,7 @@ def test_merged_serializer_kwargs_rejects_unmaterializable_context_mapping():
     """`get_serializer_kwargs` returning an unmaterializable `context` raises `ConfigurationError`."""
     mutation_cls = _bind_item_serializer_mutation(_basic_item_serializer())
     req = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    req.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    req.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
     hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
 
@@ -5679,9 +5626,7 @@ def test_merged_serializer_kwargs_preserves_custom_context_keys():
             }
 
     req = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    req.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    req.user = User(username="u")
     info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
     hook_ctx = _hook_ctx(operation="create", alias="default", instance_pk=None)
 
@@ -5820,9 +5765,7 @@ def test_decode_nested_multi_tolerates_none_item_in_list():
         DjangoSchema(query=Query, mutation=Mutation)
 
         req = HttpRequest()
-        # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-        # AbstractBaseUser | AnonymousUser
-        req.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+        req.user = User(username="u")
         info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=req)))
 
         input_cls = CreateBook._input_class

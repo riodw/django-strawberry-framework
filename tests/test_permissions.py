@@ -81,6 +81,7 @@ from apps.library.models import (
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
 from apps.scalars.models import ScalarSpecimen
+from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as db_connection
 from django.db import models
@@ -2085,9 +2086,7 @@ def _gate_info(*, is_staff: bool):
     ``tests/orders/test_sets.py::_make_info``.
     """
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_staff=is_staff)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u", is_staff=is_staff)
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 

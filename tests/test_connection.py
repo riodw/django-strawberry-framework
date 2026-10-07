@@ -53,6 +53,7 @@ import strawberry
 from apps.kanban.models import Status
 from apps.products import services
 from apps.products.models import Category, Item
+from django.contrib.auth.models import AnonymousUser
 from django.db import models
 from django.db.models import F, Q
 from django.db.models.sql import Query
@@ -1831,9 +1832,7 @@ async def test_connection_async_pipeline_applies_filter_and_order():
     schema = await sync_to_async(_field_schema)(node_type, resolver=resolver)
     await sync_to_async(services.seed_data)(1)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser()
     result = await schema.execute(
         '{ items(filter: { name: { exact: "no-such-name" } }, '
         "orderBy: [{ name: ASC }]) { edges { node { name } } } }",
@@ -2070,9 +2069,7 @@ def test_connection_async_seal_rejects_a_non_awaitable_apply_async(
 
     schema = _field_schema(_make_sidecar_node_type("AsyncSealNonAwaitableNode"), resolver=resolver)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser()
     result = asyncio.run(
         schema.execute(
             "{ items(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
@@ -2107,9 +2104,7 @@ def test_connection_async_seal_rejects_a_sliced_apply_async_result(
 
     schema = _field_schema(_make_sidecar_node_type("AsyncSealSlicedNode"), resolver=resolver)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser()
     result = asyncio.run(
         schema.execute(
             "{ items(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
@@ -3596,9 +3591,7 @@ def test_connection_async_seal_rejects_a_non_awaitable_filter_apply_async(
         resolver=resolver,
     )
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser()
     result = asyncio.run(
         schema.execute(_FILTERED_CONNECTION_QUERY, context_value=SimpleNamespace(request=request)),
     )
@@ -3630,9 +3623,7 @@ def test_connection_async_seal_rejects_a_sliced_filter_apply_async_result(
 
     schema = _field_schema(_make_sidecar_node_type("AsyncFilterSealSlicedNode"), resolver=resolver)
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as AbstractBaseUser
-    # | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = AnonymousUser()
     result = asyncio.run(
         schema.execute(_FILTERED_CONNECTION_QUERY, context_value=SimpleNamespace(request=request)),
     )

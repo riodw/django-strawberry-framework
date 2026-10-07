@@ -46,6 +46,7 @@ from types import SimpleNamespace
 
 import pytest
 from apps.library.models import Book
+from django.contrib.auth.models import User
 from django.db import connection
 from django.http import HttpRequest
 from django.test.utils import CaptureQueriesContext
@@ -134,9 +135,7 @@ def _make_info() -> SimpleNamespace:
     coupling would entangle two otherwise-independent test files.
     """
     request = HttpRequest()
-    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
-    # AbstractBaseUser | AnonymousUser
-    request.user = SimpleNamespace(is_anonymous=False)  # pyright: ignore[reportAttributeAccessIssue]
+    request.user = User(username="u")
     return SimpleNamespace(context=SimpleNamespace(request=request))
 
 

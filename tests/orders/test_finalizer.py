@@ -10,9 +10,11 @@ Covers:
 - First-bind model compatibility per spec-028 (rejects orderset
   wired to unrelated owner model; message names all four entities).
 - Multi-owner reuse: identical-target accepted; diverging-target rejected;
-  idempotent re-bind of the same ``(orderset, definition)`` pair accepted.
-- Per Decision 6 second paragraph the order side does NOT enforce the
-  filter side's own-PK Relay-identity check.
+  idempotent re-bind of the same ``(orderset, definition)`` pair accepted;
+  a second owner refused when either owner has a custom ``get_queryset``, in
+  both declaration orders.
+- Per Decision 6 the order side does NOT enforce the filter side's own-PK
+  Relay-identity check.
 - Unresolved ``RelatedOrder`` propagates as ``ConfigurationError`` with the
   underlying ``ImportError`` preserved on ``__cause__``; non-import
   expansion failure rewraps uniformly.
@@ -32,9 +34,12 @@ import sys
 from collections.abc import Callable, Iterator
 
 import pytest
+import strawberry
 from apps.library.models import Book, Branch, Genre, Shelf
 from django.db import models
+from django.db.models import QuerySet
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -588,6 +593,7 @@ def _owner_definition_stub(
     class _Stub:
         origin = type(name, (), {"__qualname__": name})
         graphql_type_name = graphql_name or name
+        has_custom_get_queryset = False
 
         def __init__(
             self,
@@ -728,6 +734,7 @@ def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
         origin = type("RelayShelfType", (), {"__qualname__": "RelayShelfType"})
         graphql_type_name = "RelayShelfType"
         model = Shelf
+        has_custom_get_queryset = False
 
         @staticmethod
         def related_target_for(_field: object):
@@ -737,6 +744,7 @@ def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
         origin = type("PlainShelfType", (), {"__qualname__": "PlainShelfType"})
         graphql_type_name = "PlainShelfType"
         model = Shelf
+        has_custom_get_queryset = False
 
         @staticmethod
         def related_target_for(_field: object):
@@ -748,6 +756,290 @@ def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
     # identity.
     _bind_orderset_owner(ShelfOrder, _as_definition(_PlainDefinition))
     assert ShelfOrder._owner_definition is _RelayDefinition
+
+
+def _declare_shared_shelf_order_owners(*, hooked_first: bool) -> list[type[DjangoType]]:
+    """Declare one ``ShelfOrder`` on a hiding and a plain ``Shelf`` type, a ``RelatedOrder`` target.
+
+    ``hooked_first`` picks which owner registers, and so binds, first; the two
+    owners return in declaration order.
+    """
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic"]
+
+    class BookOrder(OrderSet):
+        shelf = RelatedOrder(ShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    def hiding() -> type[DjangoType]:
+        class HidingShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "topic")
+                primary = True
+                orderset_class = ShelfOrder
+
+            @classmethod
+            @override
+            def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+                return queryset.exclude(topic="secret")
+
+        return HidingShelfType
+
+    def plain() -> type[DjangoType]:
+        class PlainShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "topic")
+                primary = False
+                orderset_class = ShelfOrder
+
+        return PlainShelfType
+
+    owners = [declare() for declare in ((hiding, plain) if hooked_first else (plain, hiding))]
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            orderset_class = BookOrder
+
+    assert BookType.__django_strawberry_definition__.orderset_class is BookOrder
+    return owners
+
+
+@pytest.mark.parametrize("hooked_first", [True, False], ids=["hiding-first", "plain-first"])
+def test_phase_2_5_rejects_shared_orderset_when_an_owner_scopes_get_queryset(hooked_first: bool):
+    """One ``OrderSet`` on a hiding and a plain owner is refused in both declaration orders.
+
+    ``orderBy: [{shelf: {topic: ...}}]`` reads the ``shelf`` hop through the type
+    ``ShelfOrder`` is bound to (``OrderSet._scoped_hops``), and only the first
+    binding is stored: bound to ``PlainShelfType`` a hidden shelf's topic would
+    position its book, bound to ``HidingShelfType`` it would sort as a missing
+    shelf. Finalize refuses the pairing instead of letting declaration order
+    pick the visibility.
+    """
+    owners = _declare_shared_shelf_order_owners(hooked_first=hooked_first)
+    expected = ["HidingShelfType", "PlainShelfType"]
+    assert [owner.__name__ for owner in owners] == (expected if hooked_first else expected[::-1])
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert msg.startswith("OrderSet ")
+    assert "get_queryset visibility" in msg
+    assert "RelatedOrder target" in msg
+    assert "ShelfOrder" in msg
+    assert "HidingShelfType" in msg
+    assert "PlainShelfType" in msg
+    assert "Declare separate OrderSet subclasses per owner." in msg
+
+
+def test_phase_2_5_rejects_shared_orderset_whose_owners_share_one_custom_get_queryset():
+    """Two owners inheriting ONE custom ``get_queryset`` are refused: function identity is not visibility.
+
+    The hook runs with each owner's own ``cls``, so a ``cls``-parameterized body
+    can hide different rows per owner while both owners share its function.
+    """
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic"]
+
+    class _HidingShelfBase(DjangoType):
+        # No ``Meta``: an unregistered base both owners inherit the hook from.
+        @classmethod
+        @override
+        def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+            return queryset.exclude(topic="secret")
+
+    class PrimaryShelfType(_HidingShelfBase):
+        class Meta:
+            model = Shelf
+            fields = ("id", "topic")
+            primary = True
+            orderset_class = ShelfOrder
+
+    class SecondaryShelfType(_HidingShelfBase):
+        class Meta:
+            model = Shelf
+            fields = ("id", "topic")
+            orderset_class = ShelfOrder
+
+    assert registry.get(Shelf) is PrimaryShelfType
+    assert registry.model_for_type(SecondaryShelfType) is Shelf
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "get_queryset visibility" in msg
+    assert "PrimaryShelfType" in msg
+    assert "SecondaryShelfType" in msg
+
+
+def test_phase_2_5_accepts_shared_orderset_whose_owners_keep_the_identity_get_queryset():
+    """Two owners of one model that both keep the default hook hide nothing, so they share a set."""
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic"]
+
+    class PrimaryShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "topic")
+            primary = True
+            orderset_class = ShelfOrder
+
+    class SecondaryShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "topic")
+            orderset_class = ShelfOrder
+
+    finalize_django_types()
+    assert ShelfOrder._owner_definition is PrimaryShelfType.__django_strawberry_definition__
+    assert SecondaryShelfType.__django_strawberry_definition__.orderset_class is ShelfOrder
+
+
+_SUBCLASS_OWNER_CASES = [
+    pytest.param(hiding_first, base_on_hiding, id=f"{order}-{wiring}")
+    for hiding_first, order in ((True, "hiding-declared-first"), (False, "plain-declared-first"))
+    for base_on_hiding, wiring in ((True, "base-on-hiding"), (False, "subclass-on-hiding"))
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("hiding_first", "base_on_hiding"), _SUBCLASS_OWNER_CASES)
+def test_an_orderset_subclass_binds_its_own_owner_apart_from_its_base(
+    hiding_first: bool,
+    base_on_hiding: bool,
+):
+    """``ShelfOrder`` and ``SubShelfOrder(ShelfOrder)`` on two owners each order by their own owner.
+
+    The multi-owner refusal's remedy is a separate set subclass per owner, so a
+    subclass binds its OWN owner and never sees its base's binding as a second
+    owner, whichever type declares first and whichever class the hiding type
+    wires. Each ``RelatedOrder`` branch then reads the type its target class is
+    bound to: through the hiding owner a hidden shelf sorts as a missing one
+    (last under ``ASC_NULLS_LAST``), through the plain owner by its topic.
+    """
+    from django.test import RequestFactory
+
+    from django_strawberry_framework import DjangoListField
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["topic"]
+
+    class SubShelfOrder(ShelfOrder):
+        pass
+
+    hiding_set, plain_set = (
+        (ShelfOrder, SubShelfOrder) if base_on_hiding else (SubShelfOrder, ShelfOrder)
+    )
+
+    def hiding() -> type[DjangoType]:
+        class HidingShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "topic")
+                primary = True
+                orderset_class = hiding_set
+
+            @classmethod
+            @override
+            def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+                return queryset.exclude(topic="secret")
+
+        return HidingShelfType
+
+    def plain() -> type[DjangoType]:
+        class PlainShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "topic")
+                primary = False
+                orderset_class = plain_set
+
+        return PlainShelfType
+
+    declared = [declare() for declare in ((hiding, plain) if hiding_first else (plain, hiding))]
+    hiding_type, plain_type = declared if hiding_first else declared[::-1]
+
+    class ViaHidingBookOrder(OrderSet):
+        shelf = RelatedOrder(hiding_set, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class ViaPlainBookOrder(OrderSet):
+        shelf = RelatedOrder(plain_set, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class ViaHidingBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            primary = True
+            orderset_class = ViaHidingBookOrder
+
+    class ViaPlainBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            orderset_class = ViaPlainBookOrder
+
+    finalize_django_types()
+    assert ShelfOrder.__dict__["_owner_definition"].origin is (
+        hiding_type if base_on_hiding else plain_type
+    )
+    assert SubShelfOrder.__dict__["_owner_definition"].origin is (
+        plain_type if base_on_hiding else hiding_type
+    )
+
+    # ``from __future__ import annotations`` leaves a class-body annotation a string
+    # naming a function local, so the root type is built with resolved annotations.
+    query = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {
+                    "via_hiding": list[ViaHidingBookType],
+                    "via_plain": list[ViaPlainBookType],
+                },
+                "via_hiding": DjangoListField(ViaHidingBookType),
+                "via_plain": DjangoListField(ViaPlainBookType),
+            },
+        ),
+    )
+
+    branch = Branch.objects.create(name="b")
+    hidden = Shelf.objects.create(branch=branch, code="h", topic="secret")
+    seen = Shelf.objects.create(branch=branch, code="s", topic="zzz")
+    Book.objects.create(title="on-hidden", shelf=hidden)
+    Book.objects.create(title="on-seen", shelf=seen)
+    order = "(orderBy: [{shelf: {topic: ASC_NULLS_LAST}}]) { title }"
+    result = strawberry.Schema(query=query).execute_sync(
+        f"{{ viaHiding{order} viaPlain{order} }}",
+        context_value={"request": RequestFactory().get("/")},
+    )
+    assert result.errors is None, result.errors
+    assert result.data is not None
+    assert [row["title"] for row in result.data["viaHiding"]] == ["on-seen", "on-hidden"]
+    assert [row["title"] for row in result.data["viaPlain"]] == ["on-hidden", "on-seen"]
 
 
 def test_bind_orderset_owner_rejects_orderset_model_unrelated_to_owner():

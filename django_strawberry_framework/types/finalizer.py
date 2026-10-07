@@ -1191,9 +1191,7 @@ def _bind_set_owner_common(
     *,
     get_model: Callable[[_SetT], object],
     format_model_mismatch: Callable[[_SetT, DjangoTypeDefinition], str],
-    before_second_owner_check: (
-        Callable[[_SetT, DjangoTypeDefinition, DjangoTypeDefinition], None] | None
-    ),
+    before_second_owner_check: Callable[[_SetT, DjangoTypeDefinition, DjangoTypeDefinition], None],
     related_attr: str,
     format_target_mismatch: Callable[
         [
@@ -1216,9 +1214,11 @@ def _bind_set_owner_common(
       ``_meta``, OrderSet via the raw ``Meta``).
     - ``format_model_mismatch`` / ``format_target_mismatch`` produce the
       family-named error messages.
-    - ``before_second_owner_check`` is the filter-only own-PK Relay-identity
-      axis (``None`` for orders -- ``ORDER BY id`` uses the column, not the
-      GraphQL ID type, so own-PK identity is not an owner-dependent axis there).
+    - ``before_second_owner_check`` checks the family's owner-dependent axes
+      before the relation walk: ``get_queryset`` visibility for both families
+      (``_check_set_owner_get_queryset_safety``), plus own-PK Relay identity on
+      the filter side only (``ORDER BY id`` uses the column, not the GraphQL ID
+      type, so own-PK identity is not an owner-dependent axis for orders).
     - ``related_attr`` is ``related_filters`` / ``related_orders``.
 
     First binding stores ``definition`` after rejecting a ``Meta.model``
@@ -1229,8 +1229,10 @@ def _bind_set_owner_common(
     order side reads the raw ``Meta`` with no metaclass validation, so the
     Django lazy-ref string idiom reaches here) raises the same family
     mismatch error instead of leaking ``issubclass()``'s raw ``TypeError``.
-    Re-binding the same ``(set_cls, definition)`` pair is a no-op. A second,
-    distinct owner runs the optional
+    Re-binding the same ``(set_cls, definition)`` pair is a no-op. The binding
+    read is the class's own slot, never one inherited from a base set, so a
+    subclass binds its own owner independently of its base. A second,
+    distinct owner runs the family's
     pre-check then the declared-relation-target agreement walk: every declared
     related target must resolve to the EXACT same ``DjangoTypeDefinition``
     AND ``graphql_type_name`` across both owners.
@@ -1240,9 +1242,11 @@ def _bind_set_owner_common(
     owner -- so for two legitimate owners (which share the set's ``Meta.model``)
     the relation targets are invariant. Own-PK Relay identity and ``get_queryset``
     visibility are the genuinely owner-dependent axes (both read ``owner.origin``),
-    which is why the filter side wires a pre-check (``before_second_owner_check``);
-    the order side has neither axis (``ORDER BY id`` uses the column, and ordering
-    never scopes a related branch through the owner's ``get_queryset``).
+    which is why each family wires a pre-check (``before_second_owner_check``).
+    Both families read visibility from the bound owner: a related branch or term
+    through a set used as a related target scopes by the type that set is bound
+    to, and a path re-entering the set's own model scopes by that type
+    (``utils/querysets.py::relation_target_type``).
     """
     set_model = get_model(set_cls)
     if set_model is not None and (
@@ -1253,14 +1257,16 @@ def _bind_set_owner_common(
         # metaclass validation) must raise the family model-mismatch error
         # rather than leak ``issubclass()``'s raw ``TypeError``.
         raise ConfigurationError(format_model_mismatch(set_cls, definition))
-    previous: DjangoTypeDefinition | None = getattr(set_cls, "_owner_definition", None)
+    # The class's OWN slot: a subclass inherits its base's binding through
+    # attribute lookup, but it is a separate set wired to its own owner (the
+    # multi-owner refusal's remedy), so a base's owner is never its previous one.
+    previous: DjangoTypeDefinition | None = set_cls.__dict__.get("_owner_definition")
     if previous is None:
         set_cls._owner_definition = definition
         return
     if previous is definition:
         return
-    if before_second_owner_check is not None:
-        before_second_owner_check(set_cls, previous, definition)
+    before_second_owner_check(set_cls, previous, definition)
     # ``related_filters`` / ``related_orders``: the set metaclass's name-keyed declarations.
     related: Mapping[str, object] = getattr(set_cls, related_attr, {}) or {}
     for field_name in related:
@@ -1316,7 +1322,7 @@ def _bind_filterset_owner(
        through ITS ``get_queryset``. Any owner carrying a CUSTOM
        ``get_queryset`` makes the branch scope by whichever owner finalized
        first - a registration-order-dependent row-visibility leak. Fails
-       closed on any custom hook (``_check_filterset_owner_get_queryset_safety``).
+       closed on any custom hook (``_check_set_owner_get_queryset_safety``).
     3. **Declared relation targets.** For every ``RelatedFilter`` declared
        on ``filterset_cls``, both owners' ``related_target_for(field_name)``
        must resolve to the EXACT same ``DjangoTypeDefinition`` AND the
@@ -1333,7 +1339,7 @@ def _bind_filterset_owner(
     targets are invariant and cannot diverge; axis 3 is a defensive check.
     Own-PK Relay identity and ``get_queryset`` visibility ARE genuinely
     owner-dependent (both read ``owner.origin``), which is why the filter
-    side wires the pre-check. Widening the relation walk to every FK / PK
+    side wires both into its pre-check. Widening the relation walk to every FK / PK
     declared via ``Meta.fields`` would guard a non-divergent surface and
     stays deferred (spec-027 #"Relation traversal under") until real demand
     surfaces.
@@ -1362,7 +1368,7 @@ def _check_filterset_owner_axes(
 
     1. **Own-PK Relay identity** (``_check_filterset_owner_pk_identity``): the
        filterset's own ``id`` filter resolves to a GlobalID typed to the owner.
-    2. **``get_queryset`` visibility** (``_check_filterset_owner_get_queryset_safety``):
+    2. **``get_queryset`` visibility** (``_check_set_owner_get_queryset_safety``):
        when the filterset is used as a ``RelatedFilter`` target,
        ``FilterSet._target_type_for_related_filter`` reads the bound owner's
        ``origin`` and scopes the related branch through ITS ``get_queryset``. Any
@@ -1374,22 +1380,34 @@ def _check_filterset_owner_axes(
     either raises ``ConfigurationError`` naming both owners.
     """
     _check_filterset_owner_pk_identity(filterset_cls, previous, new)
-    _check_filterset_owner_get_queryset_safety(filterset_cls, previous, new)
+    _check_set_owner_get_queryset_safety(
+        filterset_cls,
+        previous,
+        new,
+        family="FilterSet",
+        related="RelatedFilter",
+    )
 
 
-def _check_filterset_owner_get_queryset_safety(
-    filterset_cls: type[FilterSet],
+def _check_set_owner_get_queryset_safety(
+    set_cls: type[FilterSet] | type[OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
+    *,
+    family: str,
+    related: str,
 ) -> None:
-    """Reject a shared filterset with multiple owners when EITHER owner scopes visibility.
+    """Reject a shared set with multiple owners when EITHER owner scopes visibility.
 
-    A shared filterset used as a ``RelatedFilter`` target scopes the related
-    branch through its bound owner's ``get_queryset`` (via
-    ``FilterSet._target_type_for_related_filter`` ->
-    ``_derive_related_visibility_querysets_*``). Only the first binding is stored,
-    so if the branch's visibility is owner-dependent it silently pins to whichever
-    owner finalized first - a registration-order-dependent row-leak.
+    Both families read visibility from the set's bound owner
+    (``utils/permissions.py::set_bound_type``): a set used as a ``RelatedFilter``
+    / ``RelatedOrder`` target scopes the related branch or term through the type
+    it is bound to (``FilterSet._target_type_for_related_filter``,
+    ``OrderSet._scoped_hops``), and a path re-entering the set's own model scopes
+    by that type (``utils/querysets.py::relation_target_type``). Only the first
+    binding is stored, so if that visibility is owner-dependent it silently pins
+    to whichever owner finalized first - a registration-order-dependent row-leak
+    (for an order term, a hidden related row positioning its parent).
 
     Function identity is NOT visibility equivalence. Two owners inheriting ONE
     shared custom ``get_queryset`` classmethod still receive a different ``cls``,
@@ -1401,12 +1419,19 @@ def _check_filterset_owner_get_queryset_safety(
     owner-independent, and ``definition.has_custom_get_queryset`` (set at
     class-creation by ``_detect_custom_get_queryset``, which walks the MRO to
     ``DjangoType``) is exactly the "carries any override" predicate. Fail CLOSED on
-    any custom override - shared or not - and require separate FilterSet
-    subclasses per owner.
+    any custom override - shared or not - and require separate set subclasses per
+    owner. ``family`` / ``related`` name the set family and its related
+    declaration in the message.
     """
     if previous.has_custom_get_queryset or new.has_custom_get_queryset:
         raise ConfigurationError(
-            _format_owner_get_queryset_mismatch_error(filterset_cls, previous, new),
+            _format_owner_get_queryset_mismatch_error(
+                set_cls,
+                previous,
+                new,
+                family=family,
+                related=related,
+            ),
         )
 
 
@@ -1423,10 +1448,10 @@ def _check_filterset_owner_pk_identity(
     shared filterset's ``id`` filter resolve to a different (or differently-
     typed) GlobalID depending on which owner finalized first; only the FIRST
     binding is stored, so the second owner would silently mis-resolve. Called
-    from ``_check_filterset_owner_axes`` (the filter-only ``before_second_owner_check``
-    hook, alongside ``_check_filterset_owner_get_queryset_safety``); the order
-    side passes ``None`` because ``ORDER BY id`` uses the column, not the GraphQL
-    ID type (spec-028 Decision 6).
+    from ``_check_filterset_owner_axes`` (the filter's ``before_second_owner_check``
+    hook, alongside ``_check_set_owner_get_queryset_safety``); the order side
+    checks visibility only, because ``ORDER BY id`` uses the column, not the
+    GraphQL ID type (spec-028 Decision 6).
     """
     prev_is_relay = implements_relay_node(previous.origin)
     new_is_relay = implements_relay_node(new.origin)
@@ -1510,30 +1535,35 @@ def _format_owner_pk_mismatch_error(
 
 
 def _format_owner_get_queryset_mismatch_error(
-    filterset_cls: type[FilterSet],
+    set_cls: type[FilterSet] | type[OrderSet],
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
+    *,
+    family: str,
+    related: str,
 ) -> str:
-    """Return the multi-owner custom-``get_queryset`` visibility message.
+    """Return the multi-owner custom-``get_queryset`` visibility message for either family.
 
     Sibling of ``_format_owner_pk_mismatch_error``; names both owners so the
-    consumer can see why the shared filterset's related-branch visibility would
-    be registration-order-dependent. Grep-stable alongside the other
+    consumer can see why the shared set's related-row visibility would be
+    registration-order-dependent. ``family`` (``"FilterSet"`` / ``"OrderSet"``)
+    and ``related`` (``"RelatedFilter"`` / ``"RelatedOrder"``) are the ONLY
+    divergence, so the sentence is spelled once. Grep-stable alongside the other
     ``_format_*`` finalize-error helpers.
     """
+    noun = family.lower()
     return (
-        f"FilterSet {_safe_class_name(filterset_cls, qualified=True)} cannot bind to multiple owners when "
+        f"{family} {_safe_class_name(set_cls, qualified=True)} cannot bind to multiple owners when "
         f"either scopes get_queryset visibility: "
         f"{_safe_class_name(previous.origin, qualified=True)} and/or "
         f"{_safe_class_name(new.origin, qualified=True)} defines a custom get_queryset. "
-        f"When this filterset "
-        "is used as a RelatedFilter target its related-branch visibility is scoped "
-        "through the bound owner's get_queryset, but only the first binding is stored "
-        "- so the branch would scope by whichever owner finalized first, a "
-        "registration-order-dependent row-visibility leak. A shared custom "
-        "get_queryset is NOT safe either: it still runs with each owner's own cls, so "
-        "a cls-parameterized hook can diverge per owner. Declare separate FilterSet "
-        "subclasses per owner."
+        f"When this {noun} is used as a {related} target, or a path re-enters its "
+        "model, its related-row visibility is scoped through the bound owner's "
+        "get_queryset, but only the first binding is stored - so it would scope by "
+        "whichever owner finalized first, a registration-order-dependent "
+        "row-visibility leak. A shared custom get_queryset is NOT safe either: it "
+        "still runs with each owner's own cls, so a cls-parameterized hook can "
+        f"diverge per owner. Declare separate {family} subclasses per owner."
     )
 
 
@@ -1677,22 +1707,31 @@ def _bind_orderset_owner(orderset_cls: type[OrderSet], definition: DjangoTypeDef
 
     First binding writes ``orderset_cls._owner_definition = definition``
     and returns. Re-binding the same ``(orderset_cls, definition)``
-    pair is a no-op. A second, distinct owner triggers the
-    related-target-agreement check across every declared
+    pair is a no-op. A second, distinct owner is refused when either
+    owner carries a custom ``get_queryset``
+    (``_check_set_owner_get_queryset_safety``): a related term through a
+    shared orderset used as a ``RelatedOrder`` target, and a path
+    re-entering its model, read visibility from the bound owner
+    (``OrderSet._scoped_hops``), so the first-finalized owner would decide
+    which related rows may position a parent. An accepted second owner
+    then runs the related-target-agreement check across every declared
     ``RelatedOrder``.
 
-    Per spec-028 Decision 6 second-paragraph rationale, the order
-    side does NOT enforce the filter side's own-PK Relay-identity
-    check -- ``ORDER BY id`` against any model uses the column, not
-    the GraphQL ID type, so own-PK identity is not an
-    owner-dependent axis here.
+    Per spec-028 Decision 6, the order side does NOT enforce the filter
+    side's own-PK Relay-identity check -- ``ORDER BY id`` against any
+    model uses the column, not the GraphQL ID type, so own-PK identity
+    is not an owner-dependent axis here.
     """
     _bind_set_owner_common(
         orderset_cls,
         definition,
         get_model=lambda cls: getattr(getattr(cls, "Meta", None), "model", None),
         format_model_mismatch=_format_owner_orderset_model_mismatch_error,
-        before_second_owner_check=None,
+        before_second_owner_check=partial(
+            _check_set_owner_get_queryset_safety,
+            family="OrderSet",
+            related="RelatedOrder",
+        ),
         related_attr="related_orders",
         format_target_mismatch=partial(
             _format_owner_target_mismatch_error,

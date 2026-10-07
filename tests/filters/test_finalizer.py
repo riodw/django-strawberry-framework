@@ -238,7 +238,7 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
     is stored. Two owners with different ``get_queryset`` hooks would therefore
     scope the branch by whichever owner finalized first - a silent, registration-
     order-dependent row-visibility leak. ``finalize_django_types()`` must reject
-    the second binding via ``_check_filterset_owner_get_queryset_safety`` rather
+    the second binding via ``_check_set_owner_get_queryset_safety`` rather
     than silently pinning the first owner's visibility.
 
     Both owners are plain (non-Relay) so the own-PK axis agrees and this test
@@ -337,6 +337,145 @@ def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
     assert "BookFilter" in msg
     assert "PrimaryBookType" in msg
     assert "SecondaryBookType" in msg
+
+
+_SUBCLASS_OWNER_CASES = [
+    pytest.param(hiding_first, base_on_hiding, id=f"{order}-{wiring}")
+    for hiding_first, order in ((True, "hiding-declared-first"), (False, "plain-declared-first"))
+    for base_on_hiding, wiring in ((True, "base-on-hiding"), (False, "subclass-on-hiding"))
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(("hiding_first", "base_on_hiding"), _SUBCLASS_OWNER_CASES)
+def test_a_filterset_subclass_binds_its_own_owner_apart_from_its_base(
+    hiding_first: bool,
+    base_on_hiding: bool,
+):
+    """``ShelfFilter`` and ``SubShelfFilter(ShelfFilter)`` on two owners each filter by their own owner.
+
+    The multi-owner refusal's remedy is a separate set subclass per owner, so a
+    subclass binds its OWN owner and never sees its base's binding as a second
+    owner, whichever type declares first and whichever class the hiding type
+    wires. Each ``RelatedFilter`` branch then reads the type its target class is
+    bound to: through the hiding owner a hidden shelf matches nothing, through
+    the plain owner it matches its book.
+    """
+    from django.http import HttpRequest
+
+    from django_strawberry_framework import (
+        DjangoConnection,
+        DjangoConnectionField,
+        strawberry_config,
+    )
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"topic": ["exact"]}
+
+    class SubShelfFilter(ShelfFilter):
+        pass
+
+    hiding_set, plain_set = (
+        (ShelfFilter, SubShelfFilter) if base_on_hiding else (SubShelfFilter, ShelfFilter)
+    )
+
+    def hiding() -> type[DjangoType]:
+        class HidingShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "topic")
+                primary = True
+                filterset_class = hiding_set
+
+            @classmethod
+            @override
+            def get_queryset(cls, queryset: QuerySet[Shelf], info: object, **kwargs: object):
+                return queryset.exclude(topic="secret")
+
+        return HidingShelfType
+
+    def plain() -> type[DjangoType]:
+        class PlainShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "topic")
+                primary = False
+                filterset_class = plain_set
+
+        return PlainShelfType
+
+    declared = [declare() for declare in ((hiding, plain) if hiding_first else (plain, hiding))]
+    hiding_type, plain_type = declared if hiding_first else declared[::-1]
+
+    class ViaHidingBookFilter(FilterSet):
+        shelf = RelatedFilter(hiding_set, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class ViaPlainBookFilter(FilterSet):
+        shelf = RelatedFilter(plain_set, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class ViaHidingBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            primary = True
+            filterset_class = ViaHidingBookFilter
+            interfaces = (relay.Node,)
+
+    class ViaPlainBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            filterset_class = ViaPlainBookFilter
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert ShelfFilter.__dict__["_owner_definition"].origin is (
+        hiding_type if base_on_hiding else plain_type
+    )
+    assert SubShelfFilter.__dict__["_owner_definition"].origin is (
+        plain_type if base_on_hiding else hiding_type
+    )
+
+    # ``from __future__ import annotations`` leaves a class-body annotation a string
+    # naming a function local, so the root type is built with resolved annotations.
+    query = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {
+                    "via_hiding": DjangoConnection[ViaHidingBookType],
+                    "via_plain": DjangoConnection[ViaPlainBookType],
+                },
+                "via_hiding": DjangoConnectionField(ViaHidingBookType),
+                "via_plain": DjangoConnectionField(ViaPlainBookType),
+            },
+        ),
+    )
+    branch = Branch.objects.create(name="b")
+    hidden = Shelf.objects.create(branch=branch, code="h", topic="secret")
+    seen = Shelf.objects.create(branch=branch, code="s", topic="zzz")
+    Book.objects.create(title="on-hidden", shelf=hidden)
+    Book.objects.create(title="on-seen", shelf=seen)
+    match = '(filter: {shelf: {topic: {exact: "secret"}}}) { edges { node { title } } }'
+    result = strawberry.Schema(query=query, config=strawberry_config()).execute_sync(
+        f"{{ viaHiding{match} viaPlain{match} }}",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None, result.errors
+    assert result.data is not None
+    assert result.data["viaHiding"]["edges"] == []
+    assert result.data["viaPlain"]["edges"] == [{"node": {"title": "on-hidden"}}]
 
 
 def test_phase_2_5_accepts_multi_owner_with_identical_target():

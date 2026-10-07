@@ -22,7 +22,7 @@ import pickle
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, NamedTuple, TypeVar
+from typing import TYPE_CHECKING, NamedTuple, TypeVar
 from unittest import mock
 
 import pytest
@@ -36,7 +36,7 @@ from apps.scalars import models as scalar_models
 from django.db import models as django_models
 from django.db.models import Q, QuerySet
 from django.forms import ModelChoiceField, ModelMultipleChoiceField
-from django.http import HttpRequest
+from django.http import HttpRequest, QueryDict
 from django_filters import (
     BaseInFilter,
     BaseRangeFilter,
@@ -227,7 +227,7 @@ class _CrLamp(django_models.Model):
     )
     kiosks = django_models.ManyToManyField(
         _CrKioskDesk,
-        through="_CrLampKiosk",
+        through="CrLampKiosk",
         related_name="shared_kiosk_lamps",
     )
 
@@ -236,8 +236,7 @@ class _CrLamp(django_models.Model):
         managed = False
 
 
-# basedpyright: the through model of ``_CrLamp.kiosks``, resolved by its string name
-class _CrLampKiosk(django_models.Model):  # pyright: ignore[reportUnusedClass]
+class CrLampKiosk(django_models.Model):
     """The ``_CrLamp.kiosks`` join row, keyed to the kiosk desk by its ``kiosk_code``."""
 
     lamp = django_models.ForeignKey(_CrLamp, on_delete=django_models.CASCADE)
@@ -4811,8 +4810,14 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
     captured: dict[str, list[QuerySet[django_models.Model] | None]] = {}
     real_init = FilterSet.__init__
 
-    # basedpyright: verbatim forward to FilterSet.__init__ (the spy replaces it); object fails its typed params
-    def spy_init(self: FilterSet, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
+    def spy_init(
+        self: FilterSet,
+        data: QueryDict | dict[str, object] | None = None,
+        queryset: QuerySet[django_models.Model] | None = None,
+        *,
+        request: HttpRequest | None = None,
+        prefix: str | None = None,
+    ) -> None:
         # Record the `queryset` kwarg every consumer-`FilterSet` subclass
         # receives during this call. The active `shelves` branch's
         # visibility scoping now constructs the child `ShelfFilter` first
@@ -4820,8 +4825,8 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
         # so the calls list interleaves child + parent constructions; the
         # test selects the parent (Branch-model) call by queryset model
         # rather than assuming a position.
-        captured.setdefault("calls", []).append(kwargs.get("queryset"))
-        real_init(self, *args, **kwargs)
+        captured.setdefault("calls", []).append(queryset)
+        real_init(self, data=data, queryset=queryset, request=request, prefix=prefix)
 
     class BranchFilter(FilterSet):
         shelves = RelatedFilter(ShelfFilter, field_name="shelves", queryset=explicit_qs)
@@ -7743,9 +7748,15 @@ def test_capability_gate_init_override_fails_closed():
             model = library_models.Book
             fields = {"loans__note": ["icontains"]}
 
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
     assert InitOverrideFilter._is_generation_capable() is False
     InitOverrideFilter.get_filters()
@@ -8022,9 +8033,15 @@ def test_capability_gate_replaces_instance_at_init_fails_closed():
             model = library_models.Book
             fields = {"genres__name": ["icontains"]}
 
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
             # Replace the deepcopied live filter with an unstamped title filter.
             self.filters["genres__name__icontains"] = CharFilter(
                 field_name="title",
@@ -9936,9 +9953,15 @@ def _patron_child_with_init_override() -> type[FilterSet]:
             model = library_models.Patron
             fields = {"name": ["icontains"]}
 
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
     return Child
 
@@ -10207,9 +10230,15 @@ def test_projected_leaf_gets_no_candidate_row():
             model = library_models.Loan
             fields = {"note": ["icontains"]}
 
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
     class BookParent(FilterSet):
         loans = RelatedFilter(LoanChild, field_name="loans")
@@ -10599,9 +10628,15 @@ def test_projected_leaf_walking_a_hop_of_its_child_set_scopes_both_hops(spelling
             model = library_models.Patron
             fields = {"name": ["exact"]}
 
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
     class LoanParent(FilterSet):
         patron = RelatedFilter(PatronChild, field_name="patron")
@@ -12473,9 +12508,16 @@ def _book_genre_book_parent(*, customize_child: bool):
         "Meta": type("Meta", (), {"model": library_models.Genre, "fields": {"name": ["exact"]}}),
     }
     if customize_child:
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def _forwarding_init(self: FilterSet, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
-            FilterSet.__init__(self, *args, **kwargs)
+
+        def _forwarding_init(
+            self: FilterSet,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            FilterSet.__init__(self, data=data, queryset=queryset, request=request, prefix=prefix)
 
         attrs["__init__"] = _forwarding_init
     genre_child = type("GenreChild", (FilterSet,), attrs)
@@ -12791,9 +12833,15 @@ def test_projected_leaf_fires_the_child_set_branch_gate_its_chain_walks(spelling
             model = library_models.Genre
             fields = {"name": ["exact"]}
 
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
         def check_books_permission(self, request: object):
             if getattr(request, "denied", False):
@@ -12987,9 +13035,15 @@ def test_child_set_leaf_reached_flat_fires_exactly_its_nested_twins_gates(
         check_name_permission = _gate("Genre.name")
 
     class CustomizedGenreChild(GenreChild):
-        # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-        def __init__(self, *args: Any, **kwargs: Any):  # pyright: ignore[reportExplicitAny]
-            super().__init__(*args, **kwargs)
+        def __init__(
+            self,
+            data: QueryDict | dict[str, object] | None = None,
+            queryset: QuerySet[django_models.Model] | None = None,
+            *,
+            request: HttpRequest | None = None,
+            prefix: str | None = None,
+        ) -> None:
+            super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
 
     class BookParent(FilterSet):
         genres = RelatedFilter(

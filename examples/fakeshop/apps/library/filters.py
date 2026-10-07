@@ -17,11 +17,9 @@ filter graph.
 
 from __future__ import annotations
 
-from typing import Any
-
 from django import forms
-from django.db.models import QuerySet
-from django.http import HttpRequest
+from django.db.models import Model, QuerySet
+from django.http import HttpRequest, QueryDict
 from django_filters import CharFilter, ModelChoiceFilter, ModelMultipleChoiceFilter
 from django_filters.filters import BaseInFilter
 
@@ -191,9 +189,15 @@ class PatronFilter(FilterSet):
         model = models.Patron
         fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
 
-    # basedpyright: verbatim forward to FilterSet.__init__; object fails its typed params
-    def __init__(self, *args: Any, **kwargs: Any) -> None:  # pyright: ignore[reportExplicitAny]
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        data: QueryDict | dict[str, object] | None = None,
+        queryset: QuerySet[Model] | None = None,
+        *,
+        request: HttpRequest | None = None,
+        prefix: str | None = None,
+    ) -> None:
+        super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
         # Wire the validator on the underlying ``forms.CharField`` so
         # ``form.is_valid()`` fires the "missing @" gate on inputs without
         # an ``@`` sign per spec-027.

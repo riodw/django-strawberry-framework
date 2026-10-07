@@ -91,6 +91,7 @@ from django_strawberry_framework.extensions.debug import (
     _serialize_sql_row,
     _terminal_original_error,
 )
+from tests._execution import make_execution_context
 
 # The payload caps re-spelled as INDEPENDENT literals (the module's spec-044
 # D4 rule extended to spec-048 Decision 6's constants): a cap that silently
@@ -426,9 +427,7 @@ def test_partial_acquisition_failure_unwinds_earlier_connections(
     monkeypatch.setattr(debug_module._coordinator, "acquire", _acquire)
 
     extension = DjangoDebugExtension()
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(schema=None, result=None)  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
     hook = extension.on_operation()
     with pytest.raises(RuntimeError, match="second alias acquisition failed"):
         next(hook)
@@ -479,9 +478,7 @@ def test_get_results_no_stash_shape_and_idempotent_read():
 
     assert extension.get_results() == {}  # no operation at all: never {"debug": None}
 
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(schema=None, result=None)  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
     state = extension._operation_state()
     assert state is not None
     assert state.payload is None  # an operation that published nothing
@@ -1691,9 +1688,7 @@ def test_abandoned_hook_generator_close_restores_the_flag(default_wrapper: BaseD
     """
     original = default_wrapper.force_debug_cursor
     extension = DjangoDebugExtension()
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(result=None)  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
     hook = extension.on_operation()
 
     next(hook)  # the bracket is acquired

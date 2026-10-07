@@ -74,6 +74,7 @@ from django_strawberry_framework.extensions.error_policy import (
     schema_error_policy,
 )
 from django_strawberry_framework.extensions.resource_policy import DjangoResourcePolicyExtension
+from tests._execution import make_execution_context
 
 _SENSITIVE = "standalone schema secret /srv/private/standalone.key"
 
@@ -500,23 +501,22 @@ def test_a_plain_schema_with_the_extension_installed_by_hand_falls_back_to_the_d
 # ---------------------------------------------------------------------------
 
 
-def _run_teardown(result: object):
+def _run_teardown(result: GraphQLExecutionResult | None):
     """Drive one ``on_operation`` teardown over ``result`` under the default policy.
 
     Built directly rather than through a schema because the two cases below are
     exactly the ones no request produces: a sync parse/validation early return
     leaves ``execution_context.result`` at ``None``, and Strawberry never hands
-    the hook a result object it did not build.
+    the hook a result object it did not build. The context's schema is a plain
+    ``strawberry.Schema``, which carries no ``error_policy``, so the hook falls
+    back to the package's default policy.
     """
     extension = DjangoErrorPolicyExtension()
     # ``SchemaExtension.__init__`` accepts the argument but stores nothing; the
     # engine assigns the attribute, so the harness does the same.
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        schema=SimpleNamespace(error_policy=DEFAULT_ERROR_POLICY),
-        result=result,
-    )
+    context = make_execution_context()
+    context.result = result
+    extension.execution_context = context
     hook = extension.on_operation()
     next(hook)
     with pytest.raises(StopIteration):
@@ -1002,12 +1002,9 @@ def test_the_extension_adopts_all_fields_of_the_outer_fail_closed_degrade(
         extensions={"leak": _SENSITIVE},
     )
     extension = DjangoErrorPolicyExtension()
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        schema=SimpleNamespace(error_policy=DEFAULT_ERROR_POLICY),
-        result=result,
-    )
+    context = make_execution_context()
+    context.result = result
+    extension.execution_context = context
 
     extension._process_result(result, DEFAULT_ERROR_POLICY)
 
@@ -1027,19 +1024,18 @@ def test_the_extension_replaces_a_result_that_rejects_safe_field_adoption(
         errors=[GraphQLError(_SENSITIVE, original_error=RuntimeError(_SENSITIVE))],
     )
     extension = DjangoErrorPolicyExtension()
-    context = SimpleNamespace(
-        schema=SimpleNamespace(error_policy=DEFAULT_ERROR_POLICY),
-        result=result,
-    )
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
+    context = make_execution_context()
+    context.result = result
+    extension.execution_context = context
 
     extension._process_result(result, DEFAULT_ERROR_POLICY)
 
-    assert context.result is not result
-    assert context.result.data is None
-    assert context.result.errors[0].message == DEFAULT_ERROR_POLICY.message
+    degraded = context.result
+    assert degraded is not result
+    assert isinstance(degraded, StrawberryExecutionResult)
+    assert degraded.data is None
+    assert degraded.errors is not None
+    assert degraded.errors[0].message == DEFAULT_ERROR_POLICY.message
     assert any(record.exc_info for record in caplog.records)
 
 
@@ -1104,8 +1100,9 @@ def test_the_extension_teardown_fails_closed_when_context_schema_raises(
             self._result = val
 
     ctx = _HostileContext()
-    # basedpyright: the hostile stand-in context is the input under test; the extension types the
-    # slot as ExecutionContext | None
+    # basedpyright: a context whose ``schema`` read raises is the hostile input under test; no
+    # real ExecutionContext can express it, and the extension types the slot as
+    # ExecutionContext | None
     extension.execution_context = ctx  # pyright: ignore[reportAttributeAccessIssue]
 
     gen = extension.on_operation()
@@ -1194,8 +1191,9 @@ def test_error_policy_extension_on_operation_exploding_execution_context():
         def result(self, val: StrawberryExecutionResult | None):
             raise RuntimeError("cannot set result")
 
-    # basedpyright: the hostile stand-in context is the input under test; the extension types the
-    # slot as ExecutionContext | None
+    # basedpyright: a context whose ``result`` assignment raises is the hostile input under test;
+    # no real ExecutionContext can express it, and the extension types the slot as
+    # ExecutionContext | None
     ext.execution_context = ExplodingExecutionContext()  # pyright: ignore[reportAttributeAccessIssue]
     gen = ext.on_operation()
     next(gen)

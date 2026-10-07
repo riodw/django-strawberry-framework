@@ -31,6 +31,7 @@ from django_strawberry_framework.orders.inputs import (
     _materialized_names,
     materialize_input_class,
 )
+from tests._definition import make_definition
 from tests._generated_inputs import keyword_constructor as _keyword_constructor
 from tests._soft_dependency import blocked_modules
 
@@ -582,15 +583,15 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(
     """Every ``OrderSet`` subclass's phase-2.5 binding slots are reset."""
     from collections import OrderedDict
 
+    from apps.library.models import Book
+
     from django_strawberry_framework.orders import OrderSet
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
 
     class BindStateOrder(OrderSet):
         pass
 
-    # basedpyright: the stub value only marks the slot bound for the reset under test; OrderSet
-    # types _owner_definition as DjangoTypeDefinition | None
-    BindStateOrder._owner_definition = "stub_owner"  # pyright: ignore[reportAttributeAccessIssue]
+    BindStateOrder._owner_definition = make_definition(Book)
     BindStateOrder._expanded_fields = OrderedDict([("title", None)])
     BindStateOrder._is_expanding_fields = True
     assert "_owner_definition" in BindStateOrder.__dict__

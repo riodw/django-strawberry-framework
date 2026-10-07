@@ -465,6 +465,8 @@ Source: `tests/`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
+├── _definition.py                # Real ``DjangoTypeDefinition`` records built directly, without declaring or registering a type.
+├── _execution.py                 # Real Strawberry ``ExecutionContext`` objects for tests that drive an extension hook directly.
 ├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _idioms.py                    # Shared test idioms written so the type checker can follow them.
 ├── _info.py                      # Real Strawberry ``Info`` objects for tests that call a resolver-side entry point directly.
@@ -486,9 +488,11 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_consumers.py             # Hostile-input containment for the WebSocket consumer.
 ├── test_count_queries.py         # Script tests for the N+1 detector's verdict and comparison logic.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
+├── test_definition_builder.py    # Smoke test proving the shared ``tests/_definition.py`` builder hands out what it promises.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position.
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
+├── test_execution.py             # Smoke tests proving the shared ``tests/_execution.py`` builder hands out what it promises.
 ├── test_export_dry_review.py     # Repo-tooling tests for the DRY review plan, audit, and check CLI.
 ├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
 ├── test_info.py                  # Smoke tests proving the shared ``tests/_info.py`` builders hand out what they promise.
@@ -726,6 +730,8 @@ Source: `tests/ (+ planned card paths)`
 
 ```text
 tests/    # Package, integration, and repository-tool tests for django_strawberry_framework.
+├── _definition.py                # Real ``DjangoTypeDefinition`` records built directly, without declaring or registering a type.
+├── _execution.py                 # Real Strawberry ``ExecutionContext`` objects for tests that drive an extension hook directly.
 ├── _generated_inputs.py          # Shared keyword-constructor view of run-time-generated GraphQL input classes.
 ├── _idioms.py                    # Shared test idioms written so the type checker can follow them.
 ├── _info.py                      # Real Strawberry ``Info`` objects for tests that call a resolver-side entry point directly.
@@ -747,9 +753,11 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_consumers.py             # Hostile-input containment for the WebSocket consumer.
 ├── test_count_queries.py         # Script tests for the N+1 detector's verdict and comparison logic.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
+├── test_definition_builder.py    # Smoke test proving the shared ``tests/_definition.py`` builder hands out what it promises.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_error_policy.py          # ``ErrorPolicy`` construction, precedence, and install position.
 ├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
+├── test_execution.py             # Smoke tests proving the shared ``tests/_execution.py`` builder hands out what it promises.
 ├── test_export_dry_review.py     # Repo-tooling tests for the DRY review plan, audit, and check CLI.
 ├── test_graphql_core_patches.py  # Install-lifecycle tests for the graphql-core ``complete_list_value`` residual-awaitable patch.
 ├── test_info.py                  # Smoke tests proving the shared ``tests/_info.py`` builders hand out what they promise.

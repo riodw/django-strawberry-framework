@@ -76,6 +76,7 @@ from django_strawberry_framework.utils.execution_mode import (
     current_operation_mode,
 )
 from django_strawberry_framework.utils.operation_lease import OperationLease
+from tests._execution import make_execution_context
 
 
 class _NestingSeen(TypedDict):
@@ -163,11 +164,9 @@ def test_an_assignment_under_a_django_schema_records_nothing_to_be_read_later():
     reads as what it is: no operation.
     """
     extension = _Probe()
-    context = SimpleNamespace(schema=DjangoSchema(query=_Query))
+    context = make_execution_context(schema=DjangoSchema(query=_Query))
 
-    # basedpyright: the stand-in context written through the engine's assignment path is the
-    # input under test; the extension types the slot as ExecutionContext | None
-    extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = context
 
     assert extension.execution_context is None
     assert extension._operation_state() is None
@@ -182,16 +181,11 @@ def test_the_runner_builds_every_state_from_the_context_it_is_handed():
     the state names is that context and nothing a previous operation left.
     """
     schema = DjangoSchema(query=_Query, extensions=[_Probe])
-    # A stand-in for the engine's ``ExecutionContext``, carrying the three
-    # attributes an extension scope reads off one: the schema it belongs to,
-    # the request context value, and the document text.
-    context = SimpleNamespace(schema=schema, context=_RequestContext(), query="{ hello }")
+    context = make_execution_context(schema=schema, context=_RequestContext(), query="{ hello }")
     extensions = schema.get_extensions(sync=True)
     probe = next(entry for entry in extensions if isinstance(entry, _Probe))
 
-    # basedpyright: a stand-in execution context carrying only the slots the code under test reads;
-    # create_extensions_runner types the parameter as ExecutionContext
-    runner = schema.create_extensions_runner(context, extensions)  # pyright: ignore[reportArgumentType]
+    runner = schema.create_extensions_runner(context, extensions)
 
     assert probe.execution_context is None  # nothing is bound outside a scope
     with runner.operation():
@@ -215,18 +209,11 @@ def test_a_resolver_assigning_a_context_records_and_retains_nothing(assigned: st
     shared = _Probe()
     schema = DjangoSchema(query=_Query, extensions=[lambda: shared])
 
-    class _Forged:
-        """A context object a resolver could build, naming the real schema."""
-
-        def __init__(self, schema: DjangoSchema):
-            self.schema = schema
-
-    forged = None if assigned is None else _Forged(schema)
+    # A real engine context a resolver could build, naming the real schema.
+    forged = None if assigned is None else make_execution_context(schema=schema)
     forged_ref = None if forged is None else weakref.ref(forged)
 
-    # basedpyright: the stand-in context written through the engine's assignment path is the
-    # input under test; the extension types the slot as ExecutionContext | None
-    shared.execution_context = forged  # pyright: ignore[reportAttributeAccessIssue]
+    shared.execution_context = forged
     assert shared.execution_context is None
     assert shared._operation_state() is None
 
@@ -598,11 +585,9 @@ def test_a_plain_strawberry_schema_gets_operation_local_state_from_the_instance(
     runner that will never claim it.
     """
     extension = _Probe()
-    context = SimpleNamespace(schema=strawberry.Schema(query=_Query))
+    context = make_execution_context(schema=strawberry.Schema(query=_Query))
 
-    # basedpyright: the stand-in context written through the engine's assignment path is the
-    # input under test; the extension types the slot as ExecutionContext | None
-    extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = context
 
     assert extension.execution_context is context
     state = extension._operation_state()
@@ -625,8 +610,9 @@ def test_a_context_that_refuses_to_say_which_schema_it_belongs_to_takes_the_loca
     extension = _Probe()
     context = _Hostile()
 
-    # basedpyright: the stand-in context written through the engine's assignment path is the
-    # input under test; the extension types the slot as ExecutionContext | None
+    # basedpyright: a context whose ``schema`` read raises is the hostile input under test; no
+    # real ExecutionContext can express it, and the extension types the slot as
+    # ExecutionContext | None
     extension.execution_context = context  # pyright: ignore[reportAttributeAccessIssue]
 
     assert extension.execution_context is context
@@ -1479,8 +1465,8 @@ def test_a_resolver_assigning_to_a_managed_extension_leaves_nothing_behind(
             """Assign one forged value to the shared extension."""
             value = forge()
             forged["value"] = value
-            # basedpyright: the stand-in context written through the engine's assignment path is the
-            # input under test; the extension types the slot as ExecutionContext | None
+            # basedpyright: the forged non-context values a resolver could assign are the inputs
+            # under test; the extension types the slot as ExecutionContext | None
             shared.execution_context = value  # pyright: ignore[reportAttributeAccessIssue]
             return "tampered"
 
@@ -1519,8 +1505,8 @@ async def test_a_surviving_task_cannot_give_a_managed_extension_state_either():
                 await release.wait()
                 forged = _Forged()
                 seen["reference"] = weakref.ref(forged)
-                # basedpyright: the stand-in context written through the engine's assignment path is the
-                # input under test; the extension types the slot as ExecutionContext | None
+                # basedpyright: an arbitrary object graph a surviving task assigns is the input under
+                # test; the extension types the slot as ExecutionContext | None
                 shared.execution_context = forged  # pyright: ignore[reportAttributeAccessIssue]
 
             seen["task"] = asyncio.ensure_future(child())
@@ -1593,9 +1579,7 @@ def test_a_chain_that_declares_no_mode_binds_none():
     to ambient dispatch, which is what upstream would have done anyway.
     """
     runner = DjangoExtensionsRunner(
-        # basedpyright: a stand-in execution context carrying only the slots the code under test
-        # reads; DjangoExtensionsRunner types the parameter as ExecutionContext
-        execution_context=SimpleNamespace(),  # pyright: ignore[reportArgumentType]
+        execution_context=make_execution_context(),
         extensions=[SchemaExtension()],
     )
 

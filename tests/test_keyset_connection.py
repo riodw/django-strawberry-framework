@@ -251,11 +251,11 @@ def _issue_order_state():
 
 
 def _state_stub(model: type[Model], cursor_field: tuple[str, ...]) -> DeclaredCursorState:
-    """A hand-built declared state over ``model`` whose definition carries only the model."""
+    """A hand-built declared state over a directly built definition of ``model``."""
+    from tests._definition import make_definition
+
     return DeclaredCursorState(
-        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-        # DeclaredCursorState types the slot as DjangoTypeDefinition
-        definition=SimpleNamespace(model=model),  # pyright: ignore[reportArgumentType]
+        definition=make_definition(model, cursor_field=cursor_field),
         cursor_field=cursor_field,
         columns=cursor_columns_for(model, cursor_field),
         fingerprint=order_fingerprint(cursor_field),

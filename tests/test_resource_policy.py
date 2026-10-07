@@ -106,6 +106,7 @@ from django_strawberry_framework.resource_policy import (
 )
 from django_strawberry_framework.schema import _consumer_extension_entries
 from django_strawberry_framework.utils.querysets import materialized_rows, normalized_row_source
+from tests._execution import make_execution_context
 
 # ---------------------------------------------------------------------------
 # Construction and validation
@@ -3459,18 +3460,14 @@ def test_every_buffer_shape_keeps_charging_its_real_size(
 
 def test_an_explicit_policy_outranks_the_schemas():
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_depth=2))
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(schema=SimpleNamespace(resource_policy=None))  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
     assert extension._resolved_policy().max_depth == 2
 
 
 def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
     """A plain ``strawberry.Schema`` carries no ``resource_policy`` attribute."""
     extension = DjangoResourcePolicyExtension()
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(schema=SimpleNamespace())  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
     resolved = extension._resolved_policy()
     assert resolved == DEFAULT_RESOURCE_POLICY
     assert resolved is not DEFAULT_RESOURCE_POLICY
@@ -3479,14 +3476,7 @@ def test_a_schema_without_a_policy_falls_back_to_the_package_defaults():
 def test_an_operation_with_no_parsed_document_charges_no_document_budget():
     """The admission hook runs even when the parse produced nothing to walk."""
     extension = DjangoResourcePolicyExtension()
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        schema=SimpleNamespace(),
-        graphql_document=None,
-        variables=None,
-        operation_name=None,
-    )
+    extension.execution_context = make_execution_context()  # unparsed: no graphql_document
     hook = extension.on_parse()
     next(hook)
     with pytest.raises(StopIteration):
@@ -3632,9 +3622,7 @@ def test_a_rejection_an_extension_erased_is_restated_before_execution_is_decided
     """
     extension = extension_type()
     rejection = ResourceLimitExceeded("max_aliases", 1, 2, "too many aliases")
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(pre_execution_errors=[])  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context(pre_execution_errors=[])
 
     with _armed({}, DEFAULT_RESOURCE_POLICY):
         record_admission_rejection(rejection)
@@ -3657,9 +3645,7 @@ def test_an_admitted_operation_keeps_whatever_validation_published(
     """The restatement is a restatement, not an unconditional write."""
     extension = extension_type()
     validation_error = GraphQLError("Cannot query field 'nope'.")
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(pre_execution_errors=[validation_error])  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context(pre_execution_errors=[validation_error])
 
     with _armed({}, DEFAULT_RESOURCE_POLICY):
         hook = extension.on_validate()
@@ -3674,13 +3660,7 @@ def test_the_context_is_cleared_even_when_the_document_scan_rejects():
     """A rejection must not leave a policy (or a deadline) on a reused context."""
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_document_tokens=1))
     context = {}
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        schema=SimpleNamespace(),
-        context=context,
-        query="{ a b c }",
-    )
+    extension.execution_context = make_execution_context(context=context, query="{ a b c }")
     with pytest.raises(ResourceLimitExceeded):
         next(extension.on_operation())
     assert DST_RESOURCE_POLICY not in context
@@ -3798,9 +3778,7 @@ def test_an_accepted_extension_policy_survives_every_write_to_the_instance(
     """
     extension = DjangoResourcePolicyExtension(policy=ResourcePolicy(max_list_rows=1))
     attack(extension)
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(schema=SimpleNamespace())  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
 
     assert extension._policy is not None
     assert extension._policy.max_list_rows == 1
@@ -3837,9 +3815,7 @@ def test_an_accepted_extension_cannot_be_reconfigured_by_running_its_constructor
 def test_an_extension_configured_with_no_policy_reads_the_schemas():
     """The absent case the preservation rule must not swallow."""
     extension = DjangoResourcePolicyExtension()
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(schema=SimpleNamespace())  # pyright: ignore[reportAttributeAccessIssue]
+    extension.execution_context = make_execution_context()
 
     assert extension._policy is None
     resolved = extension._resolved_policy()
@@ -3859,13 +3835,18 @@ def test_a_refused_reconstruction_leaves_an_inheriting_extension_inheriting():
     with pytest.raises(ConfigurationError, match="configured when it is constructed"):
         extension.__init__(policy=ResourcePolicy(max_list_rows=999))
 
-    # basedpyright: a stand-in execution context carrying only the slots the hook reads; the
-    # extension types the slot as ExecutionContext | None
-    extension.execution_context = SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
-        schema=SimpleNamespace(resource_policy=ResourcePolicy(max_list_rows=2)),
+    @strawberry.type
+    class _Query:
+        field: str = ""
+
+    schema = DjangoSchema(query=_Query, resource_policy=ResourcePolicy(max_list_rows=2))
+    runner = schema.create_extensions_runner(
+        make_execution_context(schema=schema, context={}),
+        [extension],
     )
     assert extension._policy is None
-    assert extension._resolved_policy().max_list_rows == 2
+    with runner.operation():
+        assert extension._resolved_policy().max_list_rows == 2
 
 
 def test_a_class_entry_is_constructed_fresh_and_bounded_for_every_operation():

@@ -264,19 +264,22 @@ def test_matched_scalar_key_names_supported_mro_ancestor():
 def test_sdl_type_name_ignores_inherited_strawberry_definition():
     """A partially finalized child uses its own pending GraphQL name."""
 
-    @strawberry.type
-    class FinalizedParent:
-        value: str
+    class FinalizedParent(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
     class PendingChild(FinalizedParent):
-        pass
+        class Meta(FinalizedParent.Meta):
+            name = "PendingAlias"
 
-    definition = types.SimpleNamespace(graphql_type_name="PendingAlias")
+    # Finalization processing the parent but not yet the child.
+    strawberry.type(FinalizedParent)
 
+    assert "__strawberry_definition__" in FinalizedParent.__dict__
     assert "__strawberry_definition__" not in PendingChild.__dict__
-    # basedpyright: a plain stand-in class and a stand-in definition carrying only the slots the
-    # code under test reads; _sdl_type_name types them as type[DjangoType] and DjangoTypeDefinition
-    assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"  # pyright: ignore[reportArgumentType]
+    definition = PendingChild.__django_strawberry_definition__
+    assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"
 
 
 def test_render_annotation_renders_multi_member_union():

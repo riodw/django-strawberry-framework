@@ -31,7 +31,7 @@ Finalize-time bind / orphan / collision have no request. Shipped
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
 import pytest
 import strawberry
@@ -59,14 +59,8 @@ from django_strawberry_framework.orders.inputs import (
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.finalizer import _bind_orderset_owner
+from django_strawberry_framework.types.relay import apply_interfaces
 from tests._idioms import definition_raises
-
-
-def _as_definition(stand_in: object) -> DjangoTypeDefinition:
-    """Hand a duck-typed owner definition to the binder that takes a ``DjangoTypeDefinition``."""
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-    # _bind_orderset_owner types the parameter as DjangoTypeDefinition
-    return stand_in  # pyright: ignore[reportReturnType]
 
 
 @pytest.fixture(autouse=True)
@@ -578,36 +572,20 @@ def test_phase_2_5_rejects_orderset_wired_to_unrelated_owner_model():
 # ---------------------------------------------------------------------------
 
 
-def _owner_definition_stub(
-    name: str,
-    *,
-    model: type[models.Model],
-    graphql_name: str | None = None,
-):
-    """Return a minimal owner-definition-shaped object for binding tests.
+def _owner(model: type[models.Model]) -> DjangoTypeDefinition:
+    """Declare a plain real ``DjangoType`` over ``model`` and return its definition."""
+    owner_model = model
 
-    ``model`` is the bound orderset's ``Meta.model``: a real owner definition always carries a
-    Django model, and the first-bind model check runs ``issubclass`` against it.
-    """
+    class OwnerType(DjangoType):
+        class Meta:
+            model = owner_model
+            fields = ("id",)
 
-    class _Stub:
-        origin = type(name, (), {"__qualname__": name})
-        graphql_type_name = graphql_name or name
-        has_custom_get_queryset = False
+    return OwnerType.__django_strawberry_definition__
 
-        def __init__(
-            self,
-            resolver: Callable[[object], object] | None = None,
-            *,
-            m: type[models.Model] = model,
-        ):
-            self._resolver = resolver
-            self.model = m
 
-        def related_target_for(self, field_name: object):
-            return self._resolver(field_name) if self._resolver is not None else None
-
-    return _Stub
+def _resolves_nothing(_field_name: object) -> None:
+    """A ``related_target_for`` that resolves no relation."""
 
 
 def test_bind_orderset_owner_idempotent_for_same_definition():
@@ -618,14 +596,13 @@ def test_bind_orderset_owner_idempotent_for_same_definition():
             model = Shelf
             fields = ["code"]
 
-    Stub = _owner_definition_stub("OwnerType", model=Shelf)
-    definition = Stub()
-    _bind_orderset_owner(ShelfOrder, _as_definition(definition))  # previous None -> bind
-    _bind_orderset_owner(ShelfOrder, _as_definition(definition))  # previous IS definition -> no-op
+    definition = _owner(Shelf)
+    _bind_orderset_owner(ShelfOrder, definition)  # previous None -> bind
+    _bind_orderset_owner(ShelfOrder, definition)  # previous IS definition -> no-op
     assert ShelfOrder._owner_definition is definition
 
 
-def test_bind_orderset_owner_rejects_diverging_related_targets():
+def test_bind_orderset_owner_rejects_diverging_related_targets(monkeypatch: pytest.MonkeyPatch):
     """Two owners that resolve a shared ``RelatedOrder`` to different targets raise."""
 
     class ShelfOrder(OrderSet):
@@ -640,20 +617,35 @@ def test_bind_orderset_owner_rejects_diverging_related_targets():
             model = Book
             fields = ["title"]
 
-    class _PrevTargetDefinition:
-        origin = type("PrevTargetType", (), {"__qualname__": "PrevTargetType"})
-        graphql_type_name = "PrevTargetType"
+    class PrevTargetType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id",)
 
-    class _NewTargetDefinition:
-        origin = type("NewTargetType", (), {"__qualname__": "NewTargetType"})
-        graphql_type_name = "NewTargetType"
+    class NewTargetType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id",)
 
-    Stub = _owner_definition_stub("OwnerType", model=Book)
-    first = Stub(resolver=lambda f: (_PrevTargetDefinition, object()) if f == "shelf" else None)
-    second = Stub(resolver=lambda f: (_NewTargetDefinition, object()) if f == "shelf" else None)
-    _bind_orderset_owner(BookOrder, _as_definition(first))
+    prev_target = PrevTargetType.__django_strawberry_definition__
+    new_target = NewTargetType.__django_strawberry_definition__
+    shelf_field = Book._meta.get_field("shelf")
+    first = _owner(Book)
+    second = _owner(Book)
+
+    # Two live owners resolve ``shelf`` through the one registry and so always agree; each
+    # owner's lookup is forced to its own target to reach the defensive divergence check.
+    def prev_lookup(_field_name: object):
+        return (prev_target, shelf_field)
+
+    def new_lookup(_field_name: object):
+        return (new_target, shelf_field)
+
+    monkeypatch.setattr(first, "related_target_for", prev_lookup)
+    monkeypatch.setattr(second, "related_target_for", new_lookup)
+    _bind_orderset_owner(BookOrder, first)
     with pytest.raises(ConfigurationError) as exc_info:
-        _bind_orderset_owner(BookOrder, _as_definition(second))
+        _bind_orderset_owner(BookOrder, second)
     msg = str(exc_info.value)
     assert "diverging targets" in msg
     assert "shelf" in msg
@@ -676,16 +668,18 @@ def test_bind_orderset_owner_continues_when_both_targets_unresolved():
             model = Book
             fields = ["title"]
 
-    Stub = _owner_definition_stub("OwnerType", model=Book)
-    first = Stub(resolver=lambda _f: None)
-    second = Stub(resolver=lambda _f: None)
-    _bind_orderset_owner(BookOrder, _as_definition(first))
-    _bind_orderset_owner(BookOrder, _as_definition(second))
+    # No ``Shelf`` type is registered, so neither owner resolves ``shelf``.
+    first = _owner(Book)
+    second = _owner(Book)
+    _bind_orderset_owner(BookOrder, first)
+    _bind_orderset_owner(BookOrder, second)
     # First binding preserved.
     assert BookOrder._owner_definition is first
 
 
-def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not():
+def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A field resolved by one owner but not the other is a hard mismatch."""
 
     class ShelfOrder(OrderSet):
@@ -700,16 +694,15 @@ def test_bind_orderset_owner_raises_when_one_owner_resolves_and_other_does_not()
             model = Book
             fields = ["title"]
 
-    class _SomeTargetDefinition:
-        origin = type("SomeTargetType", (), {"__qualname__": "SomeTargetType"})
-        graphql_type_name = "SomeTargetType"
-
-    Stub = _owner_definition_stub("OwnerType", model=Book)
-    first = Stub(resolver=lambda f: (_SomeTargetDefinition, object()) if f == "shelf" else None)
-    second = Stub(resolver=lambda _f: None)
-    _bind_orderset_owner(BookOrder, _as_definition(first))
+    _owner(Shelf)
+    first = _owner(Book)
+    second = _owner(Book)
+    # Two live owners resolve ``shelf`` through the one registry and so always agree; the
+    # second owner's lookup is forced to resolve nothing to reach the defensive divergence check.
+    monkeypatch.setattr(second, "related_target_for", _resolves_nothing)
+    _bind_orderset_owner(BookOrder, first)
     with pytest.raises(ConfigurationError) as exc_info:
-        _bind_orderset_owner(BookOrder, _as_definition(second))
+        _bind_orderset_owner(BookOrder, second)
     assert "diverging targets" in str(exc_info.value)
 
 
@@ -730,32 +723,26 @@ def test_bind_orderset_owner_does_not_check_axis_1_relay_identity():
     # vacuously satisfied. The filter-side equivalent test would FAIL here
     # because the filter side has Axis-1 (Relay-identity) check; the
     # order-side equivalent must succeed.
-    class _RelayDefinition:
-        origin = type("RelayShelfType", (), {"__qualname__": "RelayShelfType"})
-        graphql_type_name = "RelayShelfType"
-        model = Shelf
-        has_custom_get_queryset = False
+    class RelayShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            interfaces = (relay.Node,)
+            fields = ("id", "code")
 
-        @staticmethod
-        def related_target_for(_field: object):
-            return None
+    class PlainShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
 
-    class _PlainDefinition:
-        origin = type("PlainShelfType", (), {"__qualname__": "PlainShelfType"})
-        graphql_type_name = "PlainShelfType"
-        model = Shelf
-        has_custom_get_queryset = False
+    apply_interfaces(RelayShelfType, RelayShelfType.__django_strawberry_definition__)
+    relay_def = RelayShelfType.__django_strawberry_definition__
 
-        @staticmethod
-        def related_target_for(_field: object):
-            return None
-
-    _bind_orderset_owner(ShelfOrder, _as_definition(_RelayDefinition))
-    # Second distinct owner -- no raise, even though the "owners" diverge
-    # on shape; the order side simply does not care about own-PK Relay
+    _bind_orderset_owner(ShelfOrder, relay_def)
+    # Second distinct owner -- no raise, even though the owners diverge on
+    # Relay-node-ness; the order side simply does not care about own-PK Relay
     # identity.
-    _bind_orderset_owner(ShelfOrder, _as_definition(_PlainDefinition))
-    assert ShelfOrder._owner_definition is _RelayDefinition
+    _bind_orderset_owner(ShelfOrder, PlainShelfType.__django_strawberry_definition__)
+    assert ShelfOrder._owner_definition is relay_def
 
 
 def _declare_shared_shelf_order_owners(*, hooked_first: bool) -> list[type[DjangoType]]:

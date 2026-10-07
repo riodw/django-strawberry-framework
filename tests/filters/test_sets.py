@@ -5280,17 +5280,22 @@ def test_target_type_for_related_filter_returns_none_without_child_model():
 def test_is_own_pk_under_relay_owner_false_for_relation_field():
     """An ``is_relation`` field never takes the own-PK Relay branch."""
 
+    class BookType(DjangoType):
+        class Meta:
+            model = library_models.Book
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(BookType, BookType.__django_strawberry_definition__)
+
     class BookFilter(FilterSet):
         class Meta:
             model = library_models.Book
             fields = {"title": ["exact"]}
 
-    # Bind an owner directly on the throwaway local class so the early
+    # Bind a Relay owner directly on the throwaway local class so the early
     # ``owner is None`` guard is passed; ``registry.clear()`` (autouse
     # teardown) strips the binding afterward.
-    # basedpyright: a bare stand-in owner the code under test only checks for presence;
-    # FilterSet types the slot as DjangoTypeDefinition | None
-    BookFilter._owner_definition = object()  # pyright: ignore[reportAttributeAccessIssue]
+    BookFilter._owner_definition = BookType.__django_strawberry_definition__
     relation_field = library_models.Book._meta.get_field("genres")
     assert BookFilter._is_own_pk_under_relay_owner(relation_field) is False
 
@@ -5299,14 +5304,19 @@ def test_is_own_pk_under_relay_owner_false_when_model_missing():
     """A non-relation field with a model-less filterset returns ``False``."""
     from types import SimpleNamespace
 
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
+
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
-    # basedpyright: a bare stand-in owner the code under test only checks for presence;
-    # FilterSet types the slot as DjangoTypeDefinition | None
-    CategoryFilter._owner_definition = object()  # pyright: ignore[reportAttributeAccessIssue]
+    CategoryFilter._owner_definition = CategoryType.__django_strawberry_definition__
     # The local class is discarded after the test, so nulling its own
     # ``_meta.model`` does not leak into other tests.
     CategoryFilter._meta.model = None
@@ -5332,17 +5342,12 @@ def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk():
 
     apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
 
-    class _Owner:
-        origin = CategoryType
-
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
-    # basedpyright: a fake owner carrying only the slots the code under test reads; FilterSet
-    # types the slot as DjangoTypeDefinition | None
-    CategoryFilter._owner_definition = _Owner()  # pyright: ignore[reportAttributeAccessIssue]
+    CategoryFilter._owner_definition = CategoryType.__django_strawberry_definition__
     pk_field = Category._meta.pk
 
     with pytest.raises(ConfigurationError) as excinfo:
@@ -5363,30 +5368,36 @@ def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk():
 
 
 def test_resolve_relation_target_type_uses_owner_related_target_for():
-    """When the owner resolves the relation, its target type is returned."""
+    """When the owner resolves the relation, its target type is returned.
+
+    The owner's ``related_target_for`` pair carries a ``DjangoTypeDefinition``,
+    whose registered ``DjangoType`` class is ``.origin`` -- NOT ``.type`` /
+    ``.type_cls``; reading those nonexistent attrs would drop every owner-aware
+    resolution to the registry fallback. The field's ``related_model`` has no
+    registered type, so only the owner path can answer.
+    """
     from types import SimpleNamespace
 
-    target_type = type("ResolvedTargetType", (), {})
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id",)
 
-    class _Owner:
-        def related_target_for(self, field_name: str):
-            # The pair's first member is a ``DjangoTypeDefinition``, whose
-            # registered ``DjangoType`` class is ``.origin`` -- NOT ``.type``
-            # / ``.type_cls``; reading those nonexistent attrs would drop
-            # every owner-aware resolution to the registry fallback.
-            return (SimpleNamespace(origin=target_type), object())
+    class BookType(DjangoType):
+        class Meta:
+            model = library_models.Book
+            fields = ("id",)
 
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
-    # basedpyright: a fake owner carrying only the slots the code under test reads; FilterSet
-    # types the slot as DjangoTypeDefinition | None
-    CategoryFilter._owner_definition = _Owner()  # pyright: ignore[reportAttributeAccessIssue]
+    CategoryFilter._owner_definition = BookType.__django_strawberry_definition__
     relation_field = SimpleNamespace(is_relation=True, related_model=Category)
-    resolved = CategoryFilter._resolve_relation_target_type(relation_field, "category")
-    assert resolved is target_type
+    assert registry.get(Category) is None
+    resolved = CategoryFilter._resolve_relation_target_type(relation_field, "shelf")
+    assert resolved is ShelfType
 
 
 def test_resolve_relation_target_type_returns_none_without_related_model():
@@ -6910,17 +6921,12 @@ def test_generation_provenance_package_replacement_for_own_pk_global_id():
 
     apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
 
-    class _Owner:
-        origin = CategoryType
-
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
-    # basedpyright: a fake owner carrying only the slots the code under test reads; FilterSet
-    # types the slot as DjangoTypeDefinition | None
-    CategoryFilter._owner_definition = _Owner()  # pyright: ignore[reportAttributeAccessIssue]
+    CategoryFilter._owner_definition = CategoryType.__django_strawberry_definition__
     pk_field = Category._meta.pk
 
     resolved = CategoryFilter.filter_for_field(pk_field, "id", "exact")
@@ -7460,17 +7466,12 @@ def test_candidate_snapshot_includes_package_replacement_global_id_leaf():
 
     apply_interfaces(GenreType, GenreType.__django_strawberry_definition__)
 
-    class _Owner:
-        origin = GenreType
-
     class GenreFilter(FilterSet):
         class Meta:
             model = library_models.Genre
             fields = {"id": ["exact"], "name": ["icontains"]}
 
-    # basedpyright: a fake owner carrying only the slots the code under test reads; FilterSet
-    # types the slot as DjangoTypeDefinition | None
-    GenreFilter._owner_definition = _Owner()  # pyright: ignore[reportAttributeAccessIssue]
+    GenreFilter._owner_definition = GenreType.__django_strawberry_definition__
 
     GenreFilter.get_filters()
     snapshot = GenreFilter._expansion_snapshot()

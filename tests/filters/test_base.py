@@ -15,6 +15,7 @@ delivers a non-list container to ``GlobalIDMultipleChoiceFilter``.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from typing import TypeVar
 
 import pytest
 from apps.library import models
@@ -25,6 +26,7 @@ from graphql import GraphQLError
 from strawberry import relay
 from typing_extensions import override
 
+from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
     ArrayFilter,
@@ -59,18 +61,13 @@ from django_strawberry_framework.filters.base import (
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
+_FilterT = TypeVar("_FilterT", bound=Filter)
+
 
 def _as_queryset(stand_in: object) -> QuerySet[Model]:
     """Hand a duck-typed queryset to a filter primitive that takes a Django ``QuerySet``."""
     # basedpyright: a stand-in queryset carrying only the slots the code under test reads; the
     # filter primitives type qs as a QuerySet
-    return stand_in  # pyright: ignore[reportReturnType]
-
-
-def _as_definition(stand_in: object) -> DjangoTypeDefinition:
-    """Hand a duck-typed owner definition to a resolver that takes a ``DjangoTypeDefinition``."""
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads; the
-    # GlobalID target resolvers type the parameter as DjangoTypeDefinition
     return stand_in  # pyright: ignore[reportReturnType]
 
 
@@ -966,88 +963,83 @@ def test_array_filter_applies_distinct_when_flagged():
 # ---------------------------------------------------------------------------
 
 
-class _FakePk:
-    name = "id"
+def _definition(
+    model: type[Model],
+    type_name: str,
+    strategy: str | None = "model",
+) -> DjangoTypeDefinition:
+    """Declare a real ``DjangoType`` over ``model`` and record its finalization-time strategy.
+
+    ``effective_globalid_strategy`` is the slot the Relay finalization step writes; setting it
+    here stands in for that step, so each test states the strategy it exercises.
+    """
+    django_model = model
+
+    class _Type(DjangoType):
+        class Meta:
+            model = django_model
+            fields = ("id",)
+            name = type_name
+
+    definition = _Type.__django_strawberry_definition__
+    definition.effective_globalid_strategy = strategy
+    return definition
 
 
-class _FakeMeta:
-    pk = _FakePk()
-    label_lower = "owner.ownermodel"
+def _owner(strategy: str | None = "model") -> DjangoTypeDefinition:
+    """The owning ``Book`` definition, emitted as ``OwnerType``."""
+    return _definition(models.Book, "OwnerType", strategy)
 
 
-class _FakeModel:
-    _meta = _FakeMeta()
+def _bound(filter_: _FilterT, owner: DjangoTypeDefinition | None) -> _FilterT:
+    """Return ``filter_`` as a real ``FilterSet`` instance binds it, its class owned by ``owner``.
+
+    Instantiating the filterset hands each declared filter a copy whose ``parent`` is the
+    instance, the slot the GlobalID target resolution reads the owner through; ``None``
+    leaves the filterset unbound.
+    """
+
+    class OwnerFilter(FilterSet):
+        bound = filter_
+
+        class Meta:
+            model = models.Book
+            fields = {"title": ["exact"]}
+
+    OwnerFilter._owner_definition = owner
+    bound = OwnerFilter().filters["bound"]
+    assert isinstance(bound, type(filter_))
+    return bound
 
 
-class _FakeTargetMeta:
-    pk = _FakePk()
-    label_lower = "library.genre"
-
-
-class _FakeTargetModel:
-    _meta = _FakeTargetMeta()
-
-
-class _FakeTargetDefinition:
-    graphql_type_name = "GenreType"
-    model = _FakeTargetModel()
-
-    def __init__(self, effective_globalid_strategy: str | None = "model"):
-        self.effective_globalid_strategy = effective_globalid_strategy
-
-
-class _FakeOwnerDefinition:
-    model = _FakeModel()
-    graphql_type_name = "OwnerType"
-
-    def __init__(self, target: object, effective_globalid_strategy: str | None = "model"):
-        self._target = target
-        self.effective_globalid_strategy = effective_globalid_strategy
-
-    def related_target_for(self, head: str):
-        return self._target
-
-
-class _FakeParent:
-    def __init__(self, owner: object):
-        self._owner_definition = owner
-
-
-def _global_id_filter_with_owner(field_name: str, owner: _FakeOwnerDefinition):
-    f = GlobalIDFilter(field_name=field_name)
-    # basedpyright: a fake parent carrying only the _owner_definition slot the code under test
-    # reads; django-filter types Filter.parent as a FilterSet
-    f.parent = _FakeParent(owner)  # pyright: ignore[reportAttributeAccessIssue]
-    return f
+def _global_id_filter_with_owner(field_name: str, owner: DjangoTypeDefinition) -> GlobalIDFilter:
+    return _bound(GlobalIDFilter(field_name=field_name), owner)
 
 
 def test_target_definition_for_returns_none_without_owner():
     """No bound owner -> no definition (node-id-only fallback in unit contexts)."""
-    f = GlobalIDFilter(field_name="id")
-    # basedpyright: a fake parent carrying only the _owner_definition slot the code under test
-    # reads; django-filter types Filter.parent as a FilterSet
-    f.parent = _FakeParent(None)  # pyright: ignore[reportAttributeAccessIssue]
+    f = _bound(GlobalIDFilter(field_name="id"), None)
     assert _target_definition_for(f) is None
 
 
 def test_target_definition_for_own_pk_branch():
     """When the field is the owner's PK, the owner definition itself is returned."""
-    owner = _FakeOwnerDefinition(target=None)
+    owner = _owner()
     f = _global_id_filter_with_owner("id", owner)
     assert _target_definition_for(f) is owner
 
 
 def test_target_definition_for_relation_branch():
     """A relation head resolves through `related_target_for` to the target definition."""
-    target_def = _FakeTargetDefinition()
-    owner = _FakeOwnerDefinition(target=(target_def, object()))
+    target_def = _definition(models.Genre, "GenreType")
+    owner = _owner()
     f = _global_id_filter_with_owner("genres__id", owner)
     assert _target_definition_for(f) is target_def
 
 
 def test_target_definition_for_relation_branch_unresolved_target():
     """An unresolvable relation head returns `None` (decode without validation)."""
-    owner = _FakeOwnerDefinition(target=None)
+    owner = _owner()
     f = _global_id_filter_with_owner("genres__id", owner)
     assert _target_definition_for(f) is None
 
@@ -1059,18 +1051,12 @@ def test_accepted_globalid_type_names_none_definition():
 
 def test_accepted_globalid_type_names_per_strategy():
     """Each framework strategy maps to its accepted `type_name` payload set."""
-    model_owner = _as_definition(
-        _FakeOwnerDefinition(target=None, effective_globalid_strategy="model"),
-    )
-    type_owner = _as_definition(
-        _FakeOwnerDefinition(target=None, effective_globalid_strategy="type"),
-    )
-    both_owner = _as_definition(
-        _FakeOwnerDefinition(target=None, effective_globalid_strategy="type+model"),
-    )
-    assert _accepted_globalid_type_names(model_owner) == {"owner.ownermodel"}
+    model_owner = _owner("model")
+    type_owner = _owner("type")
+    both_owner = _owner("type+model")
+    assert _accepted_globalid_type_names(model_owner) == {"library.book"}
     assert _accepted_globalid_type_names(type_owner) == {"OwnerType"}
-    assert _accepted_globalid_type_names(both_owner) == {"owner.ownermodel", "OwnerType"}
+    assert _accepted_globalid_type_names(both_owner) == {"library.book", "OwnerType"}
 
 
 @pytest.mark.parametrize("strategy", ["callable", "custom", None])
@@ -1082,29 +1068,29 @@ def test_accepted_globalid_type_names_non_framework_strategies(strategy: str | N
     `test_filter_known_definition_none_strategy_rejects_fail_closed`); the helper
     keeps returning `None` as a defensive belt only.
     """
-    owner = _as_definition(_FakeOwnerDefinition(target=None, effective_globalid_strategy=strategy))
+    owner = _owner(strategy)
     assert _accepted_globalid_type_names(owner) is None
 
 
 def test_filter_model_strategy_accepts_model_label():
     """Under `model`, an own-PK filter accepts the model-label payload."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")
+    owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
-    encoded = relay.to_base64("owner.ownermodel", "42")
-    assert _decode_and_validate_global_id(encoded, f) == "42"
+    encoded = relay.to_base64("library.book", "42")
+    assert _decode_and_validate_global_id(encoded, f) == 42
 
 
 def test_filter_model_strategy_accepts_predecoded_global_id():
     """The filter accepts Strawberry's already-coerced ``GlobalID`` value unchanged."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")
+    owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
 
-    assert _decode_and_validate_global_id(relay.GlobalID("owner.ownermodel", "42"), f) == "42"
+    assert _decode_and_validate_global_id(relay.GlobalID("library.book", "42"), f) == 42
 
 
 def test_filter_model_strategy_rejects_type_name():
     """Under `model`, the old bare GraphQL type name is rejected."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")
+    owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("OwnerType", "42")
     with pytest.raises(GraphQLError, match="GlobalID type mismatch"):
@@ -1113,21 +1099,21 @@ def test_filter_model_strategy_rejects_type_name():
 
 def test_filter_type_strategy_accepts_graphql_name():
     """`type` preserves the pre-0.0.9 `graphql_type_name` acceptance."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="type")
+    owner = _owner("type")
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("OwnerType", "7")
-    assert _decode_and_validate_global_id(encoded, f) == "7"
+    assert _decode_and_validate_global_id(encoded, f) == 7
     # And rejects a model-label payload under `type`.
     with pytest.raises(GraphQLError, match="GlobalID type mismatch"):
-        _decode_and_validate_global_id(relay.to_base64("owner.ownermodel", "7"), f)
+        _decode_and_validate_global_id(relay.to_base64("library.book", "7"), f)
 
 
 def test_filter_type_plus_model_accepts_both():
     """`type+model` accepts model-label AND type-name inputs."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="type+model")
+    owner = _owner("type+model")
     f = _global_id_filter_with_owner("id", owner)
-    assert _decode_and_validate_global_id(relay.to_base64("owner.ownermodel", "1"), f) == "1"
-    assert _decode_and_validate_global_id(relay.to_base64("OwnerType", "2"), f) == "2"
+    assert _decode_and_validate_global_id(relay.to_base64("library.book", "1"), f) == 1
+    assert _decode_and_validate_global_id(relay.to_base64("OwnerType", "2"), f) == 2
 
 
 @pytest.mark.parametrize("strategy", ["callable", "custom"])
@@ -1138,7 +1124,7 @@ def test_filter_encode_only_strategy_rejects_fail_closed(strategy: str):
     target's GlobalID could never validly consume the IDs it emits. The runtime
     backstop (behind the build-time audit) rejects with a coded GraphQLError.
     """
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy=strategy)
+    owner = _owner(strategy)
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("AnythingAtAll", "99")
     with pytest.raises(GraphQLError, match="encode-only") as exc_info:
@@ -1154,7 +1140,7 @@ def test_filter_known_definition_none_strategy_rejects_fail_closed():
     backstop rejects with a coded GraphQLError distinct from the encode-only
     message rather than silently falling back to node-id-only.
     """
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy=None)
+    owner = _owner(None)
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("AnythingAtAll", "99")
     with pytest.raises(GraphQLError, match="no .*recorded globalid strategy") as exc_info:
@@ -1164,11 +1150,8 @@ def test_filter_known_definition_none_strategy_rejects_fail_closed():
 
 def test_multi_value_filter_encode_only_reject_names_index():
     """`GlobalIDMultipleChoiceFilter` names the offending index on a fail-closed reject."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="callable")
-    f = GlobalIDMultipleChoiceFilter(field_name="id")
-    # basedpyright: a fake parent carrying only the _owner_definition slot the code under test
-    # reads; django-filter types Filter.parent as a FilterSet
-    f.parent = _FakeParent(owner)  # pyright: ignore[reportAttributeAccessIssue]
+    owner = _owner("callable")
+    f = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
     with pytest.raises(GraphQLError, match="at index 0") as exc_info:
         f.filter(_as_queryset(object()), [relay.to_base64("AnythingAtAll", "99")])
     assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
@@ -1176,17 +1159,14 @@ def test_multi_value_filter_encode_only_reject_names_index():
 
 def test_filter_unbound_owner_node_id_only():
     """No bound owner -> node-id-only fallback (the existing `None`-definition path)."""
-    f = GlobalIDFilter(field_name="id")
-    # basedpyright: a fake parent carrying only the _owner_definition slot the code under test
-    # reads; django-filter types Filter.parent as a FilterSet
-    f.parent = _FakeParent(None)  # pyright: ignore[reportAttributeAccessIssue]
+    f = _bound(GlobalIDFilter(field_name="id"), None)
     encoded = relay.to_base64("WhateverType", "5")
     assert _decode_and_validate_global_id(encoded, f) == "5"
 
 
 def test_filter_wrong_model_rejected():
     """A wrong-model GlobalID is still rejected for a framework strategy."""
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")
+    owner = _owner("model")
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("other.thing", "42")
     with pytest.raises(GraphQLError, match="GlobalID type mismatch"):
@@ -1195,11 +1175,11 @@ def test_filter_wrong_model_rejected():
 
 def test_related_filter_relation_branch_strategy_aware():
     """A relation-branch (target-definition) filter applies the target's strategy."""
-    target_def = _FakeTargetDefinition(effective_globalid_strategy="model")
-    owner = _FakeOwnerDefinition(target=(target_def, object()))
+    _definition(models.Genre, "GenreType", "model")
+    owner = _owner()
     f = _global_id_filter_with_owner("genres__id", owner)
     # The target's model label is accepted; the target's type name is rejected.
-    assert _decode_and_validate_global_id(relay.to_base64("library.genre", "3"), f) == "3"
+    assert _decode_and_validate_global_id(relay.to_base64("library.genre", "3"), f) == 3
     with pytest.raises(GraphQLError, match="GlobalID type mismatch"):
         _decode_and_validate_global_id(relay.to_base64("GenreType", "3"), f)
 
@@ -1213,33 +1193,27 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest
     as ``test_global_id_multiple_choice_filter_decodes_every_element``) so the
     real ``Q``-object filter machinery does not run.
     """
-    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")
-    captured: list[list[str]] = []
+    owner = _owner("model")
+    captured: list[list[object]] = []
 
-    def spy(self: object, qs: object, value: Iterable[str]):
+    def spy(self: object, qs: object, value: Iterable[object]):
         captured.append(list(value))
         return qs
 
     monkeypatch.setattr(GlobalIDMultipleChoiceFilter.__mro__[1], "filter", spy)
 
-    accepted = GlobalIDMultipleChoiceFilter(field_name="id")
-    # basedpyright: a fake parent carrying only the _owner_definition slot the code under test
-    # reads; django-filter types Filter.parent as a FilterSet
-    accepted.parent = _FakeParent(owner)  # pyright: ignore[reportAttributeAccessIssue]
+    accepted = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
     accepted.filter(
         _as_queryset(object()),
-        [relay.to_base64("owner.ownermodel", "1"), relay.to_base64("owner.ownermodel", "2")],
+        [relay.to_base64("library.book", "1"), relay.to_base64("library.book", "2")],
     )
-    assert captured == [["1", "2"]]
+    assert captured == [[1, 2]]
 
-    rejected = GlobalIDMultipleChoiceFilter(field_name="id")
-    # basedpyright: a fake parent carrying only the _owner_definition slot the code under test
-    # reads; django-filter types Filter.parent as a FilterSet
-    rejected.parent = _FakeParent(owner)  # pyright: ignore[reportAttributeAccessIssue]
+    rejected = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
     with pytest.raises(GraphQLError, match="at index 1"):
         rejected.filter(
             _as_queryset(object()),
-            [relay.to_base64("owner.ownermodel", "1"), relay.to_base64("OwnerType", "2")],
+            [relay.to_base64("library.book", "1"), relay.to_base64("OwnerType", "2")],
         )
 
 
@@ -1264,32 +1238,9 @@ def test_resolve_globalid_target_definition_multihop():
     non-string field name). Every generated leaf resolves by construction and
     a non-str field name cannot come off the wire, so those have no live form.
     """
-    branch_def = _FakeTargetDefinition(effective_globalid_strategy="type")
-    branch_def.graphql_type_name = "BranchType"
-
-    class _FakeIntermediateDefinition:
-        model = _FakeTargetModel()
-        graphql_type_name = "ShelfType"
-        effective_globalid_strategy = "type"
-
-        def related_target_for(self, head: str):
-            if head == "branch":
-                return (branch_def, object())
-            return None
-
-    shelf_def = _FakeIntermediateDefinition()
-
-    class _FakeMultiHopOwnerDefinition:
-        model = _FakeModel()
-        graphql_type_name = "OwnerType"
-        effective_globalid_strategy = "type"
-
-        def related_target_for(self, head: str):
-            if head == "shelf":
-                return (shelf_def, object())
-            return None
-
-    owner = _as_definition(_FakeMultiHopOwnerDefinition())
+    branch_def = _definition(models.Branch, "BranchType", "type")
+    shelf_def = _definition(models.Shelf, "ShelfType", "type")
+    owner = _owner("type")
 
     # Single-hop own pk
     assert resolve_globalid_target_definition(owner, "id") is owner

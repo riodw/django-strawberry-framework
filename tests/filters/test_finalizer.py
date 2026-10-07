@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -1265,36 +1265,20 @@ def test_phase_2_5_runs_under_relay_node_interface():
 # ---------------------------------------------------------------------------
 
 
-def _as_definition(stand_in: object) -> DjangoTypeDefinition:
-    """Hand a duck-typed owner definition to the binder that takes a ``DjangoTypeDefinition``."""
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-    # _bind_filterset_owner types the parameter as DjangoTypeDefinition
-    return stand_in  # pyright: ignore[reportReturnType]
-
-
-def _owner_definition_stub(name: str, *, model: type[Model]):
-    """Return a minimal owner-definition-shaped object for binding tests.
-
-    ``model`` is the bound filterset's ``Meta.model``: a real owner definition always carries a
-    Django model, and the first-bind model check runs ``issubclass`` against it.
-    """
+def _owner(model: type[Model]) -> DjangoTypeDefinition:
+    """Declare a plain real ``DjangoType`` over ``model`` and return its definition."""
     owner_model = model
 
-    class _Stub:
-        origin = type(name, (), {})
-        model = owner_model
-        # Real ``DjangoTypeDefinition`` carries this flag; default owners use the
-        # identity hook, so the get_queryset-safety axis stays a no-op here and
-        # these tests isolate the target-resolution branches they exercise.
-        has_custom_get_queryset = False
+    class OwnerType(DjangoType):
+        class Meta:
+            model = owner_model
+            fields = ("id",)
 
-        def __init__(self, resolver: Callable[[str], object] | None = None):
-            self._resolver = resolver
+    return OwnerType.__django_strawberry_definition__
 
-        def related_target_for(self, field_name: str):
-            return self._resolver(field_name) if self._resolver is not None else None
 
-    return _Stub
+def _resolves_nothing(_field_name: object) -> None:
+    """A ``related_target_for`` that resolves no relation."""
 
 
 def test_bind_filterset_owner_idempotent_for_same_definition():
@@ -1305,8 +1289,7 @@ def test_bind_filterset_owner_idempotent_for_same_definition():
             model = Shelf
             fields = {"code": ["exact"]}
 
-    Stub = _owner_definition_stub("OwnerType", model=Shelf)
-    definition = _as_definition(Stub())
+    definition = _owner(Shelf)
     _bind_filterset_owner(ShelfFilter, definition)  # previous None -> bind
     _bind_filterset_owner(ShelfFilter, definition)  # previous IS definition -> return
     assert ShelfFilter._owner_definition is definition
@@ -1327,9 +1310,9 @@ def test_bind_filterset_owner_continues_when_both_targets_unresolved():
             model = Book
             fields = {"title": ["exact"]}
 
-    Stub = _owner_definition_stub("OwnerType", model=Book)
-    first = _as_definition(Stub(resolver=lambda _f: None))
-    second = _as_definition(Stub(resolver=lambda _f: None))
+    # No ``Shelf`` type is registered, so neither owner resolves ``shelf``.
+    first = _owner(Book)
+    second = _owner(Book)
     _bind_filterset_owner(BookFilter, first)
     # Second distinct owner: ``shelf`` resolves to None from both -> continue,
     # no raise, and the first binding is preserved.
@@ -1445,7 +1428,9 @@ def test_bind_filterset_owner_rejects_diverging_own_pk_type_name():
     assert "own-primary-key Relay identity" in str(exc_info.value)
 
 
-def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not():
+def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A field resolved by one owner but not the other is a hard mismatch."""
 
     class ShelfFilter(FilterSet):
@@ -1460,10 +1445,12 @@ def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not(
             model = Book
             fields = {"title": ["exact"]}
 
-    Stub = _owner_definition_stub("OwnerType", model=Book)
-    target_def = type("ResolvedShelfDefinition", (), {"origin": type("ResolvedShelfType", (), {})})
-    first = _as_definition(Stub(resolver=lambda _f: None))
-    second = _as_definition(Stub(resolver=lambda _f: (target_def, object())))
+    _owner(Shelf)
+    first = _owner(Book)
+    second = _owner(Book)
+    # Two live owners resolve ``shelf`` through the one registry and so always agree; the first
+    # owner's lookup is forced to resolve nothing to reach the defensive divergence check.
+    monkeypatch.setattr(first, "related_target_for", _resolves_nothing)
     _bind_filterset_owner(BookFilter, first)
     with pytest.raises(ConfigurationError) as excinfo:
         _bind_filterset_owner(BookFilter, second)

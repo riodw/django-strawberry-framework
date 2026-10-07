@@ -3089,17 +3089,17 @@ def test_record_relation_connection_is_idempotent():
     branch share this writer; an idempotent dict assignment means the rerun
     records the same mapping the first attach did (spec-033 Decision 3).
     """
-    from django_strawberry_framework.types.finalizer import _record_relation_connection
+    from apps.library.models import Genre
 
-    definition = SimpleNamespace(relation_connections=None)
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-    # _record_relation_connection types the parameter as DjangoTypeDefinition
-    _record_relation_connection(definition, "books_connection", "books")  # pyright: ignore[reportArgumentType]
+    from django_strawberry_framework.types.finalizer import _record_relation_connection
+    from tests._definition import make_definition
+
+    definition = make_definition(Genre)
+    assert definition.relation_connections is None
+    _record_relation_connection(definition, "books_connection", "books")
     assert definition.relation_connections == {"books_connection": "books"}
     # Idempotent re-write (the marker-``continue`` branch path).
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-    # _record_relation_connection types the parameter as DjangoTypeDefinition
-    _record_relation_connection(definition, "books_connection", "books")  # pyright: ignore[reportArgumentType]
+    _record_relation_connection(definition, "books_connection", "books")
     assert definition.relation_connections == {"books_connection": "books"}
 
 

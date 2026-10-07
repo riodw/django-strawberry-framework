@@ -529,13 +529,17 @@ def test_relation_connection_teardown_restores_owned_annotations_in_place():
     # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
     # restores; the class declares no such attribute
     CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
-    definition = SimpleNamespace(relation_connections={"items_connection": "items"})
+    from tests._definition import make_definition
+
+    definition = make_definition(
+        Category,
+        origin=CategoryType,
+        relation_connections={"items_connection": "items"},
+    )
     registry.register(Category, CategoryType)
     _register_relation_connection_teardown(
         CategoryType,
-        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-        # _register_relation_connection_teardown types the parameter as DjangoTypeDefinition
-        definition,  # pyright: ignore[reportArgumentType]
+        definition,
         generated="items_connection",
         field_obj=field_obj,
         relation_name="items",
@@ -573,13 +577,17 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
     # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
     # restores; the class declares no such attribute
     CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
-    definition = SimpleNamespace(relation_connections={"items_connection": "items"})
+    from tests._definition import make_definition
+
+    definition = make_definition(
+        Category,
+        origin=CategoryType,
+        relation_connections={"items_connection": "items"},
+    )
     registry.register(Category, CategoryType)
     _register_relation_connection_teardown(
         CategoryType,
-        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-        # _register_relation_connection_teardown types the parameter as DjangoTypeDefinition
-        definition,  # pyright: ignore[reportArgumentType]
+        definition,
         generated="items_connection",
         field_obj=field_obj,
         relation_name="items",
@@ -611,13 +619,17 @@ def test_relation_connection_teardown_keeps_a_present_relation_annotation():
     # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
     # restores; the class declares no such attribute
     CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
-    definition = SimpleNamespace(relation_connections={"items_connection": "items"})
+    from tests._definition import make_definition
+
+    definition = make_definition(
+        Category,
+        origin=CategoryType,
+        relation_connections={"items_connection": "items"},
+    )
     registry.register(Category, CategoryType)
     _register_relation_connection_teardown(
         CategoryType,
-        # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-        # _register_relation_connection_teardown types the parameter as DjangoTypeDefinition
-        definition,  # pyright: ignore[reportArgumentType]
+        definition,
         generated="items_connection",
         field_obj=field_obj,
         relation_name="items",

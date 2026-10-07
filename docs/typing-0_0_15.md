@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 16 done, 11 to do. Ignore comments: 1334 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 17 done, 10 to do. Ignore comments: 1291 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -46,6 +46,9 @@ Progress: 16 done, 11 to do. Ignore comments: 1334 lines (1897 at the start of 0
 - [x] 19. The field factories declare the value they resolve to: `DjangoListField(T)` is `list[T]`,
   `DjangoConnectionField(T)` is `DjangoConnection[T]`, `DjangoNodeField(T)` is `T | None`, `DjangoNodesField(T)` is
   `list[T | None]`, and `current_user()` is `object` (5 ignores)
+- [x] 20. `tests/_execution.py::make_execution_context` and `tests/_definition.py::make_definition` build real
+  `ExecutionContext` / `DjangoTypeDefinition` objects; hostile stand-ins keep their ignores (43 ignores, 15 of them
+  other stand-ins)
 
 ## To do: rules still off
 
@@ -68,8 +71,7 @@ Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessa
 
 ## To do: ignore refactors (from the 2026-10-06 survey)
 
-- [ ] 20. Real `ExecutionContext` / `DjangoTypeDefinition` objects instead of stand-ins: 36, case by case
-- [ ] 21. Not yet surveyed: other stand-ins (168) and the uncategorized rest (419, of which 152 are in the package)
+- [ ] 21. Not yet surveyed: other stand-ins (153) and the uncategorized rest (419, of which 152 are in the package)
 
 Survey verdicts recorded so nothing is re-tried blind:
 
@@ -95,20 +97,19 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1334 (1363 rule hits) in 174 files: tests 1097, package 179, examples 56,
+Lines carrying `# pyright: ignore[...]`: 1291 (1320 rule hits) in 174 files: tests 1054, package 179, examples 56,
 scripts 2.
 
 ### By cause
 
 | Cause | Lines | Plan |
 | --- | --- | --- |
-| Deliberately ill-typed test input (hostile values, forged classes, rejected writes) | 482 | keep |
-| Other stand-in objects in tests | 168 | item 21 |
+| Deliberately ill-typed test input (hostile values, forged classes, rejected writes) | 490 | keep |
+| Other stand-in objects in tests | 153 | item 21 |
 | Django private QuerySet attributes (seam 14, `super()._clone()` 2, hostile writes 7, planted shapes 12) | 35 | keep |
 | DRF stubs declare `ModelSerializer.Meta` | 136 | item 23 |
-| Stand-in execution contexts / definitions | 36 | item 20 |
 | Verbatim `__init__` forwards (schema, consumers, ModelForm, ModelSerializer) | 34 | keep |
-| Framework `Meta` read from the class body only | 13 | item 21 |
+| Framework `Meta` read from the class body only | 13 | keep |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
 | Uncategorized | 419 | item 21 |
 
@@ -116,12 +117,12 @@ scripts 2.
 
 | Rule | Hits | Package | Tests | Examples | Scripts |
 | --- | --- | --- | --- | --- | --- |
-| `reportArgumentType` | 451 | 25 | 421 | 5 | 0 |
-| `reportAttributeAccessIssue` | 291 | 26 | 264 | 1 | 0 |
+| `reportArgumentType` | 442 | 25 | 412 | 5 | 0 |
+| `reportAttributeAccessIssue` | 260 | 26 | 233 | 1 | 0 |
 | `reportIncompatibleVariableOverride` | 194 | 2 | 169 | 23 | 0 |
 | `reportExplicitAny` | 111 | 71 | 25 | 13 | 2 |
 | `reportIncompatibleMethodOverride` | 76 | 5 | 66 | 5 | 0 |
-| `reportReturnType` | 46 | 0 | 45 | 1 | 0 |
+| `reportReturnType` | 43 | 0 | 42 | 1 | 0 |
 | `reportFunctionMemberAccess` | 25 | 4 | 19 | 2 | 0 |
 | `reportAssignmentType` | 23 | 0 | 20 | 3 | 0 |
 | `reportUnnecessaryIsInstance` | 20 | 20 | 0 | 0 | 0 |
@@ -157,11 +158,11 @@ scripts 2.
 | `tests/utils/test_querysets.py` | 71 |
 | `tests/rest_framework/test_sets.py` | 55 |
 | `tests/rest_framework/test_converter.py` | 48 |
-| `tests/test_resource_policy.py` | 38 |
 | `tests/test_views.py` | 38 |
 | `tests/test_django_patches.py` | 36 |
 | `tests/test_routers.py` | 33 |
 | `tests/test_list_field.py` | 29 |
+| `tests/test_resource_policy.py` | 29 |
 | `examples/fakeshop/apps/library/serializers.py` | 26 |
 
 

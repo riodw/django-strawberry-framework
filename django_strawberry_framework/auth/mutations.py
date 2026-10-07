@@ -1259,6 +1259,7 @@ def _register_decode_step(
 
 
 def _register_write_step(
+    mutation_cls: type[DjangoMutation],
     instance: models.Model | None,
     decoded: _RegisterDecoded,
 ) -> models.Model | list[FieldError]:
@@ -1271,10 +1272,13 @@ def _register_write_step(
     (the D-N2 deliberate non-reuse: ``validate_password`` raises a list-style
     ``ValidationError`` with no ``error_dict``, and the generic
     ``validation_error_to_field_errors`` mapper would key it to the ``"__all__"``
-    sentinel, not ``password``). Success hashes via ``set_password`` BEFORE
+    sentinel, not ``password``; ``RegisterInput`` takes no ``input_class``, so the
+    input field is always ``password``). Success hashes via ``set_password`` BEFORE
     ``full_clean()`` (the ``password`` column validates against the hash, never
     the raw input), then delegates ``full_clean`` -> ``save`` (race
-    ``IntegrityError`` -> envelope) -> M2M to the shared model write tail -
+    ``IntegrityError`` -> envelope) -> M2M to the shared model write tail, which
+    keys every ``full_clean`` error to the GraphQL input field the client sent
+    through ``mutation_cls``'s specs (``first_name`` -> ``firstName``) -
     ``validate_password`` + ``set_password`` are the ONLY auth-specific steps.
     """
     from ..mutations import resolvers
@@ -1304,7 +1308,7 @@ def _register_write_step(
         codes = [leaf.code for leaf in exc.error_list if leaf.code]
         return [field_error("password", exc.messages, codes=codes)]
     user.set_password(raw_password)
-    return resolvers._model_write_step(instance, (user, m2m_assignments, exclude))
+    return resolvers._model_write_step(mutation_cls, instance, (user, m2m_assignments, exclude))
 
 
 def _run_register_pipeline_sync(
@@ -1330,7 +1334,11 @@ def _run_register_pipeline_sync(
         data,
         strawberry.UNSET,
         decode_step=lambda instance: _register_decode_step(mutation_cls, data, info, instance),
-        write_step=_register_write_step,
+        write_step=lambda instance, decoded: _register_write_step(
+            mutation_cls,
+            instance,
+            decoded,
+        ),
     )
 
 

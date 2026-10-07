@@ -63,9 +63,12 @@ and the form-specific invariants this module owns:
   ``get_form_kwargs`` hooks** (Decision 8 step 4 / Decision 6); ``form.is_valid()``
   runs once. A failure maps ``form.errors`` onto the ``FieldError`` envelope via
   the reused ``validation_error_to_field_errors(ValidationError(
-  form.errors.as_data()))`` (the form's ``NON_FIELD_ERRORS`` bucket lands on the
-  ``"__all__"`` sentinel ``036`` froze, byte-identically to a model
-  ``full_clean()`` failure).
+  form.errors.as_data()), key_map)``: each form field name is re-keyed to the
+  GraphQL input field the client sent (``category`` -> ``categoryId``) through
+  the shared ``build_error_key_map`` over the bind-stashed specs, a form field
+  the input does not expose keeps its form field name, and the form's
+  ``NON_FIELD_ERRORS`` bucket lands on the ``"__all__"`` sentinel - the same
+  keying a model ``full_clean()`` failure gets.
 
 - **Write via ``form.save()`` (``ModelForm``) / ``perform_mutate`` (plain),
   wrapped by the reused ``save_or_field_errors`` ``IntegrityError`` -> envelope
@@ -449,19 +452,28 @@ def _reconstruct_partial_data(
     }
 
 
-def _form_errors_to_field_errors(form: forms.BaseForm) -> list[FieldError]:
+def _form_errors_to_field_errors(
+    form: forms.BaseForm,
+    mutation_cls: _FormMutationClass,
+) -> list[FieldError]:
     """Map a failed form's ``form.errors`` onto the ``FieldError`` envelope.
 
     Reuses the ``036`` ``validation_error_to_field_errors`` over a
     ``ValidationError(form.errors.as_data())``: ``as_data()`` yields the
     ``{field: [ValidationError, ...]}`` shape the mapper's ``error_dict`` branch
     consumes, so the form's ``NON_FIELD_ERRORS`` bucket keys to the ``"__all__"``
-    sentinel byte-identically to a model ``full_clean()`` failure (Decision 8
-    step 4). No parallel mapper.
+    sentinel exactly as a model ``full_clean()`` failure does (Decision 8 step 4).
+    Each form field name is re-keyed to the GraphQL input field the client sent
+    through ``build_error_key_map`` over ``mutation_cls._input_field_specs`` (a
+    form spec's ``target_name`` IS the form field name); a form field the input
+    does not expose keeps its form field name. No parallel mapper.
     """
-    from ..utils.errors import validation_error_to_field_errors
+    from ..utils.errors import build_error_key_map, validation_error_to_field_errors
 
-    return validation_error_to_field_errors(ValidationError(form.errors.as_data()))
+    return validation_error_to_field_errors(
+        ValidationError(form.errors.as_data()),
+        build_error_key_map(mutation_cls._input_field_specs),
+    )
 
 
 def _modelform_decode_step(
@@ -492,6 +504,7 @@ def _modelform_decode_step(
 
 
 def _bound_form_or_field_errors(
+    mutation_cls: _FormMutationClass,
     holder: _FormBuilder[_FormT],
     info: Info[object, object],
     decoded: _DecodedForm,
@@ -501,14 +514,16 @@ def _bound_form_or_field_errors(
     """Construct the bound form and run ``is_valid()`` once (both form flavors).
 
     Returns ``(form, None)`` on success or ``(None, errors)`` on a validation
-    failure. The persist hook (``form.save`` vs ``perform_mutate``) stays at the
-    caller so ModelForm can return ``form.instance`` while a plain ``Form`` has
-    no instance slot.
+    failure, the errors keyed through ``mutation_cls``'s input specs. ``holder``
+    is the ``mutation_cls`` instance whose ``get_form`` hook builds the form. The
+    persist hook (``form.save`` vs ``perform_mutate``) stays at the caller so
+    ModelForm can return ``form.instance`` while a plain ``Form`` has no instance
+    slot.
     """
     form_data, provided_files = decoded
     form = holder.get_form(info, data=form_data, files=provided_files, instance=instance)
     if not form.is_valid():
-        return None, _form_errors_to_field_errors(form)
+        return None, _form_errors_to_field_errors(form, mutation_cls)
     return form, None
 
 
@@ -529,6 +544,7 @@ def _modelform_write_step(
     / write failure.
     """
     bound = _bound_form_or_field_errors(
+        mutation_cls,
         mutation_cls(),
         info,
         decoded,
@@ -564,6 +580,7 @@ def _plain_form_write_step(
     """
     holder = mutation_cls()
     bound = _bound_form_or_field_errors(
+        mutation_cls,
         holder,
         info,
         decoded,

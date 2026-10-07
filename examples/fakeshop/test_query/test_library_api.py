@@ -10873,6 +10873,50 @@ def test_book_partial_input_class_override_merges_into_generated_partial_input()
     assert by_name["genres"]["kind"] != "NON_NULL"
 
 
+_CREATE_PUBLISHER_PAIR = (
+    "mutation($dup: PublisherInput!, $bad: PublisherInput!){ "
+    "dup: createPublisher(data:$dup){ node{ name } errors{ field path codes } } "
+    "bad: createPublisher(data:$bad){ node{ name } errors{ field path codes } } }"
+)
+
+
+@pytest.mark.django_db
+def test_create_publisher_errors_key_to_the_input_fields_sent():
+    """Validator and decode errors on ``createPublisher`` key to the GraphQL input names.
+
+    ``CreatePublisher``'s ``Meta.input_class`` renames ``Publisher.name`` to
+    ``publisherName``. A duplicate of both unique columns fails ``full_clean()``, which
+    names the model fields ``name`` / ``house_code``; each error comes back under the
+    input field the client sent (``publisherName``, ``houseCode``). The aliased second
+    call sends an unstorable ``publisherName`` that the input decode rejects before
+    ``full_clean()`` runs, on the same ``publisherName`` key. Neither call writes a row.
+    """
+    models.Publisher.objects.create(name="Keyed House", house_code="KEYED")
+
+    response = _post_graphql(
+        _CREATE_PUBLISHER_PAIR,
+        variables={
+            "dup": {"publisherName": "Keyed House", "houseCode": "KEYED"},
+            "bad": {"publisherName": "\ud800", "houseCode": "FRESH"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    duplicate = payload["data"]["dup"]
+    assert duplicate["node"] is None
+    assert sorted(duplicate["errors"], key=lambda error: error["field"]) == [
+        {"field": "houseCode", "path": ["houseCode"], "codes": ["unique"]},
+        {"field": "publisherName", "path": ["publisherName"], "codes": ["unique"]},
+    ]
+    undecodable = payload["data"]["bad"]
+    assert undecodable["node"] is None
+    assert [(error["field"], error["path"]) for error in undecodable["errors"]] == [
+        ("publisherName", ["publisherName"]),
+    ]
+    assert models.Publisher.objects.count() == 1
+
+
 _CREATE_BOOK_VIA_CUSTOM_INPUT = (
     "mutation($d: BookInput!){ createBookViaCustomInput(data:$d){ "
     "node{ title subtitle } errors{ field messages } } }"
@@ -11464,6 +11508,31 @@ def test_create_shelf_via_subclassed_serializer_validates_against_child_serializ
     assert result["errors"] == []
     assert result["result"] == {"code": "SubclassShelf"}
     assert models.Shelf.objects.filter(code="SubclassShelf", branch=branch).exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_subclassed_serializer_error_keys_to_the_renamed_input():
+    """A DRF field error on a multi-word, ``source``-renamed field keys to its input name.
+
+    ``RenamedShelfSerializer.shelf_code`` (``source="code"``) is exposed as ``shelfCode``.
+    A blank value fails DRF's own ``allow_blank`` check under the serializer field name
+    ``shelf_code``; the error comes back under ``shelfCode``, the name the client sent, with
+    the one-segment ``path``, and no row is written.
+    """
+    branch = models.Branch.objects.create(name="KeyedSubclassBranch", city="Boston")
+    query = (
+        "mutation { createShelfViaSubclassedSerializer(data: { "
+        f'shelfCode: "", branchId: {branch.pk} '
+        "}) { result { code } errors { field path codes } } }"
+    )
+    response = _post_graphql_as_staff(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaSubclassedSerializer"]
+    assert result["result"] is None
+    assert result["errors"] == [{"field": "shelfCode", "path": ["shelfCode"], "codes": ["blank"]}]
+    assert not models.Shelf.objects.filter(branch=branch).exists()
 
 
 @pytest.mark.django_db

@@ -3,17 +3,24 @@
 Hostile string subclasses, midway iterators, and lazy translation proxies never
 arrive on the wire; the constructors must still return a FieldError. Consumer
 envelopes (constraint ``codes``, ``__all__`` sentinel, relation ``not_found``)
-live in ``examples/fakeshop/test_query/test_products_api.py``.
+live in ``examples/fakeshop/test_query/test_products_api.py``. The error key map
+primitives (``build_error_key_map``, ``rekey_error_segment``,
+``model_field_error_names``) are pinned here directly; the per-flavor keying matrix
+is ``tests/utils/test_error_keys.py``.
 """
 
 import ast
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+from apps.library import models as library_models
+from apps.products import models as product_models
 from django.core.exceptions import ValidationError
+from django.db.models import Model
 from typing_extensions import override
 
-from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from django_strawberry_framework.utils import errors as errors_module
 from django_strawberry_framework.utils.errors import (
     FIELD_ERROR_CODE_CONFLICT,
@@ -26,14 +33,21 @@ from django_strawberry_framework.utils.errors import (
     FILTER_INVALID_ERROR_CODE,
     GLOBALID_INVALID_ERROR_CODE,
     GLOBALID_UNVALIDATABLE_ERROR_CODE,
+    build_error_key_map,
     coded_error_extensions,
     empty_validation_error,
     field_error,
     join_error_path,
+    model_field_error_names,
     null_field_error,
+    rekey_error_segment,
     relation_field_error,
     validation_error_to_field_errors,
 )
+from django_strawberry_framework.utils.inputs import RELATION_SINGLE, SCALAR, InputFieldSpec
+
+if TYPE_CHECKING:
+    from django_strawberry_framework.utils.errors import ErrorKeyMap
 
 
 def _as_validation_error(stand_in: object) -> ValidationError:
@@ -534,3 +548,223 @@ def test_validation_error_mapper_treats_a_text_atom_error_list_as_one_leaf(atom:
     assert error.field == NON_FIELD_ERROR_KEY
     assert error.messages == ["whole-object"]
     assert error.codes == []
+
+
+# ---------------------------------------------------------------------------
+# Error keying: validator-side name -> GraphQL input name
+# ---------------------------------------------------------------------------
+
+
+def _keys(errors: list[FieldError]) -> list[tuple[str, list[str], list[str]]]:
+    """``(field, path, messages)`` per leaf, in envelope order."""
+    return [(fe.field, fe.path, fe.messages) for fe in errors]
+
+
+def test_rekey_error_segment_never_rekeys_the_non_field_sentinel():
+    """``"__all__"`` is checked before the map, so even a map entry for it is ignored."""
+    key_map: ErrorKeyMap = {NON_FIELD_ERROR_KEY: ("hijacked", {"x": ("y", None)})}
+
+    assert rekey_error_segment(NON_FIELD_ERROR_KEY, key_map) == (NON_FIELD_ERROR_KEY, {})
+    (error,) = validation_error_to_field_errors(
+        ValidationError({NON_FIELD_ERROR_KEY: ["model-wide"]}),
+        key_map,
+    )
+    assert (error.field, error.path) == (NON_FIELD_ERROR_KEY, [])
+
+
+def test_rekey_error_segment_keeps_an_unmapped_name_verbatim():
+    """A name with no map entry (a field the input does not expose) keeps its own name."""
+    key_map: ErrorKeyMap = {"category": ("categoryId", None)}
+
+    assert rekey_error_segment("is_private", key_map) == ("is_private", {})
+    assert rekey_error_segment("category", key_map) == ("categoryId", {})
+    errors = validation_error_to_field_errors(
+        ValidationError({"category": ["bad"], "is_private": ["hidden"]}),
+        key_map,
+    )
+    assert _keys(errors) == [
+        ("categoryId", ["categoryId"], ["bad"]),
+        ("is_private", ["is_private"], ["hidden"]),
+    ]
+
+
+def test_validation_error_mapper_without_a_map_keys_every_name_verbatim():
+    """``key_map=None`` (and an omitted map) keeps each ``error_dict`` name as raised."""
+    exc = ValidationError({"category": ["bad"], NON_FIELD_ERROR_KEY: ["whole"]})
+
+    assert _keys(validation_error_to_field_errors(exc, None)) == [
+        ("category", ["category"], ["bad"]),
+        (NON_FIELD_ERROR_KEY, [], ["whole"]),
+    ]
+    assert _keys(validation_error_to_field_errors(exc)) == _keys(
+        validation_error_to_field_errors(exc, None),
+    )
+
+
+def test_validation_error_mapper_resolves_swapped_names_in_one_lookup():
+    """Two inputs renamed onto each other's names each re-key exactly once."""
+    key_map: ErrorKeyMap = {"name": ("description", None), "description": ("name", None)}
+    errors = validation_error_to_field_errors(
+        ValidationError({"name": ["on name"], "description": ["on description"]}),
+        key_map,
+    )
+    assert _keys(errors) == [
+        ("description", ["description"], ["on name"]),
+        ("name", ["name"], ["on description"]),
+    ]
+
+
+def test_validation_error_mapper_lets_a_rename_share_an_unexposed_name():
+    """A rename onto an unexposed field's name yields two errors on one key, never merged."""
+    key_map: ErrorKeyMap = {"name": ("category", None)}
+    errors = validation_error_to_field_errors(
+        ValidationError({"name": ["on name"], "category": ["on the unexposed FK"]}),
+        key_map,
+    )
+    assert _keys(errors) == [
+        ("category", ["category"], ["on name"]),
+        ("category", ["category"], ["on the unexposed FK"]),
+    ]
+
+
+def test_build_error_key_map_recurses_into_nested_specs():
+    """A nested field carries its own level's map; a flat field carries ``None``."""
+    child = (
+        InputFieldSpec(
+            input_attr="alt_branches",
+            graphql_name="altBranches",
+            target_name="alt_branches",
+            kind=SCALAR,
+        ),
+    )
+    specs = [
+        InputFieldSpec(
+            input_attr="category_id",
+            graphql_name="categoryId",
+            target_name="category",
+            kind=RELATION_SINGLE,
+        ),
+        InputFieldSpec(
+            input_attr="shelves",
+            graphql_name="shelves",
+            target_name="shelves",
+            # The map reads only ``nested_specs``; the serializer's nested kinds live
+            # behind the DRF soft dependency, so a plain kind stands in.
+            kind=SCALAR,
+            nested_specs=child,
+        ),
+    ]
+    key_map = build_error_key_map(specs)
+
+    assert key_map == {
+        "category": ("categoryId", None),
+        "shelves": ("shelves", {"alt_branches": ("altBranches", None)}),
+    }
+    segment, child_map = rekey_error_segment("shelves", key_map)
+    assert segment == "shelves"
+    assert rekey_error_segment("alt_branches", child_map) == ("altBranches", {})
+
+
+def test_build_error_key_map_keys_by_keys_of_at_every_depth():
+    """``keys_of`` replaces ``target_name`` as the validator-side names, nested levels included."""
+    child = (
+        InputFieldSpec(
+            input_attr="code",
+            graphql_name="shelfCode",
+            target_name="shelf_code",
+            kind=SCALAR,
+            source="code",
+        ),
+    )
+    specs = [
+        InputFieldSpec(
+            input_attr="full_name",
+            graphql_name="fullName",
+            target_name="full_name",
+            kind=SCALAR,
+            source="name",
+        ),
+        InputFieldSpec(
+            input_attr="is_private",
+            graphql_name="isPrivate",
+            target_name="is_private",
+            kind=SCALAR,
+        ),
+        InputFieldSpec(
+            input_attr="category_id",
+            graphql_name="categoryId",
+            target_name="category",
+            kind=RELATION_SINGLE,
+        ),
+        InputFieldSpec(
+            input_attr="shelves",
+            graphql_name="shelves",
+            target_name="shelves",
+            # The map reads only ``nested_specs``; the serializer's nested kinds live
+            # behind the DRF soft dependency, so a plain kind stands in.
+            kind=SCALAR,
+            nested_specs=child,
+        ),
+    ]
+
+    def model_names(spec: InputFieldSpec) -> tuple[str, ...]:
+        name = spec.source or spec.target_name
+        return (name, f"{name}_id") if spec.kind == RELATION_SINGLE else (name,)
+
+    by_source = build_error_key_map(specs, keys_of=model_names)
+
+    assert by_source == {
+        "name": ("fullName", None),
+        "is_private": ("isPrivate", None),
+        "category": ("categoryId", None),
+        "category_id": ("categoryId", None),
+        "shelves": ("shelves", {"code": ("shelfCode", None)}),
+    }
+    assert "full_name" not in by_source
+
+
+def test_build_error_key_map_never_lets_an_alias_displace_a_primary_name():
+    """Every primary name is entered before any alias; an alias fills only an unclaimed name."""
+    specs = [
+        InputFieldSpec(
+            input_attr="category",
+            graphql_name="categoryId",
+            target_name="category",
+            kind=RELATION_SINGLE,
+        ),
+        InputFieldSpec(
+            input_attr="category_ref",
+            graphql_name="categoryRefId",
+            target_name="category_ref",
+            kind=RELATION_SINGLE,
+            source="category_id",
+        ),
+    ]
+    names = {"category": ("category", "category_id"), "category_ref": ("category_id", "category")}
+
+    key_map = build_error_key_map(specs, keys_of=lambda spec: names[spec.target_name])
+
+    assert key_map == {"category": ("categoryId", None), "category_id": ("categoryRefId", None)}
+
+
+@pytest.mark.parametrize(
+    ("model", "name", "expected"),
+    [
+        pytest.param(
+            product_models.Item,
+            "category",
+            ("category", "category_id"),
+            id="forward-fk",
+        ),
+        pytest.param(product_models.Item, "is_private", ("is_private",), id="scalar"),
+        pytest.param(library_models.Shelf, "alt_branches", ("alt_branches",), id="m2m"),
+        pytest.param(product_models.Category, "items", ("items",), id="reverse-relation"),
+    ],
+)
+def test_model_field_error_names_add_a_forward_relation_attname(
+    model: type[Model],
+    name: str,
+    expected: tuple[str, ...],
+):
+    """A forward relation answers to its ``attname`` too; every other field to its name alone."""
+    assert model_field_error_names(model._meta.get_field(name)) == expected

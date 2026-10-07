@@ -83,6 +83,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     SCALAR,
 )
 from django_strawberry_framework.testing.relay import global_id_for
+from django_strawberry_framework.utils.errors import build_error_key_map
 from django_strawberry_framework.utils.inputs import (
     FILE,
     RELATION_MULTI,
@@ -98,11 +99,12 @@ from tests._generated_inputs import keyword_constructor as _keyword_constructor
 
 if TYPE_CHECKING:
     from django_strawberry_framework.mutations.inputs import FieldError
-    from django_strawberry_framework.rest_framework.resolvers import _ReverseMap, _WrittenRow
+    from django_strawberry_framework.rest_framework.resolvers import _WrittenRow
     from django_strawberry_framework.rest_framework.serializer_converter import (
         DRFField,
         DRFSerializer,
     )
+    from django_strawberry_framework.utils.errors import ErrorKeyMap
 
 
 def _hook_ctx(operation: str = "create", alias: str = "default", instance_pk: object = None):
@@ -214,13 +216,13 @@ def test_flattener_top_level_non_field_bucket_is_all_sentinel():
     ]
 
 
-def test_flattener_rekeys_root_segment_through_reverse_map():
-    """A top-level field's leaf path is re-keyed through the recursive reverse map."""
-    reverse_map: _ReverseMap = {"category": ("categoryId", None)}
+def test_flattener_rekeys_root_segment_through_the_key_map():
+    """A top-level field's leaf path is re-keyed through the recursive key map."""
+    key_map: ErrorKeyMap = {"category": ("categoryId", None)}
     errors = {"category": ["bad relation"], "items": [{"category": ["nested"]}]}
-    flat = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
+    flat = serializer_resolvers.serializer_errors_to_field_errors(errors, key_map)
     by_path = {fe.field: fe.messages for fe in flat}
-    # `category` re-keyed to `categoryId`; the synthetic `items` has no reverse-map entry
+    # `category` re-keyed to `categoryId`; the synthetic `items` has no key-map entry
     # (and no child map), so its children stay verbatim.
     assert by_path == {"categoryId": ["bad relation"], "items.0.category": ["nested"]}
 
@@ -252,9 +254,9 @@ def test_flattener_recursively_rekeys_nested_child_fields():
             nested_specs=child_specs,
         ),
     ]
-    reverse_map = serializer_resolvers._build_reverse_map(top_specs)
+    key_map = build_error_key_map(top_specs)
     errors = {"shelves": [{"alt_branches": ["Bad pk"]}]}
-    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
+    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, key_map)
     assert fe.field == "shelves.0.altBranches"
     assert fe.path == ["shelves", "0", "altBranches"]
 
@@ -275,10 +277,10 @@ def test_flattener_nested_non_field_bucket_keeps_all_sentinel_with_recursive_map
             nested_specs=child_specs,
         ),
     ]
-    reverse_map = serializer_resolvers._build_reverse_map(top_specs)
+    key_map = build_error_key_map(top_specs)
     drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
     errors = {"shelves": [{drf_key: ["cross-field"]}]}
-    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
+    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, key_map)
     assert fe.field == f"shelves.0.{NON_FIELD_ERROR_KEY}"
     assert fe.path == ["shelves", "0", NON_FIELD_ERROR_KEY]
 
@@ -623,8 +625,145 @@ def test_save_time_django_validation_error_uses_flat_mapper_not_detail():
             {"name": "OK", "category": category.pk},
         )
     assert isinstance(result, list)
-    # The Django mapper keys to the model field name `name` (NOT a DRF `.detail` read).
+    # The flat Django mapper reads `error_dict` (NOT a DRF `.detail`); the model name `name`
+    # is the serializer field `name`, whose GraphQL input name is also `name`.
     assert [(fe.field, fe.messages) for fe in result] == [("name", ["django save-time"])]
+
+
+@pytest.mark.django_db
+def test_save_time_django_validation_error_keys_a_source_rename_to_its_input_name():
+    """A save-time Django error on a `source`-renamed field keys to the GraphQL input name.
+
+    `full_name = CharField(source="name")` exposes input `fullName`; a Django
+    `ValidationError` raised during `save()` names the MODEL field `name`, which re-keys
+    through `spec.source` to `fullName`. A model field no input exposes keeps its name.
+    """
+
+    class RenamedRaisingSerializer(serializers.ModelSerializer[product_models.Item]):
+        full_name = serializers.CharField(source="name")
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = ("full_name", "category")
+
+        @override
+        def save(self, **kwargs: object):
+            raise DjangoValidationError(
+                {"name": ["bad name"], "description": ["bad description"]},
+            )
+
+    category = product_models.Category.objects.create(name="DjRenameCat")
+    mutation_cls = _bind_item_serializer_mutation(RenamedRaisingSerializer)
+    request = HttpRequest()
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
+    # AbstractBaseUser | AnonymousUser
+    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+
+    with write_pipeline("default", lock=False):
+        result = serializer_resolvers._serializer_write_step(
+            mutation_cls,
+            info,
+            None,
+            {"full_name": "OK", "category": category.pk},
+        )
+    assert isinstance(result, list)
+    assert [(fe.field, fe.path, fe.messages) for fe in result] == [
+        ("fullName", ["fullName"], ["bad name"]),
+        ("description", ["description"], ["bad description"]),
+    ]
+
+
+@pytest.mark.django_db
+def test_save_time_django_validation_error_keys_a_serializer_only_field_to_its_input_name():
+    """A save-time Django error on a serializer-only input field keys to that field's input name.
+
+    ``review_note`` is a write-only serializer field with no ``Item`` column behind it, so
+    there is no model field to read names from; the field's own name still maps to its
+    input ``reviewNote``.
+    """
+
+    class NoteRaisingSerializer(serializers.ModelSerializer[product_models.Item]):
+        review_note = serializers.CharField(write_only=True)
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = ("name", "category", "review_note")
+
+        @override
+        def save(self, **kwargs: object):
+            raise DjangoValidationError({"review_note": ["bad note"]})
+
+    category = product_models.Category.objects.create(name="DjNoteCat")
+    mutation_cls = _bind_item_serializer_mutation(NoteRaisingSerializer)
+    request = HttpRequest()
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
+    # AbstractBaseUser | AnonymousUser
+    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+
+    with write_pipeline("default", lock=False):
+        result = serializer_resolvers._serializer_write_step(
+            mutation_cls,
+            info,
+            None,
+            {"name": "OK", "category": category.pk, "review_note": "n"},
+        )
+    assert isinstance(result, list)
+    assert [(fe.field, fe.path, fe.messages) for fe in result] == [
+        ("reviewNote", ["reviewNote"], ["bad note"]),
+    ]
+
+
+@pytest.mark.django_db
+def test_save_time_django_validation_error_keeps_each_fields_own_column_name():
+    """A field's own source name beats another field's column-name alias for the same FK.
+
+    ``category`` (the FK) and ``category_ref`` (``source="category_id"``, its column) both
+    answer to ``category`` and ``category_id``. Each field's own source is its primary
+    name, so ``category`` reports ``categoryId`` and ``category_id`` reports
+    ``categoryRefId``; neither is displaced by the other field's alias.
+    """
+
+    class ColumnRefRaisingSerializer(serializers.ModelSerializer[product_models.Item]):
+        category_ref = serializers.PrimaryKeyRelatedField(
+            source="category_id",
+            queryset=product_models.Category.objects.all(),
+        )
+
+        # basedpyright: DRF stubs declare ModelSerializer.Meta; the runtime class has none to subclass
+        class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
+            model = product_models.Item
+            fields = ("name", "category", "category_ref")
+
+        @override
+        def save(self, **kwargs: object):
+            raise DjangoValidationError(
+                {"category": ["on the FK"], "category_id": ["on the column"]},
+            )
+
+    category = product_models.Category.objects.create(name="DjColumnRefCat")
+    mutation_cls = _bind_item_serializer_mutation(ColumnRefRaisingSerializer)
+    request = HttpRequest()
+    # basedpyright: a duck-typed stand-in user; django-stubs types request.user as
+    # AbstractBaseUser | AnonymousUser
+    request.user = SimpleNamespace(username="u", is_authenticated=True)  # pyright: ignore[reportAttributeAccessIssue]
+    info = _as_strawberry_info(SimpleNamespace(context=SimpleNamespace(request=request)))
+
+    with write_pipeline("default", lock=False):
+        result = serializer_resolvers._serializer_write_step(
+            mutation_cls,
+            info,
+            None,
+            {"name": "OK", "category": category.pk, "category_ref": category.pk},
+        )
+    assert isinstance(result, list)
+    assert [(fe.field, fe.messages) for fe in result] == [
+        ("categoryId", ["on the FK"]),
+        ("categoryRefId", ["on the column"]),
+    ]
 
 
 @pytest.mark.django_db

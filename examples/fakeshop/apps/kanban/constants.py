@@ -328,6 +328,7 @@ TRACKED_FILE_PATHS = (
     "tests/utils/test_context.py",
     "tests/utils/test_converters.py",
     "tests/utils/test_directives.py",
+    "tests/utils/test_error_keys.py",
     "tests/utils/test_errors.py",
     "tests/utils/test_execution_mode.py",
     "tests/utils/test_imports.py",

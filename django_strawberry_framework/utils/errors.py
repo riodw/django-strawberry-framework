@@ -8,6 +8,10 @@ flavors):
 - ``field_error`` - the single ``FieldError`` leaf constructor;
 - ``relation_field_error`` - the uniform relation-decode error;
 - ``validation_error_to_field_errors`` - the Django ``ValidationError`` mapper;
+- ``build_error_key_map`` / ``rekey_error_segment`` / ``ErrorKeyMap`` - the one
+  key map every flavor uses to report a validator-origin error under the
+  GraphQL input field the client sent (``categoryId``, not ``category``), and
+  ``model_field_error_names`` - every name Django keys one model field's errors by;
 - ``integrity_error_field_errors`` - the save-time ``IntegrityError`` envelope;
 - ``join_error_path`` - dotted GraphQL error-path joining for nested
   flatteners;
@@ -32,12 +36,23 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.db import models
 from django.utils.functional import Promise
 
 from ..exceptions import _safe_text, _unprintable
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import TypeAlias
+
     from ..mutations.inputs import FieldError
+    from .inputs import InputFieldSpec
+    from .typing import ModelField
+
+    #: The recursive error key map: validator-side name (a model field, form field,
+    #: serializer field or serializer ``source``) -> (the GraphQL input field name,
+    #: the nested level's own map or ``None``). Built by ``build_error_key_map``.
+    ErrorKeyMap: TypeAlias = "dict[str, tuple[str, ErrorKeyMap | None]]"
 
 __all__ = [
     "FIELD_ERROR_CODE_CONFLICT",
@@ -50,12 +65,15 @@ __all__ = [
     "FILTER_INVALID_ERROR_CODE",
     "GLOBALID_INVALID_ERROR_CODE",
     "GLOBALID_UNVALIDATABLE_ERROR_CODE",
+    "build_error_key_map",
     "coded_error_extensions",
     "empty_validation_error",
     "field_error",
     "integrity_error_field_errors",
     "join_error_path",
+    "model_field_error_names",
     "null_field_error",
+    "rekey_error_segment",
     "relation_field_error",
     "validation_error_to_field_errors",
 ]
@@ -347,7 +365,90 @@ def relation_field_error(graphql_name: str) -> FieldError:
     )
 
 
-def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
+def build_error_key_map(
+    specs: Iterable[InputFieldSpec],
+    *,
+    keys_of: Callable[[InputFieldSpec], tuple[str, ...]] | None = None,
+) -> ErrorKeyMap:
+    """Build the recursive error key map from a mutation's bind-stashed input specs.
+
+    ``{validator-side name: (spec.graphql_name, child_map | None)}``: each
+    validator-side name in ``keys_of(spec)`` maps to the spec's GraphQL name, or
+    ``spec.target_name`` alone does when ``keys_of`` is ``None`` (the form field
+    name on the form path, the declared serializer field name on the DRF path).
+    The first name ``keys_of`` returns is the spec's primary name; the rest are
+    aliases (a forward relation's ``attname``); no names means no entry.
+    The model flavor passes ``model_field_error_names`` of the column behind
+    ``spec.input_attr`` (``category`` and ``category_id`` for input
+    ``categoryId``); the serializer's save-time Django ``ValidationError`` passes
+    the same names for the model field behind ``spec.source or spec.target_name``.
+    A nested field's ``child_map`` is the same map built over its
+    ``nested_specs`` with the same ``keys_of``, so a nested error re-keys at
+    every depth; every other field's is ``None``.
+
+    Primary names win: every spec's primary name is entered first, and an alias
+    only fills a name no primary claimed. Two specs can share names - a
+    serializer field over the FK ``category`` and another whose ``source`` is
+    its ``category_id`` both resolve to ``("category", "category_id")`` - and
+    then each primary name keeps its own spec's GraphQL name, while a name that
+    is only an alias goes to the first spec listing it. Each flavor's build
+    guards reject two inputs sharing one GraphQL name. A field the input does
+    not expose has no entry, so an error on it keeps its validator-side name
+    (``rekey_error_segment``).
+    """
+    entries: list[tuple[tuple[str, ...], tuple[str, ErrorKeyMap | None]]] = []
+    for spec in specs:
+        child = (
+            build_error_key_map(spec.nested_specs, keys_of=keys_of)
+            if spec.nested_specs is not None
+            else None
+        )
+        names = keys_of(spec) if keys_of is not None else (spec.target_name,)
+        entries.append((names, (spec.graphql_name, child)))
+    result: ErrorKeyMap = {names[0]: value for names, value in entries if names}
+    for names, value in entries:
+        for alias in names[1:]:
+            result.setdefault(alias, value)
+    return result
+
+
+def model_field_error_names(field: ModelField) -> tuple[str, ...]:
+    """Return every name Django keys one model field's validation errors by.
+
+    ``field.name`` always, and a forward relation's ``attname`` (``category_id``
+    beside ``category``) too: ``validate_constraints()`` keys a single-field
+    constraint error by the name the constraint lists, which may be the
+    ``attname``, and a model ``clean()`` may raise under either spelling.
+    Django's field-clash check forbids any other field from being named a
+    relation's ``attname``, so both names identify this one field.
+    """
+    if isinstance(field, models.Field) and field.attname != field.name:
+        return (field.name, field.attname)
+    return (field.name,)
+
+
+def rekey_error_segment(key: str, key_map: ErrorKeyMap | None) -> tuple[str, ErrorKeyMap]:
+    """Re-key ONE error-path segment to its GraphQL input name; return the child level's map.
+
+    The ``"__all__"`` sentinel is checked before the map and never re-keyed (a
+    Django field name cannot contain ``__``, so no field can claim it). A mapped
+    name returns its GraphQL name and its nested child map (``{}`` when the field
+    is not nested). An unmapped key (a numeric index, a field the input does not
+    expose) and a ``None`` map both keep the key verbatim with no child map.
+    """
+    if key == NON_FIELD_ERRORS:
+        return key, {}
+    mapped = key_map.get(key) if key_map else None
+    if mapped is None:
+        return key, {}
+    graphql_name, child_map = mapped
+    return graphql_name, (child_map or {})
+
+
+def validation_error_to_field_errors(
+    exc: ValidationError,
+    key_map: ErrorKeyMap | None = None,
+) -> list[FieldError]:
     """Map a Django ``ValidationError`` to the ``FieldError`` envelope (spec-036 Decision 7).
 
     Uses ``exc.error_dict`` when present (per-field), keying the model's
@@ -355,10 +456,18 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     ``"__all__"`` in ``mutations/inputs.py`` - the single source) so a
     multi-field-constraint error surfaces under ``"__all__"``. Falls back to
     ``exc.messages`` under the sentinel for a non-dict ``ValidationError``. The
-    single source for both the ``full_clean()`` failure and the
+    single source for the ``full_clean()`` failure, the ``form.errors`` mapping,
+    the serializer's save-time Django ``ValidationError`` and the
     ``IntegrityError``-race fallback mapping. Both leaves are built through the
     shared ``field_error`` leaf ctor so the sentinel + message coercion stay
     single-sited with the recursive DRF flattener.
+
+    **Keying:** each ``error_dict`` name passes through ``rekey_error_segment``
+    with ``key_map`` (``build_error_key_map``), so a write flavor reports a
+    validator error under the GraphQL input field the client sent; a field the
+    input does not expose keeps its validator-side name. ``None`` keys every
+    name verbatim (a caller with no generated input, such as a service-layer
+    error mapped into an envelope).
     """
     try:
         error_dict = exc.error_dict
@@ -386,7 +495,11 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
                     continue
                 field_name, field_errors = unpacked
                 normalized_name = _safe_text(field_name)
-                path = "" if normalized_name == NON_FIELD_ERRORS else normalized_name
+                path = (
+                    ""
+                    if normalized_name == NON_FIELD_ERRORS
+                    else rekey_error_segment(normalized_name, key_map)[0]
+                )
                 if isinstance(field_errors, _TEXT_ATOM_TYPES):
                     field_error_items: tuple[object, ...] = (field_errors,)
                 else:

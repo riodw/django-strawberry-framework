@@ -1462,7 +1462,7 @@ def test_register_write_step_none_password_defense_in_depth():
         [],
         None,
     )
-    errors = _register_write_step(None, decoded)
+    errors = _register_write_step(DjangoMutation, None, decoded)
     assert isinstance(errors, list)
     assert len(errors) == 1
     assert errors[0].field == "password"
@@ -1549,12 +1549,69 @@ def test_register_write_step_non_str_password_defense_in_depth(bad_password: obj
         [],
         bad_password,
     )
-    errors = _register_write_step(None, decoded)
+    errors = _register_write_step(DjangoMutation, None, decoded)
     assert isinstance(errors, list)
     assert len(errors) == 1
     assert errors[0].field == "password"
     assert errors[0].codes == ["invalid"]
     assert "Invalid password" in errors[0].messages[0]
+
+
+@pytest.mark.django_db
+def test_register_full_clean_errors_key_to_the_input_fields_sent(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A register ``full_clean()`` error keys to the ``RegisterInput`` field the client sent.
+
+    A user model whose ``REQUIRED_FIELDS`` names ``first_name`` exposes it as
+    ``firstName``. An over-long value fails the model's own ``max_length`` check in the
+    shared model tail, and the error comes back as ``firstName``, never the model field
+    name ``first_name``; the password error keys to ``password`` by the same rule.
+    """
+    monkeypatch.setattr(User, "REQUIRED_FIELDS", ["email", "first_name"])
+    _declare_user_type()
+
+    @strawberry.type
+    class Mutation:
+        register = register_mutation(permission_classes=[_AllowAll])
+
+    schema = _finalize_schema(Mutation)
+    query = (
+        "mutation($d: RegisterInput!){ register(data: $d){ node{ username } "
+        "errors{ field path codes } } }"
+    )
+    too_long = schema.execute_sync(
+        query,
+        variable_values={
+            "d": {
+                "username": "keyed_first_name",
+                "email": "keyed@example.com",
+                "firstName": "x" * 200,
+                "password": "S0me-long-pass-phrase-9",
+            },
+        },
+    )
+    assert too_long.errors is None, too_long.errors
+    assert too_long.data is not None
+    assert too_long.data["register"] == {
+        "node": None,
+        "errors": [{"field": "firstName", "path": ["firstName"], "codes": ["max_length"]}],
+    }
+    weak = schema.execute_sync(
+        query,
+        variable_values={
+            "d": {
+                "username": "keyed_password",
+                "email": "keyed@example.com",
+                "firstName": "ok",
+                "password": "1",
+            },
+        },
+    )
+    assert weak.errors is None, weak.errors
+    assert weak.data is not None
+    assert [error["field"] for error in weak.data["register"]["errors"]] == ["password"]
+    assert not User.objects.filter(username__startswith="keyed_").exists()
 
 
 # ===========================================================================

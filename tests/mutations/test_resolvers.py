@@ -1157,8 +1157,8 @@ def test_partial_update_validates_scalar_field_named_id_suffix():
     """A scalar field literally named ``<x>_id`` IS validated on partial update (spec-036).
 
     ``TaggedItem.object_id`` is a scalar ``PositiveIntegerField``. A partial update
-    providing an invalid value (``-5``) must surface as a field-keyed ``FieldError``
-    on ``object_id`` from ``full_clean`` - NOT skipped from validation (which the
+    providing an invalid value (``-5``) must surface as a ``FieldError`` from
+    ``full_clean`` keyed to the ``objectId`` input the client sent - NOT skipped from validation (which the
     old ``_id`` suffix-strip caused: ``object_id`` was mangled to ``object``, read
     as unprovided, excluded from ``full_clean``, and the invalid value slipped to
     the DB as a mis-labeled ``IntegrityError`` / ``"__all__"`` envelope).
@@ -1185,11 +1185,11 @@ def test_partial_update_validates_scalar_field_named_id_suffix():
     assert res.errors is None, res.errors
     assert res.data is not None
     payload = res.data["updateTaggedItem"]
-    # The invalid scalar surfaces as a field-keyed FieldError on ``object_id`` -
+    # The invalid scalar surfaces as a FieldError keyed to the ``objectId`` input -
     # NOT a swallowed write, NOT a mis-labeled ``"__all__"`` uniqueness envelope.
     assert payload["node"] is None
     fields = [e["field"] for e in payload["errors"]]
-    assert "object_id" in fields, payload["errors"]
+    assert "objectId" in fields, payload["errors"]
     assert NON_FIELD_ERROR_KEY not in fields, payload["errors"]
     # The invalid value never reached the DB.
     tagged.refresh_from_db()
@@ -1799,7 +1799,7 @@ def test_assign_m2m_integrity_error_contained_in_envelope():
     ):
         decoded: _ModelDecoded = (cat, [("fake_m2m", [1, 2])], [])
         with managed_write_transaction("default"), open_write_pipeline(CreateCategoryMutation):
-            errors = resolvers._model_write_step(None, decoded)
+            errors = resolvers._model_write_step(CreateCategoryMutation, None, decoded)
         assert isinstance(errors, list)
         assert len(errors) == 1
         assert errors[0].field == NON_FIELD_ERROR_KEY

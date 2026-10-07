@@ -1416,6 +1416,35 @@ class UpdateBookViaCustomInput(DjangoMutation):
         permission_classes = []
 
 
+@strawberry.input
+class PublisherRenamedName:
+    """Consumer ``Meta.input_class`` override exposing ``Publisher.name`` as ``publisherName``.
+
+    A rename has no casing relation to the model field, so it shows that every error on
+    the field - the input decode's and ``full_clean()``'s alike - keys to the GraphQL input
+    name the client sent, not to the model field ``name``.
+    """
+
+    name: str = strawberry.field(name="publisherName")
+
+
+class CreatePublisher(DjangoMutation):
+    """Create a ``Publisher`` through a renaming ``Meta.input_class`` override.
+
+    ``Publisher.name`` and ``Publisher.house_code`` are both unique, so a duplicate of
+    either fails ``full_clean()``: the ``name`` error keys to the renamed
+    ``publisherName`` and the ``house_code`` error to ``houseCode``.
+    ``permission_classes = []`` (the allow-any opt-out) keeps the path under test the
+    error keying, not write-auth.
+    """
+
+    class Meta:
+        model = models.Publisher
+        operation = "create"
+        input_class = PublisherRenamedName
+        permission_classes = []
+
+
 class CreateBranchWithShelf(DjangoFormMutation):
     """A plain ``DjangoFormMutation`` whose ``perform_mutate`` runs a custom multi-row write.
 
@@ -2105,6 +2134,7 @@ class Mutation:
     update_book_via_form = DjangoMutationField(UpdateBookViaForm)
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
     update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)
+    create_publisher = DjangoMutationField(CreatePublisher)
     create_branch_with_shelf = DjangoMutationField(CreateBranchWithShelf)
     create_branch_pair = DjangoMutationField(CreateBranchPair)
     create_shelf_via_serializer = DjangoMutationField(CreateShelfViaSerializer)

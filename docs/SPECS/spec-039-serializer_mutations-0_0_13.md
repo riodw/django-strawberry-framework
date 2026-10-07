@@ -1030,12 +1030,14 @@ update — a DRF behavior pinned to the verified floor, [Decision 12](#decision-
   finalization, naming the offending key.
 - A `serializer.is_valid()` failure populates the
   [`FieldError` envelope][glossary-fielderror-envelope] (a null-object payload),
-  **not** a top-level `GraphQLError`. A serializer field error keys to the serializer
-  field name; a `validate()` / `non_field_errors` error keys to the `"__all__"`
-  sentinel. A `ValidationError` raised at **`serializer.save()`** time (a custom
-  `create()` / `update()`, or a model-level `full_clean()`) maps the **same** way —
-  its `.detail` runs through the same recursive flattener into the envelope, never a
-  top-level error ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
+  **not** a top-level `GraphQLError`. A serializer field error keys to the GraphQL input
+  field the client sent (a field the input does not expose keeps its serializer field
+  name); a `validate()` / `non_field_errors` error keys to the `"__all__"` sentinel. A
+  `ValidationError` raised at **`serializer.save()`** time (a custom `create()` /
+  `update()`, or a model-level `full_clean()`) lands in the same envelope under the same
+  keys, never a top-level error — a DRF one's `.detail` through the recursive flattener, a
+  Django one through the flat mapper with its model field names re-keyed to the input
+  names ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload)
   step 6).
 - A write the caller is not authorized to perform
   ([`DjangoModelPermission`][glossary-djangomodelpermission] / `check_permission`
@@ -1966,8 +1968,11 @@ The pipeline steps:
    - **Django `ValidationError`** (`django.core.exceptions.ValidationError`): route through
      the flat `036` `utils/errors.py::validation_error_to_field_errors`,
      which already reads Django's `error_dict` / `messages` shape (verified — it does **not**
-     read `.detail`); pushing a Django error through the DRF `.detail` path would
-     `AttributeError` or silently lose structure.
+     read `.detail`), with the save-time key map that re-keys each model field name
+     (the field behind `spec.source or spec.target_name`, and a forward relation's
+     `attname`) to its GraphQL input name ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-re-fetch--payload));
+     pushing a Django error through the DRF `.detail` path would `AttributeError` or
+     silently lose structure.
    - **`IntegrityError`** (a concurrent-uniqueness race / residual db constraint): the
      shared `utils/errors.py::integrity_error_field_errors` leaf, the same envelope the
      `036` `save_or_field_errors` wrapper produces.
@@ -2015,24 +2020,40 @@ would hit. The flattener is the serializer-flavor analog of the model/form
 envelope.
 
 **Error field names are keyed to the GraphQL input path, not the serializer path.**
-`serializer.errors` keys are **serializer field names** (`category`, `name`), but a
-client submitted **GraphQL input names** (`categoryId`, `fullName`). The flattener maps
-each leaf path's **root segment back through the reverse map** to the GraphQL input name
+This is the rule every flavor follows (`spec-036` Decision 7): a decode error,
+`serializer.errors`, and a validator error (`full_clean()`, `form.errors`, a Django
+`ValidationError` raised during a serializer save) all key to the GraphQL input field
+the client sent. `serializer.errors` keys are **serializer field names** (`category`,
+`full_name`), but a client submitted **GraphQL input names** (`categoryId`, `fullName`).
+The flattener maps each path segment **through the key map** to the GraphQL input name
 when that serializer field has a generated input field — so a validation error on
-`category` is reported as `FieldError(field="categoryId")` and a renamed `name`
-(`source`-renamed `fullName`) as `FieldError(field="fullName")`, **aligning the envelope
-with the relation-decode errors of step 3** (which already key by the submitted input
-name) and with what the client can act on. The `"__all__"` non-field sentinel is
-preserved as-is (it has no input field). **If an error references a serializer field with
-no input field in the surface** — a field the serializer still validates but the mutation
-did not expose (narrowed out, or read-only-but-still-validated) — the **serializer field
-name is kept**, because there is no GraphQL input path to report; this is the one case the
-envelope key is a serializer name. **The re-keying runs at every depth, not only the root**
-(`_rekey_segment` over the recursive child maps `_build_reverse_map` derives from
-`InputFieldSpec.nested_specs`), so a nested child field, alias, or relation suffix reports
-its SDL name (`shelves.0.altBranches`, never `shelves.0.alt_branches`); numeric indexes, a
+`category` is reported as `FieldError(field="categoryId")` and `full_name` as
+`FieldError(field="fullName")`, **aligning the envelope with the relation-decode errors of
+step 3** (which already key by the submitted input name) and with what the client can act
+on. The `"__all__"` non-field sentinel is preserved as-is (it has no input field). **If an
+error references a field with no input field in the surface** — a field the serializer
+still validates but the mutation did not expose (narrowed out, or
+read-only-but-still-validated) — **its validator-side name is kept** (the serializer
+field name here, the model field name on the save-time Django branch below), because
+there is no GraphQL input path to report; a rename onto such a name lets two errors share
+one key, which is documented rather than refused. **The re-keying runs at every depth,
+not only the root**: the key map is the shared
+`django_strawberry_framework/utils/errors.py::build_error_key_map` over the bind-stashed
+specs, recursive over `InputFieldSpec.nested_specs`, and each segment re-keys through
+`django_strawberry_framework/utils/errors.py::rekey_error_segment` after the flattener
+normalizes DRF's `non_field_errors` bucket to `"__all__"`
+(`django_strawberry_framework/rest_framework/resolvers.py::_error_node_children`), so a
+nested child field, alias, or relation suffix reports its SDL name
+(`shelves.0.altBranches`, never `shelves.0.alt_branches`); numeric indexes, a
 `JSONField`'s own keys, and the `"__all__"` non-field sentinel are preserved as they are.
-The
+**A Django `ValidationError` raised during `save()` keys the same way:** it names MODEL
+fields, so its key map is built from the model field behind `spec.source or spec.target_name`
+(its name and, for a forward relation, its `attname`, via
+`django_strawberry_framework/utils/errors.py::model_field_error_names`;
+`django_strawberry_framework/rest_framework/resolvers.py::_save_time_error_key_map`),
+and a model `name` behind `full_name = CharField(source="name")` reports as `fullName`,
+a model `category_id` behind the `category` relation as `categoryId`.
+Every key map is built on the failure branch only; a successful write builds none. The
 choice is locked by a **live renamed-field error test** ([Test plan](#test-plan)), not only
 a plain `name` error, so decode errors, validation errors, and renamed-field errors all
 agree on the key space.

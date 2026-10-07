@@ -86,8 +86,9 @@ The serializer-specific invariants this module owns:
   write. Routing is by exception CLASS, all caught OUTSIDE the atomic
   block: a DRF ``serializers.ValidationError``'s ``.detail`` -> the recursive
   flattener; a Django ``ValidationError`` -> the flat ``036`` mapper
-  (``error_dict`` / ``messages``, NEVER ``.detail``); an ``IntegrityError`` ->
-  the shared ``036`` integrity mapper - three separate ``except`` branches (DRF
+  (``error_dict`` / ``messages``, NEVER ``.detail``), its model-side names
+  (``spec.source or spec.target_name``) re-keyed to the GraphQL input names; an
+  ``IntegrityError`` -> the shared ``036`` integrity mapper - three separate ``except`` branches (DRF
   first), never a top-level ``GraphQLError``.
 
 - **The re-fetch rides the ``036`` ``refetch_optimized`` G2 path** (spec-039 Decision 9 /
@@ -129,6 +130,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files import File
 from django.db import IntegrityError, transaction
+from django.db.models import Field as DjangoModelField
 from django.db.models.signals import post_save, pre_save
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -144,10 +146,13 @@ from ..mutations.sets import backing_model_of
 from ..utils.errors import (
     FIELD_ERROR_CODE_INVALID,
     FIELD_ERROR_CODE_TRUNCATED,
+    build_error_key_map,
     empty_validation_error,
     field_error,
     integrity_error_field_errors,
     join_error_path,
+    model_field_error_names,
+    rekey_error_segment,
     validation_error_to_field_errors,
 )
 from ..utils.inputs import optional_input_field
@@ -198,14 +203,12 @@ if TYPE_CHECKING:
 
     from ..mutations.resolvers import _AsyncResolverEntry, _SyncResolverEntry
     from ..mutations.sets import _ValidatedMutationMeta
+    from ..utils.errors import ErrorKeyMap
     from ..utils.inputs import InputFieldSpec
     from ..utils.typing import ForeignKeyField, ModelField
     from .serializer_converter import DRFField, DRFSerializer
     from .sets import SerializerMutation
 
-    # The recursive error re-keying map ``_build_reverse_map`` builds: serializer field
-    # name -> (GraphQL input name, the nested level's own map or ``None``).
-    _ReverseMap: TypeAlias = "dict[str, tuple[str, _ReverseMap | None]]"
     # One relation's ``run_validation``-time capture: (object, pk, database alias).
     _RelationIdentity: TypeAlias = tuple[object, object, object]
     # A single relation's capture, or one capture per row of a many relation.
@@ -468,7 +471,7 @@ def _decode_nested(
 
 def serializer_errors_to_field_errors(
     errors: object,
-    reverse_map: _ReverseMap,
+    key_map: ErrorKeyMap,
     *,
     prefix: str = "",
 ) -> list[FieldError]:
@@ -484,18 +487,18 @@ def serializer_errors_to_field_errors(
 
     - a **dict** recurses each key, joining the dotted path (``items.0.name``); each key is
       RE-KEYED to its GraphQL name AS IT DESCENDS (not only the root),
-      using the RECURSIVE ``reverse_map``, so a nested child field / alias / relation suffix
+      using the RECURSIVE ``key_map``, so a nested child field / alias / relation suffix
       reports its GraphQL name (``shelves.0.altBranches``, not ``shelves.0.alt_branches``).
       DRF's ``non_field_errors`` key (``NON_FIELD_ERRORS_KEY`` = ``api_settings.NON_FIELD_ERRORS_KEY``,
       default ``"non_field_errors"``) normalizes to the ``"__all__"`` sentinel segment at THAT
       level - so a top-level bucket becomes the bare ``"__all__"`` and a nested one
       ``<path>.__all__``;
     - a **list of dicts/lists** recurses each child under its NUMERIC index (``items.0``),
-      carrying the SAME level reverse map (the list items are the same nested serializer);
+      carrying the SAME level key map (the list items are the same nested serializer);
     - a **list of leaf messages** (the common ``{field: ["msg", ...]}`` shape) is ONE
       ``FieldError`` for the (already-re-keyed) path with the whole message list.
 
-    ``reverse_map`` is the RECURSIVE reverse map from ``_build_reverse_map`` -
+    ``key_map`` is the RECURSIVE key map from ``utils/errors.py::build_error_key_map`` -
     ``{serializer field name: (GraphQL input name, child_map | None)}`` - so each nesting level
     re-keys with its OWN field map. A segment with no entry (a numeric index, the ``"__all__"``
     sentinel, or a non-mapped field) is kept verbatim.
@@ -510,13 +513,13 @@ def serializer_errors_to_field_errors(
     caps pathological fan-out - when exceeded, the flattened list ends with one ``"__all__"``
     ``truncated`` marker instead of unbounded work.
     """
-    children = _error_node_children(errors, reverse_map, prefix)
+    children = _error_node_children(errors, key_map, prefix)
     if children is None:
         return [_error_leaf(errors, prefix)]
     flattened: list[FieldError] = []
     budget = _ERROR_FLATTEN_NODE_BUDGET
     active: set[int] = {id(errors)}
-    frames: list[tuple[object, Iterator[tuple[object, _ReverseMap, str]]]] = [
+    frames: list[tuple[object, Iterator[tuple[object, ErrorKeyMap, str]]]] = [
         (errors, iter(children)),
     ]
     while frames:
@@ -563,14 +566,16 @@ _ERROR_FLATTEN_NODE_BUDGET = 10_000
 
 def _error_node_children(
     errors: object,
-    reverse_map: _ReverseMap,
+    key_map: ErrorKeyMap,
     prefix: str,
-) -> list[tuple[object, _ReverseMap, str]] | None:
+) -> list[tuple[object, ErrorKeyMap, str]] | None:
     """Expand one error node into ``(child, child_map, child_prefix)`` entries, or ``None`` for a leaf.
 
     The single expansion rule the iterative flattener walks: a **dict** re-keys each key to its
-    GraphQL name AS IT DESCENDS (not only the root) via ``_rekey_segment``
-    with the level's own reverse map; a **list containing dicts / lists** indexes each child
+    GraphQL name AS IT DESCENDS (not only the root) via the shared
+    ``utils/errors.py::rekey_error_segment`` with the level's own key map, after normalizing
+    DRF's non-field bucket (``_DRF_NON_FIELD_KEY``) to the ``"__all__"`` sentinel segment with
+    no child map; a **list containing dicts / lists** indexes each child
     under its numeric position, carrying the SAME level map (the items are the same nested
     serializer; a mixed list never occurs in DRF's shape, but the guard keeps a stray leaf from
     dropping). Anything else - a list of leaf messages, a bare string, an ``ErrorDetail`` - is a
@@ -578,14 +583,19 @@ def _error_node_children(
     """
     if isinstance(errors, dict):
         error_map: dict[object, object] = errors
-        children: list[tuple[object, _ReverseMap, str]] = []
+        children: list[tuple[object, ErrorKeyMap, str]] = []
         for key, value in error_map.items():
-            segment, child_map = _rekey_segment(str(key), reverse_map)
+            name = str(key)
+            segment, child_map = (
+                (NON_FIELD_ERROR_KEY, {})
+                if name == _DRF_NON_FIELD_KEY
+                else rekey_error_segment(name, key_map)
+            )
             children.append((value, child_map, join_error_path(prefix, segment)))
         return children
     if isinstance(errors, list) and any(isinstance(item, (dict, list)) for item in errors):
         return [
-            (item, reverse_map, join_error_path(prefix, str(index)))
+            (item, key_map, join_error_path(prefix, str(index)))
             for index, item in enumerate(errors)
         ]
     return None
@@ -631,40 +641,6 @@ def _error_detail_codes(errors: object) -> list[str]:
         return [code for code in (getattr(item, "code", None) for item in errors) if code]
     code = getattr(errors, "code", None)
     return [code] if code else []
-
-
-def _rekey_segment(key: str, reverse_map: _ReverseMap) -> tuple[str, _ReverseMap]:
-    """Re-key ONE dict segment to its GraphQL name + return the CHILD level's reverse map.
-
-    The DRF non-field bucket normalizes to the ``"__all__"`` sentinel (with no child map); a
-    reverse-mapped serializer field returns its GraphQL name + its nested child map (``{}`` when
-    the field is not itself nested); an unmapped key (a numeric index reached as a dict key, or a
-    non-input field) is kept verbatim with no child map. So each nesting level re-keys with its
-    OWN field map, not only the root.
-    """
-    if key == _DRF_NON_FIELD_KEY:
-        return NON_FIELD_ERROR_KEY, {}
-    mapped = reverse_map.get(key) if reverse_map else None
-    if mapped is None:
-        return key, {}
-    graphql_name, child_map = mapped
-    return graphql_name, (child_map or {})
-
-
-def _build_reverse_map(specs: Iterable[InputFieldSpec]) -> _ReverseMap:
-    """Build the RECURSIVE reverse map from the bind-stashed input specs.
-
-    ``{serializer field name (spec.target_name): (GraphQL input name (spec.graphql_name),
-    child_map | None)}`` - a nested field's ``child_map`` is the recursive reverse map of its
-    ``nested_specs``, so ``serializer_errors_to_field_errors`` re-keys nested child fields /
-    aliases / relation suffixes to their GraphQL names at every depth (not just the root). A
-    non-nested field has ``child_map=None``.
-    """
-    result: _ReverseMap = {}
-    for spec in specs:
-        child = _build_reverse_map(spec.nested_specs) if spec.nested_specs is not None else None
-        result[spec.target_name] = (spec.graphql_name, child)
-    return result
 
 
 def _upload_metadata(item: _FileAny) -> UploadMetadata:
@@ -2318,12 +2294,13 @@ def _serializer_write_step(
     ``except`` branches (DRF first), all caught OUTSIDE the atomic block: a DRF
     ``serializers.ValidationError``'s ``.detail`` -> the recursive flattener; a
     Django ``ValidationError`` -> the flat ``036`` mapper (``error_dict`` /
-    ``messages``, never ``.detail``); an ``IntegrityError`` -> the shared ``036``
-    integrity mapper - never a top-level ``GraphQLError`` at the write.
+    ``messages``, never ``.detail``) keyed through ``_save_time_error_key_map``; an
+    ``IntegrityError`` -> the shared ``036`` integrity mapper - never a top-level
+    ``GraphQLError`` at the write. Every validation branch builds its key map on
+    that failure path only; a successful write never builds one.
     """
     # Class validation gated ``Meta.serializer_class`` to a ``ModelSerializer`` subclass.
     serializer_class = cast("type[DRFSerializer]", mutation_cls._mutation_meta.serializer_class)
-    reverse_map = _build_reverse_map(mutation_cls._input_field_specs)
     pipeline = require_write_pipeline()
     alias = pipeline.alias
     # The authorized pk is an IMMUTABLE snapshot captured by the pipeline skeleton
@@ -2359,7 +2336,6 @@ def _serializer_write_step(
             instance,
             provided_data,
             serializer_class=serializer_class,
-            reverse_map=reverse_map,
             alias=alias,
             authorized_pk=authorized_pk,
             hook_context=hook_context,
@@ -2374,7 +2350,6 @@ def _guarded_serializer_write(
     provided_data: dict[str, object],
     *,
     serializer_class: type[DRFSerializer],
-    reverse_map: _ReverseMap,
     alias: str,
     authorized_pk: object,
     hook_context: SerializerHookContext,
@@ -2442,7 +2417,10 @@ def _guarded_serializer_write(
     ledger = _instrument_relation_intent(mutation_cls, serializer)
 
     if not serializer.is_valid():
-        return serializer_errors_to_field_errors(serializer.errors, reverse_map)
+        return serializer_errors_to_field_errors(
+            serializer.errors,
+            build_error_key_map(mutation_cls._input_field_specs),
+        )
 
     # PROVE the final ``validated_data`` still carries the ledger-recorded objects
     # by IDENTITY (renamed sources, injected fields, single relations, lists, and
@@ -2502,9 +2480,12 @@ def _guarded_serializer_write(
         with transaction.atomic(using=alias):
             _do_save()
     except DRFValidationError as exc:
-        return serializer_errors_to_field_errors(exc.detail, reverse_map)
+        return serializer_errors_to_field_errors(
+            exc.detail,
+            build_error_key_map(mutation_cls._input_field_specs),
+        )
     except DjangoValidationError as exc:
-        return validation_error_to_field_errors(exc)
+        return validation_error_to_field_errors(exc, _save_time_error_key_map(mutation_cls))
     except IntegrityError:
         return integrity_error_field_errors()
     # The saved result is validated BEFORE the pipeline re-fetches / trusts it: correct model,
@@ -2525,6 +2506,38 @@ def _guarded_serializer_write(
         relation_pks=relation_pks,
     )
     return saved
+
+
+def _save_time_error_key_map(mutation_cls: type[SerializerMutation]) -> ErrorKeyMap:
+    """Build the key map for a Django ``ValidationError`` raised during ``serializer.save()``.
+
+    A Django error raised by custom ``create()`` / ``update()`` / model code keys by
+    MODEL field name, which is the serializer field's ``source`` when it declares one
+    (``full_name = CharField(source="name")``) and its declared name otherwise, so the
+    keys are ``model_field_error_names`` of the backing model field named
+    ``spec.source or spec.target_name`` (``category`` and ``category_id`` for a
+    forward relation); a name with no concrete model field behind it keys by itself.
+    The source names themselves never collide (the ownership check rejects two
+    writable fields over one source string), and each spec's own source is its
+    primary name, which ``build_error_key_map`` never lets another spec's alias
+    displace: with ``category`` and ``category_ref = PrimaryKeyRelatedField(
+    source="category_id")``, ``category`` keys to ``categoryId`` and ``category_id``
+    to ``categoryRefId``. A model field no input exposes keeps its name. Read only on
+    this failure path.
+    """
+    model_meta = backing_model_of(mutation_cls._mutation_meta)._meta
+
+    def model_names(spec: InputFieldSpec) -> tuple[str, ...]:
+        name = spec.source or spec.target_name
+        try:
+            field = model_meta.get_field(name)
+        except FieldDoesNotExist:
+            return (name,)
+        names = model_field_error_names(field) if isinstance(field, DjangoModelField) else ()
+        # The spec's own source leads (its primary name); the field's other names follow.
+        return (name, *(other for other in names if other != name))
+
+    return build_error_key_map(mutation_cls._input_field_specs, keys_of=model_names)
 
 
 def _serializer_decode_step(

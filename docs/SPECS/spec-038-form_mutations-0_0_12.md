@@ -325,9 +325,10 @@ package-internal; Slice 4 is the live consumer surface.
     with `files = provided_files`, then
     `form_class(**get_form_kwargs(info, data=, files=, instance=<row>))` (omitted
     fields preserved); **validate** via `form.is_valid()` — a failure maps
-    `form.errors` onto the [`FieldError` envelope][glossary-fielderror-envelope] (the
-    form's `NON_FIELD_ERRORS` bucket → the `"__all__"` sentinel `036` defined, via the
-    reused `validation_error_to_field_errors(ValidationError(form.errors.as_data()))`)
+    `form.errors` onto the [`FieldError` envelope][glossary-fielderror-envelope] (each
+    form field name re-keyed to the GraphQL input field the client sent, the form's
+    `NON_FIELD_ERRORS` bucket → the `"__all__"` sentinel `036` defined, via the reused
+    `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`)
     and returns a null-object payload; **write** via `form.save()` (`ModelForm`) /
     `perform_mutate` (plain form), **wrapped by the `036` `save_or_field_errors`
     `IntegrityError` → envelope mapper** (no top-level error at write); **re-fetch**
@@ -372,8 +373,8 @@ package-internal; Slice 4 is the live consumer surface.
     mutation; `categoryId` validating + writing through the form's `category` field;
     **partial-update preservation** (a `name`-only update preserves `category` /
     `description`, and `unique_item_per_category` fires on a one-field change); the
-    `form.errors` envelope (`clean_<field>` keyed to the field; the constraint error
-    keyed to `"__all__"`); write authorization; the visibility-scoped `update`; **a
+    `form.errors` envelope (`clean_<field>` keyed to the field's input name; the
+    constraint error keyed to `"__all__"`); write authorization; the visibility-scoped `update`; **a
     raw `django.test.Client` multipart upload** to a form-backed `Upload` field
     (the file-routing contract); and the plain `Form` mutation's **success**
     (`ok: true`) **and** validation-failure (`ok: false`, field-keyed `errors`) shapes.
@@ -661,7 +662,8 @@ natively — not via a raw model `setattr`
 reverse map). On success the payload's `node` is the saved object re-fetched and
 optimizer-planned for the response selection; on a `form.is_valid()` failure `node`
 is `null` and `errors` carries one [`FieldError`][glossary-fielderror-envelope] per
-offending field, with the form's `NON_FIELD_ERRORS` (cross-field `clean()`,
+offending field, keyed to the input field the client sent (`categoryId` for the form's
+`category`), with the form's `NON_FIELD_ERRORS` (cross-field `clean()`,
 model-constraint) bucket keyed to the `"__all__"` sentinel.
 
 **`update` is a true partial update.** `updateItemViaForm` takes
@@ -1352,11 +1354,19 @@ write flavor rides.
    `{field: [ValidationError, …]}` shape that
    [`utils/errors.py`][utils-errors]`::validation_error_to_field_errors`
    already consumes through its `error_dict` branch, so the form pipeline calls
-   `validation_error_to_field_errors(ValidationError(form.errors.as_data()))` — the
-   form's `NON_FIELD_ERRORS` bucket lands on the `"__all__"` sentinel
-   (`NON_FIELD_ERROR_KEY`) for free, byte-identical to a model `full_clean()` failure
-   (the same field-keyed flatten graphene-django's `ErrorType.from_errors(form.errors)`
-   produces). Returns a null-object payload.
+   `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`
+   — the form's `NON_FIELD_ERRORS` bucket lands on the `"__all__"` sentinel
+   (`NON_FIELD_ERROR_KEY`) for free, exactly as a model `full_clean()` failure does,
+   and each form field name is re-keyed to the GraphQL input field the client sent
+   (`category` → `categoryId`) through the key map
+   `django_strawberry_framework/utils/errors.py::build_error_key_map` builds over the
+   bind-stashed specs (a form spec's `target_name` is the form field name;
+   `django_strawberry_framework/forms/resolvers.py::_form_errors_to_field_errors`). A
+   form field the input does not expose (a `Meta.fields` narrowing) keeps its form field
+   name. This is graphene-django's `ErrorType.from_errors(form.errors)` outcome (the
+   error names the input the client sent), reached through a map rather than its
+   `CAMELCASE_ERRORS` casing, because an input name here is not always the camel-cased
+   form field name. Returns a null-object payload.
 5. **Write**: for a `ModelForm`, `form.save()` (commit=True; M2M written via the
    internal `save_m2m()`) returns the saved instance. For a plain `Form`,
    `perform_mutate(self, form, info)` runs the form's side effect per the pinned
@@ -1401,8 +1411,9 @@ helpers the runner composes are public, and live in three modules:
   `build_payload` (the uniform-slot envelope), and `save_or_field_errors` (the
   save-time `IntegrityError` → `FieldError` mapper reused per step 5, wrapping a
   zero-arg save callable).
-- [`utils/errors.py`][utils-errors] — `validation_error_to_field_errors` (the
-  validation-error mapper reused per step 4).
+- [`utils/errors.py`][utils-errors] — `validation_error_to_field_errors` and
+  `build_error_key_map` (the validation-error mapper and its input-name key map, reused
+  per step 4).
 - [`utils/write_values.py`][utils-write-values] — `raw_choice_value` (the choice-enum
   unwrap) alongside the relation-decode spine of step 3.
 
@@ -1741,7 +1752,8 @@ behavior reachable through `/graphql/`, package tests own internals.
 - **Live, over `/graphql/`** (Slice 4, [`test_products_api.py`][test-products-api],
   seeded via `seed_data` / `create_users`): `createItemViaForm` / `updateItemViaForm`
   happy paths; the `form.errors` envelope (a `clean_<field>` error keyed to the form
-  field, the `unique_item_per_category` `clean()` error keyed to `"__all__"`);
+  field's input name, an explicit `null` `categoryId` the form's own `required` error
+  on `categoryId`, the `unique_item_per_category` `clean()` error keyed to `"__all__"`);
   **`categoryId` validates and writes through the `ModelForm`'s `category` field**
   (not via model `setattr` — proving the reverse map); **partial-update
   preservation** — a `name`-only `updateItemViaForm` preserves `description` and
@@ -1985,9 +1997,9 @@ The completion contract.
    `files = provided_files`, then `form_class(**get_form_kwargs(…, instance=<located
    row>))` — so omitted scalar / FK / M2M / file values are preserved and
    `unique_item_per_category` validates on a one-field change. `form.errors` maps
-   onto the [`FieldError` envelope][glossary-fielderror-envelope] (`NON_FIELD_ERRORS` →
-   `"__all__"`, via the reused `validation_error_to_field_errors(ValidationError(
-   form.errors.as_data()))`); **the write is wrapped by the `036` `save_or_field_errors`
+   onto the [`FieldError` envelope][glossary-fielderror-envelope] (each form field keyed
+   to its input name, `NON_FIELD_ERRORS` → `"__all__"`, via the reused
+   `validation_error_to_field_errors(ValidationError(form.errors.as_data()), key_map)`); **the write is wrapped by the `036` `save_or_field_errors`
    `IntegrityError` → envelope mapper** (no top-level error on a save-time race);
    the `ModelForm` payload object is re-fetched through the
    `036` optimizer path (G2: `select_related` / `prefetch_related` kept, no

@@ -40,7 +40,10 @@ and the load-bearing invariants this module owns:
   lookup for ``update`` / ``delete``.
 - **``full_clean()`` feeds the ``FieldError`` envelope** (spec-036 Decision 7 /
   Decision 8 step 4): a ``ValidationError`` returns a null-object payload, never
-  an exception at the GraphQL boundary; on update, ``exclude`` is the unprovided
+  an exception at the GraphQL boundary, each error keyed to the GraphQL input
+  field the client sent (the model field name re-keyed through
+  ``utils/errors.py::build_error_key_map``; a field the input does not expose
+  keeps its model field name); on update, ``exclude`` is the unprovided
   field set MINUS any unprovided field co-participating in a constraint with a
   provided field. ``full_clean()`` runs ``validate_constraints``,
   so a ``UniqueConstraint`` duplicate is caught here as a ``ValidationError``
@@ -91,8 +94,10 @@ from ..utils.errors import (
     FIELD_ERROR_CODE_NOT_FOUND,
     FIELD_ERROR_CODE_NULL,
     FIELD_ERROR_CODE_PROTECTED,
+    build_error_key_map,
     field_error,
     integrity_error_field_errors,
+    model_field_error_names,
     null_field_error,
     validation_error_to_field_errors,
 )
@@ -141,6 +146,7 @@ if TYPE_CHECKING:
 
     from ..auth.mutations import _SealedAuthHolderMeta
     from ..types.base import DjangoType
+    from ..utils.errors import ErrorKeyMap
     from ..utils.inputs import InputFieldSpec
     from ..utils.typing import ConcreteField, ModelField
     from .inputs import ModelFieldIndex
@@ -943,6 +949,7 @@ def _run_pipeline_sync(
         # The model flavor's bind stashes no ``EXCLUDED`` spec, so its decode
         # answers the three-tuple.
         write_step=lambda instance, decoded: _model_write_step(
+            mutation_cls,
             instance,
             cast("_ModelDecoded", decoded),
         ),
@@ -1014,6 +1021,7 @@ def _model_decode_step(
 
 
 def _model_write_step(
+    mutation_cls: type[DjangoMutation],
     instance: models.Model | None,
     decoded: _ModelDecoded,
 ) -> models.Model | list[FieldError]:
@@ -1022,7 +1030,8 @@ def _model_write_step(
     From validation onward create and update run an IDENTICAL tail (the prior
     ``_validate_save_assign_refetch_payload``): ``full_clean(exclude=...)`` mapped to
     the envelope, ``save()`` (race ``IntegrityError`` into the envelope), then the
-    M2M ``.set(...)`` assignment. Returns the saved instance (the skeleton's
+    M2M ``.set(...)`` assignment. ``mutation_cls`` supplies the bind-stashed specs the
+    ``full_clean`` errors are keyed through. Returns the saved instance (the skeleton's
     ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
     ``list[FieldError]`` on a validation / write failure. ``instance`` (the located
     update row, ``None`` for create) selects the save mode: a create saves the
@@ -1041,7 +1050,7 @@ def _model_write_step(
     """
     target, m2m_assignments, exclude = decoded
 
-    clean_errors = _full_clean_or_field_errors(target, exclude=exclude)
+    clean_errors = _full_clean_or_field_errors(mutation_cls, target, exclude=exclude)
     if clean_errors is not None:
         return clean_errors
 
@@ -1266,6 +1275,7 @@ def authorize_or_raise(
 
 
 def _full_clean_or_field_errors(
+    mutation_cls: type[DjangoMutation],
     instance: models.Model,
     *,
     exclude: list[str] | None,
@@ -1275,10 +1285,14 @@ def _full_clean_or_field_errors(
     ``full_clean()`` runs ``validate_constraints()``, so a ``UniqueConstraint``
     duplicate is caught here as a ``ValidationError`` BEFORE ``save()``;
     its field-keyed messages populate the envelope (multi-field constraint ->
-    ``"__all__"`` sentinel). ``exclude`` is the exclude-aware unprovided-field
-    list for BOTH create and update - ``_model_decode_step`` computes it either
-    way, so the model path never passes ``None``; the parameter stays optional
-    for a caller that validates every field. Returns the
+    ``"__all__"`` sentinel), each model field name re-keyed to the GraphQL input
+    field the client sent through ``_model_error_key_map`` (``category`` or
+    ``category_id`` -> ``categoryId``; a field the input does not expose keeps its model field
+    name). The key map is built only on this failure path. ``exclude`` is the
+    exclude-aware unprovided-field list for BOTH create and update -
+    ``_model_decode_step`` computes it either way, so the model path never passes
+    ``None``; the parameter stays optional for a caller that validates every
+    field. Returns the
     ``list[FieldError]`` (the model ``write_step`` short-circuits to a null-object
     payload through the shared skeleton) so the payload build stays single-sited in
     ``run_write_pipeline_sync``.
@@ -1286,8 +1300,26 @@ def _full_clean_or_field_errors(
     try:
         instance.full_clean(exclude=exclude)
     except ValidationError as exc:
-        return validation_error_to_field_errors(exc)
+        return validation_error_to_field_errors(exc, _model_error_key_map(mutation_cls))
     return None
+
+
+def _model_error_key_map(mutation_cls: type[DjangoMutation]) -> ErrorKeyMap:
+    """Build the model flavor's error key map: model field names -> GraphQL input name.
+
+    ``full_clean()`` keys its ``error_dict`` by model FIELD name (or, for a
+    constraint listing it, a forward relation's ``attname``), while a model
+    spec's ``target_name`` is the input attr, so the keys are
+    ``model_field_error_names`` of the bind-time column of ``spec.input_attr``
+    (``_model_fields_by_attr``) - the same index the decode and the exclude
+    calculation read, never a live ``get_field``. Input ``categoryId`` is keyed
+    by both ``category`` and ``category_id``.
+    """
+    model_fields = cast("ModelFieldIndex", mutation_cls._model_fields_by_attr)
+    return build_error_key_map(
+        mutation_cls._input_field_specs,
+        keys_of=lambda spec: model_field_error_names(model_fields[spec.input_attr]),
+    )
 
 
 def save_or_field_errors(save_callable: Callable[[], object]) -> list[FieldError] | None:

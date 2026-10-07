@@ -693,7 +693,7 @@ Consumer-visible behavior:
 | Unstorable (non-UTF-8-encodable) `username` or `password` on `login` | same `"__all__"` envelope, short-circuited by the storability preflight before `authenticate` — byte-identical, never a top-level error |
 | Password fails a configured validator on `register` | payload `errors` keyed to `password`, one message per failing validator |
 | Unstorable (non-UTF-8-encodable) `password` on `register` | payload `errors` keyed to `password`, from the write step's storability preflight before `validate_password` / `set_password` — never a top-level error (the `username` half is rejected earlier, by the shared decode) |
-| Duplicate username on `register` | payload `errors` keyed to the `USERNAME_FIELD` (the model `full_clean()` unique check) |
+| Duplicate username on `register` | payload `errors` keyed to the `USERNAME_FIELD`'s `RegisterInput` field, its GraphQL input name (`username` on the stock model; the model `full_clean()` unique check) |
 | `logout` with no authenticated session | `ok: false`, empty `errors` (not an error — idempotent logout) |
 | `login` over a Channels WebSocket, any session engine | top-level `GraphQLError` ([`ConfigurationError`][glossary-configurationerror]) refusing before authentication — never the failed-login envelope ([Decision 11](#decision-11--transport-contract-classify-first-refuse-a-transport-that-cannot-honour-the-surface-truthfully)) |
 | `logout` over a Channels WebSocket on the signed-cookie session engine | top-level `GraphQLError` ([`ConfigurationError`][glossary-configurationerror]) refusing before any session mutation ([Decision 11](#decision-11--transport-contract-classify-first-refuse-a-transport-that-cannot-honour-the-surface-truthfully)) |
@@ -1168,7 +1168,8 @@ to `Register`** with:
   `NON_FIELD_ERROR_KEY`). So the write step catches the `ValidationError` at the
   `validate_password` call site and builds the leaf itself —
   `field_error("password", exc.messages, codes=[leaf.code for leaf in exc.error_list if leaf.code])`
-  (the same [`spec-036`][spec-036] leaf ctor, keyed explicitly) — so every failing
+  (the same [`spec-036`][spec-036] leaf ctor, keyed explicitly; `RegisterInput` takes no
+  `input_class`, so `password` is always the input field's name) — so every failing
   validator's messages land under the single `password` key, not `"__all__"`. It then
   runs `user.set_password(raw_password)`
   **before** `full_clean()` / `save()`. **The password preflight, `validate_password`
@@ -1180,6 +1181,9 @@ to `Register`** with:
   [`save_or_field_errors`][mutations-resolvers]),
   so the duplicate-`USERNAME_FIELD` unique error and the concurrent-race `IntegrityError`
   come back through the standing envelope with no auth-specific error handling. The
+  write step passes the rider class to that tail, so every `full_clean()` error keys to
+  the `RegisterInput` field the client sent, exactly as on the model flavor (a
+  `REQUIRED_FIELDS` entry `first_name` reports as `firstName`). The
   plaintext exists only in memory and
   never reaches a model column (a unit assertion pins that the model decode never
   receives `password` in `scalar_and_fk_attrs`); hashing before `full_clean()` means
@@ -1221,8 +1225,8 @@ foundation as-is: registration + phase-2.5 bind via `bind_mutations()` (the clas
 IS a `DjangoMutation`), exposure via
 [`DjangoMutationField`][glossary-djangomutationfield] (the factory returns
 `DjangoMutationField(Register)` internally), the envelope from
-`full_clean()` (duplicate `USERNAME_FIELD` → field-keyed error via the model's
-unique constraint), and the post-save
+`full_clean()` (duplicate `USERNAME_FIELD` → an error keyed to its input field via the
+model's unique constraint), and the post-save
 [`refetch_optimized`][mutations-resolvers] by pk without visibility (the `036`
 own-write exception — load-bearing here, since the brand-new anonymous-created user
 is exactly the row a staff-only `UserType.get_queryset` would hide).
@@ -1911,7 +1915,8 @@ so each carries a source comment at its site.
   [Decision 11](#decision-11--transport-contract-classify-first-refuse-a-transport-that-cannot-honour-the-surface-truthfully)'s;
   the observational `ok` and the empty `errors` are the same on every transport.
 - **Duplicate username on register.** The model `full_clean()` unique check surfaces
-  as a `USERNAME_FIELD`-keyed [`FieldError`][glossary-fielderror-envelope]; the
+  as a [`FieldError`][glossary-fielderror-envelope] keyed to the `USERNAME_FIELD`'s input
+  field (`username` on the stock model); the
   concurrent-race `IntegrityError` fallback maps through the standing
   `save_or_field_errors` path — both the `036` contract, no auth-specific code.
 - **Password validator failures.** Every failing validator contributes a message

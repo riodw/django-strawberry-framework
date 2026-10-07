@@ -142,6 +142,36 @@ def test_set_card_status_unknown_lookup_envelope_uses_all_sentinel():
 
 
 @pytest.mark.django_db
+def test_set_card_status_form_errors_key_to_the_input_fields_sent():
+    """A plain-form validation error keys to the GraphQL input field, never the form field.
+
+    ``SetCardStatusForm`` declares ``status_key`` / ``actor_key``; the generated input
+    exposes them as ``statusKey`` / ``actorKey``. Blank values fail the form's own
+    ``required`` check, and each error comes back under the name the client sent, with
+    the matching one-segment ``path``.
+    """
+    card = kf.make_card(status=kf.make_status("todo"))
+    client = _staff_client()
+
+    payload = _run(
+        "mutation($d: SetCardStatusFormInput!) { setCardStatus(data: $d) "
+        "{ ok errors { field path codes } } }",
+        {"d": {"cardId": _card_gid(card), "statusKey": "", "actorKey": ""}},
+        client=client,
+    )
+
+    assert "errors" not in payload, payload
+    envelope = payload["data"]["setCardStatus"]
+    assert envelope["ok"] is False
+    assert sorted(envelope["errors"], key=lambda error: error["field"]) == [
+        {"field": "actorKey", "path": ["actorKey"], "codes": ["required"]},
+        {"field": "statusKey", "path": ["statusKey"], "codes": ["required"]},
+    ]
+    card.refresh_from_db()
+    assert card.status.key == "todo"
+
+
+@pytest.mark.django_db
 def test_create_card_from_spec_happy_path():
     version = kf.make_target_version("9.9.9")
     client = _staff_client()

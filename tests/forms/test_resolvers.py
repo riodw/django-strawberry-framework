@@ -639,7 +639,8 @@ def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_uncha
     non-distinguishing: the generated input's NAME and annotation set must be
     identical across the pair (the shape derives from ``get_form_fields()``, never
     from the construction hook), and a category outside the narrowed queryset must
-    be rejected by the scoped mutation as a field-keyed ``FieldError`` while the
+    be rejected by the scoped mutation as a ``FieldError`` keyed to the ``categoryId``
+    input the client sent (never the form field name ``category``) while the
     unscoped mutation accepts the same id (so the override demonstrably took
     effect at runtime).
     """
@@ -721,7 +722,7 @@ def test_get_form_kwargs_queryset_scoping_leaves_the_generated_input_shape_uncha
     assert scoped.errors is None, scoped.errors
     assert scoped.data is not None
     assert scoped.data["pickScoped"]["ok"] is False
-    assert [e["field"] for e in scoped.data["pickScoped"]["errors"]] == ["category"]
+    assert [e["field"] for e in scoped.data["pickScoped"]["errors"]] == ["categoryId"]
 
     unscoped = schema.execute_sync(
         "mutation($d: CategoryPickFormInput!){ pickAny(data:$d){ ok errors{ field messages } } }",

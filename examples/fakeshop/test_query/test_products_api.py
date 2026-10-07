@@ -4107,14 +4107,15 @@ def test_update_item_via_form_revalidates_an_untouched_stale_name():
 
 @pytest.mark.django_db(transaction=True)
 def test_update_item_via_form_explicit_null_category_id_is_the_form_required_error():
-    """An explicit `null` on the required FK keys to the FORM field `category`, not `categoryId`.
+    """An explicit `null` on the required FK is the form's own `required` error on `categoryId`.
 
     `null` is not an unresolvable relation id: the decode passes it through as an
     empty value and the bound `ItemModelForm` rejects it as its own required-field
-    error, keyed to the form field `category`. A decode that treated `null` as a
-    lookup would answer with an "invalid id" error on the input field `categoryId`
-    instead, so the absence of `categoryId` from the error keys is the load-bearing
-    half of this row.
+    error. That form error is keyed to the input field the client sent (`categoryId`),
+    never the form field name `category`. A decode that treated `null` as a lookup
+    would answer on the same key with an "invalid id" message and code `invalid`, so
+    the form's required message and its `required` code are the load-bearing half of
+    this row.
     """
     create_users(1)
     seed_data(1)
@@ -4123,7 +4124,8 @@ def test_update_item_via_form_explicit_null_category_id_is_the_form_required_err
     client = _login_with_perm("staff_1", "change_item")
 
     response = _post_graphql(
-        _UPDATE_ITEM_VIA_FORM,
+        "mutation($id: ID!, $d: ItemModelFormPartialInput!) { updateItemViaForm(id: $id, "
+        "data: $d) { node { name } errors { field path messages codes } } }",
         client=client,
         variables={"id": _global_id("products.item", item.pk), "d": {"categoryId": None}},
     )
@@ -4132,9 +4134,14 @@ def test_update_item_via_form_explicit_null_category_id_is_the_form_required_err
     assert "errors" not in payload, payload
     result = payload["data"]["updateItemViaForm"]
     assert result["node"] is None
-    fields = [e["field"] for e in result["errors"]]
-    assert "category" in fields
-    assert "categoryId" not in fields
+    assert result["errors"] == [
+        {
+            "field": "categoryId",
+            "path": ["categoryId"],
+            "messages": ["This field is required."],
+            "codes": ["required"],
+        },
+    ]
     item.refresh_from_db()
     assert item.category_id == category.pk
 

@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 24 done, 45 to do.
+Progress: 25 done, 45 to do.
 
 ## Done
 
@@ -31,6 +31,8 @@ Progress: 24 done, 45 to do.
 - [x] 40. Five leads closed as not bugs (Django's own behavior in each case)
 - [x] 41. `test_relations` tests failing when run alone (`cab934a0`, other session)
 - [x] 58. HIGH. Fragment spreads expanded but never charged: an 857-byte request cost 1.9 s of CPU, doubling per level (`3cc1b249`)
+- [x] 59. Two `RelatedFilter` / `RelatedOrder` declarations on one relation made flat leaves and order terms read the wrong one;
+  a set now declares each relation once, and refuses a longer declaration that takes over a branch's paths (`ddf8ef8b`)
 
 Still owed in t3 for items 7-10: delete their records (cleanup only, no code).
 
@@ -75,8 +77,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 59. Two `RelatedFilter` / `RelatedOrder` declarations on one relation: the flat leaf and the order term use the wrong one (hidden
-  rows, `queryset=` ignored, gate bypassed). Nested filters are right
 - [ ] 60. One `OrderSet` on two types of the same model keeps the first type's visibility; the `FilterSet` twin is refused at startup
 - [ ] 61. Three `FilterSet`s in a `RelatedFilter` cycle: the flat filters exposed depend on type declaration order
 - [ ] 62. A declared flat `ChoiceField` over a grouped-choices column is refused since item 35 (worked before); the refusal's message is
@@ -97,6 +97,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 68. A model's default manager hides rows from declared filter hops but not from undeclared filter hops or ordering. Make them
   agree, or keep?
 - [ ] 69. CHANGELOG entry for item 1: `Meta.exclude=["parent"]` on a mutation over a `ForeignObject` model now raises
+- [ ] 71. CHANGELOG entry for item 59: two `RelatedFilter`s or `RelatedOrder`s naming one relation now raise at class creation, and a
+  longer one (`shelf__branch` beside `shelf`) raises at expansion when the shorter branch's target set reaches `branch`
 
 ## Hunt not finished in t3
 

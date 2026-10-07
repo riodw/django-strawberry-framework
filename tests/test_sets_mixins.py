@@ -19,17 +19,19 @@ empty-input no-ops live in ``examples/fakeshop/test_query/test_library_api.py``,
 """
 
 import pytest
+from apps.library import models as library_models
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.filters import FilterSet
-from django_strawberry_framework.orders import OrderSet
+from django_strawberry_framework.filters import FilterSet, RelatedFilter
+from django_strawberry_framework.orders import OrderSet, RelatedOrder
 from django_strawberry_framework.sets_mixins import (
     ActiveInputPermissionMixin,
     is_re_readable_field_declaration,
     require_re_readable_field_declaration,
 )
 from django_strawberry_framework.utils.input_values import SetInputTraversal
+from tests._idioms import definition_raises
 
 _SHARED_PERMISSION_METHODS = (
     "_request_from_info",
@@ -993,3 +995,269 @@ def test_re_readable_gate_message_names_the_receipt_and_the_contract():
     assert "generator" in message
     assert "re-readable collection of field names" in message
     assert "not a one-shot iterator or generator" in message
+
+
+def test_two_related_filters_on_one_relation_are_refused():
+    """Two branches with one ``field_name`` raise at class creation, naming both and the relation.
+
+    The flat spellings of a branch (a flat filter leaf, an order term, a flat-path
+    gate) carry only its ORM path, so a second declaration on the relation would
+    leave them reading the other branch's visibility, ``queryset=`` and gate.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+
+        @definition_raises
+        class _Owner(FilterSet):
+            visible_shelf = RelatedFilter(FilterSet, field_name="shelf")
+            any_shelf = RelatedFilter(FilterSet, field_name="shelf")
+
+    message = str(excinfo.value)
+    assert "_Owner" in message
+    assert "RelatedFilters 'visible_shelf' and 'any_shelf'" in message
+    assert "the relation 'shelf'" in message
+
+
+def test_two_related_orders_on_one_relation_are_refused():
+    """The order family refuses two branches on one relation as the filter family does."""
+    with pytest.raises(ConfigurationError) as excinfo:
+
+        @definition_raises
+        class _Owner(OrderSet):
+            visible_shelf = RelatedOrder(OrderSet, field_name="shelf")
+            any_shelf = RelatedOrder(OrderSet, field_name="shelf")
+
+    message = str(excinfo.value)
+    assert "_Owner" in message
+    assert "RelatedOrders 'visible_shelf' and 'any_shelf'" in message
+    assert "the relation 'shelf'" in message
+
+
+def test_a_related_filter_named_after_another_ones_relation_is_refused():
+    """A branch declaring no ``field_name`` declares the relation its attribute names."""
+    with pytest.raises(ConfigurationError, match="'shelf' and 'home_shelf'"):
+
+        @definition_raises
+        class _Owner(FilterSet):
+            shelf = RelatedFilter(FilterSet)
+            home_shelf = RelatedFilter(FilterSet, field_name="shelf")
+
+
+def test_a_related_order_named_after_another_ones_relation_is_refused():
+    """A branch declaring no ``field_name`` declares the relation its attribute names."""
+    with pytest.raises(ConfigurationError, match="'shelf' and 'home_shelf'"):
+
+        @definition_raises
+        class _Owner(OrderSet):
+            shelf = RelatedOrder(OrderSet)
+            home_shelf = RelatedOrder(OrderSet, field_name="shelf")
+
+
+def test_a_subclass_related_filter_on_an_inherited_relation_is_refused():
+    """An inherited branch claims its relation in every subclass."""
+
+    class _Base(FilterSet):
+        shelf = RelatedFilter(FilterSet, field_name="shelf")
+
+    with pytest.raises(ConfigurationError, match="'shelf' and 'visible_shelf'"):
+
+        @definition_raises
+        class _Child(_Base):
+            visible_shelf = RelatedFilter(FilterSet, field_name="shelf")
+
+
+def test_a_subclass_related_order_on_an_inherited_relation_is_refused():
+    """An inherited branch claims its relation in every subclass."""
+
+    class _Base(OrderSet):
+        shelf = RelatedOrder(OrderSet, field_name="shelf")
+
+    with pytest.raises(ConfigurationError, match="'shelf' and 'visible_shelf'"):
+
+        @definition_raises
+        class _Child(_Base):
+            visible_shelf = RelatedOrder(OrderSet, field_name="shelf")
+
+
+def test_an_overriding_related_filter_and_an_overlapping_path_are_accepted():
+    """A same-named override replaces the inherited branch; a longer path is another relation."""
+
+    class _Base(FilterSet):
+        shelf = RelatedFilter(FilterSet, field_name="shelf")
+
+    class _Child(_Base):
+        shelf = RelatedFilter(FilterSet, field_name="shelf")
+        shelf_branch = RelatedFilter(FilterSet, field_name="shelf__branch")
+
+    assert list(_Child.related_filters) == ["shelf", "shelf_branch"]
+    assert _Child.related_filters["shelf"] is not _Base.related_filters["shelf"]
+
+
+def test_an_overriding_related_order_and_an_overlapping_path_are_accepted():
+    """A same-named override replaces the inherited branch; a longer path is another relation."""
+
+    class _Base(OrderSet):
+        shelf = RelatedOrder(OrderSet, field_name="shelf")
+
+    class _Child(_Base):
+        shelf = RelatedOrder(OrderSet, field_name="shelf")
+        shelf_branch = RelatedOrder(OrderSet, field_name="shelf__branch")
+
+    assert list(_Child.related_orders) == ["shelf", "shelf_branch"]
+    assert _Child.related_orders["shelf"] is not _Base.related_orders["shelf"]
+
+
+def test_a_non_string_field_name_claims_no_relation():
+    """A ``field_name`` that is not a string names no relation, so it collides with nothing.
+
+    ``utils/permissions.py::walk_declared_relation_path`` matches no hop on one either.
+    """
+
+    class _Owner(OrderSet):
+        # basedpyright: a non-string field_name is the shape under test
+        first = RelatedOrder(OrderSet, field_name=7)  # pyright: ignore[reportArgumentType]
+        # basedpyright: a non-string field_name is the shape under test
+        second = RelatedOrder(OrderSet, field_name=7)  # pyright: ignore[reportArgumentType]
+
+    assert list(_Owner.related_orders) == ["first", "second"]
+
+
+def test_a_longer_related_filter_capturing_a_branchs_flat_leaves_is_refused():
+    """``shelf__branch`` beside ``shelf`` takes ``shelf``'s flat leaves into ``branch``; refused.
+
+    The flat leaf ``public_shelf__branch__name`` carries the path
+    ``shelf__branch__name``, which the relation-path walk reads through the longer
+    declaration, so ``public_shelf``'s ``queryset=`` and gate would never apply.
+    """
+
+    class _BranchFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class _ShelfFilter(FilterSet):
+        branch = RelatedFilter(_BranchFilter)
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"topic": ["exact"]}
+
+    class _BookFilter(FilterSet):
+        public_shelf = RelatedFilter(
+            _ShelfFilter,
+            field_name="shelf",
+            queryset=library_models.Shelf.objects.exclude(topic="secret"),
+        )
+        shelf_branch = RelatedFilter(_BranchFilter, field_name="shelf__branch")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _BookFilter.get_filters()
+    message = str(excinfo.value)
+    assert "RelatedFilter 'shelf_branch' declares the relation 'shelf__branch'" in message
+    assert "continues the relation 'shelf' of 'public_shelf' into 'branch'" in message
+    assert "_ShelfFilter of 'public_shelf' reaches" in message
+
+
+def test_a_longer_related_order_capturing_a_branchs_terms_is_refused():
+    """The order twin: ``shelf: {branch: ...}`` normalizes to a path the longer declaration takes."""
+
+    class _BranchOrder(OrderSet):
+        class Meta:
+            model = library_models.Branch
+            fields = ["name"]
+
+    class _ShelfOrder(OrderSet):
+        branch = RelatedOrder(_BranchOrder, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ["topic"]
+
+    class _BookOrder(OrderSet):
+        shelf = RelatedOrder(_ShelfOrder, field_name="shelf")
+        shelf_branch = RelatedOrder(_BranchOrder, field_name="shelf__branch")
+
+    with pytest.raises(ConfigurationError, match="'shelf_branch' declares the relation"):
+        _BookOrder.get_fields()
+
+
+@pytest.mark.parametrize(
+    ("shelf_fields", "longer", "branch_target"),
+    [
+        (["branch__name"], "shelf__branch", None),
+        (["topic"], "shelf__branch__shelves", ["shelves__code"]),
+    ],
+    ids=["own-path", "through-a-branch"],
+)
+def test_a_longer_related_order_reaching_a_target_path_is_refused(
+    shelf_fields: list[str],
+    longer: str,
+    branch_target: list[str] | None,
+):
+    """A continuation reached by a path of the target's own, or through its branch, is refused."""
+
+    class _BranchOrder(OrderSet):
+        class Meta:
+            model = library_models.Branch
+            fields = branch_target or ["name"]
+
+    class _ShelfOrder(OrderSet):
+        branch = RelatedOrder(_BranchOrder, field_name="branch")
+        # A branch off the continuation is passed over.
+        books = RelatedOrder(OrderSet, field_name="books")
+        # basedpyright: a non-string field_name names no relation
+        odd = RelatedOrder(OrderSet, field_name=7)  # pyright: ignore[reportArgumentType]
+
+        class Meta:
+            model = library_models.Shelf
+            fields = shelf_fields
+
+    class _BookOrder(OrderSet):
+        shelf = RelatedOrder(_ShelfOrder, field_name="shelf")
+        longer_branch = RelatedOrder(OrderSet, field_name=longer)
+
+    with pytest.raises(ConfigurationError, match=f"the relation '{longer}'"):
+        _BookOrder.get_fields()
+
+
+def test_a_longer_related_order_the_target_never_reaches_is_accepted():
+    """An overlap no path through the shorter branch reaches reads unambiguously.
+
+    The shape of kanban's ``target_version`` beside ``target_version__milestone``;
+    a placeholder ``None`` target generates no input, so nothing runs through it,
+    whether it is the shorter branch's or one its target declares.
+    """
+
+    class _BranchOrder(OrderSet):
+        class Meta:
+            model = library_models.Branch
+            fields = ["name"]
+
+    class _ShelfOrder(OrderSet):
+        branch = RelatedOrder(_BranchOrder, field_name="branch")
+        books = RelatedOrder(None, field_name="books")
+        alt_branches = RelatedOrder(None, field_name="alt_branches")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ["topic"]
+
+    class _BookOrder(OrderSet):
+        shelf = RelatedOrder(_ShelfOrder, field_name="shelf")
+        shelf_branch_shelves = RelatedOrder(OrderSet, field_name="shelf__branch__shelves")
+        shelf_books_loans = RelatedOrder(OrderSet, field_name="shelf__books__loans")
+        shelf_alt_branches = RelatedOrder(OrderSet, field_name="shelf__alt_branches")
+        genres = RelatedOrder(None, field_name="genres")
+        genres_books = RelatedOrder(OrderSet, field_name="genres__books")
+
+    assert set(_BookOrder.get_fields()) == {
+        "shelf",
+        "shelf_branch_shelves",
+        "shelf_books_loans",
+        "shelf_alt_branches",
+        "genres",
+        "genres_books",
+    }

@@ -271,18 +271,18 @@ def test_factory_rejects_related_orders_with_colliding_graphql_names():
             model = library_models.Shelf
             fields = ["code"]
 
-    class BookCollisionOrder(OrderSet):
-        foo_bar = RelatedOrder(ShelfOrder, field_name="shelf")
+    class BranchCollisionOrder(OrderSet):
+        foo_bar = RelatedOrder(ShelfOrder, field_name="shelves")
         fooBar = RelatedOrder(  # noqa: N815 - intentional camel-case collision fixture.
             ShelfOrder,
-            field_name="shelf",
+            field_name="alt_shelves",
         )
 
         class Meta:
-            model = library_models.Book
-            fields = ["title"]
+            model = library_models.Branch
+            fields = ["name"]
 
-    factory = OrderArgumentsFactory(BookCollisionOrder)
+    factory = OrderArgumentsFactory(BranchCollisionOrder)
     with pytest.raises(ConfigurationError) as excinfo:
         factory.arguments
     message = str(excinfo.value)
@@ -389,15 +389,15 @@ def test_factory_dedupes_double_enqueued_target_via_seen_check():
             fields = ["code"]
 
     class ParentOrderDedup(OrderSet):
-        # Two RelatedOrders pointing to the SAME target -- the BFS walks
-        # both at the same outer iteration, enqueueing ChildOrderDedup
+        # Two RelatedOrders on two relations reaching the SAME target -- the BFS
+        # walks both at the same outer iteration, enqueueing ChildOrderDedup
         # twice before either is popped.
-        child_a = RelatedOrder(ChildOrderDedup, field_name="shelf")
-        child_b = RelatedOrder(ChildOrderDedup, field_name="shelf")
+        child_a = RelatedOrder(ChildOrderDedup, field_name="shelves")
+        child_b = RelatedOrder(ChildOrderDedup, field_name="alt_shelves")
 
         class Meta:
-            model = library_models.Book
-            fields = ["title"]
+            model = library_models.Branch
+            fields = ["name"]
 
     factory = OrderArgumentsFactory(ParentOrderDedup)
     factory.arguments  # must not raise; the pop-time guard fires.

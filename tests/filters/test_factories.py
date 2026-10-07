@@ -121,7 +121,7 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
 
     class AFilter(FilterSet):
         b = RelatedFilter(BFilter, field_name="shelves")
-        c = RelatedFilter(CFilter, field_name="shelves__books")
+        c = RelatedFilter(CFilter, field_name="alt_shelves__books")
 
         class Meta:
             model = library_models.Branch

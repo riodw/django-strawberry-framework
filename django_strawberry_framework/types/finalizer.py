@@ -1764,8 +1764,10 @@ def _expand_orderset(orderset_cls: type[OrderSet]) -> None:
     """Layer-4 orderset expansion.
 
     ``OrderSet.get_fields()`` stores ``RelatedOrder`` instances without eagerly
-    resolving their lazy class refs (unlike the filter side's ``get_filters()``
-    which calls ``_expand_related_filter`` reading ``f.filterset``), so this
+    resolving their lazy class refs, except the targets an overlapping pair of
+    declarations makes ``sets_mixins.py::reject_captured_branches`` read (unlike
+    the filter side's ``get_filters()``, which calls ``_expand_related_filter``
+    reading ``f.filterset``), so this
     also reads ``related.orderset`` to force Layer-2 resolution at the
     subpass-2 boundary -- so an unresolved ``RelatedOrder('...')`` rewraps as
     ``ConfigurationError`` with ``__cause__`` preserved here.

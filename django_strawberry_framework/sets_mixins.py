@@ -50,9 +50,10 @@ from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
+from django.db.models.constants import LOOKUP_SEP
 from django.utils.module_loading import import_string
 
-from .exceptions import ConfigurationError, _safe_arg_repr, _safe_type_name
+from .exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
 from .utils.input_values import SetInputTraversal, is_inactive_value
 from .utils.permissions import (
     active_permission_targets,
@@ -303,6 +304,10 @@ def collect_related_declarations(
     from a later base reappear. ``class_items`` preserves the raw class body when
     an upstream metaclass mutates it, while ``base_declarations_attr`` identifies
     that family's complete declaration map (including non-related declarations).
+
+    A set declares each relation once (``_reject_shared_relations``); a longer
+    relation overlapping a shorter branch is checked once targets resolve
+    (``reject_captured_branches``).
     """
     own_items = tuple(own_items)
     class_values = dict(own_items if class_items is None else class_items)
@@ -349,10 +354,149 @@ def collect_related_declarations(
             if inherited_value is not missing:
                 del collected[name]
                 break
+    _reject_shared_relations(new_class, collected)
     setattr(new_class, collection_attr, collected)
     for declaration in collected.values():
         declaration._bind_owner(new_class)
     return collected
+
+
+def _reject_shared_relations(
+    new_class: FilterSetMetaclass | OrderSetMetaclass,
+    collected: Mapping[str, RelatedSetTargetMixin],
+) -> None:
+    """Raise when two collected declarations name the same relation.
+
+    A declaration's relation is its ``field_name`` (the ORM accessor), or its
+    attribute name when it declares none. A flat filter leaf, an order term and
+    a flat-path permission gate carry only that ORM path, and
+    ``utils/permissions.py::walk_declared_relation_path`` reads it as the one
+    declaration on the relation, so a second declaration on the same relation
+    would leave the flat spelling reading the other one's target visibility,
+    ``queryset=`` and gate.
+    """
+    claimed: dict[tuple[str, ...], str] = {}
+    for name, declaration in collected.items():
+        relation = _declared_relation(name, declaration)
+        if relation is None:
+            continue
+        prior = claimed.setdefault(relation, name)
+        if prior != name:
+            raise ConfigurationError(
+                f"{_safe_class_name(new_class, qualified=True)}: {_safe_type_name(declaration)}s "
+                f"{prior!r} and {name!r} both declare the relation "
+                f"{LOOKUP_SEP.join(relation)!r}. A set declares "
+                "each relation once, since its flat leaves, order terms and permission gates "
+                "read a relation path as the one declaration on it; keep one of them.",
+            )
+
+
+def _declared_relation(name: str, declaration: object) -> tuple[str, ...] | None:
+    """Return the relation segments a declaration names, ``None`` for a non-string ``field_name``.
+
+    The relation is the declaration's ``field_name`` (the ORM accessor), or its
+    attribute name when it declares none, as
+    ``utils/permissions.py::walk_declared_relation_path`` matches it.
+    """
+    field_name: object = getattr(declaration, "field_name", None)
+    relation = name if field_name is None else field_name
+    return tuple(relation.split(LOOKUP_SEP)) if isinstance(relation, str) else None
+
+
+def reject_captured_branches(
+    set_cls: type[object],
+    related: Mapping[str, object],
+    *,
+    related_attr: str,
+    target_attr: str,
+    reached_paths: Callable[[type[object]], Iterable[str]],
+) -> None:
+    """Raise when a longer declaration's relation captures paths through a shorter branch.
+
+    ``utils/permissions.py::walk_declared_relation_path`` reads the longest
+    declaration a path starts with, so beside ``shelf`` a declaration on
+    ``shelf__branch`` takes every path through ``shelf`` that continues into
+    ``branch``: a flat filter leaf expanded from ``shelf``, or a nested order term
+    under it, would read the longer declaration's target visibility, ``queryset=``
+    and gate instead of ``shelf``'s. The pair is refused when ``shelf``'s target
+    set reaches that continuation, through a path of its own (``reached_paths``)
+    or through its related declarations, recursively; an overlap the target set
+    never reaches (kanban's ``target_version`` beside
+    ``target_version__milestone``) reads unambiguously and stays allowed. Runs
+    when the set expands, since it reads resolved targets; ``related`` is the
+    set's own declarations, the targets' are read under ``related_attr``.
+    """
+    relations = [
+        (name, declaration, relation)
+        for name, declaration in related.items()
+        if (relation := _declared_relation(name, declaration)) is not None
+    ]
+    for short_name, short, short_relation in relations:
+        for long_name, long_declaration, long_relation in relations:
+            if (
+                len(long_relation) <= len(short_relation)
+                or long_relation[: len(short_relation)] != short_relation
+            ):
+                continue
+            target: object = getattr(short, target_attr)
+            remainder = long_relation[len(short_relation) :]
+            if not isinstance(target, type) or not _target_reaches(
+                target,
+                remainder,
+                related_attr=related_attr,
+                target_attr=target_attr,
+                reached_paths=reached_paths,
+            ):
+                continue
+            raise ConfigurationError(
+                f"{_safe_class_name(set_cls, qualified=True)}: {_safe_type_name(long_declaration)} "
+                f"{long_name!r} declares the relation {LOOKUP_SEP.join(long_relation)!r}, "
+                f"which continues the relation {LOOKUP_SEP.join(short_relation)!r} of "
+                f"{short_name!r} into {LOOKUP_SEP.join(remainder)!r}, a path the target "
+                f"{_safe_class_name(target, qualified=True)} of {short_name!r} reaches. Every "
+                f"path through {short_name!r} into it would read {long_name!r} instead; drop "
+                "one of them.",
+            )
+
+
+def _target_reaches(
+    target: type[object],
+    remainder: tuple[str, ...],
+    *,
+    related_attr: str,
+    target_attr: str,
+    reached_paths: Callable[[type[object]], Iterable[str]],
+) -> bool:
+    """Return whether a path ``target`` exposes starts with the ``remainder`` segments.
+
+    A path of ``target``'s own (``reached_paths``) starting with them, a related
+    declaration with a target whose relation they start with or that starts
+    them, recursing into its target for the rest; each recursion consumes at
+    least one segment.
+    """
+    if any(
+        tuple(path.split(LOOKUP_SEP))[: len(remainder)] == remainder
+        for path in reached_paths(target)
+    ):
+        return True
+    related: Mapping[str, object] = getattr(target, related_attr, {})
+    for name, declaration in related.items():
+        relation = _declared_relation(name, declaration)
+        if relation is None or relation[: len(remainder)] != remainder[: len(relation)]:
+            continue
+        child: object = getattr(declaration, target_attr)
+        # A ``None`` placeholder target generates no input, so no path runs through it.
+        if not isinstance(child, type):
+            continue
+        if len(relation) >= len(remainder) or _target_reaches(
+            child,
+            remainder[len(relation) :],
+            related_attr=related_attr,
+            target_attr=target_attr,
+            reached_paths=reached_paths,
+        ):
+            return True
+    return False
 
 
 def expanded_once(
@@ -779,5 +923,6 @@ __all__ = (
     "SetLifecycleAttrs",
     "collect_related_declarations",
     "expanded_once",
+    "reject_captured_branches",
     "should_cache_expansion",
 )

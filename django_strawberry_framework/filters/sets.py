@@ -68,6 +68,7 @@ from ..sets_mixins import (
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
+    reject_captured_branches,
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
@@ -1592,6 +1593,18 @@ def _require_correlated_target(
     )
 
 
+def _filter_paths(filterset: type[object]) -> Iterator[str]:
+    """Yield the ORM path of every leaf a target filter set exposes, its expanded copies included.
+
+    A ``RelatedFilter`` (declared, or copied by an expansion) is a branch, not a
+    leaf; ``reject_captured_branches`` reads the declared ones apart.
+    """
+    # ``reject_captured_branches`` hands back a ``RelatedFilter`` target, a ``FilterSet``.
+    for filter_instance in cast("type[FilterSet]", filterset).get_filters().values():
+        if not isinstance(filter_instance, RelatedFilter):
+            yield _bound_field_name(filter_instance)
+
+
 def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Filter]:
     """Expand `f` against its target filterset's resolved filters.
 
@@ -1877,6 +1890,13 @@ class FilterSet(
                     _require_correlated_target(cls, filter_name, f)
                     expanded = _expand_related_filter(filter_name, f)
                     all_filters.update(expanded)
+                reject_captured_branches(
+                    cls,
+                    related_filters_val,
+                    related_attr="related_filters",
+                    target_attr="filterset",
+                    reached_paths=_filter_paths,
+                )
                 # Build candidate metadata in THIS same expansion pass, over the
                 # fully-expanded surface. Origin is read from the frozen
                 # generation-provenance record stamped on each instance at its

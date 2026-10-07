@@ -27,7 +27,7 @@ import contextlib
 import dataclasses
 import threading
 from collections import OrderedDict
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
@@ -45,6 +45,7 @@ from ..sets_mixins import (
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
+    reject_captured_branches,
     require_re_readable_field_declaration,
     should_cache_expansion,
 )
@@ -335,6 +336,12 @@ def _validate_normalized_terms(
     return cast("list[tuple[str, Ordering | None]]", terms)
 
 
+def _order_paths(orderset: type[object]) -> Iterable[str]:
+    """Return the ``Meta.fields`` paths a target order set exposes (its branches are walked apart)."""
+    # ``reject_captured_branches`` hands back a ``RelatedOrder`` target, an ``OrderSet``.
+    return cast("type[OrderSet]", orderset)._expand_meta_fields().keys()
+
+
 class OrderSetMetaclass(type):
     """Discover ``RelatedOrder`` declarations and bind them to the new class.
 
@@ -479,6 +486,13 @@ class OrderSet(ClassBasedTypeNameMixin, ActiveInputPermissionMixin, metaclass=Or
             fields = cls._expand_meta_fields()
             for k, v in cls.related_orders.items():
                 fields[k] = v
+            reject_captured_branches(
+                cls,
+                cls.related_orders,
+                related_attr="related_orders",
+                target_attr="orderset",
+                reached_paths=_order_paths,
+            )
 
             # The two-condition cache-write gate (own ``related_orders`` +
             # no unresolved string lazy targets) is single-sited in

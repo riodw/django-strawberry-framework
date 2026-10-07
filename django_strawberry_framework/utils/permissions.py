@@ -641,10 +641,14 @@ def walk_declared_relation_path(
     (``related_filters`` / ``related_orders``) by matching a declaration's
     ``field_name`` -- the ORM accessor, NOT the public attribute name -- so a
     renamed branch (``visible_shelves = RelatedFilter(ShelfFilter,
-    field_name="shelves")``) still resolves. A declaration whose ``field_name``
-    spans several ORM segments (``target_version__milestone``) is one hop and
-    wins over a shorter overlapping declaration (``target_version``), so the
-    flat and nested spellings reach the same target. A relation-key path
+    field_name="shelves")``) still resolves; a set declares each relation once
+    (``sets_mixins.py::collect_related_declarations``), so no two declarations
+    claim one relation. A declaration whose ``field_name`` spans several ORM
+    segments (``target_version__milestone``) is one hop and wins over a shorter
+    overlapping declaration (``target_version``); a set where a path through
+    the shorter branch continues into the longer one is refused when it
+    expands (``sets_mixins.py::reject_captured_branches``), so every path a
+    branch spells reads that branch, as its nested twin does. A relation-key path
     (``shelf``, ``shelf__branch``: nothing after a declared relation) consumes
     that last relation as a hop too and leaves an empty remainder. The walk
     stops at the first segment no declaration claims, and after a hop whose

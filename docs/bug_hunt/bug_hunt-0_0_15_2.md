@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 25 done, 45 to do.
+Progress: 26 done, 46 to do.
 
 ## Done
 
@@ -33,6 +33,8 @@ Progress: 25 done, 45 to do.
 - [x] 58. HIGH. Fragment spreads expanded but never charged: an 857-byte request cost 1.9 s of CPU, doubling per level (`3cc1b249`)
 - [x] 59. Two `RelatedFilter` / `RelatedOrder` declarations on one relation made flat leaves and order terms read the wrong one;
   a set now declares each relation once, and refuses a longer declaration that takes over a branch's paths (`ddf8ef8b`)
+- [x] 60. One `OrderSet` on two types of the same model kept the first type's visibility; a second owner is now refused when
+  either hides rows, as on the filter side, and a subclass binds its own owner (`8ab6c921`)
 
 Still owed in t3 for items 7-10: delete their records (cleanup only, no code).
 
@@ -77,7 +79,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## To do: holes found re-checking the fixes
 
-- [ ] 60. One `OrderSet` on two types of the same model keeps the first type's visibility; the `FilterSet` twin is refused at startup
 - [ ] 61. Three `FilterSet`s in a `RelatedFilter` cycle: the flat filters exposed depend on type declaration order
 - [ ] 62. A declared flat `ChoiceField` over a grouped-choices column is refused since item 35 (worked before); the refusal's message is
   also wrong for a column no type exposes
@@ -87,6 +88,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
+- [ ] 72. A set bound to a type over a proxy model reads the concrete model's primary type on a path re-entering its model (filters
+  and orders reveal rows the bound type hides); an MTI parent and child type sharing one set still diverge by binding order
 
 ## Waiting on you
 
@@ -99,6 +102,8 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 69. CHANGELOG entry for item 1: `Meta.exclude=["parent"]` on a mutation over a `ForeignObject` model now raises
 - [ ] 71. CHANGELOG entry for item 59: two `RelatedFilter`s or `RelatedOrder`s naming one relation now raise at class creation, and a
   longer one (`shelf__branch` beside `shelf`) raises at expansion when the shorter branch's target set reaches `branch`
+- [ ] 73. A set subclass used only as a `RelatedFilter` / `RelatedOrder` target, never wired to a type, inherits its base's owner and
+  that owner's visibility. Keep, or fall back to the target model's registered type?
 
 ## Hunt not finished in t3
 

@@ -2836,7 +2836,7 @@ complete extension payload over HTTP.
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- The other upstream parity gaps and typed connection argument rejections belong to
+- The other upstream parity gaps and an `extensions.code` on connection pagination rejections belong to
   [`TODO-ALPHA-051-0.0.15`][kanban].
 - Debug-extension extraction belongs to [`TODO-ALPHA-052-0.0.15`][kanban].
 - Boundary/DRY squeeze, the version literal, glossary status flip, and release wording belong

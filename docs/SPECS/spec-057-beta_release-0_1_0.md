@@ -283,8 +283,8 @@ to happen once, in order, with evidence.
 - A `0.1.0` parity audit has run once: its homeable findings are homed on
   existing cards and its six residual code gaps are card
   `051` (Upstream parity-gap closure), whose DoD also discharges this
-  card's open question about upstream argument rejections being
-  masked by the secure-output defaults. Slice 1's ledger treats that audit
+  card's open question about an audited `extensions.code` on the
+  connection pagination rejections (`PaginationArgumentError`). Slice 1's ledger treats that audit
   as evidence to join, not as the pinned source universe (Decision 6's
   reconstruct-from-pinned-revisions obligation stands).
 

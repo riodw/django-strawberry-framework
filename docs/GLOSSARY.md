@@ -184,6 +184,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Ordering`](#ordering) | shipped (`0.0.8`) |
 | [`OrderSet`](#orderset) | shipped (`0.0.8`) |
 | [`order_input_type`](#order_input_type) | shipped (`0.0.8`) |
+| [`PaginationArgumentError`](#paginationargumenterror) | shipped (`0.0.15`) |
 | [PEP 562 lazy export](#pep-562-lazy-export) | shipped (`0.0.13`) |
 | [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.1.1` |
 | [Per-operation extension isolation](#per-operation-extension-isolation) | shipped (`0.0.14`) |
@@ -250,7 +251,7 @@ For readers exploring rather than looking up a specific term:
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
 - **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info) · [Channels request adapter](#channels-request-adapter) · [Visibility boundary](#visibility-boundary) · [Sealed execution queryset](#sealed-execution-queryset) · [Prove-then-clone AST trust](#prove-then-clone-ast-trust) · [Callable shadow defect](#callable-shadow-defect) · [Prefetch alias threading](#prefetch-alias-threading) · [WebSocket Host boundary](#websocket-host-boundary) · [Connection-scoped revocation](#connection-scoped-revocation).
-- **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
+- **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror) · [`PaginationArgumentError`](#paginationargumenterror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling) · [`ListArgumentError`](#listargumenterror) · [Async queryset completion adapter](#async-queryset-completion-adapter) · [List offset order precondition](#list-offset-order-precondition).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype) · [`DjangoFilePathType`](#djangofilepathtype) · [`DjangoImagePathType`](#djangoimagepathtype) · [`Meta.filesystem_path_fields`](#metafilesystem_path_fields).
@@ -1518,6 +1519,14 @@ Factory returning the **element type** `Annotated["<Name>OrderInputType", strawb
 The helper validates its [`OrderSet`](#orderset) argument eagerly so a typo at the resolver signature site fails loud at module import. Finalize-time orphan validation catches helper-referenced order sets that were never wired through [`Meta.orderset_class`](#metaorderset_class) — tracked via a `_helper_referenced_ordersets` ledger that `registry.clear()` co-clears.
 
 **See also:** [`OrderSet`](#orderset) · [`Ordering`](#ordering) · [`Meta.orderset_class`](#metaorderset_class).
+
+## `PaginationArgumentError`
+
+**Status:** shipped (`0.0.15`).
+
+The typed rejection for a connection's pagination arguments: a dual-base `GraphQLError` + package-error class on the [`ListArgumentError`](#listargumenterror) precedent, without `extensions`. It is raised where the package validates an argument, before the page is built: an offset `after` / `before` cursor `decode_offset_cursor` does not accept, or a negative or over-cap `first` / `last` on an offset page, a keyset page or a planned nested window. The message is Strawberry's own `SliceMetadata.from_arguments` wording, byte for byte, so one invalid argument gets one message on every path, and as a deliberate `GraphQLError` it passes the [production error policy](#production-error-policy) unmasked. A keyset (`Meta.cursor_field`) cursor rejection is the keyset codec's own `GraphQLError`, not this class. An exception raised by a consumer `resolver=` source or by hydrating a row is never re-raised as this error, so the policy masks it.
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`ListArgumentError`](#listargumenterror) · [Production error policy](#production-error-policy).
 
 ## PEP 562 lazy export
 

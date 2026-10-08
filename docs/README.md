@@ -133,7 +133,7 @@ schema = DjangoSchema(
 |---|---|
 | parse / syntax / validation error (no originating exception) | unchanged |
 | a framework-raised `GraphQLError` (`GLOBALID_INVALID`, `RESOURCE_LIMIT_EXCEEDED`, the argument rejections, the `Not authorized to ...` denial) | unchanged, with its `extensions.code` where it has one |
-| a connection pagination rejection (`PaginationArgumentError`: a malformed offset `after` / `before`, a negative or over-cap `first` / `last`) or the `first` + `last` guard | unchanged, message only; neither carries an `extensions.code` |
+| a connection pagination rejection ([`PaginationArgumentError`][glossary-paginationargumenterror]: a malformed offset `after` / `before`, a negative or over-cap `first` / `last`) or the `first` + `last` guard | unchanged, message only; neither carries an `extensions.code` |
 | a `GraphQLError` you raise yourself | unchanged; `extensions.code` is present only if you supplied it |
 | any other exception escaping a resolver or hook | the policy message + a fresh `correlationId` |
 
@@ -920,6 +920,7 @@ django-strawberry-framework = { path = "../django-strawberry-framework", editabl
 [glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset
+[glossary-paginationargumenterror]: GLOSSARY.md#paginationargumenterror
 [glossary-per-operation-extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
 [glossary-plan-cache]: GLOSSARY.md#plan-cache
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration

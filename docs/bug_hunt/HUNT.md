@@ -62,7 +62,9 @@ only; this doc is canonical.
   branch, the unhandled shape, the guard that should exist. A new guard needs a test that reaches
   it through real usage; `pragma: no cover` never lands one.
 - **Root cause at the owner.** Fix the layer owning the violated contract, never only the observed
-  caller. Permanent behavioral test at the strongest reachable tier, same change. Live tier
+  caller. Permanent behavioral test at the strongest reachable tier, same change. A "refuse" fix
+  is tested against overlapping shapes (a longer declaration whose prefix equals a shorter one),
+  not only equal ones; a refusal message that names a remedy gets that remedy tested. Live tier
   needing a fakeshop fixture that doesn't exist (model, relation shape) → test at the strongest
   existing tier + the missing fixture reported as its own `blocked` line for Rio; never a new
   example model inside an item.
@@ -382,6 +384,12 @@ complete" + the unexamined list, never whole-package clearance. Then `Status: co
 only this run's `docs/bug_hunt/temp-tests/<scope>/` dirs by explicit path, then `uv run python
 scripts/workspace.py gc hunt` (copies, evidence, databases). Never remove `HUNT.md`, `dicta.md`,
 the progress file, `pbugs.md`, or `docs/shadow/`. Do not commit.
+
+The progress file's own closing audit is not evidence. Worker-0 derives the leftovers list, the
+item grades and the owned-changes attribution from `git status`, `git log -- <path>` and the
+item-scoped diffs: a self-written audit once listed committed files as outstanding, graded a
+docstring-only diff as a code fix (`review_inspect.py --code-digest` settles that), and filed a
+public behavior change as "no bugs" under another item.
 
 ## Why this shape
 

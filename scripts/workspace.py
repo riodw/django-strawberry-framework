@@ -84,7 +84,10 @@ its own), and is harness-agnostic. ``DSF_WS_ROOT`` replaces
 ``$TMPDIR/dsf-ws``; a root inside the repository is refused, since copies of
 a tree holding its own copies recurse. ``DSF_WS_SLOTS`` caps each flow's pool
 (default 4: three parallel roles and the pinned ``before``). New copies are
-refused below 6 GB free.
+refused below 6 GB free. macOS deletes files under ``$TMPDIR`` idle for about
+three days but keeps the directories, so an idle pool keeps ``state.json``
+listing slots ``ready`` while the copies and their evidence are gone; ``gc``
+the flow before reusing it after an idle stretch.
 
 Guarantees, each one a hand-run failure this encodes away:
 

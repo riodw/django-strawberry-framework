@@ -512,6 +512,8 @@ Record each command's pass/fail in `bld-<NNN>-final.md`. On failure, re-loop thr
 
 The gate closes the build cycle. Worker-0 then marks the final checkbox `- [x]` and appends `## Closing record` to the plan: the gate's command table and the `### Deferred work catalog` copied verbatim from `bld-<NNN>-final.md`, each deferred item given a named owner. The artifacts are deleted at the next cycle's pre-flight, so this copy is the only place the evidence survives in the tree (`### Archiving a plan`).
 
+A record that names its in-scope commits by content and calls the one containing it "this reconciliation" cannot name its own SHA, so every re-commit is off by one: the previous "this reconciliation" commit becomes an ordinary ancestor, to be named in the by-content list with the count word raised for it as well as for the new commits. `git log -1 -- <record path>` names the commit that just graduated.
+
 ## Floor verification
 
 Every command in the gate above runs in the shared `.venv`. **The shared `.venv` is not the supported floor** — it tracks the newest supported versions, so a green sweep in it proves only that the build works on a version many consumers are not running. The supported floor is Django **5.2.16** on Python **3.10** with strawberry-graphql **0.322.2**.
@@ -542,6 +544,7 @@ uv pip install --python <scratch>/dsf-floor/bin/python 'django==5.2.16' 'strawbe
 ```
 
 - **Never mutate the shared `.venv`.** `uv pip install` ignores `UV_PROJECT_ENVIRONMENT` and installs into `.venv` if you let it; the explicit `--python <path>` is what keeps it out. A mutated `.venv` silently changes the floor for every later pass and every concurrent session in this repo.
+- **Prove the venv before trusting the run.** Never pipe `uv venv` / `uv pip install` through `tail` or `head`: the pipeline reports the last command's status, so a failed build reads as success. Assert `<scratch>/dsf-floor/bin/python --version` reports the floor interpreter before the focused tests.
 - The floor venv lives outside the working tree, so it needs no `.gitignore` entry. Never create it inside the repo.
 - **Record the resolved versions** (`uv pip list --python <scratch>/dsf-floor/bin/python`) and each focused command's pass/fail in `bld-<NNN>-final.md`. An unrecorded floor run is not verifiable later.
 - A floor failure blocks `final-accepted` and routes back through the owning slice loop. The fix is production code that works at the floor — never a raised floor, and never a `pragma: no cover` on the divergent branch (`AGENTS.md` allows `pragma: no cover` only for branches unreachable under the test runner, and a floor-divergent branch is reachable at the floor).

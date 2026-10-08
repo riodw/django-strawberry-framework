@@ -1448,7 +1448,7 @@ boundary discipline.
 
 **The runner's boundary is more than the one `transaction.atomic()`**, and a form
 mutation inherits every part of it: `check_deadline(info)` runs **before** the
-transaction opens, so an operation already past its budget never starts a write; the
+pipeline's own transaction opens, so an operation already past its budget never starts a write; the
 transaction is opened and pinned to one write alias
 (`open_write_pipeline` / `pipeline_alias_guard` / `check_instance_write_alias`), so a
 step cannot silently write through a second connection; and an immutable

@@ -32,6 +32,7 @@ from strawberry import relay
 from strawberry.relay.exceptions import NodeIDAnnotationError
 
 from ..exceptions import ConfigurationError, _safe_arg_repr, _safe_class_name, _safe_type_name
+from ..resource_policy import check_deadline
 from ..utils.execution_mode import async_execution
 
 # ``SyncMisuseError`` moved to ``utils/querysets.py``; the
@@ -986,7 +987,13 @@ def _resolve_node_default(
     ``ConfigurationError`` subclass that also inherits ``RuntimeError``)
     rather than silently producing ``AttributeError: 'coroutine'
     object has no attribute 'filter'``.
+
+    The cooperative deadline (``resource_policy.py::check_deadline``) is checked
+    first, ahead of the execution-mode branch, so one check covers both modes for
+    every caller: the package refetch fields, Strawberry's own ``relay.node()``
+    field, and a consumer's ``GlobalID.resolve_node``.
     """
+    check_deadline(info)
     id_attr = cls.resolve_id_attr()
     value = _node_value_or_none(cls, node_id)
     if async_execution():
@@ -1056,7 +1063,10 @@ def _resolve_nodes_default(
     async ``get_queryset`` hook and surface ``SyncMisuseError`` (a
     ``ConfigurationError`` subclass that also inherits ``RuntimeError``)
     instead.
+
+    Checks the cooperative deadline first, as ``_resolve_node_default`` does.
     """
+    check_deadline(info)
     id_attr = cls.resolve_id_attr()
     if async_execution():
         return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)

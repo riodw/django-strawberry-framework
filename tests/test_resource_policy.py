@@ -842,8 +842,8 @@ def test_a_policy_written_without_arming_one_still_answers():
 
     A plain ``strawberry.Schema`` that never installed the extension leaves the
     seams on this path, answered by whatever policy the consumer published
-    under the key - a context none of the package's own collection resolvers
-    runs inside.
+    under the key - a context ``DjangoSchema``, which always arms a budget,
+    never produces.
     """
     context: dict[str, object] = {DST_RESOURCE_POLICY: ResourcePolicy(max_list_rows=5)}
     assert policy_from_info(SimpleNamespace(context=context)).max_list_rows == 5

@@ -43,7 +43,7 @@ from django_strawberry_framework.types.relay import (
 )
 from django_strawberry_framework.utils.querysets import model_for
 from tests._idioms import async_relay_hooks, relay_hooks
-from tests._info import unread_info
+from tests._info import make_info, unread_info
 
 
 @pytest.fixture(autouse=True)
@@ -1478,7 +1478,7 @@ def test_resolve_node_default_invoked_via_helper():
     assert implements_relay_node(CategoryNode)
     target = Category.objects.first()
     assert target is not None
-    result = _resolve_node_default(CategoryNode, info=unread_info(), node_id=target.pk)
+    result = _resolve_node_default(CategoryNode, info=make_info(), node_id=target.pk)
     assert result is not None
     assert isinstance(result, Category)
     assert result.pk == target.pk
@@ -1502,7 +1502,7 @@ def test_resolve_nodes_default_invoked_via_helper():
     global_id = relay.GlobalID(type_name="CategoryNode", node_id=str(target.pk))
     result = _resolve_nodes_default(
         CategoryNode,
-        info=unread_info(),
+        info=make_info(),
         node_ids=[global_id],
         required=False,
     )
@@ -1616,7 +1616,7 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
     # Sanity: the injected defaults actually fetch by pk through ``get_queryset``.
     target = Category.objects.first()
     assert target is not None
-    resolved = CategoryNode.resolve_node(str(target.pk), info=unread_info())
+    resolved = CategoryNode.resolve_node(str(target.pk), info=make_info())
     assert resolved is not None
     assert isinstance(resolved, Category)
     assert resolved.pk == target.pk

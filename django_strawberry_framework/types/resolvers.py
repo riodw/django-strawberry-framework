@@ -58,7 +58,7 @@ from ..optimizer._context import (
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
-from ..resource_policy import bounded_rows, bounded_rows_async
+from ..resource_policy import bounded_rows, bounded_rows_async, check_deadline
 from ..utils.execution_mode import async_execution
 from ..utils.querysets import (
     apply_type_visibility_async,
@@ -550,6 +550,12 @@ def _make_relation_resolver(
     ONLY supports test-double direct callers exercising the single-valued /
     many-side code paths without a registered ``DjangoType``.
 
+    Every generated relation resolver checks the request deadline
+    (``resource_policy.py::check_deadline``) on every call, whether or not the
+    relation is already loaded, as ``DjangoConnection.resolve_connection`` and
+    the Relay refetch fields do: a hop served from memory still starts the
+    rest of the subtree below it, and a lazy hop is a query of its own.
+
     Cardinality-specific shapes:
 
     - Many-side (M2M, reverse FK): ``list(getattr(root, name).all())``,
@@ -560,10 +566,18 @@ def _make_relation_resolver(
       list, matching strawberry-graphql-django's ``get_result`` shape.
       A raw relation list has no cursor and therefore no Relay cap of its
       own, so the request policy's ``max_list_rows`` is its only ceiling.
+      The deadline check rides the bound: every path through it reaches
+      ``bounded_rows`` / ``bounded_rows_async``.
     - Reverse OneToOne (a non-concrete ``OneToOneRel`` descriptor):
-      ``getattr(root, name)`` wrapped in ``try/except DoesNotExist`` so
-      the resolver returns ``None`` when the reverse row is absent.
-    - Forward FK / forward OneToOne: ``getattr(root, name)`` - returns
+      ``check_deadline`` first, then ``getattr(root, name)`` wrapped in
+      ``try/except DoesNotExist`` so the resolver returns ``None`` when the
+      reverse row is absent.
+    - Forward FK / forward OneToOne: ``check_deadline`` first, ahead of the
+      sentinel reads, so it covers the fast path, the FK-id elision stub,
+      the planned path and the visibility re-check alike; the async
+      closures built after it carry no check of their own, because the
+      head has already run in both execution modes before any closure
+      exists. Then ``getattr(root, name)`` - returns
       the related instance, or ``None`` if the FK is nullable and unset,
       or ``None`` when the FK does not resolve to a row (the same
       absence-containment class the reverse OneToOne branch applies:
@@ -713,6 +727,7 @@ def _make_relation_resolver(
         )
 
         def reverse_one_to_one_resolver(root: object, info: Info[object, object]) -> object:
+            check_deadline(info)
             _check_n1(info, root, field_name, parent_type, kind=kind, cache_name=accessor_name)
             if _will_lazy_load_single(root, accessor_name) and async_execution():
 
@@ -764,6 +779,7 @@ def _make_relation_resolver(
     )
 
     def forward_resolver(root: object, info: Info[object, object]) -> object:
+        check_deadline(info)
         context = getattr(info, "context", None)
         # FK-id elision (spec-015 Decision 7) and the N+1 probe both key off the
         # resolver key, which requires an ``info.path`` walk. Read both sentinels

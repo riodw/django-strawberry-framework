@@ -43,7 +43,12 @@ Row groups, in the order a request meets them:
   the fakeshop ``Loan`` model's no-op ``LoanQuerySet.as_manager()`` declaration
   is rebuilt at that seam and, under a prefetching plan, must answer its payload
   in the absolute two-query budget (one parent query plus one prefetch);
-- the cooperative deadline, one row per seam that hands work to the database;
+- the cooperative deadline, one row per seam that hands work to the database,
+  the generated nested relation resolvers included (single-valued and many-side,
+  sync and async), with an optimizer-mounted twin proving the single-valued check
+  sits at the resolver head rather than on the lazy-load path alone, and the
+  session-auth fields (``login``, ``logout``, ``me``) and Strawberry's own
+  ``relay.node()`` fields on both transports;
 - the enforcement authority a resolver can reach through ``info.schema``, proven
   across two requests because the write and the request it would widen are
   different requests, together with the two things that authority is identified
@@ -77,17 +82,21 @@ import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.library import schema as library_schema
-from apps.products.services import create_users, seed_data
+from apps.products import models as products_models
+from apps.products import schema as products_schema
+from apps.products.services import TEST_USER_PASSWORD, create_users, seed_data
+from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.db.models import QuerySet
 from django.http import HttpRequest
-from django.test import Client
+from django.test import AsyncClient, Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
 from graphql_client import JSONObject, graphql_payload
+from strawberry import relay
 from strawberry.extensions import ValidationCache
 from strawberry.extensions.base_extension import SchemaExtension
 from strawberry.extensions.validation_cache import _get_validate_cache
@@ -141,6 +150,40 @@ def _probe_schema(overrides: tuple[tuple[str, int], ...]) -> DjangoSchema:
     )
 
 
+@cache
+def _optimized_probe_schema(overrides: tuple[tuple[str, float], ...]) -> DjangoSchema:
+    """The ``_probe_schema`` twin with the optimizer installed.
+
+    Under a plan a single-valued relation arrives already fetched (joined, or
+    prefetched where the target declares ``get_queryset``), so its resolver never
+    lazy-loads. A deadline row on this mount is therefore what tells a check at
+    the resolver head apart from one on the lazy-load path alone. The optimizer
+    is a singleton behind a factory, the one spelling the repo permits.
+    """
+    from config.schema import Mutation, Query
+
+    optimizer = DjangoOptimizerExtension()
+    return DjangoSchema(
+        query=Query,
+        mutation=Mutation,
+        config=strawberry_config(),
+        resource_policy=dict(overrides),
+        extensions=[lambda: optimizer],
+    )
+
+
+def _optimized_probe_view(**overrides: float):
+    """Mount the package view over the optimizer-mounted probe twin."""
+    frozen = tuple(sorted(overrides.items()))
+
+    @csrf_exempt
+    def view(request: HttpRequest, *args: object, **kwargs: object):
+        built = DjangoGraphQLView.as_view(schema=_optimized_probe_schema(frozen))
+        return built(request, *args, **kwargs)
+
+    return view
+
+
 def _probe_view(**overrides: float):
     """Mount the package view over a probe schema narrowing exactly ``overrides``."""
     frozen = tuple(sorted(overrides.items()))
@@ -168,7 +211,7 @@ def _probe_upload_view(**overrides: int):
     return view
 
 
-def _probe_async_view(**overrides: int):
+def _probe_async_view(**overrides: float):
     """The async twin of ``_probe_view``, so parity is proven on a real event loop."""
     frozen = tuple(sorted(overrides.items()))
 
@@ -280,6 +323,115 @@ async def _hostile_relation_async_view(request: HttpRequest, *args: object, **kw
     schema = _hostile_relation_schema(library_schema.PatronType)
     built = AsyncDjangoGraphQLView.as_view(schema=schema)
     return await built(request, *args, **kwargs)
+
+
+async def _cards_by_hand() -> list[library_models.MembershipCard]:
+    """A hand-written async root: rows fetched by the consumer, relations left unloaded."""
+    return await sync_to_async(list)(library_models.MembershipCard.objects.order_by("id"))
+
+
+async def _patrons_by_hand() -> list[library_models.Patron]:
+    """The reverse-OneToOne twin of ``_cards_by_hand``."""
+    return await sync_to_async(list)(library_models.Patron.objects.order_by("id"))
+
+
+@cache
+def _async_relation_deadline_schema(card_type: type, patron_type: type) -> DjangoSchema:
+    """Async hand-written roots under a passed deadline, over the library O2O pair.
+
+    The roots are application code, which the deadline does not reach unless it
+    opts in, so the first seam a request meets is the generated relation resolver
+    below them: ``MembershipCard.patron`` (forward OneToOne) and ``Patron.card``
+    (reverse OneToOne). Neither target declares ``get_queryset`` and no optimizer
+    is installed, so each hop is an unloaded descriptor the resolver would
+    otherwise hand to ``sync_to_async``.
+
+    The types are ARGUMENTS and the cache is keyed on them, for the reason
+    ``_hostile_relation_schema`` gives.
+    """
+    query_cls = strawberry.type(
+        type(
+            "_AsyncRelationDeadlineQuery",
+            (),
+            {
+                "__doc__": "Async hand-written roots over the library OneToOne pair.",
+                "cards": strawberry.field(resolver=_cards_by_hand, graphql_type=list[card_type]),
+                "patrons": strawberry.field(
+                    resolver=_patrons_by_hand,
+                    graphql_type=list[patron_type],
+                ),
+            },
+        ),
+    )
+    return DjangoSchema(
+        query=query_cls,
+        config=strawberry_config(),
+        resource_policy=ResourcePolicy(execution_deadline_seconds=DEADLINE_SECONDS),
+    )
+
+
+@csrf_exempt
+async def _async_relation_deadline_view(request: HttpRequest, *args: object, **kwargs: object):
+    """Mount the async-root relation deadline schema over the async view."""
+    schema = _async_relation_deadline_schema(
+        library_schema.MembershipCardType,
+        library_schema.PatronType,
+    )
+    built = AsyncDjangoGraphQLView.as_view(schema=schema)
+    return await built(request, *args, **kwargs)
+
+
+@cache
+def _native_node_schema(node_type: type, deadline: float | None) -> DjangoSchema:
+    """Strawberry's own ``relay.node()`` fields, single and list, over one Relay type.
+
+    No package refetch field sits in front of them, so the first seam a request
+    meets is the ``resolve_node`` / ``resolve_nodes`` default the package installs
+    on every Relay ``DjangoType``. ``deadline`` ``None`` is the unarmed twin.
+
+    The type is an ARGUMENT and the cache is keyed on it, for the reason
+    ``_hostile_relation_schema`` gives.
+    """
+    query_cls = strawberry.type(
+        type(
+            "_NativeNodeQuery",
+            (),
+            {
+                "__doc__": "Strawberry's native Relay node fields, single and list.",
+                "__annotations__": {"node": relay.Node, "nodes": list[relay.Node]},
+                "node": relay.node(),
+                "nodes": relay.node(),
+            },
+        ),
+    )
+    return DjangoSchema(
+        query=query_cls,
+        types=[node_type],
+        config=strawberry_config(),
+        resource_policy=ResourcePolicy(execution_deadline_seconds=deadline),
+    )
+
+
+def _native_node_view(deadline: float | None):
+    """Mount the native-node schema over the sync view."""
+
+    @csrf_exempt
+    def view(request: HttpRequest, *args: object, **kwargs: object):
+        schema = _native_node_schema(products_schema.CategoryType, deadline)
+        return DjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
+
+    return view
+
+
+def _native_node_async_view(deadline: float | None):
+    """Mount the native-node schema over the async view."""
+
+    @csrf_exempt
+    async def view(request: HttpRequest, *args: object, **kwargs: object):
+        schema = _native_node_schema(products_schema.CategoryType, deadline)
+        return await AsyncDjangoGraphQLView.as_view(schema=schema)(request, *args, **kwargs)
+
+    return view
 
 
 #: The bound the carry mounts narrow to. Wide enough that no row in this group is
@@ -1264,6 +1416,16 @@ urlpatterns = [
     path("rp-values/", _probe_view(**_VALUE_BOUNDS)),
     path("rp-value-depth/", _probe_view(max_value_depth=MAX_VALUE_DEPTH)),
     path("rp-deadline/", _probe_view(execution_deadline_seconds=DEADLINE_SECONDS)),
+    path("rp-deadline-unarmed/", _probe_view()),
+    path(
+        "rp-deadline-optimized/",
+        _optimized_probe_view(execution_deadline_seconds=DEADLINE_SECONDS),
+    ),
+    path("rp-deadline-relation-async/", _async_relation_deadline_view),
+    path("rp-deadline-async/", _probe_async_view(execution_deadline_seconds=DEADLINE_SECONDS)),
+    path("rp-deadline-native-node/", _native_node_view(DEADLINE_SECONDS)),
+    path("rp-deadline-native-node-unarmed/", _native_node_view(None)),
+    path("rp-deadline-native-node-async/", _native_node_async_view(DEADLINE_SECONDS)),
     path("rp-values-async/", _probe_async_view(**_VALUE_BOUNDS)),
     path("rp-hostile-relation/", _hostile_relation_view),
     path("rp-hostile-relation-async/", _hostile_relation_async_view),
@@ -2757,15 +2919,506 @@ def test_a_passed_deadline_stops_a_relay_refetch_before_any_id_is_decoded():
     assert captured.captured_queries == []
 
 
+_NATIVE_NODE = "query($id: ID!){ node(id: $id){ ... on CategoryType { name } } }"
+_NATIVE_NODES = "query($ids: [ID!]!){ nodes(ids: $ids){ ... on CategoryType { name } } }"
+
+
+def _public_category_gid() -> tuple[str, str]:
+    """A seeded public category's GlobalID and name; anonymous visibility admits it."""
+    category = products_models.Category.objects.filter(is_private=False).order_by("pk").first()
+    assert category is not None
+    gid = str(relay.GlobalID(type_name="CategoryType", node_id=str(category.pk)))
+    return gid, category.name
+
+
+def _native_node_cases(gid: str, name: str) -> dict[str, tuple[str, JSONObject, JSONObject]]:
+    """Per native field: the document, its variables, and the unarmed answer."""
+    return {
+        "node": (_NATIVE_NODE, {"id": gid}, {"node": {"name": name}}),
+        "nodes": (_NATIVE_NODES, {"ids": [gid]}, {"nodes": [{"name": name}]}),
+    }
+
+
+@pytest.mark.parametrize("field", ["node", "nodes"])
 @pytest.mark.django_db
-def test_a_passed_deadline_stops_a_write_before_its_transaction_opens():
-    """The write seam: refusing before ``transaction.atomic()`` leaves nothing to unwind."""
+def test_an_unarmed_deadline_lets_a_native_node_field_resolve(field: str):
+    """The control: the same native fields with no deadline answer the row."""
+    seed_data(1)
+    query, variables, data = _native_node_cases(*_public_category_gid())[field]
+    payload = _post("/rp-deadline-native-node-unarmed/", query, variables)
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == data
+
+
+@pytest.mark.parametrize("field", ["node", "nodes"])
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_native_node_field_before_it_queries(field: str):
+    """Strawberry's own ``relay.node()`` fields reach the package's node defaults.
+
+    No package refetch field checks in front of them, so the check at the head of
+    ``resolve_node`` / ``resolve_nodes`` is the one that rejects, with no query.
+    """
+    seed_data(1)
+    query, variables, _data = _native_node_cases(*_public_category_gid())[field]
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline-native-node/", query, variables)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [[field]]
+    assert captured.captured_queries == []
+
+
+@pytest.mark.parametrize("field", ["node", "nodes"])
+@pytest.mark.django_db(transaction=True)
+def test_a_passed_deadline_stops_a_native_node_field_on_the_async_transport(field: str):
+    """Sync/async parity: the head check runs ahead of the execution-mode branch.
+
+    The rejection and its path rather than a query count, for the reason
+    ``test_a_passed_deadline_stops_a_nested_relation_on_the_async_transport``
+    gives; without the check the field answers the row.
+    """
+    seed_data(1)
+    query, variables, _data = _native_node_cases(*_public_category_gid())[field]
+    response = _await_response(
+        AsyncTestClient().query(
+            query,
+            variables,
+            assert_no_errors=False,
+            url="/rp-deadline-native-node-async/",
+        ),
+    )
+    payload = json.loads(response.response.content)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [[field]]
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_write_before_its_pipeline_transaction_opens():
+    """The write seam: refusing before the pipeline's own atomic leaves no write to unwind."""
     mutation = (
         'mutation { createBookViaCustomInput(data: { title: "t", subtitle: "s", shelfId: 1 }) '
         "{ node { title } errors { field messages } } }"
     )
     payload = _post("/rp-deadline/", mutation)
     _deadline_rejection(payload)
+
+
+_BOOK_SHELVES = "{ allLibraryBooks { title shelf { code } } }"
+_CARD_PATRONS = "{ allLibraryMembershipCards { barcode patron { name } } }"
+_PATRON_CARDS = "{ allLibraryPatrons { name card { barcode } } }"
+_BOOK_GENRES = "{ allLibraryBooks { title genres { name } } }"
+
+
+def _seed_relation_deadline_rows() -> None:
+    """Two of everything the nested-relation deadline rows walk.
+
+    Two books on two shelves, two patrons each holding a card, and a genre on
+    every book. The library roots these rows query are hand-written
+    ``@strawberry.field`` resolvers returning a queryset, which the deadline does
+    not reach, so the root list is always fetched and the first seam a request
+    meets is the generated relation resolver below it. Inline
+    ``Model.objects.create`` because the library app has no seed helper.
+    """
+    branch = library_models.Branch.objects.create(name="deadline-branch")
+    genre = library_models.Genre.objects.create(name="deadline-genre")
+    for index in range(2):
+        shelf = library_models.Shelf.objects.create(code=f"deadline-shelf-{index}", branch=branch)
+        book = library_models.Book.objects.create(title=f"deadline-book-{index}", shelf=shelf)
+        book.genres.add(genre)
+        patron = library_models.Patron.objects.create(name=f"deadline-patron-{index}")
+        library_models.MembershipCard.objects.create(
+            patron=patron,
+            barcode=f"deadline-card-{index}",
+        )
+
+
+def _error_paths(payload: JSONObject) -> list[list[object]]:
+    """Every error's path, after asserting each is the typed deadline rejection."""
+    errors = payload["errors"]
+    for error in errors:
+        assert error["extensions"]["code"] == RESOURCE_LIMIT_ERROR_CODE, errors
+        assert error["extensions"]["bound"] == "execution_deadline_seconds", errors
+    return [error["path"] for error in errors]
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_nested_forward_fk_before_its_lazy_load():
+    """The forward FK resolver checks at its head, so the shelf hop never queries.
+
+    ``ShelfType`` declares ``get_queryset``, so without the check each book would
+    cost a lazy load plus a visibility re-check. One query is the root list; the
+    first ``shelf`` rejects, and the non-null hop nulls the whole answer.
+    """
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _BOOK_SHELVES)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["allLibraryBooks", 0, "shelf"]]
+    assert payload["data"] is None
+    assert len(captured.captured_queries) == 1
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_nested_forward_one_to_one_before_its_lazy_load():
+    """The forward OneToOne shares the forward resolver and its head check."""
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _CARD_PATRONS)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["allLibraryMembershipCards", 0, "patron"]]
+    assert payload["data"] is None
+    assert len(captured.captured_queries) == 1
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_every_nested_reverse_one_to_one_before_its_lazy_load():
+    """The reverse OneToOne resolver checks at its head, once per parent row.
+
+    ``card`` is nullable, so each rejection nulls only its own hop and the next
+    row's resolver runs - and rejects too. Two errors, two null cards, and no
+    query past the root list.
+    """
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _PATRON_CARDS)
+    assert _error_paths(payload) == [
+        ["allLibraryPatrons", 0, "card"],
+        ["allLibraryPatrons", 1, "card"],
+    ]
+    assert payload["data"] == {
+        "allLibraryPatrons": [
+            {"name": "deadline-patron-0", "card": None},
+            {"name": "deadline-patron-1", "card": None},
+        ],
+    }
+    assert len(captured.captured_queries) == 1
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_nested_many_side_relation_at_its_bound():
+    """The many-side contrast: the same check, reached through ``bounded_rows``."""
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _BOOK_GENRES)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["allLibraryBooks", 0, "genres"]]
+    assert payload["data"] is None
+    assert len(captured.captured_queries) == 1
+
+
+@pytest.mark.parametrize(
+    ("query", "queries", "data"),
+    [
+        (
+            _BOOK_SHELVES,
+            5,
+            {
+                "allLibraryBooks": [
+                    {"title": "deadline-book-0", "shelf": {"code": "deadline-shelf-0"}},
+                    {"title": "deadline-book-1", "shelf": {"code": "deadline-shelf-1"}},
+                ],
+            },
+        ),
+        (
+            _CARD_PATRONS,
+            3,
+            {
+                "allLibraryMembershipCards": [
+                    {"barcode": "deadline-card-0", "patron": {"name": "deadline-patron-0"}},
+                    {"barcode": "deadline-card-1", "patron": {"name": "deadline-patron-1"}},
+                ],
+            },
+        ),
+        (
+            _PATRON_CARDS,
+            3,
+            {
+                "allLibraryPatrons": [
+                    {"name": "deadline-patron-0", "card": {"barcode": "deadline-card-0"}},
+                    {"name": "deadline-patron-1", "card": {"barcode": "deadline-card-1"}},
+                ],
+            },
+        ),
+    ],
+    ids=["forward-fk", "forward-one-to-one", "reverse-one-to-one"],
+)
+@pytest.mark.django_db
+def test_an_unarmed_deadline_lets_every_nested_relation_load(
+    query: str,
+    queries: int,
+    data: JSONObject,
+):
+    """The control: the same schema with no deadline pays every lazy hop.
+
+    One root query, then per row a lazy load (plus a visibility re-check for the
+    hooked ``ShelfType``). The armed rows' single query is therefore the
+    rejection's doing, not the shape's.
+    """
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline-unarmed/", query)
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == data
+    assert len(captured.captured_queries) == queries
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_forward_relation_the_optimizer_elided():
+    """The FK-id elision stub sits behind the head check too.
+
+    ``patron { id }`` selects nothing the card row does not already carry, and
+    ``PatronType`` declares no ``get_queryset``, so the optimizer elides the
+    hop: the resolver would build its answer from ``patron_id`` with no query
+    and return before any lazy-load or planned path. The root list is the one
+    query, and the first ``patron`` still rejects.
+    """
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post(
+            "/rp-deadline-optimized/",
+            "{ allLibraryMembershipCards { barcode patron { id } } }",
+        )
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["allLibraryMembershipCards", 0, "patron"]]
+    assert payload["data"] is None
+    assert len(captured.captured_queries) == 1
+
+
+@pytest.mark.parametrize(
+    ("query", "queries", "paths"),
+    [
+        (_CARD_PATRONS, 1, [["allLibraryMembershipCards", 0, "patron"]]),
+        (_PATRON_CARDS, 1, [["allLibraryPatrons", 0, "card"], ["allLibraryPatrons", 1, "card"]]),
+        (_BOOK_SHELVES, 2, [["allLibraryBooks", 0, "shelf"]]),
+        (_BOOK_GENRES, 2, [["allLibraryBooks", 0, "genres"]]),
+    ],
+    ids=[
+        "forward-one-to-one",
+        "reverse-one-to-one",
+        "forward-fk-prefetched",
+        "many-side",
+    ],
+)
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_a_relation_the_optimizer_already_fetched(
+    query: str,
+    queries: int,
+    paths: list[list[object]],
+):
+    """Every generated relation resolver checks on every call, loaded or not.
+
+    Under a plan the hop arrives already fetched - joined for the un-hooked
+    targets (one query), prefetched for ``ShelfType`` and the genres (two) - so
+    the resolver reads memory and would never reach a lazy-load path. It
+    rejects anyway, as the many-side does through its bound: a hop served from
+    memory still starts the subtree below it.
+    """
+    _seed_relation_deadline_rows()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline-optimized/", query)
+    assert _error_paths(payload) == paths
+    assert len(captured.captured_queries) == queries
+
+
+@pytest.mark.parametrize(
+    ("query", "error_path", "data"),
+    [
+        ("{ cards { barcode patron { name } } }", ["cards", 0, "patron"], None),
+        (
+            "{ patrons { name card { barcode } } }",
+            ["patrons", 0, "card"],
+            {"patrons": [{"name": "deadline-patron-0", "card": None}]},
+        ),
+    ],
+    ids=["forward-one-to-one", "reverse-one-to-one"],
+)
+@pytest.mark.django_db(transaction=True)
+def test_a_passed_deadline_stops_a_nested_relation_on_the_async_transport(
+    query: str,
+    error_path: list[object],
+    data: JSONObject | None,
+):
+    """Sync/async parity: both OneToOne directions reject under async execution too.
+
+    The async roots leave each hop an unloaded descriptor, the shape the
+    resolver hands to ``sync_to_async``, and the typed rejection still lands at
+    the hop's own path with the same partial data the sync rows answer. One
+    patron holding one card, so each document meets exactly one relation
+    resolver. Rows rather than a query count, for the reason
+    ``test_a_project_queryset_class_relation_answers_the_same_rows_when_awaited``
+    gives: the async roots fetch in a worker thread the capture cannot see.
+    """
+    patron = library_models.Patron.objects.create(name="deadline-patron-0")
+    library_models.MembershipCard.objects.create(patron=patron, barcode="deadline-card-0")
+    response = _await_response(
+        AsyncTestClient().query(
+            query,
+            assert_no_errors=False,
+            url="/rp-deadline-relation-async/",
+        ),
+    )
+    payload = json.loads(response.response.content)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [error_path]
+    assert payload["data"] == data
+
+
+_AUTH_LOGIN = (
+    "mutation($u: String!, $p: String!){ login(username: $u, password: $p){ "
+    "node{ username } errors{ field messages } } }"
+)
+_AUTH_LOGOUT = "mutation{ logout{ ok errors{ field messages } } }"
+_AUTH_ME = "{ me{ username } }"
+_STAFF_CREDENTIALS = {"u": "staff_1", "p": TEST_USER_PASSWORD}
+
+
+def _signed_in_client() -> Client:
+    """A client holding a live ``staff_1`` session, signed in on the unarmed mount.
+
+    Also the unarmed control: the same probe schema with no deadline logs in.
+    """
+    client = Client()
+    payload = _post("/rp-deadline-unarmed/", _AUTH_LOGIN, _STAFF_CREDENTIALS, client=client)
+    assert payload.get("errors") is None, payload
+    assert payload["data"] == {"login": {"node": {"username": "staff_1"}, "errors": []}}
+    assert "sessionid" in client.cookies
+    return client
+
+
+def _session_user(client: Client) -> object:
+    """Who the client's session belongs to, read through ``me`` on the unarmed mount."""
+    payload = _post("/rp-deadline-unarmed/", _AUTH_ME, client=client)
+    assert payload.get("errors") is None, payload
+    return payload["data"]["me"]
+
+
+def _last_login() -> object:
+    return get_user_model().objects.get(username="staff_1").last_login
+
+
+@pytest.mark.django_db
+def test_an_unarmed_deadline_lets_login_establish_a_session():
+    """The auth control: without a deadline the probe schema signs ``staff_1`` in."""
+    create_users(1)
+    client = _signed_in_client()
+    assert _session_user(client) == {"username": "staff_1"}
+    assert _last_login() is not None
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_login_before_it_authenticates():
+    """``login`` checks first: no user lookup, no password hash, no session.
+
+    Zero queries means ``authenticate`` never ran; no cookie and an unchanged
+    ``last_login`` mean no session was established.
+    """
+    create_users(1)
+    client = Client()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _AUTH_LOGIN, _STAFF_CREDENTIALS, client=client)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["login"]]
+    assert payload["data"] is None
+    assert len(captured.captured_queries) == 0
+    assert "sessionid" not in client.cookies
+    assert _last_login() is None
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_logout_before_it_touches_the_session():
+    """``logout`` checks first: the session is never loaded, so it is never flushed."""
+    create_users(1)
+    client = _signed_in_client()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _AUTH_LOGOUT, client=client)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["logout"]]
+    assert payload["data"] is None
+    assert len(captured.captured_queries) == 0
+    assert _session_user(client) == {"username": "staff_1"}
+
+
+@pytest.mark.django_db
+def test_a_passed_deadline_stops_me_before_it_resolves_the_user():
+    """``me`` checks first: ``request.user`` is never forced, so neither lookup runs.
+
+    A signed-in client, so the field would otherwise load the session and then
+    the user - two queries the rejection leaves unpaid. ``me`` is nullable, so
+    the rejection nulls only its own field.
+    """
+    create_users(1)
+    client = _signed_in_client()
+    with CaptureQueriesContext(connection) as captured:
+        payload = _post("/rp-deadline/", _AUTH_ME, client=client)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [["me"]]
+    assert payload["data"] == {"me": None}
+    assert len(captured.captured_queries) == 0
+
+
+@pytest.mark.parametrize(
+    (
+        "query",
+        "variables",
+        "error_path",
+        "data",
+    ),
+    [
+        (
+            _AUTH_LOGIN,
+            _STAFF_CREDENTIALS,
+            ["login"],
+            None,
+        ),
+        (
+            _AUTH_LOGOUT,
+            None,
+            ["logout"],
+            None,
+        ),
+        (
+            _AUTH_ME,
+            None,
+            ["me"],
+            {"me": None},
+        ),
+    ],
+    ids=["login", "logout", "me"],
+)
+@pytest.mark.django_db(transaction=True)
+def test_a_passed_deadline_stops_the_auth_fields_on_the_async_transport(
+    query: str,
+    variables: Mapping[str, object] | None,
+    error_path: list[object],
+    data: JSONObject | None,
+):
+    """Sync/async parity for the auth fields, over a signed-in session.
+
+    Outcomes rather than a query count, for the reason
+    ``test_a_passed_deadline_stops_a_nested_relation_on_the_async_transport``
+    gives. Each field would otherwise act on the session: ``login`` would
+    re-authenticate and stamp ``last_login``, ``logout`` would flush the
+    session, and ``me`` would answer ``staff_1``. The rejection leaves the
+    session signed in and ``last_login`` where the sign-in put it.
+    """
+    create_users(1)
+    client = _signed_in_client()
+    signed_in_at = _last_login()
+    async_client = AsyncClient()
+    async_client.cookies = client.cookies
+    response = _await_response(
+        AsyncTestClient(client=async_client).query(
+            query,
+            variables,
+            assert_no_errors=False,
+            url="/rp-deadline-async/",
+        ),
+    )
+    payload = json.loads(response.response.content)
+    _deadline_rejection(payload)
+    assert _error_paths(payload) == [error_path]
+    assert payload["data"] == data
+    assert _session_user(client) == {"username": "staff_1"}
+    assert _last_login() == signed_in_at
 
 
 @pytest.mark.django_db

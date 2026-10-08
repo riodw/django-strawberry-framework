@@ -69,6 +69,7 @@ from ..mutations.sets import (
     register_mutation as record_mutation_declaration,
 )
 from ..registry import register_subsystem_clear, registry
+from ..resource_policy import check_deadline
 from ..utils.directives import validated_field_directives
 from ..utils.execution_mode import async_execution
 from ..utils.permissions import request_from_info
@@ -494,6 +495,12 @@ def _make_auth_field(
     ``_lazy_ref``-built refs - never a re-spelled copy. ``arguments`` is the ordered
     ``(name, annotation)`` list of keyword-only GraphQL args (empty for ``logout`` /
     ``me``).
+
+    The cooperative deadline (``resource_policy.py::check_deadline``) is checked
+    here, ahead of the dispatch, so it runs once per call in both execution modes
+    and before either body resolves the request, forces ``request.user``,
+    authenticates, or touches the session. It is pure, so the async path runs it
+    on the event loop before any ``sync_to_async`` boundary is built.
     """
     # Hostile-container containment for the directives iterable rides the shared
     # ``utils/directives.py::validated_field_directives`` (single-sited for every field
@@ -503,6 +510,7 @@ def _make_auth_field(
     directives = validated_field_directives("auth field", directives)
 
     def _resolve(root: object, info: Info[object, object], **kwargs: object) -> object:  # noqa: ARG001
+        check_deadline(info)
         if async_execution():
             return async_body(info, **kwargs)
         return sync_body(info, **kwargs)

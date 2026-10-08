@@ -278,10 +278,13 @@ def run_write_pipeline_sync(
     ``serializer.save()`` that inserts a row, then raises) never commits the
     partial write; the error envelope is the no-effect outcome.
     """
-    # The cooperative deadline (spec-047) BEFORE the transaction opens: a write
-    # pipeline locates, locks, and writes rows, so an operation already past its
-    # budget must not start one - and refusing before ``transaction.atomic()``
-    # means the refusal never has a partial transaction to unwind.
+    # The cooperative deadline (spec-047) BEFORE the pipeline's own transaction
+    # opens: a write pipeline locates, locks, and writes rows, so an operation
+    # already past its budget must not start one - and refusing before
+    # ``open_write_pipeline`` means the refusal never has a partial write to
+    # unwind. The completion-spanning window ``schema.py`` holds around a
+    # generated mutation field is already open here; it has touched no row,
+    # and the rejection rolls it back.
     check_deadline(info)
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type

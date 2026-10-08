@@ -451,8 +451,8 @@ instant and buy itself unlimited wall clock. Neither needs hostile intent: an ap
 context key or a middleware reusing a generic string name collides just as effectively. The
 authority is therefore a module-private `ContextVar` (`_active_budget`), which no context write
 can reach, is scoped per task under asyncio and per thread otherwise, and propagates across
-`sync_to_async` / `async_to_sync` so it is armed wherever the package's own collection seams
-run. It is the same `ContextVar`-over-stash shape `optimizer/_context.py::active_strictness`
+`sync_to_async` / `async_to_sync` so it is armed wherever the package's own bound and deadline
+seams run. It is the same `ContextVar`-over-stash shape `optimizer/_context.py::active_strictness`
 reads, for the same reason: a per-execution answer a context stash cannot be trusted to give.
 A streamed operation's later frames run in other tasks, so the runner binds the same budget
 again around each of them (`extensions/operation_state.py::OperationState.rebind_on_resume`),
@@ -477,7 +477,7 @@ the clock is not a deadline it can certify the request is inside.
 
 **A published policy with nothing armed still answers**, which is the path a plain
 `strawberry.Schema` with no extension, whose consumer may publish a policy under the key, takes.
-That is a context none of this package's collection resolvers runs inside.
+`DjangoSchema` always installs the extension that arms a budget, so none of its requests take it.
 
 **The operation SNAPSHOTS both keys and puts them back; it does not clear them.**
 `utils/context.py::restored_context_keys` brackets each operation: it records what each key
@@ -849,12 +849,23 @@ Two accounting rules are contractual:
 `execution_deadline_seconds` defaults to `None`. When set, the extension stamps a monotonic
 deadline on the request context and every seam that is about to hand work to the database
 calls `resource_policy.py::check_deadline` first. The seams are enumerated rather than left
-to "the collection resolvers", because a seam that charges rows without checking the
+to "the collection resolvers", because a seam that reaches the database without checking the
 deadline is a seam the deadline does not cover:
 
 - `resource_policy.py::_raw_list_bound` — the shared body of both raw-list colors, so the
   root field and the generated many-side relation resolver are covered in one place on the
   sync and the async path alike;
+- `types/resolvers.py::_make_relation_resolver` — the generated forward FK / forward OneToOne
+  and reverse OneToOne resolvers, as the first statement of each, on EVERY call: before the
+  optimizer sentinels are read, so the lazy load, the FK-id elision stub, the planned hop and
+  the visibility re-check are all behind it, and whether or not the relation is already
+  loaded, as the many-side already does through its bound. A hop served from memory still
+  starts the subtree below it. The async `sync_to_async` closures carry no check of their own:
+  the head has run in both execution modes before any closure is built. Because the hop checks
+  on every call, a deadline that passes mid-operation also fails a generated mutation's payload
+  relation hop, and `schema.py::DjangoMutationExecutionContext._rollback_for_new_errors` then
+  rolls the write back, and fails every subscription frame's relation hops once the original
+  budget is spent — the behavior the many-side and connection hops already had;
 - `connection.py::DjangoConnection.resolve_connection` — the single head every connection
   shape passes through, so the plain and `totalCount` connections cannot diverge, placed
   after the `first` + `last` guard so a malformed pagination request still answers with its
@@ -862,13 +873,39 @@ deadline is a seam the deadline does not cover:
 - `relay.py::DjangoNodeField` / `DjangoNodesField` — before the decode, which is the step
   that makes a visibility-scoped query inevitable (after the empty-`ids` short circuit, so
   a request that asks for nothing is never refused for it);
-- `mutations/resolvers.py::run_write_pipeline_sync` — BEFORE `transaction.atomic()` opens,
-  so the refusal never has a partial transaction to unwind. It is the ONE write seam: the
-  model, form and serializer create / update flavors, the plain form flavor, and delete all
-  enter this skeleton, so all five inherit the single check rather than each carrying one.
+- `types/relay.py::_resolve_node_default` / `types/relay.py::_resolve_nodes_default` — the
+  `resolve_node` / `resolve_nodes` defaults installed on every Relay `DjangoType`, ahead of the
+  execution-mode branch so one check covers both modes. The package refetch fields call them
+  after their own check, but Strawberry's own `relay.node()` field and a consumer's
+  `GlobalID.resolve_node` reach them directly, so they carry the check themselves;
+- `auth/mutations.py::_make_auth_field` — the one field builder `login`, `logout` and `me`
+  share, ahead of its sync / async dispatch, so the check runs once per call in both execution
+  modes and before either body resolves the request, forces `request.user`, authenticates, or
+  touches the session. It is pure, so the async path runs it on the event loop before any
+  `sync_to_async` boundary is built;
+- `mutations/resolvers.py::run_write_pipeline_sync` — BEFORE the pipeline's own
+  `transaction.atomic()` opens, so the refusal never has a partial write to unwind. It is the
+  ONE write seam: the model, form and serializer create / update flavors, the plain form
+  flavor, and delete all enter this skeleton, so all five inherit the single check rather than
+  each carrying one, and `register` rides it unchanged.
 
 `utils/connections.py` was audited and needs none: every helper there is pure window
-arithmetic with no database access.
+arithmetic with no database access. Nor does the generated file resolver
+(`types/resolvers.py::_make_file_resolver`): it reads a column the row already loaded, and the
+storage I/O its subfields may do is not database work. Nor does the `resolve_id` default
+installed on every Relay `DjangoType` (`types/relay.py::_resolve_id_default`): it likewise reads
+the id column the row already loaded, and a consumer `.only()` that defers that column is
+application configuration. Nor does the completion-spanning
+transaction `schema.py::DjangoMutationExecutionContext` enters around a generated mutation field
+before its resolver runs: it reads, locks and writes no row, the write pipeline's check is the
+first statement inside it, and a rejection rolls it back. Application code — hand-written root
+fields, resolver overrides, and the `get_queryset` visibility hooks and consumer `FilterSet` /
+`OrderSet` classes the field pipelines run — is trusted code under the "Trust boundary" of the
+project goal, outside the enumeration. A connection field's resolver pipeline, `DjangoListField`
+and the many-side relation re-check run such a hook ahead of their check, so a query the hook
+issues itself is inside the deadline only where it calls `resource_policy.py::check_deadline`,
+or `resource_policy.py::bounded_rows` / `resource_policy.py::bounded_rows_async`, itself, and
+both are public for that purpose.
 
 **The deadline read guards the answer.** `resource_policy.py::check_deadline` reads the
 armed deadline, narrowed by the published mirror only where that mirror is an earlier exact
@@ -1135,7 +1172,7 @@ check runs rather than about how long anything takes.
 | 3 | `list_field.py` | `max_rows` / `trusted_max_rows`, constructor-site validation, the bound applied after visibility. |
 | 3 | `types/resolvers.py` | The generated many-side relation resolver bounds both the prefetched and the manager path. |
 | 3 | `utils/connections.py`, `connection.py` | The policy ceiling over `relay_max_results`, resolved once per connection resolve. |
-| 3 | `connection.py`, `relay.py`, `mutations/resolvers.py` | The `check_deadline` seams: the shared connection resolve head, both Relay refetch fields, and the write pipelines before their transaction opens ([Decision 9](#decision-9--the-execution-deadline-is-cooperative-and-says-so)). |
+| 3 | `connection.py`, `relay.py`, `types/relay.py`, `mutations/resolvers.py`, `types/resolvers.py`, `auth/mutations.py` | The `check_deadline` seams: the shared connection resolve head, both Relay refetch fields, the `resolve_node` / `resolve_nodes` defaults, the write pipelines before their own transaction opens, the generated single-valued relation resolvers, and the session-auth field builder ([Decision 9](#decision-9--the-execution-deadline-is-cooperative-and-says-so)). |
 | 4 | `types/base.py`, `types/finalizer.py` | `DEFAULT_RELATION_SHAPE = "connection"` and the reconciled synthesis docstring. |
 | 4 | `examples/fakeshop/apps/{library,products}/schema.py` | Explicit `"both"` opt-ins where the example's live coverage needs the raw list; `CategoryType.properties` deliberately left on the new default. |
 | 4 | `tests/test_relay_connection.py`, `tests/test_connection.py`, `tests/optimizer/test_extension.py` | Re-pinned to the new default, with the `"both"` shape pinned separately. |
@@ -1328,7 +1365,19 @@ rejected on the bound it is about.
 - **The cooperative deadline**, one row per seam — connection, raw list, Relay refetch and a
   write — each asserting the typed bound, and **zero** captured queries wherever the seam
   precedes any SQL; plus an unarmed-policy row proving no seam rejects without a configured
-  deadline.
+  deadline. The nested relation rows sit under a hand-written root the deadline does not
+  reach, so the root list's one query is always paid: forward FK, forward OneToOne and the
+  many-side contrast each reject at the first hop with that one query, the nullable reverse
+  OneToOne rejects once per parent row, an unarmed twin pays every lazy hop, and the async
+  transport rejects both OneToOne directions. An optimizer-mounted twin pins the placement:
+  with every hop already fetched, the single-valued resolvers still reject, which a check on
+  the lazy-load path alone would not, and so does a forward hop the optimizer elided to an
+  FK-id stub. The session-auth fields reject with zero queries: `login` with no user lookup,
+  cookie or `last_login` stamp, `logout` and `me` over a signed-in session that stays signed
+  in; the async transport rejects all three, and an unarmed twin still logs in. Strawberry's
+  own single and list `relay.node()` fields, with no package refetch field in front, reject
+  with zero queries on the sync transport and reject on the async one; an unarmed sync twin
+  answers the row.
 - **Uploads**: a multipart request rejected by the policy, with the row stating why the
   transport body cap cannot be what rejected it.
 - **Collections**: a raw root list stopping at the maximum; the list sibling bounded so it

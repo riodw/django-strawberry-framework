@@ -350,15 +350,45 @@ class ResourcePolicy:
     ``execution_deadline_seconds``
         Optional wall-clock budget for the operation. Cooperative: every seam
         that is about to hand work to the database calls ``check_deadline``
-        first - ``bounded_rows`` (both raw-list spellings),
-        ``connection.py::DjangoConnection.resolve_connection`` (the head every
-        connection shape passes through), the Relay refetch fields
-        (``relay.py::DjangoNodeField`` / ``DjangoNodesField``), and the write
-        pipelines (``mutations/resolvers.py::run_write_pipeline_sync``) before
-        their transaction opens. It is not a preemptive
+        first - ``bounded_rows`` (both raw-list spellings, and the generated
+        many-side relation resolver), the generated forward FK / forward
+        OneToOne and reverse OneToOne relation resolvers
+        (``types/resolvers.py::_make_relation_resolver``) on every call, loaded
+        or not, ``connection.py::DjangoConnection.resolve_connection`` (the head
+        every connection shape passes through), the Relay refetch fields
+        (``relay.py::DjangoNodeField`` / ``DjangoNodesField``) and the
+        ``resolve_node`` / ``resolve_nodes`` defaults installed on every Relay
+        ``DjangoType`` (``types/relay.py::_resolve_node_default`` /
+        ``_resolve_nodes_default``), which Strawberry's own ``relay.node()``
+        field and a consumer's ``GlobalID.resolve_node`` reach directly, the
+        session-auth fields ``login`` / ``logout`` / ``me``
+        (``auth/mutations.py::_make_auth_field``) before the request is
+        resolved, a user authenticated or a session touched, and the write
+        pipelines
+        (``mutations/resolvers.py::run_write_pipeline_sync``, which ``register``
+        rides too) before their own transaction opens. It is not a preemptive
         timeout and does not claim to be one - nothing in-process can interrupt
         a query already handed to the database driver, so what the deadline buys
         is that the request starts no MORE work.
+
+        Outside that list by audit: the generated file resolver
+        (``types/resolvers.py::_make_file_resolver``), which reads a column the
+        row already loaded; the storage I/O its subfields may do is not database
+        work. The ``resolve_id`` default installed on every Relay ``DjangoType``
+        (``types/relay.py::_resolve_id_default``) likewise reads the id column
+        the row already loaded; a consumer ``.only()`` that defers that column is
+        application configuration. The completion-spanning transaction
+        ``schema.py::DjangoMutationExecutionContext`` enters around a generated
+        mutation field before its resolver runs: it reads, locks and writes no
+        row, the pipeline's check is the first statement inside it, and a
+        rejection rolls it back. Application code - hand-written root fields,
+        resolver overrides, and the ``get_queryset`` visibility hooks and
+        consumer ``FilterSet`` / ``OrderSet`` classes the field pipelines run (a
+        connection field's resolver pipeline, ``DjangoListField`` and the
+        many-side relation re-check run them ahead of their check) - is trusted
+        code (``GOAL.md`` "Trust boundary"): a query it issues itself is inside
+        the deadline only where it calls ``check_deadline``, or ``bounded_rows``
+        / ``bounded_rows_async``, itself.
     """
 
     max_document_tokens: int = 4_000
@@ -547,7 +577,7 @@ class _RequestBudget:
 #: A ``ContextVar`` is not reachable by writing the request context, is scoped
 #: per task under asyncio and per thread otherwise, and propagates across
 #: ``sync_to_async`` / ``async_to_sync``, so it is armed wherever the package's
-#: own collection seams run. The ``ContextVar``-over-stash idiom is the
+#: own bound and deadline seams run. The ``ContextVar``-over-stash idiom is the
 #: optimizer's (``optimizer/_context.py``'s execution frame), adopted for the
 #: same reason: a per-execution answer a context stash cannot be trusted to
 #: give.
@@ -863,8 +893,9 @@ def policy_from_info(info: object) -> ResourcePolicy:
     The armed budget outranks the published mirror, and is consulted without
     reference to ``info`` at all: a resolver that rewrites ``DST_RESOURCE_POLICY``
     to widen ``max_list_rows`` for the rest of its own operation changes nothing
-    that any bound reads. The mirror answers only where no budget is armed,
-    which is a context none of this package's collection seams runs inside.
+    that any bound reads. The mirror answers only where no budget is armed:
+    ``DjangoSchema`` always installs the extension that arms one, so only a
+    schema that never installed it reaches the mirror.
 
     What comes back is always a COPY, never the armed object or the package
     default singleton. This function is the package's own way of reading a bound
@@ -903,8 +934,9 @@ def policy_from_info(info: object) -> ResourcePolicy:
 def check_deadline(info: object) -> None:
     """Raise if the operation's optional wall-clock deadline has already passed.
 
-    Cooperative and called at the collection resolvers' pre-query seam, which is
-    the last point before the request hands work to the database. The armed
+    Cooperative and called first at every seam that is about to hand work to the
+    database (the seams are enumerated at ``ResourcePolicy``'s
+    ``execution_deadline_seconds`` entry). The armed
     budget is the ceiling: a resolver may SHORTEN its own request by stashing an
     earlier instant under ``DST_RESOURCE_DEADLINE``, and cannot lengthen or
     clear it (:func:`_effective_deadline`). Where no budget is armed, the
@@ -943,7 +975,7 @@ def check_deadline(info: object) -> None:
         seconds,
         seconds + 1,
         f"the operation exceeded its configured execution deadline ({budget_label}) "
-        "before this collection reached the database",
+        "before this field reached the database",
     )
 
 

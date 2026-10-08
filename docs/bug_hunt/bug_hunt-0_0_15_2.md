@@ -128,6 +128,121 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 28. Deep dive 3 (authorization on deferred paths) is blocked; its findings are items 12 and 13
 - [ ] 29. The hunt's final test gate was never run
 
+## Addendum: handoff 2026-10-08 (item 12 and the request-rejection precedence)
+
+Written at the close of one chat for whoever picks this up next. Nothing here is landed on main.
+
+### Where the work is
+
+Scratch under `/private/tmp` is wiped by a reboot, so everything is copied to `~/dst-handoff/2026-10-08/`:
+
+- `0001-fix-resolvers-nested-forward-FK-OneToOne-and-reverse.patch`: commit `7595d578`, the item 12 fix (also kept in the main repo as
+  `refs/scratch/fix12`). Based on `85ba203e`; main has moved since (at least `cdc760b5`), so rebase and re-carve
+  `examples/fakeshop/db.sqlite3` (its only DB change is glossary rows: the "Execution resource policy" body plus new terms 587
+  `check_deadline` and 588 `bounded_rows`; `glossary_item12.py` replays them).
+- `admission-wip.patch` and `admission-wip-status.txt`: the UNCOMMITTED, UNFINISHED precedence implementation, `git diff HEAD` on top of
+  `7595d578` (new files included). It was snapshotted while an Opus Medium implementer was still mid-task: code, both new test files
+  and spec-030/032/047 edits existed; glossary, KANBAN, AGENTS, START, README and CHANGELOG had not been started, and no test had
+  run. Treat it as a draft to review, not a finished change.
+- `admission-design.md`: the approved design (read this first).
+- `item12-gather-report.md`: item 12 facts and probes.
+- `hotpath12_bench.py`, `before_run1.json`/`.log`: hot-path harness and the BEFORE numbers.
+- `probe12.py`, `probeMCF_*.py`: the probes behind the findings below.
+
+The live clone was
+`/private/tmp/claude-501/-Users-riordenweber-projects-django-strawberry-framework/df9d661e-0eaa-4a60-9fbe-5e28dd0c0d33/scratchpad/fix12`.
+The implementer was stopped and its last state committed as `970d054a` (`refs/scratch/admission-wip` in the main repo; also `0001-wip-admission-*.patch` in the handoff dir). It stopped while running the generators, so the glossary, KANBAN and constants may be half-updated. Start from that commit, not `admission-wip.patch`.
+
+### Item 12: done in the clone, not landed
+
+- Verdict: a defect under AGENTS rule 37. The contract row is the `ResourcePolicy` `execution_deadline_seconds` docstring plus
+  spec-047 Decision 9, which says every seam about to reach the database checks the deadline first. The shape is `DjangoSchema` with
+  a deadline and no optimizer (or an unplanned relation). The wire input is `{ allLibraryBooks { title shelf { code } } }` on the
+  `/rp-deadline/` test mount: 5 queries after the deadline, no error.
+- Fix (`7595d578`): `check_deadline(info)` is the first statement of `forward_resolver` and `reverse_one_to_one_resolver` in
+  `types/resolvers.py::_make_relation_resolver`, checked on every call. There are no checks inside the async closures. The wire
+  message now reads "before this field reached the database".
+- Docs: the "collection resolvers" wording in the glossary and the `check_deadline` docstring is retired. Two audited exclusions
+  are added: the file resolver, and hand-written resolvers, which are trusted code (GOAL.md "Trust boundary") and opt in via
+  `check_deadline` / `bounded_rows`.
+- Tests are written but NOT run, in `test_resource_policy_api.py`:
+  - forward FK, forward O2O, reverse O2O and many-side rows;
+  - an unarmed control;
+  - an optimizer-mounted pin, which distinguishes a check at the resolver head from one on the lazy path only;
+  - async O2O rows.
+- Hot path: `check_deadline` costs about 300 ns per call, +24% to +46% per resolver call and about +1% end to end at 100 rows.
+  The AFTER number has not been taken:
+  `<tree>/.venv/bin/python ~/dst-handoff/2026-10-08/hotpath12_bench.py --tree <tree> --json after_run1.json`.
+- Unmeasured idea: an early return when neither the budget nor the context mirror holds a deadline. It would skip 4 of the 8 calls.
+- After landing: tick 12, purge D-3A-1 from t3 (outside auto mode, backup first), and tick 28 if 13 and 12 were its only findings.
+
+### The request-rejection precedence
+
+**Why the question kept coming back.** "Which error wins: `first`/`last` or the deadline?" came up 14 times since 2026-08. The
+order of per-field checks was never chosen. It falls out of Strawberry's `ConnectionExtension.resolve` running the package resolver
+(visibility, FilterSet, OrderSet) before `resolve_connection` (guard, deadline, bounds). Every seam is hand-ordered differently, and
+no test pairs two rejections.
+
+**Approved by Rio (all 7 decisions):**
+
+- **One order.** P0 is document admission, P1 field-argument errors, P2 the deadline, P3 the consumer pipeline, P4 slice and
+  database.
+- **One seam.** A new `admission.py` (`admit_connection_page`, `admit_list_page`, `admit_node_refetch`). Connections enter it through
+  a package `DjangoConnectionExtension(ConnectionExtension)` built with `strawberry.field(extensions=...)`, which replaces both
+  `relay.connection(` calls (`connection.py`, `types/finalizer.py`).
+- **Node fields** decode the id before the deadline.
+- **`first` + `last`** raises `PaginationArgumentError`, with the same message as today.
+- **Doc home** is spec-047 Decision 14 plus a glossary entry "Request rejection precedence", plus one AGENTS.md line.
+- **Landing order:** item 12 lands first.
+- **CHANGELOG:** entries for both changes. The text is in `admission-design.md` decision 7.
+
+**A defect this closes.** On a connection, a consumer `ModelChoiceFilter` validates (and queries) before the deadline check. The
+shipped `allLibraryGenresConnection(filter: {books: {shelf: {homeBranch: {exact: $pk}}}})` ran its branch lookup after an expired
+deadline. With an invalid pk it answers `FILTER_INVALID` instead of the deadline rejection. Give it its own item number when this
+lands.
+
+**Wire changes.** Only requests that are invalid in two ways change; the table is in `admission-design.md`.
+
+**What the next agent does:**
+1. Finish the implementation from the clone or `admission-wip.patch` against the design.
+2. Write the live matrix test `examples/fakeshop/test_query/test_admission_api.py`.
+3. Write `tests/test_admission.py`.
+4. Prove failability with two mutations: swapping P1 and P2, and moving admission after `next_`.
+
+**Watch when finishing:**
+- Reproduce everything `relay.connection()` sets up beyond the extension.
+- Do not leak the admitted page across parents or concurrent async fields.
+- `bounded_rows` / `bounded_rows_async` are public API and keep their deadline check.
+- Keyset: the cursor's shape and signature belong to P1; the column-fingerprint match stays at the seek.
+- The walker's plan-time catch in `optimizer/nested_planner.py`.
+
+### Rules that bit this chat
+
+- AGENTS rules 15/16: no pytest unless Rio asks, and when asked, targeted files only.
+  - Before every run, `pgrep -fl '[p]ytest|[b]asedpyright'` must print nothing (any project; a medtrics pytest was running) and at
+    least 35% memory must be free.
+  - Three subagents ran a light probe without gating on that check. Briefs must tell them to gate on it, not just print it.
+- Work in a private `git clone --no-local` with its own `uv sync`. Never write the main checkout's tracked
+  `examples/fakeshop/db.sqlite3`.
+- Landing through a concurrently dirty main:
+  1. Rebase in scratch and re-carve the DB rows by UPDATE/INSERT.
+  2. `merge --ff-only` only when no dirty file overlaps; otherwise commit through a private index.
+  3. Never `git commit --only`.
+- No `Co-Authored-By` footer (AGENTS rule 33). No branches. CHANGELOG only when Rio says so (this time Rio did).
+- Always run a verifier agent over an implementer's commit before landing.
+
+### Other open threads
+
+- Items 78 and 79 (CHANGELOG for 65 and 52) still need Rio. Focused pytest runs for items 65 and 52 were never run since landing.
+- t3 worktree `~/.t3/worktrees/django-strawberry-framework/t3code-1cc21548` still sits at `67027892`.
+  - A fast-forward to current main is large and conflicts in 5 files; Rio has not authorized it.
+  - Backup: `~/t3code-1cc21548-pre-ff.tgz`.
+- Main-repo refs `refs/scratch/fix65`, `fix52` and `land` are superseded and can be deleted. Keep `refs/scratch/fix12` until item 12
+  lands.
+- Robustness rows noted, not filed:
+  - The `get_queryset` hooks and `check_*_permission` hooks run before the deadline check (trusted code).
+  - Strawberry's native `relay.node()` has no deadline check (Strawberry's surface, not this package's).
+
 
 <!-- LINK DEFINITIONS -->
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import datetime
+import enum
 import pickle
 import uuid
 from collections import OrderedDict
@@ -34,7 +35,7 @@ from apps.library.filters import BookFilter, LoanFilter, PatronFilter
 from apps.products.models import Category, Item
 from apps.scalars import models as scalar_models
 from django.db import models as django_models
-from django.db.models import Q, QuerySet
+from django.db.models import Lookup, Q, QuerySet
 from django.forms import ModelChoiceField, ModelMultipleChoiceField
 from django.http import HttpRequest, QueryDict
 from django_filters import (
@@ -65,6 +66,8 @@ from django_strawberry_framework.filters import (
 from django_strawberry_framework.filters.base import (
     _GLOBALID_RELATION_PK_ATTR,
     EnumChoiceFilter,
+    EnumLookupFilter,
+    EnumMemberValue,
     IntegerInFilter,
     RelationPkFilter,
     RelationPkMultipleFilter,
@@ -73,6 +76,7 @@ from django_strawberry_framework.filters.base import (
 from django_strawberry_framework.filters.inputs import (
     _field_specs,
     convert_filter_to_input_annotation,
+    normalize_input_value,
 )
 from django_strawberry_framework.filters.sets import (
     _ALL_FAMILY_PROFILES,
@@ -13092,7 +13096,7 @@ def test_expansion_origin_reads_the_branch_and_child_name_off_an_expanded_copy()
 def test_enum_choice_filter_resolves_to_the_choice_family_profile():
     """The generated choice ``exact`` class shares ``ChoiceFilter``'s audited family.
 
-    ``EnumChoiceFilter`` only adds the ``""``-is-a-value predicate, so it is an exact
+    ``EnumChoiceFilter`` only adds the enum-member-is-a-value predicate, so it is an exact
     registry key under the choice profile; without the key a generated to-many choice leaf
     would resolve to no family and lose its row-preserving routing.
     """
@@ -13138,7 +13142,7 @@ class _GradedSpecimen(django_models.Model):
 def test_raw_empty_choice_form_value_applies_no_filter(column: str):
     """A raw ``""`` (a DRF ``?field=`` querystring) keeps django-filter's empty-value skip.
 
-    Only the GraphQL ``BLANK`` member, normalized to ``BLANK_CHOICE``, filters ``= ''``; a
+    Only the GraphQL ``BLANK`` member, normalized to ``EnumMemberValue("")``, filters ``= ''``; a
     shared ``FilterSet`` used through ``DjangoFilterBackend`` reads an empty value as "no
     filter" on a text column and never binds ``''`` to an integer column.
     """
@@ -13168,3 +13172,319 @@ def test_raw_empty_choice_form_value_applies_no_filter(column: str):
         kept = IntegerChoiceFilter(data={"grade": ""}, queryset=queryset).qs
         assert "WHERE" not in str(kept.query)
     assert type(leaf) is EnumChoiceFilter
+
+
+_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS = (
+    "iexact",
+    "contains",
+    "icontains",
+    "startswith",
+    "istartswith",
+    "endswith",
+    "iendswith",
+    "regex",
+    "iregex",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+)
+
+
+class _ShelfConditionLookupFilter(FilterSet):
+    """Every single-value lookup on the blank-admitting ``Shelf.condition`` choice column."""
+
+    class Meta:
+        model = library_models.Shelf
+        fields = {"condition": ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS]}
+
+
+def _condition_filter_name(lookup: str) -> str:
+    """The form-data key of ``_ShelfConditionLookupFilter``'s ``condition`` ``lookup``."""
+    return "condition" if lookup == "exact" else f"condition__{lookup}"
+
+
+@pytest.mark.parametrize("lookup", ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS])
+def test_every_text_choice_lookup_resolves_to_an_enum_member_filter(lookup: str):
+    """A text choice column's single-value lookups are the enum-member filter classes.
+
+    ``exact`` is ``EnumChoiceFilter`` under the choice family and every other single-value
+    lookup is ``EnumLookupFilter`` under ``CharFilter``'s scalar family, each an exact registry
+    key: without the key a flat to-many leaf over the lookup resolves to no family and is
+    unroutable.
+    """
+    leaf = _ShelfConditionLookupFilter.get_filters()[_condition_filter_name(lookup)]
+    if lookup == "exact":
+        assert type(leaf) is EnumChoiceFilter
+        assert _family_profile_for(leaf) is _FILTER_FAMILY_REGISTRY[ChoiceFilter]
+    else:
+        assert type(leaf) is EnumLookupFilter
+        assert _family_profile_for(leaf) is _FILTER_FAMILY_REGISTRY[CharFilter]
+
+
+class _NullableConditionSpecimen(django_models.Model):
+    """A nullable ``blank=True`` text choice column over a table the tests create.
+
+    ``NULL`` is the discriminator a ``NOT NULL`` column lacks: applying ``""`` under a
+    lookup that matches every stored string (``contains ''``, ``gte ''``) drops the ``NULL``
+    row, while django-filter's empty-value skip keeps it.
+    """
+
+    code = django_models.TextField()
+    condition = django_models.TextField(
+        choices=[("good", "Good"), ("worn", "Worn")],
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        managed = False
+        app_label = "library"
+        db_table = "filters_nullable_condition_specimen"
+
+
+class _NullableConditionLookupFilter(FilterSet):
+    """Every single-value lookup on ``_NullableConditionSpecimen.condition``."""
+
+    class Meta:
+        model = _NullableConditionSpecimen
+        fields = {"condition": ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS]}
+
+
+class _ConditionMember(enum.Enum):
+    """Stand-in for the ``BLANK`` member of a generated choice enum."""
+
+    BLANK = ""
+
+
+@pytest.fixture
+def nullable_condition_rows(transactional_db: None) -> Iterator[None]:
+    """Create the specimen table with rows ``blank``, ``good``, ``worn`` and ``null``; drop it after.
+
+    The table is unmanaged, so it exists only for the requesting test; SQLite's schema editor
+    needs the transactional database.
+    """
+    from django.db import connection
+
+    with connection.schema_editor() as editor:
+        editor.create_model(_NullableConditionSpecimen)
+    try:
+        _NullableConditionSpecimen.objects.create(code="blank", condition="")
+        _NullableConditionSpecimen.objects.create(code="good", condition="good")
+        _NullableConditionSpecimen.objects.create(code="worn", condition="worn")
+        _NullableConditionSpecimen.objects.create(code="null", condition=None)
+        yield
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(_NullableConditionSpecimen)
+
+
+def _nullable_condition_codes(data: dict[str, object]) -> list[str]:
+    """Return the specimen codes ``_NullableConditionLookupFilter`` keeps for ``data``."""
+    filterset = _NullableConditionLookupFilter(
+        data=data,
+        queryset=_NullableConditionSpecimen.objects.order_by("id"),
+    )
+    assert filterset.is_valid(), filterset.errors
+    return list(filterset.qs.values_list("code", flat=True))
+
+
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [
+        ("exact", ["blank"]),
+        ("iexact", ["blank"]),
+        ("lte", ["blank"]),
+        ("lt", []),
+        ("gt", ["good", "worn"]),
+        ("gte", ["blank", "good", "worn"]),
+        ("contains", ["blank", "good", "worn"]),
+        ("icontains", ["blank", "good", "worn"]),
+        ("startswith", ["blank", "good", "worn"]),
+        ("istartswith", ["blank", "good", "worn"]),
+        ("endswith", ["blank", "good", "worn"]),
+        ("iendswith", ["blank", "good", "worn"]),
+        ("regex", ["blank", "good", "worn"]),
+        ("iregex", ["blank", "good", "worn"]),
+    ],
+)
+@pytest.mark.usefixtures("nullable_condition_rows")
+def test_blank_member_is_applied_as_empty_string_on_every_text_choice_lookup(
+    lookup: str,
+    expected: list[str],
+):
+    """The ``BLANK`` member is the predicate ``condition__<lookup> ''`` on every lookup.
+
+    No row keeps the ``NULL`` row, which only the empty-value skip (no predicate) would keep:
+    ``exact`` / ``iexact`` / ``lte`` keep the blank row, ``lt`` keeps none, ``gt`` keeps the
+    graded rows, and ``gte`` and every pattern lookup keep every non-null row.
+    """
+    leaf = _NullableConditionLookupFilter.get_filters()[_condition_filter_name(lookup)]
+    marker = normalize_input_value(leaf, _ConditionMember.BLANK)
+    assert marker == EnumMemberValue("")
+    assert _nullable_condition_codes({_condition_filter_name(lookup): marker}) == expected
+
+
+@pytest.mark.parametrize("lookup", ["exact", *_TEXT_CHOICE_SINGLE_VALUE_LOOKUPS])
+@pytest.mark.usefixtures("nullable_condition_rows")
+def test_raw_empty_form_value_on_every_text_choice_lookup_applies_no_filter(lookup: str):
+    """A raw ``""`` in form data keeps django-filter's empty-value skip on every lookup.
+
+    Only an enum member reaches a generated choice-column filter as an ``EnumMemberValue``;
+    a querystring ``?condition__<lookup>=`` through ``DjangoFilterBackend`` is a plain string
+    and still reads as "no filter", so the ``NULL`` row a ``""`` predicate would drop stays.
+    """
+    assert _nullable_condition_codes({_condition_filter_name(lookup): ""}) == [
+        "blank",
+        "good",
+        "worn",
+        "null",
+    ]
+
+
+@pytest.mark.django_db
+def test_flat_to_many_choice_iexact_blank_routes_through_correlated_exists():
+    """A flat to-many ``iexact`` leaf on a choice column routes ``BLANK`` through ``EXISTS``.
+
+    ``EnumLookupFilter`` is an audited family, so the leaf is a routable candidate and the
+    parent filter compiles one correlated ``EXISTS``: only a branch with a blank shelf
+    matches, and a branch with only graded shelves or with no shelf drops out.
+    """
+
+    class BranchConditionFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"shelves__condition": ["iexact"]}
+
+    name = "shelves__condition__iexact"
+    leaf = BranchConditionFilter.get_filters()[name]
+    assert type(leaf) is EnumLookupFilter
+    candidate = _snapshot(BranchConditionFilter).candidates[name]
+    assert candidate.eligible is True
+    assert candidate.routable is True
+
+    with_blank = library_models.Branch.objects.create(name="with-blank")
+    graded = library_models.Branch.objects.create(name="graded")
+    library_models.Branch.objects.create(name="no-shelves")
+    library_models.Shelf.objects.create(code="b", branch=with_blank)
+    library_models.Shelf.objects.create(code="g", branch=graded, condition="good")
+    filterset = BranchConditionFilter(
+        data={name: normalize_input_value(leaf, _ConditionMember.BLANK)},
+        queryset=library_models.Branch.objects.order_by("id"),
+        request=HttpRequest(),
+    )
+    assert filterset.is_valid(), filterset.errors
+    queryset = filterset.qs
+    assert str(queryset.query).upper().count("EXISTS") == 1
+    assert list(queryset.values_list("name", flat=True)) == ["with-blank"]
+
+
+@pytest.mark.django_db
+def test_free_text_form_value_on_a_text_choice_lookup_validates_and_filters():
+    """A raw ``?condition__icontains=wo`` is free text, validated and applied as ``CharFilter``."""
+    branch = library_models.Branch.objects.create(name="free-text")
+    library_models.Shelf.objects.create(code="good", branch=branch, condition="good")
+    library_models.Shelf.objects.create(code="worn", branch=branch, condition="worn")
+    filterset = _ShelfConditionLookupFilter(
+        data={"condition__icontains": "wo"},
+        queryset=library_models.Shelf.objects.order_by("id"),
+    )
+    assert filterset.is_valid(), filterset.errors
+    assert list(filterset.qs.values_list("code", flat=True)) == ["worn"]
+
+
+class _StatusSpecimen(django_models.Model):
+    """A text choice column whose values include ``"null"`` and a whitespace-bearing value.
+
+    Query-build only (``managed = False``): the tests read the compiled ``WHERE`` node.
+    """
+
+    status = django_models.TextField(
+        choices=[("null", "Null"), (" padded ", "Padded"), ("ok", "Ok")],
+        blank=True,
+    )
+
+    class Meta:
+        managed = False
+        app_label = "library"
+
+
+class _StatusMember(enum.Enum):
+    """Stand-in for the generated enum of ``_StatusSpecimen.status``."""
+
+    NULL = "null"
+    PADDED = " padded "
+
+
+class _StatusLookupFilter(FilterSet):
+    """``exact`` and ``iexact`` over ``_StatusSpecimen.status``."""
+
+    class Meta:
+        model = _StatusSpecimen
+        fields = {"status": ["exact", "iexact"]}
+
+
+def _status_where_lookup(data: dict[str, object]) -> Lookup[object]:
+    """Return the single ``WHERE`` lookup ``_StatusLookupFilter`` compiles for ``data``."""
+    filterset = _StatusLookupFilter(data=data, queryset=_StatusSpecimen.objects.all())
+    assert filterset.is_valid(), filterset.errors
+    children = filterset.qs.query.where.children
+    assert len(children) == 1
+    lookup = children[0]
+    assert isinstance(lookup, Lookup)
+    return lookup
+
+
+@pytest.mark.parametrize(("name", "lookup"), [("status", "exact"), ("status__iexact", "iexact")])
+def test_null_valued_enum_member_is_a_value_not_is_null(name: str, lookup: str):
+    """A ``"null"``-valued enum member filters ``= 'null'``, never ``IS NULL``.
+
+    ``ChoiceFilter`` reads its ``null_value`` (``"null"``) as the null choice; the normalizer
+    sends an enum member as an ``EnumMemberValue``, so the member is compared as the value it
+    stores on ``exact`` and on ``iexact`` alike.
+    """
+    leaf = _StatusLookupFilter.get_filters()[name]
+    marker = normalize_input_value(leaf, _StatusMember.NULL)
+    assert marker == EnumMemberValue("null")
+    where = _status_where_lookup({name: marker})
+    assert where.lookup_name == lookup
+    assert where.rhs == "null"
+
+
+def test_raw_null_form_value_keeps_choice_filter_is_null():
+    """A raw ``"null"`` in form data keeps ``ChoiceFilter``'s ``IS NULL`` branch."""
+    where = _status_where_lookup({"status": "null"})
+    assert where.lookup_name == "isnull"
+    assert where.rhs is True
+
+
+@pytest.mark.parametrize(("name", "lookup"), [("status", "exact"), ("status__iexact", "iexact")])
+def test_whitespace_bearing_enum_member_value_is_not_stripped(name: str, lookup: str):
+    """An enum member's value reaches the predicate verbatim; ``CharField`` never strips it."""
+    leaf = _StatusLookupFilter.get_filters()[name]
+    where = _status_where_lookup({name: normalize_input_value(leaf, _StatusMember.PADDED)})
+    assert where.lookup_name == lookup
+    assert where.rhs == " padded "
+
+
+def _pickle_round_trip(value: object) -> object:
+    """Return ``value`` after a pickle dump and load."""
+    return pickle.loads(pickle.dumps(value))
+
+
+@pytest.mark.parametrize("clone", [copy.deepcopy, _pickle_round_trip])
+def test_enum_member_value_survives_copy_and_pickle(clone: Callable[[object], object]):
+    """The marker is matched by type and compared by value, so a copied one still applies.
+
+    A deep copy or a pickle round trip of ``EnumMemberValue("")`` is equal to the original
+    and is still applied by the generated filter as the ``''`` predicate.
+    """
+    cloned = clone(EnumMemberValue(""))
+    assert isinstance(cloned, EnumMemberValue)
+    assert cloned == EnumMemberValue("")
+    leaf = _ShelfConditionLookupFilter.get_filters()["condition__iexact"]
+    filtered = leaf.filter(library_models.Shelf.objects.all(), cloned)
+    where = filtered.query.where.children
+    assert len(where) == 1
+    assert isinstance(where[0], Lookup)
+    assert where[0].rhs == ""

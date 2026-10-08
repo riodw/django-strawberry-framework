@@ -112,6 +112,7 @@ from .base import (
     _GLOBALID_RELATION_PK_ATTR,
     ArrayFilter,
     EnumChoiceFilter,
+    EnumLookupFilter,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     IntegerInFilter,
@@ -760,9 +761,10 @@ _FILTER_FAMILY_REGISTRY: Mapping[type[object], _FilterFamilyProfile] = MappingPr
         ModelChoiceFilter: _MODEL_CHOICE_PROFILE,
         MultipleChoiceFilter: _MULTIPLE_CHOICE_PROFILE,
         ChoiceFilter: _CHOICE_PROFILE,
-        # The package's generated choice ``exact`` class: ``ChoiceFilter`` plus the
-        # ``""``-is-a-value predicate, so it shares the choice family.
+        # The package's generated choice-column classes: ``ChoiceFilter`` / ``CharFilter``
+        # plus the enum-member-is-a-value predicate, so each shares its base's family.
         EnumChoiceFilter: _CHOICE_PROFILE,
+        EnumLookupFilter: _SCALAR_LOOKUP_PROFILE,
         # Plain-lookup scalar Filter families, each enumerated by class (they share
         # only ``Filter`` as a base, which must never be a key). A scalar key here is
         # also the audited scalar base the dynamic-CSV validator accepts as the SECOND
@@ -2548,8 +2550,13 @@ class FilterSet(
         Non-relation fields defer to the upstream pair-return shape unless
         the field is the owner's own PK and the owner is Relay-Node-shaped
         (own-PK branch per spec-027 Decision 4), the lookup is a choice
-        column's ``exact`` (``EnumChoiceFilter``, where the enum's ``BLANK``
-        member is a predicate), or it is an integer ``in`` / ``range``
+        column's ``exact`` (``EnumChoiceFilter``) or another single-value lookup
+        on a text choice column (``EnumLookupFilter``), where every member of the
+        column's choice enum is a value (``BLANK`` is ``""`` on each lookup; a
+        ``Meta.filter_overrides`` entry that maps the column to plain
+        ``CharFilter`` still yields ``EnumLookupFilter``, as any override still
+        yields ``EnumChoiceFilter`` for ``exact``), or
+        it is an integer ``in`` / ``range``
         (``IntegerInFilter`` / ``IntegerRangeFilter``). For relation fields a
         Relay-Node-shaped target maps to a ``(GlobalIDFilter, params)``
         pair (or ``GlobalIDMultipleChoiceFilter`` for multi-valued
@@ -2616,9 +2623,16 @@ class FilterSet(
         if not field.is_relation:
             if lookup_type == "exact" and default_class is ChoiceFilter:
                 # The ``exact`` input is the column's generated enum, so every member it
-                # carries is a value -- ``BLANK`` (``""``) included -- never django-filter's
-                # empty-value skip, which would widen a named member to every row.
+                # carries is a value -- ``BLANK`` (``""``) included, never django-filter's
+                # empty-value skip that would widen it to every row, and a ``"null"``-valued
+                # member included, never ``ChoiceFilter``'s ``IS NULL`` branch.
                 return EnumChoiceFilter, params
+            if default_class is CharFilter and isinstance(field, models.Field) and field.choices:
+                # Every other single-value lookup on a text choice column publishes the same
+                # enum (``filters/inputs.py::_element_annotation``), so its members are values
+                # too: ``iExact: BLANK`` applies ``iexact ''``, never the empty-value skip.
+                # ``in`` / ``range`` / ``isnull`` are not ``CharFilter`` and keep their classes.
+                return EnumLookupFilter, params
             if lookup_type == "in" and isinstance(field, models.IntegerField):
                 # An element-binding integer ``__in`` routes through IntegerInFilter:
                 # it drops out-of-range members (an out-of-range value overflows the

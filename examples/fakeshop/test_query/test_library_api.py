@@ -13618,6 +13618,102 @@ def test_branch_filter_through_shelves_condition_blank_matches_blank_shelves_ove
     )
 
 
+def _create_condition_shelves() -> None:
+    """Three shelves on one branch: blank, ``good`` and ``worn`` conditions, in that order."""
+    branch = models.Branch.objects.create(name="LookupConditionBranch", city="Boston")
+    models.Shelf.objects.create(code="L-blank", branch=branch)
+    models.Shelf.objects.create(code="L-good", branch=branch, condition="good")
+    models.Shelf.objects.create(code="L-worn", branch=branch, condition="worn")
+
+
+def _shelf_codes(variables: JSONObject) -> list[str]:
+    """POST ``_SHELF_CONDITIONS`` with ``variables`` and return the matching shelf codes."""
+    payload = _post_graphql(_SHELF_CONDITIONS, variables=variables).json()
+    assert "errors" not in payload, payload
+    return [row["code"] for row in payload["data"]["allLibraryShelves"]]
+
+
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [
+        ("iExact", ["L-blank"]),
+        ("lte", ["L-blank"]),
+        ("lt", []),
+        ("gt", ["L-good", "L-worn"]),
+    ],
+)
+@pytest.mark.django_db
+def test_shelf_condition_blank_is_a_value_on_ordering_and_iexact_lookups_over_http(
+    lookup: str,
+    expected: list[str],
+):
+    """``BLANK`` is ``""`` on ``iExact`` and the ordering lookups of a choice column.
+
+    Each lookup publishes the column's enum, so ``BLANK`` reaches the generated
+    ``EnumLookupFilter`` as a value and compiles to ``condition__<lookup> ''``: ``iExact``
+    and ``lte`` keep only the blank shelf, ``lt`` keeps none and ``gt`` keeps the graded
+    shelves. ``Shelf.condition`` is ``NOT NULL``, so the lookups that match every stored
+    value (``gte`` and the pattern lookups) are pinned in the package tier over a nullable
+    stand-in column, where a ``NULL`` row tells the applied predicate from no predicate.
+    """
+    _create_condition_shelves()
+    assert _shelf_codes({"filter": {"condition": {lookup: "BLANK"}}}) == expected
+
+
+@pytest.mark.django_db
+def test_shelf_condition_iexact_blank_under_not_and_or_over_http():
+    """``BLANK`` stays a predicate under ``not`` and inside an ``or`` branch.
+
+    ``not: {iExact: BLANK}`` keeps exactly the graded shelves, and an ``or`` of
+    ``iExact: BLANK`` with ``exact: worn`` keeps exactly the union of the two branches.
+    """
+    _create_condition_shelves()
+    negated = {"filter": {"not": {"condition": {"iExact": "BLANK"}}}}
+    assert _shelf_codes(negated) == ["L-good", "L-worn"]
+    union = {
+        "filter": {
+            "or": [{"condition": {"iExact": "BLANK"}}, {"condition": {"exact": "worn"}}],
+        },
+    }
+    assert _shelf_codes(union) == ["L-blank", "L-worn"]
+
+
+@pytest.mark.parametrize(
+    "branch_filter",
+    [{"shelvesCondition": {"iExact": "BLANK"}}, {"shelves": {"condition": {"iExact": "BLANK"}}}],
+    ids=["flat", "nested"],
+)
+@pytest.mark.django_db
+def test_branch_filter_through_shelves_condition_iexact_blank_over_http(
+    branch_filter: JSONObject,
+):
+    """``iExact: BLANK`` through a ``RelatedFilter``, flat or nested, needs a blank shelf.
+
+    The child ``ShelfFilter``'s generated ``iexact`` is an ``EnumLookupFilter``, so a branch
+    matches only through a blank shelf; a branch with only graded shelves and a branch with
+    no shelves drop out instead of the empty-value skip matching every branch.
+    """
+    with_blank = models.Branch.objects.create(name="IexactBlankShelf", city="Boston")
+    graded = models.Branch.objects.create(name="IexactGraded", city="Boston")
+    models.Branch.objects.create(name="IexactNoShelves", city="Boston")
+    models.Shelf.objects.create(code="IB-1", branch=with_blank, topic="permanent collection")
+    models.Shelf.objects.create(
+        code="IG-1",
+        branch=graded,
+        topic="permanent collection",
+        condition="good",
+    )
+    _assert_graphql_data(
+        """
+        query ($filter: BranchFilterInputType) {
+          allLibraryBranches(filter: $filter) { name }
+        }
+        """,
+        {"allLibraryBranches": [{"name": "IexactBlankShelf"}]},
+        variables={"filter": branch_filter},
+    )
+
+
 @pytest.mark.django_db
 def test_shelf_condition_blank_writes_empty_string_through_every_write_flavor_over_http():
     """``condition: BLANK`` writes ``""`` through the model, form and serializer mutations.

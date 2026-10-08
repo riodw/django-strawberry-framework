@@ -14,9 +14,11 @@ five parity-floor primitives (spec-027 Decision 4):
 - `RelationPkFilter` / `RelationPkMultipleFilter`: their raw-primary-key
   siblings for a relation key whose target is not a Relay node (or has no
   `DjangoType`), typed and coerced through `relation_identity_column`.
-- `EnumChoiceFilter`: the generated `exact` filter of a choice column, where
-  the enum's `BLANK` member (sent as `BLANK_CHOICE`) is the `= ''` predicate
-  while a raw `""` keeps django-filter's empty-value skip.
+- `EnumChoiceFilter` / `EnumLookupFilter`: the generated filters of a choice
+  column, `exact` and every other single-value lookup on a text choice column.
+  Each applies every member of the column's choice enum as a value, sent as an
+  `EnumMemberValue` (`BLANK` is `""` on each lookup, a `"null"`-valued member
+  matches `"null"`), while raw form data keeps django-filter's handling.
 - `LazyRelatedClassMixin`: re-exported from the package-root
   `sets_mixins` module (shared with the future order / aggregate sets);
   imported here so `RelatedFilter` and the `filters` public surface keep
@@ -29,12 +31,21 @@ five parity-floor primitives (spec-027 Decision 4):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.forms import Field, MultipleChoiceField, MultiWidget, SelectMultiple, TextInput
+from django.forms import (
+    CharField,
+    Field,
+    MultipleChoiceField,
+    MultiWidget,
+    SelectMultiple,
+    TextInput,
+)
 from django_filters import (
+    CharFilter,
     ChoiceFilter,
     Filter,
     ModelChoiceFilter,
@@ -431,65 +442,107 @@ class ArrayFilter(TypedFilter):
         return _apply_lookup_predicate(self, qs, value)
 
 
-class _BlankChoice:
-    """Type of ``BLANK_CHOICE``, the form value of a choice enum's ``BLANK`` member."""
+@dataclass(frozen=True)
+class EnumMemberValue:
+    """The form value of a generated choice enum member: its stored value, carried typed.
 
-    __slots__ = ()
+    ``filters/inputs.py::normalize_input_value`` wraps every member of a column's choice
+    enum in this marker when the matched filter is a generated enum-member filter
+    (``EnumChoiceFilter`` / ``EnumLookupFilter``). Form data never holds an instance (no
+    querystring or raw ``data`` can spell one), so none of django-filter's form-data
+    sentinels can reinterpret a member: ``BLANK`` (``""``) never meets the
+    ``EMPTY_VALUES`` skip, a member whose value is ``"null"`` never meets
+    ``ChoiceFilter``'s ``null_value`` ``IS NULL`` branch, and ``CharField`` never strips
+    a member's whitespace. Matched by ``isinstance`` and compared by value, so it survives
+    ``copy.deepcopy`` and pickling.
+    """
+
+    value: object
 
 
-#: The form-data value ``normalize_input_value`` substitutes for a choice enum member
-#: whose value is ``""`` (``BLANK``). An object, not a string, so no querystring or raw
-#: form ``data`` can spell it: only the GraphQL member reaches ``EnumChoiceFilter`` as
-#: the ``= ''`` predicate, and a raw ``""`` keeps django-filter's empty-value skip.
-BLANK_CHOICE = _BlankChoice()
+class _EnumMemberFieldMixin(Field):
+    """Form-field half of the enum-member filters: cleans an ``EnumMemberValue`` to itself.
 
-
-class _EnumChoiceField(ChoiceField):
-    """``ChoiceField`` that also cleans ``BLANK_CHOICE`` to itself.
-
-    Every other value cleans exactly as django-filter's ``ChoiceField`` cleans it, so raw
-    form data (a DRF querystring through ``DjangoFilterBackend``) validates unchanged.
+    The marker's ``value`` is validated exactly as the raw value would be (a ``ChoiceField``
+    still rejects a value outside its choices), and the marker itself is returned so the
+    filter applies the member's value untouched. Every other value cleans as the concrete
+    form field cleans it, so raw form data (a DRF querystring through
+    ``DjangoFilterBackend``) validates unchanged.
     """
 
     @override
-    def to_python(self, value: object) -> object:
-        """Return ``BLANK_CHOICE`` unchanged, else Django's cleaned string."""
-        if value is BLANK_CHOICE:
+    def clean(self, value: object) -> object:
+        """Return an ``EnumMemberValue`` once its value validates, else the cleaned value."""
+        if isinstance(value, EnumMemberValue):
+            super().clean(value.value)
             return value
-        return super().to_python(value)
+        return super().clean(value)
+
+
+class _EnumMemberFilterMixin(Filter):
+    """Filter half of the enum-member filters: an ``EnumMemberValue`` is always a predicate.
+
+    The marker's value is applied as ``<field>__<lookup>`` whatever it is, so no empty-value
+    skip or ``null_value`` branch can reinterpret an enum member; every other value goes to
+    the concrete filter's own ``filter`` unchanged.
+    """
 
     @override
-    def validate(self, value: object) -> None:
-        """Accept ``BLANK_CHOICE``; validate every other value as ``ChoiceField`` does."""
-        if value is BLANK_CHOICE:
-            return
-        super().validate(value)
+    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
+        """Apply the member's value as the lookup, else the concrete filter's ``filter``."""
+        if isinstance(value, EnumMemberValue):
+            return _apply_lookup_predicate(self, qs, value.value)
+        return super().filter(qs, value)
 
 
-class EnumChoiceFilter(ChoiceFilter):
-    """The generated ``exact`` filter of a choice column: every enum member is a predicate.
+# basedpyright: both bases define ``__init__``; the mixin's base is ``Field`` itself, so
+# construction runs django-filter's ``ChoiceField.__init__``, which chains to ``Field``'s
+class _EnumChoiceField(_EnumMemberFieldMixin, ChoiceField):  # pyright: ignore[reportUnsafeMultipleInheritance]
+    """``ChoiceField`` that cleans an ``EnumMemberValue`` to itself."""
+
+
+# basedpyright: both bases define ``__init__``; the mixin's base is ``Field`` itself, so
+# construction runs ``CharField.__init__``, which chains to ``Field``'s
+class _EnumCharField(_EnumMemberFieldMixin, CharField):  # pyright: ignore[reportUnsafeMultipleInheritance]
+    """``CharField`` that cleans an ``EnumMemberValue`` to itself, its value never stripped."""
+
+
+# basedpyright: both bases define ``__init__``; the mixin's base is ``Filter`` itself, so
+# construction runs ``ChoiceFilter.__init__``, which chains to ``Filter``'s
+class EnumChoiceFilter(_EnumMemberFilterMixin, ChoiceFilter):  # pyright: ignore[reportUnsafeMultipleInheritance]
+    """The generated ``exact`` filter of a choice column: every enum member is a value.
 
     ``FilterSet.filter_for_lookup`` returns this class wherever django-filter would generate
     a ``ChoiceFilter`` (an ``exact`` lookup on a column with ``choices``). Its GraphQL input
     is the column's generated enum, whose ``BLANK`` member carries ``""`` when the column
-    admits the empty string (``types/converters.py::convert_choices_to_enum``).
-    django-filter's ``Filter.filter`` skips every ``EMPTY_VALUES`` value, so ``exact:
-    BLANK`` would silently widen to every row. The input normalizer
-    (``filters/inputs.py::normalize_input_value``) therefore sends that member as
-    ``BLANK_CHOICE``, which compiles to ``<field> = ''`` exactly as a named member does.
-    Every other value keeps ``ChoiceFilter``'s behavior, so a raw ``""`` (a querystring
-    ``?field=`` under ``DjangoFilterBackend``) and an omitted field still apply no
-    constraint, and so does a plain ``String`` filter's ``exact: ""``.
+    admits the empty string (``types/converters.py::convert_choices_to_enum``). The input
+    normalizer (``filters/inputs.py::normalize_input_value``) sends every member as an
+    ``EnumMemberValue``, which compiles to ``<field> = <value>``: ``BLANK`` is ``= ''``
+    rather than django-filter's empty-value skip, and a member whose value is ``"null"`` is
+    ``= 'null'`` rather than ``ChoiceFilter``'s ``IS NULL`` branch. Every other value keeps
+    ``ChoiceFilter``'s behavior, so a raw ``""`` (a querystring ``?field=`` under
+    ``DjangoFilterBackend``) and an omitted field still apply no constraint, a raw
+    ``"null"`` still applies ``IS NULL``, and a plain ``String`` filter's ``exact: ""``
+    still applies none.
     """
 
     field_class = _EnumChoiceField
 
-    @override
-    def filter(self, qs: models.QuerySet[_M], value: object) -> models.QuerySet[_M]:
-        """Apply ``<field> = ''`` for ``BLANK_CHOICE``, else ``ChoiceFilter.filter``."""
-        if value is BLANK_CHOICE:
-            return _apply_lookup_predicate(self, qs, "")
-        return super().filter(qs, value)
+
+class EnumLookupFilter(_EnumMemberFilterMixin, CharFilter):
+    """The generated filter of every other single-value lookup on a text choice column.
+
+    ``FilterSet.filter_for_lookup`` returns this class where django-filter would generate a
+    ``CharFilter`` for a column with ``choices`` (``iexact``, ``contains``, ``startswith``,
+    ``regex``, ``gt`` and their siblings), because the input publishes the column's choice
+    enum on those lookups too. Each enum member reaches it as an ``EnumMemberValue`` and is
+    applied as ``<field>__<lookup>`` with that value, so ``iExact: BLANK`` matches only the
+    blank rows rather than the empty-value skip that would match every row, and
+    ``contains: BLANK`` matches every non-null value. A raw form-data string
+    (``?field__icontains=wo``) validates and filters exactly as ``CharFilter`` does.
+    """
+
+    field_class: type[CharField] = _EnumCharField
 
 
 def validate_range(value: object) -> None:

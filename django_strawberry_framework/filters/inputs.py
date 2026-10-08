@@ -58,9 +58,8 @@ from ..utils.inputs import (
 )
 from ..utils.strings import flatten_lookup_path, graphql_camel_name, pascal_case_or_raise
 from .base import (
-    BLANK_CHOICE,
     ArrayFilter,
-    EnumChoiceFilter,
+    EnumMemberValue,
     GlobalIDFilter,
     GlobalIDMultipleChoiceFilter,
     ListFilter,
@@ -70,6 +69,7 @@ from .base import (
     RelationPkMultipleFilter,
     TypedFilter,
     _bound_field_name,
+    _EnumMemberFilterMixin,
     model_choice_identity_column,
     relation_identity_column,
 )
@@ -664,12 +664,15 @@ def normalize_input_value(
 
     - a scalar value (``str`` / ``int`` / wire-form GlobalID string /
       enum ``.value``) when the filter consumes a single form-data key;
-      the ``BLANK`` member (value ``""``) of a generated choice ``exact``
-      (``EnumChoiceFilter``) becomes ``BLANK_CHOICE``, so it filters
-      ``= ''`` while a raw ``""`` keeps django-filter's empty-value skip.
-      A GlobalID is kept in its base64 wire form (not pre-decoded to a
-      bare ``node_id``) so the bound filter can validate its
-      ``type_name`` before decoding;
+      a member of a generated choice-column filter's enum
+      (``EnumChoiceFilter`` / ``EnumLookupFilter``) becomes
+      ``EnumMemberValue(member.value)`` instead, so every member is a value
+      on every lookup that publishes it (``BLANK`` filters ``""``, a
+      ``"null"``-valued member filters ``"null"``) while a raw string keeps
+      django-filter's form-data handling (``""`` skips, ``"null"`` on a
+      ``ChoiceFilter`` is ``IS NULL``). A GlobalID is kept in its base64
+      wire form (not pre-decoded to a bare ``node_id``) so the bound filter
+      can validate its ``type_name`` before decoding;
     - a ``list`` (for ``GlobalIDMultipleChoiceFilter`` / ``ListFilter`` /
       ``ArrayFilter``) when ``django-filter`` consumes a list;
     - a ``dict[str, Any]`` patch the caller merges into the form-data
@@ -733,20 +736,12 @@ def normalize_input_value(
     def _typed(_filter: Filter) -> object:
         return MRO_CONTINUE
 
-    def _choice(matched: Filter) -> object:
-        value = _unwrap_enum_member(raw_value)
-        if (
-            isinstance(matched, EnumChoiceFilter)
-            and isinstance(raw_value, enum.Enum)
-            and isinstance(value, str)
-            and value == ""
-        ):
-            # The enum's ``BLANK`` member: a value, never django-filter's empty skip.
-            # A raw ``""`` (not a member) stays ``""`` and keeps that skip.
-            return BLANK_CHOICE
-        return value
-
-    def _catchall(_filter: Filter) -> object:
+    def _scalar(matched: Filter) -> object:
+        # Shared by the ``ChoiceFilter`` and catch-all arms. A generated choice-column
+        # filter takes each enum member as a typed value no form-data sentinel can
+        # reinterpret; a raw value (not a member) keeps django-filter's handling.
+        if isinstance(matched, _EnumMemberFilterMixin) and isinstance(raw_value, enum.Enum):
+            return EnumMemberValue(raw_value.value)
         return _unwrap_enum_member(raw_value)
 
     return convert_with_mro(
@@ -761,8 +756,8 @@ def normalize_input_value(
             _range,
             _list,
             _typed,
-            _choice,
-            _catchall,
+            _scalar,
+            _scalar,
         ),
         scalar_registry={},
         fallthrough_error_factory=_unexpected_filter_dispatch,

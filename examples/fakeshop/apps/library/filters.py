@@ -120,7 +120,25 @@ class ShelfFilter(FilterSet):
             "id": ["exact", "in"],
             "code": ["exact", "icontains"],
             "topic": ["exact", "icontains"],
-            "condition": ["exact", "in"],
+            # Every single-value lookup on the blank-admitting choice column publishes the
+            # column's enum, so ``BLANK`` and every named member are values on each of them.
+            "condition": [
+                "exact",
+                "iexact",
+                "contains",
+                "icontains",
+                "startswith",
+                "istartswith",
+                "endswith",
+                "iendswith",
+                "regex",
+                "iregex",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "in",
+            ],
             "alt_branches": ["exact"],
         }
 

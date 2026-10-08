@@ -361,14 +361,15 @@ divergent public flavors, gaps between implementation, tests, examples, docs. Re
 `.py` added/removed/renamed since baseline (`git ls-files` + untracked) each get an item or a
 closing note; verified items whose digests moved go `stale`.
 
-Final gate (Worker-0): `uv run python scripts/workspace.py gate hunt --suites lint,default`, CI's
-lint job then the full suite in a gate copy carrying its own git index
-(`--suites lint,default,sharded,pg` once Rio authorized those cells). Passes when lint and the
-suite pass + package coverage stays 100%. Record failures,
-coverage, skips, xfails, collected/selected counts, cell. The gate's result file binds it to `git
-stash create` at gate time + blob ids of `pyproject.toml`, `uv.lock`. Product failure → the owning
-item back to Worker-1; environment/concurrent failure → recorded precisely, `blocked`. Sharded and
-Postgres cells are `unverified` unless Rio authorized them; the report lists them.
+Final gate (Worker-0): `uv run python scripts/workspace.py gate hunt --suites lint,default,floor`:
+CI's lint job, the full suite, then CI's floor cell (`workspace.py` docstring), in a gate copy
+carrying its own git index (`--suites lint,default,floor,sharded,pg` once Rio authorized those
+cells). Passes when lint, the suite and the floor suite pass + package coverage stays 100%. Record
+failures, coverage, skips, xfails, collected/selected counts, cell. The gate's result file binds it
+to `git stash create` at gate time + blob ids of `pyproject.toml`, `uv.lock` + the floor pins.
+Product failure → the owning item back to Worker-1; environment/concurrent failure → recorded
+precisely, `blocked`. Sharded and Postgres cells are `unverified` unless Rio authorized them; the
+report lists them.
 
 ## Closeout
 

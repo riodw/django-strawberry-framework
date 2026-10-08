@@ -497,15 +497,15 @@ reasoning. No inventories, copied tool output, empty placeholders.
 ### Final gate and closeout
 
 Every item but the gate verified + inventory re-reconciled → Worker-0 dispatches the gate Worker-1
-(the entry command authorized `workspace.py gate dry --suites lint,default`: CI's lint job and the
-suite in a gate copy carrying its own git index). Gate = lint + full suite + package coverage 100% +
-every `## Pending execution` command from
+(the entry command authorized `workspace.py gate dry --suites lint,default,floor`: CI's lint job,
+the suite and CI's floor cell in a gate copy carrying its own git index). Gate = lint + full suite +
+package coverage 100% + floor suite + every `## Pending execution` command from
 every artifact, run as listed (a green unmutated suite discharges no failability proof). Record
 failures, coverage, skips, xfails, collected/selected counts, `FAKESHOP_SHARDED` mode: sharded-only
 tests skip by default, so their behaviors stay unverified unless Rio also authorizes a
-`FAKESHOP_SHARDED=1` run (`--suites lint,default,sharded`, `pg` likewise). The gate's result file binds
-it: `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + each suite's
-cell. Change to package source, tests, fixtures, pytest/coverage config, dependencies or mode
+`FAKESHOP_SHARDED=1` run (`--suites lint,default,floor,sharded`, `pg` likewise). The gate's result
+file binds it: `git stash create` at gate time + blob ids of `pyproject.toml` and `uv.lock` + each
+suite's cell + the floor pins. Change to package source, tests, fixtures, pytest/coverage config, dependencies or mode
 invalidates it; prose doesn't. Worker-2 completes the gate row by confirming the bound inputs still
 match the tree and each pending command ran. Failure in a path an item touched, or of a `proof:`
 command → that item back to Worker-1; a failing `gate:` command reopens no item; failure reproduced

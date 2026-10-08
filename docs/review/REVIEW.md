@@ -832,13 +832,14 @@ Every item but the gate verified or `blocked` + inventory re-reconciled → Work
 artifact as listed, and the bench baseline commands w/ `<phase>` = `gate`, delta recorded. `gate`
 syncs a gate copy carrying its own git index of `HEAD` (the suite's CI-governance tests ask git for
 the committable file list) and runs CI's jobs: the `lint` job's commands in the workflow's order
-(`workspace.py`'s `LINT_COMMANDS`, held to `django.yml` by a test), then the suite three times: the
+(`workspace.py`'s `LINT_COMMANDS`, held to `django.yml` by a test), then the suite four times: the
 full default suite
-(package coverage 100%); the `sharded` cell w/o coverage, since sharded-only tests skip by default
-and the default run owns the floor; the `pg` cell, only the database-touching tests, on the gate
-copy's own database. It writes `gate-<run id>.json` to the evidence folder, bound to
-`git stash create` at gate time, the blob ids of `pyproject.toml` and `uv.lock` and each suite's
-cell, and prints per suite the run id, exit, summary and coverage lines; a cell that cannot run is
+(package coverage 100%); the `floor` suite, CI's floor cell (`workspace.py` docstring), w/o
+coverage; the `sharded` cell w/o coverage, since sharded-only tests skip by default
+and the default run owns the coverage floor; the `pg` cell, only the database-touching tests, on
+the gate copy's own database. It writes `gate-<run id>.json` to the evidence folder, bound to
+`git stash create` at gate time, the blob ids of `pyproject.toml` and `uv.lock`, each suite's
+cell and the floor pins, and prints per suite the run id, exit, summary and coverage lines; a cell that cannot run is
 `unverified` w/ the reason.
 
 Record, per suite, failures, coverage, skips, xfails, collected/selected counts and the cell. A

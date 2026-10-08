@@ -12,6 +12,7 @@ move there. There is no live sibling in ``examples/fakeshop/test_query/``.
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -784,6 +785,252 @@ def test_the_lint_gate_suite_runs_the_ci_lint_job_commands_in_order() -> None:
     arguments, cell = workspace.GATE_SUITES["lint"]
     assert arguments == ("sh", "-exc", "\n".join(workspace.LINT_COMMANDS))
     assert cell == "default"
+
+
+def _ci_floor_node() -> tuple[dict[str, str], list[str]]:
+    """The push/PR compatibility node of ``django.yml``'s ``test`` job and its ``run:`` lines."""
+    workflow = workspace.REPO_ROOT / ".github" / "workflows" / "django.yml"
+    job = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]["test"]
+    lists = re.findall(r"fromJSON\('(\[.*?\])'\)", job["strategy"]["matrix"]["include"], re.S)
+    push_nodes = json.loads(lists[-1])
+    floor = [node for node in push_nodes if node.get("compatibility_only") == "1"]
+    lines = [
+        line.strip()
+        for step in job["steps"]
+        for line in str(step.get("run", "")).splitlines()
+        if line.strip()
+    ]
+    assert len(floor) == 1
+    return floor[0], lines
+
+
+def test_floor_pins_are_the_pyproject_lower_bounds(tmp_path: Path) -> None:
+    pyproject = _write(
+        tmp_path / "pyproject.toml",
+        "[project]\n"
+        'requires-python = ">=3.10,<4.0"\n'
+        "dependencies = [\n"
+        '    "django>=5.2.16",\n'
+        "    \"Strawberry_Graphql[debug] >= 0.322.2, <1 ; python_version >= '3.10'\",\n"
+        '    "graphql-core>=3.2.0,<3.3",\n'
+        "]\n",
+    )
+
+    assert workspace.floor_pins(pyproject) == {
+        "python": "3.10",
+        "Django": "5.2.16",
+        "strawberry-graphql": "0.322.2",
+    }
+
+
+@pytest.mark.parametrize(
+    ("dependencies", "match"),
+    [
+        ('"Django>=5.2.16"', "lists no strawberry-graphql"),
+        ('"Django==5.2.16", "strawberry-graphql>=0.322.2"', "states no >= floor"),
+    ],
+)
+def test_floor_pins_refuse_a_pyproject_without_a_floor(
+    tmp_path: Path,
+    dependencies: str,
+    match: str,
+) -> None:
+    pyproject = _write(
+        tmp_path / "pyproject.toml",
+        f'[project]\nrequires-python = ">=3.10"\ndependencies = [{dependencies}]\n',
+    )
+
+    with pytest.raises(workspace.WorkspaceError, match=match):
+        workspace.floor_pins(pyproject)
+
+
+def test_the_floor_pins_are_the_points_build_md_and_the_ci_floor_cell_state() -> None:
+    """``pyproject.toml``'s lower bounds, BUILD.md's floor policy and CI's floor node agree.
+
+    The gate reads its pins from ``pyproject.toml``; BUILD.md "Floor
+    verification" records the exact point a floor run installs. Were the policy
+    ever to name a point other than the lower bound, this row fails rather than
+    the gate silently testing a different floor from CI.
+    """
+    pins = workspace.floor_pins(workspace.REPO_ROOT / "pyproject.toml")
+    build = (workspace.REPO_ROOT / "docs" / "builder" / "BUILD.md").read_text(encoding="utf-8")
+    stated = re.search(
+        r"The supported floor is Django \*\*([^*]+)\*\* on Python \*\*([^*]+)\*\* "
+        r"with strawberry-graphql \*\*([^*]+)\*\*",
+        build,
+    )
+    node, _lines = _ci_floor_node()
+
+    assert stated is not None
+    assert stated.groups() == (pins["Django"], pins["python"], pins["strawberry-graphql"])
+    assert (node["django"], node["python"], node["strawberry"]) == (
+        pins["Django"],
+        pins["python"],
+        pins["strawberry-graphql"],
+    )
+
+
+def test_the_floor_gate_suite_installs_and_runs_what_the_ci_floor_cell_does(
+    tmp_path: Path,
+) -> None:
+    """The floor suite is the ``test`` job's floor node: its install and its coverage-free run.
+
+    That job syncs the lock at the floor Python, installs Django over it with
+    ``--upgrade-package Django``, then strawberry-graphql, and runs pytest with
+    ``addopts`` that drop ``--cov``; the suite does each of those against its
+    own virtualenv and only adds ``-p no:cacheprovider``.
+    """
+    _node, lines = _ci_floor_node()
+    ci_addopts = re.findall(r'addopts="(-[^"]*)"', "\n".join(lines))
+    pins = {"python": "3.10", "Django": "5.2.16", "strawberry-graphql": "0.322.2"}
+    venv = tmp_path / "gate-floor"
+    python = str(venv / "bin" / "python")
+
+    commands = workspace.floor_install_commands(tmp_path / "gate", venv, pins)
+
+    assert "uv sync --python ${{ matrix.python }}" in lines
+    assert 'uv pip install --upgrade-package Django "Django==${{ matrix.django }}"' in lines
+    assert 'uv pip install "strawberry-graphql==${{ matrix.strawberry }}"' in lines
+    pip = [
+        "uv",
+        "pip",
+        "install",
+        "--directory",
+        str(tmp_path / "gate"),
+        "--python",
+        python,
+        "-q",
+    ]
+    assert commands == [
+        [
+            "uv",
+            "sync",
+            "--directory",
+            str(tmp_path / "gate"),
+            "--frozen",
+            "--python",
+            "3.10",
+            "-q",
+        ],
+        [
+            *pip,
+            "--upgrade-package",
+            "Django",
+            "Django==5.2.16",
+        ],
+        [*pip, "strawberry-graphql==0.322.2"],
+    ]
+    arguments, cell = workspace.GATE_SUITES[workspace.FLOOR_SUITE]
+    no_cov = [opts for opts in ci_addopts if "--cov" not in opts]
+    assert len(no_cov) == 1
+    assert arguments == (
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+        "-o",
+        f"addopts={no_cov[0]}",
+    )
+    assert cell == "default"
+    assert list(workspace.GATE_SUITES)[:3] == ["lint", "default", "floor"]
+
+
+def _gate_copy_inputs(layout: workspace.Layout, lock: str = "lock v1\n") -> None:
+    _write(
+        layout.gate_dir / "pyproject.toml",
+        '[project]\nrequires-python = ">=3.10"\n'
+        'dependencies = ["Django>=5.2.16", "strawberry-graphql>=0.322.2"]\n',
+    )
+    _write(layout.gate_dir / "uv.lock", lock)
+
+
+def _record_installs(
+    monkeypatch: pytest.MonkeyPatch,
+    layout: workspace.Layout,
+    fail_on: str | None = None,
+) -> list[tuple[list[str], dict[str, str]]]:
+    """Replace the build commands' subprocess layer; ``uv sync`` lays down the interpreter."""
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def _run_checked(command: list[str], env: dict[str, str]) -> None:
+        calls.append((list(command), env))
+        if fail_on is not None and fail_on in command:
+            msg = f"{' '.join(command)} failed (1): no such release"
+            raise workspace.WorkspaceError(msg)
+        if command[:2] == ["uv", "sync"]:
+            _write(layout.floor_venv / "bin" / "python", "interpreter\n")
+
+    monkeypatch.setattr(workspace, "_run_checked", _run_checked)
+    return calls
+
+
+def test_the_floor_venv_is_built_once_and_rebuilt_when_its_inputs_move(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _gate_copy_inputs(layout)
+    calls = _record_installs(monkeypatch, layout)
+
+    built = workspace.ensure_floor_venv(layout)
+    _write(layout.floor_venv / "lib" / "leftover.py", "x\n")
+    reused = workspace.ensure_floor_venv(layout)
+
+    assert built["reused"] is False
+    assert built["pins"] == {"python": "3.10", "Django": "5.2.16", "strawberry-graphql": "0.322.2"}
+    assert built["python"] == str(layout.floor_venv / "bin" / "python")
+    assert [command[:3] for command, _env in calls] == [
+        ["uv", "sync", "--directory"],
+        ["uv", "pip", "install"],
+        ["uv", "pip", "install"],
+    ]
+    assert all(env["UV_PROJECT_ENVIRONMENT"] == str(layout.floor_venv) for _c, env in calls)
+    assert reused == {**built, "reused": True}
+    assert len(calls) == 3
+
+    _gate_copy_inputs(layout, lock="lock v2\n")
+    rebuilt = workspace.ensure_floor_venv(layout)
+
+    assert rebuilt["reused"] is False
+    assert rebuilt["key"] != built["key"]
+    assert len(calls) == 6
+    assert not (layout.floor_venv / "lib" / "leftover.py").exists()
+
+
+def test_a_floor_pin_move_rebuilds_the_floor_venv(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _gate_copy_inputs(layout)
+    calls = _record_installs(monkeypatch, layout)
+    built = workspace.ensure_floor_venv(layout)
+    _write(
+        layout.gate_dir / "pyproject.toml",
+        '[project]\nrequires-python = ">=3.10"\n'
+        'dependencies = ["Django>=5.2.17", "strawberry-graphql>=0.322.2"]\n',
+    )
+
+    rebuilt = workspace.ensure_floor_venv(layout)
+
+    assert rebuilt["key"] != built["key"]
+    assert calls[-2][0][-1] == "Django==5.2.17"
+
+
+def test_a_failed_floor_build_writes_no_key_so_the_next_gate_rebuilds(
+    layout: workspace.Layout,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _gate_copy_inputs(layout)
+    _record_installs(monkeypatch, layout, fail_on="strawberry-graphql==0.322.2")
+
+    with pytest.raises(workspace.WorkspaceError, match="no such release"):
+        workspace.ensure_floor_venv(layout)
+    assert (layout.floor_venv / "bin" / "python").exists()
+    assert not (layout.floor_venv / workspace.FLOOR_KEY_NAME).exists()
+
+    calls = _record_installs(monkeypatch, layout)
+    again = workspace.ensure_floor_venv(layout)
+
+    assert again["reused"] is False
+    assert len(calls) == 3
 
 
 def test_summarize_suite_reads_summary_collected_and_coverage() -> None:

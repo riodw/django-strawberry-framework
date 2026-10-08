@@ -43,14 +43,22 @@ Worker-0 commands
         the copy had been edited or the shared tree had moved. An id with no
         log entry, or whose package or database lay outside its copy, fails
         the audit.
-    ``gate <flow> [--suites lint,default,sharded,pg]``
+    ``gate <flow> [--suites lint,default,floor,sharded,pg]``
         Run the final gate suites in a gate copy that carries a git index, as
         CI's jobs do: the lint job's commands in its order, the full default
-        suite (coverage floor), the sharded suite and the Postgres
-        database-touching suite. The result is written
-        to ``evidence/gate-<run id>.json`` and bound to the ``git stash
-        create`` sha, the blob ids of ``pyproject.toml`` and ``uv.lock`` and
-        each suite's cell.
+        suite (coverage floor), the floor suite, the sharded suite and the
+        Postgres database-touching suite. The floor suite is CI's floor cell:
+        the whole suite, without coverage, in a separate virtualenv at the
+        ``requires-python`` floor with ``Django`` and ``strawberry-graphql``
+        pinned to their ``pyproject.toml`` lower bounds, installed the way
+        that cell installs them. Only executing at the floor catches what the
+        floor type check cannot see, such as an annotation a 3.10 import
+        evaluates. That virtualenv is reused while its key (the install
+        commands and the copy's ``pyproject.toml`` and ``uv.lock``) matches,
+        and rebuilt from nothing when it does not. The result is written to
+        ``evidence/gate-<run id>.json`` and bound to the ``git stash create``
+        sha, the blob ids of ``pyproject.toml`` and ``uv.lock``, each suite's
+        cell and the floor pins.
     ``status [<flow>]``
         Print copies, bindings, active runs, disk use and Postgres leases.
     ``gc <flow> [--force]``
@@ -69,7 +77,8 @@ its full output kept in ``evidence/logs/<run id>.log``. A record cites the run
 id; ``audit`` checks it.
 
 Layout: ``$TMPDIR/dsf-ws/<sha16 of the repo root>/<flow>/`` holds
-``slots/slot-N/`` (the copies), ``gate/``, ``evidence/`` and ``state.json``.
+``slots/slot-N/`` (the copies), ``gate/``, ``gate-floor/`` (the floor
+suite's virtualenv), ``evidence/`` and ``state.json``.
 It lives outside the repository, keyed per checkout (so a git worktree gets
 its own), and is harness-agnostic. ``DSF_WS_ROOT`` replaces
 ``$TMPDIR/dsf-ws``; a root inside the repository is refused, since copies of
@@ -141,6 +150,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -244,11 +254,33 @@ LINT_COMMANDS = (
     "python scripts/build_tree_md.py --check",
 )
 
-#: Each gate suite: the command after ``uv run`` and the cell it runs in (REVIEW.md "Final
-#: gate"). ``sh -ex`` stops the lint suite at the first failing command and echoes each one.
+#: The suite that runs in the floor virtualenv instead of the gate copy's own ``.venv``.
+FLOOR_SUITE = "floor"
+#: The ``[project].dependencies`` CI's floor cell pins to their ``>=`` lower bound, in the
+#: order that cell installs them; BUILD.md "Floor verification" states the same points.
+FLOOR_PACKAGES = ("Django", "strawberry-graphql")
+#: Written into the floor virtualenv once its build succeeds; a mismatch rebuilds it.
+FLOOR_KEY_NAME = "dsf-floor-key"
+REQUIREMENT_PATTERN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*([^;]*)")
+
+#: Each gate suite: the command after ``uv run`` (after ``python -m`` in the floor
+#: virtualenv for ``floor``) and the cell it runs in (REVIEW.md "Final gate"). ``sh -ex``
+#: stops the lint suite at the first failing command and echoes each one. ``floor`` is the
+#: ``test`` job's compatibility node in ``.github/workflows/django.yml``, whose ``addopts``
+#: drop ``--cov``; ``tests/test_workspace.py`` holds it to the workflow.
 GATE_SUITES: dict[str, tuple[tuple[str, ...], str]] = {
     "lint": (("sh", "-exc", "\n".join(LINT_COMMANDS)), "default"),
     "default": (("pytest",), "default"),
+    FLOOR_SUITE: (
+        (
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "addopts=-v -n auto --dist loadscope --durations=25",
+        ),
+        "default",
+    ),
     "sharded": (("pytest", "-o", "addopts=-v -n auto --dist loadscope"), "sharded"),
     "pg": (
         (
@@ -556,6 +588,11 @@ class Layout:
         """The gate copy, outside the pool."""
         return self.flow_dir / "gate"
 
+    @property
+    def floor_venv(self) -> Path:
+        """The floor suite's virtualenv, beside the gate copy so a resync never mirrors it."""
+        return self.flow_dir / "gate-floor"
+
     def slot_dir(self, slot: str) -> Path:
         """Return one copy's directory."""
         return self.flow_dir / "slots" / slot
@@ -770,6 +807,15 @@ def mirror_tree(
     raise WorkspaceError(msg)
 
 
+def _run_checked(command: Sequence[str], env: dict[str, str]) -> None:
+    """Run one environment-building command; a non-zero exit is a refusal with its stderr."""
+    completed = subprocess.run(list(command), capture_output=True, env=env, check=False)
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip()
+        msg = f"{shlex.join(command)} failed ({completed.returncode}): {detail}"
+        raise WorkspaceError(msg)
+
+
 def _uv_sync(destination: Path) -> None:
     command = [
         "uv",
@@ -781,11 +827,147 @@ def _uv_sync(destination: Path) -> None:
         "pg",
         "-q",
     ]
-    completed = subprocess.run(command, capture_output=True, env=clean_env(), check=False)
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        msg = f"uv sync failed in {destination} ({completed.returncode}): {detail}"
+    _run_checked(command, clean_env())
+
+
+def _lower_bound(specifier: str, what: str) -> str:
+    for clause in specifier.split(","):
+        stripped = clause.strip()
+        if stripped.startswith(">="):
+            return stripped.removeprefix(">=").strip()
+    msg = f"{what} in pyproject.toml states no >= floor: {specifier!r}"
+    raise WorkspaceError(msg)
+
+
+def _normalized(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def floor_pins(pyproject: Path) -> dict[str, str]:
+    """Return the floor ``python`` and each of ``FLOOR_PACKAGES`` read from ``pyproject``.
+
+    ``pyproject.toml`` is the source of the dependency floor (BUILD.md "Floor
+    verification"): ``requires-python``'s ``>=`` bound is the interpreter and
+    each package's ``>=`` bound in ``[project].dependencies`` is the exact
+    point the floor run installs, the same points that section states.
+    """
+    import tomli
+
+    try:
+        project = tomli.loads(pyproject.read_text(encoding="utf-8"))["project"]
+        requires_python = str(project["requires-python"])
+        dependencies = [str(requirement) for requirement in project["dependencies"]]
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        tomli.TOMLDecodeError,
+    ) as error:
+        msg = f"[project] requires-python / dependencies unreadable from {pyproject}: {error!r}"
+        raise WorkspaceError(msg) from error
+    pins = {"python": _lower_bound(requires_python, "requires-python")}
+    wanted = {_normalized(name): name for name in FLOOR_PACKAGES}
+    for requirement in dependencies:
+        match = REQUIREMENT_PATTERN.match(requirement)
+        if match and _normalized(match.group(1)) in wanted:
+            pins[wanted[_normalized(match.group(1))]] = _lower_bound(match.group(2), requirement)
+    missing = [name for name in FLOOR_PACKAGES if name not in pins]
+    if missing:
+        msg = f"[project].dependencies in {pyproject} lists no {', '.join(missing)}"
         raise WorkspaceError(msg)
+    return pins
+
+
+def floor_install_commands(copy: Path, venv: Path, pins: Mapping[str, str]) -> list[list[str]]:
+    """Return the floor cell's install, aimed at ``venv`` (``UV_PROJECT_ENVIRONMENT``).
+
+    The ``test`` job of ``.github/workflows/django.yml`` syncs the lock at the
+    floor Python, then replaces Django and strawberry-graphql with the exact
+    floor points; the lock resolves newer releases of both for that Python, so
+    they are installed over the sync rather than beside it.
+    """
+    python = str(venv / "bin" / "python")
+    pip = [
+        "uv",
+        "pip",
+        "install",
+        "--directory",
+        str(copy),
+        "--python",
+        python,
+        "-q",
+    ]
+    django, strawberry = FLOOR_PACKAGES
+    return [
+        [
+            "uv",
+            "sync",
+            "--directory",
+            str(copy),
+            "--frozen",
+            "--python",
+            pins["python"],
+            "-q",
+        ],
+        [
+            *pip,
+            "--upgrade-package",
+            django,
+            f"{django}=={pins[django]}",
+        ],
+        [*pip, f"{strawberry}=={pins[strawberry]}"],
+    ]
+
+
+class _FloorVenv(TypedDict):
+    """The floor virtualenv the floor suite ran in, as the gate result records it."""
+
+    python: str
+    pins: dict[str, str]
+    key: str
+    reused: bool
+
+
+def ensure_floor_venv(layout: Layout) -> _FloorVenv:
+    """Reuse the gate copy's floor virtualenv while its key matches; else rebuild it whole.
+
+    The key covers the install commands (so the pins and the interpreter) and
+    the copy's ``pyproject.toml`` and ``uv.lock``. Package edits need no
+    rebuild: the copy is installed editable. The key is written only after
+    every command succeeded, so a failed build is rebuilt on the next gate.
+    """
+    copy = layout.gate_dir
+    venv = layout.floor_venv
+    pins = floor_pins(copy / "pyproject.toml")
+    commands = floor_install_commands(copy, venv, pins)
+    key = hashlib.sha256(
+        json.dumps(
+            {
+                "commands": commands,
+                "pyproject.toml": file_hash(copy / "pyproject.toml"),
+                "uv.lock": file_hash(copy / "uv.lock"),
+            },
+            sort_keys=True,
+        ).encode("utf-8"),
+    ).hexdigest()
+    python = venv / "bin" / "python"
+    key_path = venv / FLOOR_KEY_NAME
+    reused = python.exists() and key_path.is_file() and key_path.read_text(encoding="utf-8") == key
+    if not reused:
+        if venv.is_symlink() or venv.is_file():
+            venv.unlink()
+        elif venv.exists():
+            shutil.rmtree(venv)
+        env = clean_env(UV_PROJECT_ENVIRONMENT=str(venv))
+        for command in commands:
+            _run_checked(command, env)
+        key_path.write_text(key, encoding="utf-8")
+    return {
+        "python": str(python),
+        "pins": pins,
+        "key": key,
+        "reused": reused,
+    }
 
 
 class _Manifest(TypedDict):
@@ -1280,8 +1462,9 @@ def stream(
     env: dict[str, str],
     log_path: Path,
     header: str,
+    cwd: Path | None = None,
 ) -> int:
-    """Run ``command``, copying its stdout and stderr through while logging both."""
+    """Run ``command`` in ``cwd``, copying its stdout and stderr through while logging both."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("wb") as log:
         log.write(header.encode("utf-8"))
@@ -1289,6 +1472,7 @@ def stream(
         process = subprocess.Popen(  # the worker's own command, in its copy
             list(command),
             env=env,
+            cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -1749,8 +1933,14 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
             arguments, cell = GATE_SUITES[suite]
             run_id = new_run_id(layout.flow)
             log_path = layout.evidence / "logs" / f"{run_id}.log"
+            runner: list[str] = [*uv_run, "--"]
+            cwd: Path | None = None
             try:
                 env, database = gate_env(layout, cell)
+                if suite == FLOOR_SUITE:
+                    floor = ensure_floor_venv(layout)
+                    result["floor"] = floor
+                    runner, cwd = [floor["python"], "-m"], layout.gate_dir
             except WorkspaceError as error:
                 suite_results[suite] = {
                     "run_id": run_id,
@@ -1765,7 +1955,7 @@ def gate(layout: Layout, suites: Sequence[str]) -> int:
             header = f"workspace gate {run_id} suite={suite} cell={cell} copy={layout.gate_dir}\n"
             sys.stderr.write(header)
             started = time.monotonic()
-            code = stream([*uv_run, "--", *arguments], env, log_path, header)
+            code = stream([*runner, *arguments], env, log_path, header, cwd=cwd)
             ran: _GateRun = {
                 "run_id": run_id,
                 "cell": cell,

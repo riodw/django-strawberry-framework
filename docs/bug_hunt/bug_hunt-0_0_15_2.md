@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 29 done, 47 to do.
+Progress: 32 done, 48 to do.
 
 ## Done
 
@@ -40,11 +40,17 @@ Progress: 29 done, 47 to do.
   now matches by table, and a set shared by an MTI parent and child type is refused (`9d5e2a04`)
 - [x] 62. A declared flat `ChoiceField` over a grouped-choices column was refused since item 35; the write-side check now reads the
   column's flattened values, and its refusal no longer claims a GraphQL enum exists (`bf112a0c`)
+- [x] 65. `iExact: BLANK` and every other single-value lookup on a choice column dropped the predicate; every enum member now
+  reaches the filter as a typed value, so `""` is never skipped and a `"null"` member is never `IS NULL` (`309d4f04`)
+- [x] 48. `BLANK_CHOICE` marker broke under copy / pickle; replaced by the `EnumMemberValue` value object (`309d4f04`)
+- [x] 52. Connection resolvers sent row-hydration and consumer-source exception text to the client; pagination validators now
+  raise `PaginationArgumentError` themselves and nothing rewraps a foreign exception (`72065173`)
 
 ## To do: t3 hunt findings
 
 - [ ] 12. Nested forward-FK / OneToOne resolvers never check the request deadline
-- [ ] 14. README says integer `in: []` matches nothing; t3 saw it match everything. Check which is right
+- [ ] 14. README says `in: []` matches nothing; it matches every row on integer, text and choice columns (flat), and on a nested
+  `shelves.condition in: []` only parents with a child. Check which is right
 
 ## To do: t3 robustness rows
 
@@ -72,21 +78,22 @@ not real bugs and just get deleted from t3. One checkbox per area:
 - [ ] 45. Postgres: plain `ChoiceField` over an `ArrayField` builds, then the save fails
 - [ ] 46. Postgres: `ListField(child=ChoiceField)` over an `ArrayField` is refused
 - [ ] 47. Postgres: `serializer_choice_field=MultipleChoiceField` over an `ArrayField` is unusable
-- [ ] 48. `BLANK_CHOICE` marker breaks under copy / pickle
 - [ ] 49. `serializer_field_description` re-raises `KeyboardInterrupt`
 - [ ] 50. SKIP hint drops relation columns from `.only()`, so every row is fetched again (unverified)
 - [ ] 51. `OrderSet` `"__all__"` leaves out `ForeignObject` fields (unverified)
-- [ ] 52. Connection resolvers send raw exception text to the client (unverified)
 - [ ] 56. Two writable serializer fields can write the same FK column (`category` and `source="category_id"`)
 - [ ] 74. A consumer `select_related` on a forward FK the query never selects, combined with the optimizer's `.only()`, raises
   Django's "cannot be both deferred and traversed" (`Entry.objects.select_related("property")` with `{ entries { value item { name } } }`)
+- [ ] 80. `_guard_source_not_pre_sliced` and three `_finalize_queryset` catches turn a consumer QuerySet or ordering fault into a
+  deliberate `GraphQLError` naming the exception class: no `correlationId`, class name on the wire (robustness; no text leaks)
+- [ ] 81. `decode_offset_cursor` checks `relay.Edge.CURSOR_PREFIX`, not the connection's `edge_class.CURSOR_PREFIX`: a custom Edge
+  prefix turns a foreign `arrayconnection:` cursor into a masked error instead of the cursor message (robustness, fails closed)
 
 ## To do: holes found re-checking the fixes
 
 - [ ] 61. Three `FilterSet`s in a `RelatedFilter` cycle: the flat filters exposed depend on type declaration order
 - [ ] 63. `after` cursor at `sys.maxsize - 1 - page` with `first: 0` / `last: 0` raises Strawberry's assert instead of an empty page
 - [ ] 64. Two cursor-decoder guards no test pins (`isascii`, the nested-window decode)
-- [ ] 65. `iExact: BLANK` on a choice column matches every row
 - [ ] 66. Index advisory on a multi-table-inheritance child names an order column that lives on the parent table
 - [ ] 67. Nested serializer: a Django error raised in `create()` for a child is keyed to a renamed root input
 - [ ] 70. Argument-less directives are re-walked on every fragment expansion (about 80 ms at the token bound; bounded, robustness)
@@ -109,6 +116,10 @@ not real bugs and just get deleted from t3. One checkbox per area:
   serializer field taking a grouped column's read enum is refused with a remedy to declare a flat `ChoiceField`
 - [ ] 77. The read enum refuses a grouped-choices column, though group labels are presentation like choice labels. Flatten it on
   the read side too (retires the `str`-override carve-out and the write-side grouped refusal), or keep?
+- [ ] 78. CHANGELOG entry for item 65: every lookup on a choice column treats each enum member as a value (`iExact: BLANK`
+  matches blank rows only, a `"null"` member matches `"null"`); raw form data and declared `ChoiceFilter`s are unchanged
+- [ ] 79. CHANGELOG entry for item 52: connection fields no longer send consumer-source or row-hydration exception text to the
+  client; pagination rejections keep their messages and are the new public `PaginationArgumentError`
 - [ ] 73. A set subclass used only as a `RelatedFilter` / `RelatedOrder` target, never wired to a type, inherits its base's owner and
   that owner's visibility. Keep, or fall back to the target model's registered type?
 

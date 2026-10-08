@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 28 done, 46 to do.
+Progress: 29 done, 47 to do.
 
 ## Done
 
@@ -38,6 +38,8 @@ Progress: 28 done, 46 to do.
   either hides rows, as on the filter side, and a subclass binds its own owner (`8ab6c921`)
 - [x] 72. A set bound to a type over a proxy model read the concrete model's primary type on a path re-entering its table; re-entry
   now matches by table, and a set shared by an MTI parent and child type is refused (`9d5e2a04`)
+- [x] 62. A declared flat `ChoiceField` over a grouped-choices column was refused since item 35; the write-side check now reads the
+  column's flattened values, and its refusal no longer claims a GraphQL enum exists (`bf112a0c`)
 
 ## To do: t3 hunt findings
 
@@ -82,8 +84,6 @@ not real bugs and just get deleted from t3. One checkbox per area:
 ## To do: holes found re-checking the fixes
 
 - [ ] 61. Three `FilterSet`s in a `RelatedFilter` cycle: the flat filters exposed depend on type declaration order
-- [ ] 62. A declared flat `ChoiceField` over a grouped-choices column is refused since item 35 (worked before); the refusal's message is
-  also wrong for a column no type exposes
 - [ ] 63. `after` cursor at `sys.maxsize - 1 - page` with `first: 0` / `last: 0` raises Strawberry's assert instead of an empty page
 - [ ] 64. Two cursor-decoder guards no test pins (`isascii`, the nested-window decode)
 - [ ] 65. `iExact: BLANK` on a choice column matches every row
@@ -104,6 +104,11 @@ not real bugs and just get deleted from t3. One checkbox per area:
   longer one (`shelf__branch` beside `shelf`) raises at expansion when the shorter branch's target set reaches `branch`
 - [ ] 75. CHANGELOG entry for item 72: a `FilterSet` or `OrderSet` shared by an MTI parent and child type now raises at finalize, and
   a concrete type's path through an FK declared to a proxy (`BranchNote.branch`) reads the bound type, not the proxy's type
+- [ ] 76. CHANGELOG entry for item 62: a `SerializerMutation` whose serializer declares a flat `ChoiceField` over a grouped-choices
+  column binds again (checked against the column's flattened values); a refused value now reads "which does not list it", and a
+  serializer field taking a grouped column's read enum is refused with a remedy to declare a flat `ChoiceField`
+- [ ] 77. The read enum refuses a grouped-choices column, though group labels are presentation like choice labels. Flatten it on
+  the read side too (retires the `str`-override carve-out and the write-side grouped refusal), or keep?
 - [ ] 73. A set subclass used only as a `RelatedFilter` / `RelatedOrder` target, never wired to a type, inherits its base's owner and
   that owner's visibility. Keep, or fall back to the target model's registered type?
 

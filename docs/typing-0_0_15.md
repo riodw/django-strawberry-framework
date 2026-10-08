@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 18 done, 9 to do. Ignore comments: 1020 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 18 done, 9 to do. Ignore comments: 1024 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -102,7 +102,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1020 (1049 rule hits) in 163 files: tests 794, package 171, examples 53,
+Lines carrying `# pyright: ignore[...]`: 1024 (1053 rule hits) in 164 files: tests 794, package 175, examples 53,
 scripts 2.
 
 ### By cause
@@ -116,6 +116,7 @@ scripts 2.
 | Framework `Meta` read from the class body only | 13 | keep |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
 | Reviewed in item 21 and kept (each reason line states its cause) | 301 | keep |
+| Mixin bases whose `__init__` chain reaches one base (enum filter fields, `PaginationArgumentError`) | 4 | keep |
 
 ### By rule
 
@@ -129,9 +130,9 @@ scripts 2.
 | `reportReturnType` | 26 | 0 | 25 | 1 | 0 |
 | `reportUnnecessaryIsInstance` | 20 | 20 | 0 | 0 | 0 |
 | `reportCallIssue` | 17 | 1 | 15 | 1 | 0 |
+| `reportUnsafeMultipleInheritance` | 13 | 8 | 3 | 2 | 0 |
 | `reportAssignmentType` | 12 | 0 | 11 | 1 | 0 |
 | `reportIndexIssue` | 11 | 0 | 11 | 0 | 0 |
-| `reportUnsafeMultipleInheritance` | 9 | 4 | 3 | 2 | 0 |
 | `reportUnknownParameterType` | 9 | 1 | 8 | 0 | 0 |
 | `reportMissingSuperCall` | 8 | 2 | 6 | 0 | 0 |
 | `reportUnreachable` | 7 | 5 | 2 | 0 | 0 |

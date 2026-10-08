@@ -32,6 +32,7 @@ from ..keyset import (
 from ..utils.connections import (
     ConnectionWindowBounds,
     FetchMode,
+    PaginationArgumentError,
     UnwindowableConnection,
     derive_connection_window_bounds,
     derive_keyset_window_bounds,
@@ -876,10 +877,16 @@ def _connection_window_slice_from_arguments(
     has no ``.config`` the engine could read), and hands those to the shared
     helper, which owns the ``reverse`` / ``limit`` rule.
 
-    Returns ``None`` when the shared helper raises ``ValueError`` (negative /
-    over-max ``first`` / ``last``) or ``TypeError`` (malformed cursor) so
+    Returns ``None`` when the shared helper raises ``PaginationArgumentError``
+    (negative / over-max ``first`` / ``last``, malformed cursor) so
     ``plan_connection_relation`` leaves the selection UNPLANNED and the shipped
-    nested field path raises at its own error locality (Decision 4 step f). The
+    nested field path raises at its own error locality (Decision 4 step f). No
+    other pagination exception can arise here: ``decode_offset_cursor`` folds
+    every undecodable cursor, a non-``str`` one included, into that rejection,
+    a ``first`` / ``last`` the coercion above leaves non-``int`` is skipped by
+    the bound check exactly as the engine skips it, and once the validator has
+    returned ``SliceMetadata.from_arguments`` has nothing left to reject. The
+    walker only declines to plan: it constructs no error of its own. The
     resolver calls the same helper directly with already-coerced Strawberry
     arguments and lets the pagination error propagate instead.
 
@@ -912,7 +919,7 @@ def _connection_window_slice_from_arguments(
             last=last,
             max_results=_relay_max_results_from_info(info),
         )
-    except (ValueError, TypeError):
+    except PaginationArgumentError:
         return None
     return bounds
 
@@ -934,8 +941,8 @@ def _keyset_window_slice_from_arguments(
     codec. Error contract mirrors the offset adapter:
 
     - ``None`` for malformed pagination - a negative / over-cap ``first``
-      (``ValueError``) or an invalid / tampered / wrong-order cursor (the
-      codec's ``GraphQLError``). The caller records the field as
+      (``PaginationArgumentError``) or an invalid / tampered / wrong-order
+      cursor (the codec's ``GraphQLError``). The caller records the field as
       accounted-for and the per-parent pipeline raises the SAME error at
       the field's own locality.
     - ``UnwindowableConnection`` propagates for the valid backward shapes

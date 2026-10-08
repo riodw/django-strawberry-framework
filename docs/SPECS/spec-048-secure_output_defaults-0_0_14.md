@@ -938,14 +938,21 @@ fold-in only.
 rule and from where the masking hook is installed. Each is a boundary of the shipped contract
 rather than a gap in it, and a later pass must not read one as an omission.
 
-**Upstream's own argument rejections are masked.** The rule is structural rather than an
-allowlist, so an error is left untouched when it carries a code the package audits. Strawberry's
-relay and pagination **argument** rejections carry none, so they fall into the masked branch and
-reach the client as `policy.message` plus a correlation id — a client that passed a bad `first` /
-`last` combination learns nothing actionable. Loosening the rule is not the remedy: bringing those
-rejections under the untouched branch it already has would mean the package raising them as a
-`GraphQLError` carrying an audited `extensions.code`, which is a behaviour change this spec does
-not license.
+**An upstream rejection raised as a plain exception is masked; connection pagination is the
+package's own.** The rule is structural rather than an allowlist: an error whose
+`original_error` is a `GraphQLError` is left untouched, and anything else is masked. A library
+below the package that rejects an input by raising a plain `ValueError` / `TypeError` therefore
+reaches the client as `policy.message` plus a correlation id. Connection pagination arguments
+do not take that path. The package validates every offset `after` / `before` / `first` /
+`last` itself (`utils/connections.py::validate_offset_pagination`) before Strawberry's
+`SliceMetadata.from_arguments` runs, so on the offset path the engine's own checks are never
+reached, and the keyset fork applies the same bound check
+(`utils/connections.py::assert_relay_pagination_bound`). Each rejection is raised as
+`PaginationArgumentError`, a deliberate `GraphQLError`, so it passes the policy unmasked with
+its fixed message (the engine's own wording, no `extensions.code`), as does the package's
+`first` + `last` mutual-exclusivity guard. What the policy masks on a connection is only what
+did not come from that validation: an exception from a consumer source or from row hydration,
+which the package never catches and re-raises as client-facing text.
 
 **A consumer-built plain `GraphQLWSConsumer` gets no per-event masking.** The seam is
 installed by the consumer class `consumers.py::build_revalidating_consumer_class` builds for

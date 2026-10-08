@@ -12,11 +12,16 @@ IDENTICALLY, or optimizer-on and optimizer-off behavior can split:
   reverse / limit rule, so the resolve-time window matches the plan-time window
   by construction (spec-033 Decision 4 / Decision 5, the cursor-parity
   invariant's resolve-time half).
-* The offset cursor decoder (``decode_offset_cursor``) - the one validator of
-  an ``after`` / ``before`` offset cursor's position, read by the window
-  derivation above and by the resolver's non-window slicing tail, so the
-  planned window and every ``ListConnection``-sliced source accept and reject
-  the same cursors.
+* The offset pagination validator (``validate_offset_pagination``, over
+  ``decode_offset_cursor`` and ``assert_relay_pagination_bound``) - the one
+  validator of an offset page's ``after`` / ``before`` cursors and ``first`` /
+  ``last`` bounds, read by the window derivation above and by the resolver's
+  non-window slicing tail, so the planned window and every
+  ``ListConnection``-sliced source accept and reject the same arguments. Each
+  rejection is a ``PaginationArgumentError`` raised where the argument is
+  validated: the package's own validation constructs the client-facing error,
+  so an exception from a consumer source or from row hydration is never caught
+  and re-raised as one.
 * The connection sidecar kwarg names and the presence predicates over them -
   the walker refuses to window-plan a sidecar-bearing nested connection, and
   the resolver refuses to consume a window when sidecar kwargs are present
@@ -45,10 +50,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Protocol, TypeVar, cast
 
 import strawberry
+from graphql import GraphQLError
 from strawberry import relay
 from strawberry.relay.utils import SliceMetadata, from_base64
 
-from ..exceptions import OptimizerError
+from ..exceptions import DjangoStrawberryFrameworkError, OptimizerError
 from ..resource_policy import effective_bound, policy_from_info
 from .input_values import is_inactive_value
 from .typing import schema_config_from_info
@@ -87,6 +93,32 @@ CONNECTION_ORDER_KWARG_GRAPHQL = "orderBy"
 NEXT_PAGE_PROBE_ROWS = 1
 
 
+# basedpyright: ``GraphQLError.__init__`` calls ``super().__init__(message)``, which reaches
+# ``BaseException.__init__`` through the package base (it defines no ``__init__``)
+class PaginationArgumentError(GraphQLError, DjangoStrawberryFrameworkError):  # pyright: ignore[reportUnsafeMultipleInheritance]
+    """An offset cursor or a connection page size was invalid.
+
+    Two rejections raise it: an offset ``after`` / ``before`` cursor that
+    ``decode_offset_cursor`` does not accept, and a negative or over-cap
+    ``first`` / ``last`` that ``assert_relay_pagination_bound`` refuses on an
+    offset page, a keyset page or a planned window. A keyset (``Meta.cursor_field``)
+    cursor is not one of them: its rejection is the keyset codec's own
+    ``GraphQLError`` (``keyset.py::_invalid_cursor_error``), with its own wording.
+
+    Dual-inherits ``GraphQLError`` (so the rejection travels the wire as the
+    field's own error entry, which the production error policy treats as a
+    deliberate client-facing statement) and ``DjangoStrawberryFrameworkError``
+    (so consumers can catch it alongside any other framework error). The
+    ``ListArgumentError`` precedent, without ``extensions``: the message is
+    Strawberry's own ``SliceMetadata.from_arguments`` wording, byte for byte, so
+    one invalid page size gets one message on every path.
+
+    Raised only where the package validates an argument, never by catching an
+    exception and re-raising its text: an exception from a consumer source or
+    from row hydration is not a pagination statement, so the policy masks it.
+    """
+
+
 class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, not a surfaced error
     """Internal signal: this pagination shape cannot be served by a windowed prefetch.
 
@@ -95,12 +127,13 @@ class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, no
     results or page flags. This includes offset-bearing backward windows
     (``after`` + ``last``) and inverted ``after`` + ``before`` intervals. Per
     spec-033 Decision 5 these valid shapes fall back per parent rather than being
-    approximated. A malformed offset cursor (``decode_offset_cursor``) raises
-    ``TypeError`` instead, keeping the field-local pagination error.
+    approximated. An invalid pagination argument (``validate_offset_pagination``)
+    raises ``PaginationArgumentError`` instead, keeping the field-local pagination
+    error.
 
     A control-flow sentinel, deliberately NOT a ``DjangoStrawberryFrameworkError``
-    and NOT a ``ValueError`` / ``TypeError``: the walker catches the pagination
-    *errors* (``ValueError`` / ``TypeError``) to leave a selection unplanned while
+    and NOT a ``PaginationArgumentError``: the walker catches the pagination
+    *errors* to leave a selection unplanned while
     still recording the field as accounted-for (it will raise its OWN error), but
     must treat THIS shape as a fully-unplanned Decision-6 fallback (no
     ``planned_resolver_keys`` entry) so the per-parent access stays visible to the
@@ -687,13 +720,13 @@ def decode_offset_cursor(value: str | None, *, argument: str) -> int | None:
     ``sys.maxsize - 1`` is the last index whose start still fits a 64-bit SQL
     ``OFFSET`` (an ordinary past-the-end page). The length is compared before
     ``int()`` runs, so an arbitrarily long digit string is never converted. Any
-    other value raises ``TypeError`` with Strawberry's own foreign-prefix wording,
-    which the walker reads as malformed pagination and both resolve-time callers
-    surface as the field's ``GraphQLError``.
+    other value raises ``PaginationArgumentError`` with Strawberry's own
+    foreign-prefix wording, which the walker reads as malformed pagination and
+    both resolve-time callers let surface as the field's own error.
     """
     if not value:
         return None
-    rejection = TypeError(f"Argument '{argument}' contains a non-existing value.")
+    rejection = PaginationArgumentError(f"Argument '{argument}' contains a non-existing value.")
     try:
         prefix, raw = from_base64(value)
     except ValueError:
@@ -730,11 +763,12 @@ def derive_connection_window_bounds(
     with no page argument is bounded by that same cap and ``last: 0`` is the
     ``first: 0`` window.
 
-    ``SliceMetadata.from_arguments`` raises ``ValueError`` (negative / over-max
-    ``first`` / ``last``) or ``TypeError`` (malformed cursor) for invalid
-    pagination; this helper lets those propagate. The walker catches them to
-    leave the selection unplanned (Decision 4 step f); the resolver lets them
-    surface as the field's own pagination error.
+    The arguments pass ``validate_offset_pagination`` before the engine sees
+    them, so an invalid cursor or a negative / over-cap ``first`` / ``last``
+    raises ``PaginationArgumentError`` with the engine's own wording and the
+    engine itself never rejects. The walker catches it to leave the selection
+    unplanned (Decision 4 step f); the resolver lets it surface as the field's
+    own pagination error.
 
     Backward (``last``-only) pagination needs the reversed-row-number window:
     ``last`` set with no ``first`` and no ``before`` bound (``before`` + ``last``
@@ -757,17 +791,22 @@ def derive_connection_window_bounds(
     approximating, so raise ``UnwindowableConnection`` to leave it unplanned.
 
     Both cursors go through ``decode_offset_cursor`` before the engine sees them,
-    so a negative or non-canonical index raises ``TypeError`` (malformed
-    pagination) and ``start`` / ``end`` are never negative. Strawberry's metadata
+    so a negative or non-canonical index raises ``PaginationArgumentError``
+    (malformed pagination) and ``start`` / ``end`` are never negative. Strawberry's metadata
     is a Python slice, so only a non-inverted interval can be translated to SQL
     row numbers. An inverted ``after`` + ``before`` interval has a negative
     ``expected`` and means an empty Python slice, not an unbounded SQL tail, so it
     falls back per parent under spec-033 Decision 5.
     """
-    decode_offset_cursor(after, argument="after")
-    decode_offset_cursor(before, argument="before")
     effective_max_results = resolve_relay_max_results(info, max_results)
     first, last = page_arguments(first, last, cap=effective_max_results)
+    validate_offset_pagination(
+        before=before,
+        after=after,
+        first=first,
+        last=last,
+        cap=effective_max_results,
+    )
     slice_meta = SliceMetadata.from_arguments(
         # The engine reads ``info`` only to find a cap when ``max_results`` is
         # ``None``, and ``effective_max_results`` is always an ``int``.
@@ -807,23 +846,58 @@ _RELAY_MAX_RESULTS_DEFAULT = 100
 
 
 def assert_relay_pagination_bound(argument: str, value: object, *, cap: int) -> None:
-    """Raise ``SliceMetadata``-parity ``ValueError``s for a negative or over-cap page size.
+    """Raise ``SliceMetadata``'s ``PaginationArgumentError`` for a negative or over-cap page size.
 
-    The ONE spelling of the Relay ``first`` / ``last`` bound check the keyset
-    fork cannot run through ``SliceMetadata.from_arguments`` (a keyset cursor
-    is not an offset). Shared by ``derive_keyset_window_bounds`` (plan/resolve
+    The ONE spelling of the Relay ``first`` / ``last`` bound check, on both
+    forks. The keyset fork cannot run ``SliceMetadata.from_arguments`` (a keyset
+    cursor is not an offset), so ``derive_keyset_window_bounds`` (plan/resolve
     window bounds) and the root / per-parent keyset slicer
-    (``connection.py::_resolve_keyset_connection``), so a keyset connection's
-    consumer-visible pagination errors cannot fork from the offset vocabulary
-    or from each other. Non-``int`` values are ignored - matching
-    ``SliceMetadata``'s ``isinstance(..., int)`` gate that skips the bound.
+    (``connection.py::_resolve_keyset_connection``) call it directly; the offset
+    fork reaches it through ``validate_offset_pagination``. A connection's
+    consumer-visible pagination errors therefore cannot fork between the two
+    vocabularies or between the windowed and per-parent paths. Non-``int``
+    values are ignored - matching ``SliceMetadata``'s ``isinstance(..., int)``
+    gate that skips the bound.
     """
     if not isinstance(value, int):
         return
     if value < 0:
-        raise ValueError(f"Argument '{argument}' must be a non-negative integer.")
+        raise PaginationArgumentError(f"Argument '{argument}' must be a non-negative integer.")
     if value > cap:
-        raise ValueError(f"Argument '{argument}' cannot be higher than {cap}.")
+        raise PaginationArgumentError(f"Argument '{argument}' cannot be higher than {cap}.")
+
+
+def validate_offset_pagination(
+    *,
+    before: str | None,
+    after: str | None,
+    first: object,
+    last: object,
+    cap: int,
+) -> None:
+    """Reject every invalid offset pagination argument ``SliceMetadata.from_arguments`` rejects.
+
+    The package's own validation of an offset page, run before anything slices,
+    in the engine's check order: ``after``, ``before``, ``first``, ``last``, each
+    with the engine's exact message, so the first invalid argument a client
+    sends names the same argument with the same text it always did. The
+    cursors go through ``decode_offset_cursor`` (which is also strictly
+    narrower than the engine: a negative or non-canonical index is refused,
+    never sliced) and the bounds through ``assert_relay_pagination_bound``
+    against ``cap``, the already-resolved ``max_results`` the engine will be
+    handed. ``first`` and ``last`` are each checked when supplied, as the
+    engine checks them; their mutual exclusivity is the resolver's own guard.
+
+    Once this returns, the engine raises nothing for these arguments, so the
+    one window derivation (``derive_connection_window_bounds``) and the one
+    non-window slicing tail (``connection.py::_consume_fallback``) can call the
+    engine and ``ListConnection`` without a ``try``: anything they still raise
+    comes from the source or the rows, not from the client's arguments.
+    """
+    decode_offset_cursor(after, argument="after")
+    decode_offset_cursor(before, argument="before")
+    assert_relay_pagination_bound("first", first, cap=cap)
+    assert_relay_pagination_bound("last", last, cap=cap)
 
 
 def relay_max_results_from_info(info: EitherInfo | None) -> int | None:

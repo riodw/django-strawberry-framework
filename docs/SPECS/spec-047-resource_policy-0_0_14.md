@@ -789,17 +789,17 @@ resolved twice or differently for the two shapes.
 window arithmetic rather than only the field entry point. Its keyset twin
 `::derive_keyset_window_bounds` does the same.
 
-**The over-cap rejection reaches the two forks from different places, and is held to one
-vocabulary.** The offset fork takes it from Strawberry's `SliceMetadata.from_arguments`,
-which `derive_connection_window_bounds` calls immediately after resolving the cap. A keyset
-cursor is not an offset, so that engine cannot be run over one; the keyset fork instead
-routes every over-cap check through `utils/connections.py::assert_relay_pagination_bound`,
-the single spelling its two sites share — `::derive_keyset_window_bounds` and
-`connection.py::_resolve_keyset_connection` — and that helper reproduces
-`SliceMetadata`'s own negative and over-cap messages exactly. Parity therefore rests on the
-keyset helper mirroring the offset engine's text, not on one owner serving both forks: the
-two cannot answer the same over-cap request with different errors, and a change to either
-message is a change that must be made in both places.
+**The over-cap rejection has one owner on both forks.**
+`utils/connections.py::assert_relay_pagination_bound` is the single spelling of the
+negative and over-cap check, and it raises `PaginationArgumentError` with
+`SliceMetadata`'s own messages exactly. The offset fork reaches it through
+`utils/connections.py::validate_offset_pagination`, which
+`::derive_connection_window_bounds` and `connection.py::_consume_fallback` run against the
+resolved cap before Strawberry's `SliceMetadata.from_arguments` or `ListConnection` sees
+the arguments, so the engine itself never rejects one. A keyset cursor is not an offset,
+so the keyset fork calls the helper directly, at `::derive_keyset_window_bounds` and
+`connection.py::_resolve_keyset_connection`. The two forks therefore cannot answer the same
+over-cap request with different errors, and a message change is one edit.
 
 **No cursor shape and no `last: 0` widens a page past the cap.** `SliceMetadata` applies its
 default page only when no `before` cursor set the window's end, and Strawberry's
@@ -812,8 +812,8 @@ applies), and `last: 0` with no integer `first` is the `first: 0` page.
 are the same bounded page on both forks, and the `_page_bound` charge (0 for `last: 0`) is
 what the field serves. Nor does a negative cursor: `utils/connections.py::decode_offset_cursor`
 rejects a negative or non-canonical `after` / `before` index inside
-`::derive_connection_window_bounds` and `connection.py::_consume_fallback`, before anything
-slices, so `before` on a list source
+`::validate_offset_pagination`, which `::derive_connection_window_bounds` and
+`connection.py::_consume_fallback` run before anything slices, so `before` on a list source
 can never cut a wrapped Python slice wider than the cap. Every other shape is unchanged.
 
 This keeps the existing precedence intact (an explicit field `max_results` still beats the

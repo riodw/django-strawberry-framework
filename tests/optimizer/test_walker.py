@@ -3592,7 +3592,8 @@ def test_window_respects_relay_max_results():
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
-        # relay_max_results=5; first=10 raises ValueError in SliceMetadata ->
+        # relay_max_results=5; first=10 raises PaginationArgumentError in the
+        # shared offset validator ->
         # the malformed-slice fallback emits no window (error locality: the
         # pipeline raises the cap error) but records the resolver key so
         # strictness does not preempt it with a spurious "Unplanned N+1".

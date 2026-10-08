@@ -10,13 +10,15 @@ and ``first``/``last`` refusals live in
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 import strawberry
+from graphql import GraphQLError
 from strawberry.relay.utils import SliceMetadata, to_base64
 from strawberry.schema.config import StrawberryConfig
 
-from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.exceptions import DjangoStrawberryFrameworkError, OptimizerError
 from django_strawberry_framework.resource_policy import ResourcePolicy
 from django_strawberry_framework.utils.connections import (
     CONNECTION_FILTER_KWARG,
@@ -24,6 +26,7 @@ from django_strawberry_framework.utils.connections import (
     CONNECTION_ORDER_KWARG_GRAPHQL,
     ConnectionWindowBounds,
     FetchMode,
+    PaginationArgumentError,
     UnwindowableConnection,
     WindowRangePlan,
     assert_relay_pagination_bound,
@@ -35,6 +38,7 @@ from django_strawberry_framework.utils.connections import (
     has_connection_sidecar_input,
     has_connection_sidecar_kwargs,
     split_window_rows,
+    validate_offset_pagination,
     window_range_plan,
 )
 from tests._info import make_info, unread_info
@@ -267,8 +271,12 @@ def test_decode_offset_cursor_rejects_a_foreign_prefix_itself():
     Strawberry's engine rejects a foreign prefix with the same message, so the
     wire cannot tell which of the two refused it; this row pins that the
     decoder never returns a position for a cursor ``relay.Edge`` did not mint.
+    The rejection is the package's own typed ``PaginationArgumentError``.
     """
-    with pytest.raises(TypeError, match="^Argument 'before' contains a non-existing value.$"):
+    with pytest.raises(
+        PaginationArgumentError,
+        match="^Argument 'before' contains a non-existing value.$",
+    ):
         decode_offset_cursor(to_base64("GenreType", "1"), argument="before")
 
 
@@ -358,7 +366,7 @@ def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate():
 
 
 def test_assert_relay_pagination_bound_matches_slice_metadata_text():
-    """Keyset page-size errors share SliceMetadata's exact ValueError text.
+    """Page-size errors carry SliceMetadata's exact text as a ``PaginationArgumentError``.
 
     ``derive_keyset_window_bounds`` and the root keyset slicer both route
     through this helper so a negative / over-cap ``first`` / ``last`` cannot
@@ -367,10 +375,138 @@ def test_assert_relay_pagination_bound_matches_slice_metadata_text():
     """
     assert_relay_pagination_bound("first", None, cap=10)  # non-int: no-op
     assert_relay_pagination_bound("first", 3, cap=10)  # in range: no-op
-    with pytest.raises(ValueError, match="Argument 'first' must be a non-negative integer."):
+    with pytest.raises(
+        PaginationArgumentError,
+        match="Argument 'first' must be a non-negative integer.",
+    ):
         assert_relay_pagination_bound("first", -1, cap=10)
-    with pytest.raises(ValueError, match="Argument 'last' cannot be higher than 10."):
+    with pytest.raises(PaginationArgumentError, match="Argument 'last' cannot be higher than 10."):
         assert_relay_pagination_bound("last", 11, cap=10)
+
+
+def test_pagination_argument_error_is_a_graphql_error_and_a_framework_error():
+    """The rejection is client-facing by type and catchable beside every framework error.
+
+    The production error policy passes an ``original_error`` that IS a
+    ``GraphQLError`` through untouched; the package base keeps
+    ``except DjangoStrawberryFrameworkError`` covering it. The message is the
+    whole wire payload: no ``extensions`` ride along.
+    """
+    error = PaginationArgumentError("Argument 'first' must be a non-negative integer.")
+    assert isinstance(error, GraphQLError)
+    assert isinstance(error, DjangoStrawberryFrameworkError)
+    assert error.message == "Argument 'first' must be a non-negative integer."
+    assert not error.extensions
+
+
+_FOREIGN_CURSOR = to_base64("GenreType", "1")
+
+#: ``(id, arguments)``: each row carries one or more invalid arguments, so the
+#: argument the engine names FIRST is the check-order claim. Cursor rows use a
+#: foreign prefix, the one malformed cursor the engine itself rejects.
+_INVALID_OFFSET_PAGINATION_ROWS = [
+    (
+        "after-before-first-last",
+        {
+            "after": _FOREIGN_CURSOR,
+            "before": _FOREIGN_CURSOR,
+            "first": -1,
+            "last": -1,
+        },
+    ),
+    ("after", {"after": _FOREIGN_CURSOR}),
+    ("before-first-last", {"before": _FOREIGN_CURSOR, "first": -1, "last": 11}),
+    ("before", {"before": _FOREIGN_CURSOR}),
+    ("first-negative-last", {"first": -1, "last": -1}),
+    ("first-over-cap-last", {"first": 11, "last": -1}),
+    ("first-negative", {"first": -1}),
+    ("first-over-cap", {"first": 11}),
+    ("last-negative", {"last": -1}),
+    ("last-over-cap", {"last": 11}),
+]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [row[1] for row in _INVALID_OFFSET_PAGINATION_ROWS],
+    ids=[row[0] for row in _INVALID_OFFSET_PAGINATION_ROWS],
+)
+def test_validate_offset_pagination_matches_slice_metadata_text_and_order(
+    arguments: dict[str, str | int],
+):
+    """The validator rejects what the engine rejects, first argument first, in the engine's words.
+
+    Each row runs Strawberry's own ``SliceMetadata.from_arguments`` over the
+    same arguments and cap and reads the message it raises, so the parity is
+    measured against the engine rather than restated: the validator must name
+    the same argument with the same text, as a ``PaginationArgumentError``.
+    """
+    call: dict[str, str | int | None] = {
+        "before": None,
+        "after": None,
+        "first": None,
+        "last": None,
+    }
+    call.update(arguments)
+    with pytest.raises((ValueError, TypeError)) as engine:
+        SliceMetadata.from_arguments(
+            unread_info(),
+            before=cast("str | None", call["before"]),
+            after=cast("str | None", call["after"]),
+            first=cast("int | None", call["first"]),
+            last=cast("int | None", call["last"]),
+            max_results=10,
+        )
+    with pytest.raises(PaginationArgumentError) as rejection:
+        validate_offset_pagination(
+            before=cast("str | None", call["before"]),
+            after=cast("str | None", call["after"]),
+            first=call["first"],
+            last=call["last"],
+            cap=10,
+        )
+    assert rejection.value.message == str(engine.value)
+
+
+def test_validate_offset_pagination_accepts_what_the_engine_accepts():
+    """Valid arguments, absent cursors and non-``int`` page sizes pass without a rejection."""
+    validate_offset_pagination(before=None, after=None, first=None, last=None, cap=10)
+    validate_offset_pagination(
+        before=to_base64("arrayconnection", "4"),
+        after=to_base64("arrayconnection", "0"),
+        first=10,
+        last=0,
+        cap=10,
+    )
+    validate_offset_pagination(before="", after="", first=strawberry.UNSET, last=None, cap=10)
+
+
+def test_derive_connection_window_bounds_rejects_with_pagination_argument_error():
+    """The window derivation raises the typed rejection the walker declines to plan on."""
+    with pytest.raises(
+        PaginationArgumentError,
+        match="^Argument 'first' cannot be higher than 100.$",
+    ):
+        derive_connection_window_bounds(
+            None,
+            before=None,
+            after=None,
+            first=101,
+            last=None,
+            max_results=_MAX,
+        )
+    with pytest.raises(
+        PaginationArgumentError,
+        match="^Argument 'after' contains a non-existing value.$",
+    ):
+        derive_connection_window_bounds(
+            None,
+            before=None,
+            after=to_base64("arrayconnection", "-1"),
+            first=2,
+            last=None,
+            max_results=_MAX,
+        )
 
 
 # ---------------------------------------------------------------------------

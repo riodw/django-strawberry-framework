@@ -56,6 +56,7 @@ from .types.converters import (  # noqa: E402
     DjangoImagePathType,
     DjangoImageType,
 )
+from .utils.connections import PaginationArgumentError  # noqa: E402
 
 # Do not import or root-export DjangoDebugExtension here: its public
 # opt-in remains django_strawberry_framework.extensions.
@@ -177,6 +178,7 @@ __all__ = (
     "FieldError",
     "ListArgumentError",
     "OptimizerHint",
+    "PaginationArgumentError",
     "ResourceLimitExceeded",
     "ResourcePolicy",
     "SyncMisuseError",

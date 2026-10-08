@@ -111,7 +111,6 @@ from .utils.connections import (
     UnwindowableConnection,
     assert_relay_pagination_bound,
     connection_sidecar_inputs_from_kwargs,
-    decode_offset_cursor,
     derive_connection_window_bounds,
     derive_keyset_window_bounds,
     has_connection_sidecar_input,
@@ -120,6 +119,7 @@ from .utils.connections import (
     page_arguments,
     resolve_relay_max_results,
     split_window_rows,
+    validate_offset_pagination,
     window_range_plan,
 )
 from .utils.directives import validated_field_directives
@@ -697,7 +697,7 @@ def _consume_window(
         # the bounds derivation FORKS AT THE CURSOR VOCABULARY), so the
         # resolve-time window matches the plan-time one by construction (the
         # cursor-parity invariant). Resolver arguments are already coerced by
-        # Strawberry, so any malformed-pagination ``ValueError`` / ``TypeError``
+        # Strawberry, so an invalid argument's ``PaginationArgumentError``
         # propagates as the field's own error (the walker, by contrast, catches
         # it to leave the selection unplanned).
         keyset_state = _keyset_connection_context(cls)
@@ -723,14 +723,6 @@ def _consume_window(
             if keyset_state is None:
                 raise
             built = None
-        except (
-            ValueError,
-            TypeError,
-            AttributeError,
-            KeyError,
-            IndexError,
-        ) as exc:
-            raise GraphQLError(str(exc)) from exc
         else:
             built = _resolve_from_window(
                 cls,
@@ -767,7 +759,8 @@ def _consume_window(
 def _consume_fallback(
     cls: type[_ConnectionT],
     # basedpyright: the resolver's value reaches ListConnection.resolve_connection, whose
-    # iterable union it may not meet; the slicer's own TypeError is the guard caught below
+    # iterable union it may not meet; ``_pipeline_sync`` / ``_pipeline_async`` refuse a
+    # non-iterable first (``_guard_non_queryset_iterable``), a direct call passes it through
     nodes: Any,  # pyright: ignore[reportExplicitAny]
     *,
     info: Info[object, object],
@@ -791,11 +784,15 @@ def _consume_fallback(
     Both slicers receive ``first`` / ``last`` through
     ``utils/connections.py::page_arguments``, so every page is bounded by the
     already-clamped ``max_results`` and ``last: 0`` is the ``first: 0`` page.
-    An offset page's ``after`` / ``before`` pass
-    ``utils/connections.py::decode_offset_cursor`` first, the validator the
+    An offset page's arguments pass
+    ``utils/connections.py::validate_offset_pagination`` first, the validator the
     window derivation runs, so whatever the source shape (``QuerySet``, list,
-    tuple, generator, sync or async) a negative or non-canonical cursor is the
-    same ``GraphQLError`` and never a slice position.
+    tuple, generator, sync or async) an invalid cursor or page size is the same
+    ``PaginationArgumentError`` and a negative or non-canonical cursor is never a
+    slice position. ``ListConnection`` is then called with no ``try`` around it:
+    once the arguments are valid, whatever it raises comes from the consumer's
+    source or from row hydration, and travels as that exception for the error
+    policy to classify, never re-raised as client-facing text.
     ``super(DjangoConnection, cls)`` reaches ``ListConnection`` even for a
     generated ``<TypeName>Connection`` subclass (the spec-032 concrete-class
     pin): the package override already ran the guard and window probe.
@@ -819,31 +816,27 @@ def _consume_fallback(
             max_results=max_results,
             **kwargs,
         )
-    try:
-        # Validated here, synchronously and for every offset source, because
-        # ``ListConnection`` decodes the cursors with ``int()`` alone and an
-        # async-iterable source (a ``QuerySet`` from an async resolver) slices
-        # inside the coroutine it returns, outside this ``try``.
-        decode_offset_cursor(after, argument="after")
-        decode_offset_cursor(before, argument="before")
-        conn = super(DjangoConnection, cls).resolve_connection(
-            nodes,
-            info=info,
-            before=before,
-            after=after,
-            first=first,
-            last=last,
-            max_results=max_results,
-            **kwargs,
-        )
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise GraphQLError(str(exc)) from exc
+    # Validated here, synchronously and for every offset source, because
+    # ``ListConnection`` decodes the cursors with ``int()`` alone and an
+    # async-iterable source (a ``QuerySet`` from an async resolver) slices
+    # inside the coroutine it returns.
+    validate_offset_pagination(
+        before=before,
+        after=after,
+        first=first,
+        last=last,
+        cap=max_results,
+    )
+    conn = super(DjangoConnection, cls).resolve_connection(
+        nodes,
+        info=info,
+        before=before,
+        after=after,
+        first=first,
+        last=last,
+        max_results=max_results,
+        **kwargs,
+    )
     if inspect.isawaitable(conn):
         return _attach_count_async(conn, nodes, want_count=want_count)
     return _attach_count_sync(conn, nodes, want_count=want_count)
@@ -1115,17 +1108,8 @@ def _resolve_keyset_connection(
     # vocabulary or from the windowed keyset path. The slicer also validates
     # ``last`` because it serves backward pages; the window helper only sees
     # forward shapes (backward raises UnwindowableConnection upstream).
-    try:
-        for argument, value in (("first", first), ("last", last)):
-            assert_relay_pagination_bound(argument, value, cap=cap)
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        raise GraphQLError(str(exc)) from exc
+    for argument, value in (("first", first), ("last", last)):
+        assert_relay_pagination_bound(argument, value, cap=cap)
     backward = is_backward_shape(first, last)
     # ``_consume_fallback``'s ``page_arguments`` bounds every page with an ``int``:
     # ``last`` on a backward page, ``first`` on every other.

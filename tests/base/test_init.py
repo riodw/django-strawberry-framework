@@ -73,7 +73,8 @@ def test_public_api_surface_is_pinned():
     # production-error-policy symbols (``DEFAULT_ERROR_POLICY`` /
     # ``ErrorPolicy`` / ``DjangoErrorPolicyExtension``, Decision 7). All of these
     # cards shipped in ``0.0.14``; the ``0.0.15`` version cut adds
-    # ``ListArgumentError`` (spec-050) to this public surface.
+    # ``ListArgumentError`` (spec-050) and ``PaginationArgumentError`` (the
+    # connection pagination rejection) to this public surface.
     assert django_strawberry_framework.__all__ == (
         "DEFAULT_ERROR_POLICY",
         "DEFAULT_RESOURCE_POLICY",
@@ -104,6 +105,7 @@ def test_public_api_surface_is_pinned():
         "FieldError",
         "ListArgumentError",
         "OptimizerHint",
+        "PaginationArgumentError",
         "ResourceLimitExceeded",
         "ResourcePolicy",
         "SyncMisuseError",
@@ -191,6 +193,7 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
         DjangoType,
         FieldError,
         ListArgumentError,
+        PaginationArgumentError,
         SyncMisuseError,
         finalize_django_types,
     )
@@ -233,6 +236,9 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
     from django_strawberry_framework.types import (
         finalize_django_types as types_finalize_django_types,
     )
+    from django_strawberry_framework.utils.connections import (
+        PaginationArgumentError as ConnectionsPaginationArgumentError,
+    )
 
     assert DjangoType is TypesDjangoType
     assert SyncMisuseError is TypesSyncMisuseError
@@ -245,6 +251,7 @@ def test_reexported_types_resolve_to_canonical_subpackage_definitions():
     assert DjangoMutationField is MutationsDjangoMutationField
     assert FieldError is MutationsFieldError
     assert ListArgumentError is ListListArgumentError
+    assert PaginationArgumentError is ConnectionsPaginationArgumentError
     assert DjangoErrorPolicyExtension is ExtErrorPolicy
     assert DjangoResourcePolicyExtension is ExtResourcePolicy
 

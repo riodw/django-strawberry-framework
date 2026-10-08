@@ -132,7 +132,8 @@ schema = DjangoSchema(
 | Error shape | Reaches the client as |
 |---|---|
 | parse / syntax / validation error (no originating exception) | unchanged |
-| a framework-raised `GraphQLError` (`GLOBALID_INVALID`, `RESOURCE_LIMIT_EXCEEDED`, the argument rejections, the `Not authorized to ...` denial) | unchanged, `extensions.code` included |
+| a framework-raised `GraphQLError` (`GLOBALID_INVALID`, `RESOURCE_LIMIT_EXCEEDED`, the argument rejections, the `Not authorized to ...` denial) | unchanged, with its `extensions.code` where it has one |
+| a connection pagination rejection (`PaginationArgumentError`: a malformed offset `after` / `before`, a negative or over-cap `first` / `last`) or the `first` + `last` guard | unchanged, message only; neither carries an `extensions.code` |
 | a `GraphQLError` you raise yourself | unchanged; `extensions.code` is present only if you supplied it |
 | any other exception escaping a resolver or hook | the policy message + a fresh `correlationId` |
 

@@ -76,9 +76,20 @@ three-row ``max_page_size`` (where a wrapped negative slice would serve 39 of
 shipped root ``allLibraryGenresConnection``. Index 0, a minted ``endCursor``,
 ``after: ""`` (absent) and the largest accepted index ``sys.maxsize - 1`` (an
 ordinary past-the-end page on the root ``QuerySet`` and a list resolver) are the
-positive controls. The test-local resolvers
+positive controls. Each ``first`` / ``last`` bound message (negative, over the
+three-row cap) is read exactly on both colours. The test-local resolvers
 are served over module-owned ``/graphql-cursor/`` and ``/graphql-cursor-async/``
 mounts with no error-policy pass-through.
+
+Only the package's own argument validation speaks to the client. An exception
+from a consumer source or from row hydration is not a pagination error: it is
+masked by the default error policy (the policy message plus a ``correlationId``,
+the exception's text nowhere in the body) like any other unexpected exception,
+on the sync and async views alike. That is pinned for a failing row hydration on
+a root offset connection and on a nested connection under one (planned window
+and per-parent pipeline, told apart by their ``library_book`` statement count),
+and for a consumer generator source raising ``KeyError`` or ``ValueError``, whose
+original exception is read back from the policy's server log.
 
 Each test-local mount serves whichever schema the test in flight published in
 its holder: the acceptance harness reloads every contributing app schema
@@ -89,8 +100,11 @@ that reload, and the slot is cleared when the request ends.
 import base64
 import importlib
 import inspect
+import json
+import logging
+import re
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterator
 from typing import TypeAlias
 
 import pytest
@@ -110,6 +124,7 @@ from graphql_client import JSONObject, assert_graphql_success, graphql_payload
 from strawberry import relay
 
 from django_strawberry_framework import DjangoConnectionField, DjangoSchema, strawberry_config
+from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.testing import AsyncTestClient
 from django_strawberry_framework.utils._queryset_private import (
     set_queryset_hints,
@@ -238,9 +253,10 @@ def test_live_keyset_negative_first_is_graphql_error():
     payload = graphql_payload(
         "{ allLibraryIssuesConnection(first: -5) { edges { node { id } } } }",
     )
-    assert "errors" in payload
     assert payload["data"] is None, payload
-    assert any("non-negative" in str(e.get("message", "")).lower() for e in payload["errors"])
+    assert [error["message"] for error in payload["errors"]] == [
+        "Argument 'first' must be a non-negative integer.",
+    ], payload
 
 
 @pytest.mark.django_db
@@ -253,9 +269,10 @@ def test_live_keyset_over_cap_first_is_graphql_error():
     payload = graphql_payload(
         "{ allLibraryIssuesConnection(first: 101) { edges { node { id } } } }",
     )
-    assert "errors" in payload
     assert payload["data"] is None, payload
-    assert any("cannot be higher than" in str(e.get("message", "")) for e in payload["errors"])
+    assert [error["message"] for error in payload["errors"]] == [
+        "Argument 'first' cannot be higher than 100.",
+    ], payload
 
 
 @pytest.mark.django_db
@@ -1520,6 +1537,26 @@ def _generator_genres(root: object, info: strawberry.Info[object, object]):
     return (genre for genre in _cursor_rows())
 
 
+#: The text a consumer source or a hydrating column fails with. Shaped like what a
+#: real exception carries by accident, so its absence from the body is a claim
+#: about disclosure.
+_SOURCE_SECRET = "internal tenant secret /srv/private/tenant-42.key"
+
+
+def _failing_genres(error: Exception) -> Iterator[library_models.Genre]:
+    """A consumer generator that fails on its first ``next``, the way a source lookup fails."""
+    yield from ()
+    raise error
+
+
+def _key_error_genres(root: object, info: strawberry.Info[object, object]):
+    return _failing_genres(KeyError(_SOURCE_SECRET))
+
+
+def _value_error_genres(root: object, info: strawberry.Info[object, object]):
+    return _failing_genres(ValueError(_SOURCE_SECRET))
+
+
 async def _async_list_genres(root: object, info: strawberry.Info[object, object]):
     return await sync_to_async(_cursor_rows)()
 
@@ -1537,7 +1574,8 @@ def _cursor_schema() -> DjangoSchema:
 
     Built per request after the harness reload (see ``_ASYNC_CURRENT``). The
     ``max_page_size`` policy is the cap a wrapped negative slice would
-    otherwise widen a page past.
+    otherwise widen a page past. The two failing generator sources are plain
+    ``def`` resolvers that touch no database, so both mounts serve them.
     """
     importlib.import_module("config.schema")
     from apps.library.schema import GenreType
@@ -1550,6 +1588,8 @@ def _cursor_schema() -> DjangoSchema:
         async_list_genres = DjangoConnectionField(GenreType, resolver=_async_list_genres)
         async_tuple_genres = DjangoConnectionField(GenreType, resolver=_async_tuple_genres)
         async_queryset_genres = DjangoConnectionField(GenreType, resolver=_async_queryset_genres)
+        key_error_genres = DjangoConnectionField(GenreType, resolver=_key_error_genres)
+        value_error_genres = DjangoConnectionField(GenreType, resolver=_value_error_genres)
 
     return DjangoSchema(
         query=Query,
@@ -1585,28 +1625,24 @@ def _cursor_page_query(field: str) -> str:
     )
 
 
-def _post_cursor_sync(field: str, variables: JSONObject) -> JSONObject:
+def _post_local_sync(query: str, variables: JSONObject) -> JSONObject:
     _CURSOR_CURRENT["schema"] = _cursor_schema()
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
-            return graphql_payload(
-                _cursor_page_query(field),
-                variables=variables,
-                url="/graphql-cursor/",
-            )
+            return graphql_payload(query, variables=variables, url="/graphql-cursor/")
     finally:
         _CURSOR_CURRENT["schema"] = None
         clear_url_caches()
 
 
-async def _post_cursor_async(field: str, variables: JSONObject) -> JSONObject:
+async def _post_local_async(query: str, variables: JSONObject) -> JSONObject:
     _CURSOR_CURRENT["schema"] = await sync_to_async(_cursor_schema)()
     try:
         with override_settings(ROOT_URLCONF=__name__):
             clear_url_caches()
             result = await AsyncTestClient().query(
-                _cursor_page_query(field),
+                query,
                 variables=variables,
                 assert_no_errors=False,
                 url="/graphql-cursor-async/",
@@ -1616,6 +1652,14 @@ async def _post_cursor_async(field: str, variables: JSONObject) -> JSONObject:
         clear_url_caches()
     assert result.response.status_code == 200
     return result.response.json()
+
+
+def _post_cursor_sync(field: str, variables: JSONObject) -> JSONObject:
+    return _post_local_sync(_cursor_page_query(field), variables)
+
+
+async def _post_cursor_async(field: str, variables: JSONObject) -> JSONObject:
+    return await _post_local_async(_cursor_page_query(field), variables)
 
 
 def _assert_cursor_rejected(payload: JSONObject, argument: str) -> None:
@@ -1854,3 +1898,274 @@ def test_minted_offset_cursors_still_page():
     assert [edge["node"]["name"] for edge in second_page["edges"]] == ["Charlie", "Delta"]
     assert second_page["edges"][0]["cursor"] == _cursor("2")
     assert empty_after == first_page
+
+
+#: ``(id, variables, message)``: one row per ``first`` / ``last`` bound message,
+#: under the mounts' three-row ``max_page_size``.
+_PAGE_BOUND_ROWS = [
+    ("first-negative", {"first": -1}, "Argument 'first' must be a non-negative integer."),
+    ("first-over-cap", {"first": 4}, "Argument 'first' cannot be higher than 3."),
+    ("last-negative", {"last": -1}, "Argument 'last' must be a non-negative integer."),
+    ("last-over-cap", {"last": 4}, "Argument 'last' cannot be higher than 3."),
+]
+
+
+def _assert_rejected_with(payload: JSONObject, message: str) -> None:
+    assert payload["data"] is None, payload
+    assert [error["message"] for error in payload["errors"]] == [message], payload
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("variables", "message"),
+    [row[1:] for row in _PAGE_BOUND_ROWS],
+    ids=[row[0] for row in _PAGE_BOUND_ROWS],
+)
+def test_offset_page_bound_is_the_exact_pagination_message(variables: JSONObject, message: str):
+    """Each page-size rejection reaches a ``DEBUG=False`` client as its own exact message."""
+    library_models.Genre.objects.create(name="g00")
+
+    _assert_rejected_with(_post_cursor_sync("listGenres", variables), message)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    ("variables", "message"),
+    [row[1:] for row in _PAGE_BOUND_ROWS],
+    ids=[row[0] for row in _PAGE_BOUND_ROWS],
+)
+async def test_async_offset_page_bound_is_the_exact_pagination_message(
+    variables: JSONObject,
+    message: str,
+):
+    """The async colour of the page-size rows, over ``/graphql-cursor-async/``."""
+    await library_models.Genre.objects.acreate(name="g00")
+
+    _assert_rejected_with(await _post_cursor_async("asyncListGenres", variables), message)
+
+
+# =============================================================================
+# Source and hydration failures are masked, never pagination messages. Only the
+# package's own argument validation constructs a client-facing pagination
+# error; an exception a consumer source or a hydrating row raises inside the
+# slicer travels as itself, and the default (``DEBUG=False``) error policy
+# masks it.
+# =============================================================================
+
+#: 32 lowercase hex characters and nothing else - the pinned correlation id shape.
+_CORRELATION_ID = re.compile(r"\A[0-9a-f]{32}\Z")
+
+
+def _assert_masked(payload: JSONObject) -> None:
+    """The policy's masked shape on every error, with the exception's text nowhere in the body.
+
+    One error per failing parent: a nullable nested connection fails once per
+    parent, a non-null one once for the whole list, so the count is not the claim.
+    """
+    assert payload["errors"], payload
+    for error in payload["errors"]:
+        assert error["message"] == DEFAULT_ERROR_POLICY.message, error
+        correlation_id = error["extensions"][DEFAULT_ERROR_POLICY.correlation_extension_key]
+        assert _CORRELATION_ID.fullmatch(correlation_id), error
+    body = json.dumps(payload)
+    assert _SOURCE_SECRET not in body, body
+    assert "tenant-42" not in body, body
+
+
+def _fail_hydrating(
+    monkeypatch: pytest.MonkeyPatch,
+    model: type[models.Model],
+    field_name: str,
+) -> None:
+    """Make every fetched row of ``model`` fail to hydrate ``field_name`` while ``monkeypatch`` holds.
+
+    A field-level ``from_db_value`` is the converter Django runs on each fetched
+    value of that column, on every database vendor, so the failure is raised
+    while the slicer iterates rows - exactly where a corrupt stored value fails -
+    without writing anything un-hydratable to the database.
+    """
+
+    def from_db_value(value: object, expression: object, connection: object) -> object:
+        raise ValueError(_SOURCE_SECRET)
+
+    monkeypatch.setattr(
+        model._meta.get_field(field_name),
+        "from_db_value",
+        from_db_value,
+        raising=False,
+    )
+
+
+def _assert_served(payload: JSONObject, *values: str) -> None:
+    """The unpatched control: the same request serves its rows, so the path is live."""
+    assert "errors" not in payload, payload
+    body = json.dumps(payload["data"])
+    for value in values:
+        assert json.dumps(value) in body, payload
+
+
+#: ``(genre, book)`` pairs the nested rows read: TWO parents, so a planned window
+#: (one ``library_book`` statement for both) and the per-parent pipeline (one per
+#: parent) are told apart by statement count.
+_NESTED_ROWS = (("g00", "Dune"), ("g01", "Emma"))
+
+
+def _shelve_nested_rows() -> None:
+    branch = library_models.Branch.objects.create(name="Central", city="Boston")
+    shelf = library_models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    for genre_name, title in _NESTED_ROWS:
+        book = library_models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(library_models.Genre.objects.create(name=genre_name))
+
+
+_ROOT_HYDRATION_QUERY = "{ allLibraryGenresConnection(first: 2) { edges { node { name } } } }"
+
+
+@pytest.mark.django_db
+def test_a_root_row_that_fails_to_hydrate_is_masked():
+    """A row failing to hydrate on the shipped root connection is masked over ``/graphql/``.
+
+    The failure is raised inside Strawberry's ``ListConnection`` slicer; it is
+    the row's exception, not the client's argument, so the client reads the
+    policy message rather than the converter's text.
+    """
+    library_models.Genre.objects.create(name="g00")
+    _assert_served(graphql_payload(_ROOT_HYDRATION_QUERY), "g00")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _fail_hydrating(monkeypatch, library_models.Genre, "name")
+        payload = graphql_payload(_ROOT_HYDRATION_QUERY)
+
+    _assert_masked(payload)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_async_root_row_that_fails_to_hydrate_is_masked():
+    """The async colour: a ``QuerySet`` from an async resolver, iterated in the slicer's coroutine."""
+    await library_models.Genre.objects.acreate(name="g00")
+    query = "{ asyncQuerysetGenres(first: 2) { edges { node { name } } } }"
+    _assert_served(await _post_local_async(query, {}), "g00")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _fail_hydrating(monkeypatch, library_models.Genre, "name")
+        payload = await _post_local_async(query, {})
+
+    _assert_masked(payload)
+
+
+#: The nested selection the hydration rows read: the BOOK's title is the column
+#: that fails, so the root rows hydrate.
+_NESTED_SELECTION = (
+    "edges { node { name booksConnection(first: 2) { edges { node { title } } } } }"
+)
+
+
+def _nested_on_shipped_root() -> JSONObject:
+    # The shipped schema installs the optimizer, so the nested connection is a
+    # planned window prefetched while the root slicer iterates its rows.
+    return graphql_payload(f"{{ allLibraryGenresConnection(first: 2) {{ {_NESTED_SELECTION} }} }}")
+
+
+def _nested_on_list_resolver() -> JSONObject:
+    # No optimizer on the local mount, and the list resolver has already
+    # materialized the genres: the nested connection runs the per-parent
+    # pipeline and its own slicer hydrates the books.
+    return _post_local_sync(f"{{ listGenres(first: 2) {{ {_NESTED_SELECTION} }} }}", {})
+
+
+#: ``source -> (request, library_book statements its unpatched control issues)``.
+#: One statement is the planned window serving both parents; two is the
+#: per-parent pipeline fetching each parent's page, so each row proves which
+#: path its failure was raised on.
+_NESTED_SOURCES: dict[str, tuple[Callable[[], JSONObject], int]] = {
+    "planned-window": (_nested_on_shipped_root, 1),
+    "per-parent": (_nested_on_list_resolver, 2),
+}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("source", list(_NESTED_SOURCES))
+def test_a_nested_connection_row_that_fails_to_hydrate_is_masked(source: str):
+    """A nested connection's row failing to hydrate under an offset root is masked."""
+    _shelve_nested_rows()
+    request, book_statements = _NESTED_SOURCES[source]
+    with CaptureQueriesContext(connection) as captured:
+        control = request()
+    _assert_served(control, "g00", "Dune", "g01", "Emma")
+    book_sql = [
+        entry["sql"] for entry in captured.captured_queries if "library_book" in entry["sql"]
+    ]
+    assert len(book_sql) == book_statements, book_sql
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _fail_hydrating(monkeypatch, library_models.Book, "title")
+        payload = request()
+
+    _assert_masked(payload)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_async_nested_connection_row_that_fails_to_hydrate_is_masked():
+    """The async colour of the nested row, under a ``QuerySet`` from an async resolver."""
+    await sync_to_async(_shelve_nested_rows)()
+    query = f"{{ asyncQuerysetGenres(first: 2) {{ {_NESTED_SELECTION} }} }}"
+    _assert_served(await _post_local_async(query, {}), "g00", "Dune", "g01", "Emma")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        _fail_hydrating(monkeypatch, library_models.Book, "title")
+        payload = await _post_local_async(query, {})
+
+    _assert_masked(payload)
+
+
+#: ``field -> the exception type its generator raises``.
+_FAILING_SOURCES: dict[str, type[Exception]] = {
+    "keyErrorGenres": KeyError,
+    "valueErrorGenres": ValueError,
+}
+
+_PACKAGE_LOGGER = "django_strawberry_framework"
+
+
+def _assert_logged_source_failure(caplog: pytest.LogCaptureFixture, field: str) -> None:
+    """The masked error's server-side record is the generator's own exception.
+
+    The policy logs the ORIGINAL exception under the correlation id it handed
+    the client, so this is what proves the mask covered the source's failure
+    and not some other error on the same path.
+    """
+    records = [
+        record
+        for record in caplog.records
+        if record.name == _PACKAGE_LOGGER and record.levelno == logging.ERROR
+    ]
+    assert len(records) == 1, caplog.records
+    assert records[0].exc_info is not None, records[0]
+    original = records[0].exc_info[1]
+    assert isinstance(original, _FAILING_SOURCES[field]), original
+    assert type(original) is _FAILING_SOURCES[field], original
+    assert original.args == (_SOURCE_SECRET,), original
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field", list(_FAILING_SOURCES))
+def test_a_consumer_source_that_raises_is_masked(caplog: pytest.LogCaptureFixture, field: str):
+    """A consumer generator raising ``KeyError`` / ``ValueError`` mid-slice is masked.
+
+    Nothing between the slicer and the client catches either one: the
+    consumer's exception is not a statement for the client, so it reaches the
+    policy as itself rather than as a ``GraphQLError`` carrying its text.
+    """
+    caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
+
+    _assert_masked(_post_cursor_sync(field, {"first": 2}))
+    _assert_logged_source_failure(caplog, field)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("field", list(_FAILING_SOURCES))
+async def test_an_async_view_consumer_source_that_raises_is_masked(
+    caplog: pytest.LogCaptureFixture,
+    field: str,
+):
+    """The same generator sources over ``/graphql-cursor-async/``."""
+    caplog.set_level(logging.ERROR, logger=_PACKAGE_LOGGER)
+
+    _assert_masked(await _post_cursor_async(field, {"first": 2}))
+    _assert_logged_source_failure(caplog, field)

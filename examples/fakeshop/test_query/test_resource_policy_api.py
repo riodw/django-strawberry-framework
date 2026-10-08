@@ -78,13 +78,12 @@ import strawberry
 from apps.library import models as library_models
 from apps.library import schema as library_schema
 from apps.products.services import create_users, seed_data
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.db.models import QuerySet
 from django.http import HttpRequest
-from django.test import Client, override_settings
+from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import include, path
 from django.views.decorators.csrf import csrf_exempt
@@ -122,22 +121,6 @@ if TYPE_CHECKING:
     from django.db.models.fields.related_descriptors import RelatedManager
 
 pytestmark = pytest.mark.urls(__name__)
-
-
-#: Settings that open the spec-048 error policy's pass-through gate for ONE live
-#: request. ``settings.DEBUG`` is the gate, and on this tier it is the only
-#: reachable instrument - the project schema is constructed by the app, not by the
-#: test. Fakeshop's shipped settings also wire django-debug-toolbar behind
-#: ``DEBUG``, so the toolbar middleware is dropped for the duration: left in, it
-#: would try to inject a panel referencing the ``djdt`` routes that ``config.urls``
-#: computed under the ambient ``DEBUG=False`` and fail the request for a reason
-#: that has nothing to do with the row. Dropping the middleware is the deterministic
-#: form of that - the toolbar's own show-gate is memoized per process, so overriding
-#: its callback would not reliably take effect.
-_ERROR_POLICY_PASS_THROUGH = {
-    "DEBUG": True,
-    "MIDDLEWARE": [entry for entry in settings.MIDDLEWARE if "debug_toolbar" not in entry],
-}
 
 
 @cache
@@ -2686,19 +2669,14 @@ def test_the_list_sibling_cannot_bypass_the_connection_page_cap():
 
 
 @pytest.mark.django_db
-@override_settings(**_ERROR_POLICY_PASS_THROUGH)
 def test_a_connection_page_larger_than_the_policy_is_refused():
     """The policy is a ceiling over ``relay_max_results``, never a replacement for it.
 
-    The refusal here comes from Strawberry's own ``relay_max_results`` check, which
-    raises a plain ``ValueError`` rather than a ``GraphQLError`` - so the spec-048
-    error policy classifies it as unexpected and masks its wording, and the bound in
-    that wording is exactly what this row reads to prove the ceiling was lowered.
-    ``DEBUG=True`` opens the policy's pass-through gate so the live request returns
-    the ceiling's own message. The instrument is the gate rather than
-    ``error_policy={"enabled": False}`` because the mounts here come from one
-    ``@cache``-d ``_probe_schema`` shared by the whole suite: an opt-out at
-    construction would silently change every other row's response boundary too.
+    The refusal is the package's own ``PaginationArgumentError``, carrying the
+    wording of Strawberry's ``relay_max_results`` check with the effective cap in
+    it, so the bound in that wording is exactly what this row reads to prove the
+    ceiling was lowered. It is a deliberate ``GraphQLError``, so it reaches the
+    client through the default (``DEBUG=False``) error policy unmasked.
     """
     seed_data(1)
     payload = _post(

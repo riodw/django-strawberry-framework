@@ -64,6 +64,7 @@ from django_strawberry_framework.keyset import (
 )
 from django_strawberry_framework.utils.connections import (
     FetchMode,
+    PaginationArgumentError,
     UnwindowableConnection,
     derive_keyset_window_bounds,
     resolve_relay_max_results,
@@ -534,7 +535,7 @@ def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
 
 
 def test_derive_keyset_window_bounds_first_validation():
-    with pytest.raises(ValueError, match="non-negative"):
+    with pytest.raises(PaginationArgumentError, match="non-negative"):
         derive_keyset_window_bounds(
             _capped_info(),
             before=None,
@@ -543,7 +544,7 @@ def test_derive_keyset_window_bounds_first_validation():
             last=None,
             max_results=None,
         )
-    with pytest.raises(ValueError, match="cannot be higher than 50"):
+    with pytest.raises(PaginationArgumentError, match="cannot be higher than 50"):
         derive_keyset_window_bounds(
             _capped_info(),
             before=None,

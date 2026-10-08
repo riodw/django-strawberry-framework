@@ -37,9 +37,12 @@ from graphql import (
     DefinitionNode,
     DocumentNode,
     FragmentDefinitionNode,
+    GraphQLField,
     GraphQLObjectType,
     GraphQLResolveInfo,
+    GraphQLSchema,
     OperationDefinitionNode,
+    OperationType,
 )
 from strawberry import relay
 from strawberry.extensions.base_extension import SchemaExtension
@@ -71,15 +74,17 @@ from django_strawberry_framework.utils._queryset_private import (
 )
 from django_strawberry_framework.utils.querysets import _AsyncQuerySetRows
 from tests._idioms import definition_raises
+from tests._info import make_info, response_path
 
 if TYPE_CHECKING:
     from django_strawberry_framework.optimizer.selections import FragmentVisitKey
 
 
-def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
-    """Hand a duck-typed info to an extension hook that takes a graphql-core resolve info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
-    # extension hooks type info as graphql-core's GraphQLResolveInfo
+def _as_partial_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a partial info to an extension hook that takes a graphql-core resolve info."""
+    # basedpyright: an info lacking the slots, or the graphql-core slot types, every real
+    # resolve info carries is the input under test: the hook either returns before reading
+    # it or takes a defensive arm; the extension hooks type info as GraphQLResolveInfo
     return stand_in  # pyright: ignore[reportReturnType]
 
 
@@ -546,7 +551,7 @@ def test_optimize_returns_same_instance_for_evaluated_queryset():
     qs = Category.objects.all()
     len(qs)
 
-    assert ext._optimize(qs, _as_resolve_info(SimpleNamespace())) is qs
+    assert ext._optimize(qs, _as_partial_resolve_info(SimpleNamespace())) is qs
     assert ext.cache_info().misses == 0
 
 
@@ -561,10 +566,10 @@ def test_apply_to_returns_a_combined_queryset_unplanned(caplog: pytest.LogCaptur
     services.seed_data(1)
     ext = DjangoOptimizerExtension()
     qs = Category.objects.filter(pk__lt=0).union(Category.objects.all())
-    info = SimpleNamespace(field_name="allCategories", field_nodes=[object()])
+    info = make_info(field_name="allCategories")._raw_info
     caplog.set_level("DEBUG", logger=optimizer_logger.name)
 
-    assert ext.apply_to(None, Category, qs, _as_resolve_info(info)) is qs
+    assert ext.apply_to(None, Category, qs, info) is qs
     assert ext.cache_info().misses == 0
     assert any("combined (union) queryset" in r.message for r in caplog.records)
 
@@ -597,14 +602,8 @@ def test_resolve_async_passes_through_evaluated_queryset(monkeypatch: pytest.Mon
     async def fake_next(root: object, info: object, *args: object, **kwargs: object):
         return qs
 
-    info = SimpleNamespace(
-        path=SimpleNamespace(prev=None, key="allCategories", typename="Query"),
-        return_type=SimpleNamespace(),
-        schema=None,
-        field_name="allCategories",
-        field_nodes=[],
-    )
-    result = ext.resolve(fake_next, None, _as_resolve_info(info))
+    info = make_info(field_name="allCategories")._raw_info
+    result = ext.resolve(fake_next, None, info)
     assert asyncio.iscoroutine(result)
     resolved = asyncio.run(result)
     assert resolved is qs  # same instance, no clone
@@ -640,32 +639,47 @@ def test_resolve_model_from_return_type_unwraps_nested_wrappers():
     assert isinstance(inner, GraphQLObjectType)
     wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
 
-    info = SimpleNamespace(
-        return_type=wrapped,
-        schema=schema._schema,
-    )
-    result = _resolve_model_from_return_type(_as_resolve_info(info))
+    info = make_info()._raw_info._replace(return_type=wrapped, schema=schema._schema)
+    result = _resolve_model_from_return_type(info)
     assert result is not None
     assert result.model is Category
     assert result.origin is CategoryType
 
 
 def test_resolve_model_returns_none_for_non_object_leaf():
-    """When the leaf type has no name (e.g. a scalar), returns None."""
+    """When the leaf type has no name, returns None.
+
+    Every graphql-core named type carries a name, so a nameless leaf is a defensive arm.
+    """
     info = SimpleNamespace(
         return_type=SimpleNamespace(),  # no of_type, no name
         schema=None,
     )
-    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
+    assert _resolve_model_from_return_type(_as_partial_resolve_info(info)) is None
+
+
+def _object_type_outside_schema(name: str) -> GraphQLObjectType:
+    """A graphql-core object type ``name`` with one string field, in no Strawberry schema."""
+    object_type = GraphQLObjectType(
+        name,
+        {"value": GraphQLField(make_info()._raw_info.return_type)},
+    )
+    # graphql-core's named-type constructor is typed to return any named type.
+    assert isinstance(object_type, GraphQLObjectType)
+    return object_type
 
 
 def test_resolve_model_returns_none_when_no_strawberry_schema():
-    """When schema._strawberry_schema is missing, returns None."""
-    info = SimpleNamespace(
-        return_type=SimpleNamespace(name="SomeType"),
-        schema=SimpleNamespace(),  # no _strawberry_schema
+    """When schema._strawberry_schema is missing, returns None.
+
+    A graphql-core schema Strawberry did not build files no ``_strawberry_schema``.
+    """
+    some_type = _object_type_outside_schema("SomeType")
+    info = make_info()._raw_info._replace(
+        return_type=some_type,
+        schema=GraphQLSchema(types=[some_type]),
     )
-    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
+    assert _resolve_model_from_return_type(info) is None
 
 
 def test_resolve_model_returns_none_when_type_not_in_schema():
@@ -685,11 +699,11 @@ def test_resolve_model_returns_none_when_type_not_in_schema():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
 
-    info = SimpleNamespace(
-        return_type=SimpleNamespace(name="NonExistentType"),
+    info = make_info()._raw_info._replace(
+        return_type=_object_type_outside_schema("NonExistentType"),
         schema=schema._schema,
     )
-    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
+    assert _resolve_model_from_return_type(info) is None
 
 
 def test_resolve_model_returns_none_when_definition_has_no_origin():
@@ -703,7 +717,7 @@ def test_resolve_model_returns_none_when_definition_has_no_origin():
         return_type=SimpleNamespace(name="SomeType"),
         schema=SimpleNamespace(_strawberry_schema=fake_strawberry_schema),
     )
-    assert _resolve_model_from_return_type(_as_resolve_info(info)) is None
+    assert _resolve_model_from_return_type(_as_partial_resolve_info(info)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -730,10 +744,8 @@ def test_resolve_passes_through_non_root_resolvers():
         called_with["fired"] = True
         return qs
 
-    info = SimpleNamespace(
-        path=SimpleNamespace(prev=SimpleNamespace(key="parent", prev=None, typename="Query")),
-    )
-    result = ext.resolve(fake_next, None, _as_resolve_info(info))
+    info = make_info(path=response_path("parent", "allCategories"))._raw_info
+    result = ext.resolve(fake_next, None, info)
     # _next was called and result passed through unchanged (no _optimize).
     assert called_with["fired"] is True
     assert result is qs
@@ -762,18 +774,12 @@ def test_resolve_handles_async_root_resolver():
     async def fake_next(root: object, info: object, *args: object, **kwargs: object):
         return qs
 
-    # Root resolver: path.prev is None.
-    info = SimpleNamespace(
-        path=SimpleNamespace(prev=None, key="allCategories", typename="Query"),
-        return_type=SimpleNamespace(),  # no name -> _resolve_model returns None
-        schema=None,
-        field_name="allCategories",
-        field_nodes=[],
-    )
-    result = ext.resolve(fake_next, None, _as_resolve_info(info))
+    # Root resolver: path.prev is None. Its String return type maps to no registered model.
+    info = make_info(field_name="allCategories")._raw_info
+    result = ext.resolve(fake_next, None, info)
     # result should be a coroutine (async wrapper)
     assert asyncio.iscoroutine(result)
-    # Await it - _optimize will pass through because return_type has no name.
+    # Await it - _optimize will pass through because no model backs the return type.
     resolved = asyncio.run(result)
     assert resolved is qs
 
@@ -805,17 +811,16 @@ def test_optimize_handles_empty_field_nodes(
     ext = DjangoOptimizerExtension()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
 
-    # Drive _optimize directly with a synthetic info that has empty field_nodes.
+    # Drive _optimize directly with a real info whose field_nodes is empty.
     ext = DjangoOptimizerExtension()
 
-    info = SimpleNamespace(
+    info = make_info(field_name="allCategories")._raw_info._replace(
         return_type=schema._schema.type_map["CategoryType"],
         schema=schema._schema,
-        field_name="allCategories",
         field_nodes=[],
     )
     qs = Category.objects.all()
-    result = ext._optimize(qs, _as_resolve_info(info))
+    result = ext._optimize(qs, info)
     # Should return the queryset unchanged (no field_nodes to plan from).
     assert isinstance(result, QuerySet)
     assert result.query.select_related is False
@@ -1015,53 +1020,34 @@ def test_cache_differentiates_same_model_root_fields(
 
 def test_cache_key_includes_root_runtime_path_for_same_model_fields():
     """B1/O4: cache keys differ for root fields returning the same model."""
-    from graphql import parse
-
-    operation = parse("{ allCategories { name } featured { name } }").definitions[0]
-    info_a = SimpleNamespace(
-        operation=operation,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allCategories", prev=None),
-    )
-    info_b = SimpleNamespace(
-        operation=operation,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="featured", prev=None),
-    )
+    # One operation, two response paths: the path alone separates the keys.
+    info_a = make_info(
+        field_name="allCategories",
+        selections="{ name }",
+        path=response_path("allCategories"),
+    )._raw_info
+    info_b = make_info(
+        field_name="allCategories",
+        selections="{ name }",
+        path=response_path("featured"),
+    )._raw_info
 
     assert DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(info_a),
+        info_a,
         Category,
-    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_b), Category)
+    ) != DjangoOptimizerExtension._build_cache_key(info_b, Category)
 
 
 def test_cache_key_differs_for_named_operations_in_same_document():
     """B1: two named operations in one document must not share a plan cache entry."""
-    from graphql import parse
-
-    doc = parse("query A { allItems { name } } query B { allItems { category { name } } }")
-    operations = [d for d in doc.definitions if isinstance(d, OperationDefinitionNode)]
-    operation_a = next(d for d in operations if getattr(d.name, "value", None) == "A")
-    operation_b = next(d for d in operations if getattr(d.name, "value", None) == "B")
-    info_a = SimpleNamespace(
-        operation=operation_a,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
-    info_b = SimpleNamespace(
-        operation=operation_b,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
+    document = "query A { allItems { name } } query B { allItems { category { name } } }"
+    info_a = make_info(document=document, operation_name="A")._raw_info
+    info_b = make_info(document=document, operation_name="B")._raw_info
 
     assert DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(info_a),
+        info_a,
         Item,
-    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_b), Item)
+    ) != DjangoOptimizerExtension._build_cache_key(info_b, Item)
 
 
 def test_query_and_mutation_plans_coexist_distinct_keys():
@@ -1073,27 +1059,18 @@ def test_query_and_mutation_plans_coexist_distinct_keys():
     never collide on one cache entry even with identical selection bodies (G2
     cache-safety; DoD item 3). Pins the key inequality directly, not a cache stat.
     """
-    from graphql import parse
-
-    query_op = parse("query { allItems { category { name } } }").definitions[0]
-    mutation_op = parse("mutation { allItems { category { name } } }").definitions[0]
-    info_query = SimpleNamespace(
-        operation=query_op,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
-    info_mutation = SimpleNamespace(
-        operation=mutation_op,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
+    selection = "{ category { name } }"
+    info_query = make_info(field_name="allItems", selections=selection)._raw_info
+    info_mutation = make_info(
+        field_name="allItems",
+        selections=selection,
+        operation=OperationType.MUTATION,
+    )._raw_info
 
     assert DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(info_query),
+        info_query,
         Item,
-    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_mutation), Item)
+    ) != DjangoOptimizerExtension._build_cache_key(info_mutation, Item)
 
 
 @pytest.mark.django_db
@@ -1163,7 +1140,6 @@ def test_mutation_real_execution_suppresses_only_keeps_select_related():
 
 def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch):
     """B1: the plan cache evicts least-recently-used entries when full."""
-    from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -1171,32 +1147,24 @@ def test_cache_eviction_removes_old_entries(monkeypatch: pytest.MonkeyPatch):
     ext = DjangoOptimizerExtension()
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
 
-    def _cache_info_for(root_field: str) -> SimpleNamespace:
-        operation = parse(f"query {root_field} {{ {root_field} {{ name }} }}").definitions[0]
-        return SimpleNamespace(
-            operation=operation,
-            fragments={},
-            variable_values={},
-            path=SimpleNamespace(key=root_field, prev=None),
-        )
+    def _cache_info_for(root_field: str) -> GraphQLResolveInfo:
+        document = f"query {root_field} {{ {root_field} {{ name }} }}"
+        return make_info(document=document)._raw_info
 
     infos = [_cache_info_for(f"root{idx}") for idx in range(4)]
-    keys = [
-        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category, None)
-        for info in infos
-    ]
+    keys = [DjangoOptimizerExtension._build_cache_key(info, Category, None) for info in infos]
     plans = [OptimizationPlan() for _ in range(4)]
     ext._plan_cache = OrderedDict(zip(keys, plans, strict=True))
 
-    assert ext._get_or_build_plan([], Category, _as_resolve_info(infos[0]), None) is plans[0]
+    assert ext._get_or_build_plan([], Category, infos[0], None) is plans[0]
 
     root4_info = _cache_info_for("root4")
     root4_key = DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(root4_info),
+        root4_info,
         Category,
         None,
     )
-    ext._get_or_build_plan([], Category, _as_resolve_info(root4_info), None)
+    ext._get_or_build_plan([], Category, root4_info, None)
 
     assert keys[0] in ext._plan_cache
     assert keys[1] not in ext._plan_cache
@@ -1325,7 +1293,6 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
     collapsing N per-parent walks to one. The intra-execution reuse is NOT counted
     as a cross-request cache hit (``cache_info`` reports the instance cache only).
     """
-    from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -1344,20 +1311,14 @@ def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(
 
     monkeypatch.setattr(extension_module, "plan_optimizations", _fake_plan_optimizations)
 
-    operation = parse("{ allItems { name } }").definitions[0]
-    info = SimpleNamespace(
-        operation=operation,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
+    info = make_info(field_name="allItems", selections="{ name }")._raw_info
 
     ext = DjangoOptimizerExtension()
     gen = ext.on_execute()
     next(gen)  # enter the lifecycle: installs the per-execution plan memo
     try:
-        first = ext._get_or_build_plan([], Item, _as_resolve_info(info), None)
-        second = ext._get_or_build_plan([], Item, _as_resolve_info(info), None)
+        first = ext._get_or_build_plan([], Item, info, None)
+        second = ext._get_or_build_plan([], Item, info, None)
     finally:
         with contextlib.suppress(StopIteration):
             next(gen)  # exit: resets the memo
@@ -1451,15 +1412,11 @@ def test_build_cache_key_is_stable_when_source_location_missing():
     """B1: cache key still works when the operation has no source body."""
     from graphql import parse
 
-    operation = parse("{ allCategories { name } }", no_location=True).definitions[0]
-    info = SimpleNamespace(
-        operation=operation,
-        fragments={},
-        variable_values={},
-        path=None,
-    )
+    document = "{ allCategories { name } }"
+    operation = _operation(parse(document, no_location=True))
+    info = make_info(document=document)._raw_info._replace(operation=operation)
 
-    key = DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
+    key = DjangoOptimizerExtension._build_cache_key(info, Category)
 
     assert key[2] is Category
     assert isinstance(key[3], tuple)
@@ -1604,36 +1561,30 @@ def test_directive_var_family_no_directives():
 
 
 def _key_for(
-    operation: object,
+    document: str,
     *,
     variable_values: dict[str, object],
     path_key: str,
     model: type[Model] = Category,
 ):
-    """Build a ``_build_cache_key`` tuple for ``operation`` at root ``path_key``.
+    """Build a ``_build_cache_key`` tuple for ``document``'s operation at root ``path_key``.
 
-    Mirrors the ``SimpleNamespace`` info pattern used by the existing direct
-    cache-key pins (``test_cache_key_includes_root_runtime_path_for_same_model_fields``).
-    The two calls under test differ only in ``variable_values``, so any key
-    inequality is attributable to the variable-collection rule.
+    The calls under test differ only in ``variable_values``, so any key inequality is
+    attributable to the variable-collection rule.
     """
-    info = SimpleNamespace(
-        operation=operation,
-        fragments={},
-        variable_values=variable_values,
-        path=SimpleNamespace(key=path_key, prev=None),
-    )
-    return DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), model)
+    info = make_info(
+        document=document,
+        variables=variable_values,
+        path=response_path(path_key),
+    )._raw_info
+    return DjangoOptimizerExtension._build_cache_key(info, model)
 
 
 def test_nested_pagination_variable_keys_cache():
     """A nested ``first: $n`` value keys the plan cache: two values -> two keys."""
-    from graphql import parse
-
-    operation = parse(
-        "query Q($n: Int!) { parents { booksConnection(first: $n) "
-        "{ edges { node { title } } } } }",
-    ).definitions[0]
+    operation = (
+        "query Q($n: Int!) { parents { booksConnection(first: $n) { edges { node { title } } } } }"
+    )
 
     key_two = _key_for(operation, variable_values={"n": 2}, path_key="parents")
     key_five = _key_for(operation, variable_values={"n": 5}, path_key="parents")
@@ -1642,11 +1593,7 @@ def test_nested_pagination_variable_keys_cache():
 
 def test_root_pagination_variable_shares_cache():
     """A root ``first: $n`` value does NOT key the cache (root slicing post-plan)."""
-    from graphql import parse
-
-    operation = parse(
-        "query Q($n: Int!) { someRootConnection(first: $n) { edges { node { name } } } }",
-    ).definitions[0]
+    operation = "query Q($n: Int!) { someRootConnection(first: $n) { edges { node { name } } } }"
 
     key_two = _key_for(operation, variable_values={"n": 2}, path_key="someRootConnection")
     key_five = _key_for(operation, variable_values={"n": 5}, path_key="someRootConnection")
@@ -1655,12 +1602,10 @@ def test_root_pagination_variable_shares_cache():
 
 def test_mixed_root_and_nested_pagination_variables():
     """Only the nested pagination variable keys: vary root -> share, vary nested -> split."""
-    from graphql import parse
-
-    operation = parse(
+    operation = (
         "query Q($r: Int!, $n: Int!) { parents(first: $r) "
-        "{ booksConnection(first: $n) { edges { node { title } } } } }",
-    ).definitions[0]
+        "{ booksConnection(first: $n) { edges { node { title } } } } }"
+    )
 
     base = _key_for(operation, variable_values={"r": 1, "n": 2}, path_key="parents")
     vary_root = _key_for(operation, variable_values={"r": 9, "n": 2}, path_key="parents")
@@ -1677,31 +1622,17 @@ def test_root_fragment_pagination_variable_shares_cache():
     spreads at response-path depth 0, so its connection field is root and its
     pagination variable does not key the cache.
     """
-    from graphql import parse
-
-    doc = parse(
+    document = (
         "query Q($n: Int!) { ...RootFrag } "
         "fragment RootFrag on Query { someRootConnection(first: $n) "
-        "{ edges { node { name } } } }",
+        "{ edges { node { name } } } }"
     )
-    operation = doc.definitions[0]
-    fragments = _fragments_by_name(doc.definitions[1:])
-    info_two = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"n": 2},
-        path=SimpleNamespace(key="someRootConnection", prev=None),
-    )
-    info_five = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"n": 5},
-        path=SimpleNamespace(key="someRootConnection", prev=None),
-    )
+    info_two = make_info(document=document, variables={"n": 2})._raw_info
+    info_five = make_info(document=document, variables={"n": 5})._raw_info
     assert DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(info_two),
+        info_two,
         Category,
-    ) == DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_five), Category)
+    ) == DjangoOptimizerExtension._build_cache_key(info_five, Category)
 
 
 def test_fragment_carried_nested_pagination_variable_collected():
@@ -1711,31 +1642,17 @@ def test_fragment_carried_nested_pagination_variable_collected():
     ``booksConnection`` field is nested and its pagination variable keys the
     cache - the positive spread-site-depth pin (Decision 7 line 346).
     """
-    from graphql import parse
-
-    doc = parse(
+    document = (
         "query Q($n: Int!) { parents { edges { node { ...BooksFrag } } } } "
         "fragment BooksFrag on ParentNode { booksConnection(first: $n) "
-        "{ edges { node { title } } } }",
+        "{ edges { node { title } } } }"
     )
-    operation = doc.definitions[0]
-    fragments = _fragments_by_name(doc.definitions[1:])
-    info_two = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"n": 2},
-        path=SimpleNamespace(key="parents", prev=None),
-    )
-    info_five = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"n": 5},
-        path=SimpleNamespace(key="parents", prev=None),
-    )
+    info_two = make_info(document=document, variables={"n": 2})._raw_info
+    info_five = make_info(document=document, variables={"n": 5})._raw_info
     assert DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(info_two),
+        info_two,
         Category,
-    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_five), Category)
+    ) != DjangoOptimizerExtension._build_cache_key(info_five, Category)
 
 
 def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
@@ -1851,8 +1768,11 @@ def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
     from django_strawberry_framework.optimizer.extension import _hashable_variable_value
 
     class Opaque:
-        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
+        # Defining ``__eq__`` without ``__hash__`` makes the class unhashable (that is the
+        # input under test).
+        @override
+        def __eq__(self, other: object):
+            return self is other
 
     first = _hashable_variable_value(Opaque())
     second = _hashable_variable_value(Opaque())
@@ -1888,20 +1808,11 @@ def test_hashable_custom_scalar_equality_cannot_abort_cache_key_lookup():
     assert first != second
     assert isinstance(hash(first), int)
     assert isinstance(hash(second), int)
-    from graphql import parse
-
-    operation = parse(
-        "query Q($value: Int!) { parents { child(first: $value) { value } } }",
-    ).definitions[0]
+    document = "query Q($value: Int!) { parents { child(first: $value) { value } } }"
 
     def _key(value: object):
-        info = SimpleNamespace(
-            operation=operation,
-            fragments={},
-            variable_values={"value": value},
-            path=SimpleNamespace(key="parents", prev=None),
-        )
-        return DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
+        info = make_info(document=document, variables={"value": value})._raw_info
+        return DjangoOptimizerExtension._build_cache_key(info, Category)
 
     assert _key(EqualityBomb()) != _key(EqualityBomb())
 
@@ -2021,12 +1932,14 @@ def test_hashable_variable_value_safely_degrades_for_hostile_custom_values():
             raise RuntimeError("repr boom")
 
     class UnhashableMetaclass(type):
-        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
+        @override
+        def __eq__(cls, other: object):
+            return cls is other
 
     class UnhashableType(metaclass=UnhashableMetaclass):
-        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
+        @override
+        def __eq__(self, other: object):
+            return self is other
 
     values = (
         ExplodingHash(),
@@ -2048,36 +1961,18 @@ def test_build_cache_key_tolerates_unhashable_pagination_variable():
     the syntactic collector over-collects. The cache key must remain buildable
     while keeping structurally different values distinct.
     """
-    from graphql import parse
 
-    doc = parse(
-        "query Q($x: [Int!]!) { parents { logs(after: $x) { value } } }",
-    ).definitions[0]
+    def _key(document: str, values: dict[str, object]):
+        info = make_info(document=document, variables=values)._raw_info
+        return DjangoOptimizerExtension._build_cache_key(info, Category)
 
-    def _key(values: dict[str, object]):
-        info = SimpleNamespace(
-            operation=doc,
-            fragments={},
-            variable_values=values,
-            path=SimpleNamespace(key="parents", prev=None),
-        )
-        return DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
-
-    assert _key({"x": [1, 2, 3]}) != _key({"x": [4, 5]})
+    logs = "query Q($x: [Int!]!) { parents { logs(after: $x) { value } } }"
+    assert _key(logs, {"x": [1, 2, 3]}) != _key(logs, {"x": [4, 5]})
 
     # An input-object (dict) value on ``before`` is likewise tolerated.
-    doc2 = parse(
-        "query Q($x: DateRange) { parents { events(before: $x) { value } } }",
-    ).definitions[0]
-    info2 = SimpleNamespace(
-        operation=doc2,
-        fragments={},
-        variable_values={"x": {"start": "2020", "end": "2021"}},
-        path=SimpleNamespace(key="parents", prev=None),
-    )
-    dict_key = DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info2), Category)
-    info2.variable_values = {"x": {"end": "2021", "start": "2020"}}
-    assert DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info2), Category) == dict_key
+    events = "query Q($x: DateRange) { parents { events(before: $x) { value } } }"
+    dict_key = _key(events, {"x": {"start": "2020", "end": "2021"}})
+    assert _key(events, {"x": {"end": "2021", "start": "2020"}}) == dict_key
 
 
 def _categories_list_schema(ext: DjangoOptimizerExtension):
@@ -2212,7 +2107,6 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     cross-request document LRU has been emptied, so the per-execution memo is
     pinned on its own rather than through the document cache standing in for it.
     """
-    from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
 
@@ -2236,31 +2130,28 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(
     # count below a measurement rather than an artifact of collection order.
     monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
 
-    operation = parse(
-        "query Q($n: Int!) { parents { booksConnection(first: $n) "
-        "{ edges { node { title } } } } }",
-    ).definitions[0]
-    info = SimpleNamespace(
-        operation=operation,
-        fragments={},
-        variable_values={"n": 2},
-        path=SimpleNamespace(key="parents", prev=None),
-    )
+    info = make_info(
+        document=(
+            "query Q($n: Int!) { parents { booksConnection(first: $n) "
+            "{ edges { node { title } } } } }"
+        ),
+        variables={"n": 2},
+    )._raw_info
 
     ext = DjangoOptimizerExtension()
     gen = ext.on_execute()
     next(gen)  # enter the lifecycle: installs the per-execution var-name memo
     try:
-        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
-        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
-        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
         assert calls["count"] == 1
         # Empty the cross-request LRU mid-lifecycle so only the per-execution
         # ``id(operation)`` memo can answer the next call. The counter staying
         # at 1 pins THAT tier specifically - without it this fourth call is a
         # document-cache miss and the collector runs again.
         extension_module._doc_key_cache.clear()
-        DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info), Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
     finally:
         with contextlib.suppress(StopIteration):
             next(gen)  # exit the lifecycle: resets the memo
@@ -2413,25 +2304,19 @@ def test_plan_cache_eviction_survives_concurrent_drain(
     plan. The drain lands on each pop position of the sweep in turn, so every
     interleaving is pinned, not just the first.
     """
-    from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 16)
 
-    def _info_for(root_field: str) -> SimpleNamespace:
-        return SimpleNamespace(
-            operation=parse(f"query Q{root_field} {{ {root_field} }}").definitions[0],
-            fragments={},
-            variable_values={},
-            path=SimpleNamespace(key=root_field, prev=None),
-        )
+    def _info_for(root_field: str) -> GraphQLResolveInfo:
+        return make_info(document=f"query Q{root_field} {{ {root_field} }}")._raw_info
 
     extension = DjangoOptimizerExtension()
     for idx in range(16):
         key = DjangoOptimizerExtension._build_cache_key(
-            _as_resolve_info(_info_for(f"root{idx}")),
+            _info_for(f"root{idx}"),
             Category,
             None,
         )
@@ -2465,7 +2350,7 @@ def test_plan_cache_eviction_survives_concurrent_drain(
 
     monkeypatch.setattr(extension_module, "plan_optimizations", _new_plan)
 
-    plan = extension._get_or_build_plan([], Category, _as_resolve_info(_info_for("rootnew")), None)
+    plan = extension._get_or_build_plan([], Category, _info_for("rootnew"), None)
     assert plan is new_plan
     assert calls.value == 4
 
@@ -2975,31 +2860,17 @@ def test_directive_var_family_includes_fragment_spread_directives():
 
 def test_cache_key_includes_fragment_spread_directive_variable_value():
     """B1: a variable on a fragment-spread ``@include`` splits the cache."""
-    from graphql import parse
-
-    doc = parse(
+    document = (
         "query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } "
-        "fragment ItemBits on ItemType { category { name } }",
+        "fragment ItemBits on ItemType { category { name } }"
     )
-    operation = doc.definitions[0]
-    fragments = {d.name.value: d for d in doc.definitions if isinstance(d, FragmentDefinitionNode)}
-    info_false = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"show": False},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
-    info_true = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"show": True},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
+    info_false = make_info(document=document, variables={"show": False})._raw_info
+    info_true = make_info(document=document, variables={"show": True})._raw_info
 
     assert DjangoOptimizerExtension._build_cache_key(
-        _as_resolve_info(info_false),
+        info_false,
         Item,
-    ) != DjangoOptimizerExtension._build_cache_key(_as_resolve_info(info_true), Item)
+    ) != DjangoOptimizerExtension._build_cache_key(info_true, Item)
 
 
 # ---------------------------------------------------------------------------
@@ -3021,13 +2892,15 @@ def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch: pytes
     class ReachableWithoutFieldMap:
         pass
 
-    class UnreachableType:
-        pass
+    class UnreachableType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
 
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # registry.register types the parameter as type[DjangoType]
+    # basedpyright: a class registered with no definition is the input under test (a type
+    # without optimizer metadata); registry.register types the parameter as type[DjangoType]
     registry.register(Category, ReachableWithoutFieldMap)  # pyright: ignore[reportArgumentType]
-    registry.register(Item, UnreachableType)  # pyright: ignore[reportArgumentType]
+    del UnreachableType
 
     def _reachable_types(schema: object) -> set[type]:
         return {ReachableWithoutFieldMap}
@@ -3393,7 +3266,7 @@ def test_publish_plan_to_context_reuses_finalized_metadata():
     ).finalize()
     ctx = SimpleNamespace()
 
-    ext._publish_plan_to_context(plan, _as_resolve_info(SimpleNamespace(context=ctx)))
+    ext._publish_plan_to_context(plan, make_info(context=ctx)._raw_info)
 
     assert ctx.dst_optimizer_plan is plan
     assert ctx.dst_optimizer_fk_id_elisions is plan.finalized_fk_id_elisions
@@ -3420,7 +3293,7 @@ def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan():
     assert plan.finalized_lookup_paths is None
     ctx = SimpleNamespace()
 
-    ext._publish_plan_to_context(plan, _as_resolve_info(SimpleNamespace(context=ctx)))
+    ext._publish_plan_to_context(plan, make_info(context=ctx)._raw_info)
 
     assert ctx.dst_optimizer_fk_id_elisions == frozenset({"ItemType.category@allItems.category"})
     assert ctx.dst_optimizer_planned == frozenset({"ItemType.category@allItems.category"})
@@ -4452,19 +4325,17 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
     field = FieldMeta.from_django_field(Item._meta.get_field("category"))
     info = SimpleNamespace()
 
-    class FilteredCategoryType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return True
+    class FilteredCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def get_queryset(cls, queryset: QuerySet[Category], passed_info: object, **kwargs: object):
-            assert passed_info is info
+        def get_queryset(cls, queryset: QuerySet[Category], info: strawberry.Info):
             return queryset
 
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # plan_relation types the parameter as type[DjangoType]
-    kind, reason = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)  # pyright: ignore[reportArgumentType]
+    kind, reason = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)
     assert kind == "prefetch"
     assert reason == "custom_get_queryset"
 
@@ -4963,8 +4834,8 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
     inner = schema._schema.type_map["AdminItemType"]
     assert isinstance(inner, GraphQLObjectType)
     wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
-    info = SimpleNamespace(return_type=wrapped, schema=schema._schema)
-    resolved = _resolve_model_from_return_type(_as_resolve_info(info))
+    info = make_info()._raw_info._replace(return_type=wrapped, schema=schema._schema)
+    resolved = _resolve_model_from_return_type(info)
     assert resolved is not None
     assert resolved.origin is AdminItemType
     assert resolved.model is Item
@@ -5116,9 +4987,9 @@ def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets():
     ).finalize()
     ctx = SimpleNamespace()
 
-    ext._publish_plan_to_context(parent_plan, _as_resolve_info(SimpleNamespace(context=ctx)))
+    ext._publish_plan_to_context(parent_plan, make_info(context=ctx)._raw_info)
     # The nested publish (a fallback pipeline re-entry) unions into the parent's stash.
-    ext._publish_plan_to_context(nested_plan, _as_resolve_info(SimpleNamespace(context=ctx)))
+    ext._publish_plan_to_context(nested_plan, make_info(context=ctx)._raw_info)
 
     # The parent's resolver key + FK-id elision survive the nested publish.
     assert ctx.dst_optimizer_planned == frozenset(
@@ -5798,7 +5669,7 @@ def test_optimizer_unadapted_non_queryset_passthrough():
     from django_strawberry_framework.utils.querysets import unwrap_async_queryset_adapter
 
     ext = DjangoOptimizerExtension()
-    non_qs_result = ext._optimize([1, 2, 3], _as_resolve_info(SimpleNamespace()))
+    non_qs_result = ext._optimize([1, 2, 3], _as_partial_resolve_info(SimpleNamespace()))
     assert non_qs_result == [1, 2, 3]
     assert not unwrap_async_queryset_adapter(non_qs_result)[1]
 
@@ -5815,7 +5686,7 @@ def test_optimizer_preserves_async_adapter_evaluated_cache():
     qs_eval._result_cache = []
     adapted_eval = wrap_async_queryset_adapter(qs_eval)
     assert unwrap_async_queryset_adapter(adapted_eval)[1]
-    eval_res = ext._optimize(adapted_eval, _as_resolve_info(SimpleNamespace()))
+    eval_res = ext._optimize(adapted_eval, _as_partial_resolve_info(SimpleNamespace()))
     assert unwrap_async_queryset_adapter(eval_res)[1]
     assert isinstance(eval_res, _AsyncQuerySetRows)
     assert eval_res._queryset is qs_eval
@@ -5832,16 +5703,9 @@ def test_optimizer_preserves_async_adapter_unresolved_type():
     qs_unresolved = Category.objects.all()
     adapted_unresolved = wrap_async_queryset_adapter(qs_unresolved)
 
-    def _no_type(name: str) -> None:
-        return None
-
-    info_unresolved = SimpleNamespace(
-        return_type=object(),
-        schema=SimpleNamespace(get_type=_no_type),
-        field_name="unresolvedField",
-        field_nodes=[],
-    )
-    unresolved_res = ext._optimize(adapted_unresolved, _as_resolve_info(info_unresolved))
+    # A String root return type maps to no registered model.
+    info_unresolved = make_info(field_name="unresolvedField")._raw_info
+    unresolved_res = ext._optimize(adapted_unresolved, info_unresolved)
     assert unwrap_async_queryset_adapter(unresolved_res)[1]
     assert isinstance(unresolved_res, _AsyncQuerySetRows)
     assert unresolved_res._queryset is qs_unresolved
@@ -5867,15 +5731,14 @@ def test_optimizer_preserves_async_adapter_optimized_tail():
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
-    info_optimized = SimpleNamespace(
+    info_optimized = make_info(field_name="categories")._raw_info._replace(
         return_type=schema._schema.type_map["CategoryType"],
         schema=schema._schema,
-        field_name="categories",
         field_nodes=[],
     )
     qs_valid = Category.objects.all()
     adapted_valid = wrap_async_queryset_adapter(qs_valid)
-    optimized_res = ext._optimize(adapted_valid, _as_resolve_info(info_optimized))
+    optimized_res = ext._optimize(adapted_valid, info_optimized)
     assert unwrap_async_queryset_adapter(optimized_res)[1]
     assert isinstance(optimized_res, _AsyncQuerySetRows)
     assert optimized_res._queryset is not None
@@ -5928,6 +5791,8 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
     so the copy answers exactly as a context with no optimizer running does, and
     every sentinel the frame held is collectable.
     """
+    from strawberry.types.nodes import SelectedField
+
     from django_strawberry_framework.optimizer._context import (
         begin_execution_frame,
         cache_key_parts_memo,
@@ -5937,16 +5802,20 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
         publish_scoped_relations,
         stash_for_optimizer,
     )
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     extension = DjangoOptimizerExtension()
-    sentinels = {
-        name: _FrameSentinel()
-        for name in (
-            "stash",
-            "plans",
-            "key_parts",
-            "converted",
-        )
+    # Real memo entries of each memo's declared type; the weak-referenceable part of each is
+    # what the references below watch (a tuple or a list is not itself weak-referenceable).
+    stash = _FrameSentinel()
+    plan = OptimizationPlan()
+    frozen_variables = frozenset({("probe", ("probe", 0, None))})
+    node = SelectedField(name="probe", directives={}, arguments={}, selections=[])
+    sentinels: dict[str, object] = {
+        "stash": stash,
+        "plans": plan,
+        "key_parts": frozen_variables,
+        "converted": node,
     }
     references = {name: weakref.ref(value) for name, value in sentinels.items()}
 
@@ -5957,22 +5826,23 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
         strictness="warn",
     )
     try:
-        stash_for_optimizer(None, "probe", sentinels["stash"])
+        stash_for_optimizer(None, "probe", stash)
         plans_memo = execution_plan_memo()
         assert plans_memo is not None
-        # basedpyright: a stand-in memo entry carrying only the weak-reference identity the
-        # code under test reads; the per-execution memos type their keys and values exactly
-        plans_memo["probe"] = sentinels["plans"]  # pyright: ignore[reportArgumentType]
+        plan_key = (
+            "probe",
+            frozenset(),
+            Category,
+            (),
+            None,
+        )
+        plans_memo[plan_key] = plan
         key_parts_memo = cache_key_parts_memo()
         assert key_parts_memo is not None
-        # basedpyright: a stand-in memo entry carrying only the weak-reference identity the
-        # code under test reads; the per-execution memos type their keys and values exactly
-        key_parts_memo[1] = sentinels["key_parts"]  # pyright: ignore[reportArgumentType]
+        key_parts_memo[1] = ("probe", frozen_variables)
         selections_memo = converted_selections_memo()
         assert selections_memo is not None
-        # basedpyright: a stand-in memo entry carrying only the weak-reference identity the
-        # code under test reads; the per-execution memos type their keys and values exactly
-        selections_memo["probe"] = sentinels["converted"]  # pyright: ignore[reportArgumentType]
+        selections_memo[1] = [node]
         publish_scoped_relations({"probe@Type"})
         copied = contextvars.copy_context()
         inside = _read_optimizer_state_in_a_copied_context(copied)
@@ -5994,7 +5864,7 @@ def test_an_execution_frame_a_task_copied_answers_nothing_once_the_execution_end
     assert after["scoped"] is False
 
     sentinels.clear()
-    del inside, after
+    del inside, after, stash, plan, frozen_variables, node
     gc.collect()
     assert {name: reference() for name, reference in references.items()} == dict.fromkeys(
         references,

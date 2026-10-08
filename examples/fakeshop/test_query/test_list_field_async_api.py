@@ -38,6 +38,7 @@ from django.http import HttpRequest, HttpResponse
 from django.test import AsyncClient, override_settings
 from django.test.utils import register_lookup
 from django.urls import clear_url_caches, path
+from django.utils.functional import cached_property
 from graphql_client import JSONObject
 from strawberry.django.context import StrawberryDjangoContext
 from strawberry.types.arguments import StrawberryArgument
@@ -1467,8 +1468,11 @@ class _ProjectTransform(Transform):
     """A project transform registered on a built-in field, emitting its own SQL."""
 
     lookup_name = "jitter"
-    # basedpyright: django-stubs declares output_field a cached_property, not a class-level field
-    output_field = models.FloatField()  # pyright: ignore[reportAssignmentType]
+
+    @cached_property
+    @override
+    def output_field(self) -> models.FloatField[float, float]:
+        return models.FloatField()
 
     @override
     def as_sql(

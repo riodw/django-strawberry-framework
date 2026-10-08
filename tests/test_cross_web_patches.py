@@ -60,24 +60,16 @@ def test_apply_is_idempotent():
     assert patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_when_property_reverted():
+def test_apply_reinstalls_when_property_reverted(monkeypatch: pytest.MonkeyPatch):
     """``apply()`` re-installs if a third party reverted ``adapter.body``."""
     patches.apply()
     assert patches._patch_is_installed() is True
 
-    saved = DjangoHTTPRequestAdapter.__dict__["body"]
-    try:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(DjangoHTTPRequestAdapter, "body", property(patches._original_body_fget))
+    assert patches._patch_is_installed() is False
 
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
 def test_patch_is_installed_on_adapter():
@@ -195,7 +187,9 @@ def test_apply_fails_loudly_when_body_getter_signature_changes():
             patches.apply()
 
 
-def test_apply_fails_loudly_when_original_getter_was_never_captured():
+def test_apply_fails_loudly_when_original_getter_was_never_captured(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A valid-looking live ``body`` property cannot mask a missing capture.
 
     When the import-time capture never happened (``_original_body_fget`` is the
@@ -204,67 +198,49 @@ def test_apply_fails_loudly_when_original_getter_was_never_captured():
     have nothing authoritative to pin against. Pins that the shape validation
     inspects the captured getter, not the live descriptor.
     """
-    saved = DjangoHTTPRequestAdapter.__dict__["body"]
-    try:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(DjangoHTTPRequestAdapter, "body", property(patches._original_body_fget))
+    assert patches._patch_is_installed() is False
+
+    with mock.patch.object(patches, "_original_body_fget", None):
+        with pytest.raises(RuntimeError, match="no longer a readable property"):
+            patches.apply()
         assert patches._patch_is_installed() is False
 
-        with mock.patch.object(patches, "_original_body_fget", None):
-            with pytest.raises(RuntimeError, match="no longer a readable property"):
-                patches.apply()
-            assert patches._patch_is_installed() is False
-    finally:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
 
-
-def test_apply_no_ops_when_toggle_disabled(settings: pytest_django.Settings):
+def test_apply_no_ops_when_toggle_disabled(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
-    saved = DjangoHTTPRequestAdapter.__dict__["body"]
-    try:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(DjangoHTTPRequestAdapter, "body", property(patches._original_body_fget))
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
-        patches.apply()
-        assert patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
+    patches.apply()
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
+    patches.apply()
+    assert patches._patch_is_installed() is True
 
 
-def test_apply_no_ops_when_cross_web_dependency_opted_out(settings: pytest_django.Settings):
+def test_apply_no_ops_when_cross_web_dependency_opted_out(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``{"cross_web": False}`` disables only this module; ``{"django": False}`` does not.
 
     The production half of the per-dependency opt-out contract: opting out of
     the test-only Django patch alone leaves this request hardening
     installing normally (each gate reads its own dependency name).
     """
-    saved = DjangoHTTPRequestAdapter.__dict__["body"]
-    try:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = property(patches._original_body_fget)  # pyright: ignore[reportAttributeAccessIssue]
-        assert patches._patch_is_installed() is False
+    monkeypatch.setattr(DjangoHTTPRequestAdapter, "body", property(patches._original_body_fget))
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}
-        patches.apply()
-        assert patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}
+    patches.apply()
+    assert patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
-        patches.apply()
-        assert patches._patch_is_installed() is True
-    finally:
-        # basedpyright: cross_web's own setter-less ``body`` property; a class-level write replaces
-        # the descriptor at run time, but the checker reads it as a write through the property
-        DjangoHTTPRequestAdapter.body = saved  # pyright: ignore[reportAttributeAccessIssue]
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+    patches.apply()
+    assert patches._patch_is_installed() is True

@@ -10,6 +10,7 @@ relation ids, batched ``pk__in`` cost, duplicate members, and empty M2M clears l
 
 from collections.abc import Iterator
 from enum import Enum
+from typing import NoReturn
 
 import pytest
 import strawberry
@@ -890,6 +891,11 @@ def test_decode_visible_relation_ids_coercion_and_null_boundaries_stay_contained
     assert pks == [category.pk]
 
 
+def _relation_decoder_never_called(*args: object, **kwargs: object) -> NoReturn:
+    """A relation decoder the path under test never reaches: any call fails the test."""
+    raise AssertionError("the relation decoders must not run")
+
+
 def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
     """``extra_handlers`` entries are FULL handlers and replace the scalar fallback.
 
@@ -912,10 +918,8 @@ def test_decode_field_handlers_extra_handlers_override_the_scalar_kind():
     handlers, _ = decode_field_handlers(
         dest,
         info=unread_info(),
-        # basedpyright: the path under test never calls the relation decoders;
-        # decode_field_handlers types the parameter as a required _RelationDecoder
-        single=None,  # pyright: ignore[reportArgumentType]
-        multi=None,  # pyright: ignore[reportArgumentType]
+        single=_relation_decoder_never_called,
+        multi=_relation_decoder_never_called,
         extra_handlers={SCALAR: custom},
     )
     spec = _spec(attr="name", kind=SCALAR, target="name")

@@ -611,10 +611,18 @@ def test_register_only_schema_without_user_type_raises_the_register_arm_error():
 
 def test_ambiguous_user_primary_raises_the_set_meta_primary_message():
     """Two user types with no declared primary split onto the ambiguity message."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # registry.register types the parameter as type[DjangoType]
-    registry.register(User, type("UserA", (), {}))  # pyright: ignore[reportArgumentType]
-    registry.register(User, type("UserB", (), {}))  # pyright: ignore[reportArgumentType]
+
+    class UserA(DjangoType):
+        class Meta:
+            model = User
+            fields = ("id", "username")
+
+    class UserB(DjangoType):
+        class Meta:
+            model = User
+            fields = ("id", "username")
+
+    del UserA, UserB
     login_mutation()
     with pytest.raises(ConfigurationError, match="multiple registered DjangoTypes"):
         bind_auth_mutations()
@@ -1210,15 +1218,14 @@ def _privilege_required_user():
     ``django_strawberry_framework/auth/mutations.py::derive_register_fields``.
     """
 
-    class PrivilegeRequiredUser(djmodels.Model):
+    class PrivilegeRequiredUser(AbstractBaseUser):
         username = djmodels.CharField(max_length=150)
-        password = djmodels.CharField(max_length=128)
         is_staff = djmodels.BooleanField(default=False)
 
         USERNAME_FIELD = "username"
-        REQUIRED_FIELDS = ("is_staff",)
+        REQUIRED_FIELDS = ["is_staff"]
 
-        class Meta:
+        class Meta(AbstractBaseUser.Meta):
             app_label = _unique_app_label()
 
     return PrivilegeRequiredUser
@@ -1238,31 +1245,26 @@ def test_derive_register_fields_custom_username_and_required_fields():
     observable.
     """
 
-    class CustomLoginUser(djmodels.Model):
+    class CustomLoginUser(AbstractBaseUser):
         email = djmodels.EmailField(unique=True)
         nickname = djmodels.CharField(max_length=50)
-        password = djmodels.CharField(max_length=128)
 
         USERNAME_FIELD = "email"
         # ``email`` repeats USERNAME_FIELD and ``password`` repeats the fixed
         # tail - both appear exactly once in the derived tuple.
-        REQUIRED_FIELDS = ("nickname", "email", "password")
+        REQUIRED_FIELDS = ["nickname", "email", "password"]
 
-        class Meta:
+        class Meta(AbstractBaseUser.Meta):
             app_label = _unique_app_label()
 
-    # basedpyright: a plain Model carrying only the USERNAME_FIELD / REQUIRED_FIELDS hooks the code
-    # under test reads; derive_register_fields types the parameter as type[AbstractBaseUser]
-    assert derive_register_fields(CustomLoginUser) == ("email", "nickname", "password")  # pyright: ignore[reportArgumentType]
+    assert derive_register_fields(CustomLoginUser) == ("email", "nickname", "password")
 
 
 def test_derive_register_fields_rejects_privilege_fields():
     """A custom model cannot turn ``is_staff`` into public registration input."""
     model = _privilege_required_user()
     with pytest.raises(ConfigurationError, match=_PROTECTED_FIELD_REJECT):
-        # basedpyright: the model exposing a privilege field in REQUIRED_FIELDS is the hostile
-        # input under test; derive_register_fields types the parameter as type[AbstractBaseUser]
-        derive_register_fields(model)  # pyright: ignore[reportArgumentType]
+        derive_register_fields(model)
 
 
 def test_register_mutation_rejects_a_protected_required_field_at_the_factory_call(
@@ -1401,44 +1403,35 @@ def test_model_decode_step_without_exclusion_keeps_the_historical_three_tuple():
     assert len(decoded) == 3
 
 
+def _register_rider() -> type[DjangoMutation]:
+    """Bind a register-only schema and return the real ``Register`` rider it synthesized."""
+    _declare_user_type()
+
+    @strawberry.type
+    class Mutation:
+        register = register_mutation()
+
+    _finalize_schema(Mutation)
+    rider = _declared_auth_surface("register")
+    assert rider is not None
+    assert issubclass(rider, DjangoMutation)
+    return rider
+
+
 def test_register_with_explicit_none_password_returns_null_field_error():
     """An explicit null password on register is rejected with field-keyed null error."""
     from django_strawberry_framework.auth.mutations import _register_decode_step
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
-    specs = [
-        InputFieldSpec(
-            graphql_name="username",
-            input_attr="username",
-            target_name="username",
-            kind="scalar",
-        ),
-        InputFieldSpec(
-            graphql_name="password",
-            input_attr="password",
-            target_name="password",
-            kind="excluded",
-        ),
-    ]
-    model_fields = {
-        "username": User._meta.get_field("username"),
-        "password": User._meta.get_field("password"),
-    }
-    fake_mutation = SimpleNamespace(
-        _mutation_meta=SimpleNamespace(model=User),
-        _input_field_specs=specs,
-        _model_fields_by_attr=model_fields,
-    )
+    rider = _register_rider()
 
     @strawberry.input
     class _RegisterInput:
         username: str
+        email: str
         password: str | None = None
 
-    data = _RegisterInput(username="testuser", password=None)
-    # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
-    # _register_decode_step types the parameter as type[DjangoMutation]
-    errors = _register_decode_step(fake_mutation, data, info=unread_info(), instance=None)  # pyright: ignore[reportArgumentType]
+    data = _RegisterInput(username="testuser", email="u@example.com", password=None)
+    errors = _register_decode_step(rider, data, info=unread_info(), instance=None)
     assert isinstance(errors, list)
     assert len(errors) == 1
     assert errors[0].field == "password"
@@ -1466,42 +1459,18 @@ def test_register_write_step_none_password_defense_in_depth():
 def test_register_decode_step_with_unset_password_returns_none_password():
     """_register_decode_step safely returns None when password is omitted/UNSET instead of raising KeyError."""
     from django_strawberry_framework.auth.mutations import _register_decode_step
-    from django_strawberry_framework.utils.inputs import InputFieldSpec
 
-    specs = [
-        InputFieldSpec(
-            graphql_name="username",
-            input_attr="username",
-            target_name="username",
-            kind="scalar",
-        ),
-        InputFieldSpec(
-            graphql_name="password",
-            input_attr="password",
-            target_name="password",
-            kind="excluded",
-        ),
-    ]
-    model_fields = {
-        "username": User._meta.get_field("username"),
-        "password": User._meta.get_field("password"),
-    }
-    fake_mutation = SimpleNamespace(
-        _mutation_meta=SimpleNamespace(model=User),
-        _input_field_specs=specs,
-        _model_fields_by_attr=model_fields,
-    )
+    rider = _register_rider()
 
     @strawberry.input
     class _RegisterInput:
         username: str
+        email: str
         password: str = strawberry.UNSET
 
-    data = _RegisterInput(username="testuser", password=strawberry.UNSET)
+    data = _RegisterInput(username="testuser", email="u@example.com", password=strawberry.UNSET)
     user, _m2m, _exclude, raw_password = _register_decode_step(
-        # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
-        # _register_decode_step types the parameter as type[DjangoMutation]
-        fake_mutation,  # pyright: ignore[reportArgumentType]
+        rider,
         data,
         info=unread_info(),
         instance=None,

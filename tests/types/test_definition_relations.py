@@ -27,7 +27,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-import strawberry
 from apps.library.models import Book, Genre, Loan, Shelf
 from strawberry import relay
 from typing_extensions import override
@@ -40,14 +39,6 @@ from django_strawberry_framework.types.definition import (
     _is_framework_relay_id_resolver,
     origin_has_custom_id_resolver,
 )
-from django_strawberry_framework.types.relay import _resolve_id_default
-
-
-def _as_django_type(cls: type[object]) -> type[DjangoType]:
-    """Hand a plain origin class to the definition constructor that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # DjangoTypeDefinition types origin as type[DjangoType]
-    return cls  # pyright: ignore[reportReturnType]
 
 
 @pytest.fixture(autouse=True)
@@ -385,21 +376,12 @@ def test_has_custom_id_resolver_for_caches_mro_result():
         def resolve_id(self):
             return "custom"
 
-    class BookType(BaseType):
-        pass
+    class BookType(DjangoType, BaseType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
 
-    definition = DjangoTypeDefinition(
-        origin=_as_django_type(BookType),
-        model=Book,
-        name=None,
-        description=None,
-        fields_spec=None,
-        exclude_spec=None,
-        selected_fields=(),
-        field_map={},
-        optimizer_hints={},
-        has_custom_get_queryset=False,
-    )
+    definition = BookType.__django_strawberry_definition__
 
     assert definition.has_custom_id_resolver_for("id") is True
     assert definition.has_custom_id_resolver_for("uuid") is False
@@ -409,21 +391,14 @@ def test_has_custom_id_resolver_for_caches_mro_result():
 def test_has_custom_id_resolver_for_ignores_framework_relay_default():
     """Framework-installed Relay ``resolve_id`` does not count as consumer custom."""
 
-    class BookType:
-        resolve_id = classmethod(_resolve_id_default)
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
 
-    definition = DjangoTypeDefinition(
-        origin=_as_django_type(BookType),
-        model=Book,
-        name=None,
-        description=None,
-        fields_spec=None,
-        exclude_spec=None,
-        selected_fields=(),
-        field_map={},
-        optimizer_hints={},
-        has_custom_get_queryset=False,
-    )
+    finalize_django_types()
+    definition = BookType.__django_strawberry_definition__
 
     assert definition.has_custom_id_resolver_for("id") is False
     assert definition._custom_id_resolver_cache == {"id": False}
@@ -432,21 +407,14 @@ def test_has_custom_id_resolver_for_ignores_framework_relay_default():
 def test_has_custom_id_resolver_for_ignores_inherited_relay_default():
     """Inherited Strawberry Relay ``resolve_id`` does not count as consumer custom."""
 
-    class BookType(relay.Node):
-        pass
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
 
-    definition = DjangoTypeDefinition(
-        origin=_as_django_type(BookType),
-        model=Book,
-        name=None,
-        description=None,
-        fields_spec=None,
-        exclude_spec=None,
-        selected_fields=(),
-        field_map={},
-        optimizer_hints={},
-        has_custom_get_queryset=False,
-    )
+    finalize_django_types()
+    definition = BookType.__django_strawberry_definition__
 
     assert definition.has_custom_id_resolver_for("id") is False
     assert definition._custom_id_resolver_cache == {"id": False}
@@ -459,22 +427,15 @@ def test_has_custom_id_resolver_for_detects_non_id_pk_resolver():
     other than the framework-exempted ``resolve_id`` is taken at face value.
     """
 
-    class BookType:
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+
         def resolve_uuid(self):
             return "custom"
 
-    definition = DjangoTypeDefinition(
-        origin=_as_django_type(BookType),
-        model=Book,
-        name=None,
-        description=None,
-        fields_spec=None,
-        exclude_spec=None,
-        selected_fields=(),
-        field_map={},
-        optimizer_hints={},
-        has_custom_get_queryset=False,
-    )
+    definition = BookType.__django_strawberry_definition__
 
     assert definition.has_custom_id_resolver_for("uuid") is True
     assert definition._custom_id_resolver_cache == {"uuid": True}
@@ -488,23 +449,16 @@ def test_has_custom_id_resolver_for_flags_non_pk_node_id():
     though no ``resolve_id`` override is present.
     """
 
-    @strawberry.type
-    class BookType(relay.Node):
-        code: relay.NodeID[str]
-        title: str
+    class BookType(DjangoType):
+        title: relay.NodeID[str]
 
-    definition = DjangoTypeDefinition(
-        origin=_as_django_type(BookType),
-        model=Book,
-        name=None,
-        description=None,
-        fields_spec=None,
-        exclude_spec=None,
-        selected_fields=(),
-        field_map={},
-        optimizer_hints={},
-        has_custom_get_queryset=False,
-    )
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    definition = BookType.__django_strawberry_definition__
 
     assert definition.has_custom_id_resolver_for("id") is True
     assert definition._custom_id_resolver_cache == {"id": True}
@@ -513,23 +467,16 @@ def test_has_custom_id_resolver_for_flags_non_pk_node_id():
 def test_has_custom_id_resolver_for_allows_pk_node_id():
     """A ``relay.NodeID`` on the pk column itself stays elision-eligible."""
 
-    @strawberry.type
-    class BookType(relay.Node):
+    class BookType(DjangoType):
         id: relay.NodeID[int]
-        title: str
 
-    definition = DjangoTypeDefinition(
-        origin=_as_django_type(BookType),
-        model=Book,
-        name=None,
-        description=None,
-        fields_spec=None,
-        exclude_spec=None,
-        selected_fields=(),
-        field_map={},
-        optimizer_hints={},
-        has_custom_get_queryset=False,
-    )
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    definition = BookType.__django_strawberry_definition__
 
     assert definition.has_custom_id_resolver_for("id") is False
     assert definition._custom_id_resolver_cache == {"id": False}

@@ -552,15 +552,14 @@ def test_run_permission_classes_short_circuits_on_first_denial():
             eval_order.append("NeverReachedPerm")
             return True
 
-    class FakeMutation:
-        _mutation_meta = SimpleNamespace(
-            permission_classes=[AllowingPerm, DenyingPerm, NeverReachedPerm],
-        )
+    class GuardedMutation(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = [AllowingPerm, DenyingPerm, NeverReachedPerm]
 
     result = run_permission_classes(
-        # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
-        # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
-        FakeMutation(),  # pyright: ignore[reportArgumentType]
+        GuardedMutation(),
         info=make_info(),
         operation="create",
         data=None,
@@ -621,8 +620,8 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
             # ``mutation`` IS the mutation class the walk passes; the pollution
             # reach is the exact object the walk would iterate live.
             try:
-                # basedpyright: the reach into the walked class's snapshot is the hostile hook under
-                # test; the hook receives the class as type[object]
+                # basedpyright: the hostile hook reaches the walked class's live permission list;
+                # the hook receives the class as type[object], which declares no _mutation_meta
                 mutation._mutation_meta.permission_classes.clear()  # pyright: ignore[reportAttributeAccessIssue]
             except AttributeError:  # tuple substrate: in-place mutation refused
                 events.append("pollution-refused")
@@ -650,8 +649,9 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
 
     assert (
         run_permission_classes(
-            # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
-            # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
+            # basedpyright: the pre-fix mutable-list substrate is the input under test and a real
+            # mutation seals its snapshot against it; run_permission_classes types the parameter
+            # as DjangoMutation | DjangoFormMutation
             ListSubstrateMutation(),  # pyright: ignore[reportArgumentType]
             info=make_info(),
             operation="create",
@@ -669,14 +669,15 @@ def test_walk_ignores_mid_request_pollution_of_the_class_permission_list():
     # the walk still reaches the denier.
     events.clear()
 
-    class TupleSubstrateMutation:
-        _mutation_meta = SimpleNamespace(permission_classes=(AllowAndPollute, Denier))
+    class TupleSubstrateMutation(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = (AllowAndPollute, Denier)
 
     assert (
         run_permission_classes(
-            # basedpyright: a stand-in mutation carrying only the slots the code under test reads;
-            # run_permission_classes types the parameter as DjangoMutation | DjangoFormMutation
-            TupleSubstrateMutation(),  # pyright: ignore[reportArgumentType]
+            TupleSubstrateMutation(),
             info=make_info(),
             operation="create",
             data=None,

@@ -36,6 +36,7 @@ import strawberry
 from apps.products.models import Category, Item, Property
 from django.db import models
 from strawberry import relay
+from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -55,15 +56,16 @@ from tests._soft_dependency import blocked_modules
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
     """Hand a plain stand-in class to a registry method that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # registry mutators type the parameter as type[DjangoType]
+    # basedpyright: the class is only a registry key (a real DjangoType would declare a Meta model
+    # contradicting the model each test registers it against); the registry mutators type the
+    # parameter as type[DjangoType]
     return cls  # pyright: ignore[reportReturnType]
 
 
 def _as_definition(stand_in: object) -> DjangoTypeDefinition:
     """Hand a sentinel definition to a registry method that takes a ``DjangoTypeDefinition``."""
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads; the
-    # registry definition mutators type the parameter as DjangoTypeDefinition
+    # basedpyright: an ``object()`` sentinel the registry stores and returns by identity, never
+    # reading a slot; the registry definition mutators type the parameter as DjangoTypeDefinition
     return stand_in  # pyright: ignore[reportReturnType]
 
 
@@ -924,9 +926,10 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     ``examples/fakeshop/test_query/test_schema_composition_api.py``.
     """
     original_type = strawberry.type
+    reached_by_strawberry: list[type] = []
 
     def failing_type(type_cls: type, **kwargs: object):
-        type_cls.__partial_strawberry_mutation__ = True
+        reached_by_strawberry.append(type_cls)
         raise TypeError("simulated Strawberry failure")
 
     monkeypatch.setattr(strawberry, "type", failing_type)
@@ -943,9 +946,7 @@ def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(
     assert registry.is_finalized() is False
     assert definition is not None
     assert definition.finalized is False
-    # basedpyright: the failing strawberry.type stand-in stamps the marker on the class at run
-    # time; the class declares no such attribute
-    assert BrokenCategoryType.__partial_strawberry_mutation__ is True  # pyright: ignore[reportAttributeAccessIssue]
+    assert reached_by_strawberry == [BrokenCategoryType]
 
     registry.clear()
     monkeypatch.setattr(strawberry, "type", original_type)
@@ -1032,8 +1033,9 @@ def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry: Typ
     """
 
     class _NonHashableField:
-        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
+        @override
+        def __eq__(self, other: object):
+            return self is other
 
     pending = PendingRelation(
         source_type=_as_django_type(type("Src", (), {})),

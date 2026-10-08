@@ -56,7 +56,6 @@ from unittest import mock
 
 import pytest
 import strawberry
-from asgiref.sync import iscoroutinefunction
 from cross_web import (
     AsyncDjangoHTTPRequestAdapter,
     DjangoHTTPRequestAdapter,
@@ -107,6 +106,7 @@ from django_strawberry_framework.middleware.request_body import (
     GraphQLRequestBodyBoundaryMiddleware,
     _package_view_instance,
 )
+from django_strawberry_framework.utils.typing import is_marked_coroutine_function
 from django_strawberry_framework.views import (
     _BODY_LIMIT_REASON,
     _JSON_PARSE_REASON,
@@ -282,11 +282,8 @@ def test_async_view_as_view_is_a_real_coroutine_function():
     """
     async_callback = AsyncDjangoGraphQLView.as_view(schema=SCHEMA)
     sync_callback = DjangoGraphQLView.as_view(schema=SCHEMA)
-    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
-    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
-    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
-    assert iscoroutinefunction(async_callback) is True  # pyright: ignore[reportDeprecated]
-    assert iscoroutinefunction(sync_callback) is False  # pyright: ignore[reportDeprecated]
+    assert is_marked_coroutine_function(async_callback) is True
+    assert is_marked_coroutine_function(sync_callback) is False
     assert async_callback.__code__.co_flags & inspect.CO_COROUTINE
     assert not sync_callback.__code__.co_flags & inspect.CO_COROUTINE
 
@@ -771,15 +768,12 @@ class _UnreadableSpool(tempfile.SpooledTemporaryFile[bytes]):
         raise AssertionError("the cap read a stream it was supposed to size-probe")
 
 
-class _RecordingNonSeekableStream:
-    """A non-seekable byte source that records every read performed on it.
+class _RecordingStream:
+    """A byte source with no ``seekable`` method that records every read performed on it.
 
-    The shape WSGI really presents: Django's ``LimitedStream`` subclasses
-    ``io.IOBase``, so it declares ``seekable()`` -> ``False`` and raises from
-    ``tell()``, and ``django.test.AsyncClient`` wraps its body the same way. Such
-    a stream can only be measured by reading it, so the bound has to be asserted
-    on the reads themselves - which is what ``requested`` (the size of every
-    ``read`` call) and ``delivered`` (the running total handed over) record.
+    ``requested`` (the size of every ``read`` call) and ``delivered`` (the running total handed
+    over) are what the bound is asserted on. A subclass declares the seekability it models, or
+    leaves it undeclared as ``tempfile.SpooledTemporaryFile`` was before 3.11.
     """
 
     def __init__(self, raw: bytes):
@@ -787,9 +781,6 @@ class _RecordingNonSeekableStream:
         self.requested = []
         self.delivered = 0
         self.closed = False
-
-    def seekable(self):
-        return False
 
     def read(self, size: int = -1):
         self.requested.append(size)
@@ -806,7 +797,20 @@ class _RecordingNonSeekableStream:
         return len(self._buffer.getvalue()) - self._buffer.tell()
 
 
-class _UndeclaredSeekableStream(_RecordingNonSeekableStream):
+class _RecordingNonSeekableStream(_RecordingStream):
+    """A non-seekable byte source that records every read performed on it.
+
+    The shape WSGI really presents: Django's ``LimitedStream`` subclasses
+    ``io.IOBase``, so it declares ``seekable()`` -> ``False`` and raises from
+    ``tell()``, and ``django.test.AsyncClient`` wraps its body the same way. Such
+    a stream can only be measured by reading it.
+    """
+
+    def seekable(self):
+        return False
+
+
+class _UndeclaredSeekableStream(_RecordingStream):
     """Seekable in fact, silent about it - the Python 3.10 ``SpooledTemporaryFile``.
 
     ``tempfile.SpooledTemporaryFile`` only became an ``io.IOBase`` subclass in
@@ -819,10 +823,6 @@ class _UndeclaredSeekableStream(_RecordingNonSeekableStream):
     version this card protects. ``read`` is inherited from the recorder and would
     register if it ran.
     """
-
-    # basedpyright: ``None`` stands in for the ``seekable`` method this stream lacks; the probe
-    # must treat it as absent
-    seekable = None  # pyright: ignore[reportAssignmentType]
 
     def tell(self):
         return self._buffer.tell()
@@ -837,7 +837,7 @@ class _NonCallableSeekableMarkerStream(_UndeclaredSeekableStream):
     seekable = False
 
 
-class _UnmeasurableStream(_RecordingNonSeekableStream):
+class _UnmeasurableStream(_RecordingStream):
     """Neither declares seekability nor can report its position.
 
     A raw, unwrapped WSGI ``wsgi.input`` pipe: no ``seekable`` method, and a
@@ -845,10 +845,6 @@ class _UnmeasurableStream(_RecordingNonSeekableStream):
     and a ``ValueError`` at once. The fail-safe direction is the bounded read,
     never "unmeasurable means empty".
     """
-
-    # basedpyright: ``None`` stands in for the ``seekable`` method this stream lacks; the probe
-    # must treat it as absent
-    seekable = None  # pyright: ignore[reportAssignmentType]
 
     def tell(self):
         raise io.UnsupportedOperation("tell")
@@ -954,7 +950,6 @@ class _CapabilityQueryRaisingStream(_UndeclaredSeekableStream):
     read is both available and correct.
     """
 
-    @override
     def seekable(self):
         raise OSError("this stream refuses to answer capability queries")
 
@@ -963,7 +958,6 @@ class _SeekableAttributeRaisingStream(_UndeclaredSeekableStream):
     """A descriptor that raises before the probe can call ``seekable()``."""
 
     @property
-    @override
     def seekable(self):
         raise RuntimeError("this stream refuses attribute inspection")
 
@@ -1073,7 +1067,7 @@ class _UnrestorableStream(_UndeclaredSeekableStream):
         raise OSError("this stream cannot seek back")
 
 
-class _TellWithoutSeekStream(_RecordingNonSeekableStream):
+class _TellWithoutSeekStream(_RecordingStream):
     """Reports positions but has no ``seek`` method anywhere in its MRO.
 
     The forward-only body-inspection middleware shape: ``seekable`` is absent
@@ -1086,10 +1080,6 @@ class _TellWithoutSeekStream(_RecordingNonSeekableStream):
     restore-or-refuse path, so an under-limit request was refused ``413`` and
     the operator was told the probe had moved a stream that had no way to move.
     """
-
-    # basedpyright: ``None`` stands in for the ``seekable`` method this stream lacks; the probe
-    # must treat it as absent
-    seekable = None  # pyright: ignore[reportAssignmentType]
 
     def tell(self):
         return self._buffer.tell()
@@ -1637,7 +1627,7 @@ def test_a_non_callable_seekable_marker_uses_the_bounded_read(view_class: _ViewC
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_read(
     view_class: _ViewClass,
-    stream_class: type[_RecordingNonSeekableStream],
+    stream_class: type[_RecordingStream],
 ):
     """A failed probe is a ``413`` from a bounded read, never a ``500``.
 
@@ -1679,7 +1669,7 @@ def test_a_probe_that_fails_without_moving_the_stream_falls_back_to_the_bounded_
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_position_object_whose_numeric_protocol_raises_never_runs_inside_the_gate(
     view_class: _ViewClass,
-    stream_class: type[_RecordingNonSeekableStream],
+    stream_class: type[_RecordingStream],
 ):
     """No foreign numeric protocol is executed on a probed position, at all.
 
@@ -1901,7 +1891,7 @@ def _assert_the_unreadable_stream_was_recorded(caplog: pytest.LogCaptureFixture,
 @pytest.mark.parametrize("view_class", _VIEW_CLASSES)
 def test_a_request_stream_that_cannot_be_read_is_refused_rather_than_escaping(
     view_class: _ViewClass,
-    stream_class: type[_RecordingNonSeekableStream],
+    stream_class: type[_RecordingStream],
     caplog: pytest.LogCaptureFixture,
 ):
     """A broken client stream is the controlled ``413``, never an unhandled ``500``.
@@ -2710,10 +2700,7 @@ def test_the_view_callback_of_both_views_carries_the_csrf_exempt_mark(view_class
     assert view_class.as_view.__func__ is views_module._RequestBodyBoundaryMixin.as_view.__func__
     assert view.view_class is view_class
     assert view.view_initkwargs == {"schema": SCHEMA}
-    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
-    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
-    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
-    assert iscoroutinefunction(view) is (view_class is AsyncDjangoGraphQLView)  # pyright: ignore[reportDeprecated]
+    assert is_marked_coroutine_function(view) is (view_class is AsyncDjangoGraphQLView)
 
 
 def test_each_csrf_continuation_matches_the_transport_it_protects():
@@ -2733,12 +2720,9 @@ def test_each_csrf_continuation_matches_the_transport_it_protects():
     """
     from django_strawberry_framework import views as views_module
 
-    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
-    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
-    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
-    assert iscoroutinefunction(views_module._async_run_after_csrf_check)  # pyright: ignore[reportDeprecated]
-    assert iscoroutinefunction(views_module._csrf_protected_async_run)  # pyright: ignore[reportDeprecated]
-    assert iscoroutinefunction(views_module._csrf_protected_run) is False  # pyright: ignore[reportDeprecated]
+    assert is_marked_coroutine_function(views_module._async_run_after_csrf_check)
+    assert is_marked_coroutine_function(views_module._csrf_protected_async_run)
+    assert is_marked_coroutine_function(views_module._csrf_protected_run) is False
     assert views_module._csrf_protected_run is not views_module._run_after_csrf_check
     for function in (
         views_module._run_after_csrf_check,
@@ -2868,28 +2852,35 @@ def _wrapper_copying_only_csrf_exempt(view: Callable[..., HttpResponseBase]):
     Deliberately not ``functools.wraps``-based: ``wraps`` copies ``__dict__``, so
     both marks would travel together and the interesting callback would not exist.
     """
-    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
-    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
-    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
-    if iscoroutinefunction(view):  # pyright: ignore[reportDeprecated]
+    if is_marked_coroutine_function(view):
 
-        async def async_wrapped(request: HttpRequest, *args: object, **kwargs: object):
+        async def async_wrapped(
+            request: HttpRequest,
+            *args: object,
+            **kwargs: object,
+        ) -> HttpResponseBase:
             return await view(request, *args, **kwargs)
 
         wrapped = async_wrapped
 
     else:
 
-        def sync_wrapped(request: HttpRequest, *args: object, **kwargs: object):
+        def sync_wrapped(
+            request: HttpRequest,
+            *args: object,
+            **kwargs: object,
+        ) -> HttpResponseBase:
             return view(request, *args, **kwargs)
 
         wrapped = sync_wrapped
 
-    # basedpyright: Django's ``View.as_view()`` sets these three on its function callback and a
-    # hand-written wrapper copies them; ``FunctionType`` declares none
-    wrapped.csrf_exempt = view.csrf_exempt  # pyright: ignore[reportFunctionMemberAccess]
-    wrapped.view_class = view.view_class  # pyright: ignore[reportFunctionMemberAccess]
-    wrapped.view_initkwargs = view.view_initkwargs  # pyright: ignore[reportFunctionMemberAccess]
+    # Django's ``View.as_view()`` sets these three marks in the callback function's namespace.
+    view_marks = vars(view)
+    vars(wrapped).update(
+        csrf_exempt=view_marks["csrf_exempt"],
+        view_class=view_marks["view_class"],
+        view_initkwargs=view_marks["view_initkwargs"],
+    )
     return wrapped
 
 
@@ -3130,24 +3121,36 @@ setattr(_marked_callback_with_a_foreign_view_class, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_raising_metaclass, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_raising_boundary_descriptor, _BOUNDARY_MARKER, True)
 setattr(_marked_callback_with_a_minimal_boundary_view_class, _BOUNDARY_MARKER, True)
-# basedpyright: Django's ``as_view()`` callback contract puts ``view_class`` /
-# ``view_initkwargs`` on a function, mimicked here; ``FunctionType`` declares neither
-_marked_callback_with_unusable_initkwargs.view_class = DjangoGraphQLView  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_unusable_initkwargs.view_initkwargs = [("schema", SCHEMA)]  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_initkwargs_the_class_rejects.view_class = DjangoGraphQLView  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_initkwargs_the_class_rejects.view_initkwargs = {"not_a_view_kwarg": 1}  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_callable_view_class.view_class = _view_class_factory  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_callable_view_class.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_foreign_view_class.view_class = _ForeignButBuildableView  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_foreign_view_class.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_raising_metaclass.view_class = _ViewClassWhoseMetaclassRaises  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_raising_metaclass.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_raising_boundary_descriptor.view_class = (  # pyright: ignore[reportFunctionMemberAccess]
-    _ViewClassWhoseBoundaryDescriptorRaises
+# Django's ``as_view()`` callback contract puts ``view_class`` / ``view_initkwargs`` in the
+# callback function's namespace, mimicked here with values ``as_view`` never produces.
+vars(_marked_callback_with_unusable_initkwargs).update(
+    view_class=DjangoGraphQLView,
+    view_initkwargs=[("schema", SCHEMA)],
 )
-_marked_callback_with_a_raising_boundary_descriptor.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_minimal_boundary_view_class.view_class = _MinimalBoundaryViewClass  # pyright: ignore[reportFunctionMemberAccess]
-_marked_callback_with_a_minimal_boundary_view_class.view_initkwargs = {}  # pyright: ignore[reportFunctionMemberAccess]
+vars(_marked_callback_with_initkwargs_the_class_rejects).update(
+    view_class=DjangoGraphQLView,
+    view_initkwargs={"not_a_view_kwarg": 1},
+)
+vars(_marked_callback_with_a_callable_view_class).update(
+    view_class=_view_class_factory,
+    view_initkwargs={},
+)
+vars(_marked_callback_with_a_foreign_view_class).update(
+    view_class=_ForeignButBuildableView,
+    view_initkwargs={},
+)
+vars(_marked_callback_with_a_raising_metaclass).update(
+    view_class=_ViewClassWhoseMetaclassRaises,
+    view_initkwargs={},
+)
+vars(_marked_callback_with_a_raising_boundary_descriptor).update(
+    view_class=_ViewClassWhoseBoundaryDescriptorRaises,
+    view_initkwargs={},
+)
+vars(_marked_callback_with_a_minimal_boundary_view_class).update(
+    view_class=_MinimalBoundaryViewClass,
+    view_initkwargs={},
+)
 
 #: The callback-side read failure, built once: the marker is in the instance's
 #: ``__dict__`` so recognition gets past the first clause and fails on the next read.
@@ -3618,10 +3621,7 @@ async def test_the_async_chain_resets_the_ordering_mark_around_the_downstream_ca
 
     middleware = GraphQLRequestBodyBoundaryMiddleware(downstream)
 
-    # basedpyright: asgiref's ``iscoroutinefunction`` is Django's own detector at the floor and the
-    # only one that reads ``markcoroutinefunction`` below 3.12 (``inspect``'s ignores it there); the
-    # checker cannot narrow asgiref's ``hasattr`` shim, so it infers asyncio's 3.14-deprecated arm
-    assert iscoroutinefunction(middleware) is True  # pyright: ignore[reportDeprecated]
+    assert is_marked_coroutine_function(middleware) is True
     with pytest.raises(RuntimeError, match="downstream chain"):
         response = middleware(RequestFactory().get("/graphql/"))
         assert inspect.isawaitable(response)

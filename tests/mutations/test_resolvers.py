@@ -1393,9 +1393,7 @@ def test_locate_instance_opt_out_skips_the_lock(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(mutation_resolvers, "apply_type_visibility_sync", _returning(visible_qs))
 
     result = mutation_resolvers.locate_instance(
-        # basedpyright: the patched lookups never read the target type; locate_instance types the
-        # parameter as type[DjangoType]
-        object(),  # pyright: ignore[reportArgumentType]
+        DjangoType,
         7,
         unread_info(),
         alias="default",
@@ -1426,15 +1424,23 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
     from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
-    mutation_cls = MagicMock()
-    mutation_cls.__name__ = "FakePipelineMutation"  # the alias guard names the mutation
-    mutation_cls._mutation_meta.operation = "create"
-    mutation_cls._mutation_meta.select_for_update = False
+    class ItemType(DjangoType):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
+    del ItemType
+
     # No permission classes: this test is about the managed-alias atomic, not auth,
     # so the authorization phase (and its rolled-back auth-alias barrier) is a no-op.
-    mutation_cls._mutation_meta.permission_classes = []
-    mutation_cls._primary_type = object()
-    mutation_cls._payload_type_name = "Unused"
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = []
+
+    finalize_django_types()
 
     captured: dict[str, object] = {}
 
@@ -1463,9 +1469,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch: pytest.
         managed_write_transaction("shard_b"),
     ):
         result = mutation_resolvers.run_write_pipeline_sync(
-            # basedpyright: a MagicMock stand-in mutation carrying only the slots the code under
-            # test reads; run_write_pipeline_sync types the parameter as WriteMutationClass
-            mutation_cls,  # pyright: ignore[reportArgumentType]
+            CreateItem,
             info=make_info(),
             data=None,
             id=None,
@@ -1709,7 +1713,6 @@ def test_delete_pipeline_pk_drift_diagnostic_survives_hostile_repr(
 
 def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyPatch):
     """Delete supplies a snapshot ``tail_step``; locate/auth/atomic live in the skeleton."""
-    from unittest.mock import MagicMock
 
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
@@ -1733,11 +1736,21 @@ def test_delete_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(mutation_resolvers, "run_write_pipeline_sync", fake_pipeline)
     monkeypatch.setattr(mutation_resolvers, "payload_cls_for", _returning(object))
     monkeypatch.setattr(mutation_resolvers, "payload_object_slot", _returning("node"))
-    mutation_cls = MagicMock()
-    mutation_cls._primary_type = object()
-    # basedpyright: a MagicMock stand-in mutation carrying only the slots the code under test
-    # reads; _run_delete types the parameter as type[DjangoMutation]
-    result = mutation_resolvers._run_delete(mutation_cls, info=unread_info(), id="gid")  # pyright: ignore[reportArgumentType]
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
+    class DeleteItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "delete"
+
+    finalize_django_types()
+    assert DeleteItem._primary_type is ItemType
+    result = mutation_resolvers._run_delete(DeleteItem, info=unread_info(), id="gid")
     assert result == "ridden"
     assert seen["data"] is None
     assert seen["id"] == "gid"

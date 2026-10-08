@@ -33,8 +33,9 @@ import pytest
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
 from django.db.models import Field, Model, Prefetch, QuerySet
-from graphql import GraphQLError, GraphQLResolveInfo
+from graphql import GraphQLError
 from strawberry.relay.utils import from_base64, to_base64
+from strawberry.schema.config import StrawberryConfig
 
 import django_strawberry_framework as framework
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
@@ -68,6 +69,7 @@ from django_strawberry_framework.utils.connections import (
     resolve_relay_max_results,
     window_range_plan,
 )
+from tests._info import make_info
 from tests._soft_dependency import simulated_absence
 
 if TYPE_CHECKING:
@@ -484,28 +486,14 @@ def test_keyset_seek_carrier_q_matches_builder():
 # ---------------------------------------------------------------------------
 
 
-class _FakeConfig:
-    relay_max_results = 50
-
-
-class _FakeSchema:
-    config = _FakeConfig()
-
-
-class _FakeInfo:
-    schema = _FakeSchema()
-
-
-def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
-    """Hand a duck-typed info to a bounds helper that takes a resolve info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the shared
-    # bounds helpers type info as a Strawberry Info or graphql-core's GraphQLResolveInfo
-    return stand_in  # pyright: ignore[reportReturnType]
+def _capped_info(relay_max_results: int = 50):
+    """A real Strawberry ``Info`` whose schema config caps connection pages at the given size."""
+    return make_info(config=StrawberryConfig(relay_max_results=relay_max_results))
 
 
 def test_derive_keyset_window_bounds_forward_shapes():
     bounds = derive_keyset_window_bounds(
-        _as_resolve_info(_FakeInfo()),
+        _capped_info(),
         before=None,
         after="x",
         first=3,
@@ -514,7 +502,7 @@ def test_derive_keyset_window_bounds_forward_shapes():
     )
     assert (bounds.offset, bounds.limit, bounds.reverse) == (0, 3, False)
     unbounded = derive_keyset_window_bounds(
-        _as_resolve_info(_FakeInfo()),
+        _capped_info(),
         before=None,
         after="x",
         first=None,
@@ -527,7 +515,7 @@ def test_derive_keyset_window_bounds_forward_shapes():
 def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
     with pytest.raises(UnwindowableConnection):
         derive_keyset_window_bounds(
-            _as_resolve_info(_FakeInfo()),
+            _capped_info(),
             before="x",
             after=None,
             first=1,
@@ -536,7 +524,7 @@ def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
         )
     with pytest.raises(UnwindowableConnection):
         derive_keyset_window_bounds(
-            _as_resolve_info(_FakeInfo()),
+            _capped_info(),
             before=None,
             after=None,
             first=None,
@@ -548,7 +536,7 @@ def test_derive_keyset_window_bounds_backward_shapes_are_unwindowable():
 def test_derive_keyset_window_bounds_first_validation():
     with pytest.raises(ValueError, match="non-negative"):
         derive_keyset_window_bounds(
-            _as_resolve_info(_FakeInfo()),
+            _capped_info(),
             before=None,
             after=None,
             first=-1,
@@ -557,7 +545,7 @@ def test_derive_keyset_window_bounds_first_validation():
         )
     with pytest.raises(ValueError, match="cannot be higher than 50"):
         derive_keyset_window_bounds(
-            _as_resolve_info(_FakeInfo()),
+            _capped_info(),
             before=None,
             after=None,
             first=51,
@@ -567,15 +555,11 @@ def test_derive_keyset_window_bounds_first_validation():
 
 
 def test_resolve_relay_max_results_precedence():
-    assert resolve_relay_max_results(_as_resolve_info(_FakeInfo()), 7) == 7
-    assert resolve_relay_max_results(_as_resolve_info(_FakeInfo()), None) == 50
+    assert resolve_relay_max_results(_capped_info(), 7) == 7
+    assert resolve_relay_max_results(_capped_info(), None) == 50
 
-    class _StrawberryWrapped:
-        class schema:  # noqa: N801 - shape stub
-            class _strawberry_schema:  # noqa: N801 - shape stub
-                config = _FakeConfig()
-
-    assert resolve_relay_max_results(_as_resolve_info(_StrawberryWrapped()), None) == 50
+    # The graphql-core info a resolver's wrapper holds: its schema wraps the Strawberry schema.
+    assert resolve_relay_max_results(_capped_info()._raw_info, None) == 50
     # basedpyright: the slotless object is the input under test (the default applies);
     # resolve_relay_max_results types info as EitherInfo | None
     assert resolve_relay_max_results(object(), None) == 100  # pyright: ignore[reportArgumentType]

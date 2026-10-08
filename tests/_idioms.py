@@ -15,6 +15,10 @@ read as use of a private local import (``reportPrivateLocalImportUsage``). ``var
 the ``__dict__`` entry, which a package ``__getattr__`` cannot satisfy, so the check is at
 least as strict as the attribute read it replaces.
 
+``websocket_scope`` builds a complete ASGI WebSocket handshake scope, so a row that cares
+about only the headers and the ``server`` pair still hands a typed scope to code that
+declares asgiref's ``WebSocketScope``.
+
 ``relay_hooks`` / ``async_relay_hooks`` read the Relay resolvers ``finalize_django_types()``
 installs on a Relay ``DjangoType``. The declared class gains ``relay.Node`` only when the
 finalizer injects it, so its static type carries none of them; and ``relay.Node``'s own
@@ -26,18 +30,26 @@ sync executor's shape; ``async_relay_hooks`` is the async one, where ``resolve_n
 ``resolve_nodes`` return the coroutine the caller awaits.
 """
 
+import inspect
 from collections.abc import Iterable
 from types import ModuleType
-from typing import Literal, Protocol, TypeGuard, TypeVar, overload
+from typing import TYPE_CHECKING, Literal, Protocol, TypeGuard, TypeVar, overload
 
 from django.db.models import Model, QuerySet
+from django.test.testcases import SimpleTestCase
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.utils.querysets import model_for
 
+if TYPE_CHECKING:
+    from asgiref.typing import WebSocketScope
+
+    from django_strawberry_framework.rest_framework.serializer_converter import DRFField
+
 _ClassT = TypeVar("_ClassT", bound=type)
 _ModelT = TypeVar("_ModelT", bound=Model)
+_DRFFieldT = TypeVar("_DRFFieldT", bound="DRFField")
 
 
 def definition_raises(cls: _ClassT) -> _ClassT:
@@ -48,6 +60,37 @@ def definition_raises(cls: _ClassT) -> _ClassT:
 def module_binding(module: ModuleType, name: str) -> object:
     """Return ``module``'s own binding for ``name`` (its ``__dict__`` entry)."""
     return vars(module)[name]
+
+
+def stub_module(name: str, **attributes: object) -> ModuleType:
+    """Build a run-time module called ``name`` whose namespace holds ``attributes``."""
+    module = ModuleType(name)
+    vars(module).update(attributes)
+    return module
+
+
+def _remove_databases_failures_descriptor(
+    cls: type[SimpleTestCase],
+) -> "classmethod[SimpleTestCase, ..., object]":
+    """``cls``'s ``_remove_databases_failures`` descriptor, found along the MRO unbound.
+
+    django-stubs omits this private classmethod, so a test cannot name it on the class.
+    ``inspect.getattr_static`` fetches the descriptor without binding it and the
+    ``isinstance`` check makes the read assert the shape the callers use.
+    """
+    descriptor = inspect.getattr_static(cls, "_remove_databases_failures")
+    assert isinstance(descriptor, classmethod)
+    return descriptor
+
+
+def remove_databases_failures_function(cls: type[SimpleTestCase]) -> object:
+    """The function behind ``cls._remove_databases_failures`` (``classmethod.__func__``)."""
+    return _remove_databases_failures_descriptor(cls).__func__
+
+
+def call_remove_databases_failures(cls: type[SimpleTestCase]) -> None:
+    """Run ``cls._remove_databases_failures()``: the descriptor's function called with ``cls``."""
+    _remove_databases_failures_descriptor(cls).__func__(cls)
 
 
 class RelayNodeHooks(Protocol[_ModelT]):
@@ -168,3 +211,38 @@ def async_relay_hooks(
     """Return finalized Relay type ``type_cls`` over ``model`` as its async node lookups."""
     assert _async_hooks_over(type_cls, model), f"{type_cls!r} is not a Relay type over {model!r}"
     return type_cls
+
+
+def websocket_scope(
+    headers: Iterable[tuple[bytes, bytes]] = (),
+    server: tuple[str, int | None] | None = None,
+) -> "WebSocketScope":
+    """Return a complete ASGI WebSocket handshake scope carrying ``headers`` and ``server``."""
+    return {
+        "type": "websocket",
+        "asgi": {"spec_version": "2.3", "version": "3.0"},
+        "http_version": "1.1",
+        "scheme": "ws",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": list(headers),
+        "client": None,
+        "server": server,
+        "subprotocols": [],
+        "extensions": None,
+    }
+
+
+def bind_unparented(field: _DRFFieldT, name: str) -> _DRFFieldT:
+    """Bind a serializer field to ``name`` with no parent serializer, and return it.
+
+    DRF populates ``field_name`` / ``source`` / ``source_attrs`` at bind time, and the
+    converters read bound fields, as the schema-time discovery hands them. The field a
+    row holds directly has no serializer above it.
+    """
+    # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
+    # unparented bound field)
+    field.bind(name, None)  # pyright: ignore[reportArgumentType]
+    return field

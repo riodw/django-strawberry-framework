@@ -46,7 +46,7 @@ import gc
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from types import SimpleNamespace
-from typing import Any, TypeAlias, TypedDict, TypeVar, get_origin
+from typing import TypeAlias, TypedDict, TypeVar, get_origin
 
 import pytest
 import strawberry
@@ -59,6 +59,7 @@ from django.db.models import F, Q
 from django.db.models.sql import Query
 from django.http import HttpRequest
 from graphql import GraphQLError
+from graphql_client import JSONObject
 from strawberry import relay
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info
@@ -98,8 +99,7 @@ from tests._info import make_info
 
 _M = TypeVar("_M", bound=models.Model)
 
-# basedpyright: ExecutionResult.data is dict[str, Any]; a response node is read by key
-_ResponseNode: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+_ResponseNode: TypeAlias = JSONObject
 
 
 class _DefinitionReads(TypedDict):
@@ -937,17 +937,23 @@ async def test_attach_count_async_awaits_before_guard_raises():
     """
     consumed = {"flag": False}
 
-    async def make_conn():
+    async def make_conn() -> DjangoConnection[object]:
         consumed["flag"] = True
-        return SimpleNamespace()
+        return DjangoConnection[object](
+            page_info=relay.PageInfo(
+                has_previous_page=False,
+                has_next_page=False,
+                start_cursor=None,
+                end_cursor=None,
+            ),
+            edges=[],
+        )
 
     coro = make_conn()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with pytest.raises(GraphQLError, match="totalCount"):
-            # basedpyright: a stand-in connection the guard never reads; _attach_count_async types
-            # the parameter as an awaitable DjangoConnection
-            await _attach_count_async(coro, ["not", "a", "queryset"], want_count=True)  # pyright: ignore[reportArgumentType]
+            await _attach_count_async(coro, ["not", "a", "queryset"], want_count=True)
         gc.collect()
         leaked = [
             w
@@ -1717,17 +1723,16 @@ def test_apply_connection_optimization_short_circuits_when_target_has_no_model()
     """
     from django_strawberry_framework.optimizer.extension import apply_connection_optimization
 
-    class _UnregisteredNode:  # never registered -> registry.model_for_type(...) is None
-        pass
+    class _UnregisteredNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    registry.unregister(_UnregisteredNode)  # the registry no longer maps it to a model
+    assert registry.model_for_type(_UnregisteredNode) is None
 
     qs = Category.objects.all()
-    result = apply_connection_optimization(
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # apply_connection_optimization types the parameter as type[DjangoType]
-        _UnregisteredNode,  # pyright: ignore[reportArgumentType]
-        qs,
-        make_info(),
-    )
+    result = apply_connection_optimization(_UnregisteredNode, qs, make_info())
     assert result is qs
 
 

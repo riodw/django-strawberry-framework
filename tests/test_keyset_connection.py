@@ -48,7 +48,7 @@ from apps.scalars.models import ScalarSpecimen
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Count, F, Model, QuerySet
 from django.http import HttpRequest
-from graphql import GraphQLError, GraphQLResolveInfo
+from graphql import GraphQLError
 from strategy_schemas import make_django_type
 from strawberry.schema.config import StrawberryConfig
 
@@ -214,15 +214,11 @@ def test_counted_keyset_window_without_seek_count_falls_back():
     issue_type = _make_issue_type("KeysetCountDriftNode")
     state = _issue_state(issue_type)
     connection_type = _issue_connection_of(issue_type)
-    row = SimpleNamespace(
-        id=1,
-        number=1,
-        **{WINDOW_ROW_NUMBER: 1, WINDOW_TOTAL_COUNT: 3},
-    )
+    row = Issue(id=1, number=1)
+    # The window columns arrive as annotations: attributes Django sets on each row it builds.
+    vars(row).update({WINDOW_ROW_NUMBER: 1, WINDOW_TOTAL_COUNT: 3})
     info = make_info(field_name="issues", selections="{ pageInfo { hasNextPage } }")
-    # basedpyright: a stand-in row carrying only the window columns the code under test reads;
-    # _WindowedConnectionRows types rows as list[Model]
-    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Issue.objects.all())  # pyright: ignore[reportArgumentType]
+    window = _WindowedConnectionRows(rows=[row], fallback=lambda: Issue.objects.all())
     assert (
         _resolve_from_window(
             connection_type,
@@ -402,7 +398,7 @@ def _resolved_name(model: type[Model], path: str) -> str:
     return field.name
 
 
-def test_resolve_order_path_field_arms():
+def test_resolve_order_path_field_arms(monkeypatch: pytest.MonkeyPatch):
     # Local column; pk alias; related path terminal.
     assert _resolved_name(Issue, "number") == "number"
     assert _resolved_name(Issue, "pk") == "id"
@@ -427,10 +423,8 @@ def test_resolve_order_path_field_arms():
     def _detached_relation(_name: str) -> object:
         return detached_relation
 
-    detached_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_detached_relation))
-    # basedpyright: a stand-in model carrying only the slots the code under test reads;
-    # _resolve_order_path_field types the parameter as type[Model]
-    assert _resolve_order_path_field(detached_model, "relation__value") is None  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(Issue._meta, "get_field", _detached_relation)
+    assert _resolve_order_path_field(Issue, "relation__value") is None
 
     virtual_field = SimpleNamespace(
         is_relation=False,
@@ -441,10 +435,8 @@ def test_resolve_order_path_field_arms():
     def _virtual_field(_name: str) -> object:
         return virtual_field
 
-    virtual_model = SimpleNamespace(_meta=SimpleNamespace(get_field=_virtual_field))
-    # basedpyright: a stand-in model carrying only the slots the code under test reads;
-    # _resolve_order_path_field types the parameter as type[Model]
-    assert _resolve_order_path_field(virtual_model, "virtual") is None  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(Issue._meta, "get_field", _virtual_field)
+    assert _resolve_order_path_field(Issue, "virtual") is None
 
 
 def test_resolve_order_path_field_accepts_mti_parent_link():
@@ -460,17 +452,6 @@ def test_resolve_order_path_field_accepts_mti_parent_link():
 # =============================================================================
 
 
-class _FakeInfo:
-    schema = SimpleNamespace(config=SimpleNamespace(relay_max_results=100))
-
-
-def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
-    """Hand a duck-typed info to the nested-planner slice helper."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads;
-    # _keyset_window_slice_from_arguments types info as graphql-core's GraphQLResolveInfo
-    return stand_in  # pyright: ignore[reportReturnType]
-
-
 @pytest.mark.django_db
 def test_keyset_window_slice_from_arguments_arms():
     issue_type = _make_issue_type("KeysetWalkerSliceNode")
@@ -478,7 +459,7 @@ def test_keyset_window_slice_from_arguments_arms():
     state = declared_cursor_state_for_definition(issue_type.__django_strawberry_definition__)
     assert state is not None
     columns, fingerprint = state.columns, state.fingerprint
-    info = _as_resolve_info(_FakeInfo())
+    info = make_info(config=StrawberryConfig(relay_max_results=100))._raw_info
 
     # No cursor: a plain forward window, no seek.
     sliced = _keyset_window_slice_from_arguments(

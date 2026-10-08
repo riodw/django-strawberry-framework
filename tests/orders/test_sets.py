@@ -861,11 +861,9 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
     assert isinstance(expressions[0].expression, F)
     assert isinstance(expressions[1].expression, F)
     # orders by the annotation alias
-    # basedpyright: django-stubs omits F.name, reported as an unknown attribute
-    assert expressions[0].expression.name == alias  # pyright: ignore[reportAttributeAccessIssue]
+    assert expressions[0].expression == F(alias)
     # scalar ordered directly
-    # basedpyright: django-stubs omits F.name, reported as an unknown attribute
-    assert expressions[1].expression.name == "name"  # pyright: ignore[reportAttributeAccessIssue]
+    assert expressions[1].expression == F("name")
 
 
 def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():

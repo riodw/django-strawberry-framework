@@ -34,6 +34,7 @@ from django.db.models.sql.compiler import SQLCompiler
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext, register_lookup
 from django.urls import clear_url_caches, path
+from django.utils.functional import cached_property
 from graphql_client import JSONObject, graphql_payload, post_graphql
 from strawberry.django.context import StrawberryDjangoContext
 from strawberry.schema.name_converter import NameConverter
@@ -812,8 +813,11 @@ class _ProjectTransform(Transform):
     """A project transform registered on a built-in field, emitting its own SQL."""
 
     lookup_name = "jitter"
-    # basedpyright: django-stubs declares output_field a cached_property, not a class-level field
-    output_field = models.FloatField()  # pyright: ignore[reportAssignmentType]
+
+    @cached_property
+    @override
+    def output_field(self) -> models.FloatField[float, float]:
+        return models.FloatField()
 
     @override
     def as_sql(

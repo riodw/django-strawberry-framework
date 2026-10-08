@@ -62,11 +62,11 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import AsyncIterable, Iterable, Mapping
+from collections.abc import AsyncIterable, Iterable, Iterator, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
 from itertools import islice
-from typing import Any, TypeGuard, TypeVar, overload
+from typing import TypeGuard, TypeVar, cast, overload
 
 from django.db.models import Model, QuerySet
 from graphql import GraphQLError
@@ -964,7 +964,11 @@ _SLICE_BOUNDED_ROW_TYPES = (
 )
 
 
-def _bounds_by_its_own_slice(result: object) -> bool:
+def _bounds_by_its_own_slice(
+    result: object,
+) -> TypeGuard[
+    list[object] | tuple[object, ...] | str | bytes | bytearray | QuerySet[Model, object]
+]:
     """Whether slicing ``result`` is an operation this package owns the meaning of.
 
     Exact types only, and ``type(result)`` rather than ``isinstance``: a subclass
@@ -975,6 +979,16 @@ def _bounds_by_its_own_slice(result: object) -> bool:
     ``utils/querysets.py::normalized_row_source``, or not at all.
     """
     return type(result) in _SLICE_BOUNDED_ROW_TYPES
+
+
+def _consumer_rows(result: object) -> Iterator[object]:
+    """Iterate a consumer resolver's return, whatever shape it declared.
+
+    ``iter`` is the iterability check: a non-iterable raises the same
+    ``TypeError`` ``islice`` would, and an object iterable only through
+    ``__getitem__`` iterates through it, exactly as ``islice`` would have.
+    """
+    return iter(cast("Iterable[object]", result))
 
 
 def _raw_list_bound(info: object, declared: int | None, *, trusted: bool = False) -> int:
@@ -1034,9 +1048,7 @@ def _windowed_rows(
     trusted: bool = False,
 ) -> object: ...
 def _windowed_rows(
-    # basedpyright: a consumer resolver's return reaches islice / slicing unchecked; object
-    # needs an iterability check, a runtime change
-    result: Any,  # pyright: ignore[reportExplicitAny]
+    result: object,
     info: object,
     declared: int | None = None,
     *,
@@ -1095,14 +1107,14 @@ def _windowed_rows(
     result = normalized_row_source(result)
     by_slice = _bounds_by_its_own_slice(result)
     if offset is None and requested_limit is None:
-        return result[:limit] if by_slice else list(islice(result, limit))
+        return result[:limit] if by_slice else list(islice(_consumer_rows(result), limit))
 
     start = offset if offset is not None else 0
     window = requested_limit if requested_limit is not None else limit
     if window == 0:
         return result[start:start] if by_slice else []
     stop = start + window
-    return result[start:stop] if by_slice else list(islice(result, start, stop))
+    return result[start:stop] if by_slice else list(islice(_consumer_rows(result), start, stop))
 
 
 @overload

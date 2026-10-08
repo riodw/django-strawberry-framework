@@ -17,7 +17,6 @@ model.
 """
 
 import sys
-import types
 from collections.abc import Iterator
 from enum import Enum
 from io import StringIO
@@ -44,6 +43,7 @@ from django_strawberry_framework.management.commands.inspect_django_type import 
     _sdl_type_name,
 )
 from django_strawberry_framework.registry import registry
+from tests._idioms import stub_module
 from tests.optimizer import _link_models
 
 
@@ -56,35 +56,29 @@ def _isolate_registry() -> Iterator[None]:
 
 
 def _make_test_module(monkeypatch: pytest.MonkeyPatch, **attrs: object):
-    module = types.ModuleType("test_module")
-    for key, value in attrs.items():
-        setattr(module, key, value)
+    module = stub_module("test_module", **attrs)
     monkeypatch.setitem(sys.modules, "test_module", module)
     return module
 
 
 def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch: pytest.MonkeyPatch):
     """Every ambiguity candidate is a directly reusable dotted object path."""
-    module_a = types.ModuleType("management_duplicate_types_a")
-    module_b = types.ModuleType("management_duplicate_types_b")
-    monkeypatch.setitem(sys.modules, module_a.__name__, module_a)
-    monkeypatch.setitem(sys.modules, module_b.__name__, module_b)
     meta_a = type("Meta", (), {"model": Category, "fields": ("id", "name")})
     duplicate_a = type(
         "DupType",
         (DjangoType,),
-        {"__module__": module_a.__name__, "Meta": meta_a},
+        {"__module__": "management_duplicate_types_a", "Meta": meta_a},
     )
-    # basedpyright: the stub module is built at run time; ModuleType declares no DupType
-    module_a.DupType = duplicate_a  # pyright: ignore[reportAttributeAccessIssue]
+    module_a = stub_module("management_duplicate_types_a", DupType=duplicate_a)
+    monkeypatch.setitem(sys.modules, module_a.__name__, module_a)
     meta_b = type("Meta", (), {"model": Item, "fields": ("id", "name")})
     duplicate_b = type(
         "DupType",
         (DjangoType,),
-        {"__module__": module_b.__name__, "Meta": meta_b},
+        {"__module__": "management_duplicate_types_b", "Meta": meta_b},
     )
-    # basedpyright: the stub module is built at run time; ModuleType declares no DupType
-    module_b.DupType = duplicate_b  # pyright: ignore[reportAttributeAccessIssue]
+    module_b = stub_module("management_duplicate_types_b", DupType=duplicate_b)
+    monkeypatch.setitem(sys.modules, module_b.__name__, module_b)
 
     path_a = f"{module_a.__name__}.DupType"
     path_b = f"{module_b.__name__}.DupType"

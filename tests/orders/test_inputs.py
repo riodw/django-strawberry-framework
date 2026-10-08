@@ -133,8 +133,8 @@ def test_ordering_resolve_wraps_value_in_f_expression():
     expr = Ordering.ASC.resolve("shelf__code")
     # ``OrderBy.expression`` holds the wrapped ``F("shelf__code")``.
     assert isinstance(expr.expression, F)
-    # basedpyright: django-stubs omits F.name, reported as an unknown attribute
-    assert expr.expression.name == "shelf__code"  # pyright: ignore[reportAttributeAccessIssue]
+    # ``F`` compares equal by class and name, so this reads the wrapped name.
+    assert expr.expression == F("shelf__code")
 
 
 # ---------------------------------------------------------------------------
@@ -562,16 +562,14 @@ def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespac
     from django_strawberry_framework.orders.factories import OrderArgumentsFactory
     from django_strawberry_framework.orders.inputs import clear_order_input_namespace
 
-    class _FakeOrder:
+    class _FakeOrder(OrderSet):
         pass
 
     class _FakeInput:
         pass
 
     OrderArgumentsFactory.input_object_types["FakeOrderInputType"] = _FakeInput
-    # basedpyright: a plain stand-in class the clear only evicts; OrderArgumentsFactory types the
-    # registry values as type[OrderSet]
-    OrderArgumentsFactory._type_orderset_registry["FakeOrderInputType"] = _FakeOrder  # pyright: ignore[reportArgumentType]
+    OrderArgumentsFactory._type_orderset_registry["FakeOrderInputType"] = _FakeOrder
     clear_order_input_namespace()
     assert OrderArgumentsFactory.input_object_types == {}
     assert OrderArgumentsFactory._type_orderset_registry == {}
@@ -760,6 +758,7 @@ def test_registry_clear_invokes_clear_order_input_namespace():
 
     from django_strawberry_framework.orders.factories import OrderArgumentsFactory
     from django_strawberry_framework.orders.inputs import (
+        FieldSpec,
         _field_specs,
         materialize_input_class,
     )
@@ -768,14 +767,13 @@ def test_registry_clear_invokes_clear_order_input_namespace():
     class _LedgerStub:
         pass
 
+    class _LedgerOrder(OrderSet):
+        pass
+
     materialize_input_class("LedgerStubOrderInputType", _LedgerStub)
     OrderArgumentsFactory.input_object_types["LedgerStubOrderInputType"] = _LedgerStub
-    # basedpyright: a plain stand-in class the clear only evicts; OrderArgumentsFactory types the
-    # registry values as type[OrderSet]
-    OrderArgumentsFactory._type_orderset_registry["LedgerStubOrderInputType"] = _LedgerStub  # pyright: ignore[reportArgumentType]
-    # basedpyright: a stand-in ledger entry the clear only evicts; _field_specs types its keys as
-    # tuple[type[OrderSet], str] and its values as FieldSpec
-    _field_specs[("stub", "title")] = "fake"  # pyright: ignore[reportArgumentType]
+    OrderArgumentsFactory._type_orderset_registry["LedgerStubOrderInputType"] = _LedgerOrder
+    _field_specs[(_LedgerOrder, "title")] = FieldSpec("title", "title", "title")
 
     registry.clear()
 

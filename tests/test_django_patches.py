@@ -44,6 +44,7 @@ cursor before ``tearDownClass``.
 """
 
 import importlib
+from typing import NoReturn
 from unittest import mock
 
 import pytest
@@ -52,6 +53,7 @@ from django.db import connections
 from django.test.testcases import SimpleTestCase, TestCase, TransactionTestCase
 
 from django_strawberry_framework import _django_patches
+from tests._idioms import call_remove_databases_failures, remove_databases_failures_function
 
 
 def _database_failure(wrapped: object):
@@ -72,7 +74,7 @@ def test_apply_is_idempotent():
     assert _django_patches._patch_is_installed() is True
 
 
-def test_apply_reinstalls_when_class_attribute_reverted():
+def test_apply_reinstalls_when_class_attribute_reverted(monkeypatch: pytest.MonkeyPatch):
     """``apply()`` re-installs the patch if a third party reverted the
     class attribute between calls.
 
@@ -87,26 +89,18 @@ def test_apply_reinstalls_when_class_attribute_reverted():
     _django_patches.apply()
     assert _django_patches._patch_is_installed() is True
 
-    # Capture the classmethod descriptor via ``__dict__`` (assigning a
-    # bound method back via the attribute would replace the descriptor
-    # with a regular function and break later tests).
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
-    try:
+    # ``monkeypatch`` saves the class ``__dict__`` entry, so teardown puts the
+    # classmethod descriptor itself back (assigning a bound method back via the
+    # attribute would replace the descriptor with a regular function and break
+    # later tests).
+    def _foreign(cls: type[SimpleTestCase]):
+        pass
 
-        def _foreign(cls: type[SimpleTestCase]):
-            pass
+    monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
+    assert _django_patches._patch_is_installed() is False
 
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = classmethod(_foreign)  # pyright: ignore[reportAttributeAccessIssue]
-        assert _django_patches._patch_is_installed() is False
-
-        _django_patches.apply()
-        assert _django_patches._patch_is_installed() is True
-    finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved  # pyright: ignore[reportAttributeAccessIssue]
+    _django_patches.apply()
+    assert _django_patches._patch_is_installed() is True
 
 
 def test_patch_is_installed_on_simple_test_case():
@@ -119,9 +113,7 @@ def test_patch_is_installed_on_simple_test_case():
     be in place via ``AppConfig.ready()``.
     """
     assert (
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures.__func__  # pyright: ignore[reportAttributeAccessIssue]
+        remove_databases_failures_function(SimpleTestCase)
         is _django_patches._patched_remove_databases_failures
     )
 
@@ -132,9 +124,7 @@ def test_patch_is_inherited_by_transaction_test_case():
     subclass for free.
     """
     assert (
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        TransactionTestCase._remove_databases_failures.__func__  # pyright: ignore[reportAttributeAccessIssue]
+        remove_databases_failures_function(TransactionTestCase)
         is _django_patches._patched_remove_databases_failures
     )
 
@@ -145,14 +135,14 @@ def test_patch_is_inherited_by_test_case():
     covers the whole Django test-case hierarchy.
     """
     assert (
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        TestCase._remove_databases_failures.__func__  # pyright: ignore[reportAttributeAccessIssue]
+        remove_databases_failures_function(TestCase)
         is _django_patches._patched_remove_databases_failures
     )
 
 
-def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict():
+def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Pin the ``installed is None`` branch of ``_patch_is_installed()``.
 
     Defensive contract: if a future Django release moves
@@ -164,20 +154,12 @@ def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict(
     to the install path rather than mis-reporting that the patch is
     already in place.
     """
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
-    try:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        del SimpleTestCase._remove_databases_failures  # pyright: ignore[reportAttributeAccessIssue]
-        assert "_remove_databases_failures" not in SimpleTestCase.__dict__
-        assert _django_patches._patch_is_installed() is False
-    finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.delattr(SimpleTestCase, "_remove_databases_failures")
+    assert "_remove_databases_failures" not in SimpleTestCase.__dict__
+    assert _django_patches._patch_is_installed() is False
 
 
-def test_patched_remove_databases_failures_unwraps_a_real_wrapper():
+def test_patched_remove_databases_failures_unwraps_a_real_wrapper(monkeypatch: pytest.MonkeyPatch):
     """Happy path: when ``connection.<method>`` is a genuine
     ``_DatabaseFailure`` instance, the patched method unwraps it
     exactly as Django's upstream version does.
@@ -197,13 +179,9 @@ def test_patched_remove_databases_failures_unwraps_a_real_wrapper():
     sentinel = mock.sentinel.original_cursor
 
     wrapper = _database_failure(sentinel)
-    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
-    # declares cursor as a method
-    connection.cursor = wrapper  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(connection, "cursor", wrapper)
     try:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        _NarrowTest._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
+        call_remove_databases_failures(_NarrowTest)
         # Wrapper unwrapped -> method now equals the sentinel.
         assert connection.cursor is sentinel
     finally:
@@ -230,17 +208,13 @@ def test_patched_remove_databases_failures_skips_non_wrapper_methods():
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    def _plain_cursor(*args: object, **kwargs: object):
-        return None  # explicitly not a ``_DatabaseFailure`` wrapper
+    def _plain_cursor(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("not a ``_DatabaseFailure`` wrapper; only its identity is read")
 
-    # basedpyright: the plain stand-in cursor is the state under test; django-stubs declares cursor
-    # as a method
-    connection.cursor = _plain_cursor  # pyright: ignore[reportAttributeAccessIssue]
+    connection.cursor = _plain_cursor
     try:
         # Should NOT raise.
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        _NarrowTest._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
+        call_remove_databases_failures(_NarrowTest)
         # And the replacement is left untouched (the patch declines to
         # restore a wrapper it never installed).
         assert connection.cursor is _plain_cursor
@@ -267,25 +241,23 @@ def test_patched_remove_databases_failures_covers_direct_simple_test_case_subcla
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    def _plain_cursor(*args: object, **kwargs: object):
-        return None
+    def _plain_cursor(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("not a ``_DatabaseFailure`` wrapper; only its identity is read")
 
-    # basedpyright: the plain stand-in cursor is the state under test; django-stubs declares cursor
-    # as a method
-    connection.cursor = _plain_cursor  # pyright: ignore[reportAttributeAccessIssue]
+    connection.cursor = _plain_cursor
     try:
         # Should NOT raise even though this class only inherits from
         # ``SimpleTestCase``. If the patch were still installed on
         # ``TransactionTestCase``, this call would raise.
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        _NarrowSimpleTest._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
+        call_remove_databases_failures(_NarrowSimpleTest)
         assert connection.cursor is _plain_cursor
     finally:
         connection.cursor = original_cursor
 
 
-def test_unpatched_remove_databases_failures_crashes_on_non_wrapper():
+def test_unpatched_remove_databases_failures_crashes_on_non_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Pins that Trac #37064's bug shape IS still in Django at our pin.
 
     Temporarily reverts ``SimpleTestCase._remove_databases_failures`` to
@@ -299,10 +271,6 @@ def test_unpatched_remove_databases_failures_crashes_on_non_wrapper():
     the copy would keep crashing no matter what the installed Django
     ships.
     """
-    # Capture the classmethod descriptor via ``__dict__`` so the
-    # ``finally`` restore puts the patch back in its native shape (a
-    # ``classmethod`` descriptor on ``SimpleTestCase``).
-    patched = SimpleTestCase.__dict__["_remove_databases_failures"]
     captured = _django_patches._original_remove_databases_failures
     # Premise check: the import-time capture is genuinely upstream's
     # method, not this package's patch (the module is imported - and the
@@ -310,33 +278,25 @@ def test_unpatched_remove_databases_failures_crashes_on_non_wrapper():
     assert isinstance(captured, classmethod)
     assert captured.__func__.__module__ == "django.test.testcases"
 
-    # basedpyright: django-stubs omits the private classmethod, which reads as an unknown attribute
-    SimpleTestCase._remove_databases_failures = captured  # pyright: ignore[reportAttributeAccessIssue]
+    # ``monkeypatch`` saves the class ``__dict__`` entry, so teardown puts the patch
+    # back in its native shape (a ``classmethod`` descriptor on ``SimpleTestCase``).
+    monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", captured)
+
+    class _NarrowTest(TransactionTestCase):
+        databases = set()  # exclude every alias including default
+
+    connection = connections["default"]
+    original_cursor = connection.cursor
+
+    def _plain_cursor(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("not a ``_DatabaseFailure`` wrapper; only its identity is read")
+
+    connection.cursor = _plain_cursor
     try:
-
-        class _NarrowTest(TransactionTestCase):
-            databases = set()  # exclude every alias including default
-
-        connection = connections["default"]
-        original_cursor = connection.cursor
-
-        def _plain_cursor(*args: object, **kwargs: object):
-            return None
-
-        # basedpyright: the plain stand-in cursor is the state under test; django-stubs declares
-        # cursor as a method
-        connection.cursor = _plain_cursor  # pyright: ignore[reportAttributeAccessIssue]
-        try:
-            with pytest.raises(AttributeError, match="wrapped"):
-                # basedpyright: django-stubs omits the private classmethod, which reads as an
-                # unknown attribute
-                _NarrowTest._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
-        finally:
-            connection.cursor = original_cursor
+        with pytest.raises(AttributeError, match="wrapped"):
+            call_remove_databases_failures(_NarrowTest)
     finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = patched  # pyright: ignore[reportAttributeAccessIssue]
+        connection.cursor = original_cursor
 
 
 def test_apply_fails_loudly_when_database_failure_symbol_missing():
@@ -361,7 +321,7 @@ def test_apply_fails_loudly_when_upstream_method_signature_changes():
             _django_patches.apply()
 
 
-def test_apply_fails_loudly_when_upstream_body_drifts():
+def test_apply_fails_loudly_when_upstream_body_drifts(monkeypatch: pytest.MonkeyPatch):
     """A shape-passing but body-drifted Django must not get its teardown clobbered.
 
     The patch *reimplements* upstream's whole body rather than wrapping
@@ -375,42 +335,34 @@ def test_apply_fails_loudly_when_upstream_body_drifts():
     the patch exists to prevent. ``apply()`` must raise the targeted
     ``RuntimeError`` before installing anything.
     """
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
-    try:
 
-        def _foreign(cls: type[SimpleTestCase]):
-            pass
+    def _foreign(cls: type[SimpleTestCase]):
+        pass
 
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = classmethod(_foreign)  # pyright: ignore[reportAttributeAccessIssue]
-        assert _django_patches._patch_is_installed() is False
+    monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
+    assert _django_patches._patch_is_installed() is False
 
-        def _drifted(cls: type[SimpleTestCase]):
-            """A (cls)-shaped upstream whose body renamed the method list."""
-            for alias in connections:
-                if alias in cls.databases:
-                    continue
-                connection = connections[alias]
-                # basedpyright: the renamed method list is the upstream drift under test;
-                # SimpleTestCase declares no such attribute
-                for name, _ in cls._forbidden_connection_methods:  # pyright: ignore[reportAttributeAccessIssue]
-                    method = getattr(connection, name)
-                    setattr(connection, name, method.wrapped)
+    def _drifted(cls: type[SimpleTestCase]):
+        """A (cls)-shaped upstream whose body renamed the method list."""
+        for alias in connections:
+            if alias in cls.databases:
+                continue
+            connection = connections[alias]
+            # basedpyright: the renamed method list is the upstream drift under test;
+            # SimpleTestCase declares no such attribute
+            for name, _ in cls._forbidden_connection_methods:  # pyright: ignore[reportAttributeAccessIssue]
+                method = getattr(connection, name)
+                setattr(connection, name, method.wrapped)
 
-        with mock.patch.object(
-            _django_patches,
-            "_original_remove_databases_failures",
-            classmethod(_drifted),
-        ):
-            with pytest.raises(RuntimeError, match="upstream body"):
-                _django_patches.apply()
-        # ``apply()`` raised during validation, before the install step.
-        assert _django_patches._patch_is_installed() is False
-    finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved  # pyright: ignore[reportAttributeAccessIssue]
+    with mock.patch.object(
+        _django_patches,
+        "_original_remove_databases_failures",
+        classmethod(_drifted),
+    ):
+        with pytest.raises(RuntimeError, match="upstream body"):
+            _django_patches.apply()
+    # ``apply()`` raised during validation, before the install step.
+    assert _django_patches._patch_is_installed() is False
 
 
 def test_audited_upstream_bodies_are_exactly_the_two_known_shapes():
@@ -513,7 +465,9 @@ def test_validation_refuses_an_unaudited_upstream_body():
             _django_patches._validate_upstream_shape()
 
 
-def test_disallowed_methods_read_prefers_the_class_attribute_shape():
+def test_disallowed_methods_read_prefers_the_class_attribute_shape(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Django 5.2.16-6.0.x shape: the pairs come off the test-case class.
 
     Driven against a synthetic ``cls`` so the branch is covered on ANY
@@ -521,50 +475,39 @@ def test_disallowed_methods_read_prefers_the_class_attribute_shape():
     the attribute, which would leave this read path uncovered.
     """
 
-    class _ClassAttributeCls:
-        databases = frozenset()
+    class _ClassAttributeCls(SimpleTestCase):
+        databases = set()
         _disallowed_connection_methods = (("cursor", "queries"),)
 
-    class _UnusedFeatures:
-        disallowed_simple_test_case_connection_methods = (("connect", "connections"),)
-
-    class _FakeConnection:
-        features = _UnusedFeatures()
-
+    connection = connections["default"]
     with mock.patch.object(
         _django_patches,
         "_validated_remove_databases_failures_source",
         _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
     ):
         assert (
-            # basedpyright: a plain stand-in class and connection carrying only the slots the code
-            # under test reads; _disallowed_connection_methods types them as type[SimpleTestCase]
-            # and BaseDatabaseWrapper
-            _django_patches._disallowed_connection_methods(_ClassAttributeCls, _FakeConnection())  # pyright: ignore[reportArgumentType]
+            _django_patches._disallowed_connection_methods(_ClassAttributeCls, connection)
             is _ClassAttributeCls._disallowed_connection_methods
         )
 
-    connection = connections["default"]
     original_cursor = connection.cursor
     sentinel = mock.sentinel.class_attribute_cursor
-    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
-    # declares cursor as a method
-    connection.cursor = _database_failure(sentinel)  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(connection, "cursor", _database_failure(sentinel))
     try:
         with mock.patch.object(
             _django_patches,
             "_validated_remove_databases_failures_source",
             _django_patches._CLASS_ATTRIBUTE_REMOVE_DATABASES_FAILURES_SOURCE,
         ):
-            # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-            # _patched_remove_databases_failures types the parameter as type[SimpleTestCase]
-            _django_patches._patched_remove_databases_failures(_ClassAttributeCls)  # pyright: ignore[reportArgumentType]
+            _django_patches._patched_remove_databases_failures(_ClassAttributeCls)
         assert connection.cursor is sentinel
     finally:
         connection.cursor = original_cursor
 
 
-def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag():
+def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Django 6.1 shape: the class attribute is gone, the feature flag carries the pairs.
 
     Driven against a synthetic ``cls`` with no
@@ -574,46 +517,35 @@ def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag():
     path uncovered.
     """
 
-    class _FeatureFlagCls:
-        databases = frozenset()
+    class _FeatureFlagCls(SimpleTestCase):
+        databases = set()
         # A legacy override may survive a Django upgrade. Django 6.1's
         # ``_add_databases_failures`` ignores it and wraps the feature list,
         # so removal must ignore it too or leave three wrappers installed.
         _disallowed_connection_methods = (("cursor", "legacy queries"),)
 
-    class _Features:
-        disallowed_simple_test_case_connection_methods = (
-            ("cursor", "queries"),
-            ("chunked_cursor", "queries"),
-        )
-
-    class _FakeConnection:
-        features = _Features()
-
-    with mock.patch.object(
-        _django_patches,
-        "_validated_remove_databases_failures_source",
-        _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
-    ):
-        assert (
-            # basedpyright: a plain stand-in class and connection carrying only the slots the code
-            # under test reads; _disallowed_connection_methods types them as type[SimpleTestCase]
-            # and BaseDatabaseWrapper
-            _django_patches._disallowed_connection_methods(_FeatureFlagCls, _FakeConnection())  # pyright: ignore[reportArgumentType]
-            is _Features.disallowed_simple_test_case_connection_methods
-        )
-
     connection = connections["default"]
+    flagged_pairs = [("cursor", "queries"), ("chunked_cursor", "queries")]
+    connection.features.disallowed_simple_test_case_connection_methods = flagged_pairs
+    try:
+        with mock.patch.object(
+            _django_patches,
+            "_validated_remove_databases_failures_source",
+            _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
+        ):
+            assert (
+                _django_patches._disallowed_connection_methods(_FeatureFlagCls, connection)
+                is flagged_pairs
+            )
+    finally:
+        del connection.features.disallowed_simple_test_case_connection_methods
+
     original_cursor = connection.cursor
     original_chunked_cursor = connection.chunked_cursor
     cursor_sentinel = mock.sentinel.feature_flag_cursor
     chunked_cursor_sentinel = mock.sentinel.feature_flag_chunked_cursor
-    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
-    # declares cursor as a method
-    connection.cursor = _database_failure(cursor_sentinel)  # pyright: ignore[reportAttributeAccessIssue]
-    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
-    # declares chunked_cursor as a method
-    connection.chunked_cursor = _database_failure(chunked_cursor_sentinel)  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(connection, "cursor", _database_failure(cursor_sentinel))
+    monkeypatch.setattr(connection, "chunked_cursor", _database_failure(chunked_cursor_sentinel))
     # The patched loop visits every alias, so the flag has to be readable on
     # each one (the sharded settings mode configures more than ``default``).
     for alias in connections:
@@ -627,9 +559,7 @@ def test_disallowed_methods_read_falls_back_to_the_connection_feature_flag():
             "_validated_remove_databases_failures_source",
             _django_patches._CONNECTION_FEATURE_REMOVE_DATABASES_FAILURES_SOURCE,
         ):
-            # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-            # _patched_remove_databases_failures types the parameter as type[SimpleTestCase]
-            _django_patches._patched_remove_databases_failures(_FeatureFlagCls)  # pyright: ignore[reportArgumentType]
+            _django_patches._patched_remove_databases_failures(_FeatureFlagCls)
         assert connection.cursor is cursor_sentinel
         assert connection.chunked_cursor is chunked_cursor_sentinel
     finally:
@@ -656,10 +586,7 @@ def test_disallowed_methods_rejects_an_unvalidated_upstream_shape():
         "unexpected source",
     ):
         with pytest.raises(RuntimeError, match="without a validated upstream"):
-            # basedpyright: the path under test raises before reading cls or connection;
-            # _disallowed_connection_methods types them as type[SimpleTestCase] and
-            # BaseDatabaseWrapper
-            _django_patches._disallowed_connection_methods(object, object())  # pyright: ignore[reportArgumentType]
+            _django_patches._disallowed_connection_methods(SimpleTestCase, connections["default"])
 
 
 def test_apply_fails_loudly_when_upstream_source_is_unavailable():
@@ -682,7 +609,10 @@ def test_apply_fails_loudly_when_upstream_source_is_unavailable():
             _django_patches.apply()
 
 
-def test_apply_no_ops_when_toggle_disabled(settings: pytest_django.Settings):
+def test_apply_no_ops_when_toggle_disabled(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install.
 
     The Trac #37064 patch is gated by the same flag as the package's
@@ -691,31 +621,26 @@ def test_apply_no_ops_when_toggle_disabled(settings: pytest_django.Settings):
     re-installing when the flag is off, and resume installing when it
     is back on.
     """
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
-    try:
 
-        def _foreign(cls: type[SimpleTestCase]):
-            pass
+    def _foreign(cls: type[SimpleTestCase]):
+        pass
 
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = classmethod(_foreign)  # pyright: ignore[reportAttributeAccessIssue]
-        assert _django_patches._patch_is_installed() is False
+    monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
+    assert _django_patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
-        _django_patches.apply()
-        assert _django_patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
+    _django_patches.apply()
+    assert _django_patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
-        _django_patches.apply()
-        assert _django_patches._patch_is_installed() is True
-    finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved  # pyright: ignore[reportAttributeAccessIssue]
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
+    _django_patches.apply()
+    assert _django_patches._patch_is_installed() is True
 
 
-def test_apply_no_ops_when_django_dependency_opted_out(settings: pytest_django.Settings):
+def test_apply_no_ops_when_django_dependency_opted_out(
+    settings: pytest_django.Settings,
+    monkeypatch: pytest.MonkeyPatch,
+):
     """``{"APPLY_UPSTREAM_PATCHES": {"django": False}}`` disables only this module.
 
     The per-dependency escape: a mapping naming ``"django"`` makes this
@@ -723,31 +648,23 @@ def test_apply_no_ops_when_django_dependency_opted_out(settings: pytest_django.S
     dependency leaves this module installing normally (each gate reads its own
     name).
     """
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
-    try:
 
-        def _foreign(cls: type[SimpleTestCase]):
-            pass
+    def _foreign(cls: type[SimpleTestCase]):
+        pass
 
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = classmethod(_foreign)  # pyright: ignore[reportAttributeAccessIssue]
-        assert _django_patches._patch_is_installed() is False
+    monkeypatch.setattr(SimpleTestCase, "_remove_databases_failures", classmethod(_foreign))
+    assert _django_patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
-        _django_patches.apply()
-        assert _django_patches._patch_is_installed() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+    _django_patches.apply()
+    assert _django_patches._patch_is_installed() is False
 
-        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
-        _django_patches.apply()
-        assert _django_patches._patch_is_installed() is True
-    finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved  # pyright: ignore[reportAttributeAccessIssue]
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
+    _django_patches.apply()
+    assert _django_patches._patch_is_installed() is True
 
 
-def test_reload_preserves_the_installed_patch_teardown():
+def test_reload_preserves_the_installed_patch_teardown(monkeypatch: pytest.MonkeyPatch):
     """``importlib.reload()`` must not break the RUNNING patch's teardown.
 
     ``importlib.reload()`` retains the module dictionary but re-executes the
@@ -764,7 +681,13 @@ def test_reload_preserves_the_installed_patch_teardown():
     Without the reload-aware initialization, the teardown call below raises
     ``RuntimeError`` instead of unwrapping to the sentinel.
     """
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
+    # Re-setting the app-load generation's descriptor registers its restore; the
+    # ``finally`` undoes it BEFORE ``apply()`` re-installs the current generation.
+    monkeypatch.setattr(
+        SimpleTestCase,
+        "_remove_databases_failures",
+        SimpleTestCase.__dict__["_remove_databases_failures"],
+    )
     try:
         assert _django_patches._patch_is_installed() is True
 
@@ -790,15 +713,11 @@ def test_reload_preserves_the_installed_patch_teardown():
         connection = connections["default"]
         original_cursor = connection.cursor
         sentinel = mock.sentinel.reload_survivor
-        # basedpyright: the installed _DatabaseFailure wrapper is the state under test;
-        # django-stubs declares cursor as a method
-        connection.cursor = _database_failure(sentinel)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(connection, "cursor", _database_failure(sentinel))
         try:
             # The still-installed PREVIOUS-generation function must unwrap
             # cleanly against the reloaded module dictionary.
-            # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-            # attribute
-            _NarrowReloaded._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
+            call_remove_databases_failures(_NarrowReloaded)
             assert connection.cursor is sentinel
         finally:
             connection.cursor = original_cursor
@@ -812,9 +731,7 @@ def test_reload_preserves_the_installed_patch_teardown():
             is _django_patches._patched_remove_databases_failures
         )
     finally:
-        # basedpyright: django-stubs omits the private classmethod, which reads as an unknown
-        # attribute
-        SimpleTestCase._remove_databases_failures = saved  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.undo()
         _django_patches.apply()
 
 

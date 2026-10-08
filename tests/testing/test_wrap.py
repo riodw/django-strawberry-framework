@@ -21,6 +21,7 @@ from typing_extensions import override
 
 from django_strawberry_framework import _django_patches
 from django_strawberry_framework.testing import safe_wrap_connection_method
+from tests._idioms import call_remove_databases_failures
 
 
 def _database_failure(wrapped: Callable[..., object]):
@@ -47,7 +48,9 @@ def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure()
         connection.cursor = original_cursor
 
 
-def test_safe_wrap_connection_method_declines_when_database_failure_in_place():
+def test_safe_wrap_connection_method_declines_when_database_failure_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The Trac #37064 cooperative-wrap mirror: when Django has already
     installed ``_DatabaseFailure`` at the method, the helper refuses
     to clobber it and returns ``False``.
@@ -56,9 +59,7 @@ def test_safe_wrap_connection_method_declines_when_database_failure_in_place():
     original_cursor = connection.cursor
 
     django_wrapper = _database_failure(original_cursor)
-    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
-    # declares cursor as a method
-    connection.cursor = django_wrapper  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(connection, "cursor", django_wrapper)
 
     consumer_wrapper = mock.Mock(name="consumer_wrapper")
 
@@ -118,7 +119,9 @@ def test_safe_wrap_connection_method_works_on_arbitrary_method_names():
         connection.chunked_cursor = original
 
 
-def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in_depth():
+def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in_depth(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """End-to-end composition: when a consumer uses
     :func:`safe_wrap_connection_method` AND Django's setup/teardown
     pair runs, the package's unwrap-time patch
@@ -141,9 +144,7 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
 
     # Simulate Django's setUpClass installing the ``_DatabaseFailure``.
     django_wrapper = _database_failure(sentinel_original)
-    # basedpyright: the installed _DatabaseFailure wrapper is the state under test; django-stubs
-    # declares cursor as a method
-    connection.cursor = django_wrapper  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(connection, "cursor", django_wrapper)
 
     # The consumer attempts to wrap and is correctly declined - Django
     # already wrapped first. Wrap-time half of defense-in-depth fires.
@@ -162,9 +163,7 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
         databases = set()  # exclude every alias including default
 
     try:
-        # basedpyright: django-stubs omits TransactionTestCase._remove_databases_failures, reported
-        # as an unknown attribute
-        _NarrowTest._remove_databases_failures()  # pyright: ignore[reportAttributeAccessIssue]
+        call_remove_databases_failures(_NarrowTest)
         # Wrapper unwrapped to the sentinel original.
         assert connection.cursor is sentinel_original
     finally:

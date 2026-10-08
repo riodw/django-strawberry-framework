@@ -377,7 +377,7 @@ the AppConfig.
 
 import inspect
 import textwrap
-from typing import TYPE_CHECKING, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, TypeVar, cast
 
 from .conf import upstream_patches_enabled
 
@@ -400,6 +400,44 @@ if TYPE_CHECKING:
     _AnyBaseView = _BaseView[Never]
     _AnySyncView = _SyncBaseHTTPView[Never, object, object, object, object]
     _AnyAsyncView = _AsyncBaseHTTPView[Never, object, object, object, object, object, object]
+
+    # The two multipart parsers serve every concrete view, whose invariant slots (response,
+    # context, root value) are each fixed by the view's own parametrization: the view
+    # parameter is generic over them, where ``object`` would reject every real view.
+    _ResponseT = TypeVar("_ResponseT")
+    _SubResponseT = TypeVar("_SubResponseT")
+    _WebSocketRequestT = TypeVar("_WebSocketRequestT")
+    _WebSocketResponseT = TypeVar("_WebSocketResponseT")
+    _ContextT = TypeVar("_ContextT")
+    _RootValueT = TypeVar("_RootValueT")
+
+    class _SyncParseMultipart(Protocol):
+        """Upstream's sync ``parse_multipart``, callable on a view of any parametrization."""
+
+        def __call__(
+            self,
+            view: _SyncBaseHTTPView[Never, _ResponseT, _SubResponseT, _ContextT, _RootValueT],
+            request: SyncHTTPRequestAdapter,
+            /,
+        ) -> dict[str, str]: ...
+
+    class _AsyncParseMultipart(Protocol):
+        """Upstream's async ``parse_multipart``, callable on a view of any parametrization."""
+
+        def __call__(
+            self,
+            view: _AsyncBaseHTTPView[
+                Never,
+                _ResponseT,
+                _WebSocketRequestT,
+                _WebSocketResponseT,
+                _SubResponseT,
+                _ContextT,
+                _RootValueT,
+            ],
+            request: AsyncHTTPRequestAdapter,
+            /,
+        ) -> Awaitable[dict[str, str]]: ...
 
     class _UploadUtility(Protocol):
         """The upload utility as the traversal translation reads it: a plain function."""
@@ -472,11 +510,11 @@ _original_parse_query_params = cast(
     _captured_upstream_method(BaseView, "parse_query_params"),
 )
 _original_sync_parse_multipart = cast(
-    "Callable[[_AnySyncView, SyncHTTPRequestAdapter], dict[str, str]] | None",
+    "_SyncParseMultipart | None",
     _captured_upstream_method(SyncBaseHTTPView, "parse_multipart"),
 )
 _original_async_parse_multipart = cast(
-    "Callable[[_AnyAsyncView, AsyncHTTPRequestAdapter], Awaitable[dict[str, str]]] | None",
+    "_AsyncParseMultipart | None",
     _captured_upstream_method(AsyncBaseHTTPView, "parse_multipart"),
 )
 
@@ -539,10 +577,8 @@ class _UpstreamCaptures(NamedTuple):
     replace_placeholders_with_files: "_UploadUtility"
     parse_json: "Callable[[_AnyBaseView, str | bytes], object]"
     parse_query_params: "Callable[[_AnyBaseView, QueryParams], dict[str, object]]"
-    sync_parse_multipart: "Callable[[_AnySyncView, SyncHTTPRequestAdapter], dict[str, str]]"
-    async_parse_multipart: (
-        "Callable[[_AnyAsyncView, AsyncHTTPRequestAdapter], Awaitable[dict[str, str]]]"
-    )
+    sync_parse_multipart: "_SyncParseMultipart"
+    async_parse_multipart: "_AsyncParseMultipart"
 
 
 def _upstream_captures() -> _UpstreamCaptures:
@@ -844,7 +880,7 @@ def _raised_inside_the_upload_utility(exc: BaseException, utility: "_UploadUtili
 
 
 def _patched_sync_parse_multipart(
-    self: "_AnySyncView",
+    self: "_SyncBaseHTTPView[Never, _ResponseT, _SubResponseT, _ContextT, _RootValueT]",
     request: "SyncHTTPRequestAdapter",
 ) -> "dict[str, str]":
     """Translate malformed multipart structures to Strawberry's controlled ``400``.
@@ -874,7 +910,15 @@ def _patched_sync_parse_multipart(
 
 
 async def _patched_async_parse_multipart(
-    self: "_AnyAsyncView",
+    self: """_AsyncBaseHTTPView[
+        Never,
+        _ResponseT,
+        _WebSocketRequestT,
+        _WebSocketResponseT,
+        _SubResponseT,
+        _ContextT,
+        _RootValueT,
+    ]""",
     request: "AsyncHTTPRequestAdapter",
 ) -> "dict[str, str]":
     """Async twin of :func:`_patched_sync_parse_multipart`."""

@@ -317,18 +317,10 @@ def test_marked_mutation_class_safe_on_none_parent_and_malformed_nodes():
     # Missing field from parent_type.fields
     assert ctx_mut._marked_mutation_class(mut_type, [_field_node("doesNotExist")]) is None
 
-    # parent_type with non-dict fields
-    class NonDictFieldsParent:
-        fields = ["not", "a", "dict"]
-
-    ctx_non_dict = DjangoMutationExecutionContext.__new__(DjangoMutationExecutionContext)
-    # basedpyright: a stand-in schema carrying only the mutation_type the lookup reads;
-    # graphql-core types the slot as GraphQLSchema
-    ctx_non_dict.schema = SimpleNamespace(mutation_type=NonDictFieldsParent)  # pyright: ignore[reportAttributeAccessIssue]
+    # parent_type with non-dict fields: the mutation root's cached ``fields`` replaced in place
+    vars(mut_type)["fields"] = ["not", "a", "dict"]
     named_node = _field_node("some_mutation")
-    # basedpyright: the parent whose fields is not a dict is the hostile input under test;
-    # _marked_mutation_class types the parameter as GraphQLObjectType | None
-    assert ctx_non_dict._marked_mutation_class(NonDictFieldsParent, [named_node]) is None  # pyright: ignore[reportArgumentType]
+    assert ctx_mut._marked_mutation_class(mut_type, [named_node]) is None
 
 
 def test_execution_errors_fallback():
@@ -853,9 +845,6 @@ def test_a_schema_that_cannot_be_hashed_is_still_constructible_and_bounded():
     """Identity needs no hash, so declaring ``__eq__`` cannot cost a schema its record."""
 
     class _UnhashableSchema(DjangoSchema):
-        # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
-
         @override
         def __eq__(self, other: object):
             return self is other

@@ -22,10 +22,11 @@ import re
 import subprocess
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 import pytest
 import yaml
+from graphql_client import JSONObject
 
 # The repo-wide Python sweep below borrows this repo's existing definition of the
 # first-party source trees rather than re-listing them, so the two cannot drift
@@ -54,9 +55,7 @@ IMAGE_REFERENCE = re.compile(
 # and therefore already covered by the commit under review.
 LOCAL_ACTION_PREFIX = "./"
 
-# basedpyright: a parsed workflow is an untyped YAML tree (yaml.safe_load returns Any); the rows
-# read its nested values by key
-_YAMLMapping: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+_YAMLMapping: TypeAlias = JSONObject
 
 
 def _workflow_paths():

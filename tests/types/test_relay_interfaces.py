@@ -60,8 +60,8 @@ def _meta(**attrs: object) -> type:
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
     """Hand a plain host class to a builder that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # interface builders type the parameter as type[DjangoType]
+    # basedpyright: a bare host whose bases cannot take the interface (or whose name lookups
+    # raise) is the input under test; apply_interfaces types the parameter as type[DjangoType]
     return cls  # pyright: ignore[reportReturnType]
 
 
@@ -196,7 +196,7 @@ def test_meta_interfaces_stored_on_definition():
     meta = _meta(interfaces=(relay.Node,))
     normalized = _validate_interfaces(meta, Category)
     definition = DjangoTypeDefinition(
-        origin=_as_django_type(object),
+        origin=DjangoType,
         model=Category,
         name=None,
         description=None,
@@ -405,11 +405,13 @@ def test_relay_node_strips_django_id_annotation():
     """
     fields = tuple(Category._meta.get_fields())
 
-    class _Host:
-        pass
+    class _Host(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
     synthesized, _ = _build_annotations(
-        _as_django_type(_Host),
+        _Host,
         fields,
         source_model=Category,
         interfaces=(relay.Node,),
@@ -445,11 +447,13 @@ def test_extended_node_interface_subclass_suppresses_id_annotation():
 
     fields = tuple(Category._meta.get_fields())
 
-    class _Host:
-        pass
+    class _Host(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
     synthesized, _ = _build_annotations(
-        _as_django_type(_Host),
+        _Host,
         fields,
         source_model=Category,
         interfaces=(CustomNode,),
@@ -467,11 +471,13 @@ def test_non_relay_type_keeps_id_int():
     """
     fields = tuple(Category._meta.get_fields())
 
-    class _Host:
-        pass
+    class _Host(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
     synthesized, _ = _build_annotations(
-        _as_django_type(_Host),
+        _Host,
         fields,
         source_model=Category,
         interfaces=(),
@@ -838,7 +844,9 @@ def _build_seeded_category_node_with_async_get_queryset():
 
         @classmethod
         @override
-        # basedpyright: an ``async def get_queryset`` is a supported hook (awaited on the async path) that the base's sync return type does not declare
+        # basedpyright: an ``async def get_queryset`` is a supported hook (awaited on the async
+        # path), but the base declares the one sync signature every sync override shares, and a
+        # union or Any return there would break those overrides
         async def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):  # pyright: ignore[reportIncompatibleMethodOverride]
             return queryset.filter(is_private=False)
 
@@ -1430,7 +1438,9 @@ def test_model_for_returns_registered_model():
     assert model_for(CategoryNode) is CategoryNode.__django_strawberry_definition__.model
 
 
-def test_resolve_id_default_unit_dict_cache_and_getattr_branches():
+def test_resolve_id_default_unit_dict_cache_and_getattr_branches(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Direct unit-test of the dict-cache / ``getattr`` split (no DB hit)."""
 
     class CategoryNode(DjangoType):
@@ -1445,12 +1455,12 @@ def test_resolve_id_default_unit_dict_cache_and_getattr_branches():
     inst = Category(id=7, name="x")
     vars(inst)["id"] = 7
     assert _resolve_id_default(CategoryNode, inst, info=unread_info()) == "7"
-    # Cache-miss fallback to ``getattr``: synthetic root whose ``__dict__``
-    # is empty but whose class-level ``id`` attribute resolves the value.
-    fake = _build_fake_root(12)
-    # basedpyright: the synthetic root is the stand-in row the getattr fallback reads;
-    # _resolve_id_default types it as a Model
-    assert _resolve_id_default(CategoryNode, fake, info=unread_info()) == "12"  # pyright: ignore[reportArgumentType]
+    # Cache-miss fallback to ``getattr``: a real row whose ``__dict__`` lacks the pk but whose
+    # class-level ``id`` attribute resolves the value.
+    monkeypatch.setattr(Category, "id", 12)
+    uncached = Category(name="x")
+    del vars(uncached)["id"]
+    assert _resolve_id_default(CategoryNode, uncached, info=unread_info()) == "12"
 
 
 @pytest.mark.django_db
@@ -1552,11 +1562,13 @@ def test_direct_relay_node_inheritance_suppresses_id_annotation():
     """
     fields = tuple(Category._meta.get_fields())
 
-    class _Host(relay.Node):
-        pass
+    class _Host(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
     synthesized, _ = _build_annotations(
-        _as_django_type(_Host),
+        _Host,
         fields,
         source_model=Category,
         interfaces=(),

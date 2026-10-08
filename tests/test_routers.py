@@ -128,7 +128,7 @@ from collections.abc import (
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypeGuard
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypeAlias, TypeGuard
 from urllib.parse import urlparse
 
 import pytest
@@ -152,6 +152,7 @@ from django.http import HttpRequest, JsonResponse
 from django.test import AsyncClient, RequestFactory, override_settings
 from django.urls import URLPattern, path
 from graphql import GraphQLError
+from graphql_client import JSONObject
 from strawberry.extensions import SchemaExtension
 from strawberry.types.execution import ExecutionResult as StrawberryExecutionResult
 from typing_extensions import override
@@ -163,6 +164,7 @@ from django_strawberry_framework.error_policy import DEFAULT_ERROR_POLICY
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils import sessions as session_store_module
 from django_strawberry_framework.utils.permissions import request_from_info
+from tests._idioms import websocket_scope
 from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
 
 if TYPE_CHECKING:
@@ -170,7 +172,7 @@ if TYPE_CHECKING:
     from strawberry.channels import GraphQLWSConsumer
 
     from django_strawberry_framework import DjangoSchema
-    from django_strawberry_framework.consumers import _GatedSocket
+    from django_strawberry_framework.consumers import RevalidatingGraphQLWSConsumer, _GatedSocket
 
 # The hint floors are deliberately RE-TYPED literals, matching
 # ``tests/rest_framework/test_soft_dependency.py``'s ``_HINT_SUBSTRING``
@@ -600,10 +602,43 @@ class _RecordingDjangoApplication:
         send: ASGISendCallable,
     ) -> None:
         self.paths.append(scope["path"])
-        # basedpyright: asgiref's event TypedDicts require keys the ASGI spec makes optional;
-        # the server accepts the message without them
-        await send({"type": "http.response.start", "status": 418, "headers": []})  # pyright: ignore[reportArgumentType]
-        await send({"type": "http.response.body", "body": b"django-application"})  # pyright: ignore[reportArgumentType]
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 418,
+                "headers": [],
+                "trailers": False,
+            },
+        )
+        await send(
+            {"type": "http.response.body", "body": b"django-application", "more_body": False},
+        )
+
+
+async def _unreachable_application(
+    scope: WebSocketScope,
+    receive: ASGIReceiveCallable,
+    send: ASGISendCallable,
+) -> None:
+    """An ASGI application a row wraps but never reaches: a call fails the test."""
+    raise AssertionError("the wrapped application must not run")
+
+
+class _ConsumerState:
+    """The state the revalidation helpers read off a consumer: revocation, scope, window."""
+
+    def __init__(self, scope: dict[str, object] | None = None, window: float = 0.0):
+        self._revocation = consumers_module._ConnectionRevocation()
+        self.scope: dict[str, object] = {} if scope is None else scope
+        self.revalidation_window = window
+
+
+class _UnreadRevocationOwner:
+    """A consumer whose revocation state a row must never read."""
+
+    @property
+    def _revocation(self) -> NoReturn:
+        raise AssertionError("the wrapper must not read the consumer's revocation")
 
 
 # basedpyright: verbatim forward to DjangoGraphQLProtocolRouter.__init__ (rows pass deliberately
@@ -820,8 +855,7 @@ async def _ws_graphql_data(application: ProtocolTypeRouter, query: str, cookie: 
     return payload["data"]
 
 
-# basedpyright: json.loads returns Any and the rows read each JSON frame's nested values by key
-_JSONFrame: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+_JSONFrame: TypeAlias = JSONObject
 
 
 async def _drain_until_close(
@@ -2625,25 +2659,28 @@ def _handshake_scope(
     headers: Iterable[tuple[bytes, bytes]],
     server: tuple[str, int] | None = None,
 ):
-    """The two ASGI keys the Host projection reads, plus what ``ASGIRequest`` demands.
+    """The handshake scope the Host projection reads.
 
     One scope builder feeding BOTH oracles below, so the projection and Django's own
-    adapter can never be handed subtly different inputs. The four HTTP-only keys
-    (``method`` / ``path`` / ``query_string`` / ``type``) exist solely because
-    ``ASGIRequest.__init__`` reads them; ``_host_validation_request`` reads neither,
-    which is the asymmetry spec-046 Decision 19 cites for projecting into a plain
-    ``HttpRequest`` instead.
+    adapter can never be handed subtly different inputs.
     """
-    scope: dict[str, object] = {
+    return websocket_scope(headers, server)
+
+
+def _http_scope_of(handshake: WebSocketScope) -> dict[str, object]:
+    """``handshake`` as the HTTP scope ``ASGIRequest.__init__`` demands.
+
+    ``ASGIRequest.__init__`` reads ``method``, ``path``, ``query_string`` and ``type``;
+    ``_host_validation_request`` reads none of them, which is the asymmetry spec-046
+    Decision 19 cites for projecting into a plain ``HttpRequest`` instead. The
+    handshake's ``"ws"`` scheme becomes ``"http"``, the scheme an HTTP scope carries.
+    """
+    return {
+        **handshake,
         "type": "http",
+        "scheme": "http",
         "method": "GET",
-        "path": "/",
-        "query_string": b"",
-        "headers": list(headers),
     }
-    if server is not None:
-        scope["server"] = server
-    return scope
 
 
 def _django_asgi_host_meta(
@@ -2665,7 +2702,7 @@ def _django_asgi_host_meta(
     which participates in the Host decision, and none of which this boundary has any
     business carrying.
     """
-    meta = ASGIRequest(_handshake_scope(headers, server), BytesIO()).META
+    meta = ASGIRequest(_http_scope_of(_handshake_scope(headers, server)), BytesIO()).META
     return {key: value for key, value in meta.items() if key in _HOST_META_KEYS}
 
 
@@ -2795,9 +2832,7 @@ def test_the_host_projection_matches_djangos_asgi_adapter_key_for_key(
     sibling: ``examples/fakeshop/test_query/test_transport_api.py``
     (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
-    # basedpyright: a stand-in scope carrying only the slots the code under test reads;
-    # _host_validation_request types the parameter as asgiref's WebSocketScope
-    projected = consumers_module._host_validation_request(_handshake_scope(headers, server)).META  # pyright: ignore[reportArgumentType]
+    projected = consumers_module._host_validation_request(_handshake_scope(headers, server)).META
 
     assert set(projected) <= _HOST_META_KEYS, projected
     assert projected == _django_asgi_host_meta(headers, server)
@@ -2938,7 +2973,7 @@ async def test_duplicate_host_headers_fail_closed_in_djangos_comma_joined_form()
     (``test_a_hostile_host_header_is_rejected_before_the_schema_runs``).
     """
     duplicated = [(b"host", b"testserver"), (b"host", b"testserver")]
-    joined = ASGIRequest(_handshake_scope(duplicated), BytesIO()).META["HTTP_HOST"]
+    joined = ASGIRequest(_http_scope_of(_handshake_scope(duplicated)), BytesIO()).META["HTTP_HOST"]
     assert joined == "testserver,testserver"
     assert _django_http_host_verdict(host=joined) is None
     assert _django_http_host_verdict(host="testserver") is not None
@@ -3267,9 +3302,10 @@ async def test_the_debug_host_and_origin_defaults_diverge_on_a_localhost_subdoma
     origin = f"http://{subdomain}"
     with override_settings(DEBUG=True, ALLOWED_HOSTS=[]):
         assert _django_http_host_verdict(host=subdomain) == subdomain
-        # basedpyright: the path under test never calls the wrapped application;
-        # AllowedHostsOriginValidator types the parameter as a channels application
-        assert AllowedHostsOriginValidator(None).valid_origin(urlparse(origin)) is False  # pyright: ignore[reportArgumentType]
+        assert (
+            AllowedHostsOriginValidator(_unreachable_application).valid_origin(urlparse(origin))
+            is False
+        )
 
         router = _router()
         divergent, detail = await _ws_handshake(router, host=subdomain, origin=origin)
@@ -3297,9 +3333,13 @@ def _recording_websocket_application(reached: list[str]):
     ):
         reached.append(scope["path"])
         assert (await receive())["type"] == "websocket.connect"
-        # basedpyright: asgiref's event TypedDicts require keys the ASGI spec makes optional;
-        # the server accepts the message without them
-        await send({"type": "websocket.accept", "subprotocol": next(iter(scope["subprotocols"]))})  # pyright: ignore[reportArgumentType]
+        await send(
+            {
+                "type": "websocket.accept",
+                "subprotocol": next(iter(scope["subprotocols"])),
+                "headers": [],
+            },
+        )
 
     return application
 
@@ -5299,10 +5339,17 @@ async def test_close_observes_an_already_cancelled_attempt_as_abandoned():
     await _discard(starter)
 
 
+def _is_revalidating_consumer_class(
+    consumer_class: "type[GraphQLWSConsumer]",
+) -> TypeGuard["type[RevalidatingGraphQLWSConsumer]"]:
+    """Whether ``consumer_class`` takes the ``revalidation_window`` initkwarg the factory adds."""
+    return "revalidation_window" in inspect.signature(consumer_class).parameters
+
+
 def _consumer_with_a_controlled_teardown(
     monkeypatch: pytest.MonkeyPatch,
     teardown: Callable[[object, int], Awaitable[None]],
-) -> "GraphQLWSConsumer":
+) -> "RevalidatingGraphQLWSConsumer":
     """Instantiate the generated consumer with ``teardown`` as upstream's ``disconnect``.
 
     Patched on upstream's own consumer class, which is where the generated
@@ -5314,9 +5361,8 @@ def _consumer_with_a_controlled_teardown(
     monkeypatch.setattr(upstream_consumer, "disconnect", teardown, raising=False)
     consumer_class = _mounted_ws_callback(_router()).consumer_class
     assert issubclass(consumer_class, upstream_consumer)
-    # basedpyright: the package consumer adds the revalidation_window initkwarg, but the mount
-    # declares it as upstream's GraphQLWSConsumer, whose __init__ lacks it
-    return consumer_class(schema=SCHEMA, revalidation_window=0.0)  # pyright: ignore[reportCallIssue]
+    assert _is_revalidating_consumer_class(consumer_class)
+    return consumer_class(schema=SCHEMA, revalidation_window=0.0)
 
 
 async def test_cancelling_the_teardown_ends_the_close_attempt_instead_of_orphaning_it():
@@ -5392,10 +5438,9 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(
         teardown_reached.set()
 
     consumer = _consumer_with_a_controlled_teardown(monkeypatch, cancellable_teardown)
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)  # pyright: ignore[reportAttributeAccessIssue]
-    attempt = consumer._revocation.attempt  # pyright: ignore[reportAttributeAccessIssue]
+    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)
+    attempt = consumer._revocation.attempt
+    assert attempt is not None
 
     disconnecting = asyncio.create_task(consumer.disconnect(1000))
     await _reached(teardown_reached, "the generated disconnect never delegated to upstream")
@@ -5406,13 +5451,9 @@ async def test_a_cancelled_disconnect_leaves_no_task_retaining_the_connection(
         await disconnecting
 
     assert attempt.done() and attempt.cancelled()
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    assert consumer._revocation.state == consumers_module._REVOCATION_ABANDONED  # pyright: ignore[reportAttributeAccessIssue]
+    assert consumer._revocation.state == consumers_module._REVOCATION_ABANDONED
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    await consumer._revocation.settle()  # pyright: ignore[reportAttributeAccessIssue]
+    await consumer._revocation.settle()
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
     await _discard(starter)
 
@@ -5451,10 +5492,9 @@ async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(
             raise
 
     consumer = _consumer_with_a_controlled_teardown(monkeypatch, parked_teardown)
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)  # pyright: ignore[reportAttributeAccessIssue]
-    attempt = consumer._revocation.attempt  # pyright: ignore[reportAttributeAccessIssue]
+    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)
+    attempt = consumer._revocation.attempt
+    assert attempt is not None
 
     disconnecting = asyncio.create_task(consumer.disconnect(1000))
     await _reached(teardown_reached, "the generated disconnect never delegated to upstream")
@@ -5468,9 +5508,7 @@ async def test_a_teardown_cancelled_before_it_returns_still_settles_the_close(
         await disconnecting
 
     assert attempt.done() and not attempt.cancelled()
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED  # pyright: ignore[reportAttributeAccessIssue]
+    assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
     await starter
 
@@ -5503,17 +5541,14 @@ async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(
         raise RuntimeError("upstream teardown failed")
 
     consumer = _consumer_with_a_controlled_teardown(monkeypatch, failing_teardown)
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)  # pyright: ignore[reportAttributeAccessIssue]
-    attempt = consumer._revocation.attempt  # pyright: ignore[reportAttributeAccessIssue]
+    websocket, starter = await _revocation_with_a_parked_attempt(consumer._revocation)
+    attempt = consumer._revocation.attempt
+    assert attempt is not None
 
     disconnecting = asyncio.create_task(consumer.disconnect(1000))
     await _reached(teardown_reached, "the generated disconnect never delegated to upstream")
     await _wait_until(
-        # basedpyright: the package consumer adds the _revocation slot, but the mount declares it
-        # as upstream's GraphQLWSConsumer, which lacks it
-        lambda: consumer._revocation.attempt is attempt and websocket.entered.is_set(),  # pyright: ignore[reportAttributeAccessIssue]
+        lambda: consumer._revocation.attempt is attempt and websocket.entered.is_set(),
         lambda: "the settlement never reached the parked attempt",
         tries=5,
     )
@@ -5524,9 +5559,7 @@ async def test_a_teardown_that_raises_still_settles_the_close_and_propagates(
         await disconnecting
 
     assert attempt.done() and not attempt.cancelled()
-    # basedpyright: the package consumer adds the _revocation slot, but the mount declares it as
-    # upstream's GraphQLWSConsumer, which lacks it
-    assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED  # pyright: ignore[reportAttributeAccessIssue]
+    assert consumer._revocation.state == consumers_module._REVOCATION_CLOSED
     assert websocket.closes == [(_REVOKED_CLOSE_CODE, _REVOKED_CLOSE_REASON)]
     await starter
 
@@ -5786,9 +5819,7 @@ def test_the_stop_aware_schema_covers_every_upstream_schema_read():
         f"_StopAwareSchema does not cover: {uncovered}."
     )
 
-    # basedpyright: the path under test never reads the consumer; _StopAwareSchema types the
-    # parameter as _RevocationOwner
-    wrapper = consumers_module._StopAwareSchema(SCHEMA, None)  # pyright: ignore[reportArgumentType]
+    wrapper = consumers_module._StopAwareSchema(SCHEMA, _UnreadRevocationOwner())
     # Every name the wrapper claims is a name it really intercepts, whether or not
     # the installed release reads it: a covered-but-delegating entry would be a
     # silent bypass with a reassuring docstring.
@@ -5844,14 +5875,12 @@ async def test_a_streamed_value_the_policy_cannot_mask_reaches_the_transport_unc
         yield unrenderable
         yield maskable
 
-    consumer = SimpleNamespace(_revocation=SimpleNamespace(revoked=False))
+    consumer = _ConsumerState()
     delivered = [
         result
         async for result in consumers_module._stop_aware_results(
             source(),
-            # basedpyright: a stand-in consumer carrying only the slots the code under test reads;
-            # _stop_aware_results types the parameter as _RevocationOwner
-            consumer,  # pyright: ignore[reportArgumentType]
+            consumer,
             _masking_schema(),
         )
     ]
@@ -6328,15 +6357,8 @@ async def test_actor_without_is_authenticated_attribute_degrades_safely_to_unaut
     class CustomActor:
         pass
 
-    class MockConsumer:
-        def __init__(self, user: object):
-            self.scope = {"user": user}
-            self.revalidation_window = 0.0
-
-    consumer = MockConsumer(CustomActor())
-    # basedpyright: a stand-in consumer carrying only the slots the code under test reads;
-    # _actor_is_current types the parameter as _RevalidatedConsumer
-    assert await consumers_module._actor_is_current(consumer) is True  # pyright: ignore[reportArgumentType]
+    consumer = _ConsumerState({"user": CustomActor()})
+    assert await consumers_module._actor_is_current(consumer) is True
 
 
 # ---------------------------------------------------------------------------

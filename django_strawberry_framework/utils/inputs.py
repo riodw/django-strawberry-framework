@@ -1064,6 +1064,15 @@ def build_strawberry_input_class(
                 "once; a later field would silently overwrite the earlier field.",
             )
         requested_name = kwargs.get("name")
+        field_description = kwargs.pop("description", None)
+        if (requested_name is not None and not isinstance(requested_name, str)) or (
+            field_description is not None and not isinstance(field_description, str)
+        ):
+            raise ConfigurationError(
+                f"Generated input {name!r} field {python_attr!r} takes a string name and "
+                f"description; got {_safe_type_name(requested_name)} and "
+                f"{_safe_type_name(field_description)}.",
+            )
         graphql_name = (
             requested_name if requested_name is not None else graphql_camel_name(python_attr)
         )
@@ -1074,27 +1083,21 @@ def build_strawberry_input_class(
                 f"{python_attr!r} to the same GraphQL field name {graphql_name!r}; one would "
                 "silently overwrite the other.",
             )
-        kwargs["name"] = graphql_name
         seen_graphql_names[graphql_name] = python_attr
         # The PRESENCE of ``default`` (not its value) decides required-vs-optional:
         # a required field gets NO class default at all, so ``None`` is a legal
         # explicit default for an optional field rather than the required sentinel.
         has_default = "default" in kwargs
         default = kwargs.pop("default", None)
-        # basedpyright: the name / description values come from a caller's ``object`` mapping
-        # and are forwarded unchecked into strawberry.field's typed keywords
-        strawberry_field_kwargs: dict[str, Any] = {"name": kwargs.pop("name")}  # pyright: ignore[reportExplicitAny]
-        if "description" in kwargs:
-            strawberry_field_kwargs["description"] = kwargs.pop("description")
         annotations[python_attr] = annotation
         # Every field carries a pinned ``name``, so it always gets a
         # ``strawberry.field``; pass ``default`` only when one was supplied so
         # a required field (e.g. a required FK ``categoryId``) stays non-null
         # and coercion rejects omission.
         namespace[python_attr] = (
-            strawberry.field(default=default, **strawberry_field_kwargs)
+            strawberry.field(default=default, name=graphql_name, description=field_description)
             if has_default
-            else strawberry.field(**strawberry_field_kwargs)
+            else strawberry.field(name=graphql_name, description=field_description)
         )
     cls = type(name, (), namespace)
     # basedpyright: strawberry.input's signature returns its argument's type unchanged, so the

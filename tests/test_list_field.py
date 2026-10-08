@@ -69,7 +69,7 @@ from django.db.models import QuerySet, Value
 from django.db.models.functions import Lower, Now, Random, RowNumber
 from django.db.models.sql.compiler import SQLCompiler
 from django.test import RequestFactory
-from graphql import GraphQLError, GraphQLResolveInfo
+from graphql import GraphQLError
 from strawberry.schema_directive import Location as _DirectiveLocation
 from strawberry.schema_directive import schema_directive as _schema_directive
 from strawberry.types import Info
@@ -125,20 +125,6 @@ def _as_strawberry_info(stand_in: object) -> Info[object, object]:
     # basedpyright: a deliberately partial or hostile info shape is the input under test; the
     # list-field helpers type info as a concrete Strawberry Info
     return stand_in  # pyright: ignore[reportReturnType]
-
-
-def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
-    """Hand a duck-typed info to the optimizer hook that takes a graphql-core info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads;
-    # DjangoOptimizerExtension._optimize types info as graphql-core's GraphQLResolveInfo
-    return stand_in  # pyright: ignore[reportReturnType]
-
-
-def _as_orderset_class(cls: type[object]) -> type[OrderSet]:
-    """Hand a plain class to the capture scope that takes an ``OrderSet`` class."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # _order_normalization_scope types the parameter as type[OrderSet]
-    return cls  # pyright: ignore[reportReturnType]
 
 
 @pytest.fixture(autouse=True)
@@ -913,8 +899,7 @@ def test_the_capture_scope_stays_closed_for_shapes_the_offset_guard_cannot_use(s
     from django_strawberry_framework.list_field import _order_normalization_scope
     from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 
-    @_as_orderset_class
-    class SomeOrder:
+    class SomeOrder(OrderSet):
         pass
 
     def _record(
@@ -950,8 +935,7 @@ def test_the_capture_scope_opens_for_a_positive_offset_with_an_orderset():
     from django_strawberry_framework.list_field import _order_normalization_scope
     from django_strawberry_framework.orders.sets import _ORDER_NORMALIZATION_CAPTURE
 
-    @_as_orderset_class
-    class SomeOrder:
+    class SomeOrder(OrderSet):
         pass
 
     args_record = _ListArguments(
@@ -1685,7 +1669,8 @@ def test_list_field_optimizer_adapter_unwrap_rewrap_and_early_returns():
 
     # 1. Non-adapted queryset stays non-adapted
     qs = Category.objects.all()
-    info_unresolved = _as_resolve_info(SimpleNamespace(field_name="cats", return_type=object()))
+    # The default probe field returns ``String``: no ``DjangoType`` to resolve a model from.
+    info_unresolved = make_info(field_name="cats")._raw_info
     out1 = ext._optimize(qs, info_unresolved)
     assert not unwrap_async_queryset_adapter(out1)[1]
     assert out1 is qs
@@ -1887,9 +1872,7 @@ def test_order_term_classifier_rejects_a_non_expression_term():
     """
     from django_strawberry_framework.list_field import _is_deterministic_order_term
 
-    # basedpyright: the path under test never reads the query; _is_deterministic_order_term types
-    # the parameter as Query
-    assert _is_deterministic_order_term(SimpleNamespace(), 42) is False  # pyright: ignore[reportArgumentType]
+    assert _is_deterministic_order_term(Category.objects.all().query, 42) is False
 
 
 def test_order_term_classifier_refuses_a_relation_ordering_cycle(monkeypatch: pytest.MonkeyPatch):
@@ -2262,24 +2245,13 @@ def test_is_model_default_ordering_active_exact_bool_identity(monkeypatch: pytes
     from django_strawberry_framework.list_field import _is_model_default_ordering_active
 
     monkeypatch.setattr(Category._meta, "ordering", ("name",))
-    query_mock = SimpleNamespace(
-        default_ordering=1,
-        order_by=(),
-        extra_order_by=(),
-        group_by=(),
-        annotations={},
-        extra={},
-        get_meta=lambda: Category._meta,
-    )
-    qs_mock = SimpleNamespace(model=Category, query=query_mock)
-    # basedpyright: a stand-in queryset carrying only the slots the code under test reads;
-    # _is_model_default_ordering_active types the parameter as QuerySet
-    assert _is_model_default_ordering_active(qs_mock) is False  # pyright: ignore[reportArgumentType]
+    queryset = Category.objects.all()
+    # A merely truthy value no queryset pipeline produces: planted past the typed attribute.
+    vars(queryset.query)["default_ordering"] = 1
+    assert _is_model_default_ordering_active(queryset) is False
 
-    query_mock.default_ordering = True
-    # basedpyright: a stand-in queryset carrying only the slots the code under test reads;
-    # _is_model_default_ordering_active types the parameter as QuerySet
-    assert _is_model_default_ordering_active(qs_mock) is True  # pyright: ignore[reportArgumentType]
+    queryset.query.default_ordering = True
+    assert _is_model_default_ordering_active(queryset) is True
 
 
 def test_list_field_wire_name_resolution_falls_back_without_a_usable_definition():
@@ -2338,19 +2310,17 @@ def test_require_orderset_class_rejects_a_target_without_one():
     error inside the ordering call.
     """
 
-    class Orderless:
-        __django_strawberry_definition__ = SimpleNamespace(orderset_class=None)
+    class Orderless(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
-    # basedpyright: a stand-in definition carrying only the slots the code under test reads;
-    # _orderset_class_from_definition types the parameter as DjangoTypeDefinition
-    assert _orderset_class_from_definition(Orderless.__django_strawberry_definition__) is None  # pyright: ignore[reportArgumentType]
+    assert _orderset_class_from_definition(Orderless.__django_strawberry_definition__) is None
     with pytest.raises(
         ConfigurationError,
         match=r"Field target Orderless has no orderset_class configured\.",
     ):
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # require_orderset_class types the parameter as type[DjangoType]
-        require_orderset_class(Orderless, None)  # pyright: ignore[reportArgumentType]
+        require_orderset_class(Orderless, None)
 
 
 @pytest.mark.django_db

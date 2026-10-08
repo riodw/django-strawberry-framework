@@ -2197,11 +2197,11 @@ class FilterSet(
             and identity_policy_field
         ):
             effective_origin = "override_generated"
+        model = cls._meta.model
         framework_added_distinct = (
-            # basedpyright: generation runs only for a model-backed set; upstream ``get_filters``
-            # returns the declared filters alone when ``Meta.model`` is unset. It rejects the
-            # ``None`` arm of ``Meta.model``
-            path_traverses_to_many(cls._meta.model, field_name)  # pyright: ignore[reportArgumentType]
+            # A set without ``Meta.model`` has no relation path to classify: no fan-out.
+            model is not None
+            and path_traverses_to_many(model, field_name)
             and generation_shape_capable
             and effective_origin == "framework_default"
         )

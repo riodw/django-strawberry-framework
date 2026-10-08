@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from typing import TypeAlias
 
+    from django.utils.functional import Promise
+
     from ..filters.sets import FilterSet
     from ..orders.sets import OrderSet
     from ..utils.typing import ModelField
@@ -169,7 +171,7 @@ class DjangoTypeDefinition:
     origin: type[DjangoType]
     model: type[models.Model]
     name: str | None
-    description: str | None
+    description: str | Promise | None
     fields_spec: tuple[str, ...] | Literal["__all__"] | None
     exclude_spec: tuple[str, ...] | None
     selected_fields: tuple[ModelField, ...]

@@ -23,7 +23,6 @@ nested ``pageInfo``, and shipped SDL field presence live in
 """
 
 import inspect
-from types import SimpleNamespace
 
 import pytest
 import pytest_django
@@ -61,17 +60,21 @@ from tests._info import make_info
 
 
 def _as_django_type(cls: type[object]) -> type[DjangoType]:
-    """Hand a plain stand-in class to a seam that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # registry, teardown and N+1 seams type the parameter as type[DjangoType]
+    """Hand a plain class whose ``__annotations__`` dict the test controls to a teardown seam."""
+    # basedpyright: a class carrying no definition whose ``__annotations__`` dict identity is the
+    # input under test (a declared DjangoType owns its own); the teardown seam types the
+    # parameter as type[DjangoType]
     return cls  # pyright: ignore[reportReturnType]
 
 
-def _as_window_rows(*rows: object) -> list[djmodels.Model]:
-    """Hand stand-in window rows to ``_WindowedConnectionRows``."""
-    # basedpyright: a stand-in row carrying only the window columns the code under test reads;
-    # _WindowedConnectionRows types rows as list[Model]
-    return list(rows)  # pyright: ignore[reportReturnType]
+def _window_rows(*row_numbers: int) -> list[djmodels.Model]:
+    """Real ``Book`` rows carrying only the window row-number annotation, as Django sets it."""
+    rows: list[djmodels.Model] = []
+    for row_number in row_numbers:
+        row = Book()
+        vars(row)["_dst_row_number"] = row_number
+        rows.append(row)
+    return rows
 
 
 def _synthesized_field() -> StrawberryField:
@@ -521,14 +524,13 @@ def test_relation_connection_teardown_restores_owned_annotations_in_place():
     """Teardown preserves the annotation-dict identity held by consumer tooling."""
     annotations: dict[str, object] = {"items": list[Item]}
 
+    field_obj = _synthesized_field()
+
     @_as_django_type
     class CategoryType:
         __annotations__ = annotations
+        items_connection = field_obj
 
-    field_obj = _synthesized_field()
-    # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
-    # restores; the class declares no such attribute
-    CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
     from tests._definition import make_definition
 
     definition = make_definition(
@@ -569,14 +571,13 @@ def test_relation_connection_teardown_inverts_a_replaced_annotations_dict():
     synthesis_time_annotations: dict[str, object] = {"items": list[Item]}
     replaced = {"name": str, "items_connection": object}
 
+    field_obj = _synthesized_field()
+
     @_as_django_type
     class CategoryType:
         __annotations__ = replaced
+        items_connection = field_obj
 
-    field_obj = _synthesized_field()
-    # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
-    # restores; the class declares no such attribute
-    CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
     from tests._definition import make_definition
 
     definition = make_definition(
@@ -611,14 +612,13 @@ def test_relation_connection_teardown_keeps_a_present_relation_annotation():
     consumer_items = object()
     replaced = {"items": consumer_items, "items_connection": object}
 
+    field_obj = _synthesized_field()
+
     @_as_django_type
     class CategoryType:
         __annotations__ = replaced
+        items_connection = field_obj
 
-    field_obj = _synthesized_field()
-    # basedpyright: the synthesized connection field is planted on the stand-in class the teardown
-    # restores; the class declares no such attribute
-    CategoryType.items_connection = field_obj  # pyright: ignore[reportAttributeAccessIssue]
     from tests._definition import make_definition
 
     definition = make_definition(
@@ -2370,9 +2370,10 @@ def test_strictness_silent_when_planned():
     from django_strawberry_framework.optimizer.plans import resolver_key
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    @_as_django_type
-    class GenreType:
-        pass
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
 
     # The walker keys a planned connection under (declaring type, RELATION FIELD
     # NAME, runtime path) - matched here at resolve time off ``info.path``.
@@ -2469,8 +2470,6 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
     guard still fires here; checked before any edge is built, so a stub ``cls``
     proves the early return.
     """
-    from types import SimpleNamespace
-
     from django_strawberry_framework.connection import (
         _resolve_from_window,
         _WindowedConnectionRows,
@@ -2481,17 +2480,12 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
     # Plain forward page, ``totalCount`` requested, count annotation absent: the
     # count cannot be fabricated, so fall back per-parent.
     window = _WindowedConnectionRows(
-        rows=_as_window_rows(
-            SimpleNamespace(_dst_row_number=1),
-            SimpleNamespace(_dst_row_number=2),
-        ),
+        rows=_window_rows(1, 2),
         fallback=lambda: None,
     )
     assert (
         _resolve_from_window(
-            # basedpyright: the path under test returns before reading cls; _resolve_from_window
-            # types the parameter as type[DjangoConnection]
-            object,  # pyright: ignore[reportArgumentType]
+            DjangoConnection,
             window,
             info=inert_info,
             offset=0,
@@ -2506,14 +2500,12 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
     # cannot be inferred. (The SAME shape count-FREE is now SERVED, not dropped -
     # see the live edges-only / unbounded overshoot pins.)
     marker_only = _WindowedConnectionRows(
-        rows=_as_window_rows(SimpleNamespace(_dst_row_number=1)),
+        rows=_window_rows(1),
         fallback=lambda: None,
     )
     assert (
         _resolve_from_window(
-            # basedpyright: the path under test returns before reading cls; _resolve_from_window
-            # types the parameter as type[DjangoConnection]
-            object,  # pyright: ignore[reportArgumentType]
+            DjangoConnection,
             marker_only,
             info=inert_info,
             offset=5,
@@ -2661,7 +2653,7 @@ def _windowed_book_connection_class(
 #: A count-free plain ``first: 2`` window row: with ``totalCount`` observed and no
 #: count annotation, ``_resolve_from_window`` refuses it (the conditional-count
 #: drift guard).
-_COUNT_LESS_WINDOW_ROWS = _as_window_rows(SimpleNamespace(_dst_row_number=1))
+_COUNT_LESS_WINDOW_ROWS = _window_rows(1)
 
 
 @pytest.mark.django_db

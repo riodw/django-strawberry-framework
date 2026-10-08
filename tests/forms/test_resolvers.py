@@ -32,7 +32,6 @@ from collections.abc import Iterator
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any
-from unittest import mock
 
 import pytest
 import strawberry
@@ -1013,11 +1012,17 @@ def test_plain_form_pipeline_rides_shared_write_skeleton(monkeypatch: pytest.Mon
         seen["tail_step"] = tail_step
         return "ridden"
 
+    class PlainForm(forms.Form):
+        name = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = PlainForm
+            permission_classes = []
+
     monkeypatch.setattr(form_resolvers, "run_write_pipeline_sync", fake_pipeline)
     result = form_resolvers._run_form_pipeline_sync(
-        # basedpyright: a stand-in mutation class carrying only the slots the code under test
-        # reads; _run_form_pipeline_sync types the parameter as _FormMutationClass
-        mock.Mock(_primary_type=None),  # pyright: ignore[reportArgumentType]
+        Submit,
         info=unread_info(),
         data="data",
         id="unset-id",
@@ -1610,23 +1615,27 @@ def test_partial_update_reconstruct_with_dangling_fk_target():
     assert data.get("category") in (None, 999999)
 
 
-def test_to_form_key_value_handles_serializable_value_exceptions():
+def test_to_form_key_value_handles_serializable_value_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from django.core.exceptions import FieldDoesNotExist
 
     from django_strawberry_framework.forms.resolvers import _to_form_key_value
 
-    class FakeField:
-        to_field_name = "invalid_attr"
+    field = forms.ModelChoiceField(
+        queryset=library_models.Genre.objects.all(),
+        to_field_name="invalid_attr",
+    )
+    row = library_models.Genre(pk=42)
 
-    class FakeObj:
-        pk = 42
+    # An attribute the row lacks: serializable_value raises AttributeError.
+    assert _to_form_key_value(row, field) == 42
 
-        def serializable_value(self, name: str):
-            raise FieldDoesNotExist("missing")
+    def _missing(self: library_models.Genre, name: str) -> object:
+        raise FieldDoesNotExist("missing")
 
-    # basedpyright: a stand-in row and form field carrying only the slots the code under test
-    # reads; _to_form_key_value types them as Model and forms.Field | None
-    assert _to_form_key_value(FakeObj(), FakeField()) == 42  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(library_models.Genre, "serializable_value", _missing)
+    assert _to_form_key_value(row, field) == 42
 
 
 def test_is_empty_form_value_handles_unhashable_and_typeerror():
@@ -1662,9 +1671,7 @@ def test_decode_form_relation_multi_rejects_non_collection_sequences():
         val, err = _decode_form_relation_multi(
             bad,
             graphql_name="genres",
-            # basedpyright: the path under test rejects the container before reading the related
-            # model; _decode_form_relation_multi types the parameter as type[Model]
-            related_model=None,  # pyright: ignore[reportArgumentType]
+            related_model=library_models.Genre,
             form_field=forms.ModelMultipleChoiceField(queryset=None),
             info=unread_info(),
         )
@@ -1759,49 +1766,27 @@ def test_decode_form_relation_multi_materializes_before_any_visibility_query():
     assert ctx.captured_queries == []
 
 
-def test_reconstruct_partial_data_m2m_does_not_exist():
+def test_reconstruct_partial_data_m2m_does_not_exist(monkeypatch: pytest.MonkeyPatch):
     from django.core.exceptions import ObjectDoesNotExist
 
     from django_strawberry_framework.forms.resolvers import _reconstruct_partial_data
 
-    class FakeModelOpts:
-        many_to_many = [SimpleNamespace(name="tags")]
-        fields = []
-        concrete_fields = []
-        private_fields = []
-        concrete_model = None
+    def _dangling(self: library_models.Book) -> object:
+        raise ObjectDoesNotExist("dangling")
 
-    class FakeInstance:
-        pk = 1
-        _meta = FakeModelOpts
-        _state = type("State", (), {"adding": False})()
+    monkeypatch.setattr(library_models.Book, "genres", property(_dangling))
 
-        @property
-        def tags(self):
-            raise ObjectDoesNotExist("dangling")
-
-    class FakeForm(forms.ModelForm[product_models.Item]):
-        tags = forms.ModelMultipleChoiceField(queryset=product_models.Item.objects.all())
+    class BookForm(forms.ModelForm[library_models.Book]):
+        genres = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
 
         class Meta:
-            model = product_models.Item
-            fields = ("tags",)
+            model = library_models.Book
+            fields = ("genres",)
 
-    class FakeMutation:
-        _mutation_meta = SimpleNamespace(
-            model=SimpleNamespace(_meta=FakeModelOpts),
-            form_class=FakeForm,
-        )
-
+    class BookMutation(DjangoModelFormMutation):
         class Meta:
-            form_class = FakeForm
+            form_class = BookForm
             operation = "update"
 
-        @classmethod
-        def get_form_fields(cls):
-            return FakeForm.base_fields.items()
-
-    # basedpyright: a plain stand-in class and row carrying only the slots the code under test
-    # reads; _reconstruct_partial_data types them as _FormMutationClass and Model
-    data = _reconstruct_partial_data(FakeMutation, FakeInstance(), {})  # pyright: ignore[reportArgumentType]
-    assert "tags" not in data
+    data = _reconstruct_partial_data(BookMutation, library_models.Book(pk=1), {})
+    assert "genres" not in data

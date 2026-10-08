@@ -41,10 +41,9 @@ from django_strawberry_framework.utils.sessions import (
     ConnectionActorState,
     connection_actor_state,
 )
+from tests._idioms import websocket_scope
 
 if TYPE_CHECKING:
-    from strawberry.channels import GraphQLWSConsumer
-
     from django_strawberry_framework.consumers import RevalidatingGraphQLWSConsumer
 
 
@@ -494,7 +493,7 @@ async def test_send_revalidated_hostile_scope_fails_closed():
 class _RevalidatingAdapter(Protocol):
     """What the rows read off the generated adapter: its consumer and ``send_json``."""
 
-    ws_consumer: GraphQLWSConsumer
+    ws_consumer: RevalidatingGraphQLWSConsumer
 
     async def send_json(self, message: object) -> None: ...
 
@@ -552,9 +551,8 @@ async def test_send_json_hostile_message_get_fails_closed():
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
         from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
-        # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer
-        # type, whose scope Channels types as its _ChannelScope TypedDict; note_authenticated_actor
-        # types the parameter as MutableMapping[str, object]
+        # basedpyright: Channels types the consumer scope as its _ChannelScope TypedDict, while
+        # note_authenticated_actor types the parameter as MutableMapping[str, object]
         note_authenticated_actor(adapter.ws_consumer.scope)  # pyright: ignore[reportArgumentType]
 
         class HostileMessage(dict[str, object]):
@@ -580,9 +578,8 @@ async def test_send_json_non_dict_message_does_not_escape(message: object):
         adapter.ws_consumer.scope["user"] = Mock(is_authenticated=True)
         from django_strawberry_framework.utils.sessions import note_authenticated_actor
 
-        # basedpyright: build_revalidating_consumer_class returns upstream's GraphQLWSConsumer
-        # type, whose scope Channels types as its _ChannelScope TypedDict; note_authenticated_actor
-        # types the parameter as MutableMapping[str, object]
+        # basedpyright: Channels types the consumer scope as its _ChannelScope TypedDict, while
+        # note_authenticated_actor types the parameter as MutableMapping[str, object]
         note_authenticated_actor(adapter.ws_consumer.scope)  # pyright: ignore[reportArgumentType]
         await adapter.send_json(message)
         assert consumer._revocation.revoked is True
@@ -912,9 +909,8 @@ async def test_send_json_control_frame_unreadable_revoked_flag_suppresses_the_fr
         def revoked(self):
             raise ValueError("hostile revoked")
 
-    # basedpyright: the hostile revocation is the input under test;
-    # build_revalidating_consumer_class returns upstream's GraphQLWSConsumer type, which lacks the
-    # _revocation slot
+    # basedpyright: the hostile revocation is the input under test, and it is not a
+    # _ConnectionRevocation
     adapter.ws_consumer._revocation = HostileRevocation()  # pyright: ignore[reportAttributeAccessIssue]
 
     with patch.object(
@@ -936,9 +932,8 @@ async def test_send_json_control_frame_cancellation_reading_revoked_is_re_raised
         def revoked(self):
             raise asyncio.CancelledError
 
-    # basedpyright: the cancelling revocation is the input under test;
-    # build_revalidating_consumer_class returns upstream's GraphQLWSConsumer type, which lacks the
-    # _revocation slot
+    # basedpyright: the cancelling revocation is the input under test, and it is not a
+    # _ConnectionRevocation
     adapter.ws_consumer._revocation = CancellingRevocation()  # pyright: ignore[reportAttributeAccessIssue]
 
     with pytest.raises(asyncio.CancelledError):
@@ -1088,8 +1083,8 @@ def test_resolved_window_huge_int_overflow_is_configuration_error():
 def test_host_validation_absent_headers_and_server_uses_defaults():
     """A scope with neither Host headers nor ``server`` reconstructs Django's literals."""
     scope: dict[str, object] = {}
-    # basedpyright: a stand-in scope carrying only the slots the code under test reads;
-    # _host_validation_request types the parameter as asgiref's WebSocketScope
+    # basedpyright: the absent keys (no headers, no server) are the input under test; asgiref's
+    # WebSocketScope declares every key required
     req = cmod._host_validation_request(scope)  # pyright: ignore[reportArgumentType]
     assert req.META["SERVER_NAME"] == "unknown"
     assert req.META["SERVER_PORT"] == "0"
@@ -1098,19 +1093,15 @@ def test_host_validation_absent_headers_and_server_uses_defaults():
 
 def test_host_validation_duplicate_hosts_are_comma_joined():
     """Two Host headers become Django's comma-joined form, not a silently picked one."""
-    scope = {"headers": [(b"host", b"a.com"), (b"host", b"b.com")], "server": ("x", 80)}
-    # basedpyright: a stand-in scope carrying only the slots the code under test reads;
-    # _host_validation_request types the parameter as asgiref's WebSocketScope
-    req = cmod._host_validation_request(scope)  # pyright: ignore[reportArgumentType]
+    scope = websocket_scope([(b"host", b"a.com"), (b"host", b"b.com")], ("x", 80))
+    req = cmod._host_validation_request(scope)
     assert req.META["HTTP_HOST"] == "a.com,b.com"
 
 
 def test_host_validation_case_insensitive_header():
     """Header names are normalized; an odd-cased ``Host`` still projects."""
-    scope = {"headers": [(b"Host", b"example.com")], "server": ("x", 80)}
-    # basedpyright: a stand-in scope carrying only the slots the code under test reads;
-    # _host_validation_request types the parameter as asgiref's WebSocketScope
-    req = cmod._host_validation_request(scope)  # pyright: ignore[reportArgumentType]
+    scope = websocket_scope([(b"Host", b"example.com")], ("x", 80))
+    req = cmod._host_validation_request(scope)
     assert req.META["HTTP_HOST"] == "example.com"
 
 
@@ -1126,8 +1117,8 @@ def test_host_validation_case_insensitive_header():
 def test_host_validation_server_absent_vs_null(server: object):
     """A falsy ``scope['server']`` uses the same ``unknown`` reconstruction as absence."""
     scope = {"headers": [], "server": server}
-    # basedpyright: a stand-in scope carrying only the slots the code under test reads;
-    # _host_validation_request types the parameter as asgiref's WebSocketScope
+    # basedpyright: the ill-typed server value is the input under test; asgiref's WebSocketScope
+    # types server as tuple[str, int | None] | None
     req = cmod._host_validation_request(scope)  # pyright: ignore[reportArgumentType]
     assert req.META["SERVER_NAME"] == "unknown"
 

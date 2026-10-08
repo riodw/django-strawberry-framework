@@ -437,13 +437,15 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
     class _DuckRelated:
         pass
 
-    class _Set:
+    class _Set(ActiveInputPermissionMixin):
         check_name_permission = "not-a-callable"
 
+        @override
         @classmethod
         def _permission_walk_gates(cls, input_value: object):
             return ()
 
+        @override
         @classmethod
         def _active_permission_targets(
             cls,
@@ -451,26 +453,27 @@ def test_invoke_permission_method_rejects_a_non_callable_gate_slot():
         ) -> tuple[list[str], list[tuple[str, object, object]]]:
             return ["name"], [("duck", _DuckRelated(), {"x": 1})]
 
+        @override
         @staticmethod
         def _invoke_permission_method(
-            bare: object,
+            bare_instance: ActiveInputPermissionMixin,
             field_path: str,
             request: object,
             *,
             fired: set[str] | None = None,
         ):
-            invoke_permission_method(bare, field_path, request, fired=fired)
+            invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
     # ``bare`` must be an instance of the set class (the mixin's
     # ``object.__new__(cls)`` contract) for the class-declared gate slot to be
     # visible through instance attribute access.
     with pytest.raises(ConfigurationError, match="must be callable"):
         run_active_input_permission_checks(
-            _as_permission_set(_Set),
+            _Set,
             {"name": "x"},
             HttpRequest(),
             fired={},
-            bare=_as_bare(object.__new__(_Set)),
+            bare=object.__new__(_Set),
             target_attr="filterset",
             related_attr="related_filters",
         )
@@ -516,20 +519,6 @@ def test_invoke_permission_method_treats_a_none_slot_as_absent():
 # ---------------------------------------------------------------------------
 
 
-def _as_permission_set(cls: type[object]) -> type[ActiveInputPermissionMixin]:
-    """Hand a duck-typed set class to a permission walker that takes the facade mixin."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # permission walkers type the parameter as type[ActiveInputPermissionMixin]
-    return cls  # pyright: ignore[reportReturnType]
-
-
-def _as_bare(obj: object) -> ActiveInputPermissionMixin:
-    """Hand a duck-typed bare instance to run_active_input_permission_checks."""
-    # basedpyright: a stand-in bare instance carrying only the slots the code under test reads;
-    # run_active_input_permission_checks types the parameter as ActiveInputPermissionMixin
-    return obj  # pyright: ignore[reportReturnType]
-
-
 class _Rel:
     """Duck-typed RelatedFilter/RelatedOrder: an ORM ``field_name`` + a target set."""
 
@@ -571,12 +560,12 @@ def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
         related_filters = {"property": _Rel("property", Property, target_attr="filterset")}
         check_property_permission = _record_gate(calls, "Entry.property")
 
-    class Item:
+    class Item(ActiveInputPermissionMixin):
         related_filters = {"entries": _Rel("entries", Entry, target_attr="filterset")}
         check_entries_permission = _record_gate(calls, "Item.entries")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Item),
+        Item,
         "entries__property__category__name",
         HttpRequest(),
         fired={},
@@ -620,7 +609,7 @@ def test_walk_declared_relation_path_returns_the_hops_and_the_path_left_on_the_l
     class Version:
         related_filters: dict[str, object] = {}
 
-    class Item:
+    class Item(ActiveInputPermissionMixin):
         related_filters = {
             "category": _Rel("category", Category, target_attr="filterset"),
             "version": _Rel("target_version", Version, target_attr="filterset"),
@@ -662,14 +651,14 @@ def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name()
     class Shelf:
         check_code_permission = _record_gate(calls, "Shelf.code")
 
-    class Book:
+    class Book(ActiveInputPermissionMixin):
         related_filters = {
             "visible_shelves": _Rel("shelves", Shelf, target_attr="filterset"),
         }
         check_visible_shelves_permission = _record_gate(calls, "Book.visible_shelves")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Book),
+        Book,
         "shelves__code",
         HttpRequest(),
         fired={},
@@ -691,14 +680,14 @@ def test_fire_flat_relation_path_gates_fires_the_branch_gate_of_a_relation_key_l
     class Shelf:
         check_shelves_permission = _record_gate(calls, "Shelf.shelves")
 
-    class Book:
+    class Book(ActiveInputPermissionMixin):
         related_filters = {
             "visible_shelves": _Rel("shelves", Shelf, target_attr="filterset"),
         }
         check_visible_shelves_permission = _record_gate(calls, "Book.visible_shelves")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Book),
+        Book,
         "shelves",
         HttpRequest(),
         fired={},
@@ -725,7 +714,7 @@ def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
     class TargetVersion:
         related_filters: dict[str, object] = {}
 
-    class Card:
+    class Card(ActiveInputPermissionMixin):
         related_filters = {
             "milestone": _Rel(
                 "target_version__milestone",
@@ -741,7 +730,7 @@ def test_fire_flat_relation_path_gates_prefers_composite_branch_prefix():
         check_milestone_permission = _record_gate(calls, "Card.milestone")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Card),
+        Card,
         "target_version__milestone__key",
         HttpRequest(),
         fired={},
@@ -755,12 +744,12 @@ def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop():
     """A relation hop with no declared RelatedFilter stops the walk (no guessing)."""
     calls: list[str] = []
 
-    class Item:
+    class Item(ActiveInputPermissionMixin):
         related_filters: dict[str, object] = {}  # no ``author`` RelatedFilter declared
         check_author_permission = _record_gate(calls, "Item.author")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Item),
+        Item,
         "author__name",
         HttpRequest(),
         fired={},
@@ -780,14 +769,14 @@ def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
     class Category:
         check_name_permission = _record_gate(calls, "Category.name")
 
-    class Item:
+    class Item(ActiveInputPermissionMixin):
         related_filters = {"category": _Rel("category", Category, target_attr="filterset")}
         check_category_permission = _record_gate(calls, "Item.category")
 
     fired: dict[type, set[str]] = {}
     # First the flat leaf...
     _fire_flat_relation_path_gates(
-        _as_permission_set(Item),
+        Item,
         "category__name",
         HttpRequest(),
         fired=fired,
@@ -796,7 +785,7 @@ def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
     )
     # ...then the same path again (as the nested twin would, sharing ``fired``).
     _fire_flat_relation_path_gates(
-        _as_permission_set(Item),
+        Item,
         "category__name",
         HttpRequest(),
         fired=fired,
@@ -818,12 +807,12 @@ def test_fire_flat_relation_path_gates_works_for_the_order_family():
     class CategoryOrder:
         check_name_permission = _record_gate(calls, "CategoryOrder.name")
 
-    class ItemOrder:
+    class ItemOrder(ActiveInputPermissionMixin):
         related_orders = {"category": _Rel("category", CategoryOrder, target_attr="orderset")}
         check_category_permission = _record_gate(calls, "ItemOrder.category")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(ItemOrder),
+        ItemOrder,
         "category__name",
         HttpRequest(),
         fired={},
@@ -845,13 +834,13 @@ def test_fire_flat_relation_path_gates_falls_back_to_declared_attribute_when_fie
     class AuthorOrder:
         check_name_permission = _record_gate(calls, "AuthorOrder.name")
 
-    class BookOrder:
+    class BookOrder(ActiveInputPermissionMixin):
         # field_name is None (the default for RelatedOrder(Target))
         related_orders = {"author": _Rel(None, AuthorOrder, target_attr="orderset")}
         check_author_permission = _record_gate(calls, "BookOrder.author")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(BookOrder),
+        BookOrder,
         "author__name",
         HttpRequest(),
         fired={},
@@ -871,13 +860,13 @@ def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolv
     """
     calls: list[str] = []
 
-    class Item:
+    class Item(ActiveInputPermissionMixin):
         # ``category`` matches the hop but its target filterset is unresolved.
         related_filters = {"category": _Rel("category", None, target_attr="filterset")}
         check_category_permission = _record_gate(calls, "Item.category")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Item),
+        Item,
         "category__name",
         HttpRequest(),
         fired={},
@@ -892,12 +881,12 @@ def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf():
     """A single-segment source path (no relation hop) fires nothing here."""
     calls: list[str] = []
 
-    class Item:
+    class Item(ActiveInputPermissionMixin):
         related_filters: dict[str, object] = {}
         check_name_permission = _record_gate(calls, "Item.name")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(Item),
+        Item,
         "name",
         HttpRequest(),
         fired={},
@@ -917,12 +906,12 @@ def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_str
         def field_name(self):
             raise RuntimeError("field name exploded")
 
-    class _UnreadableSet:
+    class _UnreadableSet(ActiveInputPermissionMixin):
         related_filters = {"category": _UnreadableRelation()}
 
     with pytest.raises(ConfigurationError, match="unreadable related branch"):
         _fire_flat_relation_path_gates(
-            _as_permission_set(_UnreadableSet),
+            _UnreadableSet,
             "category__name",
             HttpRequest(),
             fired={},
@@ -932,12 +921,12 @@ def test_flat_relation_gate_rejects_unreadable_branch_metadata_and_skips_non_str
 
     calls: list[str] = []
 
-    class _NonStringSet:
+    class _NonStringSet(ActiveInputPermissionMixin):
         related_filters = {"category": _Rel(123, object(), target_attr="filterset")}
         check_category_permission = _record_gate(calls, "_NonStringSet.category")
 
     _fire_flat_relation_path_gates(
-        _as_permission_set(_NonStringSet),
+        _NonStringSet,
         "category__name",
         HttpRequest(),
         fired={},
@@ -958,7 +947,7 @@ def test_related_permission_declarations_fail_closed_for_malformed_metadata():
                 raise RuntimeError("related descriptor exploded")
             return super().__getattribute__(name)
 
-    class _UnreadableSet(metaclass=_HostileMeta):
+    class _UnreadableSet(ActiveInputPermissionMixin, metaclass=_HostileMeta):
         pass
 
     class _NoneSet:
@@ -1019,11 +1008,13 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
 
     related_obj = type("Rel", (), {"orderset": _Child})()
 
-    class _Parent:
+    class _Parent(ActiveInputPermissionMixin):
+        @override
         @classmethod
         def _permission_walk_gates(cls, input_value: object):
             return ()
 
+        @override
         @classmethod
         def _active_permission_targets(
             cls,
@@ -1034,15 +1025,16 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
             # paths (repeated ``name`` -> must dedup) and the related branches.
             return ["name", "name"], [("child", related_obj, {"x": 1})]
 
+        @override
         @staticmethod
         def _invoke_permission_method(
-            bare: object,
+            bare_instance: ActiveInputPermissionMixin,
             field_path: str,
             request: object,
             *,
             fired: set[str] | None = None,
         ):
-            invoke_permission_method(bare, field_path, request, fired=fired)
+            invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
         def check_name_permission(self, request: object):
             calls.append("parent.name")
@@ -1053,11 +1045,11 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
     fired: dict[type, set[str]] = {}
     bare = object.__new__(_Parent)
     run_active_input_permission_checks(
-        _as_permission_set(_Parent),
+        _Parent,
         {"name": "v", "child": {"x": 1}},
         HttpRequest(),
         fired=fired,
-        bare=_as_bare(bare),
+        bare=bare,
         target_attr="orderset",
         related_attr="related_orders",
     )
@@ -1070,12 +1062,12 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
 
 
 def test_active_related_branches_empty_when_no_related_collection():
-    class _NoRel:
+    class _NoRel(ActiveInputPermissionMixin):
         pass
 
     assert (
         active_related_branches(
-            _as_permission_set(_NoRel),
+            _NoRel,
             {"a": 1},
             related_attr="related_orders",
         )
@@ -1092,13 +1084,15 @@ def test_run_active_input_permission_checks_caps_related_recursion():
     catchable ``ConfigurationError`` at the source.
     """
 
-    class _SelfRef:
+    class _SelfRef(ActiveInputPermissionMixin):
         _MAX_LOGIC_DEPTH = 2
 
+        @override
         @classmethod
         def _permission_walk_gates(cls, input_value: object):
             return ()
 
+        @override
         @classmethod
         def _active_permission_targets(
             cls,
@@ -1108,9 +1102,10 @@ def test_run_active_input_permission_checks_caps_related_recursion():
             # runtime shape of ``CardFilter.dependencies`` -> ``CardFilter``.
             return [], [("child", _rel, {"x": 1})]
 
+        @override
         @staticmethod
         def _invoke_permission_method(
-            bare: object,
+            bare_instance: ActiveInputPermissionMixin,
             field_path: str,
             request: object,
             *,
@@ -1118,6 +1113,7 @@ def test_run_active_input_permission_checks_caps_related_recursion():
         ):
             pass
 
+        @override
         @classmethod
         def _run_permission_checks(
             cls,
@@ -1125,14 +1121,15 @@ def test_run_active_input_permission_checks_caps_related_recursion():
             request: object,
             *,
             _fired: dict[type[object], set[str]] | None = None,
+            _bare: ActiveInputPermissionMixin | None = None,
             _depth: int = 0,
         ):
             run_active_input_permission_checks(
-                _as_permission_set(cls),
+                cls,
                 input_value,
                 request,
                 fired=_fired if _fired is not None else {},
-                bare=_as_bare(object.__new__(cls)),
+                bare=object.__new__(cls),
                 target_attr="child_set",
                 related_attr="related",
                 depth=_depth,
@@ -1154,11 +1151,11 @@ def test_active_permission_targets_excludes_logic_and_related_keys_from_the_leaf
     wrapper made every caller re-pass.
     """
 
-    class _Set:
+    class _Set(ActiveInputPermissionMixin):
         related_orders = {"shelf": object()}
 
     paths, branches = active_permission_targets(
-        _as_permission_set(_Set),
+        _Set,
         {"title": "asc", "shelf": {"code": "x"}, "and_": [{"title": "x"}]},
         field_specs={},
         related_attr="related_orders",
@@ -1235,11 +1232,13 @@ def test_related_depth_error_survives_hostile_child_qualname():
 
     related = type("Related", (), {"child_set": _Child})()
 
-    class _Parent:
+    class _Parent(ActiveInputPermissionMixin):
+        @override
         @classmethod
         def _permission_walk_gates(cls, input_value: object):
             return ()
 
+        @override
         @classmethod
         def _active_permission_targets(
             cls,
@@ -1249,11 +1248,11 @@ def test_related_depth_error_survives_hostile_child_qualname():
 
     with pytest.raises(ConfigurationError, match="nesting exceeded"):
         run_active_input_permission_checks(
-            _as_permission_set(_Parent),
+            _Parent,
             {"child": {}},
             HttpRequest(),
             fired={},
-            bare=_as_bare(object()),
+            bare=object.__new__(_Parent),
             target_attr="child_set",
             related_attr="related",
         )
@@ -1276,11 +1275,13 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
 
     related = type("Related", (), {"child_set": _ChildWithoutDepthCap})()
 
-    class _Parent:
+    class _Parent(ActiveInputPermissionMixin):
+        @override
         @classmethod
         def _permission_walk_gates(cls, input_value: object):
             return ()
 
+        @override
         @classmethod
         def _active_permission_targets(
             cls,
@@ -1294,11 +1295,11 @@ def test_run_active_input_permission_checks_falls_back_to_default_traversal_dept
         match="nesting exceeded the maximum traversal depth \\(8\\)",
     ):
         run_active_input_permission_checks(
-            _as_permission_set(_Parent),
+            _Parent,
             {"child": {}},
             HttpRequest(),
             fired={},
-            bare=_as_bare(object()),
+            bare=object.__new__(_Parent),
             target_attr="child_set",
             related_attr="related",
             depth=8,
@@ -1410,11 +1411,13 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
         # Does not define 'filterset' or 'target_attr'
         pass
 
-    class _SampleFilter:
+    class _SampleFilter(ActiveInputPermissionMixin):
+        @override
         @classmethod
         def _permission_walk_gates(cls, input_value: object):
             return ()
 
+        @override
         @classmethod
         def _active_permission_targets(
             cls,
@@ -1422,24 +1425,25 @@ def test_run_active_input_permission_checks_safely_handles_missing_target_attr()
         ) -> tuple[list[str], list[tuple[str, object, object]]]:
             return [], [("duck", _DuckRelatedObj(), {"sub": 1})]
 
+        @override
         @staticmethod
         def _invoke_permission_method(
-            bare: object,
-            field_name: str,
+            bare_instance: ActiveInputPermissionMixin,
+            field_path: str,
             request: object,
             *,
             fired: set[str] | None = None,
         ):
             if fired is not None:
-                fired.add(f"check_{field_name}_permission")
+                fired.add(f"check_{field_path}_permission")
 
     fired = {}
     run_active_input_permission_checks(
-        _as_permission_set(_SampleFilter),
+        _SampleFilter,
         {"duck": {"sub": 1}},
         object(),
         fired=fired,
-        bare=_as_bare(object()),
+        bare=object.__new__(_SampleFilter),
         target_attr="filterset",
         related_attr="related_filters",
     )

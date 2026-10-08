@@ -12,6 +12,7 @@ import strawberry
 from typing_extensions import override
 
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters.base import RelatedFilter
 from django_strawberry_framework.filters.sets import FilterSet
 from django_strawberry_framework.utils.input_values import (
     DEFAULT_SET_INPUT_TRAVERSAL_DEPTH,
@@ -71,23 +72,18 @@ def test_is_inactive_value_is_identity_based_not_truthiness():
 # ---------------------------------------------------------------------------
 
 
-class _Spec:
-    def __init__(self, path: str):
-        self.django_source_path = path
-
-
 def test_iter_active_fields_classifies_and_skips_inactive():
-    related_obj = object()
+    related_obj = RelatedFilter("ShelfFilter", field_name="shelf")
 
-    class _Set:
-        related_filters = {"shelf": related_obj}
+    class _Set(FilterSet):
+        shelf = related_obj
 
-    specs = {(_Set, "title"): _Spec("title"), (_Set, "shelf"): _Spec("shelf")}
+    specs: dict[tuple[type[FilterSet], str], GeneratedInputFieldSpec] = {
+        (_Set, "title"): GeneratedInputFieldSpec("title", "title", "title"),
+        (_Set, "shelf"): GeneratedInputFieldSpec("shelf", "shelf", "shelf"),
+    }
     config = SetInputTraversal(
-        # basedpyright: a stand-in field-spec map (a plain set class, plain specs) carrying only
-        # the slots the code under test reads; SetInputTraversal types the parameter as
-        # FieldSpecMap
-        field_specs=specs,  # pyright: ignore[reportArgumentType]
+        field_specs=specs,
         related_attr="related_filters",
         logic_keys=frozenset({"and_"}),
         unset_sentinel=strawberry.UNSET,

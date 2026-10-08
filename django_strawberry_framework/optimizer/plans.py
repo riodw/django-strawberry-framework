@@ -37,7 +37,7 @@ from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, ClassVar, TypeVar, cast
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Count, Prefetch, Q, Value, Window
+from django.db.models import Count, OrderBy, Prefetch, Q, Value, Window
 from django.db.models.functions import RowNumber
 from typing_extensions import override
 
@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 
     from django.db import models
     from django.db.models import QuerySet
-    from django.db.models.expressions import Combinable, Expression, F, OrderBy
+    from django.db.models.expressions import Combinable, Expression, F
     from django.db.models.options import Options
     from django.db.models.sql.query import Query
 
@@ -1273,8 +1273,9 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
     ``deterministic_order`` can therefore carry into a window:
 
     - a STRING ref (``"title"`` / ``"-title"``): the leading ``-`` toggles;
-    - an ``OrderBy``-like wrapper (it carries a ``descending`` flag): the flag
-      inverts and the explicit NULLS positioning swaps with it;
+    - an ``OrderBy``: a copy reversed by Django's own ``OrderBy.reverse_ordering``
+      (the method its compiler applies for ``standard_ordering=False``), so the
+      flag inverts and an explicit NULLS positioning swaps with it;
     - a BARE EXPRESSION (``Lower("title")``, ``Coalesce(...)``, a plain ``F``):
       it carries no direction of its own, which SQL reads as ascending, so the
       reverse is the expression sorted descending - ``expression.desc()``,
@@ -1283,8 +1284,8 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
       forward on that column, so a ``last: N`` window returned the partition's
       FIRST page under any expression ordering.
 
-    Raises ``OptimizerError`` for an entry with neither a ``descending`` flag
-    nor a callable ``desc()``: such a term cannot be reversed, and an
+    Raises ``OptimizerError`` for an entry that is neither an ``OrderBy`` nor
+    carries a callable ``desc()``: such a term cannot be reversed, and an
     unreversible window must fail loudly rather than silently serve the wrong
     end of the partition. ``OptimizerError`` is deliberately not a
     ``ValueError`` / ``TypeError``, so the walker's leave-unplanned pagination
@@ -1296,30 +1297,23 @@ def _reverse_order_by(order_by: Sequence[OrderEntry]) -> list[OrderEntry]:
         if isinstance(entry, str):
             reversed_order.append(entry[1:] if entry.startswith("-") else f"-{entry}")
             continue
-        descending = getattr(entry, "descending", None)
-        if descending is None:
-            # ``F.desc`` and ``Expression.desc`` both return an ``OrderBy``; the probe's
-            # ``None`` covers an entry that carries no ``desc`` at all.
-            desc: Callable[[], OrderBy] | None = getattr(entry, "desc", None)
-            if not callable(desc):
-                raise OptimizerError(
-                    f"Cannot reverse connection order entry {entry!r}: it carries neither a "
-                    "'descending' flag nor a callable 'desc()', so a backward (last-only) "
-                    "window cannot be expressed for it.",
-                )
-            reversed_order.append(desc())
+        if isinstance(entry, OrderBy):
+            # Django's own reversal, the one its compiler applies to an ``OrderBy`` for
+            # ``standard_ordering=False``: the flag flips and an explicit NULLS placement swaps.
+            clone = entry.copy()
+            clone.reverse_ordering()
+            reversed_order.append(clone)
             continue
-        # Only an ``OrderBy`` carries the ``descending`` flag read above.
-        clone = cast("OrderBy", entry.copy() if hasattr(entry, "copy") else entry)
-        clone.descending = not descending
-        nulls_first = getattr(clone, "nulls_first", None)
-        nulls_last = getattr(clone, "nulls_last", None)
-        if nulls_first is not None or nulls_last is not None:
-            # basedpyright: django-stubs types ``OrderBy.nulls_first`` / ``nulls_last`` as
-            # ``bool``; ``OrderBy.__init__`` stores ``None`` for the backend's default placement.
-            # It rejects ``None`` for both ``bool`` attributes
-            clone.nulls_first, clone.nulls_last = nulls_last, nulls_first  # pyright: ignore[reportAttributeAccessIssue]
-        reversed_order.append(clone)
+        # ``F.desc`` and ``Expression.desc`` both return an ``OrderBy``; the probe's
+        # ``None`` covers an entry that carries no ``desc`` at all.
+        desc: Callable[[], OrderBy] | None = getattr(entry, "desc", None)
+        if not callable(desc):
+            raise OptimizerError(
+                f"Cannot reverse connection order entry {entry!r}: it is neither an "
+                "'OrderBy' nor carries a callable 'desc()', so a backward (last-only) "
+                "window cannot be expressed for it.",
+            )
+        reversed_order.append(desc())
     return reversed_order
 
 

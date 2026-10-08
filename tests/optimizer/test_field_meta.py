@@ -21,6 +21,7 @@ from apps.library.models import (
     LendingDesk,
     MembershipCard,
     Patron,
+    PatronProfile,
     RepairTicket,
     TaggedItem,
     Venue,
@@ -535,24 +536,17 @@ def test_fk_id_elision_edge_cases():
     assert fm.fk_id_elision_eligible is True
 
     # Non-PK to_field: not eligible
-    fake_to_field_fk = SimpleNamespace(
-        name="author_code",
-        is_relation=True,
-        many_to_many=False,
-        one_to_many=False,
-        one_to_one=False,
-        attname="author_code_id",
-        related_model=Category,
-        target_field=SimpleNamespace(name="code", attname="code"),
-    )
-    fm_to_field = FieldMeta.from_django_field(_as_field(fake_to_field_fk))
-    assert fm_to_field.target_field_name == "code"
+    fm_to_field = FieldMeta.from_django_field(PatronProfile._meta.get_field("favorite_genre"))
+    assert fm_to_field.target_field_name == "name"
     assert fm_to_field.target_pk_name == "id"
     assert fm_to_field.fk_id_elision_eligible is False
 
     # Composite PK target (``tests/_relation_fixtures.py::RpCompositeParent``): not eligible
     assert has_composite_pk(RpCompositeParent) is True
 
+    # basedpyright: a plain forward FK to a composite-pk target does not exist in Django (system
+    # check fields.E347), so the duck FK is the only way to reach the has_composite_pk guard;
+    # FieldMeta.from_django_field types the parameter as a Django field
     fake_comp_fk = SimpleNamespace(
         name="comp_rel",
         is_relation=True,

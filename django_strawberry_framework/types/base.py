@@ -55,6 +55,7 @@ from typing import (
 )
 
 from django.db import models
+from django.utils.functional import Promise
 from strawberry import relay
 from strawberry.relay.types import NodeIDPrivate
 from strawberry.types.auto import StrawberryAuto
@@ -852,16 +853,11 @@ class DjangoType:
             required_overrides=validated.required_overrides,
             filesystem_path_fields=validated.filesystem_path_fields,
         )
-        # Read in the order the definition lists them: ``model`` before ``description``.
-        model = validated.model
-        # basedpyright: Meta.description reaches DjangoTypeDefinition.description (str | None)
-        # unvalidated; object needs a runtime check
-        description: Any = _meta_attr(meta, "description")  # pyright: ignore[reportExplicitAny]
         definition = DjangoTypeDefinition(
             origin=cls,
-            model=model,
+            model=validated.model,
             name=validated.name,
-            description=description,
+            description=validated.description,
             fields_spec=validated.fields_spec,
             exclude_spec=validated.exclude_spec,
             selected_fields=tuple(fields),
@@ -1327,6 +1323,7 @@ class _ValidatedMeta(NamedTuple):
     model: type[models.Model]
     interfaces: tuple[type[object], ...]
     name: str | None
+    description: str | Promise | None
     primary: bool
     optimizer_hints: dict[str, object]
     fields_spec: tuple[str, ...] | Literal["__all__"] | None
@@ -1411,6 +1408,20 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
             )
     else:
         name = None
+
+    raw_description = _meta_attr(meta, "description")
+    description: str | Promise | None
+    if raw_description is None or isinstance(raw_description, Promise):
+        # A lazy translation string stays lazy until finalize, which renders it once.
+        description = raw_description
+    elif isinstance(raw_description, str):
+        # A str subclass's own ``__str__`` is consumer code; keep the plain text it holds.
+        description = str.__str__(raw_description)
+    else:
+        raise ConfigurationError(
+            f"{model.__name__}.Meta.description must be a string or a lazy translation "
+            f"string; got {_safe_arg_repr(raw_description)}.",
+        )
 
     # ``meta.__dict__`` (this class's OWN keys only, no MRO walk) is
     # deliberate for the typo-guard below (the ``deferred`` / ``unknown``
@@ -1511,6 +1522,7 @@ def _validate_meta(cls: type[DjangoType], meta: object) -> _ValidatedMeta:
         model=model,
         interfaces=interfaces,
         name=name,
+        description=description,
         primary=primary,
         optimizer_hints=optimizer_hints,
         fields_spec=fields_spec,

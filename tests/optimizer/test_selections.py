@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
-from graphql import GraphQLResolveInfo, parse
+from graphql import parse
 from graphql.language.ast import (
     DocumentNode,
     FieldNode,
@@ -43,6 +43,7 @@ from django_strawberry_framework.optimizer.selections import (
     response_keys,
     should_include,
 )
+from tests._info import make_info
 
 if TYPE_CHECKING:
     from django_strawberry_framework.optimizer.selections import FragmentVisitKey
@@ -64,13 +65,6 @@ def _ast_selections(
         assert isinstance(selection, (FieldNode, InlineFragmentNode, FragmentSpreadNode))
         members.append(selection)
     return members
-
-
-def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
-    """Hand a duck-typed info to the AST adapter that takes a graphql-core resolve info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads;
-    # ast_to_converted_selections types info as graphql-core's GraphQLResolveInfo
-    return stand_in  # pyright: ignore[reportReturnType]
 
 
 def _as_strawberry_info(stand_in: object) -> Info[object, object]:
@@ -415,7 +409,7 @@ def test_ast_to_converted_selections_memoized_per_execution():
 
     doc = parse("{ items { name } books { title } }")
     field_nodes = _ast_selections(_operation(doc).selection_set.selections)
-    info = _as_resolve_info(SimpleNamespace(fragments={}, variable_values={}))
+    info = make_info()._raw_info
     single = field_nodes[:1]
 
     frame = begin_execution_frame({}, nested=False)
@@ -687,16 +681,13 @@ def test_ast_to_converted_selections_converts_anonymous_and_named_fragments():
         "} "
         "fragment Frag on Author { penName }",
     )
-    operation, fragment_def = doc.definitions
+    operation = doc.definitions[0]
     assert isinstance(operation, OperationDefinitionNode)
     field_nodes = _ast_selections(operation.selection_set.selections)
-    info = _as_resolve_info(
-        SimpleNamespace(
-            fragments={"Frag": fragment_def},
-            variable_values={"incl": True},
-            schema=None,
-        ),
-    )
+    info = make_info(
+        fragments="fragment Frag on Author { penName }",
+        variables={"incl": True},
+    )._raw_info
 
     converted = ast_to_converted_selections(info, field_nodes)
     assert len(converted) == 4

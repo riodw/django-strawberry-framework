@@ -12,12 +12,15 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
+from apps.library.models import Book
 from apps.products.models import Category, Entry, Item
 from apps.products.services import seed_data
 from django.db.models import Field, Model, Prefetch, QuerySet
 from graphql import GraphQLResolveInfo, OperationType
 from strawberry.relay.utils import to_base64
+from strawberry.schema.config import StrawberryConfig
 from strawberry.schema.name_converter import HasGraphQLName, NameConverter
+from strawberry.types.nodes import SelectedField, Selection
 from typing_extensions import override
 
 from django_strawberry_framework import DjangoType, OptimizerHint
@@ -56,6 +59,7 @@ from django_strawberry_framework.utils._queryset_private import (
     queryset_prefetch_lookups,
 )
 from django_strawberry_framework.utils.querysets import _COMBINED_WHAT
+from tests._info import make_info
 
 from ._link_models import LnkPairChild, LnkParent, LnkSlugChild
 
@@ -103,39 +107,19 @@ def _sel(
     )
 
 
-def _as_resolve_info(stand_in: object) -> GraphQLResolveInfo:
-    """Hand a duck-typed info to a planner entry point that takes a graphql-core resolve info."""
-    # basedpyright: a stand-in info carrying only the slots the code under test reads; the
-    # planner entry points type info as graphql-core's GraphQLResolveInfo
+def _as_partial_resolve_info(stand_in: object) -> GraphQLResolveInfo:
+    """Hand a partial info to a planner entry point that takes a graphql-core resolve info."""
+    # basedpyright: an info missing slots every real resolve info carries (an operation, a
+    # schema config) is the input under test: the planner's defensive arms must tolerate it;
+    # the planner entry points type info as graphql-core's GraphQLResolveInfo
     return stand_in  # pyright: ignore[reportReturnType]
 
 
-def _operation_resolve_info() -> GraphQLResolveInfo:
-    """Return the graphql-core resolve info of a real executing Strawberry operation.
-
-    A relation whose target declares ``get_queryset`` hands that hook the
-    resolver's ``strawberry.Info``, rebuilt from this raw info's schema and field
-    (``walker.py::_hook_info``), so a walk reaching such a hook needs the real
-    object rather than a stand-in.
-    """
-    captured: list[GraphQLResolveInfo] = []
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def probe(self, info: strawberry.Info) -> int:
-            captured.append(info._raw_info)
-            return 0
-
-    assert strawberry.Schema(query=Query).execute_sync("{ probe }").errors is None
-    (info,) = captured
-    return info
-
-
-def _as_django_type(cls: type[object]) -> type[DjangoType]:
-    """Hand a duck-typed stub class to a planner entry point that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # planner entry points type the parameter as type[DjangoType]
+def _as_definitionless_django_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a class that never went through ``DjangoType`` declaration to a planner entry point."""
+    # basedpyright: a class carrying no ``__django_strawberry_definition__`` is the input under
+    # test (the planner must tolerate a registered type with no definition); the planner entry
+    # points type the parameter as type[DjangoType]
     return cls  # pyright: ignore[reportReturnType]
 
 
@@ -404,7 +388,9 @@ def test_plan_relay_id_projects_attname_when_pk_is_relation():
         registry.clear()
 
 
-def test_plan_prefetches_relation_with_missing_related_model_defensively():
+def test_plan_prefetches_relation_with_missing_related_model_defensively(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Defensive branch: relation fields without related_model become string prefetches."""
 
     # Deliberately impossible in real Django; covers the defensive branch.
@@ -417,18 +403,16 @@ def test_plan_prefetches_relation_with_missing_related_model_defensively():
         one_to_many=False,
     )
 
-    class FakeModel:
-        _meta = SimpleNamespace(get_fields=lambda: [fake_field])
-
-    # basedpyright: a stand-in model carrying only the slots the code under test reads;
-    # plan_optimizations types the parameter as type[Model]
-    plan = plan_optimizations([_sel("generic")], FakeModel)  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(Category._meta, "get_fields", lambda: [fake_field])
+    plan = plan_optimizations([_sel("generic")], Category)
 
     assert plan.prefetch_related == ("generic",)
     assert plan.planned_resolver_keys == ("generic@generic",)
 
 
-def test_plan_select_relation_with_missing_related_model_is_not_elided():
+def test_plan_select_relation_with_missing_related_model_is_not_elided(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Defensive branch: FK-id elision is unsafe when related_model is missing."""
 
     fake_field = SimpleNamespace(
@@ -443,12 +427,8 @@ def test_plan_select_relation_with_missing_related_model_is_not_elided():
         auto_created=False,
     )
 
-    class FakeModel:
-        _meta = SimpleNamespace(get_fields=lambda: [fake_field])
-
-    # basedpyright: a stand-in model carrying only the slots the code under test reads;
-    # plan_optimizations types the parameter as type[Model]
-    plan = plan_optimizations([_sel("relation", selections=[_sel("id")])], FakeModel)  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(Category._meta, "get_fields", lambda: [fake_field])
+    plan = plan_optimizations([_sel("relation", selections=[_sel("id")])], Category)
 
     assert plan.select_related == ("relation",)
     assert plan.only_fields == ("relation_id",)
@@ -616,19 +596,15 @@ def test_name_resolution_defensively_skips_unusable_metadata():
 
 
 def _converter_info(name_converter: NameConverter | None = None) -> GraphQLResolveInfo:
-    """Build a plan-time ``info`` whose schema config carries a name converter."""
-    from strawberry.schema.config import StrawberryConfig
+    """Build a plan-time ``info`` over a schema of its own whose config carries ``name_converter``.
 
+    Every call builds a fresh config, so each info carries its own converter instance
+    (the default one when ``name_converter`` is ``None``).
+    """
     config = StrawberryConfig()
     if name_converter is not None:
         config.name_converter = name_converter
-    return _as_resolve_info(
-        SimpleNamespace(
-            schema=SimpleNamespace(config=config),
-            path=None,
-            variable_values={},
-        ),
-    )
+    return make_info(config=config)._raw_info
 
 
 def _declare_edition_node():
@@ -1196,25 +1172,23 @@ def test_plan_does_not_elide_when_fragment_contains_relation_selection():
 def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
     """B2: O6 visibility hooks win over FK-id elision."""
     registry.clear()
-
-    @_as_django_type
-    class FilteredCategoryType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
-
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
-            return queryset
-
-    registry.register(Category, FilteredCategoryType)
     try:
+
+        class FilteredCategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+
+            @override
+            @classmethod
+            def get_queryset(cls, queryset: QuerySet[Category], info: strawberry.Info):
+                return queryset
+
+        del FilteredCategoryType
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("id")])],
             Item,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
         )
     finally:
         registry.clear()
@@ -1404,12 +1378,12 @@ def test_has_custom_id_resolver_fallback_matches_definition_path():
     """
     from strawberry import relay
 
-    @_as_django_type
+    @_as_definitionless_django_type
     class PlainCustomTarget:
         def resolve_id(self):
             return "custom"
 
-    @_as_django_type
+    @_as_definitionless_django_type
     class FrameworkDefaultTarget(relay.Node):
         pass
 
@@ -1432,24 +1406,22 @@ def test_has_custom_id_resolver_fallback_matches_definition_path():
 def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     """O6: a custom target ``get_queryset`` downgrades forward FK joins to ``Prefetch``."""
     registry.clear()
-    info = _operation_resolve_info()
+    info = make_info()._raw_info
     calls = {}
 
-    @_as_django_type
-    class FilteredCategoryType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    class FilteredCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Category], passed_info: object, **kwargs: object):
+        def get_queryset(cls, queryset: QuerySet[Category], info: strawberry.Info):
             calls["queryset"] = queryset
-            calls["info"] = passed_info
+            calls["info"] = info
             return queryset.filter(is_private=False)
 
-    registry.register(Category, FilteredCategoryType)
+    del FilteredCategoryType
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
@@ -1472,20 +1444,19 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     hook_info = calls["info"]
     assert isinstance(hook_info, strawberry.Info)
     assert hook_info._raw_info is info
-    assert hook_info.field_name == "probe"
+    assert hook_info.field_name == "field"
 
 
 def test_plan_keeps_select_related_when_target_uses_default_get_queryset():
     """O6: registered target types without custom ``get_queryset`` still use joins."""
     registry.clear()
 
-    @_as_django_type
-    class DefaultCategoryType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    class DefaultCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
-    registry.register(Category, DefaultCategoryType)
+    del DefaultCategoryType
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
@@ -1505,25 +1476,23 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     registry.clear()
     calls = {}
 
-    @_as_django_type
-    class FilteredItemType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+    class FilteredItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Item], info: object, **kwargs: object):
+        def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info):
             calls["queryset"] = queryset
             return queryset.filter(is_private=False)
 
-    registry.register(Item, FilteredItemType)
+    del FilteredItemType
     try:
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("name")])],
             Category,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
         )
     finally:
         registry.clear()
@@ -1551,25 +1520,23 @@ def test_plan_refuses_sliced_hook_result_for_plain_list_relation():
     """
     registry.clear()
 
-    @_as_django_type
-    class SlicedItemType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+    class SlicedItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Item], info: object, **kwargs: object):
+        def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info):
             return queryset.order_by("pk")[:1]
 
-    registry.register(Item, SlicedItemType)
+    del SlicedItemType
     try:
         with pytest.raises(ConfigurationError) as excinfo:
             plan_optimizations(
                 [_sel("items", selections=[_sel("name")])],
                 Category,
-                info=_operation_resolve_info(),
+                info=make_info()._raw_info,
             )
     finally:
         registry.clear()
@@ -1588,20 +1555,18 @@ def test_connection_child_seam_still_admits_a_sliced_hook_result():
     which is the one axis the two policies differ on.
     """
 
-    @_as_django_type
-    class SlicedItemType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+    class SlicedItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Item], info: object, **kwargs: object):
+        def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info):
             return queryset.order_by("pk")[:1]
 
     field = FieldMeta.from_django_field(Category._meta.get_field("items"))
-    info = _operation_resolve_info()
+    info = make_info()._raw_info
     admitted = _build_connection_child_queryset(
         field,
         SlicedItemType,
@@ -1625,16 +1590,14 @@ def test_child_hook_without_resolve_info_fails_loudly():
     """
     calls: list[object] = []
 
-    @_as_django_type
-    class HookedItemType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+    class HookedItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Item], info: object):
+        def get_queryset(cls, queryset: QuerySet[Item], info: strawberry.Info):
             calls.append(info)
             return queryset
 
@@ -1732,24 +1695,22 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
     """O4+O6: a nested custom ``get_queryset`` makes the root plan uncacheable."""
     registry.clear()
 
-    @_as_django_type
-    class FilteredEntryType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Entry)
+    class FilteredEntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Entry], info: object, **kwargs: object):
+        def get_queryset(cls, queryset: QuerySet[Entry], info: strawberry.Info):
             return queryset.filter(is_private=False)
 
-    registry.register(Entry, FilteredEntryType)
+    del FilteredEntryType
     try:
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
             Category,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
         )
     finally:
         registry.clear()
@@ -1993,31 +1954,25 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
     registry.clear()
     calls = []
 
-    @_as_django_type
-    class CategoryType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
+        @override
         @classmethod
-        def has_custom_get_queryset(cls):
-            return True
-
-        @classmethod
-        def get_queryset(cls, queryset: QuerySet[Category], info: object, **kwargs: object):
+        def get_queryset(cls, queryset: QuerySet[Category], info: strawberry.Info):
             calls.append(info)
             return queryset.filter(is_private=False)
 
-    class ItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.select_related()}
 
-    registry.register(Category, CategoryType)
-    _register_type_definition(
-        Item,
-        ItemType,
-        optimizer_hints={"category": OptimizerHint.select_related()},
-    )
-    info = _operation_resolve_info()
+    del CategoryType, ItemType
+    info = make_info()._raw_info
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
@@ -2183,18 +2138,9 @@ def test_ensure_connector_only_fields_adds_m2m_target_pk():
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
 
     plan = OptimizationPlan(only_fields=["name"])
-    fake_related_model = SimpleNamespace(
-        _meta=SimpleNamespace(pk=SimpleNamespace(attname="id")),
-    )
-    fake_parent_field = SimpleNamespace(
-        one_to_many=False,
-        many_to_many=True,
-        related_model=fake_related_model,
-    )
+    parent_field = FieldMeta.from_django_field(Book._meta.get_field("genres"))
 
-    # basedpyright: a stand-in field carrying only the slots the code under test reads;
-    # _ensure_connector_only_fields types the parameter as FieldMeta
-    _ensure_connector_only_fields(plan, fake_parent_field)  # pyright: ignore[reportArgumentType]
+    _ensure_connector_only_fields(plan, parent_field)
 
     assert plan.only_fields == ["name", "id"]
 
@@ -2206,16 +2152,10 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(
     from django_strawberry_framework.optimizer.walker import logger
 
     plan = plan_optimizations([_sel("name")], Category)
-    fake_parent_field = SimpleNamespace(
-        name="generic",
-        one_to_many=True,
-        many_to_many=False,
-    )
+    parent_field = FieldMeta(name="generic", is_relation=True, one_to_many=True)
 
     caplog.set_level("DEBUG", logger=logger.name)
-    # basedpyright: a stand-in field carrying only the slots the code under test reads;
-    # _ensure_connector_only_fields types the parameter as FieldMeta
-    _ensure_connector_only_fields(plan, fake_parent_field)  # pyright: ignore[reportArgumentType]
+    _ensure_connector_only_fields(plan, parent_field)
 
     assert plan.only_fields == ("name",)
     assert any("could not resolve connector column" in r.message for r in caplog.records)
@@ -2334,7 +2274,7 @@ def test_plan_tolerates_registered_type_without_definition():
     """Shape guard: a stale registered type without definition metadata has no hints."""
     registry.clear()
 
-    @_as_django_type
+    @_as_definitionless_django_type
     class ItemType:
         @classmethod
         def has_custom_get_queryset(cls):
@@ -2441,11 +2381,12 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
     never actually planned.
     """
 
-    @_as_django_type
-    class ItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    registry.clear()
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
 
     plan = OptimizationPlan()
     baseline = (list(plan.only_fields), list(plan.planned_resolver_keys), plan.cacheable)
@@ -2575,28 +2516,20 @@ def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
     """
     registry.clear()
 
-    class ItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            primary = True
+            optimizer_hints = {"category": OptimizerHint.SKIP}
 
-    @_as_django_type
-    class AdminItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.prefetch_related()}
 
-    _register_type_definition(
-        Item,
-        ItemType,
-        optimizer_hints={"category": OptimizerHint.SKIP},
-        primary=True,
-    )
-    _register_type_definition(
-        Item,
-        AdminItemType,
-        optimizer_hints={"category": OptimizerHint.prefetch_related()},
-    )
+    del ItemType
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
@@ -2623,25 +2556,20 @@ def test_scalar_only_secondary_resolver_uses_secondary_field_map():
     """
     registry.clear()
 
-    class ItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
-
-    @_as_django_type
-    class AdminItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
-
     # Primary's field_map omits ``name``.
-    primary_fields = tuple(f for f in Item._meta.get_fields() if f.name != "name")
-    primary_field_map = {
-        field.name: FieldMeta.from_django_field(field) for field in primary_fields
-    }
-    _register_type_definition(Item, ItemType, field_map=primary_field_map, primary=True)
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "category")
+            primary = True
+
     # Secondary's field_map includes ``name``.
-    _register_type_definition(Item, AdminItemType)
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    del ItemType
     try:
         plan = plan_optimizations(
             [_sel("name")],
@@ -2722,19 +2650,17 @@ def test_walker_resolves_relation_targets_through_definition_metadata(
     """Registered relation targets route through ``DjangoTypeDefinition.related_target_for``."""
     registry.clear()
 
-    class CategoryType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
-    @_as_django_type
-    class ItemType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
 
-    _register_type_definition(Category, CategoryType)
-    _register_type_definition(Item, ItemType)
+    del CategoryType
     definition = registry.get_definition(ItemType)
     assert definition is not None
     real_related_target_for = definition.related_target_for
@@ -2764,19 +2690,14 @@ def test_walker_resolves_relation_targets_through_definition_metadata(
 
 
 def _fake_info(relay_max_results: int = 100) -> GraphQLResolveInfo:
-    """Build a minimal ``info`` exposing ``schema.config.relay_max_results`` and ``path``.
+    """Build the root resolve info of a query whose schema config carries ``relay_max_results``.
 
-    ``SliceMetadata.from_arguments`` reads ``info.schema.config.relay_max_results``
-    when ``max_results`` is left ``None``; the walker reads ``info.path`` for
-    runtime-path identity. Nothing else on ``info`` is touched at plan time.
+    ``SliceMetadata.from_arguments`` reads the configured ``relay_max_results`` when
+    ``max_results`` is left ``None``; the walker reads ``info.path`` for runtime-path
+    identity, so every resolver key planned under this info starts at the root field
+    ``field``.
     """
-    return _as_resolve_info(
-        SimpleNamespace(
-            schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
-            path=None,
-            variable_values={},
-        ),
-    )
+    return make_info(config=StrawberryConfig(relay_max_results=relay_max_results))._raw_info
 
 
 def _conn_sel(
@@ -3275,7 +3196,9 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
         prefetch = _prefetch_entry(plan)
         assert prefetch.to_attr == "_dst_printings_2_connection"
         assert prefetch.prefetch_through == "printings_2"
-        assert plan.planned_resolver_keys == ("PublisherNode.printings_2@printings2Connection",)
+        assert plan.planned_resolver_keys == (
+            "PublisherNode.printings_2@field.printings2Connection",
+        )
 
         class ConnectionNameConverter(NameConverter):
             @override
@@ -3284,20 +3207,7 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
                     return "numberedRuns"
                 return super().get_graphql_name(obj)
 
-        custom_info = _as_resolve_info(
-            SimpleNamespace(
-                schema=SimpleNamespace(
-                    _strawberry_schema=SimpleNamespace(
-                        config=SimpleNamespace(
-                            name_converter=ConnectionNameConverter(),
-                            relay_max_results=100,
-                        ),
-                    ),
-                ),
-                path=None,
-                variable_values={},
-            ),
-        )
+        custom_info = _converter_info(ConnectionNameConverter())
         custom_plan = plan_optimizations(
             [
                 _conn_sel(
@@ -3313,7 +3223,9 @@ def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch()
         custom_prefetch = _prefetch_entry(custom_plan)
         assert custom_prefetch.to_attr == "_dst_printings_2_connection"
         assert custom_prefetch.prefetch_through == "printings_2"
-        assert custom_plan.planned_resolver_keys == ("PublisherNode.printings_2@numberedRuns",)
+        assert custom_plan.planned_resolver_keys == (
+            "PublisherNode.printings_2@field.numberedRuns",
+        )
     finally:
         registry.clear()
 
@@ -3575,7 +3487,8 @@ def test_relay_max_results_from_optimizer_info_shapes():
     The walker runs at the optimizer middleware layer where ``info.schema`` is a
     bare graphql-core ``GraphQLSchema`` with NO ``.config``; the config lives on
     ``schema._strawberry_schema.config``. The helper prefers that path, falls
-    back to a bare ``schema.config`` (the ``_fake_info`` test stub), then ``None``.
+    back to a bare ``schema.config`` (a Strawberry ``Info``, whose ``schema`` is the
+    Strawberry ``Schema``), then ``None``.
     Without it ``SliceMetadata.from_arguments(max_results=None)`` would
     dereference ``info.schema.config`` and raise ``AttributeError`` in production.
     """
@@ -3583,17 +3496,13 @@ def test_relay_max_results_from_optimizer_info_shapes():
 
     from django_strawberry_framework.optimizer.walker import _relay_max_results_from_info
 
-    # Production shape: bare GraphQLSchema-like with a wrapped strawberry schema.
-    wrapped = SimpleNamespace(
-        schema=SimpleNamespace(
-            _strawberry_schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=7)),
-        ),
-    )
-    assert _relay_max_results_from_info(_as_resolve_info(wrapped)) == 7
-    # Test-stub shape: ``schema.config`` directly (no ``_strawberry_schema``).
-    assert _relay_max_results_from_info(_fake_info(relay_max_results=42)) == 42
+    # Production shape: a bare GraphQLSchema with the Strawberry schema filed on it.
+    assert _relay_max_results_from_info(_fake_info(relay_max_results=7)) == 7
+    # Resolve-time shape: ``schema.config`` directly on the Strawberry ``Schema``.
+    resolve_time = make_info(config=StrawberryConfig(relay_max_results=42))
+    assert _relay_max_results_from_info(resolve_time) == 42
     # No config anywhere -> None (engine default applies downstream).
-    configless = _as_resolve_info(SimpleNamespace(schema=SimpleNamespace()))
+    configless = _as_partial_resolve_info(SimpleNamespace(schema=SimpleNamespace()))
     assert _relay_max_results_from_info(configless) is None
 
 
@@ -4185,8 +4094,8 @@ def test_divergent_aliases_plan_one_window_per_response_key():
         assert "<= 5" in str(by_attr["_dst_books$b_connection"].queryset.query)
         # Both keys planned -> both resolver identities recorded (strictness-silent).
         assert len(plan.planned_resolver_keys) == 2
-        assert any(key.endswith("@a") for key in plan.planned_resolver_keys)
-        assert any(key.endswith("@b") for key in plan.planned_resolver_keys)
+        assert any(key.endswith("@field.a") for key in plan.planned_resolver_keys)
+        assert any(key.endswith("@field.b") for key in plan.planned_resolver_keys)
     finally:
         registry.clear()
 
@@ -4277,7 +4186,7 @@ def test_divergent_mixed_sidecar_plans_only_the_plain_key(caplog: pytest.LogCapt
         assert set(by_attr) == {"_dst_books$b_connection"}
         # Only ``b`` accounted-for; the sidecar key stays strictness-visible.
         assert len(plan.planned_resolver_keys) == 1
-        assert plan.planned_resolver_keys[0].endswith("@b")
+        assert plan.planned_resolver_keys[0].endswith("@field.b")
         assert any(
             "response key 'a'" in record.message and "(sidecar arguments)" in record.message
             for record in caplog.records
@@ -4363,7 +4272,7 @@ def test_divergent_unwindowable_key_falls_back_alone():
         by_attr = _prefetch_by_to_attr(plan)
         assert set(by_attr) == {"_dst_books$b_connection"}
         assert len(plan.planned_resolver_keys) == 1
-        assert plan.planned_resolver_keys[0].endswith("@b")
+        assert plan.planned_resolver_keys[0].endswith("@field.b")
     finally:
         registry.clear()
 
@@ -4912,7 +4821,7 @@ def test_visibility_target_window_flips_cacheable_false():
                 ),
             ],
             Genre,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
             source_type=GenreType,
         )
         assert plan.cacheable is False
@@ -4963,7 +4872,7 @@ def test_distinct_child_queryset_left_unplanned_for_correct_total_count():
                 ),
             ],
             Genre,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
             source_type=GenreType,
         )
         # Distinct target -> per-parent fallback: no window prefetch, no resolver key.
@@ -5037,7 +4946,7 @@ def test_distinct_fallback_does_not_leak_child_resolver_keys_into_parent():
                 ),
             ],
             genre_model,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
             source_type=genre_type,
         )
         # Falls back per-parent: no window prefetch and NO child metadata absorbed.
@@ -5081,7 +4990,7 @@ def test_malformed_slice_fallback_does_not_leak_child_resolver_keys_into_parent(
         )
         # The connection's own key is recorded (error-locality), but no CHILD
         # (``shelf``) key or fk-id elision leaked from a child build that never ran.
-        assert plan.planned_resolver_keys == ("GenreType.books@booksConnection",)
+        assert plan.planned_resolver_keys == ("GenreType.books@field.booksConnection",)
         assert not any("shelf" in key for key in plan.planned_resolver_keys)
         assert plan.fk_id_elisions == ()
     finally:
@@ -5215,24 +5124,14 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
 # assertion lives in the fakeshop live suite.
 
 
-def _op_info(operation: OperationType, relay_max_results: int = 100) -> GraphQLResolveInfo:
-    """Build a minimal operation-bearing ``info`` for the G2 gate.
+def _op_info(operation: OperationType) -> GraphQLResolveInfo:
+    """Build the root resolve info of a one-field ``operation`` for the G2 gate.
 
-    Mirrors ``_fake_info``'s ``schema.config`` / ``path`` shape (so
-    ``_relay_max_results_from_info`` and ``runtime_path_from_info`` resolve)
-    and adds the ``operation.operation`` chain ``_enable_only_for_operation``
-    reads. ``_fake_info`` itself has no ``operation`` attribute, so it exercises
-    the partial-``info`` defensive arm; this factory exercises the
-    QUERY / MUTATION / SUBSCRIPTION arms without mutating the shared helper.
+    ``_enable_only_for_operation`` reads ``info.operation.operation``; this factory
+    exercises the QUERY / MUTATION / SUBSCRIPTION arms. Resolver keys planned under it
+    start at the root field ``field``, as under ``_fake_info``.
     """
-    return _as_resolve_info(
-        SimpleNamespace(
-            operation=SimpleNamespace(operation=operation),
-            schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
-            path=None,
-            variable_values={},
-        ),
-    )
+    return make_info(operation=operation)._raw_info
 
 
 def test_mutation_queryset_drops_only_keeps_select_prefetch():
@@ -5256,6 +5155,16 @@ def test_mutation_queryset_drops_only_keeps_select_prefetch():
     assert plan.prefetch_related != ()
 
 
+def _selected_field(name: str, selections: list[Selection] | None = None) -> SelectedField:
+    """A real Strawberry ``SelectedField``, the node the production extractor reads."""
+    return SelectedField(
+        name=name,
+        directives={},
+        arguments={},
+        selections=selections or [],
+    )
+
+
 def _mutation_payload_selection(slot: str = "node"):
     """Build the PAYLOAD-level selection a mutation field returns.
 
@@ -5264,18 +5173,18 @@ def _mutation_payload_selection(slot: str = "node"):
     ``errors`` sibling is present on purpose: the extractor must drop it, since it
     is not a selection on the node type.
     """
-    return _sel(
+    return _selected_field(
         "createItem",
-        selections=[
-            _sel(
+        [
+            _selected_field(
                 slot,
-                selections=[
-                    _sel("name"),
-                    _sel("category", selections=[_sel("name")]),
-                    _sel("entries", selections=[_sel("name")]),
+                [
+                    _selected_field("name"),
+                    _selected_field("category", [_selected_field("name")]),
+                    _selected_field("entries", [_selected_field("name")]),
                 ],
             ),
-            _sel("errors", selections=[_sel("field"), _sel("messages")]),
+            _selected_field("errors", [_selected_field("field"), _selected_field("messages")]),
         ],
     )
 
@@ -5290,9 +5199,7 @@ def _mutation_refetch_selections(info: GraphQLResolveInfo, slot: str = "node"):
     derived list changes and the plan assertions move with it.
     """
     payload = _mutation_payload_selection(slot)
-    # basedpyright: a stand-in selection carrying only the slots the code under test reads;
-    # mutation_payload_child_selections types the parameter as list[Selection]
-    return mutation_payload_child_selections(slot)([payload], info)  # pyright: ignore[reportArgumentType]
+    return mutation_payload_child_selections(slot)([payload], info)
 
 
 @pytest.mark.parametrize("slot", ["node", "result"])
@@ -5510,20 +5417,24 @@ def test_enable_only_defaults_enabled_without_info():
     plan = plan_optimizations([_sel("name")], Category, info=None)
     assert plan.only_fields == ("name",)
     # Partial info whose ``operation`` is absent -> enabled, no AttributeError.
-    plan = plan_optimizations([_sel("name")], Category, info=_as_resolve_info(SimpleNamespace()))
+    plan = plan_optimizations(
+        [_sel("name")],
+        Category,
+        info=_as_partial_resolve_info(SimpleNamespace()),
+    )
     assert plan.only_fields == ("name",)
     # Partial info whose ``operation`` is ``None`` -> enabled.
     plan = plan_optimizations(
         [_sel("name")],
         Category,
-        info=_as_resolve_info(SimpleNamespace(operation=None)),
+        info=_as_partial_resolve_info(SimpleNamespace(operation=None)),
     )
     assert plan.only_fields == ("name",)
     # ``operation.operation`` is ``None`` -> enabled.
     plan = plan_optimizations(
         [_sel("name")],
         Category,
-        info=_as_resolve_info(SimpleNamespace(operation=SimpleNamespace(operation=None))),
+        info=_as_partial_resolve_info(SimpleNamespace(operation=SimpleNamespace(operation=None))),
     )
     assert plan.only_fields == ("name",)
     # Truth table on the helper directly.
@@ -5547,7 +5458,7 @@ def test_mutation_id_only_relation_still_records_elision():
         Item,
         info=_op_info(OperationType.MUTATION),
     )
-    assert plan.fk_id_elisions == ("category@category",)
+    assert plan.fk_id_elisions == ("category@field.category",)
     assert plan.only_fields == ()
 
 
@@ -5930,7 +5841,7 @@ def test_connection_custom_get_queryset_builds_base_child_queryset_once():
                 ),
             ],
             Genre,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
             source_type=GenreType,
         )
         assert calls == 1
@@ -6135,7 +6046,7 @@ def test_unsafe_child_queryset_left_unplanned_under_both_strategies(
                 ),
             ],
             Genre,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
             source_type=GenreType,
         )
         assert not any(
@@ -6199,7 +6110,7 @@ def test_combined_child_queryset_is_planned_as_its_primary_key_set(strategy_name
                 ),
             ],
             Genre,
-            info=_operation_resolve_info(),
+            info=make_info()._raw_info,
             source_type=GenreType,
         )
         windows = [

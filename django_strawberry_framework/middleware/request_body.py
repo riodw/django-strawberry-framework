@@ -79,7 +79,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from asgiref.sync import iscoroutinefunction, markcoroutinefunction
+from asgiref.sync import markcoroutinefunction
 from cross_web import HTTPException
 from django.conf import settings
 from django.http import HttpResponse
@@ -95,6 +95,7 @@ from django_strawberry_framework._boundary_ordering import (
     _boundary_middleware_request,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.utils.typing import is_marked_coroutine_function
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -143,9 +144,7 @@ class GraphQLRequestBodyBoundaryMiddleware:
         """Bind the downstream chain and refuse a chain that cannot deliver the ordering."""
         self.get_response = get_response
         _require_boundary_before_csrf()
-        # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's below
-        # it, where that one is not deprecated; the checker infers only the asyncio branch
-        if iscoroutinefunction(self.get_response):  # pyright: ignore[reportDeprecated]
+        if is_marked_coroutine_function(self.get_response):
             markcoroutinefunction(self)
 
     def __call__(self, request: HttpRequest) -> HttpResponseBase | Awaitable[HttpResponseBase]:
@@ -163,12 +162,10 @@ class GraphQLRequestBodyBoundaryMiddleware:
         later entry in the chain - and reset in a ``finally`` so a raising view
         cannot leave it set for whatever the worker handles next.
         """
-        # A plain ``bool``: typeshed's ``iscoroutinefunction`` is a TypeGuard, and a guard
+        # A plain ``bool``: ``is_marked_coroutine_function`` is a TypeGuard, and a guard
         # on it - direct, or through a local, which pyright follows - would re-type
         # ``self`` as a bare callable.
-        # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's below
-        # it, where that one is not deprecated; the checker infers only the asyncio branch
-        is_async = bool(iscoroutinefunction(self))  # pyright: ignore[reportDeprecated]
+        is_async = bool(is_marked_coroutine_function(self))
         if is_async:
             return self.__acall__(request)
         token = _boundary_middleware_request.set(request)

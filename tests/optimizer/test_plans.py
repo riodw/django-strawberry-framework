@@ -1285,17 +1285,6 @@ class TestReverseOrderBy:
         assert first_slot is True
         assert last_slot is None
 
-    def test_swaps_explicit_nulls_positioning_with_boolean_flags(self):
-        """Swaps explicit nulls_first / nulls_last even when values are boolean False."""
-        order = SimpleNamespace(descending=False, nulls_first=False, nulls_last=None)
-        # basedpyright: a stand-in order entry carrying only the slots the code under test reads;
-        # _reverse_order_by types the parameter as Sequence[OrderEntry]
-        reversed_entry = _reverse_order_by([order])[0]  # pyright: ignore[reportArgumentType]
-        assert isinstance(reversed_entry, SimpleNamespace)
-        assert reversed_entry.descending is True
-        assert reversed_entry.nulls_first is None
-        assert reversed_entry.nulls_last is False
-
     def test_bare_expression_reverses_through_desc(self):
         """A term with no ``.descending`` is IMPLICITLY ascending; its reverse is ``desc()``.
 
@@ -1325,7 +1314,7 @@ class TestReverseOrderBy:
         assert reversed_expression.expression == Lower("title")
 
     def test_unreversible_term_raises_instead_of_serving_the_wrong_end(self):
-        """A term that can be neither flagged nor ``desc()``-ed fails loudly.
+        """A term that is neither an ``OrderBy`` nor ``desc()``-able fails loudly.
 
         There is no correct reversal for such a term, and silently keeping it
         forward is what produced a wrong ``last: N`` page. ``OptimizerError`` (not
@@ -1333,7 +1322,10 @@ class TestReverseOrderBy:
         handler cannot swallow it.
         """
         unreversible = SimpleNamespace(name="not-an-expression")
-        with pytest.raises(OptimizerError, match="Cannot reverse connection order entry"):
+        with pytest.raises(
+            OptimizerError,
+            match=r"Cannot reverse connection order entry .*neither an 'OrderBy' nor carries",
+        ):
             # basedpyright: the unreversible term is the hostile input under test;
             # _reverse_order_by types the parameter as Sequence[OrderEntry]
             _reverse_order_by([unreversible])  # pyright: ignore[reportArgumentType]

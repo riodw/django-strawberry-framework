@@ -18,22 +18,31 @@ what a live request cannot (or need not) pin:
 - the assertion helpers' FAILURE directions against canned responses (their
   PASSING directions ride the live unittest tests);
 - the mixin's ``self.client`` delegation and endpoint rungs against a recording
-  stand-in;
+  client;
 - the ``__test__ = False`` collection guard and the export surface.
 
 ``login()`` logout-on-exception is live in
 ``examples/fakeshop/test_query/test_client_api.py`` (sync and async); the
 clean-exit sync bracket stays in ``test_products_api.py``.
 
-Every test here is DB-free: no schema reload, no ``seed_data``, no real request.
+Every test here is DB-free: no schema reload, no ``seed_data``, no database row.
+The recording transports are real ``django.test.Client`` / ``AsyncClient``
+subclasses, so each post is a real request through Django's own handler, routed
+by this module's ``urlpatterns`` (its own ``ROOT_URLCONF``, no middleware) to a
+local view that answers with the canned JSON payload the transport attached.
 """
 
 import json
 import unittest
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import pytest
-from django.http import HttpResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http.response import HttpResponseBase
 from django.test import AsyncClient, Client, override_settings
+from django.test.client import MULTIPART_CONTENT
+from django.urls import re_path
 from graphql import GraphQLFormattedError
 from typing_extensions import override
 
@@ -46,53 +55,128 @@ from django_strawberry_framework.testing import (
     TestClient,
 )
 
+if TYPE_CHECKING:
+    from django_stubs_ext import StrOrPromise
+
 # ---------------------------------------------------------------------------
-# Recording / canned transport doubles: a recording ``post`` stands in for the
-# wrapped Django client, so TARGET SELECTION and body shape are read off what
-# the package's own ``request()`` chose and a mechanics test never depends on a
-# live view. The double stops at the transport seam deliberately - one that
-# overrode ``request()`` would re-implement the selection under test. Every
-# test in this file is DB-free.
+# Recording transports: real Django test clients whose ``post`` records its
+# target, so TARGET SELECTION and body shape are read off what the package's own
+# ``request()`` chose, and the canned answer comes from a local view rather than
+# the fakeshop schema. The recording stops at the transport seam deliberately -
+# one that overrode ``request()`` would re-implement the selection under test.
+# Every test in this file is DB-free.
 # ---------------------------------------------------------------------------
 
 
-class _CannedJSONResponse(HttpResponse):
-    """A minimal 200 response carrying the ``.json()`` the client's ``_decode`` calls."""
+_CANNED_PAYLOAD_HEADER = "X-Canned-Payload"
+_DEFAULT_PAYLOAD: dict[str, object] = {"data": {"ok": True}}
+
+
+def _canned_view(request: HttpRequest) -> HttpResponse:
+    """Answer every request with the JSON payload the recording client attached."""
+    return JsonResponse(json.loads(request.headers.get(_CANNED_PAYLOAD_HEADER, "{}")))
+
+
+#: This module is its own ``ROOT_URLCONF``: every path reaches the canned view.
+urlpatterns = [re_path(r"^.*$", _canned_view)]
+
+
+@pytest.fixture(autouse=True)
+def _canned_transport_urlconf():
+    """Route the real Django clients below to ``_canned_view`` with no middleware in the way."""
+    with override_settings(ROOT_URLCONF=__name__, MIDDLEWARE=[]):
+        yield
+
+
+class _RecordingDjangoClient(Client):
+    """A real ``django.test.Client`` recording ``post`` targets.
+
+    The transport-level seam: it is the wrapped Django client, so the URL it
+    records is the one the real ``TestClient.request`` chose, and the response it
+    returns is a genuine one from Django's own request pipeline. A double that
+    overrode ``request()`` itself would re-implement the selection under test and
+    could never detect a change to it.
+    """
 
     def __init__(self, payload: dict[str, object] | None = None):
         super().__init__()
-        self._payload = payload if payload is not None else {"data": {"ok": True}}
+        self.posts: list[tuple[str, dict[str, object]]] = []
+        self.responses: list[HttpResponseBase] = []
+        self._payload = payload if payload is not None else _DEFAULT_PAYLOAD
 
-    def json(self):
-        return self._payload
+    @override
+    def post(
+        self,
+        path: "StrOrPromise",
+        data: object = None,
+        content_type: str = MULTIPART_CONTENT,
+        follow: bool = False,
+        secure: bool = False,
+        *,
+        headers: Mapping[str, str] | None = None,
+        query_params: Mapping[object, object] | None = None,
+        **extra: object,
+    ):
+        self.posts.append(
+            (str(path), {"data": data, "content_type": content_type, "headers": headers}),
+        )
+        response = super().post(
+            path,
+            data,
+            content_type,
+            follow,
+            secure,
+            headers={**(headers or {}), _CANNED_PAYLOAD_HEADER: json.dumps(self._payload)},
+            query_params=query_params,
+            **extra,
+        )
+        self.responses.append(response)
+        return response
 
 
-class _RecordingDjangoClient:
-    """A ``django.test.Client`` stand-in recording ``post`` targets.
-
-    The transport-level seam: it stands in for the wrapped Django client, so
-    the URL it records is the one the real ``TestClient.request`` chose. A
-    double that overrode ``request()`` itself would re-implement the selection
-    under test and could never detect a change to it.
-    """
+class _RecordingAsyncTransport(AsyncClient):
+    """A real ``django.test.AsyncClient`` whose awaited ``post`` records its target."""
 
     def __init__(self):
-        self.posts = []
+        super().__init__()
+        self.posts: list[tuple[str, dict[str, object]]] = []
+        self.responses: list[HttpResponseBase] = []
 
-    def post(self, url: str, **kwargs: object):
-        self.posts.append((url, kwargs))
-        return _CannedJSONResponse()
+    @override
+    async def post(
+        self,
+        path: "StrOrPromise",
+        data: object = None,
+        content_type: str = MULTIPART_CONTENT,
+        follow: bool = False,
+        secure: bool = False,
+        *,
+        headers: Mapping[str, str] | None = None,
+        query_params: Mapping[object, object] | None = None,
+        **extra: object,
+    ):
+        self.posts.append(
+            (str(path), {"data": data, "content_type": content_type, "headers": headers}),
+        )
+        response = await super().post(
+            path,
+            data,
+            content_type,
+            follow,
+            secure,
+            headers={**(headers or {}), _CANNED_PAYLOAD_HEADER: json.dumps(_DEFAULT_PAYLOAD)},
+            query_params=query_params,
+            **extra,
+        )
+        self.responses.append(response)
+        return response
 
 
-class _RecordingAsyncTransport:
-    """A ``django.test.AsyncClient`` stand-in whose ``post`` is awaited."""
+class _FalsySyncClient(_RecordingDjangoClient):
+    """Falsy through ``__bool__``."""
 
-    def __init__(self):
-        self.posts = []
-
-    async def post(self, url: str, **kwargs: object):
-        self.posts.append((url, kwargs))
-        return _CannedJSONResponse()
+    def __bool__(self):
+        return False
 
 
 class _BoolFalsyAsyncTransport(_RecordingAsyncTransport):
@@ -119,9 +203,7 @@ class _MixinProbe(GraphQLTestMixin):
     client: Client
 
     def __init__(self):
-        # basedpyright: the recording double stands in for the Django client at the transport
-        # seam; it is not a django.test.Client
-        self.client = _RecordingDjangoClient()  # pyright: ignore[reportAttributeAccessIssue]
+        self.client = _RecordingDjangoClient()
 
     def assertEqual(
         self,
@@ -187,23 +269,23 @@ def test_per_call_url_outranks_the_constructor_and_never_persists():
     """Per-call rung: ``query(url=)`` wins for ONE request; ``self.path`` is untouched.
 
     Driven through the real ``TestClient.request``: the recording transport
-    stands in for the wrapped Django client, so the URL it records is the one
+    is the wrapped Django client, so the URL it records is the one
     ``request()`` itself selected, not one the test re-derived. The overridden
-    call posts to ``/percall/``, the stored ``path`` is unchanged afterward
-    (the non-persistence guarantee), and the next un-overridden call falls back
-    to the constructor path.
+    call posts to ``/percall/`` with the caller's headers forwarded, the
+    ``Response`` wraps the very response the transport returned, the stored
+    ``path`` is unchanged afterward (the non-persistence guarantee), and the
+    next un-overridden call falls back to the constructor path.
     """
     transport = _RecordingDjangoClient()
-    # basedpyright: a stand-in Django test client carrying only the slots the code under test
-    # reads; TestClient types the parameter as django.test.Client | None
-    client = TestClient("/constructor/", client=transport)  # pyright: ignore[reportArgumentType]
+    client = TestClient("/constructor/", client=transport)
 
-    res = client.query("{ ok }", url="/percall/")
+    res = client.query("{ ok }", url="/percall/", headers={"X-Probe": "per-call"})
     assert [url for url, _ in transport.posts] == ["/percall/"]
+    assert transport.posts[0][1]["headers"] == {"X-Probe": "per-call"}
     assert client.path == "/constructor/"
     assert isinstance(res, Response)
     assert res.data == {"ok": True}
-    assert isinstance(res.response, _CannedJSONResponse)
+    assert res.response is transport.responses[0]
 
     client.query("{ ok }")
     assert [url for url, _ in transport.posts] == ["/percall/", "/constructor/"]
@@ -533,9 +615,7 @@ def test_empty_files_dict_is_a_plain_json_post():
     multipart body posted as JSON.
     """
     transport = _RecordingDjangoClient()
-    # basedpyright: a stand-in Django test client carrying only the slots the code under test
-    # reads; TestClient types the parameter as django.test.Client | None
-    res = TestClient(client=transport).query("{ ok }", variables={"a": 1}, files={})  # pyright: ignore[reportArgumentType]
+    res = TestClient(client=transport).query("{ ok }", variables={"a": 1}, files={})
 
     url, kwargs = transport.posts[0]
     assert url == "/graphql/"
@@ -611,20 +691,12 @@ def test_response_extensions_surface_decoded_or_none():
     transport here).
     """
 
-    class _ExtensionsTransport(_RecordingDjangoClient):
-        @override
-        def post(self, url: str, **kwargs: object):
-            self.posts.append((url, kwargs))
-            return _CannedJSONResponse({"data": {"ok": True}, "extensions": {"traceId": "t-1"}})
-
-    # basedpyright: a stand-in Django test client carrying only the slots the code under test
-    # reads; TestClient types the parameter as django.test.Client | None
-    with_extensions = TestClient(client=_ExtensionsTransport()).query("{ ok }")  # pyright: ignore[reportArgumentType]
+    with_extensions = TestClient(
+        client=_RecordingDjangoClient({"data": {"ok": True}, "extensions": {"traceId": "t-1"}}),
+    ).query("{ ok }")
     assert with_extensions.extensions == {"traceId": "t-1"}
 
-    # basedpyright: a stand-in Django test client carrying only the slots the code under test
-    # reads; TestClient types the parameter as django.test.Client | None
-    without = TestClient(client=_RecordingDjangoClient()).query("{ ok }")  # pyright: ignore[reportArgumentType]
+    without = TestClient(client=_RecordingDjangoClient()).query("{ ok }")
     assert without.extensions is None
 
 
@@ -650,14 +722,12 @@ def test_clients_preserve_an_explicit_falsy_transport(
 ):
     """An explicitly supplied client is selected by presence, not truthiness."""
 
-    class _FalsyClient:
-        def __bool__(self):
-            return False
-
-    supplied = _FalsyClient()
-    # basedpyright: a stand-in Django test client carrying only the slots the code under test
-    # reads; each client types the parameter as django.test.Client / AsyncClient | None
-    client = client_class(client=supplied)  # pyright: ignore[reportArgumentType]
+    if client_class is TestClient:
+        supplied = _FalsySyncClient()
+        client = TestClient(client=supplied)
+    else:
+        supplied = _BoolFalsyAsyncTransport()
+        client = AsyncTestClient(client=supplied)
     assert client.client is supplied
 
 
@@ -691,14 +761,13 @@ async def test_async_client_posts_a_real_query_through_a_falsy_transport(
     (``__bool__`` and an empty ``__len__``) that a presence check ignores alike.
     """
     transport = transport_class()
-    # basedpyright: a stand-in Django test client carrying only the slots the code under test
-    # reads; AsyncTestClient types the parameter as django.test.AsyncClient | None
-    client = AsyncTestClient("/async/", client=transport)  # pyright: ignore[reportArgumentType]
+    client = AsyncTestClient("/async/", client=transport)
 
     res = await client.query("{ ok }")
 
     assert [url for url, _ in transport.posts] == ["/async/"]
     assert res.data == {"ok": True}
+    assert res.response is transport.responses[0]
 
 
 def test_export_surface_is_the_testing_root_not_the_package_root():
@@ -735,7 +804,7 @@ def test_export_surface_is_the_testing_root_not_the_package_root():
 
 # ---------------------------------------------------------------------------
 # Mixin mechanics (the ``self.client`` delegation and endpoint rungs 3-5,
-# proven against the recording stand-in; the rungs are proven end-to-end live).
+# proven against the recording client; the rungs are proven end-to-end live).
 # ---------------------------------------------------------------------------
 
 
@@ -817,8 +886,7 @@ class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
         data: dict[str, object] | None,
         status_code: int = 200,
     ):
-        raw = _CannedJSONResponse({"data": data})
-        raw.status_code = status_code
+        raw = JsonResponse({"data": data}, status=status_code)
         return Response(errors=errors, data=data, extensions=None, response=raw)
 
     def test_assert_response_no_errors_fails_on_an_errors_response(self):

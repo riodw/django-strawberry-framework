@@ -18,13 +18,13 @@ wire against the optimizer-off wire and pins the optimized query count.
 """
 
 from collections.abc import Callable, Iterator
-from typing import Any
 
 import pytest
 import strawberry
 from django.db import connection
 from django.db.models import QuerySet
 from django.test.utils import CaptureQueriesContext
+from graphql_client import JSONObject
 from strategy_schemas import make_django_type
 from strawberry import relay
 
@@ -140,8 +140,7 @@ def _run(query: str, *, parent_hook: bool = False):
     return result.data, len(ctx.captured_queries)
 
 
-# basedpyright: ExecutionResult.data is dict[str, Any]; the rows read nested wire values by key
-_WireData = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+_WireData = JSONObject
 
 
 def _names(rows: list[_WireData], key: str) -> list[list[str]]:

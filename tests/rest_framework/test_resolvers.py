@@ -123,8 +123,9 @@ def _hook_ctx(operation: str = "create", alias: str = "default", instance_pk: ob
 
 def _as_serializer_mutation(stand_in: object) -> type[SerializerMutation]:
     """Hand a plain stand-in class to a resolver internal that takes a ``SerializerMutation``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # serializer resolver internals type the parameter as type[SerializerMutation]
+    # basedpyright: a plain class carrying only the bound-mutation slots the internal reads (spec
+    # lists, a ``_mutation_meta`` snapshot), so a slot can be malformed or absent; the serializer
+    # resolver internals type the parameter as type[SerializerMutation]
     return stand_in  # pyright: ignore[reportReturnType]
 
 
@@ -863,14 +864,12 @@ def test_merged_kwargs_injects_partial_true_on_update_never_create():
     )
     assert "partial" not in create_kwargs
 
-    instance = SimpleNamespace(pk=1)
+    instance = product_models.Category(pk=1)
     update_kwargs = serializer_resolvers._merged_serializer_kwargs(
         mutation_cls,
         info,
         final_data={"name": "X"},
-        # basedpyright: a stand-in instance carrying only the slots the code under test reads;
-        # _merged_serializer_kwargs types the parameter as Model | None
-        instance=instance,  # pyright: ignore[reportArgumentType]
+        instance=instance,
         alias="default",
         hook_context=_hook_ctx(),
     )
@@ -1014,9 +1013,7 @@ def test_merged_kwargs_override_returning_partial_is_configuration_error():
             PartialReturningMutation,
             info,
             final_data={"name": "X"},
-            # basedpyright: a stand-in instance carrying only the slots the code under test reads;
-            # _merged_serializer_kwargs types the parameter as Model | None
-            instance=SimpleNamespace(pk=1),  # pyright: ignore[reportArgumentType]
+            instance=product_models.Category(pk=1),
             alias="default",
             hook_context=_hook_ctx(),
         )
@@ -2897,9 +2894,7 @@ def test_merged_kwargs_hook_substituting_instance_is_configuration_error():
             mutation_cls,
             _info_with_request(),
             final_data={"name": "X"},
-            # basedpyright: a stand-in instance carrying only the slots the code under test reads;
-            # _merged_serializer_kwargs types the parameter as Model | None
-            instance=SimpleNamespace(pk=1),  # pyright: ignore[reportArgumentType]
+            instance=product_models.Category(pk=1),
             alias="default",
             hook_context=_hook_ctx(),
         )
@@ -4235,9 +4230,11 @@ def test_runtime_nested_source_ownership_handles_omitted_child_data():
         __name__="NestedOwnershipMutation",
         _mutation_meta=SimpleNamespace(operation="update"),
     )
-    nested_spec = SimpleNamespace(
-        kind=NESTED_SINGLE,
+    nested_spec = InputFieldSpec(
+        input_attr="child",
+        graphql_name="child",
         target_name="child",
+        kind=NESTED_SINGLE,
         nested_specs=(),
     )
 
@@ -4245,9 +4242,7 @@ def test_runtime_nested_source_ownership_handles_omitted_child_data():
         _as_serializer_mutation(mutation_cls),
         ParentSerializer(data={}),
         {},
-        # basedpyright: a stand-in spec carrying only the slots the code under test reads;
-        # _assert_runtime_write_source_ownership types the parameter as Iterable[InputFieldSpec]
-        [nested_spec],  # pyright: ignore[reportArgumentType]
+        [nested_spec],
     )
 
 
@@ -5358,35 +5353,40 @@ def test_attestation_skips_serializer_only_and_non_matching_sources():
     category = product_models.Category.objects.create(name="SkipCat")
     item = product_models.Item.objects.create(name="SkipItem", category=category)
 
-    ghost_single = SimpleNamespace(
-        kind=RELATION_SINGLE,
+    ghost_single = InputFieldSpec(
+        input_attr="ghost",
+        graphql_name="ghost",
         target_name="ghost",
+        kind=RELATION_SINGLE,
         source="not_a_field",
-        nested_specs=None,
     )
-    ghost_multi = SimpleNamespace(
-        kind=RELATION_MULTI,
+    ghost_multi = InputFieldSpec(
+        input_attr="ghosts",
+        graphql_name="ghosts",
         target_name="ghosts",
-        source="also_missing",
-        nested_specs=None,
-    )
-    fk_as_multi = SimpleNamespace(
         kind=RELATION_MULTI,
+        source="also_missing",
+    )
+    fk_as_multi = InputFieldSpec(
+        input_attr="cat_as_multi",
+        graphql_name="cat_as_multi",
         target_name="cat_as_multi",
+        kind=RELATION_MULTI,
         source="category",
-        nested_specs=None,
     )
-    scalar_as_single = SimpleNamespace(
-        kind=RELATION_SINGLE,
+    scalar_as_single = InputFieldSpec(
+        input_attr="name",
+        graphql_name="name",
         target_name="name",
-        source="name",
-        nested_specs=None,
-    )
-    absent_single = SimpleNamespace(
         kind=RELATION_SINGLE,
+        source="name",
+    )
+    absent_single = InputFieldSpec(
+        input_attr="absent_cat",
+        graphql_name="absent_cat",
         target_name="absent_cat",
+        kind=RELATION_SINGLE,
         source="category",
-        nested_specs=None,
     )
     fake_mut = SimpleNamespace(
         __name__="SkipMut",
@@ -5400,7 +5400,12 @@ def test_attestation_skips_serializer_only_and_non_matching_sources():
         ],
         _injected_field_specs=None,
     )
-    fake_serializer = SimpleNamespace(fields={}, validated_data={})
+
+    class EmptySerializer(serializers.Serializer[object]):
+        pass
+
+    validated = EmptySerializer(data={})
+    assert validated.is_valid()
     # The manifest names the in-scope specs (so their skip paths are exercised) but
     # NOT ``absent_cat`` (a relation the client never supplied is simply absent).
     # No raise, no query: serializer-only sources (FieldDoesNotExist), a scalar
@@ -5408,9 +5413,7 @@ def test_attestation_skips_serializer_only_and_non_matching_sources():
     # M2M) are all skipped; the absent spec is never looked at.
     serializer_resolvers._attest_saved_relations(
         _as_serializer_mutation(fake_mut),
-        # basedpyright: a stand-in serializer carrying only the slots the code under test reads;
-        # _attest_saved_relations types the parameter as DRFSerializer
-        fake_serializer,  # pyright: ignore[reportArgumentType]
+        validated,
         item,
         alias="default",
         m2m_before={},
@@ -5429,11 +5432,12 @@ def test_attestation_rejects_a_cleared_fk_that_was_not_cleared():
     category = product_models.Category.objects.create(name="NullCat")
     item = product_models.Item.objects.create(name="NullItem", category=category)
 
-    fk_spec = SimpleNamespace(
-        kind=RELATION_SINGLE,
+    fk_spec = InputFieldSpec(
+        input_attr="category",
+        graphql_name="category",
         target_name="category",
+        kind=RELATION_SINGLE,
         source="category",
-        nested_specs=None,
     )
     fake_mut = SimpleNamespace(
         __name__="NullMut",
@@ -5441,13 +5445,16 @@ def test_attestation_rejects_a_cleared_fk_that_was_not_cleared():
         _input_field_specs=[fk_spec],
         _injected_field_specs=None,
     )
-    fake_serializer = SimpleNamespace(fields={}, validated_data={"category": None})
+
+    class NullCategorySerializer(serializers.Serializer[object]):
+        category = serializers.IntegerField(allow_null=True)
+
+    validated = NullCategorySerializer(data={"category": None})
+    assert validated.is_valid()
     with pytest.raises(ConfigurationError, match="ignored or replaced a validated relation"):
         serializer_resolvers._attest_saved_relations(
             _as_serializer_mutation(fake_mut),
-            # basedpyright: a stand-in serializer carrying only the slots the code under test
-            # reads; _attest_saved_relations types the parameter as DRFSerializer
-            fake_serializer,  # pyright: ignore[reportArgumentType]
+            validated,
             item,
             alias="default",
             m2m_before={},
@@ -5457,14 +5464,15 @@ def test_attestation_rejects_a_cleared_fk_that_was_not_cleared():
 
 def test_decode_nested_multi_non_iterable_returns_field_error():
     """Passing a non-iterable to _decode_nested for NESTED_MULTI returns a field-keyed error."""
-    spec = SimpleNamespace(
+    spec = InputFieldSpec(
+        input_attr="shelves",
+        graphql_name="shelves",
+        target_name="shelves",
         kind=NESTED_MULTI,
-        nested_specs=[],
+        nested_specs=(),
     )
     result, error = serializer_resolvers._decode_nested(
-        # basedpyright: a stand-in spec carrying only the slots the code under test reads;
-        # _decode_nested types the parameter as InputFieldSpec
-        spec,  # pyright: ignore[reportArgumentType]
+        spec,
         12345,
         info=unread_info(),
         path_prefix="shelves",

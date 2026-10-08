@@ -5,6 +5,7 @@ Traversal on the wire is ``examples/fakeshop/test_query/test_library_api.py``.
 """
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -46,6 +47,7 @@ from django_strawberry_framework.utils.relations import (
     relation_link,
     validate_lookup_expr,
 )
+from tests._relation_fixtures import RpCompositeParent
 from tests.optimizer._link_models import (
     LnkColumnChild,
     LnkPairChild,
@@ -55,11 +57,17 @@ from tests.optimizer._link_models import (
 )
 
 
-def _as_model(stand_in: object) -> type[Model]:
-    """Hand a duck-typed model to a relation helper that takes a model class."""
-    # basedpyright: a stand-in model carrying only the slots the code under test reads; the
-    # relation helpers type the parameter as type[Model]
-    return stand_in  # pyright: ignore[reportReturnType]
+def _serving_field(
+    monkeypatch: pytest.MonkeyPatch,
+    answer: Callable[[str], object],
+) -> type[Model]:
+    """A real model (``Book``) whose ``_meta.get_field`` answers every segment through ``answer``.
+
+    The answer is planted in the ``Options`` instance dict, so the undo deletes
+    it and the class method shows through again.
+    """
+    monkeypatch.setitem(vars(Book._meta), "get_field", answer)
+    return Book
 
 
 @dataclass(frozen=True)
@@ -646,29 +654,18 @@ def test_classify_path_hidden_reverse_relation_raises():
         classify_path(Patron, "definitely_hidden_reverse")
 
 
-class _SingleFieldMeta:
-    """A fake model ``_meta`` whose ``get_field`` answers one field for every segment."""
-
-    def __init__(self, field: object) -> None:
-        super().__init__()
-        self.field = field
-
-    def get_field(self, name: str) -> object:
-        return self.field
-
-
-def test_classify_path_empty_path_infos_relation_raises():
+def test_classify_path_empty_path_infos_relation_raises(monkeypatch: pytest.MonkeyPatch):
     """A relation exposing empty ``path_infos`` raises (defensive - no real field does).
 
     Stock Django relation descriptors always populate ``path_infos``; this pins
-    the fail-closed branch with a minimal fake model whose ``get_field`` returns
+    the fail-closed branch with a real model whose ``get_field`` returns
     a traversable-looking relation with an empty ``path_infos``.
     """
     fake_field = SimpleNamespace(is_relation=True, path_infos=[])
-    fake_model = SimpleNamespace(_meta=_SingleFieldMeta(fake_field))
+    model = _serving_field(monkeypatch, lambda name: fake_field)
 
     with pytest.raises(PathResolutionError) as excinfo:
-        classify_path(_as_model(fake_model), "rel")
+        classify_path(model, "rel")
 
     assert excinfo.value.segment == "rel"
 
@@ -681,13 +678,15 @@ def test_classify_path_non_string_path_raises_typed_path_error():
         classify_path(Book, object())  # pyright: ignore[reportArgumentType]
 
 
-def test_classify_path_malformed_path_info_member_raises_typed_path_error():
+def test_classify_path_malformed_path_info_member_raises_typed_path_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Malformed path-info metadata cannot escape as an attribute error."""
     fake_field = SimpleNamespace(is_relation=True, path_infos=[object()])
-    fake_model = SimpleNamespace(_meta=_SingleFieldMeta(fake_field))
+    model = _serving_field(monkeypatch, lambda name: fake_field)
 
     with pytest.raises(PathResolutionError) as excinfo:
-        classify_path(_as_model(fake_model), "rel")
+        classify_path(model, "rel")
 
     assert excinfo.value.segment == "rel"
 
@@ -1052,17 +1051,7 @@ def test_has_composite_pk_cardinality():
     """Composite-PK returns True only when pk_fields contains multiple fields."""
     assert has_composite_pk(Book) is False
 
-    single_pk_model = SimpleNamespace(
-        _meta=SimpleNamespace(pk_fields=[SimpleNamespace(name="id")]),
-    )
-    assert has_composite_pk(_as_model(single_pk_model)) is False
-
-    multi_pk_model = SimpleNamespace(
-        _meta=SimpleNamespace(
-            pk_fields=[SimpleNamespace(name="tenant_id"), SimpleNamespace(name="id")],
-        ),
-    )
-    assert has_composite_pk(_as_model(multi_pk_model)) is True
+    assert has_composite_pk(RpCompositeParent) is True
 
 
 def test_relation_bool_none_value_falls_back_to_default():
@@ -1072,16 +1061,16 @@ def test_relation_bool_none_value_falls_back_to_default():
     assert relation_bool(field_with_none, "flag", default=False) is False
 
 
-def test_resolve_segment_field_unexpected_exception_converts_to_field_does_not_exist():
+def test_resolve_segment_field_unexpected_exception_converts_to_field_does_not_exist(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Unexpected exception in get_field converts into FieldDoesNotExist."""
 
-    class _ExplodingMeta:
-        def get_field(self, _segment: str):
-            raise RuntimeError("meta get_field exploded")
+    def _exploding(_segment: str) -> object:
+        raise RuntimeError("meta get_field exploded")
 
-    exploding_model = SimpleNamespace(_meta=_ExplodingMeta())
     with pytest.raises(FieldDoesNotExist):
-        _resolve_segment_field(_as_model(exploding_model), "field")
+        _resolve_segment_field(_serving_field(monkeypatch, _exploding), "field")
 
 
 def test_relation_metadata_rejects_non_boolean_and_non_string_slots():
@@ -1134,12 +1123,13 @@ def test_traversable_relation_probe_handles_false_and_hostile_flags():
     assert _is_traversable_relation(_UnreadableRelationFlag()) is False
 
 
-def test_classify_path_wraps_malformed_relation_flags_and_taxonomy():
+def test_classify_path_wraps_malformed_relation_flags_and_taxonomy(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Malformed flags at the segment gate and at the kind gate both surface as path errors."""
     malformed_flag = SimpleNamespace(is_relation=1)
-    flag_model = SimpleNamespace(_meta=_SingleFieldMeta(malformed_flag))
     with pytest.raises(PathResolutionError):
-        classify_path(_as_model(flag_model), "relation")
+        classify_path(_serving_field(monkeypatch, lambda name: malformed_flag), "relation")
 
     path_info = SimpleNamespace(m2m=False, to_opts=SimpleNamespace(model=Book))
     malformed_kind = SimpleNamespace(
@@ -1151,9 +1141,8 @@ def test_classify_path_wraps_malformed_relation_flags_and_taxonomy():
         auto_created=False,
         concrete=True,
     )
-    kind_model = SimpleNamespace(_meta=_SingleFieldMeta(malformed_kind))
     with pytest.raises(PathResolutionError):
-        classify_path(_as_model(kind_model), "relation")
+        classify_path(_serving_field(monkeypatch, lambda name: malformed_kind), "relation")
 
 
 def test_lookup_validation_wraps_every_transform_failure_stage():
@@ -1354,7 +1343,9 @@ def test_is_forward_concrete_relation_contains_every_metadata_read():
     assert is_forward_concrete_relation(_HostileColumn()) is False
 
 
-def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
+def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """The probe's cache clear invalidates the classifier cache beneath the answer cache.
 
     The probe's answer is computed from ``_classify_path_cached``; a clear that
@@ -1377,8 +1368,8 @@ def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
                 except KeyError:
                     raise FieldDoesNotExist(name) from None
 
-        fake_model = SimpleNamespace(_meta=_MutableOpts())
-        assert path_traverses_to_many(_as_model(fake_model), "flag") is False
+        model = _serving_field(monkeypatch, _MutableOpts().get_field)
+        assert path_traverses_to_many(model, "flag") is False
 
         _MutableOpts.fields = {
             "flag": SimpleNamespace(
@@ -1396,10 +1387,9 @@ def test_path_traverses_to_many_cache_clear_reaches_the_classification_cache():
         }
         relations_module._path_traverses_to_many_cache_clear()
 
-        assert path_traverses_to_many(_as_model(fake_model), "flag") is True
-        # The clear reaches beneath the answer cache: the classifier cache is
-        # empty too, so no warm key can serve a stale frozen classification.
-        assert _classify_path_cached.cache_info().currsize == 0
+        # The clear reaches beneath the answer cache: a classifier cache left
+        # warm would answer the stale frozen classification here.
+        assert path_traverses_to_many(model, "flag") is True
     finally:
         _classify_path_cached.cache_clear()
         relations_module._path_traverses_to_many_cache_clear()

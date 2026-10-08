@@ -78,6 +78,7 @@ from django.test import override_settings
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer import nested_planner
 from django_strawberry_framework.optimizer.join_taxonomy import (
+    LateralJoinShape,
     RelationJoinDescriptor,
     classify_relation_join,
 )
@@ -867,10 +868,13 @@ class TestAdviseCompositeIndex:
         column: str | None,
         content_type_column: str | None = None,
     ) -> RelationJoinDescriptor:
-        # basedpyright: a stand-in join descriptor carrying only the slots the code under test
-        # reads; _advise_composite_index types the parameter as RelationJoinDescriptor
-        return SimpleNamespace(  # pyright: ignore[reportReturnType]
+        return RelationJoinDescriptor(
+            kind="reverse_many_to_one",
+            windowable=column is not None,
             partition_expr=column,
+            parent_join_columns=(),
+            through_model=None,
+            lateral_shape=LateralJoinShape.DIRECT_FK,
             content_type_column=content_type_column,
         )
 

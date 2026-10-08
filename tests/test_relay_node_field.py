@@ -286,9 +286,16 @@ def test_stamp_node_type_passes_through_none_and_unstampable_objects():
     returning a ``__slots__``-style object that rejects attribute writes -
     the stamp is best-effort and such returns keep the isinstance fallback.
     """
-    # basedpyright: the path under test never reads the resolved type; _stamp_node_type types
-    # the parameter as type[_RelayDjangoType]
-    assert _stamp_node_type(object, None) is None  # pyright: ignore[reportArgumentType]
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert implements_relay_node(CategoryNode)
+    assert _stamp_node_type(CategoryNode, None) is None
     unstampable = object()
     # basedpyright: a plain stand-in class carrying no definition, which the code under test
     # reads through getattr; _stamp_node_type types the parameter as type[_RelayDjangoType]
@@ -311,8 +318,9 @@ def test_stamp_node_type_returns_a_model_instance_that_rejects_copying():
         {"__django_strawberry_definition__": type("Definition", (), {"model": Model})()},
     )
     node = UncopyableNode()
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # _stamp_node_type types the parameter as type[_RelayDjangoType]
+    # basedpyright: a type()-built class whose definition names a plain (non-Django) model, so
+    # the node is an instance that refuses copying; _stamp_node_type types the parameter as
+    # type[_RelayDjangoType]
     assert _stamp_node_type(resolved_type, node) is node  # pyright: ignore[reportArgumentType]
     assert not hasattr(node, "_dsf_node_type_hint")
 

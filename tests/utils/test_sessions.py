@@ -32,6 +32,7 @@ from django_strawberry_framework.utils.sessions import (
     note_authenticated_actor,
     session_store_class,
 )
+from tests._idioms import stub_module
 from tests.auth._helpers import _drain_until
 
 # ---------------------------------------------------------------------------
@@ -55,14 +56,11 @@ def test_session_store_class_honors_override_settings():
 def test_session_store_class_resolves_custom_engine(monkeypatch: pytest.MonkeyPatch):
     """A custom session engine resolves identically via import_string."""
     module_name = "tests.utils._stub_custom_session_engine"
-    module = types.ModuleType(module_name)
 
     class CustomSessionStore:
         pass
 
-    # basedpyright: ModuleType declares no settable attributes; the planted engine attribute is
-    # the input import_string reads
-    module.SessionStore = CustomSessionStore  # pyright: ignore[reportAttributeAccessIssue]
+    module = stub_module(module_name, SessionStore=CustomSessionStore)
     monkeypatch.setitem(sys.modules, module_name, module)
 
     with override_settings(SESSION_ENGINE=module_name):

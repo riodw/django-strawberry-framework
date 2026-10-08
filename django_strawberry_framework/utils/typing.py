@@ -14,6 +14,9 @@ and the GlobalID-callable validator share:
   An ``async def`` that ``yield``s is intentionally False here; the field
   wrappers classify that shape by VALUE at resolve time (the shared
   async-only-iterable route), not by declared shape.
+- ``is_marked_coroutine_function`` -- asgiref's detector, the one Django uses to
+  decide whether to ``await`` a view or a middleware, so it also reads a sync
+  callable marked by ``markcoroutinefunction``.
 
 And to the brittle Strawberry-private ``_strawberry_schema`` / ``.config``
 accessors (``strawberry_schema_from_*`` / ``schema_config_from_info``): the
@@ -27,6 +30,7 @@ import inspect
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar, cast, get_args, get_origin
 
+from asgiref.sync import iscoroutinefunction
 from typing_extensions import Never
 
 if TYPE_CHECKING:
@@ -95,6 +99,7 @@ if TYPE_CHECKING:
 __all__ = (
     "MAX_TYPE_WRAPPER_DEPTH",
     "is_async_callable",
+    "is_marked_coroutine_function",
     "schema_config_from_info",
     "strawberry_schema_from_info",
     "strawberry_schema_from_schema",
@@ -238,6 +243,24 @@ def is_async_callable(value: object) -> TypeGuard[Callable[..., Coroutine[object
     return inspect.iscoroutinefunction(
         getattr(target, "__call__", None),  # noqa: B004
     )
+
+
+# basedpyright: a guard replaces the caller's type, and awaiting the narrowed callable must still
+# give the caller its own result type (a view's ``HttpResponseBase``); the coroutine's parameters
+# stay ``Any`` as in typeshed's own guard, where ``object`` would refuse that result
+def is_marked_coroutine_function(
+    value: object,
+) -> TypeGuard[Callable[..., Coroutine[Any, Any, Any]]]:  # pyright: ignore[reportExplicitAny]
+    """Return whether Django's own coroutine detector reads ``value`` as async.
+
+    asgiref's ``iscoroutinefunction`` is ``inspect.iscoroutinefunction`` from
+    Python 3.12 and the only detector that reads ``markcoroutinefunction`` below it,
+    which is how Django decides whether to ``await`` a view or a middleware.
+    """
+    # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's on 3.10
+    # and 3.11, where the runtime does not deprecate it; typeshed marks asyncio's deprecated from
+    # 3.11 and the checker types asgiref's name as asyncio's
+    return iscoroutinefunction(value)  # pyright: ignore[reportDeprecated]
 
 
 def unwrap_graphql_type(gql_type: object) -> object:

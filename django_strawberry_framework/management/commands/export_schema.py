@@ -1,7 +1,6 @@
 """manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol."""
 
 import pathlib
-from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from strawberry import Schema
@@ -29,8 +28,7 @@ class Command(BaseCommand):
         )
 
     @override
-    # basedpyright: call_command can bypass argparse; object needs a str guard, a runtime change
-    def handle(self, *args: object, **options: Any) -> None:  # pyright: ignore[reportExplicitAny]
+    def handle(self, *args: object, **options: object) -> None:
         """Resolve the dotted-path schema symbol and emit SDL.
 
         Routes through three branches: ``--path`` omitted prints SDL to
@@ -42,8 +40,14 @@ class Command(BaseCommand):
         rejected earlier by argparse, before ``handle`` runs. A non-empty
         target is encoded as UTF-8 and replaced without prompting.
         """
+        # A direct ``handle`` call bypasses argparse's ``type=str``; ``call_command`` cannot.
+        schema_location = options["schema"]
+        if not isinstance(schema_location, str):
+            raise CommandError(
+                f"The schema location must be a string; got {type(schema_location).__name__}.",
+            )
         schema_symbol = import_module_symbol_or_command_error(
-            options["schema"],
+            schema_location,
             default_symbol_name="schema",
         )
 

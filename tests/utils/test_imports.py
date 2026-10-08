@@ -23,6 +23,7 @@ from django_strawberry_framework.utils.imports import (
     loaded_attr,
     require_optional_module,
 )
+from tests._idioms import stub_module
 
 _HINT = "TestFeature requires somepackage. Install it with `pip install somepackage`."
 
@@ -79,11 +80,8 @@ def test_import_attr_if_importable_returns_the_attribute_on_an_importable_module
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A reachable module returns its named attribute unchanged."""
-    fake = types.ModuleType("dsf_fake_importable_module")
     marker = object()
-    # basedpyright: ModuleType declares no settable attributes; the planted module attribute is
-    # the input the helper reads
-    fake.Marker = marker  # pyright: ignore[reportAttributeAccessIssue]
+    fake = stub_module("dsf_fake_importable_module", Marker=marker)
     monkeypatch.setitem(sys.modules, "dsf_fake_importable_module", fake)
     assert import_attr_if_importable("dsf_fake_importable_module", "Marker") is marker
 
@@ -153,10 +151,7 @@ def test_import_attr_if_importable_returns_none_on_absent_module():
 def test_import_helpers_normalize_hostile_string_subclass_names(monkeypatch: pytest.MonkeyPatch):
     """A hostile name must not escape through ``sys.modules`` hashing or getattr."""
     module_path = "dsf_hostile_name_module"
-    fake = types.ModuleType(module_path)
-    # basedpyright: ModuleType declares no settable attributes; the planted module attribute is
-    # the input the helper reads
-    fake.Marker = object()  # pyright: ignore[reportAttributeAccessIssue]
+    fake = stub_module(module_path, Marker=object())
     monkeypatch.setitem(sys.modules, module_path, fake)
     hostile_path = _HostileString(module_path)
     hostile_attr = _HostileString("Marker")

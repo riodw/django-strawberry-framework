@@ -12,7 +12,6 @@ or the ValueError-passthrough.
 """
 
 import sys
-import types
 
 import pytest
 from django.core.management import CommandError
@@ -22,6 +21,7 @@ from django_strawberry_framework.management.commands._imports import (
     import_or_command_error,
     import_string_or_command_error,
 )
+from tests._idioms import stub_module
 
 
 def test_import_or_command_error_passes_through_return_value():
@@ -66,9 +66,7 @@ def test_import_or_command_error_does_not_swallow_other_exceptions():
 
 
 def _make_module(monkeypatch: pytest.MonkeyPatch, name: str = "imports_probe_module"):
-    module = types.ModuleType(name)
-    # basedpyright: the stub module is built at run time; ModuleType declares no schema
-    module.schema = object()  # pyright: ignore[reportAttributeAccessIssue]
+    module = stub_module(name, schema=object())
     monkeypatch.setitem(sys.modules, name, module)
     return module
 

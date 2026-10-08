@@ -4,9 +4,10 @@ Handle-level selector errors, the non-schema symbol check, whitespace ``--path``
 and stdout/``--path``/``print_schema`` byte identity run against ``config.schema``
 in ``examples/fakeshop/tests/test_export_schema.py``. What stays here has no
 project-schema shape: argparse rejects a missing positional and a bare ``--path``
-before ``handle`` runs; ``Command.create_parser`` is the only place the
-destructive-write help string is asserted; ``Path.write_text(..., newline="")``
-is a kwargs pin that Unix SDL text cannot distinguish from the platform default.
+before ``handle`` runs; a direct ``handle`` call skips argparse's ``type=str``;
+``Command.create_parser`` is the only place the destructive-write help string is
+asserted; ``Path.write_text(..., newline="")`` is a kwargs pin that Unix SDL text
+cannot distinguish from the platform default.
 """
 
 import sys
@@ -40,6 +41,16 @@ def _make_schema():
 def test_export_schema_raises_command_error_for_missing_positional_argument():
     with pytest.raises(CommandError):
         call_command("export_schema")
+
+
+def test_export_schema_raises_command_error_for_a_non_string_schema_location():
+    """A direct ``handle`` call skips argparse's ``type=str``, so ``handle`` guards the selector.
+
+    ``call_command`` cannot carry the value: it routes the positional through
+    ``parse_args`` (stringifying it), and Django refuses the positional by keyword.
+    """
+    with pytest.raises(CommandError, match="schema location must be a string"):
+        Command().handle(schema=5)
 
 
 def test_export_schema_raises_command_error_when_path_flag_has_no_value():

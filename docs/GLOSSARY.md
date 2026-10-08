@@ -1203,7 +1203,7 @@ class GenreType(DjangoType):
 
 **Status:** shipped.
 
-Overrides the GraphQL type description (defaults to the class docstring).
+Sets the GraphQL type description: a `str`, or a lazy translation string (`gettext_lazy(...)`) that stays lazy on the definition and renders once to plain text at `finalize_django_types`, in the language active then. Omitted, the type has no description; the class docstring is not read. Any other value raises `ConfigurationError` at class creation. A `str` subclass contributes the text it holds, never its own `__str__`.
 
 **See also:** [`DjangoType`](#djangotype) · [`Meta.name`](#metaname).
 

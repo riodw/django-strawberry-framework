@@ -24,7 +24,7 @@ from django.db.models import Model, QuerySet
 from django.http import HttpRequest, QueryDict
 from graphql import GraphQLError
 from strawberry import relay
-from typing_extensions import override
+from typing_extensions import Self, override
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -64,11 +64,38 @@ from django_strawberry_framework.types.definition import DjangoTypeDefinition
 _FilterT = TypeVar("_FilterT", bound=Filter)
 
 
-def _as_queryset(stand_in: object) -> QuerySet[Model]:
-    """Hand a duck-typed queryset to a filter primitive that takes a Django ``QuerySet``."""
-    # basedpyright: a stand-in queryset carrying only the slots the code under test reads; the
-    # filter primitives type qs as a QuerySet
-    return stand_in  # pyright: ignore[reportReturnType]
+class _RecordingQs(QuerySet[Model]):
+    """A real ``QuerySet`` whose query methods record the call instead of building SQL.
+
+    ``filter`` / ``exclude`` keep the keywords they were called with, ``distinct`` counts, and
+    ``none`` answers ``nothing``, a second real queryset the test can recognise by identity.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(model=models.Shelf)
+        self.captured: dict[str, object] = {}
+        self.distinct_calls = 0
+        self.nothing: _RecordingQs | None = None
+
+    @override
+    def filter(self, *args: object, **kwargs: object) -> Self:
+        self.captured.update(kwargs)
+        return self
+
+    @override
+    def exclude(self, *args: object, **kwargs: object) -> Self:
+        self.captured.update(kwargs)
+        return self
+
+    @override
+    def distinct(self, *field_names: str) -> Self:
+        self.distinct_calls += 1
+        return self
+
+    @override
+    def none(self) -> Self:
+        self.nothing = type(self)()
+        return self.nothing
 
 
 @pytest.fixture(autouse=True)
@@ -111,28 +138,20 @@ def test_typed_filter_is_a_django_filter_filter():
 
 def test_array_filter_treats_empty_list_as_value():
     """`[]` is a real value for `ArrayField`; default filter must run."""
-    captured = {}
-
-    class _Qs:
-        def distinct(self):
-            return self
-
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     f = ArrayFilter(field_name="tags", lookup_expr="exact")
-    result = f.filter(_as_queryset(_Qs()), [])
-    assert isinstance(result, _Qs)
-    assert captured == {"tags__exact": []}
+    result = f.filter(qs, [])
+    assert result is qs
+    assert qs.captured == {"tags__exact": []}
 
 
 def test_array_filter_passes_through_none():
     """`None` is `EMPTY_VALUES`-ish and short-circuits."""
-    sentinel = object()
+    sentinel = _RecordingQs()
     f = ArrayFilter(field_name="tags")
     # The cookbook returns the original queryset untouched for `None`.
-    assert f.filter(_as_queryset(sentinel), None) is sentinel
+    assert f.filter(sentinel, None) is sentinel
 
 
 def test_array_filter_method_setter_swaps_in_array_filter_method():
@@ -199,40 +218,30 @@ def test_integer_range_filter_decomposes_range_into_gte_lte():
     ``__range`` (``BETWEEN``) bind - so each bound flows through Django's range-aware
     integer lookup instead of overflowing the backend on an out-of-range value.
     """
-    captured = {}
-
-    class _Qs:
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
-    result = f.filter(_as_queryset(_Qs()), [1, 100])
-    assert isinstance(result, _Qs)
-    assert captured == {"signed_big__gte": 1, "signed_big__lte": 100}
+    result = f.filter(qs, [1, 100])
+    assert result is qs
+    assert qs.captured == {"signed_big__gte": 1, "signed_big__lte": 100}
 
 
 def test_integer_range_filter_excludes_via_negated_conjunction():
     """Under ``exclude=True`` the decomposed pair is applied through ``qs.exclude`` -
     the exact complement of ``NOT (col BETWEEN a AND b)``.
     """
-    captured = {}
-
-    class _Qs:
-        def exclude(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range", exclude=True)
-    f.filter(_as_queryset(_Qs()), [1, 100])
-    assert captured == {"signed_big__gte": 1, "signed_big__lte": 100}
+    f.filter(qs, [1, 100])
+    assert qs.captured == {"signed_big__gte": 1, "signed_big__lte": 100}
 
 
 def test_integer_range_filter_passes_through_empty_value():
     """An empty / ``None`` range keeps django-filter's skip (no bounds supplied)."""
-    sentinel = object()
+    sentinel = _RecordingQs()
     f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
-    assert f.filter(_as_queryset(sentinel), None) is sentinel
+    assert f.filter(sentinel, None) is sentinel
 
 
 def test_integer_range_filter_lying_list_subclass_fails_closed():
@@ -246,30 +255,20 @@ def test_integer_range_filter_lying_list_subclass_fails_closed():
         def __iter__(self):
             raise RuntimeError("hostile __iter__ detonated")
 
-    sentinel = object()
+    sentinel = _RecordingQs()
     f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
-    assert f.filter(_as_queryset(sentinel), Lying([1, 2])) is sentinel
+    assert f.filter(sentinel, Lying([1, 2])) is sentinel
 
 
 def test_integer_range_filter_applies_distinct_when_flagged():
     """``IntegerRangeFilter.filter`` calls ``.distinct()`` when ``distinct=True``."""
-    calls = {"distinct": 0}
-    seen: dict[str, dict[str, object]] = {}
-
-    class _Qs:
-        def distinct(self):
-            calls["distinct"] += 1
-            return self
-
-        def filter(self, **kwargs: object):
-            seen["filter_kwargs"] = kwargs
-            return self
+    qs = _RecordingQs()
 
     f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range", distinct=True)
-    result = f.filter(_as_queryset(_Qs()), [1, 100])
-    assert isinstance(result, _Qs)
-    assert calls["distinct"] == 1
-    assert seen["filter_kwargs"] == {"signed_big__gte": 1, "signed_big__lte": 100}
+    result = f.filter(qs, [1, 100])
+    assert result is qs
+    assert qs.distinct_calls == 1
+    assert qs.captured == {"signed_big__gte": 1, "signed_big__lte": 100}
 
 
 # ---------------------------------------------------------------------------
@@ -278,46 +277,33 @@ def test_integer_range_filter_applies_distinct_when_flagged():
 
 
 def test_list_filter_returns_qs_none_on_empty_list():
-    class _Qs:
-        def none(self):
-            return "none-sentinel"
+    qs = _RecordingQs()
 
     f = ListFilter(field_name="ids")
-    assert f.filter(_as_queryset(_Qs()), []) == "none-sentinel"
+    assert f.filter(qs, []) is qs.nothing
 
 
 def test_list_filter_returns_qs_when_excluding_on_empty_list():
-    class _Qs:
-        pass
-
-    qs = _Qs()
+    qs = _RecordingQs()
     f = ListFilter(field_name="ids", exclude=True)
-    assert f.filter(_as_queryset(qs), []) is qs
+    assert f.filter(qs, []) is qs
 
 
 def test_list_filter_defers_to_super_for_nonempty_lists():
-    captured = {}
-
-    class _Qs:
-        def distinct(self):
-            return self
-
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     f = ListFilter(field_name="ids", lookup_expr="in")
-    f.filter(_as_queryset(_Qs()), [1, 2])
-    assert captured == {"ids__in": [1, 2]}
+    f.filter(qs, [1, 2])
+    assert qs.captured == {"ids__in": [1, 2]}
 
 
 def test_list_filter_passes_through_none():
     """``None`` skips the list-shape gate entirely and falls through to
     ``Filter.filter``, which short-circuits on ``EMPTY_VALUES`` - the same
     pass-through the sibling ``IntegerInFilter`` documents."""
-    sentinel = object()
+    sentinel = _RecordingQs()
     f = ListFilter(field_name="ids")
-    assert f.filter(_as_queryset(sentinel), None) is sentinel
+    assert f.filter(sentinel, None) is sentinel
 
 
 # ---------------------------------------------------------------------------
@@ -327,32 +313,22 @@ def test_list_filter_passes_through_none():
 
 def test_global_id_filter_decodes_via_strawberry_relay():
     """The decoded `node_id` reaches the underlying `Filter.filter` call."""
-    captured = {}
-
-    class _Qs:
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     encoded = relay.to_base64("BookType", "42")
     f = GlobalIDFilter(field_name="id", lookup_expr="exact")
-    f.filter(_as_queryset(_Qs()), encoded)
-    assert captured == {"id__exact": "42"}
+    f.filter(qs, encoded)
+    assert qs.captured == {"id__exact": "42"}
 
 
 def test_global_id_filter_passes_through_none():
-    captured = {}
-
-    class _Qs:
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     f = GlobalIDFilter(field_name="id", lookup_expr="exact")
     # `None` falls through to `Filter.filter`, which short-circuits on EMPTY_VALUES.
-    result = f.filter(_as_queryset(_Qs()), None)
-    assert captured == {}
-    assert isinstance(result, _Qs)
+    result = f.filter(qs, None)
+    assert qs.captured == {}
+    assert result is qs
 
 
 def test_global_id_multiple_choice_filter_decodes_every_element(monkeypatch: pytest.MonkeyPatch):
@@ -371,22 +347,17 @@ def test_global_id_multiple_choice_filter_decodes_every_element(monkeypatch: pyt
     # wrote through to the upstream class.
     monkeypatch.setattr(GlobalIDMultipleChoiceFilter.__mro__[1], "filter", spy)
     f = GlobalIDMultipleChoiceFilter(field_name="id")
-    f.filter(_as_queryset(object()), [encoded_one, encoded_two])
+    f.filter(_RecordingQs(), [encoded_one, encoded_two])
     assert captured == [["1", "2"]]
 
 
 def test_global_id_multiple_choice_filter_passes_through_none():
-    captured = {}
-
-    class _Qs:
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     f = GlobalIDMultipleChoiceFilter(field_name="id")
-    result = f.filter(_as_queryset(_Qs()), None)
-    assert captured == {}
-    assert isinstance(result, _Qs)
+    result = f.filter(qs, None)
+    assert qs.captured == {}
+    assert result is qs
 
 
 @pytest.mark.parametrize("value", [iter(["not-a-global-id"]), object(), "not-a-list"])
@@ -395,7 +366,7 @@ def test_global_id_multiple_choice_filter_rejects_malformed_container(value: obj
     f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in")
 
     with pytest.raises(GraphQLError, match="expected a list of GlobalIDs") as exc_info:
-        f.filter(_as_queryset(object()), value)
+        f.filter(_RecordingQs(), value)
 
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
@@ -421,16 +392,12 @@ def test_global_id_multiple_choice_field_omission_still_enforces_required():
 
 
 def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_filter():
-    class _Qs:
-        def none(self):
-            return "none-sentinel"
-
-    qs = _Qs()
+    qs = _RecordingQs()
     global_ids = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in")
     list_filter = ListFilter(field_name="id", lookup_expr="in")
 
-    assert global_ids.filter(_as_queryset(qs), []) == "none-sentinel"
-    assert list_filter.filter(_as_queryset(qs), []) == "none-sentinel"
+    assert global_ids.filter(qs, []) is qs.nothing
+    assert list_filter.filter(qs, []) is qs.nothing
 
 
 def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_filter():
@@ -443,40 +410,30 @@ def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_
     contract must not be ``in``-only.
     """
 
-    class _Qs:
-        def none(self):
-            return "none-sentinel"
-
-    qs = _Qs()
+    qs = _RecordingQs()
     # Default lookup_expr is ``exact`` (settings.DEFAULT_LOOKUP_EXPR).
     global_ids = GlobalIDMultipleChoiceFilter(field_name="genres")
     list_filter = ListFilter(field_name="genres", lookup_expr="exact")
 
     assert global_ids.lookup_expr == "exact"
-    assert global_ids.filter(_as_queryset(qs), []) == "none-sentinel"
-    assert list_filter.filter(_as_queryset(qs), []) == "none-sentinel"
+    assert global_ids.filter(qs, []) is qs.nothing
+    assert list_filter.filter(qs, []) is qs.nothing
 
 
 def test_global_id_multiple_choice_filter_empty_excluded_in_matches_everything():
-    class _Qs:
-        pass
-
-    qs = _Qs()
+    qs = _RecordingQs()
     f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in", exclude=True)
 
-    assert f.filter(_as_queryset(qs), []) is qs
+    assert f.filter(qs, []) is qs
 
 
 def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everything():
     """Exclude + empty membership is the complement of match-nothing: every row."""
 
-    class _Qs:
-        pass
-
-    qs = _Qs()
+    qs = _RecordingQs()
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact", exclude=True)
 
-    assert f.filter(_as_queryset(qs), []) is qs
+    assert f.filter(qs, []) is qs
 
 
 # ---------------------------------------------------------------------------
@@ -491,20 +448,6 @@ def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everythin
 # ---------------------------------------------------------------------------
 
 
-class _CapturingQs:
-    """Predicate-capturing stub: records ``filter`` kwargs, no database needed."""
-
-    def __init__(self):
-        self.captured = {}
-
-    def distinct(self):
-        return self
-
-    def filter(self, **kwargs: object):
-        self.captured.update(kwargs)
-        return self
-
-
 def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects():
     """The same reject covers the non-``in`` (per-element) path.
 
@@ -515,7 +458,7 @@ def test_global_id_multiple_choice_filter_empty_node_id_exact_path_rejects():
     """
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact")
     with pytest.raises(GraphQLError, match="empty node id") as exc_info:
-        f.filter(_as_queryset(object()), [relay.to_base64("GenreType", "")])
+        f.filter(_RecordingQs(), [relay.to_base64("GenreType", "")])
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
@@ -525,10 +468,10 @@ def test_global_id_multiple_choice_filter_well_formed_list_still_applies_predica
     Removing the empty-stripping block must not disturb the normal path -- a list
     of real ids compiles the byte-identical ``{field__in: node_ids}`` predicate.
     """
-    qs = _CapturingQs()
+    qs = _RecordingQs()
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
     encoded = [relay.to_base64("GenreType", "5"), relay.to_base64("GenreType", "9")]
-    f.filter(_as_queryset(qs), encoded)
+    f.filter(qs, encoded)
     assert qs.captured == {"genres__in": ["5", "9"]}
 
 
@@ -670,38 +613,25 @@ def test_global_id_multiple_choice_filter_non_pk_to_field_union_by_pk():
 
 def test_global_id_filter_fk_to_pk_predicate_is_byte_identical():
     """Without the marker, the predicate is the unchanged ``{field__lookup: node_id}``."""
-    captured = {}
-
-    class _Qs:
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     encoded = relay.to_base64("ShelfType", "7")
     f = GlobalIDFilter(field_name="shelf", lookup_expr="exact")
     assert getattr(f, _GLOBALID_RELATION_PK_ATTR, False) is not True
-    f.filter(_as_queryset(_Qs()), encoded)
-    assert captured == {"shelf__exact": "7"}
+    f.filter(qs, encoded)
+    assert qs.captured == {"shelf__exact": "7"}
 
 
 def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
     """Without the marker, the ``in`` predicate keeps the raw whole-list form."""
-    captured = {}
-
-    class _Qs:
-        def distinct(self):
-            return self
-
-        def filter(self, **kwargs: object):
-            captured.update(kwargs)
-            return self
+    qs = _RecordingQs()
 
     encoded = [relay.to_base64("GenreType", "1"), relay.to_base64("GenreType", "2")]
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
     assert getattr(f, _GLOBALID_RELATION_PK_ATTR, False) is not True
     # ``MultipleChoiceFilter`` defaults ``distinct=True``; the stub must accept it.
-    f.filter(_as_queryset(_Qs()), encoded)
-    assert captured == {"genres__in": ["1", "2"]}
+    f.filter(qs, encoded)
+    assert qs.captured == {"genres__in": ["1", "2"]}
 
 
 def test_global_id_filter_marked_empty_node_id_rejects_before_query():
@@ -722,7 +652,7 @@ def test_global_id_filter_marked_empty_node_id_rejects_before_query():
     f = GlobalIDFilter(field_name="favorite_genre", lookup_expr="exact")
     setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
     with pytest.raises(GraphQLError, match="empty node id") as exc_info:
-        f.filter(_as_queryset(object()), relay.to_base64("GenreType", ""))
+        f.filter(_RecordingQs(), relay.to_base64("GenreType", ""))
     assert exc_info.value.extensions == {"code": "GLOBALID_INVALID"}
 
 
@@ -796,21 +726,13 @@ def test_related_filter_accepts_unqualified_name_argument():
 def test_related_filter_bind_filterset_sets_bound_filterset():
     f = RelatedFilter("ShelfFilter")
 
-    class _A:
-        pass
+    from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
 
-    class _B:
-        pass
-
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # RelatedFilter.bind_filterset types the parameter as type[FilterSet]
-    f.bind_filterset(_A)  # pyright: ignore[reportArgumentType]
-    assert f.bound_filterset is _A
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # RelatedFilter.bind_filterset types the parameter as type[FilterSet]
-    f.bind_filterset(_B)  # pyright: ignore[reportArgumentType]
+    f.bind_filterset(ShelfFilter)
+    assert f.bound_filterset is ShelfFilter
+    f.bind_filterset(BranchFilter)
     # Idempotent: a second `bind_filterset` is a no-op.
-    assert f.bound_filterset is _A
+    assert f.bound_filterset is ShelfFilter
 
 
 def test_related_filter_filterset_property_resolves_lazy_string():
@@ -889,10 +811,10 @@ def test_array_filter_method_call_passes_through_none():
     def custom(qs: object, name: str, value: object):
         return ("custom", name, value)
 
-    sentinel = object()
+    sentinel = _RecordingQs()
     f = ArrayFilter(field_name="tags", method=custom)
     assert isinstance(f.filter, ArrayFilterMethod)
-    assert f.filter(_as_queryset(sentinel), None) is sentinel
+    assert f.filter(sentinel, None) is sentinel
 
 
 def test_array_filter_method_call_dispatches_to_custom_method():
@@ -902,7 +824,7 @@ def test_array_filter_method_call_dispatches_to_custom_method():
         return ("custom", name, value)
 
     f = ArrayFilter(field_name="tags", method=custom)
-    assert f.filter(_as_queryset("qs-sentinel"), [1, 2]) == ("custom", "tags", [1, 2])
+    assert f.filter(_RecordingQs(), [1, 2]) == ("custom", "tags", [1, 2])
 
 
 def test_list_filter_method_setter_swaps_in_list_filter_method():
@@ -921,9 +843,9 @@ def test_list_filter_method_call_passes_through_none():
     def custom(qs: object, name: str, value: object):
         return ("custom", name, value)
 
-    sentinel = object()
+    sentinel = _RecordingQs()
     f = ListFilter(field_name="ids", method=custom)
-    assert f.filter(_as_queryset(sentinel), None) is sentinel
+    assert f.filter(sentinel, None) is sentinel
 
 
 def test_list_filter_method_call_dispatches_to_custom_method():
@@ -933,28 +855,18 @@ def test_list_filter_method_call_dispatches_to_custom_method():
         return ("custom", name, value)
 
     f = ListFilter(field_name="ids", method=custom)
-    assert f.filter(_as_queryset("qs-sentinel"), [1, 2]) == ("custom", "ids", [1, 2])
+    assert f.filter(_RecordingQs(), [1, 2]) == ("custom", "ids", [1, 2])
 
 
 def test_array_filter_applies_distinct_when_flagged():
     """`ArrayFilter.filter` calls `.distinct()` when the filter is `distinct=True`."""
-    calls = {"distinct": 0}
-    seen: dict[str, dict[str, object]] = {}
-
-    class _Qs:
-        def distinct(self):
-            calls["distinct"] += 1
-            return self
-
-        def filter(self, **kwargs: object):
-            seen["filter_kwargs"] = kwargs
-            return self
+    qs = _RecordingQs()
 
     f = ArrayFilter(field_name="tags", lookup_expr="exact", distinct=True)
-    result = f.filter(_as_queryset(_Qs()), [1])
-    assert isinstance(result, _Qs)
-    assert calls["distinct"] == 1
-    assert seen["filter_kwargs"] == {"tags__exact": [1]}
+    result = f.filter(qs, [1])
+    assert result is qs
+    assert qs.distinct_calls == 1
+    assert qs.captured == {"tags__exact": [1]}
 
 
 # ---------------------------------------------------------------------------
@@ -1153,7 +1065,7 @@ def test_multi_value_filter_encode_only_reject_names_index():
     owner = _owner("callable")
     f = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
     with pytest.raises(GraphQLError, match="at index 0") as exc_info:
-        f.filter(_as_queryset(object()), [relay.to_base64("AnythingAtAll", "99")])
+        f.filter(_RecordingQs(), [relay.to_base64("AnythingAtAll", "99")])
     assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
 
 
@@ -1204,7 +1116,7 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest
 
     accepted = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
     accepted.filter(
-        _as_queryset(object()),
+        _RecordingQs(),
         [relay.to_base64("library.book", "1"), relay.to_base64("library.book", "2")],
     )
     assert captured == [[1, 2]]
@@ -1212,7 +1124,7 @@ def test_multi_value_filter_strategy_aware_indexes_rejection(monkeypatch: pytest
     rejected = _bound(GlobalIDMultipleChoiceFilter(field_name="id"), owner)
     with pytest.raises(GraphQLError, match="at index 1"):
         rejected.filter(
-            _as_queryset(object()),
+            _RecordingQs(),
             [relay.to_base64("library.book", "1"), relay.to_base64("OwnerType", "2")],
         )
 
@@ -1579,14 +1491,16 @@ def test_integer_in_filter_string_value_is_rejected_not_iterated_charwise():
     """A string value iterated char-by-char through the coercion loop:
     ``in: "26"`` coerced to ``[2, 6]`` -- a wrong-result membership, not
     just a raw escape."""
-    f = IntegerInFilter(field_name="lifetime_fines_cents")
 
-    class Parent:
-        _meta = type("_Meta", (), {"model": models.Patron})()
+    class PatronFilter(FilterSet):
+        fines = IntegerInFilter(field_name="lifetime_fines_cents")
 
-    # basedpyright: a fake parent carrying only the _meta.model slot the code under test reads;
-    # django-filter types Filter.parent as a FilterSet
-    f.parent = Parent()  # pyright: ignore[reportAttributeAccessIssue]
+        class Meta:
+            model = models.Patron
+            fields = {"name": ["exact"]}
+
+    # django-filter binds the declared filter to its set as ``parent`` on instantiation.
+    f = PatronFilter().filters["fines"]
     with pytest.raises(GraphQLError):
         f.filter(models.Shelf.objects.none(), "26")
 

@@ -35,7 +35,7 @@ from .operations import _OPERATION_PERMISSION_ACTION
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import ClassVar, Protocol, TypeAlias
+    from typing import Protocol, TypeAlias
 
     from django.db import models
     from strawberry.types import Info
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
         The class carries its nested ``Meta`` and the ``_resolve_model`` seam.
         """
 
-        Meta: ClassVar[type[object]]
+        Meta: type
 
         @classmethod
         def _resolve_model(cls, meta: type[object]) -> type[models.Model] | None: ...

@@ -44,7 +44,7 @@ not live. Live bind/write siblings:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import pytest
 import strawberry
@@ -1748,9 +1748,8 @@ def _category_field_map(
         if with_create:
 
             @override
-            # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-            def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-                return None
+            def create(self, validated_data: dict[str, object]) -> NoReturn:
+                raise AssertionError("never called; the nested-write check reads its presence")
 
     return CategorySer, dict(CategorySer().fields)
 
@@ -2016,9 +2015,8 @@ def test_nested_fields_stored_on_snapshot_and_builds():
             fields = ("name", "items")
 
         @override
-        # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-        def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-            return None
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
 
     class CategoryT(DjangoType):
         class Meta:
@@ -2078,9 +2076,8 @@ def test_nested_hidden_field_source_collision_raises_at_class_creation():
             fields = ("name", "items")
 
         @override
-        # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-        def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-            return None
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
 
     with pytest.raises(ConfigurationError, match="nested serializer path 'items'"):
 
@@ -2113,9 +2110,8 @@ def test_nested_star_source_field_raises_at_class_creation():
             fields = ("name", "items")
 
         @override
-        # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-        def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-            return None
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
 
     with pytest.raises(ConfigurationError, match="nested serializer path 'items'.*source='\\*'"):
 
@@ -2278,9 +2274,8 @@ def _nested_category_serializer():
             fields = ("name", "items")
 
         @override
-        # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-        def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-            return None
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
 
     return CategoryWithItems
 
@@ -2482,9 +2477,8 @@ def test_validate_nested_fields_child_serializer_errors():
             fields = ("child",)
 
         @override
-        # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-        def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-            pass
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
 
     class Parent2(serializers.ModelSerializer[product_models.Category]):
         child = BrokenExcChild()
@@ -2495,9 +2489,8 @@ def test_validate_nested_fields_child_serializer_errors():
             fields = ("child",)
 
         @override
-        # basedpyright: a stub ``create`` whose presence the nested-write check reads; it is never called, so it returns nothing
-        def create(self, validated_data: dict[str, object]):  # pyright: ignore[reportIncompatibleMethodOverride]
-            pass
+        def create(self, validated_data: dict[str, object]) -> NoReturn:
+            raise AssertionError("the nested-write check reads this override; nothing calls it")
 
     with pytest.raises(ConfigurationError) as config_exc:
 

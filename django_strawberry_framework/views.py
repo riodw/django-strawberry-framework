@@ -85,7 +85,6 @@ import codecs
 from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from asgiref.sync import iscoroutinefunction
 from cross_web import DjangoHTTPRequestAdapter, HTTPException
 from django.conf import settings
 from django.utils.decorators import classonlymethod
@@ -105,6 +104,7 @@ from django_strawberry_framework._request_body import body_exceeds_limit
 from django_strawberry_framework.conf import max_request_body_bytes_setting
 from django_strawberry_framework.exceptions import ConfigurationError, describe_value
 from django_strawberry_framework.utils.querysets import run_in_one_sync_boundary
+from django_strawberry_framework.utils.typing import is_marked_coroutine_function
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -599,9 +599,7 @@ class _RequestBodyBoundaryMixin(_BoundaryMixinBase):
         # neither def redeclares the other; ``wraps`` gives the returned callback
         # upstream's ``__name__`` and ``__qualname__`` either way.
         view: Callable[..., object]
-        # basedpyright: asgiref binds ``inspect.iscoroutinefunction`` from 3.12 and asyncio's below
-        # it, where that one is not deprecated; the checker infers only the asyncio branch
-        if iscoroutinefunction(upstream_view):  # pyright: ignore[reportDeprecated]
+        if is_marked_coroutine_function(upstream_view):
 
             @wraps(upstream_view)
             async def async_view(request: HttpRequest, *args: object, **kwargs: object) -> object:

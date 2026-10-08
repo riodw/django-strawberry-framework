@@ -16,6 +16,7 @@ from typing_extensions import override
 
 from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
 from django_strawberry_framework.utils.canonical import base_container_values
 from django_strawberry_framework.utils.inputs import (
@@ -135,6 +136,17 @@ def test_builder_rejects_duplicate_effective_graphql_names():
             "DuplicateGraphQLInput",
             [("first", int, {"name": "same"}), ("second", str, {"name": "same"})],
         )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"name": 5}, {"description": 5}, {"name": b"x", "description": ["d"]}],
+    ids=["name", "description", "both"],
+)
+def test_builder_rejects_non_string_name_and_description(kwargs: dict[str, object]):
+    """The builder forwards only strings into ``strawberry.field``'s ``name`` / ``description``."""
+    with pytest.raises(ConfigurationError, match="takes a string name and description"):
+        build_strawberry_input_class("NonStringKwargInput", [("field", int, kwargs)])
 
 
 def test_builder_rejects_malformed_field_kwargs_with_configuration_error():
@@ -361,14 +373,10 @@ def test_make_input_namespace_returns_ledger_materialize_clear_trio():
 def test_set_input_type_name_delegates_to_type_name_for():
     """``set_input_type_name`` is the one ``<Class>InputType`` derivation site."""
 
-    class _Named:
-        @classmethod
-        def type_name_for(cls, _field_path: str | None = None):
-            return f"{cls.__name__}InputType"
+    class _Named(OrderSet):
+        pass
 
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # set_input_type_name types the parameter as type[ClassBasedTypeNameMixin]
-    assert set_input_type_name(_Named) == "_NamedInputType"  # pyright: ignore[reportArgumentType]
+    assert set_input_type_name(_Named) == "_NamedInputType"
 
 
 def test_make_set_input_namespace_returns_heavy_ledger_field_specs_materialize_clear():
@@ -816,19 +824,13 @@ def test_generated_input_arguments_factory_tolerates_none_or_missing_related_att
         ) -> list[tuple[str, object, dict[str, object]]]:
             return [("id", int | None, {"default": None})]
 
-    class _SetWithNoneRelated:
+    class _SetWithNoneRelated(OrderSet):
         related_probes = None
 
-        @classmethod
-        def type_name_for(cls):
-            return "SetWithNoneRelatedInput"
-
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # GeneratedInputArgumentsFactory types the parameter as type[ClassBasedTypeNameMixin]
-    factory = _ProbeFactory(_SetWithNoneRelated)  # pyright: ignore[reportArgumentType]
+    factory = _ProbeFactory(_SetWithNoneRelated)
     input_cls = factory.arguments
     assert input_cls is not None
-    assert input_cls.__name__ == "SetWithNoneRelatedInput"
+    assert input_cls.__name__ == "_SetWithNoneRelatedInputType"
 
 
 def test_build_strawberry_input_class_rejects_empty_specs_with_the_callers_remedy():

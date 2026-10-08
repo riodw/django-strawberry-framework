@@ -111,11 +111,9 @@ def test_the_html_build_refuses_a_placeholder_that_resolves_nowhere() -> None:
     assert assert_placeholders_resolve(resolvable) is None
 
 
-def _payload_card(number: int, **lists: int) -> CardRow:
+def _payload_card(number: int, **lists: int) -> dict[str, object]:
     """A card as the GraphQL payload carries it, with the named lists' lengths."""
-    # basedpyright: a stand-in card row carrying only the slots the code under test reads; the
-    # truncation checks type their cards as CardRow
-    return {  # pyright: ignore[reportReturnType]
+    return {
         "number": number,
         **{key: [{"order": index} for index in range(count)] for key, count in lists.items()},
     }
@@ -157,6 +155,14 @@ def test_every_guarded_list_can_actually_fail(payload_key: str) -> None:
         _expected(52, **{payload_key: 5}),
     )
     assert defects == [f"card 52 {payload_key}: payload has 4, database has 5"]
+
+
+def test_a_card_without_an_integer_number_is_reported() -> None:
+    """A card the database counts cannot be matched against never checks clean."""
+    assert truncation_defects(
+        [{"number": None, "items": []}],
+        _expected(52, items=0),
+    ) == ["card None: payload has no integer number"]
 
 
 def test_a_top_level_list_is_not_checked() -> None:

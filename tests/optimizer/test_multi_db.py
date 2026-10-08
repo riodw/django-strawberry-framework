@@ -35,13 +35,11 @@ collected-item count matches the spec contract (one item from this file).
 from types import SimpleNamespace
 
 from apps.products.models import Category, Item
-from django.db.models import Model, Prefetch
+from django.db.models import Prefetch
 
-from django_strawberry_framework import OptimizerHint
-from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework import DjangoType, OptimizerHint
 from django_strawberry_framework.optimizer.walker import plan_optimizations
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.utils._queryset_private import (
     queryset_db,
     queryset_prefetch_lookups,
@@ -59,56 +57,20 @@ def _sel(name: str, selections: list[SimpleNamespace] | None = None):
     )
 
 
-def _register_type_definition(
-    model: type[Model],
-    type_cls: type,
-    *,
-    optimizer_hints: dict[str, OptimizerHint] | None = None,
-):
-    """Register a minimal definition for walker-only synthetic type classes.
-
-    Mirrors the helper at ``tests/optimizer/test_walker.py::_register_type_definition`` -
-    inlined here to keep this file's fixtures local and avoid
-    cross-test-module import coupling.
-    """
-    selected_fields = tuple(model._meta.get_fields())
-    registry.register(model, type_cls, primary=False)
-    registry.register_definition(
-        type_cls,
-        DjangoTypeDefinition(
-            origin=type_cls,
-            model=model,
-            name=None,
-            description=None,
-            fields_spec=None,
-            exclude_spec=None,
-            selected_fields=selected_fields,
-            field_map={
-                field.name: FieldMeta.from_django_field(field) for field in selected_fields
-            },
-            optimizer_hints=optimizer_hints or {},
-            has_custom_get_queryset=type_cls.has_custom_get_queryset(),
-        ),
-    )
-
-
 def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias():
     """Decision 3 axis 3 - ``OptimizerHint.prefetch(Prefetch(queryset=using))`` round-trips ``_db``."""
-
-    class ParentType:
-        @classmethod
-        def has_custom_get_queryset(cls):
-            return False
 
     explicit = Prefetch("items", queryset=Item.objects.using("shard_b").all())
 
     registry.clear()
     try:
-        _register_type_definition(
-            Category,
-            ParentType,
-            optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
-        )
+
+        class ParentType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name", "items")
+                optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
+
         # ``source_type=ParentType`` so the walker's
         # ``_resolve_optimizer_hints(ParentType)``
         # (``django_strawberry_framework/optimizer/walker.py::_resolve_optimizer_hints``)
@@ -117,9 +79,7 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("id")])],
             Category,
-            # basedpyright: a plain stand-in class carrying only the hooks the code under test
-            # reads; plan_optimizations types the parameter as type[DjangoType] | None
-            source_type=ParentType,  # pyright: ignore[reportArgumentType]
+            source_type=ParentType,
         )
     finally:
         registry.clear()

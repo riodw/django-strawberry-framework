@@ -758,6 +758,18 @@ def test_filterset_accepts_a_computed_re_readable_collection():
 # ---------------------------------------------------------------------------
 
 
+def test_filter_for_field_on_a_model_less_set_adds_no_fan_out_distinct():
+    """A set without ``Meta.model`` has no relation path to classify, so no ``distinct`` is added."""
+
+    class ModelLessProbe(FilterSet):
+        pass
+
+    generated = ModelLessProbe.filter_for_field(Item._meta.get_field("name"), "name", "exact")
+
+    assert generated is not None
+    assert generated.distinct is False
+
+
 def test_filter_for_field_preserves_upstream_none_contract_for_unrecognized_field():
     """An unrecognized model field returns ``None`` under WARN / IGNORE behavior.
 
@@ -6117,7 +6129,10 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
 
         @classmethod
         @override
-        # basedpyright: an ``async def get_queryset`` is a supported hook (awaited on the async path) that the base's sync return type does not declare
+        # basedpyright: an ``async def get_queryset`` is a supported hook, awaited on the async path,
+        # but the base hook has one signature, and its return cannot admit both a sync child's
+        # ``QuerySet`` and an async child's coroutine without breaking every sync caller that
+        # reads ``super().get_queryset(...)`` as a ``QuerySet``
         async def get_queryset(  # pyright: ignore[reportIncompatibleMethodOverride]
             cls,
             queryset: QuerySet[library_models.Shelf],
@@ -6521,13 +6536,14 @@ def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss():
 def test_collect_related_declarations_honors_base_tombstone():
     """A direct base's non-related declaration removes a later inherited candidate."""
 
-    class Declaration:
-        def _bind_owner(self, owner: type):
-            raise AssertionError(f"removed declaration was bound to {owner.__name__}")
+    class Declaration(RelatedFilter):
+        @override
+        def _bind_owner(self, owner: object):
+            raise AssertionError(f"removed declaration was bound to {owner!r}")
 
-    declaration = Declaration()
+    declaration = Declaration("ShelfFilter")
 
-    class Base:
+    class Base(FilterSet):
         related_declarations = OrderedDict(probe=declaration)
         all_declarations = {"probe": object()}
 
@@ -6535,16 +6551,10 @@ def test_collect_related_declarations_honors_base_tombstone():
         pass
 
     collected = collect_related_declarations(
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # collect_related_declarations types the parameter as FilterSetMetaclass |
-        # OrderSetMetaclass
-        Child,  # pyright: ignore[reportArgumentType]
+        Child,
         (Base,),
         own_items=(),
-        # basedpyright: a plain stand-in declaration class carrying only the hooks the code under
-        # test reads; collect_related_declarations types the parameter as type[_D], bound to
-        # RelatedSetTargetMixin
-        declaration_type=Declaration,  # pyright: ignore[reportArgumentType]
+        declaration_type=Declaration,
         collection_attr="related_declarations",
         inherit_from_bases=True,
         base_declarations_attr="all_declarations",

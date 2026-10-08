@@ -19,7 +19,6 @@ import asyncio
 import contextlib
 import subprocess
 import sys
-import types
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -46,6 +45,7 @@ from django_strawberry_framework.auth.sessions import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.permissions import ChannelsRequestAdapter
+from tests._idioms import stub_module
 from tests._soft_dependency import simulated_absence
 from tests.auth._helpers import _drain_until
 
@@ -289,14 +289,11 @@ def test_signed_cookie_detection_follows_a_subclassed_engine():
     resolve, then removed so no global state leaks.
     """
     module_name = "tests.auth._stub_signed_cookie_engine"
-    module = types.ModuleType(module_name)
 
     class SessionStore(SignedCookieSessionStore):
         pass
 
-    # basedpyright: the stub engine module is built at run time; ModuleType declares no
-    # SessionStore
-    module.SessionStore = SessionStore  # pyright: ignore[reportAttributeAccessIssue]
+    module = stub_module(module_name, SessionStore=SessionStore)
     sys.modules[module_name] = module
     try:
         with override_settings(SESSION_ENGINE=module_name):
@@ -620,10 +617,7 @@ async def test_scope_lock_corrupted_non_lock_value_is_contained():
 
 def test_uses_signed_cookie_sessions_non_class_store_is_contained():
     module_name = "tests.auth._stub_bad_store_sessions"
-    module = types.ModuleType(module_name)
-    # basedpyright: the stub engine module is built at run time; ModuleType declares no
-    # SessionStore
-    module.SessionStore = "not a class"  # pyright: ignore[reportAttributeAccessIssue]
+    module = stub_module(module_name, SessionStore="not a class")
     sys.modules[module_name] = module
     try:
         with override_settings(SESSION_ENGINE=module_name):

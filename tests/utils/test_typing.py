@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 import strawberry
+from asgiref.sync import markcoroutinefunction
 from typing_extensions import override
 
 import django_strawberry_framework.utils.typing as typing_module
@@ -18,6 +19,7 @@ from django_strawberry_framework.utils.typing import (
     MAX_TYPE_WRAPPER_DEPTH,
     _callable_inspection_target,
     is_async_callable,
+    is_marked_coroutine_function,
     schema_config_from_info,
     strawberry_schema_from_info,
     strawberry_schema_from_schema,
@@ -33,6 +35,7 @@ def test_typing_exports_all():
     assert typing_module.__all__ == (
         "MAX_TYPE_WRAPPER_DEPTH",
         "is_async_callable",
+        "is_marked_coroutine_function",
         "schema_config_from_info",
         "strawberry_schema_from_info",
         "strawberry_schema_from_schema",
@@ -269,6 +272,31 @@ def test_is_async_callable_sees_through_supported_wrappers(value: object, expect
     is not callable, even when its underlying function is async.
     """
     assert is_async_callable(value) is expected
+
+
+def _marked_sync_fn():
+    """Sync body Django is told to await through the ``markcoroutinefunction`` marker."""
+
+
+markcoroutinefunction(_marked_sync_fn)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (_async_fn, True),
+        (_marked_sync_fn, True),  # sync def carrying the marker Django honours
+        (_sync_fn, False),
+    ],
+)
+def test_is_marked_coroutine_function_reads_the_marker(value: object, expected: bool):
+    """The detector answers as Django's own does, so a marked sync callable is async.
+
+    Django awaits a view or a middleware on this detector's word, and below Python
+    3.12 ``inspect.iscoroutinefunction`` does not read the marker, so the row holds
+    on every supported Python only through asgiref's shim.
+    """
+    assert is_marked_coroutine_function(value) is expected
 
 
 def test_strawberry_schema_from_info_and_schema():

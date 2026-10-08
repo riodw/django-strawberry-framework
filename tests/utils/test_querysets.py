@@ -180,44 +180,53 @@ def _noop(*args: object, **kwargs: object) -> None:
     """A shadow that accepts any call and does nothing (it must never run)."""
 
 
-def _as_django_type(cls: type[object]) -> type[DjangoType]:
-    """Hand a duck-typed stub class to a substrate entry point that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # visibility substrate types the parameter as type[DjangoType]
+def _as_async_hook_type(cls: type[object]) -> type[DjangoType]:
+    """Hand a class whose ``get_queryset`` is ``async def`` to the visibility substrate."""
+    # basedpyright: an async ``get_queryset`` is a supported consumer hook the sync base signature
+    # does not admit, and a DjangoType subclass declaring one is reported as an incompatible
+    # override; the visibility substrate types the parameter as type[DjangoType]
     return cls  # pyright: ignore[reportReturnType]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registry(isolate_global_registry: None) -> None:
+    """Every type declared here registers; the shared fixture clears it after each test."""
+
+
+def _declared_type(
+    model: type[models.Model],
+    name: str,
+    hook: Callable[[type, models.QuerySet[_M], object], object] | None = None,
+) -> type[DjangoType]:
+    """Declare a real ``DjangoType`` over ``model``, with ``hook`` as its visibility hook."""
+    namespace: dict[str, object] = {
+        "Meta": type("Meta", (), {"model": model, "fields": ("id",)}),
+    }
+    if hook is not None:
+        namespace["get_queryset"] = classmethod(hook)
+    return type(name, (DjangoType,), namespace)
 
 
 def _stub_type(
     model: type[_M],
     hook: Callable[[type, models.QuerySet[_M], object], object],
 ) -> type[DjangoType]:
-    """Build a duck-typed ``DjangoType`` stub over ``model`` with ``hook`` as its visibility hook."""
-    return _as_django_type(
-        type(
-            "_StubType",
-            (),
-            {
-                "__django_strawberry_definition__": SimpleNamespace(model=model),
-                "get_queryset": classmethod(hook),
-            },
-        ),
+    """Declare a real ``DjangoType`` over ``model`` with ``hook`` as its visibility hook."""
+    return _declared_type(model, "_StubType", hook)
+
+
+def _sync_type() -> type[DjangoType]:
+    """A real type whose sync ``get_queryset`` keeps every row but a never-present name."""
+    return _declared_type(
+        Category,
+        "_SyncType",
+        lambda cls, queryset, info: queryset.exclude(name="__never__"),
     )
 
 
-@_as_django_type
-class _SyncType:
-    """Duck-typed ``DjangoType`` stub with a sync ``get_queryset``."""
-
-    __django_strawberry_definition__ = SimpleNamespace(model=Category)
-
-    @classmethod
-    def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
-        return queryset.exclude(name="__never__")
-
-
-@_as_django_type
+@_as_async_hook_type
 class _AsyncType:
-    """Duck-typed ``DjangoType`` stub with an ``async def`` ``get_queryset``."""
+    """Plain class with an ``async def`` ``get_queryset``."""
 
     __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -256,7 +265,7 @@ def test_normalize_query_source_passes_non_queryset_through():
 
 def test_initial_queryset_uses_default_manager():
     """``initial_queryset`` returns the declared model's ``_default_manager.all()``."""
-    qs = initial_queryset(_SyncType)
+    qs = initial_queryset(_sync_type())
     assert isinstance(qs, models.QuerySet)
     assert qs.model is Category
 
@@ -321,7 +330,7 @@ def test_relation_write_visibility_boundary_is_controlled_by_type_registration()
 def test_apply_type_visibility_sync_runs_sync_get_queryset():
     """The sync path invokes ``get_queryset`` and returns its queryset."""
     base = Category.objects.all()
-    result = apply_type_visibility_sync(_SyncType, base, info=None)
+    result = apply_type_visibility_sync(_sync_type(), base, info=None)
     assert isinstance(result, models.QuerySet)
 
 
@@ -349,7 +358,7 @@ async def test_apply_type_visibility_async_awaits_async_hook():
 async def test_apply_type_visibility_async_passes_sync_hook_through():
     """The async path passes a sync ``get_queryset`` return through without awaiting."""
     base = Category.objects.all()
-    result = await apply_type_visibility_async(_SyncType, base, info=None)
+    result = await apply_type_visibility_async(_sync_type(), base, info=None)
     assert isinstance(result, models.QuerySet)
 
 
@@ -410,7 +419,7 @@ def test_visibility_source_must_be_a_queryset():
 def test_visibility_source_must_use_registered_concrete_table():
     """A source over the wrong model fails closed - the hook would narrow the wrong table."""
     with pytest.raises(ConfigurationError, match="concrete table"):
-        apply_type_visibility_sync(_SyncType, Item.objects.all(), info=None)
+        apply_type_visibility_sync(_sync_type(), Item.objects.all(), info=None)
 
 
 @pytest.mark.django_db
@@ -453,7 +462,7 @@ def test_active_write_pipeline_rejects_divergent_source_alias():
         write_pipeline("default", lock=False),
         pytest.raises(ConfigurationError, match="routed to alias 'other'"),
     ):
-        apply_type_visibility_sync(_SyncType, Category.objects.using("other"), info=None)
+        apply_type_visibility_sync(_sync_type(), Category.objects.using("other"), info=None)
 
 
 def test_hostile_source_all_override_is_neutralized_by_sealing():
@@ -463,7 +472,7 @@ def test_hostile_source_all_override_is_neutralized_by_sealing():
     unfiltered queryset. The boundary never dispatches through the consumer
     object; it seals the source into a fresh framework-owned plain ``QuerySet``
     rebuilt from the extracted query state, so the overridden ``.all()`` is never
-    called and the visibility ``WHERE`` survives. The hook (``_SyncType``) then
+    called and the visibility ``WHERE`` survives. The hook (``_sync_type()``) then
     runs on that sealed plain queryset.
     """
 
@@ -473,7 +482,7 @@ def test_hostile_source_all_override_is_neutralized_by_sealing():
             return Category.objects.all()
 
     sticky = models.QuerySet.filter(_StickySource(model=Category), name="visible")
-    result = apply_type_visibility_sync(_SyncType, sticky, info=None)
+    result = apply_type_visibility_sync(_sync_type(), sticky, info=None)
     assert type(result) is models.QuerySet  # sealed - not the hostile subclass
     assert "visible" in str(result.query)  # the source predicate survived sealing
 
@@ -548,7 +557,7 @@ def test_hook_manager_result_is_coerced_sync():
 async def test_hook_manager_result_is_coerced_async():
     """An async-path ``Manager`` return is coerced too - previously it flowed through verbatim."""
 
-    @_as_django_type
+    @_as_async_hook_type
     class _ManagerAsyncType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -665,7 +674,7 @@ def test_unpinned_result_is_repinned_to_explicit_source_alias():
 def test_matching_explicit_result_alias_is_accepted():
     """A hook result explicitly routed to the required alias passes through."""
     result = apply_type_visibility_sync(
-        _SyncType,
+        _sync_type(),
         Category.objects.using("other").all(),
         info=None,
     )
@@ -787,7 +796,7 @@ def test_predicate_dropping_all_override_source_is_neutralized_by_sealing():
             return Category.objects.all()  # would drop whatever WHERE the source carried
 
     hostile = models.QuerySet.filter(_DropFilter(model=Category), name="visible")
-    result = apply_type_visibility_sync(_SyncType, hostile, info=None)
+    result = apply_type_visibility_sync(_sync_type(), hostile, info=None)
     assert type(result) is models.QuerySet
     assert "visible" in str(result.query)
 
@@ -1203,7 +1212,7 @@ def test_injected_custom_iterable_result_fails_closed():
 def test_values_projection_source_fails_closed_on_read_surface():
     """A ``.values()`` SOURCE is rejected on a read surface before the hook runs."""
     with pytest.raises(ConfigurationError, match="the visibility contract composes over"):
-        apply_type_visibility_sync(_SyncType, Category.objects.values("name"), info=None)
+        apply_type_visibility_sync(_sync_type(), Category.objects.values("name"), info=None)
 
 
 def test_spoofed_base_table_over_frozen_alias_map_fails_closed():
@@ -1275,7 +1284,7 @@ def test_cross_model_union_source_fails_closed():
     """
     hostile = Category.objects.all().union(Item.objects.all())
     with pytest.raises(ConfigurationError, match="concrete table"):
-        apply_type_visibility_sync(_SyncType, hostile, info=None)
+        apply_type_visibility_sync(_sync_type(), hostile, info=None)
 
 
 def test_manager_result_degrading_to_list_fails_closed():
@@ -1635,7 +1644,7 @@ def test_prefetch_with_non_queryset_queryset_fails_closed():
     # types Prefetch's queryset as a QuerySet
     source = Category.objects.all().prefetch_related(Prefetch("items", queryset=object()))  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
-        apply_type_visibility_sync(_SyncType, source, info=None)
+        apply_type_visibility_sync(_sync_type(), source, info=None)
 
 
 def test_prefetch_with_foreign_inner_query_fails_closed():
@@ -1655,7 +1664,7 @@ def test_prefetch_with_foreign_inner_query_fails_closed():
     set_queryset_query(inner, _ForeignQuery(Item))
     source = Category.objects.all().prefetch_related(prefetch)
     with pytest.raises(ConfigurationError, match="cannot be sealed"):
-        apply_type_visibility_sync(_SyncType, source, info=None)
+        apply_type_visibility_sync(_sync_type(), source, info=None)
 
 
 def test_combined_query_foreign_branch_subclass_fails_closed():
@@ -1686,7 +1695,7 @@ def test_sliced_source_fails_closed_with_typed_error():
     contract (the cascade already rejects a sliced target subquery).
     """
     with pytest.raises(ConfigurationError, match="sliced"):
-        apply_type_visibility_sync(_SyncType, Category.objects.all()[:5], info=None)
+        apply_type_visibility_sync(_sync_type(), Category.objects.all()[:5], info=None)
 
 
 def test_sliced_hook_result_fails_closed_with_typed_error():
@@ -2018,7 +2027,7 @@ async def test_async_custom_awaitable_hook_is_awaited_once():
 async def test_async_nested_awaitable_fails_closed():
     """An async hook resolving to ANOTHER awaitable fails closed after exactly one await."""
 
-    @_as_django_type
+    @_as_async_hook_type
     class _NestedType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -2036,7 +2045,7 @@ async def test_async_nested_awaitable_fails_closed():
 async def test_async_generator_hook_result_fails_closed():
     """An async hook resolving to an async generator is not awaitable - a type rejection."""
 
-    @_as_django_type
+    @_as_async_hook_type
     class _AgenType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -2058,7 +2067,7 @@ async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
     """
     await Category.objects.acreate(name="visible_row", is_private=False)
 
-    @_as_django_type
+    @_as_async_hook_type
     class _CaptureAsyncType:
         __django_strawberry_definition__ = SimpleNamespace(model=Category)
 
@@ -4980,9 +4989,7 @@ def test_query_genuineness_defect_with_clean_combined_branches():
 def test_prepared_visibility_source_with_custom_render_error():
     """_prepared_visibility_source formats defect with custom render_error callable."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     def custom_render(code: str, detail: str):
         return f"custom source error: {code} -> {detail}"
@@ -4994,9 +5001,7 @@ def test_prepared_visibility_source_with_custom_render_error():
 def test_normalized_visibility_result_with_custom_render_error():
     """_normalized_visibility_result formats defect with custom render_error callable."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     def custom_render(code: str, detail: str):
         return f"custom result error: {code} -> {detail}"
@@ -5032,8 +5037,8 @@ def test_visible_related_object_resolution():
 
 def test_reject_awaitable_sync_source_noop_for_non_awaitable():
     """reject_awaitable_sync_source passes non-awaitables without raising."""
-    reject_awaitable_sync_source([1, 2, 3], _as_django_type(Category))
-    reject_awaitable_sync_source(Category.objects.none(), _as_django_type(Category))
+    reject_awaitable_sync_source([1, 2, 3], _declared_type(Category, "CategoryType"))
+    reject_awaitable_sync_source(Category.objects.none(), _declared_type(Category, "CategoryType"))
 
 
 def test_reject_awaitable_sync_source_raises_for_awaitable():
@@ -5044,7 +5049,7 @@ def test_reject_awaitable_sync_source_raises_for_awaitable():
 
     coro = sample()
     with pytest.raises(SyncMisuseError, match="consumer resolver returned an awaitable"):
-        reject_awaitable_sync_source(coro, _as_django_type(Category))
+        reject_awaitable_sync_source(coro, _declared_type(Category, "CategoryType"))
 
 
 # --------------------------------------------------------------------------
@@ -5843,9 +5848,7 @@ def test_visibility_defect_messages():
     dispatch must say so rather than mislabel it.
     """
 
-    @_as_django_type
-    class BookType:
-        pass
+    BookType = _declared_type(Book, "BookType")
 
     for code in ("evaluated", "routing"):
         unrendered = str(
@@ -5873,9 +5876,7 @@ def test_visibility_defect_messages():
         _COMBINED_WHAT.format(model="Category", detail="union: a lost property")
     )
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     evaluated_qs = Category.objects.all()
     evaluated_qs._result_cache = []
@@ -5908,13 +5909,10 @@ def test_apply_type_visibility_sync_serves_a_combined_result_as_its_pk_set():
     names = sorted(Category.objects.values_list("name", flat=True))
     first, second = names[0], names[1]
 
-    @_as_django_type
-    class CombinedType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    def _union_hook(cls: type, queryset: models.QuerySet[Category], info: object):
+        return queryset.filter(name=first).union(queryset.filter(name=second))
 
-        @classmethod
-        def get_queryset(cls, queryset: models.QuerySet[Category], info: object):
-            return queryset.filter(name=first).union(queryset.filter(name=second))
+    CombinedType = _declared_type(Category, "CombinedType", _union_hook)
 
     sealed = apply_type_visibility_sync(CombinedType, Category.objects.all(), SimpleNamespace())
     assert sealed.query.combinator is None
@@ -5926,9 +5924,7 @@ def test_apply_type_visibility_sync_serves_a_combined_result_as_its_pk_set():
 def test_validate_post_orderset_result_valid():
     """_validate_post_orderset_result accepts valid, ordered candidate querysets."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     valid_candidate = Category.objects.all().order_by("name")
@@ -5944,9 +5940,7 @@ def test_validate_post_orderset_result_valid():
 def test_validate_post_orderset_result_rejects_non_queryset():
     """_validate_post_orderset_result rejects non-queryset collections."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     with pytest.raises(
@@ -5964,9 +5958,7 @@ def test_validate_post_orderset_result_rejects_non_queryset():
 def test_validate_post_orderset_result_rejects_none():
     """_validate_post_orderset_result rejects None return values."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     with pytest.raises(
@@ -5984,9 +5976,7 @@ def test_validate_post_orderset_result_rejects_none():
 def test_validate_post_orderset_result_rejects_wrong_model():
     """_validate_post_orderset_result rejects querysets of an unrelated model."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     wrong_model_qs = Item.objects.all()
@@ -6005,9 +5995,7 @@ def test_validate_post_orderset_result_rejects_wrong_model():
 def test_validate_post_orderset_result_rejects_evaluated():
     """_validate_post_orderset_result rejects querysets with evaluated result cache."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     eval_qs = Category.objects.all()
@@ -6027,9 +6015,7 @@ def test_validate_post_orderset_result_rejects_evaluated():
 def test_validate_post_orderset_result_rejects_sliced():
     """_validate_post_orderset_result rejects sliced querysets."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     sliced_qs = Category.objects.all()[:5]
@@ -6056,9 +6042,7 @@ def test_validate_post_orderset_result_serves_a_combined_result_and_refuses_a_lo
     seed_data(1)
     names = sorted(Category.objects.values_list("name", flat=True))
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     comb_qs = (
@@ -6127,9 +6111,7 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
         },
     )
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Book)
+    DummyType = _declared_type(Book, "DummyType")
 
     class UnionBookOrder(OrderSet):
         class Meta:
@@ -6157,9 +6139,7 @@ def test_validate_post_orderset_result_refuses_a_combined_result_ordered_through
 def test_validate_post_orderset_result_rejects_projection():
     """_validate_post_orderset_result rejects values/projection querysets."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     values_qs = Category.objects.values("id")
@@ -6178,9 +6158,7 @@ def test_validate_post_orderset_result_rejects_projection():
 def test_validate_post_orderset_result_rejects_db_routing_mismatch():
     """_validate_post_orderset_result rejects querysets routed to a different database."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     diff_db_qs = Category.objects.using("other")
@@ -6199,9 +6177,7 @@ def test_validate_post_orderset_result_rejects_db_routing_mismatch():
 def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
     """_validate_post_orderset_result rejects querysets with divergent database routing hints."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     diff_hints_qs = Category.objects.all()
@@ -6221,9 +6197,7 @@ def test_validate_post_orderset_result_rejects_hints_routing_mismatch():
 def test_validate_post_orderset_result_contains_an_unreadable_instance_dictionary():
     """A hostile QuerySet ``__dict__`` descriptor becomes a typed seal defect."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     class UnreadableStateQuerySet(models.QuerySet[Category]):
         # basedpyright: the hostile shape under test; a raising __dict__ descriptor is what the
@@ -6254,9 +6228,7 @@ def test_validate_post_orderset_result_contains_an_unreadable_instance_dictionar
 def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
     """_validate_post_orderset_result accesses _db and _hints without consumer __getattribute__."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     class HostileGetattributeQuerySet(models.QuerySet[Category]):
         @override
@@ -6279,9 +6251,7 @@ def test_validate_post_orderset_result_zero_consumer_dispatch_on_getattribute():
 def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
     """_validate_post_orderset_result compares and reports routing hints without consumer __eq__ or __repr__."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     class HostileValue:
         @override
@@ -6332,9 +6302,7 @@ def test_validate_post_orderset_result_routing_hints_hostile_eq_repr():
 def test_validate_post_orderset_result_routing_hints_none_vs_empty():
     """_validate_post_orderset_result preserves distinction between absent (None) and empty ({}) hints."""
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     # basedpyright: plants a ``None`` ``_hints``, which Django never stores (it writes ``{}``)
@@ -6391,9 +6359,7 @@ def test_routing_hints_equal_rejects_a_renamed_key_at_equal_length():
     standing between a renamed routing hint and a silent accept.
     """
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     set_queryset_hints(source_qs, {"tenant": "a"})
@@ -6423,9 +6389,7 @@ def test_routing_hints_equal_rejects_equal_primitives_that_are_not_identical():
     holds and a runtime-rebuilt equal string fails closed.
     """
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     set_queryset_hints(source_qs, {"tenant": "shard-a"})
@@ -6460,9 +6424,7 @@ def test_snapshot_routing_intent_is_frozen_before_consumer_code_can_mutate_the_s
     what the source carried when the override was handed it.
     """
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     source_qs = Category.objects.all()
     set_queryset_hints(source_qs, {"tenant": 1})
@@ -6522,9 +6484,7 @@ def test_routing_intent_pins_the_alias_resolved_before_a_hint_could_be_mutated()
     contents.
     """
 
-    @_as_django_type
-    class DummyType:
-        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+    DummyType = _declared_type(Category, "DummyType")
 
     token = {"alias": "default"}
     source_qs = Category.objects.all()

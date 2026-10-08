@@ -10,15 +10,14 @@ fixture package under ``tmp_path``.
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 import pytest
+from graphql_client import JSONObject
 
 from scripts import review_inspect
 
-# basedpyright: the inspector's --json document is an untyped JSON tree (json.loads returns Any);
-# the rows read its nested values by key
-_JSONDocument: TypeAlias = dict[str, Any]  # pyright: ignore[reportExplicitAny]
+_JSONDocument: TypeAlias = JSONObject
 
 PACKAGE = "django_strawberry_framework"
 REL_PATH = f"{PACKAGE}/sample.py"

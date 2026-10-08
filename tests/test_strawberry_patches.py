@@ -72,13 +72,23 @@ from unittest import mock
 
 import pytest
 import pytest_django
-from cross_web import FormData, HTTPException
+import strawberry
+from cross_web import (
+    AsyncDjangoHTTPRequestAdapter,
+    DjangoHTTPRequestAdapter,
+    FormData,
+    HTTPException,
+)
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import HttpRequest
+from django.test import RequestFactory
 from strawberry.http.async_base_view import AsyncBaseHTTPView
 from strawberry.http.base import BaseView
 from strawberry.http.sync_base_view import SyncBaseHTTPView
-from typing_extensions import Never
+from typing_extensions import Never, override
 
 from django_strawberry_framework import _strawberry_patches as patches
+from django_strawberry_framework.views import AsyncDjangoGraphQLView, DjangoGraphQLView
 
 
 def test_apply_is_idempotent():
@@ -248,54 +258,58 @@ def test_patched_parse_json_passes_through_list_for_batch_handling():
     assert patches._patched_parse_json(BaseView(), "[]") == []
 
 
-class _MultipartView:
-    """A minimal view carrying only the upstream parser's ``parse_json`` hook.
-
-    Shared by the sync and async rows: both upstream parsers read the same one
-    hook off the view they are handed, so one stand-in states that contract once.
-    """
-
-    @staticmethod
-    def parse_json(data: str | bytes):
-        return json.loads(data)
+@strawberry.type
+class _Query:
+    ok: bool = True
 
 
-class _SyncMultipartRequest:
-    """The adapter fields the upstream sync multipart parser reads."""
-
-    def __init__(
-        self,
-        operations: str,
-        files_map: str,
-        files: Mapping[str, object],
-    ):
-        self.post_data = {"operations": operations, "map": files_map}
-        self.files = files
+_EMPTY_SCHEMA = strawberry.Schema(query=_Query)
 
 
-class _AsyncMultipartRequest:
-    """The awaited form-data seam the upstream async parser reads.
+def _multipart_request(operations: str, files_map: str, files: Mapping[str, str]) -> HttpRequest:
+    """A real Django multipart POST: the ``operations`` / ``map`` fields plus one upload per name."""
+    return RequestFactory().post(
+        "/graphql/",
+        data={
+            "operations": operations,
+            "map": files_map,
+            **{
+                name: SimpleUploadedFile(name, content.encode()) for name, content in files.items()
+            },
+        },
+    )
 
-    Returns the genuine ``cross_web.request.FormData`` dataclass every real
-    adapter returns, because upstream reads ``form_data.form`` / ``.files`` as
-    ATTRIBUTES. A stand-in mapping would raise ``AttributeError`` before the
-    parser ever reaches the upload utility, which would make the malformed-map
-    rows below pass for the wrong reason.
-    """
 
-    def __init__(
-        self,
-        operations: str,
-        files_map: str,
-        files: Mapping[str, object],
-    ):
-        self._form_data = FormData(
-            files=files,
-            form={"operations": operations, "map": files_map},
-        )
+def _sync_request(
+    operations: str,
+    files_map: str,
+    files: Mapping[str, str] | None = None,
+) -> DjangoHTTPRequestAdapter:
+    """The real sync adapter over a multipart POST."""
+    return DjangoHTTPRequestAdapter(_multipart_request(operations, files_map, files or {}))
 
-    async def get_form_data(self):
-        return self._form_data
+
+def _async_request(
+    operations: str,
+    files_map: str,
+    files: Mapping[str, str] | None = None,
+) -> AsyncDjangoHTTPRequestAdapter:
+    """The real async adapter over a multipart POST."""
+    return AsyncDjangoHTTPRequestAdapter(_multipart_request(operations, files_map, files or {}))
+
+
+class _MultipartView(DjangoGraphQLView):
+    """The package's sync view: both upstream parsers read its ``parse_json`` hook."""
+
+    def __init__(self):
+        super().__init__(schema=_EMPTY_SCHEMA)
+
+
+class _AsyncMultipartView(AsyncDjangoGraphQLView):
+    """The package's async view, read the same way."""
+
+    def __init__(self):
+        super().__init__(schema=_EMPTY_SCHEMA)
 
 
 _MULTIPART_OPERATIONS = '{"query": "{ __typename }", "variables": {"upload": null}}'
@@ -326,11 +340,8 @@ def test_patched_sync_parse_multipart_rejects_structurally_invalid_maps(
     """Every malformed map that upstream leaks as a Python error becomes its 400."""
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_sync_parse_multipart(
-            # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-            # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
-            # SyncHTTPRequestAdapter
-            _MultipartView(),  # pyright: ignore[reportArgumentType]
-            _SyncMultipartRequest(operations, files_map, {"0": object()}),  # pyright: ignore[reportArgumentType]
+            _MultipartView(),
+            _sync_request(operations, files_map, {"0": "x"}),
         )
 
     assert excinfo.value.status_code == 400
@@ -341,21 +352,22 @@ async def test_patched_async_parse_multipart_rejects_structurally_invalid_maps()
     """The async parser has the same untrusted-map failure boundary as the sync one."""
     with pytest.raises(HTTPException) as excinfo:
         await patches._patched_async_parse_multipart(
-            # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-            # test reads; _patched_async_parse_multipart types them as AsyncBaseHTTPView and
-            # AsyncHTTPRequestAdapter
-            _MultipartView(),  # pyright: ignore[reportArgumentType]
-            _AsyncMultipartRequest(_MULTIPART_OPERATIONS, "[{}]", {"0": object()}),  # pyright: ignore[reportArgumentType]
+            _AsyncMultipartView(),
+            _async_request(_MULTIPART_OPERATIONS, "[{}]", {"0": "x"}),
         )
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
 
 
-class _UnformableRequest:
+class _UnformableRequest(AsyncDjangoHTTPRequestAdapter):
     """An adapter whose form-data read fails the way a broken multipart body does."""
 
-    async def get_form_data(self):
+    def __init__(self):
+        super().__init__(_multipart_request("{}", "{}", {}))
+
+    @override
+    async def get_form_data(self) -> FormData:
         raise ValueError("malformed multipart body")
 
 
@@ -374,10 +386,7 @@ async def test_the_multipart_reason_is_upstreams_own_native_literal():
     original_async_parse_multipart = patches._original_async_parse_multipart
     assert original_async_parse_multipart is not None
     with pytest.raises(HTTPException) as excinfo:
-        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-        # test reads; the captured upstream parser types them as AsyncBaseHTTPView and
-        # AsyncHTTPRequestAdapter
-        await original_async_parse_multipart(_MultipartView(), _UnformableRequest())  # pyright: ignore[reportArgumentType]
+        await original_async_parse_multipart(_AsyncMultipartView(), _UnformableRequest())
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
@@ -386,25 +395,30 @@ async def test_the_multipart_reason_is_upstreams_own_native_literal():
 def test_patched_sync_parse_multipart_preserves_a_non_structural_parser_exception():
     """The malformed-envelope wrapper cannot hide a consumer JSON hook failure."""
 
-    class _ExplodingView:
-        @staticmethod
-        def parse_json(data: str | bytes):
+    class _ExplodingView(_MultipartView):
+        @override
+        def parse_json(self, data: str | bytes) -> object:
             raise RuntimeError("consumer decode hook failed")
 
-    request = _SyncMultipartRequest(_MULTIPART_OPERATIONS, "{}", {})
+    request = _sync_request(_MULTIPART_OPERATIONS, "{}", {})
 
     with pytest.raises(RuntimeError, match="consumer decode hook failed"):
-        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-        # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
-        # SyncHTTPRequestAdapter
-        patches._patched_sync_parse_multipart(_ExplodingView(), request)  # pyright: ignore[reportArgumentType]
+        patches._patched_sync_parse_multipart(_ExplodingView(), request)
 
 
-class _StructurallyBuggyView:
+class _StructurallyBuggyView(_MultipartView):
     """A view whose JSON hook has a genuine server-side bug of a TRAVERSAL type."""
 
-    @staticmethod
-    def parse_json(data: str | bytes):
+    @override
+    def parse_json(self, data: str | bytes) -> object:
+        raise TypeError("server-side bug before the upload traversal")
+
+
+class _StructurallyBuggyAsyncView(_AsyncMultipartView):
+    """The async twin of ``_StructurallyBuggyView``."""
+
+    @override
+    def parse_json(self, data: str | bytes) -> object:
         raise TypeError("server-side bug before the upload traversal")
 
 
@@ -417,41 +431,33 @@ def test_patched_sync_parse_multipart_does_not_downgrade_a_server_bug_to_400():
     client-error ``400`` would hide a server fault, so the translation is scoped
     to failures whose traceback passes through the upload utility's frame.
     """
-    request = _SyncMultipartRequest(_MULTIPART_OPERATIONS, "{}", {})
+    request = _sync_request(_MULTIPART_OPERATIONS, "{}", {})
 
     with pytest.raises(TypeError, match="server-side bug before the upload traversal"):
-        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-        # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
-        # SyncHTTPRequestAdapter
-        patches._patched_sync_parse_multipart(_StructurallyBuggyView(), request)  # pyright: ignore[reportArgumentType]
+        patches._patched_sync_parse_multipart(_StructurallyBuggyView(), request)
 
 
 async def test_patched_async_parse_multipart_does_not_downgrade_a_server_bug_to_400():
     """The async twin scopes the translation to the upload utility identically."""
-    request = _AsyncMultipartRequest(_MULTIPART_OPERATIONS, "{}", {})
+    request = _async_request(_MULTIPART_OPERATIONS, "{}", {})
 
     with pytest.raises(TypeError, match="server-side bug before the upload traversal"):
-        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-        # test reads; _patched_async_parse_multipart types them as AsyncBaseHTTPView and
-        # AsyncHTTPRequestAdapter
-        await patches._patched_async_parse_multipart(_StructurallyBuggyView(), request)  # pyright: ignore[reportArgumentType]
+        await patches._patched_async_parse_multipart(_StructurallyBuggyAsyncView(), request)
 
 
 def test_patched_sync_parse_multipart_preserves_valid_batched_operations():
     """The batch allowance belongs to ``operations`` and remains available to Strawberry."""
     operations = '[{"query": "{ __typename }", "variables": {"upload": null}}]'
-    request = _SyncMultipartRequest(
-        operations,
-        '{"0": ["0.variables.upload"]}',
-        {"0": "upload"},
+    http_request = _multipart_request(operations, '{"0": ["0.variables.upload"]}', {"0": "upload"})
+
+    parsed = patches._patched_sync_parse_multipart(
+        _MultipartView(),
+        DjangoHTTPRequestAdapter(http_request),
     )
 
-    # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-    # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
-    # SyncHTTPRequestAdapter
-    parsed = patches._patched_sync_parse_multipart(_MultipartView(), request)  # pyright: ignore[reportArgumentType]
-
-    assert parsed == [{"query": "{ __typename }", "variables": {"upload": "upload"}}]
+    assert parsed == [
+        {"query": "{ __typename }", "variables": {"upload": http_request.FILES["0"]}},
+    ]
 
 
 def test_patched_parse_query_params_skips_empty_string_param():
@@ -750,13 +756,10 @@ def test_patched_sync_parse_multipart_translates_a_deep_operations_document(
     frame the provenance check scopes by, hence a client-input translation to
     the multipart-parse ``400``, not a server-bug ``500``.
     """
-    request = _SyncMultipartRequest(deepcopy_overflow_operations_text, "{}", {})
+    request = _sync_request(deepcopy_overflow_operations_text, "{}", {})
 
     with pytest.raises(HTTPException) as excinfo:
-        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-        # test reads; _patched_sync_parse_multipart types them as SyncBaseHTTPView and
-        # SyncHTTPRequestAdapter
-        patches._patched_sync_parse_multipart(_MultipartView(), request)  # pyright: ignore[reportArgumentType]
+        patches._patched_sync_parse_multipart(_MultipartView(), request)
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON
@@ -766,13 +769,10 @@ async def test_patched_async_parse_multipart_translates_a_deep_operations_docume
     deepcopy_overflow_operations_text: str,
 ):
     """The async delegate scopes the deepcopy recursion identically."""
-    request = _AsyncMultipartRequest(deepcopy_overflow_operations_text, "{}", {})
+    request = _async_request(deepcopy_overflow_operations_text, "{}", {})
 
     with pytest.raises(HTTPException) as excinfo:
-        # basedpyright: a stand-in view and request adapter carrying only the slots the code under
-        # test reads; _patched_async_parse_multipart types them as AsyncBaseHTTPView and
-        # AsyncHTTPRequestAdapter
-        await patches._patched_async_parse_multipart(_MultipartView(), request)  # pyright: ignore[reportArgumentType]
+        await patches._patched_async_parse_multipart(_AsyncMultipartView(), request)
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.reason == patches._UPSTREAM_MULTIPART_PARSE_REASON

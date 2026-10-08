@@ -1525,13 +1525,25 @@ if TYPE_CHECKING:
     # The payload object type one ledger's drain resolves: the primary
     # ``DjangoType`` for the model-backed ledger, ``None`` for the model-less one.
     _ObjectTypeT = TypeVar("_ObjectTypeT", bound="type[DjangoType] | None")
-    _ObjectTypeT_contra = TypeVar(
-        "_ObjectTypeT_contra",
+    _ObjectTypeT_co = TypeVar(
+        "_ObjectTypeT_co",
         bound="type[DjangoType] | None",
-        contravariant=True,
+        covariant=True,
     )
 
-    class _BoundDeclaration(Protocol[_ObjectTypeT_contra]):
+    class _BindTarget(Protocol[_ObjectTypeT_co]):
+        """A declaration class as ``bind_mutation_outputs`` stashes the bind outputs on it.
+
+        ``_primary_type`` holds the payload's object type: the primary
+        ``DjangoType`` on the model-backed ledger, ``None`` on the model-less one.
+        """
+
+        __name__: str
+        _primary_type: _ObjectTypeT_co
+        _input_class: type[object] | None
+        _payload_type_name: str
+
+    class _BoundDeclaration(_BindTarget[_ObjectTypeT], Protocol[_ObjectTypeT]):
         """A registered declaration as the phase-2.5 drain reads and stashes it.
 
         Registration follows the metaclass's validated-snapshot stash, so
@@ -1539,16 +1551,12 @@ if TYPE_CHECKING:
         object type its own ledger's ``resolve_object_type`` answers.
         """
 
-        __name__: str
         _mutation_meta: _ValidatedMutationMeta
-        _primary_type: type[DjangoType] | None
-        _input_class: type[object] | None
-        _payload_type_name: str | None
 
         def build_input(
             self,
             meta: _ValidatedMutationMeta,
-            primary_type: _ObjectTypeT_contra,
+            primary_type: _ObjectTypeT,
         ) -> type[object] | None:
             """Build + materialize the operation's input class; ``None`` when it takes none."""
 
@@ -1855,7 +1863,7 @@ def _strawberry_field_shape(field: StrawberryField) -> tuple[int, object]:
 
 
 def bind_mutation_outputs(
-    mutation_cls: _BoundDeclaration[_ObjectTypeT],
+    mutation_cls: _BindTarget[_ObjectTypeT],
     *,
     input_cls: type[object] | None,
     object_type: _ObjectTypeT,
@@ -1892,7 +1900,7 @@ def bind_mutation_outputs(
 def bind_write_declarations(
     *,
     cache: dict[_KeyT, _PayloadT],
-    iterate: Callable[[], tuple[type[object], ...]],
+    iterate: Callable[[], tuple[_BoundDeclaration[_ObjectTypeT], ...]],
     resolve_object_type: Callable[
         [_BoundDeclaration[_ObjectTypeT], _ValidatedMutationMeta],
         _ObjectTypeT,
@@ -1928,9 +1936,7 @@ def bind_write_declarations(
     clear would wipe the sibling pass's already-materialized entries.
     """
     cache.clear()
-    # Every ledger records a class only after its metaclass stashed the validated
-    # snapshot, so each drained declaration carries the bound-declaration shape.
-    for mutation_cls in cast("tuple[_BoundDeclaration[_ObjectTypeT], ...]", iterate()):
+    for mutation_cls in iterate():
         meta = mutation_cls._mutation_meta
         object_type = resolve_object_type(mutation_cls, meta)
         bind_mutation_outputs(

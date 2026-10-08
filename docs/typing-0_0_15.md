@@ -5,7 +5,7 @@ rules still switched off and the `# pyright: ignore[...]` comments still in the 
 Each item is fixed at the root, gated (both passes 0 errors, full suite in one pass at 100% coverage), then committed.
 A split suite run on a tree other sessions are editing can drop modules from every part, so it is not a coverage gate.
 
-Progress: 17 done, 10 to do. Ignore comments: 1291 lines (1897 at the start of 0.0.15's ignore sweep).
+Progress: 18 done, 9 to do. Ignore comments: 1020 lines (1897 at the start of 0.0.15's ignore sweep).
 
 ## Pre-commit (`uvx pre-commit run --all-files`, d322f477, clean clone)
 
@@ -49,6 +49,10 @@ Progress: 17 done, 10 to do. Ignore comments: 1291 lines (1897 at the start of 0
 - [x] 20. `tests/_execution.py::make_execution_context` and `tests/_definition.py::make_definition` build real
   `ExecutionContext` / `DjangoTypeDefinition` objects; hostile stand-ins keep their ignores (43 ignores, 15 of them
   other stand-ins)
+- [x] 21. The other stand-ins and the uncategorized rest: real objects and models in place of stand-ins, real
+  functions marked with `vars(fn).update(...)`, Django wrapper plants through `monkeypatch`, and `make_info` builds
+  `operation` / `document` / `operation_name`; `Meta.description` takes a `str` or a lazy translation string; every
+  kept ignore's reason line states its real cause (272 ignores)
 
 ## To do: rules still off
 
@@ -69,9 +73,7 @@ Off by design (not planned): `reportImplicitStringConcatenation`, `reportPrivate
 Off at the 3.10 floor only: the five `reportUnknown*` rules and `reportUnnecessaryTypeIgnoreComment`. django-stubs needs
 `typing.Self` (3.11), so at 3.10 every `-> Self` reads as unknown.
 
-## To do: ignore refactors (from the 2026-10-06 survey)
-
-- [ ] 21. Not yet surveyed: other stand-ins (153) and the uncategorized rest (419, of which 152 are in the package)
+## Ignore refactors: survey verdicts
 
 Survey verdicts recorded so nothing is re-tried blind:
 
@@ -83,6 +85,9 @@ Survey verdicts recorded so nothing is re-tried blind:
   ModelForm / ModelSerializer forwards in examples; Django model `Meta` on proxy / MTI children; `connection.py`'s two
   ignores the Strawberry survey looked at
 - Rejected: making `DjangoType` generic over its model (rows and GraphQL types stay unrelated classes)
+- Item 21, not taken: aliasing asgiref's coroutine marker; `is_marked_coroutine_function` keeps its two suppressions
+  with their real reasons (typeshed deprecates `asyncio.iscoroutinefunction` from 3.11; asgiref picks its check by
+  `hasattr`)
 
 ## Waiting on you
 
@@ -97,7 +102,7 @@ strawberry_django does?
 
 ## Ignore breakdown
 
-Lines carrying `# pyright: ignore[...]`: 1291 (1320 rule hits) in 174 files: tests 1054, package 179, examples 56,
+Lines carrying `# pyright: ignore[...]`: 1020 (1049 rule hits) in 163 files: tests 794, package 171, examples 53,
 scripts 2.
 
 ### By cause
@@ -105,29 +110,26 @@ scripts 2.
 | Cause | Lines | Plan |
 | --- | --- | --- |
 | Deliberately ill-typed test input (hostile values, forged classes, rejected writes) | 490 | keep |
-| Other stand-in objects in tests | 153 | item 21 |
 | Django private QuerySet attributes (seam 14, `super()._clone()` 2, hostile writes 7, planted shapes 12) | 35 | keep |
 | DRF stubs declare `ModelSerializer.Meta` | 136 | item 23 |
 | Verbatim `__init__` forwards (schema, consumers, ModelForm, ModelSerializer) | 34 | keep |
 | Framework `Meta` read from the class body only | 13 | keep |
 | Django model `Meta` on proxy / MTI children | 11 | keep |
-| Uncategorized | 419 | item 21 |
+| Reviewed in item 21 and kept (each reason line states its cause) | 301 | keep |
 
 ### By rule
 
 | Rule | Hits | Package | Tests | Examples | Scripts |
 | --- | --- | --- | --- | --- | --- |
-| `reportArgumentType` | 442 | 25 | 412 | 5 | 0 |
-| `reportAttributeAccessIssue` | 260 | 26 | 233 | 1 | 0 |
+| `reportArgumentType` | 320 | 24 | 291 | 5 | 0 |
 | `reportIncompatibleVariableOverride` | 194 | 2 | 169 | 23 | 0 |
-| `reportExplicitAny` | 111 | 71 | 25 | 13 | 2 |
-| `reportIncompatibleMethodOverride` | 76 | 5 | 66 | 5 | 0 |
-| `reportReturnType` | 43 | 0 | 42 | 1 | 0 |
-| `reportFunctionMemberAccess` | 25 | 4 | 19 | 2 | 0 |
-| `reportAssignmentType` | 23 | 0 | 20 | 3 | 0 |
+| `reportAttributeAccessIssue` | 186 | 25 | 160 | 1 | 0 |
+| `reportExplicitAny` | 101 | 67 | 19 | 13 | 2 |
+| `reportIncompatibleMethodOverride` | 69 | 5 | 59 | 5 | 0 |
+| `reportReturnType` | 26 | 0 | 25 | 1 | 0 |
 | `reportUnnecessaryIsInstance` | 20 | 20 | 0 | 0 | 0 |
-| `reportCallIssue` | 18 | 1 | 16 | 1 | 0 |
-| `reportDeprecated` | 14 | 5 | 9 | 0 | 0 |
+| `reportCallIssue` | 17 | 1 | 15 | 1 | 0 |
+| `reportAssignmentType` | 12 | 0 | 11 | 1 | 0 |
 | `reportIndexIssue` | 11 | 0 | 11 | 0 | 0 |
 | `reportUnsafeMultipleInheritance` | 9 | 4 | 3 | 2 | 0 |
 | `reportUnknownParameterType` | 9 | 1 | 8 | 0 | 0 |
@@ -135,9 +137,11 @@ scripts 2.
 | `reportUnreachable` | 7 | 5 | 2 | 0 | 0 |
 | `reportGeneralTypeIssues` | 7 | 1 | 6 | 0 | 0 |
 | `reportUndefinedVariable` | 7 | 0 | 7 | 0 | 0 |
+| `reportFunctionMemberAccess` | 6 | 4 | 1 | 1 | 0 |
 | `reportMissingParameterType` | 5 | 0 | 5 | 0 | 0 |
 | `reportPropertyTypeMismatch` | 4 | 4 | 0 | 0 | 0 |
 | `reportUnnecessaryComparison` | 4 | 4 | 0 | 0 | 0 |
+| `reportDeprecated` | 4 | 3 | 1 | 0 | 0 |
 | `reportInvalidTypeArguments` | 3 | 1 | 2 | 0 | 0 |
 | `reportOptionalMemberAccess` | 3 | 3 | 0 | 0 | 0 |
 | `reportInvalidCast` | 3 | 3 | 0 | 0 | 0 |
@@ -154,16 +158,16 @@ scripts 2.
 
 | File | Lines |
 | --- | --- |
-| `tests/rest_framework/test_resolvers.py` | 73 |
 | `tests/utils/test_querysets.py` | 71 |
-| `tests/rest_framework/test_sets.py` | 55 |
-| `tests/rest_framework/test_converter.py` | 48 |
-| `tests/test_views.py` | 38 |
-| `tests/test_django_patches.py` | 36 |
-| `tests/test_routers.py` | 33 |
-| `tests/test_list_field.py` | 29 |
+| `tests/rest_framework/test_resolvers.py` | 66 |
+| `tests/rest_framework/test_sets.py` | 48 |
+| `tests/rest_framework/test_converter.py` | 42 |
 | `tests/test_resource_policy.py` | 29 |
 | `examples/fakeshop/apps/library/serializers.py` | 26 |
+| `tests/test_list_field.py` | 22 |
+| `tests/test_consumers.py` | 20 |
+| `tests/utils/test_relations.py` | 18 |
+| `tests/test_error_policy.py` | 17 |
 
 
 <!-- LINK DEFINITIONS -->

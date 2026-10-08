@@ -75,9 +75,7 @@ def test_unresolved_relation_diagnostic_survives_hostile_model_name():
             source_type=_HostileName,  # pyright: ignore[reportArgumentType]
             source_model=_HostileName,  # pyright: ignore[reportArgumentType]
             field_name="books",
-            # basedpyright: a stand-in field the failing path never reads; PendingRelation types
-            # django_field as ModelField
-            django_field=object(),  # pyright: ignore[reportArgumentType]
+            django_field=Book._meta.get_field("genres"),
             # basedpyright: the class whose __name__ raises is the hostile input under test;
             # PendingRelation types related_model as type[Model]
             related_model=_HostileName,  # pyright: ignore[reportArgumentType]
@@ -292,10 +290,13 @@ def test_annotation_name_snapshot_wraps_unreadable_mapping():
 
 def test_pending_relation_without_source_definition_is_typed():
     """A pending relation whose source type never registered a definition raises."""
-    target_type = type("GenreType", (), {})
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # TypeRegistry.register types the parameter as type[DjangoType]
-    registry.register(Genre, target_type)  # pyright: ignore[reportArgumentType]
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+
+    del GenreType
     registry.add_pending_relation(
         PendingRelation(
             # basedpyright: the definition-less class is the hostile input under test;
@@ -423,8 +424,9 @@ def test_field_surface_names_ignores_field_without_python_or_graphql_name():
     class _ChildType(_BaseWithFakeDef):
         pass
 
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # _field_surface_names types the parameter as type[DjangoType]
+    # basedpyright: a plain class inheriting a Strawberry definition whose field has no python or
+    # graphql name, the malformed base the surface read skips; _field_surface_names types the
+    # parameter as type[DjangoType]
     surface = _field_surface_names(_ChildType)  # pyright: ignore[reportArgumentType]
     assert surface == {}
 

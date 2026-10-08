@@ -81,6 +81,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     serializer_only_relation_annotation,
 )
 from django_strawberry_framework.scalars import Upload
+from tests._idioms import bind_unparented
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import DRFField
@@ -107,19 +108,6 @@ def _isolate_registry() -> Iterator[None]:
     registry.clear()
     yield
     registry.clear()
-
-
-def _bind(field: DRFField, name: str) -> DRFField:
-    """Bind a serializer field (DRF populates ``field_name`` / ``source`` / ``source_attrs``).
-
-    The schema-time discovery reads bound fields (DRF binds during ``.fields``
-    materialization), so the converter's ``source``-axis / ``field_name`` reads
-    require a bound field. Direct converter tests bind explicitly.
-    """
-    # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
-    # unparented bound field)
-    field.bind(name, None)  # pyright: ignore[reportArgumentType]
-    return field
 
 
 def _concrete_field(model: type[models.Model], name: str) -> ConcreteField:
@@ -186,7 +174,7 @@ def _make_relay_target():
 )
 def test_scalar_field_annotations(field: DRFField, expected: object):
     """Each supported scalar serializer field maps to its Strawberry annotation, kind ``scalar``."""
-    conversion = convert_serializer_field(_bind(field, "f"))
+    conversion = convert_serializer_field(bind_unparented(field, "f"))
     assert conversion.annotation == expected
     assert conversion.kind == SCALAR
 
@@ -194,23 +182,30 @@ def test_scalar_field_annotations(field: DRFField, expected: object):
 def test_required_ness_reflects_field_required():
     """``required`` mirrors ``field.required`` for both states."""
     assert (
-        convert_serializer_field(_bind(serializers.CharField(required=True), "f")).required is True
+        convert_serializer_field(
+            bind_unparented(serializers.CharField(required=True), "f"),
+        ).required
+        is True
     )
     assert (
-        convert_serializer_field(_bind(serializers.CharField(required=False), "f")).required
+        convert_serializer_field(
+            bind_unparented(serializers.CharField(required=False), "f"),
+        ).required
         is False
     )
 
 
 def test_email_field_maps_via_mro_under_charfield():
     """A known subclass (``EmailField``) resolves to its ``CharField`` parent's scalar (MRO walk)."""
-    assert convert_serializer_field(_bind(serializers.EmailField(), "f")).annotation is str
+    assert (
+        convert_serializer_field(bind_unparented(serializers.EmailField(), "f")).annotation is str
+    )
 
 
 def test_is_input_parameter_is_accepted_and_ignored():
     """``is_input`` is threaded for graphene-parity but does not branch (spec-039)."""
-    a = convert_serializer_field(_bind(serializers.CharField(), "f"), is_input=True)
-    b = convert_serializer_field(_bind(serializers.CharField(), "f"), is_input=False)
+    a = convert_serializer_field(bind_unparented(serializers.CharField(), "f"), is_input=True)
+    b = convert_serializer_field(bind_unparented(serializers.CharField(), "f"), is_input=False)
     assert a.annotation is b.annotation is str
     assert a.kind == b.kind == SCALAR
 
@@ -222,7 +217,7 @@ def test_is_input_parameter_is_accepted_and_ignored():
 
 def test_list_field_scalar_child_maps_to_list():
     """``ListField(child=IntegerField())`` -> ``list[int]`` (recursive through the scalar registry)."""
-    field = _bind(serializers.ListField(child=serializers.IntegerField()), "nums")
+    field = bind_unparented(serializers.ListField(child=serializers.IntegerField()), "nums")
     conversion = convert_serializer_field(field)
     assert conversion.annotation == list[int]
     assert conversion.kind == SCALAR
@@ -230,7 +225,7 @@ def test_list_field_scalar_child_maps_to_list():
 
 def test_multiple_choice_field_maps_to_list_str():
     """``MultipleChoiceField`` -> ``list[str]`` (precedes the scalar ``ChoiceField`` -> ``str``)."""
-    field = _bind(serializers.MultipleChoiceField(choices=["a", "b"]), "tags")
+    field = bind_unparented(serializers.MultipleChoiceField(choices=["a", "b"]), "tags")
     conversion = convert_serializer_field(field)
     assert conversion.annotation == list[str]
     assert conversion.kind == SCALAR
@@ -239,7 +234,7 @@ def test_multiple_choice_field_maps_to_list_str():
 def test_list_field_relation_child_raises():
     """A ``ListField`` whose child is a relation raises (only a scalar child is supported)."""
     _register_products_types()
-    field = _bind(
+    field = bind_unparented(
         serializers.ListField(
             child=serializers.PrimaryKeyRelatedField(
                 queryset=product_models.Category.objects.all(),
@@ -257,7 +252,7 @@ def test_list_field_nested_serializer_child_raises():
     class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
-    field = _bind(serializers.ListField(child=Inner()), "items")
+    field = bind_unparented(serializers.ListField(child=Inner()), "items")
     with pytest.raises(ConfigurationError):
         convert_serializer_field(field)
 
@@ -269,7 +264,7 @@ def test_list_field_file_child_raises():
     earlier), so it reaches the scalar-child guard: ``convert_serializer_field`` returns
     a ``FILE`` kind with a ``None`` annotation, which is rejected.
     """
-    field = _bind(serializers.ListField(child=serializers.FileField()), "files")
+    field = bind_unparented(serializers.ListField(child=serializers.FileField()), "files")
     with pytest.raises(ConfigurationError, match="does not resolve to a scalar"):
         convert_serializer_field(field)
 
@@ -282,7 +277,7 @@ def test_serializer_only_many_related_field_maps_to_globalid_list():
     and the id type follows the Relay-vs-raw-pk rule against the target's primary.
     """
     relay_target, _ = _make_relay_target()
-    field = _bind(
+    field = bind_unparented(
         serializers.PrimaryKeyRelatedField(many=True, queryset=relay_target.objects.all()),
         "targets",
     )
@@ -302,7 +297,7 @@ def test_nested_serializer_field_raises():
         x = serializers.CharField()
 
     with pytest.raises(ConfigurationError, match="nested"):
-        convert_serializer_field(_bind(Inner(), "inner"))
+        convert_serializer_field(bind_unparented(Inner(), "inner"))
 
 
 def test_list_serializer_field_raises():
@@ -312,7 +307,7 @@ def test_list_serializer_field_raises():
         x = serializers.CharField()
 
     with pytest.raises(ConfigurationError, match="nested"):
-        convert_serializer_field(_bind(Inner(many=True), "items"))
+        convert_serializer_field(bind_unparented(Inner(many=True), "items"))
 
 
 def test_is_nested_serializer_field_detects_nested_and_scalar():
@@ -321,9 +316,13 @@ def test_is_nested_serializer_field_detects_nested_and_scalar():
     class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
-    assert serializer_converter.is_nested_serializer_field(_bind(Inner(), "single"))
-    assert serializer_converter.is_nested_serializer_field(_bind(Inner(many=True), "many"))
-    assert not serializer_converter.is_nested_serializer_field(_bind(serializers.CharField(), "s"))
+    assert serializer_converter.is_nested_serializer_field(bind_unparented(Inner(), "single"))
+    assert serializer_converter.is_nested_serializer_field(
+        bind_unparented(Inner(many=True), "many"),
+    )
+    assert not serializer_converter.is_nested_serializer_field(
+        bind_unparented(serializers.CharField(), "s"),
+    )
 
 
 def test_nested_serializer_child_reports_single_vs_many():
@@ -332,12 +331,12 @@ def test_nested_serializer_child_reports_single_vs_many():
     class Inner(serializers.Serializer[object]):
         x = serializers.CharField()
 
-    single = _bind(Inner(), "single")
+    single = bind_unparented(Inner(), "single")
     child_single, many_single = serializer_converter.nested_serializer_child(single)
     assert child_single is single
     assert many_single is False
 
-    many = _bind(Inner(many=True), "many")
+    many = bind_unparented(Inner(many=True), "many")
     child_many, many_flag = serializer_converter.nested_serializer_child(many)
     assert isinstance(child_many, Inner)
     assert many_flag is True
@@ -379,7 +378,7 @@ def test_resolve_serializer_field_rejects_nested_over_relation_column():
 def test_primary_key_related_field_is_relation_single():
     """``PrimaryKeyRelatedField`` -> kind ``relation_single`` (annotation finalized at build site)."""
     _register_products_types()
-    field = _bind(
+    field = bind_unparented(
         serializers.PrimaryKeyRelatedField(queryset=product_models.Category.objects.all()),
         "category",
     )
@@ -391,7 +390,7 @@ def test_primary_key_related_field_is_relation_single():
 def test_many_related_field_is_relation_multi():
     """``PrimaryKeyRelatedField(many=True)`` (a ``ManyRelatedField``) -> kind ``relation_multi``."""
     _register_products_types()
-    field = _bind(
+    field = bind_unparented(
         serializers.PrimaryKeyRelatedField(
             many=True,
             queryset=product_models.Category.objects.all(),
@@ -410,7 +409,7 @@ def test_slug_related_field_raises_non_pk_relation():
     no pk-based input shape, so it raises rather than silently misdecoding a pk.
     """
     _register_products_types()
-    field = _bind(
+    field = bind_unparented(
         serializers.SlugRelatedField(
             slug_field="name",
             queryset=product_models.Category.objects.all(),
@@ -424,7 +423,7 @@ def test_slug_related_field_raises_non_pk_relation():
 def test_many_related_field_non_pk_child_raises():
     """A ``ManyRelatedField`` wrapping a non-PK child (``SlugRelatedField(many=True)``) fails loud."""
     _register_products_types()
-    field = _bind(
+    field = bind_unparented(
         serializers.SlugRelatedField(
             many=True,
             slug_field="name",
@@ -438,10 +437,10 @@ def test_many_related_field_non_pk_child_raises():
 
 def test_file_and_image_fields_are_file_kind():
     """``FileField`` / ``ImageField`` -> kind ``file`` (the ``Upload`` annotation is build-site)."""
-    assert convert_serializer_field(_bind(serializers.FileField(), "f")).kind == FILE
+    assert convert_serializer_field(bind_unparented(serializers.FileField(), "f")).kind == FILE
     # ``ImageField`` requires Pillow at validate time, but construction +
     # conversion only read the class, so no Pillow dependency here.
-    assert convert_serializer_field(_bind(serializers.ImageField(), "f")).kind == FILE
+    assert convert_serializer_field(bind_unparented(serializers.ImageField(), "f")).kind == FILE
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +469,7 @@ def test_unknown_custom_field_subclass_raises():
         ConfigurationError,
         match="Unsupported serializer field type 'CustomField'",
     ):
-        convert_serializer_field(_bind(CustomField(), "x"))
+        convert_serializer_field(bind_unparented(CustomField(), "x"))
 
 
 # ---------------------------------------------------------------------------
@@ -775,7 +774,7 @@ def test_dotted_source_on_model_column_field_raises():
 def test_star_source_on_model_column_field_raises():
     """A ``source="*"`` on a model-column-converting field raises ``ConfigurationError``."""
     _register_products_types()
-    field = _bind(serializers.CharField(source="*"), "whole")
+    field = bind_unparented(serializers.CharField(source="*"), "whole")
     with pytest.raises(ConfigurationError, match="dotted source"):
         backing_model_field(product_models.Item, field)
 
@@ -786,14 +785,14 @@ def test_require_one_segment_source_rejects_star_and_dotted():
     ``backing_model_field`` and the nested-input walk both call this owner; column /
     nested nouns stay at the call sites via ``field_label`` / ``must_map_to``.
     """
-    star = _bind(serializers.CharField(source="*"), "whole")
+    star = bind_unparented(serializers.CharField(source="*"), "whole")
     with pytest.raises(ConfigurationError, match="dotted source / source='\\*'"):
         require_one_segment_source(
             star,
             field_label="Serializer field 'whole'",
             must_map_to="a model-column-backed field must map to a single concrete column",
         )
-    dotted = _bind(serializers.CharField(source="a.b"), "nm")
+    dotted = bind_unparented(serializers.CharField(source="a.b"), "nm")
     with pytest.raises(ConfigurationError, match="a nested write must map to a single attribute"):
         require_one_segment_source(
             dotted,
@@ -802,7 +801,7 @@ def test_require_one_segment_source_rejects_star_and_dotted():
         )
     # One-segment source is the allowed shape (no raise).
     require_one_segment_source(
-        _bind(serializers.CharField(source="name"), "nm"),
+        bind_unparented(serializers.CharField(source="name"), "nm"),
         field_label="Serializer field 'nm'",
         must_map_to="a model-column-backed field must map to a single concrete column",
     )
@@ -892,14 +891,14 @@ def test_expanded_scalar_matrix(field: DRFField, expected: object):
     ``DurationField`` -> ``str`` (a DELIBERATE scalar - DRF renders a duration as an
     ISO-8601-ish string on the wire, not an accidental fallthrough).
     """
-    conversion = convert_serializer_field(_bind(field, "f"))
+    conversion = convert_serializer_field(bind_unparented(field, "f"))
     assert conversion.annotation == expected
     assert conversion.kind == SCALAR
 
 
 def test_hstore_field_maps_to_json_via_mro():
     """``HStoreField`` (a ``DictField`` subclass) resolves to ``JSON`` through the MRO walk."""
-    conversion = convert_serializer_field(_bind(serializers.HStoreField(), "h"))
+    conversion = convert_serializer_field(bind_unparented(serializers.HStoreField(), "h"))
     assert conversion.annotation == strawberry.scalars.JSON
     assert conversion.kind == SCALAR
 
@@ -907,7 +906,7 @@ def test_hstore_field_maps_to_json_via_mro():
 def test_model_field_maps_via_wrapped_model_field():
     """``ModelField`` resolves its scalar through the wrapped Django ``model_field`` (#7)."""
     field = serializers.ModelField(model_field=_concrete_field(product_models.Item, "name"))
-    conversion = convert_serializer_field(_bind(field, "nm"))
+    conversion = convert_serializer_field(bind_unparented(field, "nm"))
     assert conversion.annotation is str
     assert conversion.kind == SCALAR
 
@@ -960,13 +959,13 @@ def test_unregistered_custom_field_raises_then_registered_maps(_restore_converte
         ConfigurationError,
         match="Unsupported serializer field type '_CustomHexField'",
     ):
-        convert_serializer_field(_bind(_CustomHexField(), "c"))
+        convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
     register_serializer_field_converter(
         _CustomHexField,
         lambda field: SerializerFieldConversion(annotation=str, required=field.required),
     )
-    conversion = convert_serializer_field(_bind(_CustomHexField(), "c"))
+    conversion = convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
     assert conversion.annotation is str
     assert conversion.kind == SCALAR
 
@@ -979,7 +978,7 @@ def test_registered_converter_malformed_return_is_configuration_error(
     # register_serializer_field_converter types the parameter as SerializerFieldConverter
     register_serializer_field_converter(_CustomHexField, lambda _field: None)  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="must return SerializerFieldConversion"):
-        convert_serializer_field(_bind(_CustomHexField(), "c"))
+        convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
 
 def test_registered_converter_exception_is_wrapped_as_configuration_error(
@@ -992,7 +991,7 @@ def test_registered_converter_exception_is_wrapped_as_configuration_error(
 
     register_serializer_field_converter(_CustomHexField, broken_converter)
     with pytest.raises(ConfigurationError, match="raised RuntimeError"):
-        convert_serializer_field(_bind(_CustomHexField(), "c"))
+        convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
 
 def test_registered_converter_relation_kind_is_configuration_error(
@@ -1008,7 +1007,7 @@ def test_registered_converter_relation_kind_is_configuration_error(
         ),
     )
     with pytest.raises(ConfigurationError, match="must return a scalar conversion"):
-        convert_serializer_field(_bind(_CustomHexField(), "c"))
+        convert_serializer_field(bind_unparented(_CustomHexField(), "c"))
 
 
 def test_register_converter_resolves_unregistered_subclass_via_mro(
@@ -1023,7 +1022,7 @@ def test_register_converter_resolves_unregistered_subclass_via_mro(
     class _CustomHexSubclass(_CustomHexField):
         pass
 
-    assert convert_serializer_field(_bind(_CustomHexSubclass(), "c")).annotation is str
+    assert convert_serializer_field(bind_unparented(_CustomHexSubclass(), "c")).annotation is str
 
 
 def test_register_converter_override_guard(_restore_converter_registry: None):
@@ -1036,7 +1035,9 @@ def test_register_converter_override_guard(_restore_converter_registry: None):
         register_serializer_field_converter(serializers.CharField, conv)
     # ``override=True`` replaces it.
     register_serializer_field_converter(serializers.CharField, conv, override=True)
-    assert convert_serializer_field(_bind(serializers.CharField(), "f")).annotation is int
+    assert (
+        convert_serializer_field(bind_unparented(serializers.CharField(), "f")).annotation is int
+    )
 
 
 @pytest.mark.parametrize(
@@ -1300,12 +1301,10 @@ def _integer_choice_column(
     blank: bool = False,
     null: bool = False,
 ) -> models.IntegerField[object, object]:
-    """An integer choice column bound to a stand-in model (only ``__name__`` is read)."""
+    """An integer choice column bound to a real model (only ``__name__`` is read)."""
     column = models.IntegerField(choices=[(1, "One"), (2, "Two")], blank=blank, null=null)
     column.set_attributes_from_name("rank")
-    # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
-    # as a Model subclass
-    column.model = type("Ranked", (), {})  # pyright: ignore[reportAttributeAccessIssue]
+    column.model = product_models.Category
     return column
 
 
@@ -1325,7 +1324,7 @@ def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_reme
         "RankSer",
         "rank",
         "''",
-        "Ranked.rank",
+        "Category.rank",
         "Drop allow_blank from the serializer field.",
     )
 
@@ -1354,9 +1353,7 @@ def test_integer_choices_column_accepts_its_own_choices():
 
     column = models.IntegerField(choices=Rank.choices)
     column.set_attributes_from_name("rank")
-    # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
-    # as a Model subclass
-    column.model = type("Ranked", (), {})  # pyright: ignore[reportAttributeAccessIssue]
+    column.model = product_models.Category
     serializer_converter._reject_choice_values_the_column_does_not_list(
         RankSer().fields["rank"],
         column,
@@ -1621,12 +1618,9 @@ def _array_choice_column(monkeypatch: pytest.MonkeyPatch, *, blank: bool = False
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     element = models.CharField(max_length=5, choices=[("a", "A"), ("b", "B")], blank=blank)
     column = _FakeArrayField(element)
-    tagged = type("Tagged", (), {})
     for field in (column, element):
         field.set_attributes_from_name("tags")
-        # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
-        # as a Model subclass
-        field.model = tagged  # pyright: ignore[reportAttributeAccessIssue]
+        field.model = product_models.Category
     return column
 
 
@@ -1671,7 +1665,13 @@ def test_multiple_choice_element_missing_from_array_base_enum_refused(
     field = _multi_tags_field(**kwargs)
     with pytest.raises(ConfigurationError) as exc_info:
         serializer_converter._model_backed_scalar_annotation(field, column, "X")
-    assert str(exc_info.value) == _value_refusal("TagsSer", "tags", missing, "Tagged.tags", remedy)
+    assert str(exc_info.value) == _value_refusal(
+        "TagsSer",
+        "tags",
+        missing,
+        "Category.tags",
+        remedy,
+    )
 
 
 def test_multiple_choice_blank_element_over_blank_array_base_accepted(
@@ -1696,12 +1696,9 @@ def test_multiple_choice_over_empty_label_array_base_accepted(monkeypatch: pytes
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     element = models.CharField(max_length=5, choices=_Condition.choices)
     column = _FakeArrayField(element)
-    tagged = type("Tagged", (), {})
     for model_field in (column, element):
         model_field.set_attributes_from_name("tags")
-        # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
-        # as a Model subclass
-        model_field.model = tagged  # pyright: ignore[reportAttributeAccessIssue]
+        model_field.model = product_models.Category
     field = _multi_tags_field(choices=_Condition.choices)
     annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
     (inner,) = get_args(annotation)
@@ -1861,12 +1858,9 @@ def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
     element = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
     column = _FakeArrayField(element)
-    tagged = type("Tagged", (), {})
     for model_field in (column, element):
         model_field.set_attributes_from_name("tags")
-        # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
-        # as a Model subclass
-        model_field.model = tagged  # pyright: ignore[reportAttributeAccessIssue]
+        model_field.model = product_models.Category
     return column
 
 
@@ -1892,7 +1886,7 @@ def test_multiple_choice_element_the_grouped_array_base_does_not_list_refused(
         "TagsSer",
         "tags",
         "'zzz'",
-        "Tagged.tags",
+        "Category.tags",
         "Remove 'zzz' from the serializer field's choices.",
     )
 
@@ -1911,7 +1905,7 @@ def test_list_field_over_grouped_array_base_refused(monkeypatch: pytest.MonkeyPa
     assert str(exc_info.value) == _grouped_read_enum_refusal(
         "ListTagsSer",
         "tags",
-        "Tagged.tags",
+        "Category.tags",
     )
 
 
@@ -2047,7 +2041,7 @@ def test_serializer_field_description_combines_help_text_and_constraints():
         serializer_field_description,
     )
 
-    field = _bind(
+    field = bind_unparented(
         serializers.CharField(help_text="The item name.", min_length=2, max_length=20),
         "name",
     )
@@ -2064,7 +2058,7 @@ def test_serializer_field_description_none_without_metadata():
         serializer_field_description,
     )
 
-    assert serializer_field_description(_bind(serializers.CharField(), "f")) is None
+    assert serializer_field_description(bind_unparented(serializers.CharField(), "f")) is None
 
 
 def test_serializer_field_description_notes_numeric_bounds_and_allow_blank():
@@ -2074,10 +2068,12 @@ def test_serializer_field_description_notes_numeric_bounds_and_allow_blank():
     )
 
     numeric = serializer_field_description(
-        _bind(serializers.IntegerField(min_value=0, max_value=9), "n"),
+        bind_unparented(serializers.IntegerField(min_value=0, max_value=9), "n"),
     )
     assert numeric == "Constraints: min_value=0, max_value=9."
-    blank = serializer_field_description(_bind(serializers.CharField(allow_blank=True), "b"))
+    blank = serializer_field_description(
+        bind_unparented(serializers.CharField(allow_blank=True), "b"),
+    )
     assert blank == "Constraints: allow_blank=true."
 
 
@@ -2087,7 +2083,10 @@ def test_serializer_field_description_notes_allow_empty_false():
         serializer_field_description,
     )
 
-    field = _bind(serializers.ListField(child=serializers.CharField(), allow_empty=False), "tags")
+    field = bind_unparented(
+        serializers.ListField(child=serializers.CharField(), allow_empty=False),
+        "tags",
+    )
     assert serializer_field_description(field) == "Constraints: allow_empty=false."
 
 
@@ -2107,7 +2106,7 @@ def test_serializer_field_description_hostile_metadata_is_configuration_error():
 
     # basedpyright: the raising help text is the hostile input under test; drf-stubs types
     # help_text as _StrOrPromise | None
-    field = _bind(serializers.CharField(help_text=HostileText()), "name")  # pyright: ignore[reportArgumentType]
+    field = bind_unparented(serializers.CharField(help_text=HostileText()), "name")  # pyright: ignore[reportArgumentType]
     with pytest.raises(ConfigurationError, match="metadata that cannot be rendered"):
         serializer_field_description(field)
 
@@ -2195,10 +2194,7 @@ def test_consumer_declared_scalar_disagreeing_with_choices_column_fails_loud():
 
 def test_list_field_with_no_child_raises_configuration_error():
     """ListField with default child=None raises ConfigurationError requesting a typed child."""
-    field = serializers.ListField()
-    # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
-    # unparented bound field)
-    field.bind("tags", None)  # pyright: ignore[reportArgumentType]
+    field = bind_unparented(serializers.ListField(), "tags")
     with pytest.raises(ConfigurationError, match="ListField with no explicit child field"):
         convert_serializer_field(field)
 

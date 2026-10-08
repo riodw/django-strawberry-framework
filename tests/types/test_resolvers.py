@@ -49,11 +49,17 @@ if TYPE_CHECKING:
     from django_strawberry_framework.utils.typing import ModelField
 
 
-def _as_django_type(cls: type[object]) -> type[DjangoType]:
-    """Hand a plain parent class to a resolver builder that takes a ``DjangoType``."""
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads; the
-    # relation resolver builders type the parameter as type[DjangoType]
-    return cls  # pyright: ignore[reportReturnType]
+def _parent_type(
+    model: type[Model],
+    name: str | None = None,
+    fields: tuple[str, ...] = ("id",),
+) -> type[DjangoType]:
+    """Declare a real ``DjangoType`` over ``model``, the parent a relation resolver is built for.
+
+    The autouse ``_isolate_registry`` fixture clears the registration at the next test.
+    """
+    meta = type("Meta", (), {"model": model, "fields": fields})
+    return type(name or f"{model.__name__}Type", (DjangoType,), {"Meta": meta})
 
 
 def _as_field(stand_in: object) -> "ModelField":
@@ -121,8 +127,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item)
 
     class Root:
         category_id = 42
@@ -132,7 +137,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
             raise AssertionError("the relation resolver must not lazy-load the relation")
 
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_info = make_info(
         context=SimpleNamespace(dst_optimizer_fk_id_elisions={key}),
@@ -226,37 +231,12 @@ def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
     """Resolver FK-id elision reads attname from registered FieldMeta."""
     from types import SimpleNamespace
 
-    from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    from django_strawberry_framework.types.definition import DjangoTypeDefinition
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
-
+    # The real ``Item`` type registers its own ``FieldMeta`` for ``category``.
+    ItemType = _parent_type(Item, fields=("id", "category"))
     field = SimpleNamespace(name="category", attname="wrong_id")
-    registry.register_definition(
-        _as_django_type(ItemType),
-        DjangoTypeDefinition(
-            origin=_as_django_type(ItemType),
-            model=Item,
-            name=None,
-            description=None,
-            fields_spec=None,
-            exclude_spec=None,
-            selected_fields=(),
-            field_map={
-                "category": FieldMeta(
-                    name="category",
-                    is_relation=True,
-                    attname="category_id",
-                    related_model=Category,
-                ),
-            },
-            optimizer_hints={},
-            has_custom_get_queryset=False,
-        ),
-    )
-    resolver = _make_relation_resolver(_as_field(field), parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(_as_field(field), parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_info = make_info(
         context={"dst_optimizer_fk_id_elisions": {key}},
@@ -283,11 +263,10 @@ def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_root = SimpleNamespace(category_id=None)
     fake_info = make_info(
@@ -322,15 +301,13 @@ def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
-    class OtherType:
-        pass
+    OtherType = _parent_type(Category, "OtherType")
 
     sentinel = object()
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     wrong_key = resolver_key(OtherType, "category", ("allItems", "category"))
     fake_root = SimpleNamespace(category_id=42, category=sentinel)
     fake_info = make_info(
@@ -348,12 +325,11 @@ def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     sentinel = object()
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     fake_root = SimpleNamespace(category_id=42, category=sentinel)
     fake_info = make_info(
         context={"dst_optimizer_fk_id_elisions": {"category"}},
@@ -371,8 +347,7 @@ def test_check_n1_ignores_bare_field_name_key():
     from django_strawberry_framework.exceptions import OptimizerError
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": {"category"}, "dst_optimizer_strictness": "raise"},
@@ -381,7 +356,7 @@ def test_check_n1_ignores_bare_field_name_key():
     )
 
     with pytest.raises(OptimizerError, match="Unplanned N\\+1"):
-        _check_n1(fake_info, SimpleNamespace(), "category", _as_django_type(ItemType), kind=None)
+        _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind=None)
 
 
 def test_check_n1_returns_when_relation_is_already_loaded():
@@ -390,8 +365,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
 
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
@@ -402,7 +376,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
         fake_info,
         SimpleNamespace(category="cached"),
         "category",
-        _as_django_type(ItemType),
+        ItemType,
         kind=None,
     )
 
@@ -413,8 +387,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture
 
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "warn"},
@@ -422,7 +395,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog: pytest.LogCaptureFixture
     )
 
     caplog.set_level("WARNING", logger="django_strawberry_framework")
-    _check_n1(fake_info, SimpleNamespace(), "category", _as_django_type(ItemType), kind=None)
+    _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind=None)
 
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
 
@@ -433,8 +406,7 @@ def test_check_n1_planned_absent_is_silent():
 
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(context={}, path=response_path("allItems", 0, "category"))
     # No exception, no log, no side effect - strictness is irrelevant when the
@@ -443,7 +415,7 @@ def test_check_n1_planned_absent_is_silent():
         fake_info,
         SimpleNamespace(),
         "category",
-        _as_django_type(ItemType),
+        ItemType,
         kind="forward_single",
     )
 
@@ -454,8 +426,7 @@ def test_check_n1_planned_hit_is_silent():
 
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_info = SimpleNamespace(
@@ -466,7 +437,7 @@ def test_check_n1_planned_hit_is_silent():
         fake_info,
         SimpleNamespace(),
         "category",
-        _as_django_type(ItemType),
+        ItemType,
         kind="forward_single",
     )
 
@@ -477,8 +448,7 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
 
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set()},
@@ -488,7 +458,7 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
         fake_info,
         SimpleNamespace(),
         "category",
-        _as_django_type(ItemType),
+        ItemType,
         kind="forward_single",
     )
 
@@ -500,8 +470,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
     from django_strawberry_framework.exceptions import OptimizerError
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
@@ -512,7 +481,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
             fake_info,
             SimpleNamespace(),
             "category",
-            _as_django_type(ItemType),
+            ItemType,
             kind="forward_single",
         )
 
@@ -532,8 +501,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
     from django_strawberry_framework.exceptions import OptimizerError
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class CategoryType:
-        pass
+    CategoryType = _parent_type(Category, "CategoryType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
@@ -544,7 +512,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(
     # short-circuit the many-side check.
     root = SimpleNamespace(items=["not-a-real-prefetch"])
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: items"):
-        _check_n1(fake_info, root, "items", _as_django_type(CategoryType), kind=kind)
+        _check_n1(fake_info, root, "items", CategoryType, kind=kind)
 
 
 def test_check_n1_many_kind_respects_prefetched_objects_cache():
@@ -553,8 +521,7 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
 
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class CategoryType:
-        pass
+    CategoryType = _parent_type(Category, "CategoryType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
@@ -562,7 +529,7 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
     )
     root = SimpleNamespace(_prefetched_objects_cache={"items": []})
     # No raise - the relation is prefetched, so the strictness branch is skipped.
-    _check_n1(fake_info, root, "items", _as_django_type(CategoryType), kind="many")
+    _check_n1(fake_info, root, "items", CategoryType, kind="many")
 
 
 def test_check_n1_probes_prefetch_cache_under_cache_name():
@@ -581,8 +548,7 @@ def test_check_n1_probes_prefetch_cache_under_cache_name():
     from django_strawberry_framework.exceptions import OptimizerError
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class PlainAuthorType:
-        pass
+    PlainAuthorType = _parent_type(Category, "PlainAuthorType")
 
     fake_info = SimpleNamespace(
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
@@ -594,7 +560,7 @@ def test_check_n1_probes_prefetch_cache_under_cache_name():
         fake_info,
         root,
         "plainbook",
-        _as_django_type(PlainAuthorType),
+        PlainAuthorType,
         kind="reverse_many_to_one",
         cache_name="plainbook_set",
     )
@@ -605,7 +571,7 @@ def test_check_n1_probes_prefetch_cache_under_cache_name():
             fake_info,
             root,
             "plainbook",
-            _as_django_type(PlainAuthorType),
+            PlainAuthorType,
             kind="reverse_many_to_one",
         )
 
@@ -675,13 +641,13 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
 # ---------------------------------------------------------------------------
 
 
-def _forward_category_resolver():
-    """Build the generated forward resolver for ``Item.category``."""
+def _forward_category_resolver(parent_type: type[DjangoType]):
+    """Build the generated forward resolver for ``Item.category`` under ``parent_type``."""
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
     return _make_relation_resolver(
         Item._meta.get_field("category"),
-        parent_type=_as_django_type(Item),
+        parent_type=parent_type,
     )
 
 
@@ -694,7 +660,7 @@ def test_forward_resolver_contains_unsaved_instance_does_not_exist():
     ``None`` - the same absent-row contract the reverse OneToOne branch has -
     instead of letting the ORM exception escape the public resolver boundary.
     """
-    resolver = _forward_category_resolver()
+    resolver = _forward_category_resolver(_parent_type(Item))
     root = Item(name="unsaved")
     assert root.category_id is None
     fake_info = make_info()
@@ -709,7 +675,7 @@ async def test_forward_resolver_async_contains_unsaved_instance_does_not_exist()
     ``sync_to_async``; the absence signal raised inside that thread is
     contained into ``None`` exactly as the sync branch contains it.
     """
-    resolver = _forward_category_resolver()
+    resolver = _forward_category_resolver(_parent_type(Item))
     root = Item(name="unsaved-async")
     fake_info = make_info()
     pending = resolver(root, fake_info)
@@ -726,8 +692,9 @@ def test_forward_resolver_planned_path_contains_unsaved_instance_does_not_exist(
     """
     from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
 
-    resolver = _forward_category_resolver()
-    armed = {resolver_key(Item, "category", ("elsewhere", "category"))}
+    item_type = _parent_type(Item)
+    resolver = _forward_category_resolver(item_type)
+    armed = {resolver_key(item_type, "category", ("elsewhere", "category"))}
     fake_info = make_info(
         context={DST_OPTIMIZER_FK_ID_ELISIONS: armed},
         path=response_path("allItems", 0, "category"),
@@ -741,8 +708,9 @@ async def test_forward_resolver_async_planned_path_contains_unsaved_instance():
     """Async planned-path parity of the unsaved-instance containment."""
     from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
 
-    resolver = _forward_category_resolver()
-    armed = {resolver_key(Item, "category", ("elsewhere", "category"))}
+    item_type = _parent_type(Item)
+    resolver = _forward_category_resolver(item_type)
+    armed = {resolver_key(item_type, "category", ("elsewhere", "category"))}
     fake_info = make_info(
         context={DST_OPTIMIZER_FK_ID_ELISIONS: armed},
         path=response_path("allItems", 0, "category"),
@@ -804,7 +772,7 @@ def test_reverse_one_to_one_real_model_missing_row_contained():
 
     resolver = _make_relation_resolver(
         Patron._meta.get_field("card"),
-        parent_type=_as_django_type(Patron),
+        parent_type=_parent_type(Patron),
     )
     fake_info = make_info()
     assert resolver(Patron(name="No Card"), fake_info) is None
@@ -819,7 +787,7 @@ async def test_reverse_one_to_one_async_contains_missing_row():
 
     resolver = _make_relation_resolver(
         Patron._meta.get_field("card"),
-        parent_type=_as_django_type(Patron),
+        parent_type=_parent_type(Patron),
     )
     fake_info = make_info()
     pending = resolver(Patron(name="No Card Async"), fake_info)
@@ -856,7 +824,7 @@ def test_forward_resolver_nullable_dangling_fk_resolves_to_none():
     child = create_specimen("dangling-fk-child", parent=parent)
     resolver = _make_relation_resolver(
         ScalarSpecimen._meta.get_field("parent"),
-        parent_type=_as_django_type(ScalarSpecimen),
+        parent_type=_parent_type(ScalarSpecimen),
     )
     fake_info = make_info()
     disabled = db_connection.disable_constraint_checking()
@@ -887,7 +855,7 @@ def test_forward_resolver_propagates_consumer_attribute_error():
     answer the query with a silent ``null`` and hide the bug, so it
     propagates out of the resolver unchanged.
     """
-    resolver = _forward_category_resolver()
+    resolver = _forward_category_resolver(_parent_type(Item))
 
     class HostileItem:
         """Stands in for a consumer overriding the relation with a broken property."""
@@ -1072,8 +1040,7 @@ def test_strictness_check_is_connection_agnostic_under_non_default_alias():
     )
     from django_strawberry_framework.types.resolvers import _check_n1
 
-    class _ParentType:
-        pass
+    _ParentType = _parent_type(Item, "_ParentType")
 
     # ``_state.db = "shard_b"`` proves the non-default alias is accepted
     # without altering the check's shape; ``fields_cache`` is empty so the
@@ -1096,7 +1063,7 @@ def test_strictness_check_is_connection_agnostic_under_non_default_alias():
     )
 
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: shelf"):
-        _check_n1(info, root, "shelf", _as_django_type(_ParentType), kind="forward_single")
+        _check_n1(info, root, "shelf", _ParentType, kind="forward_single")
 
 
 # ---------------------------------------------------------------------------
@@ -1117,11 +1084,10 @@ def test_fk_id_elision_enabled_under_mutation():
     from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
 
     class Root:
@@ -1168,11 +1134,10 @@ def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(
     )
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
 
     def make_root():
@@ -1291,11 +1256,10 @@ def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog: pytest.
 
     services.seed_data(1)
 
-    class ItemType:
-        pass
+    ItemType = _parent_type(Item, "ItemType")
 
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field, parent_type=_as_django_type(ItemType))
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
     key = resolver_key(ItemType, "category", ("allItems", "category"))
 
     # The Django contract the guard depends on, asserted on a real instance.
@@ -1359,9 +1323,7 @@ def test_fk_attname_is_deferred_and_stub_exceptions():
     assert not _fk_attname_is_deferred(BrokenDeferredIn(), "category_id")
 
     # _visible_related_object(None, ...) -> None
-    # basedpyright: the path under test returns before reading the target type;
-    # _visible_related_object types it as type[DjangoType]
-    assert _visible_related_object(None, Category, unread_info()) is None  # pyright: ignore[reportArgumentType]
+    assert _visible_related_object(None, DjangoType, unread_info()) is None
 
     # _build_fk_id_stub with unreadable attname / uninstantiable related_model
     class BrokenRoot:
@@ -1442,10 +1404,10 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         rev_field = FakeRevRel()
         rev_resolver = _make_relation_resolver(
             _as_field(rev_field),
-            parent_type=_as_django_type(Item),
+            parent_type=CustomItemType,
         )
 
-        key = resolver_key(Item, "profile", ("item", "profile"))
+        key = resolver_key(CustomItemType, "profile", ("item", "profile"))
         publish_scoped_relations({key})
 
         cat = await Category.objects.acreate(name="Visible Cat")
@@ -1475,8 +1437,8 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
 
         # Forward resolver (scoped and unscoped, without strictness)
         fwd_field = Item._meta.get_field("category")
-        fwd_resolver = _make_relation_resolver(fwd_field, parent_type=_as_django_type(Item))
-        fwd_key = resolver_key(Item, "category", ("item", "category"))
+        fwd_resolver = _make_relation_resolver(fwd_field, parent_type=CustomItemType)
+        fwd_key = resolver_key(CustomItemType, "category", ("item", "category"))
         publish_scoped_relations({fwd_key})
         fwd_info = make_info(path=response_path("item", "category"), context={})
 
@@ -1586,7 +1548,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         # Many-side resolver with prefetched cache and visibility in async context
         many_field = Category._meta.get_field("items")
 
-        many_resolver = _make_relation_resolver(many_field, parent_type=_as_django_type(Category))
+        many_resolver = _make_relation_resolver(many_field, parent_type=CustomCategoryType)
         item_obj = await Item.objects.acreate(name="Visible Item", category=cat)
         cat_with_cache = SimpleNamespace(
             _prefetched_objects_cache={"items": [item_obj]},
@@ -1598,7 +1560,7 @@ async def test_async_resolvers_optimizer_scoped_and_visibility():
         assert isinstance(many_res_unscoped, Sized)
         assert len(many_res_unscoped) == 1
 
-        many_scoped_key = resolver_key(Category, "items", ("category", "items"))
+        many_scoped_key = resolver_key(CustomCategoryType, "items", ("category", "items"))
         publish_scoped_relations({many_scoped_key})
         many_scoped_info = make_info(path=response_path("category", "items"), context={})
         many_res_scoped = many_resolver(cat_with_cache, many_scoped_info)
@@ -1651,9 +1613,9 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
         item = Item.objects.create(name="Visible Item", category=cat)
 
         fwd_field = Item._meta.get_field("category")
-        fwd_resolver = _make_relation_resolver(fwd_field, parent_type=_as_django_type(Item))
+        fwd_resolver = _make_relation_resolver(fwd_field, parent_type=CustomItemType)
 
-        fwd_key = resolver_key(Item, "category", ("item", "category"))
+        fwd_key = resolver_key(CustomItemType, "category", ("item", "category"))
         publish_scoped_relations({fwd_key})
         fwd_scoped_info = make_info(path=response_path("item", "category"), context={})
         res_scoped = fwd_resolver(item, fwd_scoped_info)
@@ -1666,7 +1628,7 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
         assert res_unscoped.pk == cat.pk
 
         many_field = Category._meta.get_field("items")
-        many_resolver = _make_relation_resolver(many_field, parent_type=_as_django_type(Category))
+        many_resolver = _make_relation_resolver(many_field, parent_type=CustomCategoryType)
         cat_with_cache = SimpleNamespace(
             _prefetched_objects_cache={"items": [item]},
             items=Item.objects.filter(category=cat),
@@ -1676,7 +1638,7 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
         assert isinstance(res_many_unscoped, Sized)
         assert len(res_many_unscoped) == 1
 
-        many_key = resolver_key(Category, "items", ("category", "items"))
+        many_key = resolver_key(CustomCategoryType, "items", ("category", "items"))
         publish_scoped_relations({many_key})
         many_scoped_info = make_info(path=response_path("category", "items"), context={})
         res_many_scoped = many_resolver(cat_with_cache, many_scoped_info)
@@ -1700,9 +1662,9 @@ def test_sync_forward_and_many_resolver_visibility(db: None):
 
             rev_resolver = _make_relation_resolver(
                 _as_field(FakeRevRel()),
-                parent_type=_as_django_type(Item),
+                parent_type=CustomItemType,
             )
-            rev_key = resolver_key(Item, "profile", ("item", "profile"))
+            rev_key = resolver_key(CustomItemType, "profile", ("item", "profile"))
             publish_scoped_relations({rev_key, fwd_key})
 
             class FakeRevRoot:
@@ -1742,7 +1704,7 @@ def test_an_unsealable_prefetch_cache_is_refused_under_the_accessor_it_was_read_
     cached._iterable_class = list  # pyright: ignore[reportAttributeAccessIssue]
     resolver = _make_relation_resolver(
         Category._meta.get_field("items"),
-        parent_type=_as_django_type(Category),
+        parent_type=_parent_type(Category),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"items": cached})
     info = make_info(path=response_path("category", "items"), context={})
@@ -1769,7 +1731,7 @@ def test_resolver_helpers_edge_cases():
         info,
         root_with_attr,
         "items",
-        _as_django_type(Category),
+        _parent_type(Category),
         kind="connection_to_attr",
         to_attr="prefetched_page",
         strictness="warn",
@@ -1780,7 +1742,7 @@ def test_resolver_helpers_edge_cases():
         info,
         root_without_attr,
         "items",
-        _as_django_type(Category),
+        _parent_type(Category),
         kind="connection_to_attr",
         to_attr="prefetched_page",
         strictness="warn",
@@ -1790,19 +1752,18 @@ def test_resolver_helpers_edge_cases():
         info,
         root_with_attr,
         "items",
-        _as_django_type(Category),
+        _parent_type(Category),
         kind="connection_to_attr",
         to_attr=None,
         strictness="warn",
     )
 
     # Lines 639 and 697: skip_field_names
-    class DummyTarget:
-        pass
+    DummyTarget = _parent_type(Category, "DummyTarget")
 
     fake_rel = SimpleNamespace(name="skipped_rel", is_relation=True)
     _attach_relation_resolvers(
-        _as_django_type(DummyTarget),
+        DummyTarget,
         (_as_field(fake_rel),),
         skip_field_names=frozenset({"skipped_rel"}),
     )
@@ -1810,7 +1771,7 @@ def test_resolver_helpers_edge_cases():
 
     fake_file = SimpleNamespace(name="skipped_file", is_relation=False)
     _attach_file_resolvers(
-        _as_django_type(DummyTarget),
+        DummyTarget,
         (_as_field(fake_file),),
         skip_field_names=frozenset({"skipped_file"}),
     )

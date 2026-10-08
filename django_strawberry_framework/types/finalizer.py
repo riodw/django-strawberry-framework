@@ -1179,7 +1179,10 @@ def finalize_django_types() -> None:
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
-        strawberry.type(type_cls, name=definition.name, description=definition.description)
+        # A lazy ``Meta.description`` renders here, once, in the active language;
+        # GraphQL schema descriptions are plain strings.
+        description = None if definition.description is None else str(definition.description)
+        strawberry.type(type_cls, name=definition.name, description=description)
         definition.finalized = True
 
     registry.mark_finalized()

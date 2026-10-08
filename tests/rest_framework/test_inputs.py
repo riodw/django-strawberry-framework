@@ -74,7 +74,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 )
 from django_strawberry_framework.scalars import Upload
 from django_strawberry_framework.utils.inputs import normalize_field_name_sequence
-from tests._idioms import definition_raises
+from tests._idioms import bind_unparented, definition_raises
 
 if TYPE_CHECKING:
     from django_strawberry_framework.rest_framework.serializer_converter import (
@@ -300,7 +300,7 @@ def test_schema_hook_stable_field_map_generates_input():
             _ = self.context["tenant"]
             return {}
 
-    stable = {"name": _bound(serializers.CharField(), "name")}
+    stable = {"name": bind_unparented(serializers.CharField(), "name")}
     cre, _shape, _par, _pshape = _build_serializer_inputs(CtxSer, field_map=dict(stable))
     assert set(_field_map(cre)) == {"name"}
 
@@ -326,14 +326,6 @@ def test_build_serializer_inputs_materializes_one_shot_narrowing(
     )
     assert set(_field_map(create_cls)) == expected
     assert set(_field_map(partial_cls)) == expected
-
-
-def _bound(field: DRFField, name: str) -> DRFField:
-    """Bind a serializer field for use in a hand-built stable field map."""
-    # basedpyright: drf-stubs types parent as BaseSerializer; the runtime accepts None (an
-    # unparented bound field)
-    field.bind(name, None)  # pyright: ignore[reportArgumentType]
-    return field
 
 
 # ---------------------------------------------------------------------------

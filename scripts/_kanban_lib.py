@@ -23,7 +23,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Container, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeAlias, TypedDict, cast
 
@@ -419,7 +419,10 @@ def board_row_counts() -> dict[str, dict[int, int]]:
     return counts
 
 
-def truncation_defects(cards: Sequence[CardRow], expected: dict[str, dict[int, int]]) -> list[str]:
+def truncation_defects(
+    cards: Sequence[Mapping[str, object]],
+    expected: dict[str, dict[int, int]],
+) -> list[str]:
     """Return one message per nested card list that came back short of ``expected``.
 
     The export is GraphQL-driven on purpose, so it inherits the package's row
@@ -433,13 +436,19 @@ def truncation_defects(cards: Sequence[CardRow], expected: dict[str, dict[int, i
     Scoped to the nested lists (:data:`CARD_NESTED_LISTS`) because those are the
     only ones the bound reaches. Checking a top-level list here would read as
     coverage while being unable to fail - the shape that makes a guard worse than
-    none, since it certifies the surface it never inspected.
+    none, since it certifies the surface it never inspected. A card without an
+    integer ``number`` cannot be matched against the database at all, so it is a
+    defect of its own rather than a card that silently checks clean.
     """
     defects: list[str] = []
     for card in cards:
         number = card.get("number")
+        if not isinstance(number, int):
+            defects.append(f"card {number!r}: payload has no integer number")
+            continue
         for payload_key in CARD_NESTED_LISTS:
-            found = len(card.get(payload_key) or [])
+            nested = card.get(payload_key)
+            found = len(nested) if isinstance(nested, list) else 0
             owed = expected.get(payload_key, {}).get(number, 0)
             if found != owed:
                 defects.append(
@@ -448,7 +457,7 @@ def truncation_defects(cards: Sequence[CardRow], expected: dict[str, dict[int, i
     return defects
 
 
-def assert_nothing_truncated(cards: list[CardRow]) -> None:
+def assert_nothing_truncated(cards: Sequence[Mapping[str, object]]) -> None:
     """Fail the build when a row bound silenced part of the board.
 
     Sits at the shared fetch rather than in either ``main``, because both exports

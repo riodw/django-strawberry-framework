@@ -33,13 +33,14 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Iterator
+from typing import ClassVar
 
 import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
 from strawberry import relay
-from strawberry.types.base import get_object_definition
+from strawberry.types.base import StrawberryObjectDefinition, get_object_definition
 from typing_extensions import override
 
 import django_strawberry_framework
@@ -1314,11 +1315,7 @@ def test_bind_resolve_primary_distinguishes_ambiguous_from_zero_type():
             operation = "create"
 
     with pytest.raises(ConfigurationError, match="multiple registered DjangoTypes"):
-        # basedpyright: DjangoMutation declares _primary_type as a bound
-        # ClassVar[type[DjangoType]], which the protocol's mutable type[DjangoType] | None slot
-        # rejects as invariant; _resolve_primary_type types the parameter as
-        # _BoundDeclaration[type[DjangoType]]
-        _resolve_primary_type(CreateIssue, library_models.Issue)  # pyright: ignore[reportArgumentType]
+        _resolve_primary_type(CreateIssue, library_models.Issue)
 
     # The full finalize path catches this earlier at the Phase-1 ambiguity audit.
     with pytest.raises(ConfigurationError, match="multiple registered DjangoType subclasses"):
@@ -1730,18 +1727,20 @@ def test_mutation_shape_build_cache_clears_via_registry_and_direct_clear():
     Direct ``clear_mutation_shape_build_cache`` and ``registry.clear()`` both empty
     the same dict.
     """
-    probe_key = ("probe", "create", frozenset({"name"}))
-    # basedpyright: a stand-in key and class the clear only evicts; _shape_build_cache types its
-    # entries as (model, operation, names) -> input class
-    _shape_build_cache[probe_key] = object  # pyright: ignore[reportArgumentType]
+
+    @strawberry.input
+    class ProbeInput:
+        __strawberry_definition__: ClassVar[StrawberryObjectDefinition]
+        name: str
+
+    probe_key = (product_models.Category, "create", frozenset({"name"}))
+    _shape_build_cache[probe_key] = ProbeInput
     assert probe_key in _shape_build_cache
 
     clear_mutation_shape_build_cache()
     assert _shape_build_cache == {}
 
-    # basedpyright: a stand-in key and class the clear only evicts; _shape_build_cache types its
-    # entries as (model, operation, names) -> input class
-    _shape_build_cache[probe_key] = object  # pyright: ignore[reportArgumentType]
+    _shape_build_cache[probe_key] = ProbeInput
     registry.clear()
     assert _shape_build_cache == {}
 
@@ -1941,21 +1940,24 @@ def test_model_backed_permission_and_lock_defaults_and_explicit_opt_out():
 
 def test_bind_mutation_outputs_stashes_model_less_payload_and_slots():
     """The shared payload stash writes the three bind-output slots both ledgers fill."""
+    from django import forms
+
+    from django_strawberry_framework.forms.sets import DjangoFormMutation
     from django_strawberry_framework.mutations.inputs import _materialized_names
     from django_strawberry_framework.mutations.sets import bind_mutation_outputs
 
-    class BindOutputsProbe:
-        _primary_type: type[DjangoType] | None
-        _input_class: type[object] | None
-        _payload_type_name: str | None
+    class ProbeForm(forms.Form):
+        name = forms.CharField()
 
-    sentinel = object()
-    # basedpyright: a plain stand-in class carrying only the slots the code under test writes, and
-    # a sentinel input class it only stashes; bind_mutation_outputs types them as _BoundDeclaration
-    # and type[object] | None
-    bind_mutation_outputs(BindOutputsProbe, input_cls=sentinel, object_type=None)  # pyright: ignore[reportArgumentType]
+    class BindOutputsProbe(DjangoFormMutation):
+        class Meta:
+            form_class = ProbeForm
+            permission_classes = []
+
+    input_cls = BindOutputsProbe.build_input(BindOutputsProbe._mutation_meta)
+    bind_mutation_outputs(BindOutputsProbe, input_cls=input_cls, object_type=None)
     assert BindOutputsProbe._primary_type is None
-    assert BindOutputsProbe._input_class is sentinel
+    assert BindOutputsProbe._input_class is input_cls
     assert BindOutputsProbe._payload_type_name == "BindOutputsProbePayload"
     assert "BindOutputsProbePayload" in _materialized_names
 

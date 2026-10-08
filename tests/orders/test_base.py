@@ -17,18 +17,11 @@ document. Consumer ``orderBy`` walks live in
 from __future__ import annotations
 
 import pytest
-from django.db import models
+from apps.products.models import Category
 
 from django_strawberry_framework import sets_mixins
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.orders import OrderSet, RelatedOrder
-
-
-def _as_model(stand_in: object) -> type[models.Model]:
-    """Hand a duck-typed model to a ``Meta`` validator that reads ``model.__name__``."""
-    # basedpyright: a stand-in model carrying only the slots the code under test reads;
-    # _validate_orderset_class types model as type[Model]
-    return stand_in  # pyright: ignore[reportReturnType]
 
 
 class AOrder(OrderSet):
@@ -139,9 +132,7 @@ def test_validate_orderset_class_returns_none_for_missing_value():
     """The validator short-circuits to ``None`` when ``Meta.orderset_class`` is absent."""
     from django_strawberry_framework.types.base import _validate_orderset_class
 
-    fake_model = _as_model(type("FakeModel", (), {}))
-
-    assert _validate_orderset_class(fake_model, None) is None
+    assert _validate_orderset_class(Category, None) is None
 
 
 def test_validate_orderset_class_accepts_order_set_subclass():
@@ -151,9 +142,7 @@ def test_validate_orderset_class_accepts_order_set_subclass():
     class MyOrder(OrderSet):
         pass
 
-    fake_model = _as_model(type("FakeModel", (), {}))
-
-    assert _validate_orderset_class(fake_model, MyOrder) is MyOrder
+    assert _validate_orderset_class(Category, MyOrder) is MyOrder
 
 
 def test_validate_orderset_class_rejects_non_order_set():
@@ -166,13 +155,11 @@ def test_validate_orderset_class_rejects_non_order_set():
     class NotAnOrderSet:
         pass
 
-    fake_model = _as_model(type("FakeModel", (), {}))
-
     with _pytest.raises(ConfigurationError) as exc_info:
-        _validate_orderset_class(fake_model, NotAnOrderSet)
+        _validate_orderset_class(Category, NotAnOrderSet)
     msg = str(exc_info.value)
     assert "OrderSet subclass" in msg
-    assert "FakeModel" in msg
+    assert "Category" in msg
     assert "NotAnOrderSet" in msg
 
 

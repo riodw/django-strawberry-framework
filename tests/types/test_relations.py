@@ -14,7 +14,9 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 from apps.products.models import Category, Item
+from typing_extensions import override
 
+from django_strawberry_framework import DjangoType
 from django_strawberry_framework.types.relations import (
     PendingRelation,
     PendingRelationAnnotation,
@@ -24,15 +26,23 @@ from django_strawberry_framework.types.relations import (
 class _NonHashableField:
     """Stand-in for relation metadata whose ``__hash__`` is ``None``."""
 
-    # basedpyright: ``__hash__ = None`` is the data-model spelling of an unhashable class; typeshed declares ``object.__hash__`` a method
-    __hash__ = None  # pyright: ignore[reportAssignmentType]
+    @override
+    def __eq__(self, other: object):
+        return self is other
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registry(isolate_global_registry: None) -> None:
+    """Each record's source type registers; the shared fixture clears it after the test."""
 
 
 def _build_pending() -> PendingRelation:
     return PendingRelation(
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # PendingRelation types source_type as type[DjangoType]
-        source_type=type("Src", (), {}),  # pyright: ignore[reportArgumentType]
+        source_type=type(
+            "Src",
+            (DjangoType,),
+            {"Meta": type("Meta", (), {"model": Category, "fields": ("id", "name")})},
+        ),
         source_model=Category,
         field_name="items",
         # basedpyright: the unhashable field is the hostile input under test; PendingRelation types

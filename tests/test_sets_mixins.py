@@ -31,6 +31,7 @@ from django_strawberry_framework.sets_mixins import (
     require_re_readable_field_declaration,
 )
 from django_strawberry_framework.utils.input_values import SetInputTraversal
+from django_strawberry_framework.utils.inputs import GeneratedInputFieldSpec
 from tests._idioms import definition_raises
 
 _SHARED_PERMISSION_METHODS = (
@@ -280,23 +281,19 @@ def test_related_set_target_mixin():
         def _validate_target(self, resolved: object):
             """Permissive gate -- this test pins the bind/lazy machinery, not the gate."""
 
-    class _OwnerOne:
+    class _OwnerOne(OrderSet):
         pass
 
-    class _OwnerTwo:
+    class _OwnerTwo(OrderSet):
         pass
 
     item = _RelatedItem(_TargetStub)
     # First bind records owner
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # _bind_owner types the parameter as FilterSetMetaclass | OrderSetMetaclass
-    item._bind_owner(_OwnerOne)  # pyright: ignore[reportArgumentType]
+    item._bind_owner(_OwnerOne)
     assert item.bound_owner is _OwnerOne
 
     # Second bind is idempotent no-op
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # _bind_owner types the parameter as FilterSetMetaclass | OrderSetMetaclass
-    item._bind_owner(_OwnerTwo)  # pyright: ignore[reportArgumentType]
+    item._bind_owner(_OwnerTwo)
     assert item.bound_owner is _OwnerOne
 
     # Resolved target returns resolved class
@@ -411,16 +408,14 @@ def test_collect_related_declarations():
     class _BaseB(_BaseA):
         pass
 
-    class _NewCls:
+    class _NewCls(OrderSet):
         # The slot ``collection_attr`` names; a bare annotation adds nothing to ``__dict__``.
         related_items: dict[str, _Decl]
 
     # inherit_from_bases=True merges base declarations and own items
     own_override = _Decl()
     collected = collect_related_declarations(
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # collect_related_declarations types the parameter as FilterSetMetaclass | OrderSetMetaclass
-        _NewCls,  # pyright: ignore[reportArgumentType]
+        _NewCls,
         (_BaseB,),
         own_items=[("beta", own_override), ("gamma", _Decl()), ("alpha", None)],
         declaration_type=_Decl,
@@ -543,9 +538,7 @@ def test_active_input_permission_mixin_hooks():
         None,
         None,
         _fired={},
-        # basedpyright: the no-op hook under test never reads _bare;
-        # _run_logic_permission_checks types the parameter as ActiveInputPermissionMixin
-        _bare=None,  # pyright: ignore[reportArgumentType]
+        _bare=_ProbePermissionSet(),
         _depth=0,
     )
 
@@ -623,14 +616,12 @@ def test_collect_related_declarations_diamond_tombstone():
     class _BaseRight(_Root):
         related_items = {"shared_rel": _Decl()}
 
-    class _DiamondSubclass:
+    class _DiamondSubclass(OrderSet):
         pass
 
     # Left base comes first in bases list, has a tombstone attribute shadowing the declaration
     collected = collect_related_declarations(
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # collect_related_declarations types the parameter as FilterSetMetaclass | OrderSetMetaclass
-        _DiamondSubclass,  # pyright: ignore[reportArgumentType]
+        _DiamondSubclass,
         (_BaseLeft, _BaseRight),
         own_items=[],
         declaration_type=_Decl,
@@ -665,13 +656,11 @@ def test_collect_related_declarations_base_declarations_precedence():
             "scalar_key": non_decl,  # scalar declaration shadows related decl
         }
 
-    class _Subclass:
+    class _Subclass(OrderSet):
         pass
 
     collected = collect_related_declarations(
-        # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-        # collect_related_declarations types the parameter as FilterSetMetaclass | OrderSetMetaclass
-        _Subclass,  # pyright: ignore[reportArgumentType]
+        _Subclass,
         (_BaseWithAllDecls,),
         own_items=[],
         declaration_type=_Decl,
@@ -700,6 +689,9 @@ def test_active_input_permission_mixin_field_paths_and_branches():
         ActiveInputPermissionMixin,
     )
 
+    class _OtherSet(OrderSet):
+        pass
+
     @dataclass
     class _ChildInput:
         sub_field: str = "val"
@@ -715,10 +707,14 @@ def test_active_input_permission_mixin_field_paths_and_branches():
             target_attr="childset",
             traversal=SetInputTraversal(
                 related_attr="related_children",
-                # basedpyright: a stand-in field-spec map keyed by attribute name, so the
-                # class-keyed lookup finds no spec; SetInputTraversal types the parameter as
-                # FieldSpecMap
-                field_specs={"sub_field": types.SimpleNamespace(django_source_path="sub_field")},  # pyright: ignore[reportArgumentType]
+                # Keyed by ANOTHER set class: the class-keyed lookup finds no spec for this one.
+                field_specs={
+                    (_OtherSet, "sub_field"): GeneratedInputFieldSpec(
+                        "sub_field",
+                        "subField",
+                        "sub_field",
+                    ),
+                },
                 unset_sentinel=None,
             ),
         )
@@ -735,10 +731,10 @@ def test_active_input_permission_mixin_field_paths_and_branches():
             target_attr="childset",
             traversal=SetInputTraversal(
                 related_attr="related_children",
-                # basedpyright: a stand-in field-spec map keyed by attribute name, so the
-                # class-keyed lookup finds no spec; SetInputTraversal types the parameter as
-                # FieldSpecMap
-                field_specs={"title": types.SimpleNamespace(django_source_path="title")},  # pyright: ignore[reportArgumentType]
+                # Keyed by ANOTHER set class: the class-keyed lookup finds no spec for this one.
+                field_specs={
+                    (_OtherSet, "title"): GeneratedInputFieldSpec("title", "title", "title"),
+                },
                 unset_sentinel=None,
             ),
         )
@@ -803,29 +799,27 @@ def test_order_normalizer_consumes_the_family_permission_traversal(
 
     monkeypatch.setattr(order_inputs, "iter_active_fields", _spy)
 
-    class _StubFamily(ActiveInputPermissionMixin):
+    spec_a = GeneratedInputFieldSpec("a", "a", "a")
+
+    class _StubFamily(OrderSet):
         _permission = ActiveInputPermissionAttrs(
             family_label="StubFamily",
             target_attr="stubset",
             traversal=SetInputTraversal(
                 related_attr="related_stub",
-                # basedpyright: a stand-in field-spec map the normalizer only carries to the spy;
-                # SetInputTraversal types the parameter as FieldSpecMap
-                field_specs={"a": "spec-a"},  # pyright: ignore[reportArgumentType]
+                field_specs={(OrderSet, "a"): spec_a},
                 logic_keys=frozenset({"custom_op"}),
                 unset_sentinel=sentinel,
                 handle_top_level_list=True,
             ),
         )
 
-    # basedpyright: a plain stand-in class carrying only the hooks the code under test reads;
-    # normalize_input_value types the parameter as type[OrderSet]
-    assert order_inputs.normalize_input_value(_StubFamily, None) == []  # pyright: ignore[reportArgumentType]
+    assert order_inputs.normalize_input_value(_StubFamily, None) == []
     config = captured["config"]
     assert config.related_attr == "related_stub"
     assert config.unset_sentinel is sentinel
     assert config.handle_top_level_list is True
-    assert config.field_specs == {"a": "spec-a"}
+    assert config.field_specs == {(OrderSet, "a"): spec_a}
     assert config.logic_keys == frozenset({"custom_op"})
 
 

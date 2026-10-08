@@ -372,8 +372,7 @@ def _carrying_the_packages_csrf_mark(
     mark = view_class.as_view().csrf_exempt
 
     def decorate(view: _ViewT) -> _ViewT:
-        # basedpyright: ``FunctionType`` declares no ``csrf_exempt``, though a function takes any attribute
-        view.csrf_exempt = mark  # pyright: ignore[reportFunctionMemberAccess]
+        vars(view)["csrf_exempt"] = mark
         return view
 
     return decorate

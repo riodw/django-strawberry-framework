@@ -29,7 +29,7 @@ five parity-floor primitives (spec-027 Decision 4):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -866,9 +866,7 @@ def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> se
 
 
 def _decode_and_validate_global_id(
-    # basedpyright: a non-GlobalID value reaches relay.GlobalID.from_id unchecked; object
-    # needs a str guard there, a runtime change
-    value: Any,  # pyright: ignore[reportExplicitAny]
+    value: object,
     filter_instance: Filter,
     *,
     index: int | None = None,
@@ -922,6 +920,10 @@ def _decode_and_validate_global_id(
         decoded = value
     else:
         try:
+            # Strawberry's own decode reads the value as ``str`` and raises ``ValueError`` for
+            # anything else, so a non-string takes the same malformed-payload route.
+            if not isinstance(value, str):
+                raise ValueError("a GlobalID filter value is a base64 string")  # noqa: TRY004
             decoded = relay.GlobalID.from_id(value)
         except ValueError as exc:
             # A malformed GlobalID filter value (bad base64 / not a

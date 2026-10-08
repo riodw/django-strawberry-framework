@@ -29,10 +29,13 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
-from django.test import RequestFactory, modify_settings
+from django.test import RequestFactory, modify_settings, override_settings
+from django.urls import include, path
 
 import django_strawberry_framework
 from tests._soft_dependency import blocked_modules, evicted_modules, simulated_absence
+
+urlpatterns = [path("__debug__/", include("debug_toolbar.urls"))]
 
 if TYPE_CHECKING:
     from django_strawberry_framework.middleware.debug_toolbar import DebugToolbarMiddleware
@@ -378,9 +381,12 @@ def test_malformed_json_body_gets_no_package_rewrite(
     response = HttpResponse(content, content_type="application/json; charset=utf-8")
     response["Content-Length"] = len(response.content)
 
-    # basedpyright: a stand-in toolbar carrying only the slots the code under test reads;
-    # _postprocess types the parameter as DebugToolbar
-    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))  # pyright: ignore[reportArgumentType]
+    from debug_toolbar.toolbar import DebugToolbar
+
+    # No panels: the stock postprocess then has no instrumentation window to have missed.
+    with override_settings(DEBUG_TOOLBAR_PANELS=[], ROOT_URLCONF=__name__):
+        toolbar = DebugToolbar(request, middleware.get_response)
+        result = middleware._postprocess(request, response, toolbar)
 
     assert result is response
     assert result.content == content
@@ -402,9 +408,9 @@ def test_process_view_tolerates_non_class_view_class(middleware: DebugToolbarMid
     def view_func(request: HttpRequest):
         return None
 
-    # basedpyright: Django's ``as_view()`` callback contract puts ``view_class`` on a function;
-    # ``FunctionType`` declares none
-    view_func.view_class = "not-a-class"  # pyright: ignore[reportFunctionMemberAccess]
+    # Django's ``as_view()`` callback contract puts ``view_class`` in the callback function's
+    # namespace; this one forges it as a string.
+    vars(view_func).update(view_class="not-a-class")
     middleware.process_view(request, view_func)
     # basedpyright: the middleware stamps _is_graphiql on the request at run time; HttpRequest
     # declares no such attribute

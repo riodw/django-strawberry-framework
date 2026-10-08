@@ -36,6 +36,8 @@ import strawberry
 from apps.library.models import Patron
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
+from django.utils.functional import Promise
+from django.utils.translation import gettext_lazy
 from strawberry import relay
 from strawberry.types import get_object_definition
 from strawberry.types.auto import StrawberryAuto
@@ -1643,6 +1645,62 @@ def test_meta_name_overrides_graphql_type_name():
     finalize_django_types()
 
     assert get_object_definition(CategoryType, strict=True).name == "Category"
+
+
+@pytest.mark.parametrize("description", [5, b"bytes", ["a"]])
+def test_meta_description_rejects_a_non_string_at_type_creation(description: object):
+    """A non-string ``Meta.description`` is a typed error, not a schema-build ``TypeError``."""
+    meta_cls = type(
+        "Meta",
+        (),
+        {"model": Category, "fields": CATEGORY_SCALAR_FIELDS, "description": description},
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match="Meta.description must be a string or a lazy translation string",
+    ):
+        type("BadDescriptionType", (DjangoType,), {"Meta": meta_cls})
+
+
+def test_meta_description_lazy_translation_renders_to_str_at_finalize():
+    """A ``gettext_lazy`` description stays lazy on the definition and finalizes as plain text."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            description = gettext_lazy("A Faker provider.")
+
+    definition = registry.get_definition(CategoryType)
+    assert definition is not None
+    assert isinstance(definition.description, Promise)
+
+    finalize_django_types()
+
+    description = get_object_definition(CategoryType, strict=True).description
+    assert type(description) is str
+    assert description == "A Faker provider."
+
+
+def test_meta_description_str_subclass_keeps_its_plain_text():
+    """A ``str`` subclass's own ``__str__`` never runs; the text it holds is the description."""
+
+    class LoudText(str):
+        @override
+        def __str__(self) -> str:
+            return "overridden"
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            description = LoudText("A Faker provider.")
+
+    definition = registry.get_definition(CategoryType)
+    assert definition is not None
+    assert type(definition.description) is str
+    assert definition.description == "A Faker provider."
 
 
 def test_meta_description_threads_through_to_strawberry():

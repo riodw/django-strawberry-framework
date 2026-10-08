@@ -10,6 +10,8 @@ build test-local types over the ``apps.library`` models and execute real
 GraphQL operations in-process, sync and async.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable, Iterator
 

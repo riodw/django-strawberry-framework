@@ -26,6 +26,10 @@ Covers ``django_strawberry_framework/rest_framework/sets.py``:
   the per-shape build cache for a later non-injecting declaration over the same
   shape);
 - the no-registered-primary-type finalize error;
+- choice fields over a choice column at finalize: a declared flat ``ChoiceField`` over a
+  grouped column binds whether the column is read as ``str`` or not at all, an auto-generated
+  one is refused (it would take the read enum), and a declared value the column does not list
+  is refused over a grouped or a flat column whatever reads it;
 - the model-flavor seam defaults unchanged (the base is unregressed).
 
 System-under-test is the base / validation / bind, run against the products
@@ -48,6 +52,7 @@ from apps.products import models as product_models
 from django.db import models
 from rest_framework import serializers
 from strawberry.types.base import get_object_definition
+from strawberry.types.enum import StrawberryEnumDefinition
 from strawberry.types.field import StrawberryField
 from typing_extensions import override
 
@@ -700,6 +705,145 @@ def test_multiple_choice_over_single_value_choice_column_fails_finalize():
         r"MultipleChoiceField over the single-value choice column Book\.circulation_status",
     ):
         finalize_django_types()
+
+
+def _grouped_shelf_model():
+    """A fresh model whose ``status`` column declares Django's grouped-choices form."""
+
+    class GroupedShelf(models.Model):
+        status = models.CharField(
+            max_length=8,
+            choices=[("Fiction", [("a", "A"), ("b", "B")]), ("Other", [("c", "C")])],
+        )
+
+        class Meta:
+            app_label = "test_rest_framework_grouped_sets"
+
+    return GroupedShelf
+
+
+def _declare_primary(model: type[models.Model], *, status_field: str, exposes_status: bool):
+    """Register a primary type over ``model``: its choice column read as ``str``, or not read."""
+    fields = ("id", status_field) if exposes_status else ("id",)
+    meta = type("Meta", (), {"model": model, "fields": fields, "primary": True})
+    namespace: dict[str, object] = {"Meta": meta}
+    if exposes_status:
+        namespace["__annotations__"] = {status_field: str}
+    type_cls = type(f"{model.__name__}T", (DjangoType,), namespace)
+    assert registry.get(model) is type_cls
+
+
+def _declare_create(model: type[models.Model], status: serializers.ChoiceField):
+    """Declare a create ``SerializerMutation`` whose serializer declares ``status``."""
+    meta = type("Meta", (), {"model": model, "fields": ("status",)})
+    serializer_cls = type(
+        "GroupedSer",
+        (serializers.ModelSerializer,),
+        {"status": status, "Meta": meta},
+    )
+    mutation_meta = type(
+        "Meta",
+        (),
+        {"serializer_class": serializer_cls, "operation": "create"},
+    )
+    mutation = type("CreateGroupedShelf", (SerializerMutation,), {"Meta": mutation_meta})
+    assert mutation in iter_mutations()
+    return mutation
+
+
+@pytest.mark.parametrize("exposes_status", [True, False], ids=["str-override", "not-exposed"])
+def test_declared_flat_choice_over_grouped_column_binds(exposes_status: bool):
+    """A declared flat ``ChoiceField`` over a grouped column binds, typed by its declared choices.
+
+    The column is read as ``str`` by an annotation override, or by no type at all, so no read
+    enum exists; the field's values are checked against the column's flattened values and its
+    input field is the serializer-only enum of its declared choices.
+    """
+    model = _grouped_shelf_model()
+    _declare_primary(model, status_field="status", exposes_status=exposes_status)
+    mutation = _declare_create(model, serializers.ChoiceField(choices=[("a", "A"), ("b", "B")]))
+    finalize_django_types()
+    (status,) = [
+        field
+        for field in get_object_definition(mutation._input_class, strict=True).fields
+        if field.python_name == "status"
+    ]
+    enum_definition = status.type
+    assert isinstance(enum_definition, StrawberryEnumDefinition)
+    assert enum_definition.name == "GroupedSerInputStatusEnum"
+    assert [value.value for value in enum_definition.values] == ["a", "b"]
+    assert registry.get_enum(model, "status") is None
+
+
+def test_generated_choice_over_grouped_column_fails_finalize():
+    """An auto-generated ``ChoiceField`` would take the grouped column's read enum: refused."""
+    model = _grouped_shelf_model()
+    _declare_primary(model, status_field="status", exposes_status=True)
+    meta = type("Meta", (), {"model": model, "fields": ("status",)})
+    serializer_cls = type("GeneratedSer", (serializers.ModelSerializer,), {"Meta": meta})
+    mutation_meta = type(
+        "Meta",
+        (),
+        {"serializer_class": serializer_cls, "operation": "create"},
+    )
+    type("CreateGroupedShelf", (SerializerMutation,), {"Meta": mutation_meta})
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    assert str(exc_info.value).endswith(
+        "status: Serializer GeneratedSer field 'status' takes the read enum of the choice column "
+        "GroupedShelf.status, which uses Django's grouped-choices form (nested tuples for option "
+        "groups). Only the flat (value, label) form has a read enum; flatten the choices source, "
+        "split into separate fields, or declare a flat ChoiceField on the serializer.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("make_model", "exposes_status"),
+    [
+        (_grouped_shelf_model, True),
+        (_grouped_shelf_model, False),
+        (None, True),
+        (None, False),
+    ],
+    ids=[
+        "grouped-str-override",
+        "grouped-not-exposed",
+        "flat-str-override",
+        "flat-not-exposed",
+    ],
+)
+def test_declared_choice_value_the_column_does_not_list_fails_finalize(
+    make_model: Callable[[], type[models.Model]] | None,
+    exposes_status: bool,
+):
+    """A declared value the choice column does not list is refused, whether or not a type reads it.
+
+    The refusal states the column fact: no read enum need exist (a grouped column, or a flat one
+    every type reads as ``str`` or not at all).
+    """
+    from apps.library.models import Book
+
+    model, status_field = (make_model(), "status") if make_model else (Book, "circulation_status")
+    _declare_primary(model, status_field=status_field, exposes_status=exposes_status)
+    meta = type("Meta", (), {"model": model, "fields": (status_field,)})
+    serializer_cls = type(
+        "UnlistedSer",
+        (serializers.ModelSerializer,),
+        {status_field: serializers.ChoiceField(choices=[("zzz", "Z")]), "Meta": meta},
+    )
+    mutation_meta = type(
+        "Meta",
+        (),
+        {"serializer_class": serializer_cls, "operation": "create"},
+    )
+    type("CreateUnlisted", (SerializerMutation,), {"Meta": mutation_meta})
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    assert str(exc_info.value).endswith(
+        f"{status_field}: Serializer UnlistedSer field {status_field!r} admits 'zzz' over the "
+        f"choice column {model.__name__}.{status_field}, which does not list it. Remove 'zzz' "
+        "from the serializer field's choices.",
+    )
 
 
 def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard():

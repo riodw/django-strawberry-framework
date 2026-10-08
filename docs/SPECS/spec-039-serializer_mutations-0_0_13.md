@@ -1505,15 +1505,19 @@ them separately:
   string before the serializer runs. Over a model choice column, every value the choice
   field admits (its declared choice values, plus `""` when `allow_blank=True`; never `None`,
   which `allow_null` decides before DRF reads the choices), compared as
-  the column reads it back, must be a member of the column's read enum
-  (`types/converters.py::choice_column_enum_values`: the column's choice values, which carry
+  the column reads it back, must be a value the column lists
+  (`types/converters.py::choice_column_values`: the column's choice values, which carry
   `""` only when `""` is a declared column choice or the column is `blank=True` on a type
   that stores empty strings, and never the `(None, label)` pair `Choices.__empty__` adds,
   which labels the empty option and gets no member). A field whose choices carry that pair,
   as an auto-generated `ModelSerializer` field over an `__empty__` column does (DRF copies the
-  column's choices), is checked on its other values only. Any other value is a
+  column's choices), is checked on its other values only. The check reads the column's flat
+  values, a grouped column's groups flattened in order (Django's `flatchoices`), while grouped
+  choices remain rejected for the read enum: a declared flat choice field over a grouped
+  column is checked against those values, and a field that would take the column's read enum
+  over it is refused, the message offering a declared flat `ChoiceField`. Any other value is a
   [`ConfigurationError`][glossary-configurationerror] at input build: the field would write a
-  value the column's read enum cannot serialize, so every later read of the row would fail.
+  value the column does not list (over a flat column, one its read enum cannot serialize).
   This holds for a declared field, an auto-generated one given `allow_blank` by
   `Meta.extra_kwargs`, and a field a `get_serializer_for_schema()` / `get_fields()` hook
   returns; the message names the serializer, the field, the offending values, the column and
@@ -1522,9 +1526,9 @@ them separately:
   `MultipleChoiceField` writes a list (DRF's `to_internal_value` returns one), so it is
   checked against the column each element is stored through
   (`rest_framework/serializer_converter.py::_multiple_choice_element_column`): an
-  `ArrayField`'s `base_field`, whose choices are the element enum the read side's
-  `list[<enum>]` uses. Over a single-value choice column it is refused outright: the list is
-  stored as its `str` (or fails to coerce) and is never a member of the column's read enum;
+  `ArrayField`'s `base_field`, whose listed values (groups flattened) each element must be.
+  Over a single-value choice column it is refused outright: the list is stored as its `str`
+  (or fails to coerce) and is never one of the column's choices;
   the message names the serializer, the field and the column, and offers a `ChoiceField` for
   one value or an `ArrayField` column for many. A `MultipleChoiceField` over a column without
   `choices` (`JSONField`, plain text) is not checked: its read type has no member set, and the
@@ -3247,9 +3251,9 @@ on a `MultipleChoiceField`). A `None`-valued pair (the `(None, label)` pair
 the empty option travels as `null` where `allow_null=True`, and a `MultipleChoiceField` element
 stays non-null (its `allow_null` nulls the whole list, never an element). A serializer-only
 field has no column, so its `BLANK` member stands; a choice field bound to a model choice
-column offers only values the column's read enum also carries (a `MultipleChoiceField`: the read enum of the `ArrayField` `base_field` each
-element is stored through; over a single-value choice column it is refused)
-(`rest_framework/serializer_converter.py::_reject_choice_values_outside_column_enum` refuses
+column offers only values the column also lists (a `MultipleChoiceField` is checked against the values the `ArrayField` `base_field` each
+element is stored through lists, groups flattened; over a single-value choice column it is refused)
+(`rest_framework/serializer_converter.py::_reject_choice_values_the_column_does_not_list` refuses
 it otherwise, see [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)). The enum is
 cached by its descriptor-derived name (`<TypeName><Field>Enum`) so two inputs referencing one
 serializer-only choice field share one enum object; a name reused with a different member set

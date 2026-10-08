@@ -15,9 +15,13 @@ Covers ``django_strawberry_framework/rest_framework/serializer_converter.py``:
   the dotted-``source`` rejection, the serializer-only relation (``queryset.model``),
   and the missing-primary-DjangoType raise;
 - a choice field admitting a value (a declared choice, or ``""`` from ``allow_blank``) its
-  choice column's read enum has no member for (refused: declared, ``source``-mapped,
-  ``extra_kwargs``, an integer column) beside the accepted ``blank=True`` column, the
-  read-back comparison and the serializer-only field;
+  choice column does not list (refused: declared, ``source``-mapped, ``extra_kwargs``, an
+  integer column) beside the accepted ``blank=True`` column, the read-back comparison and the
+  serializer-only field;
+- a grouped choice column: a declared flat ``ChoiceField`` checked against the column's
+  flattened values (accepted, or refused for a value the column does not list), an
+  ``ArrayField`` whose ``base_field`` is grouped, and the refusal of every field that would
+  take the column's read enum;
 - a ``Choices.__empty__`` ``(None, label)`` pair left to ``allow_null``: the auto
   ``ModelSerializer`` field, a serializer-only ``ChoiceField`` / ``MultipleChoiceField`` and an
   ``ArrayField`` element build with no ``_None`` member;
@@ -1134,10 +1138,10 @@ def _value_refusal(
     column: str,
     remedy: str,
 ):
+    them = "them" if ", " in missing else "it"
     return (
         f"Serializer {serializer_name} field {field_name!r} admits {missing} over the choice "
-        f"column {column}, whose GraphQL enum has no matching member, so a value written "
-        f"through this input could not be read back. {remedy}"
+        f"column {column}, which does not list {them}. {remedy}"
     )
 
 
@@ -1313,7 +1317,7 @@ def test_allow_blank_over_blank_integer_choice_column_refused_without_blank_reme
 
     column = _integer_choice_column(blank=True, null=True)
     with pytest.raises(ConfigurationError) as exc_info:
-        serializer_converter._reject_choice_values_outside_column_enum(
+        serializer_converter._reject_choice_values_the_column_does_not_list(
             RankSer().fields["rank"],
             column,
         )
@@ -1332,7 +1336,7 @@ def test_choice_values_compared_as_the_column_reads_them_back():
     class RankSer(serializers.Serializer[object]):
         rank = serializers.ChoiceField(choices=[("1", "One"), (2, "Two")])
 
-    serializer_converter._reject_choice_values_outside_column_enum(
+    serializer_converter._reject_choice_values_the_column_does_not_list(
         RankSer().fields["rank"],
         _integer_choice_column(),
     )
@@ -1353,7 +1357,7 @@ def test_integer_choices_column_accepts_its_own_choices():
     # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
     # as a Model subclass
     column.model = type("Ranked", (), {})  # pyright: ignore[reportAttributeAccessIssue]
-    serializer_converter._reject_choice_values_outside_column_enum(
+    serializer_converter._reject_choice_values_the_column_does_not_list(
         RankSer().fields["rank"],
         column,
     )
@@ -1504,9 +1508,8 @@ def _multiple_choice_refusal(serializer_name: str, field_name: str) -> str:
     return (
         f"Serializer {serializer_name} field {field_name!r} is a MultipleChoiceField over the "
         "single-value choice column Book.circulation_status: it writes a list, which is not one "
-        "of the column's choices, so the column's GraphQL enum could not read the row back. "
-        "Declare a ChoiceField to write one value, or store many values in an ArrayField column "
-        "whose base_field declares the choices."
+        "of the column's choices. Declare a ChoiceField to write one value, or store many values "
+        "in an ArrayField column whose base_field declares the choices."
     )
 
 
@@ -1703,6 +1706,213 @@ def test_multiple_choice_over_empty_label_array_base_accepted(monkeypatch: pytes
     annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
     (inner,) = get_args(annotation)
     assert {member.name: member.value for member in inner} == {"good": "good", "worn": "worn"}
+
+
+_GROUPED_CHOICES = [("Fiction", [("a", "A"), ("b", "B")]), ("Other", [("c", "C")])]
+
+
+def _grouped_choice_model():
+    """A fresh model whose ``status`` column declares Django's grouped-choices form."""
+
+    class GroupedShelf(models.Model):
+        status = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
+
+        class Meta:
+            app_label = "test_rest_framework_grouped_choices"
+
+    return GroupedShelf
+
+
+def _grouped_status_field(
+    model: type[models.Model],
+    choices: list[tuple[str, str]],
+    *,
+    allow_blank: bool = False,
+) -> DRFField:
+    """Bind a declared ``status`` serializer field over ``model``'s grouped column."""
+    meta = type("Meta", (), {"model": model, "fields": ("status",)})
+    status = serializers.ChoiceField(choices=choices, allow_blank=allow_blank)
+    serializer_cls = type(
+        "GroupedSer",
+        (serializers.ModelSerializer,),
+        {"status": status, "Meta": meta},
+    )
+    return serializer_cls().fields["status"]
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [[("a", "A"), ("b", "B")], [("c", "C"), ("a", "A")]],
+    ids=["one-group", "across-groups"],
+)
+def test_declared_flat_choice_over_grouped_column_accepted(declared: list[tuple[str, str]]):
+    """A declared flat ``ChoiceField`` is checked against the column's flattened values.
+
+    The column lists ``a`` / ``b`` / ``c`` (Django's ``flatchoices``), so a field declaring a
+    subset is accepted and keeps the serializer-only enum from its declared choices; the
+    grouped form's lack of a read enum does not reach it.
+    """
+    model = _grouped_choice_model()
+    field = _grouped_status_field(model, declared)
+    _attr, annotation, _spec = resolve_serializer_field(field, model, "X")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert [member.value for member in annotation] == [value for value, _label in declared]
+    assert registry.get_enum(model, "status") is None
+
+
+@pytest.mark.parametrize(
+    (
+        "choices",
+        "allow_blank",
+        "missing",
+        "remedy",
+    ),
+    [
+        (
+            [("a", "A"), ("zzz", "Z")],
+            False,
+            "'zzz'",
+            "Remove 'zzz' from the serializer field's choices.",
+        ),
+        (
+            [("a", "A")],
+            True,
+            "''",
+            _BLANK_COLUMN_REMEDY,
+        ),
+    ],
+    ids=["unlisted-value", "blank-over-strict"],
+)
+def test_declared_choice_over_grouped_column_value_the_column_does_not_list_refused(
+    choices: list[tuple[str, str]],
+    allow_blank: bool,
+    missing: str,
+    remedy: str,
+):
+    """A value outside the grouped column's flattened values is refused with the column fact."""
+    model = _grouped_choice_model()
+    field = _grouped_status_field(model, choices, allow_blank=allow_blank)
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_serializer_field(field, model, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "GroupedSer",
+        "status",
+        missing,
+        "GroupedShelf.status",
+        remedy,
+    )
+
+
+def _grouped_read_enum_refusal(serializer_name: str, field_name: str, column: str) -> str:
+    return (
+        f"Serializer {serializer_name} field {field_name!r} takes the read enum of the choice "
+        "column "
+        f"{column}, which uses Django's grouped-choices form (nested tuples for option groups). "
+        "Only the flat (value, label) form has a read enum; flatten the choices source, split "
+        "into separate fields, or declare a flat ChoiceField on the serializer."
+    )
+
+
+def _generated_grouped_ser(model: type[models.Model]) -> DRFField:
+    meta = type("Meta", (), {"model": model, "fields": ("status",)})
+    serializer_cls = type("GeneratedSer", (serializers.ModelSerializer,), {"Meta": meta})
+    return serializer_cls().fields["status"]
+
+
+def _declared_char_grouped_ser(model: type[models.Model]) -> DRFField:
+    meta = type("Meta", (), {"model": model, "fields": ("status",)})
+    serializer_cls = type(
+        "DeclaredCharSer",
+        (serializers.ModelSerializer,),
+        {"status": serializers.CharField(), "Meta": meta},
+    )
+    return serializer_cls().fields["status"]
+
+
+@pytest.mark.parametrize(
+    ("make_field", "serializer_name"),
+    [(_generated_grouped_ser, "GeneratedSer"), (_declared_char_grouped_ser, "DeclaredCharSer")],
+    ids=["generated-choice", "declared-char"],
+)
+def test_field_taking_the_read_enum_of_a_grouped_column_refused(
+    make_field: Callable[[type[models.Model]], DRFField],
+    serializer_name: str,
+):
+    """A field whose input type is the column's read enum is refused: a grouped column has none.
+
+    The auto-generated ``ChoiceField`` carries DRF's flattened choices, which the column lists,
+    so the value check passes and the read-enum refusal names the serializer-side remedy.
+    """
+    model = _grouped_choice_model()
+    field = make_field(model)
+    with pytest.raises(ConfigurationError) as exc_info:
+        resolve_serializer_field(field, model, "X")
+    assert str(exc_info.value) == _grouped_read_enum_refusal(
+        serializer_name,
+        "status",
+        "GroupedShelf.status",
+    )
+
+
+def _grouped_array_choice_column(monkeypatch: pytest.MonkeyPatch):
+    """A ``tags`` array column whose ``base_field`` declares the grouped choices."""
+    from django_strawberry_framework.types import converters
+
+    monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
+    element = models.CharField(max_length=8, choices=_GROUPED_CHOICES)
+    column = _FakeArrayField(element)
+    tagged = type("Tagged", (), {})
+    for model_field in (column, element):
+        model_field.set_attributes_from_name("tags")
+        # basedpyright: a stand-in model class (only __name__ is read); django-stubs types Field.model
+        # as a Model subclass
+        model_field.model = tagged  # pyright: ignore[reportAttributeAccessIssue]
+    return column
+
+
+def test_multiple_choice_over_grouped_array_base_accepted(monkeypatch: pytest.MonkeyPatch):
+    """Each element is checked against the grouped ``base_field``'s flattened values."""
+    column = _grouped_array_choice_column(monkeypatch)
+    field = _multi_tags_field(choices=[("a", "A")])
+    annotation = serializer_converter._model_backed_scalar_annotation(field, column, "X")
+    assert get_origin(annotation) is list
+    (inner,) = get_args(annotation)
+    assert [member.value for member in inner] == ["a"]
+
+
+def test_multiple_choice_element_the_grouped_array_base_does_not_list_refused(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """An element value outside the grouped ``base_field``'s flattened values is refused."""
+    column = _grouped_array_choice_column(monkeypatch)
+    field = _multi_tags_field(choices=[("zzz", "Z")])
+    with pytest.raises(ConfigurationError) as exc_info:
+        serializer_converter._model_backed_scalar_annotation(field, column, "X")
+    assert str(exc_info.value) == _value_refusal(
+        "TagsSer",
+        "tags",
+        "'zzz'",
+        "Tagged.tags",
+        "Remove 'zzz' from the serializer field's choices.",
+    )
+
+
+def test_list_field_over_grouped_array_base_refused(monkeypatch: pytest.MonkeyPatch):
+    """A list field over the array would take the grouped ``base_field``'s read enum: refused."""
+    column = _grouped_array_choice_column(monkeypatch)
+    serializer_cls = type(
+        "ListTagsSer",
+        (serializers.Serializer,),
+        {"tags": serializers.ListField(child=serializers.CharField())},
+    )
+    field = serializer_cls().fields["tags"]
+    with pytest.raises(ConfigurationError) as exc_info:
+        serializer_converter._model_backed_scalar_annotation(field, column, "X")
+    assert str(exc_info.value) == _grouped_read_enum_refusal(
+        "ListTagsSer",
+        "tags",
+        "Tagged.tags",
+    )
 
 
 def test_serializer_only_filepathfield_stays_str_not_enum():

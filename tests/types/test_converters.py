@@ -26,7 +26,7 @@ Covered behavior:
 - enum generation + naming
 - registry caching keyed on ``(model, field_name)``
 - enum reuse across two ``DjangoType``s pointing at the same column
-- grouped-choices rejection
+- grouped-choices rejection on the read enum, and the same column's values listed flattened
 - a ``None``-valued choice (``Choices.__empty__`` or hand-declared) gets no member, on
   the column enum, an ``ArrayField`` element and a ``null=True`` column's read and write
 - member-name sanitization (hyphens, leading digits, keywords)
@@ -39,7 +39,7 @@ widening branch and ``registry.register_enum`` / ``get_enum``.
 import enum
 import itertools
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, TypedDict, get_args
 
 import pytest
@@ -72,7 +72,8 @@ from django_strawberry_framework.types.converters import (
     _field_output_type_for,
     _sanitize_member_name,
     build_enum_from_choices,
-    choice_column_enum_values,
+    choice_column_is_grouped,
+    choice_column_values,
     convert_choices_to_enum,
     convert_field_output,
     convert_scalar,
@@ -562,7 +563,7 @@ def test_declared_empty_choice_is_not_duplicated_by_include_blank():
         "integer-blank",
     ],
 )
-def test_choice_column_enum_values(
+def test_choice_column_values(
     field: models.Field[Never, object],
     admits: bool,
     values: list[object],
@@ -574,15 +575,15 @@ def test_choice_column_enum_values(
     """
     field.set_attributes_from_name("status")
     assert _column_admits_empty_string(field) is admits
-    assert choice_column_enum_values(field) == values
+    assert choice_column_values(field) == values
 
 
-def test_choice_column_enum_values_match_the_read_enum():
+def test_choice_column_values_match_the_read_enum():
     """The represented values are exactly the read enum's member values, in member order."""
     model = _blank_choice_model(choices=[("good", "Good"), ("worn", "Worn")], blank=True)
     field = _concrete_field(model, "status")
     enum_cls = convert_choices_to_enum(field, "RepresentedFixtureType")
-    assert choice_column_enum_values(field) == [member.value for member in enum_cls]
+    assert choice_column_values(field) == [member.value for member in enum_cls]
 
 
 @pytest.mark.parametrize("blank", [False, True], ids=["strict", "blank"])
@@ -591,15 +592,8 @@ def test_choice_column_enum_values_match_the_read_enum():
     [
         (["abc"], "declares a malformed choice 'abc'"),
         ([("a",)], r"declares a malformed choice \('a',\)"),
-        ([("g", [("a", "A")])], "uses Django's grouped-choices form"),
-        ([(None, [("a", "A")])], "uses Django's grouped-choices form"),
     ],
-    ids=[
-        "bare-string",
-        "one-tuple",
-        "grouped",
-        "grouped-none-label",
-    ],
+    ids=["bare-string", "one-tuple"],
 )
 def test_malformed_column_choices_keep_their_specific_message(
     choices: object,
@@ -616,12 +610,81 @@ def test_malformed_column_choices_keep_their_specific_message(
     with pytest.raises(ConfigurationError, match=message):
         convert_choices_to_enum(field, "MalformedFixtureType")
     with pytest.raises(ConfigurationError, match=message):
-        choice_column_enum_values(field)
+        choice_column_values(field)
 
 
-def test_choice_column_enum_values_wrap_unreadable_choices(
+_GROUPED_MESSAGE = re.escape(
+    "BlankChoiceFixture.status uses Django's grouped-choices form (nested tuples for option groups). Only "
+    "the flat (value, label) form is supported; flatten the choices source or split into "
+    "separate fields.",
+)
+
+
+@pytest.mark.parametrize(
+    ("choices", "blank", "values"),
+    [
+        ([("Fiction", [("a", "A"), ("b", "B")]), ("Other", [("c", "C")])], False, ["a", "b", "c"]),
+        (
+            [("Fiction", [("a", "A"), ("b", "B")]), ("Other", [("c", "C")])],
+            True,
+            [
+                "",
+                "a",
+                "b",
+                "c",
+            ],
+        ),
+        ([(None, [("a", "A")]), ("z", "Z"), ("Other", [("c", "C")])], False, ["a", "z", "c"]),
+        ([("Fiction", [("a", "A"), ("", "None yet")])], True, ["a", ""]),
+    ],
+    ids=[
+        "groups-strict",
+        "groups-blank",
+        "none-label-group-beside-flat",
+        "group-declares-empty",
+    ],
+)
+def test_choice_column_values_flatten_groups_but_the_read_enum_refuses_them(
+    choices: list[tuple[object, object]],
+    blank: bool,
+    values: list[object],
+):
+    """A grouped column lists its values flattened in group order; it still has no read enum.
+
+    The write side asks whether the column lists a value (Django's ``flatchoices``), the read
+    enum whether the form is flat; a ``(None, [...])`` group is a group, flattened the same way,
+    and ``""`` follows the column's blank rule.
+    """
+    field = _concrete_field(_blank_choice_model(choices=choices, blank=blank), "status")
+    assert choice_column_values(field) == values
+    with pytest.raises(ConfigurationError, match=f"^{_GROUPED_MESSAGE}$"):
+        convert_choices_to_enum(field, "GroupedFixtureType")
+
+
+@pytest.mark.parametrize(
+    ("choices", "message"),
+    [
+        ([("g", [("a", "A"), "bad"])], "declares a malformed choice 'bad'"),
+        ([("g", [("a", "A"), ("b",)])], r"declares a malformed choice \('b',\)"),
+    ],
+    ids=["bare-string", "one-tuple"],
+)
+def test_malformed_choice_inside_a_group_keeps_its_specific_message(choices: object, message: str):
+    """A group's inner entry passes the same malformed-entry check as a flat entry."""
+    field = _concrete_field(_blank_choice_model(choices=choices), "status")
+    with pytest.raises(ConfigurationError, match=message):
+        choice_column_values(field)
+
+
+@pytest.mark.parametrize(
+    "read_column",
+    [choice_column_values, choice_column_is_grouped],
+    ids=["values", "is-grouped"],
+)
+def test_choice_column_readers_wrap_unreadable_choices(
     choice_fixture_model: type[models.Model],
     monkeypatch: pytest.MonkeyPatch,
+    read_column: Callable[["ConcreteField"], object],
 ):
     """A choices container with broken truthiness raises the package error, not its own."""
 
@@ -632,7 +695,7 @@ def test_choice_column_enum_values_wrap_unreadable_choices(
     field = _concrete_field(choice_fixture_model, "status")
     monkeypatch.setattr(field, "choices", HostileChoices())
     with pytest.raises(ConfigurationError, match="Could not inspect choices"):
-        choice_column_enum_values(field)
+        read_column(field)
 
 
 def test_declared_blank_value_collides_with_blank_member():
@@ -728,7 +791,7 @@ def test_none_valued_choice_is_the_empty_option_label_and_gets_no_member(
     assert _concrete_field(owner, "status") is field
     enum_cls = convert_choices_to_enum(field, "EmptyLabelFixtureType")
     assert _member_map(enum_cls) == members
-    assert choice_column_enum_values(field) == list(members.values())
+    assert choice_column_values(field) == list(members.values())
 
 
 def test_nullable_empty_label_choice_column_reads_null_without_a_none_member():
@@ -847,7 +910,7 @@ def test_choices_holding_only_the_empty_option_are_empty(choices: list[tuple[Non
     field = models.TextField(choices=choices, blank=True)
     field.set_attributes_from_name("status")
     with pytest.raises(ConfigurationError, match="holding only the empty option"):
-        choice_column_enum_values(field)
+        choice_column_values(field)
 
 
 def test_empty_choices_message_names_no_empty_option():

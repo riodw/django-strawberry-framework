@@ -68,7 +68,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from enum import Enum, EnumMeta
 from types import GenericAlias
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, TypeGuard, TypeVar, cast
 
 import strawberry
 from django.db import models
@@ -751,16 +751,56 @@ def build_enum_from_choices(
     return strawberry.enum(enum_cls)
 
 
+def _is_choice_group(label: object) -> TypeGuard[list[object] | tuple[object, ...]]:
+    """Return whether a choice entry's second slot holds a group's inner pairs.
+
+    Django's grouped-choices form is ``(group_label, [(value, label), ...])``. In the flat form
+    the second element is always a label; in the grouped form it is a sequence of
+    ``(value, label)`` pairs. Detecting on the second slot rather than the first is the
+    load-bearing distinction: in the grouped form the first slot is the human-readable group
+    name (a string), so testing it produces a false negative.
+    """
+    return isinstance(label, (list, tuple))
+
+
+def _unpack_choice_entry(entry: object, *, source_label: str) -> tuple[object, object]:
+    """Return one choice entry as its ``(value, label)`` pair, refusing a malformed entry."""
+    if isinstance(entry, (str, bytes)):
+        raise ConfigurationError(
+            f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
+            "choices must be a flat sequence of (value, label) pairs.",
+        )
+    value: object
+    label: object
+    try:
+        # basedpyright: a choice entry is consumer-declared, so unpacking it IS the pair check;
+        # it rejects unpacking an ``object`` as not iterable
+        value, label = entry  # pyright: ignore[reportGeneralTypeIssues]
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
+            "choices must be a flat sequence of (value, label) pairs.",
+        ) from exc
+    return value, label
+
+
 def _normalize_choice_pairs(
     choice_pairs: Iterable[object],
     *,
     source_label: str,
+    flatten_groups: bool = False,
 ) -> list[tuple[object, object]]:
-    """Return a flat choice sequence as ``(value, label)`` pairs, rejecting every malformed form.
+    """Return a choice sequence as flat ``(value, label)`` pairs, rejecting every malformed form.
 
     Steps 1 and 2 of ``build_enum_from_choices`` (unreadable / empty sequence, a malformed entry,
-    Django's grouped-choices form), shared with ``choice_column_enum_values`` so a column's
-    represented values are read through the same checks, with the same messages, as its enum.
+    Django's grouped-choices form), shared with ``choice_column_values`` so a column's listed
+    values are read through the same checks, with the same messages, as its enum.
+
+    ``flatten_groups`` answers "which values does the column list?" rather than "can the read
+    enum be built?": each group of Django's grouped-choices form (a ``(None, [...])`` group
+    included) is expanded one level, in order, every inner entry passing the same
+    malformed-entry check (Django's ``Field.flatchoices`` rule, which ``Field.validate`` reads).
+    Without it the grouped form is refused, since the read enum supports only the flat form.
 
     A ``None``-valued pair (the ``(None, label)`` pair ``Choices.__empty__`` adds to
     ``.choices``, or one declared by hand) is the label of the empty option, never a value, so it
@@ -777,33 +817,16 @@ def _normalize_choice_pairs(
         ) from exc
     normalized_pairs: list[tuple[object, object]] = []
     for entry in pairs:
-        if isinstance(entry, (str, bytes)):
-            raise ConfigurationError(
-                f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
-                "choices must be a flat sequence of (value, label) pairs.",
+        value, label = _unpack_choice_entry(entry, source_label=source_label)
+        if flatten_groups and _is_choice_group(label):
+            normalized_pairs.extend(
+                _unpack_choice_entry(inner, source_label=source_label) for inner in label
             )
-        value: object
-        label: object
-        try:
-            # basedpyright: a choice entry is consumer-declared, so unpacking it IS the pair check;
-            # it rejects unpacking an ``object`` as not iterable
-            value, label = entry  # pyright: ignore[reportGeneralTypeIssues]
-        except BaseException as exc:
-            raise ConfigurationError(
-                f"{source_label} declares a malformed choice {_safe_arg_repr(entry)}; "
-                "choices must be a flat sequence of (value, label) pairs.",
-            ) from exc
+            continue
         normalized_pairs.append((value, label))
 
     for _value, label in normalized_pairs:
-        # Django's grouped-choices form is
-        # ``(group_label, [(value, label), ...])``. In the flat form the
-        # second element is always a label string; in the grouped form it
-        # is a sequence of (value, label) pairs. Detecting on ``label``
-        # rather than ``value`` is the load-bearing distinction - in the
-        # grouped form the *value* slot is the human-readable group name
-        # (a string), so checking it produces a false negative.
-        if isinstance(label, (list, tuple)):
+        if _is_choice_group(label):
             raise ConfigurationError(
                 f"{source_label} uses Django's grouped-choices "
                 "form (nested tuples for option groups). Only the flat "
@@ -850,15 +873,18 @@ def _column_admits_empty_string(field: "ConcreteField") -> bool:
     return bool(field.blank and field.empty_strings_allowed)
 
 
-def choice_column_enum_values(field: "ConcreteField") -> list[object]:
-    """Return the values a choice column's read enum can represent, in member order.
+def choice_column_values(field: "ConcreteField") -> list[object]:
+    """Return the values a choice column lists, in order: the write side's admissible set.
 
-    The column's choice values (never ``None``: a ``None``-valued pair labels the empty option and
-    gets no member), plus ``""`` when ``_column_admits_empty_string`` holds and no
-    declared value is ``""``: exactly the member values ``convert_choices_to_enum`` builds,
-    read through the same ``_normalize_choice_pairs`` checks (so a malformed column raises the
-    same specific ``ConfigurationError``). No enum is built or registered, so a write-side
-    caller cannot claim the column enum's GraphQL name.
+    The column's choice values with every group of Django's grouped-choices form flattened in
+    order (Django's ``Field.flatchoices``, which ``Field.validate`` checks a stored value
+    against), never ``None`` (a ``None``-valued pair labels the empty option), plus ``""`` when
+    ``_column_admits_empty_string`` holds and no listed value is ``""``. Every entry, a group's
+    inner entries included, passes the same ``_normalize_choice_pairs`` checks as the read enum,
+    so a malformed column raises the same specific ``ConfigurationError``. For a flat column the
+    list is exactly the member values ``convert_choices_to_enum`` builds; a grouped column has
+    values but no read enum. No enum is built or registered, so a write-side caller cannot claim
+    the column enum's GraphQL name.
     """
     try:
         choices = field.choices
@@ -868,9 +894,32 @@ def choice_column_enum_values(field: "ConcreteField") -> list[object]:
         raise ConfigurationError(
             f"Could not inspect choices for {_field_label(field)}.",
         ) from exc
-    pairs = _normalize_choice_pairs(choice_source, source_label=_field_label(field))
+    pairs = _normalize_choice_pairs(
+        choice_source,
+        source_label=_field_label(field),
+        flatten_groups=True,
+    )
     _insert_blank_pair(pairs, include_blank=include_blank)
     return [value for value, _label in pairs]
+
+
+def choice_column_is_grouped(field: "ConcreteField") -> bool:
+    """Return whether a column declares Django's grouped-choices form, which has no read enum.
+
+    An entry is a group when its second slot holds the group's inner pairs (``_is_choice_group``);
+    a malformed entry is no group here and is refused by whichever check reads it next.
+    """
+    entries: tuple[object, ...]
+    try:
+        entries = tuple(field.choices or [])
+    except BaseException as exc:
+        raise ConfigurationError(
+            f"Could not inspect choices for {_field_label(field)}.",
+        ) from exc
+    return any(
+        isinstance(entry, (list, tuple)) and len(entry) == 2 and _is_choice_group(entry[1])
+        for entry in entries
+    )
 
 
 def convert_choices_to_enum(field: "ConcreteField", type_name: str) -> type[Enum]:

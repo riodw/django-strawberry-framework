@@ -3,7 +3,7 @@
 Every finding from the 0.0.15 hunt in the t3 worktree (never merged), plus bugs found while fixing them.
 Each one is verified on main, fixed at the root, checked by a second agent, landed, then deleted from t3.
 
-Progress: 32 done, 48 to do.
+Progress: 34 done, 46 to do.
 
 ## Done
 
@@ -45,10 +45,13 @@ Progress: 32 done, 48 to do.
 - [x] 48. `BLANK_CHOICE` marker broke under copy / pickle; replaced by the `EnumMemberValue` value object (`309d4f04`)
 - [x] 52. Connection resolvers sent row-hydration and consumer-source exception text to the client; pagination validators now
   raise `PaginationArgumentError` themselves and nothing rewraps a foreign exception (`72065173`)
+- [x] 12. Nested forward-FK / OneToOne resolvers never checked the request deadline; every package seam that reaches the database
+  now checks it first, which also covers the session-auth `login` / `logout` / `me` fields and the `resolve_node` /
+  `resolve_nodes` defaults Strawberry's `relay.node()` reaches (`8d4f66bd`)
+- [x] 28. Deep dive 3 (authorization on deferred paths): its only findings were items 12 and 13, both done
 
 ## To do: t3 hunt findings
 
-- [ ] 12. Nested forward-FK / OneToOne resolvers never check the request deadline
 - [ ] 14. README says `in: []` matches nothing; it matches every row on integer, text and choice columns (flat), and on a nested
   `shelves.condition in: []` only parents with a child. Check which is right
 
@@ -125,12 +128,12 @@ not real bugs and just get deleted from t3. One checkbox per area:
 
 ## Hunt not finished in t3
 
-- [ ] 28. Deep dive 3 (authorization on deferred paths) is blocked; its findings are items 12 and 13
 - [ ] 29. The hunt's final test gate was never run
 
 ## Addendum: handoff 2026-10-08 (item 12 and the request-rejection precedence)
 
-Written at the close of one chat for whoever picks this up next. Nothing here is landed on main.
+Written at the close of one chat for whoever picks this up next. Item 12 has since landed as `8d4f66bd`; the precedence work
+is not landed.
 
 ### Where the work is
 
@@ -153,7 +156,7 @@ The live clone was
 `/private/tmp/claude-501/-Users-riordenweber-projects-django-strawberry-framework/df9d661e-0eaa-4a60-9fbe-5e28dd0c0d33/scratchpad/fix12`.
 The implementer was stopped and its last state committed as `970d054a` (`refs/scratch/admission-wip` in the main repo; also `0001-wip-admission-*.patch` in the handoff dir). It stopped while running the generators, so the glossary, KANBAN and constants may be half-updated. Start from that commit, not `admission-wip.patch`.
 
-### Item 12: done in the clone, not landed
+### Item 12: landed as `8d4f66bd`
 
 - Verdict: a defect under AGENTS rule 37. The contract row is the `ResourcePolicy` `execution_deadline_seconds` docstring plus
   spec-047 Decision 9, which says every seam about to reach the database checks the deadline first. The shape is `DjangoSchema` with
@@ -234,14 +237,18 @@ lands.
 ### Other open threads
 
 - Items 78 and 79 (CHANGELOG for 65 and 52) still need Rio. Focused pytest runs for items 65 and 52 were never run since landing.
-- t3 worktree `~/.t3/worktrees/django-strawberry-framework/t3code-1cc21548` still sits at `67027892`.
-  - A fast-forward to current main is large and conflicts in 5 files; Rio has not authorized it.
-  - Backup: `~/t3code-1cc21548-pre-ff.tgz`.
-- Main-repo refs `refs/scratch/fix65`, `fix52` and `land` are superseded and can be deleted. Keep `refs/scratch/fix12` until item 12
-  lands.
-- Robustness rows noted, not filed:
-  - The `get_queryset` hooks and `check_*_permission` hooks run before the deadline check (trusted code).
-  - Strawberry's native `relay.node()` has no deadline check (Strawberry's surface, not this package's).
+- t3 worktree `~/.t3/worktrees/django-strawberry-framework/t3code-1cc21548` was rebased onto main (`8a322bbf`) on 2026-10-08,
+  its uncommitted hunt work merged file by file; item 12's D-3A-1 copy is stripped from it.
+- Main-repo refs `refs/scratch/fix65`, `fix52`, `land` and `fix12` are superseded and can be deleted.
+- For the precedence work, from item 12's verification:
+  - The `get_queryset` hooks, `check_*_permission` hooks and consumer `FilterSet` / `OrderSet` classes (a `ModelChoiceFilter`
+    validating) run before the deadline check on connections, `DjangoListField` and the many-side relation re-check;
+    `8d4f66bd` documents them as trusted application code, and the approved order (P2 deadline before P3 consumer pipeline)
+    will change that text.
+  - Under strictness `"raise"` with a passed deadline, a forward FK / OneToOne hop reports the deadline (checked before
+    `_check_n1`) while a many-side hop reports the N+1 error (`_check_n1` runs before `bounded_rows`).
+  - A generated mutation field's completion-spanning transaction opens (BEGIN / SAVEPOINT, no row) before the write pipeline's
+    check; documented as an audited exclusion in `8d4f66bd`.
 
 
 <!-- LINK DEFINITIONS -->

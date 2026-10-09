@@ -48,7 +48,8 @@ Progress: 34 done, 46 to do.
 - [x] 12. Nested forward-FK / OneToOne resolvers never checked the request deadline; every package seam that reaches the database
   now checks it first, which also covers the session-auth `login` / `logout` / `me` fields and the `resolve_node` /
   `resolve_nodes` defaults Strawberry's `relay.node()` reaches (`8d4f66bd`)
-- [x] 28. Deep dive 3 (authorization on deferred paths): its only findings were items 12 and 13, both done
+- [x] 28. Deep dive 3 (authorization on deferred paths): findings 12 and 13 done; `VenueBadgeType` and `VenueSponsorType` now
+  hide marked rows, and live rows prove none leaks through the no-`related_name` reverse accessors (`16a8c179`)
 
 ## To do: t3 hunt findings
 
